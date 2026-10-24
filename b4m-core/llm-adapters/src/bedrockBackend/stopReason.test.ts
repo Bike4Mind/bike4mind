@@ -5,10 +5,12 @@
  * notice on the reply. Bedrock needs its own harness (BedrockRuntimeClient plus a
  * per-subclass translate) rather than a row in stopReasonBackends.test.ts, so the
  * test backend here passes pre-shaped ICompletionResponseChunk objects through.
+ * The real Anthropic adapter is also exercised on both transports below.
  */
 
 import { describe, it, expect } from 'vitest';
-import type { IMessage, ModelInfo } from '@bike4mind/common';
+import { ChatModels, type IMessage, type ModelInfo } from '@bike4mind/common';
+import AnthropicBedrockBackend from './anthropic';
 import { BaseBedrockBackend } from './base';
 import {
   ChoiceEndReason,
@@ -60,33 +62,42 @@ const endChoice = (chunkText: string) => ({
   usage: { input_tokens: 10, output_tokens: 20 },
 });
 
-/** Mocks the streaming transport: each chunk is JSON-encoded into `bytes`. */
-function streamingBackend(chunks: unknown[]): TestBedrockBackend {
-  const backend = new TestBedrockBackend();
-  (backend as unknown as { _bedrockRuntime: { send: (c: unknown) => Promise<unknown> } })._bedrockRuntime = {
-    send: async () => ({
-      body: {
-        [Symbol.asyncIterator]: async function* () {
-          for (const c of chunks) yield { chunk: { bytes: new TextEncoder().encode(JSON.stringify(c)) } };
-        },
+type Runtime = { _bedrockRuntime: { send: (c: unknown) => Promise<unknown> } };
+
+function useTransport<T extends BaseBedrockBackend>(backend: T, transport: Runtime['_bedrockRuntime']): T {
+  (backend as unknown as Runtime)._bedrockRuntime = transport;
+  return backend;
+}
+
+/** A streaming transport: each chunk is JSON-encoded into `bytes`. */
+const streamTransport = (chunks: unknown[]): Runtime['_bedrockRuntime'] => ({
+  send: async () => ({
+    body: {
+      [Symbol.asyncIterator]: async function* () {
+        for (const c of chunks) yield { chunk: { bytes: new TextEncoder().encode(JSON.stringify(c)) } };
       },
-    }),
-  };
-  return backend;
-}
+    },
+  }),
+});
 
-/** Mocks the InvokeModel transport, whose whole response body is one JSON blob. */
-function nonStreamingBackend(response: unknown): TestBedrockBackend {
-  const backend = new TestBedrockBackend();
-  (backend as unknown as { _bedrockRuntime: { send: (c: unknown) => Promise<unknown> } })._bedrockRuntime = {
-    send: async () => ({ body: new TextEncoder().encode(JSON.stringify(response)) }),
-  };
-  return backend;
-}
+/** An InvokeModel transport, whose whole response body is one JSON blob. */
+const invokeTransport = (response: unknown): Runtime['_bedrockRuntime'] => ({
+  send: async () => ({ body: new TextEncoder().encode(JSON.stringify(response)) }),
+});
 
-async function lastInfo(backend: TestBedrockBackend, stream: boolean): Promise<CompletionInfo | undefined> {
+const streamingBackend = (chunks: unknown[]): TestBedrockBackend =>
+  useTransport(new TestBedrockBackend(), streamTransport(chunks));
+
+const nonStreamingBackend = (response: unknown): TestBedrockBackend =>
+  useTransport(new TestBedrockBackend(), invokeTransport(response));
+
+async function lastInfo(
+  backend: BaseBedrockBackend,
+  stream: boolean,
+  model = 'test'
+): Promise<CompletionInfo | undefined> {
   const infos: (CompletionInfo | undefined)[] = [];
-  await backend.complete('test', messages, { stream }, async (_text, info) => {
+  await backend.complete(model, messages, { stream }, async (_text, info) => {
     infos.push(info);
   });
   return infos[infos.length - 1];
@@ -114,5 +125,61 @@ describe('BaseBedrockBackend surfaces stopReason on CompletionInfo', () => {
   it('omits stopReason for an adapter whose translate reports none', async () => {
     const backend = streamingBackend([{ model: 'test', choices: [endChoice('answer')] }]);
     expect((await lastInfo(backend, true))?.stopReason).toBeUndefined();
+  });
+});
+
+const MODEL = ChatModels.CLAUDE_5_OPUS_BEDROCK;
+
+class AnthropicTestBackend extends AnthropicBedrockBackend {
+  // Same reason as TestBedrockBackend: complete() rebuilds the client and would clobber the mock.
+  protected override updateClientForModel(_model: string): void {
+    // intentionally empty
+  }
+}
+
+/** The real Claude stream framing, carrying whatever terminal stop_reason the provider reports. */
+function anthropicStream(stopReason?: string) {
+  return [
+    { type: 'message_start', message: { usage: { input_tokens: 12, output_tokens: 1 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial answer' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: stopReason ? { stop_reason: stopReason } : {}, usage: { output_tokens: 4096 } },
+    { type: 'message_stop' },
+  ];
+}
+
+describe('AnthropicBedrockBackend surfaces stopReason through complete()', () => {
+  it('carries a truncated stream through as max_tokens', async () => {
+    const backend = useTransport(new AnthropicTestBackend(), streamTransport(anthropicStream('max_tokens')));
+    expect((await lastInfo(backend, true, MODEL))?.stopReason).toBe('max_tokens');
+  });
+
+  it('carries a clean stream through as end_turn', async () => {
+    const backend = useTransport(new AnthropicTestBackend(), streamTransport(anthropicStream('end_turn')));
+    expect((await lastInfo(backend, true, MODEL))?.stopReason).toBe('end_turn');
+  });
+
+  it.each(['max_tokens', 'end_turn'])('rejects a %s stream missing message_stop', async stopReason => {
+    const chunks = anthropicStream(stopReason).slice(0, -1);
+    const backend = useTransport(new AnthropicTestBackend(), streamTransport(chunks));
+
+    await expect(lastInfo(backend, true, MODEL)).rejects.toThrow(/without a terminal event/);
+  });
+
+  it('carries a truncated non-streaming turn through as max_tokens', async () => {
+    const backend = useTransport(
+      new AnthropicTestBackend(),
+      invokeTransport({
+        id: 'msg_1',
+        type: 'message',
+        role: 'assistant',
+        model: MODEL,
+        content: [{ type: 'text', text: 'cut off' }],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 12, output_tokens: 4096 },
+      })
+    );
+    expect((await lastInfo(backend, false, MODEL))?.stopReason).toBe('max_tokens');
   });
 });

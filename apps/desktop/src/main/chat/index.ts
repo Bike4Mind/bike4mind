@@ -63,7 +63,7 @@ import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
-import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
+import { IMAGE_BYTE_CAP, IMAGE_MAX_EDGE, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
@@ -109,6 +109,8 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import type { PreparedImage } from './tools/types';
+import { desktopScreenCapturer } from './screen/desktopScreen';
 import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
@@ -170,6 +172,35 @@ function shrinkImage(bytes: Buffer, mediaType: string, maxEdge: number): { bytes
   const asJpeg = resized.toJPEG(SHRUNK_JPEG_QUALITY);
   if (asJpeg.length === 0) return null;
   return { bytes: asJpeg, mediaType: 'image/jpeg' };
+}
+
+/**
+ * Fit an image a tool shows the model, as shrinkImage does an attachment. Unlike that one it
+ * reports the sizes for the tool's result, and passes through what already fits so a GIF the
+ * decoder reads keeps its frames.
+ */
+function prepareToolImage(bytes: Buffer, mediaType: string, maxBytes: number): PreparedImage | null {
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return null;
+
+  const { width: sourceWidth, height: sourceHeight } = image.getSize();
+  const oversized = Math.max(sourceWidth, sourceHeight) > IMAGE_MAX_EDGE;
+  if (!oversized && bytes.length <= maxBytes) {
+    return { bytes, mediaType, width: sourceWidth, height: sourceHeight, sourceWidth, sourceHeight };
+  }
+
+  const edge = sourceWidth >= sourceHeight ? { width: IMAGE_MAX_EDGE } : { height: IMAGE_MAX_EDGE };
+  const resized = oversized ? image.resize({ ...edge, quality: 'best' }) : image;
+  if (resized.isEmpty()) return null;
+  const sizes = { ...resized.getSize(), sourceWidth, sourceHeight };
+
+  const asPng = resized.toPNG();
+  if (asPng.length > 0 && asPng.length <= maxBytes) return { bytes: asPng, mediaType: 'image/png', ...sizes };
+  for (const quality of [SHRUNK_JPEG_QUALITY, 60]) {
+    const asJpeg = resized.toJPEG(quality);
+    if (asJpeg.length > 0 && asJpeg.length <= maxBytes) return { bytes: asJpeg, mediaType: 'image/jpeg', ...sizes };
+  }
+  return null;
 }
 
 /**
@@ -496,6 +527,8 @@ export function registerChat(
     sidebarSections,
     mcp,
     browser,
+    screen: desktopScreenCapturer(app.getName()),
+    prepareImage: prepareToolImage,
     artifacts,
     queue,
     skills,

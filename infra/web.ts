@@ -5,7 +5,6 @@ import {
   publishedArtifactsBucket,
   qaArtifactsBucket,
   historyImportBucket,
-  whatsNewDistributionBucket,
   uploadCompleteFunction,
   notebookImportFunction,
 } from './buckets';
@@ -109,7 +108,6 @@ import { searxngUrl } from './searxng';
 import {
   router,
   routerDistributionId,
-  whatsNewDistributionId,
   cdnUrlForLambdaEnv,
   appUrlForLambdaEnv,
   originVerifySecret,
@@ -298,8 +296,6 @@ export const web = new sst.aws.Nextjs(
       // Resource.generationCallbackQueue.url, which also has to resolve in the generation queue
       // Lambdas and the timeout sweep, where only direct links exist.
       generationCallbackQueue,
-      ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
-      ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],
     permissions: [
       {

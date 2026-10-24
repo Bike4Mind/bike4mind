@@ -125,6 +125,7 @@ export async function handler(event: UserActivityReportEvent, context: Context) 
         aiInsights,
         date: reportParams.date,
         usageBySource: report.usageBySource,
+        appUrl: process.env.APP_URL?.trim(),
       });
     }
 

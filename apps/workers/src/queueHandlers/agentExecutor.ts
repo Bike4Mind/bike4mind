@@ -72,7 +72,7 @@ import {
   type ApiKeyTable,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { Permission, OPTI_SURFACE } from '@bike4mind/common';
+import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { getUserEntitlements } from '@server/entitlements';
@@ -129,15 +129,12 @@ import {
   settleGatedCall as settleGatedCallImpl,
   type GatedAction,
 } from './agentExecutorUtils/toolPermissions';
-import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
 import {
   evaluateConfidenceGate,
   formatConfidenceGateReason,
   decideIterationConfidencePause,
 } from './agentExecutorUtils/confidenceGate';
-import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
-import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
 import {
   buildDagResumeReport,
@@ -212,7 +209,7 @@ import {
   mcpSessionDisabledTools,
   type ResolvedOrchestrationProfile,
 } from './agentExecutor.orchestrationProfile';
-import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
+import { executorAgentExtensions } from './agentExecutor.agentExtensions';
 // Wire schemas live in their own side-effect-free module so unit tests can
 // import them without dragging this file's Mongo/AWS/ReActAgent deps and the
 // `registerLambdaErrorHandlers()` call into the test sandbox. See
@@ -1251,28 +1248,35 @@ async function processExecution(
     // Resolved only on new executions; continuations carry forward whatever the
     // first invocation set up (checkpoint replay restores agent state).
     let orchestrationProfile: ResolvedOrchestrationProfile | undefined;
-    // Optimizer surface with no pinned `@agent`: use the opti-scoped profile (optimizer
-    // tools only, image-gen/delegation denied, higher iteration ceiling, ReAct loop
-    // prompt) instead of the generic synthetic default. Resolved on continuations too,
+    // A surface with a registered profile and no pinned `@agent` (the optimizer surface: optimizer
+    // tools only, image-gen/delegation denied, higher iteration ceiling, ReAct loop prompt) uses
+    // that profile instead of the generic synthetic default. Resolved on continuations too,
     // NOT just new executions: it's a deterministic function of the persisted
     // `session.surface`, and the tool list is rebuilt on every Lambda invocation, so a
     // post-permission / post-timeout resume (isNewExecution=false, no startPayload) would
     // otherwise collapse the toolbelt to mission-only and the loop could no longer
     // formulate/schedule to advance the ladder. An explicit `@agent` mention still wins
-    // on the initial send (it sets `startPayload.agentId` -> the persisted-agent path).
-    if (!startPayload?.agentId && session.surface === OPTI_SURFACE) {
-      // Premium tool names come from the generated map (the same one merged into `externalTools`
-      // below), so a tool an overlay registers is offerable here without editing a list by hand.
-      const premiumToolNames = Object.keys(premiumLlmTools);
-      // An empty map means codegen ran with no overlay hydrated. The loop then has no optimizer
-      // tools at all and answers in prose, which reads as a model failure rather than a build one -
-      // so say it once, here, where the cause is known.
-      if (premiumToolNames.length === 0) {
-        logger.warn('[opti] optimizer surface resolved no premium tools; the agent has only core generics', {
+    // across continuations too; its provenance is persisted with the profile denials.
+    // Contributed tool names come from the generated map (the same one merged into `externalTools`
+    // below), so a contributed tool is offerable here without editing a list by hand.
+    const profileIsPinned = isNewExecution ? Boolean(startPayload?.agentId) : execution.profileIsPinned;
+    const surfaceProfile = profileIsPinned
+      ? undefined
+      : executorAgentExtensions.resolveSurfaceProfile(session.surface, {
           executionId,
+          logger,
+          contributedToolNames: Object.keys(premiumLlmTools),
         });
-      }
-      orchestrationProfile = buildOptiOrchestrationProfile({ premiumToolNames });
+    if (surfaceProfile) {
+      // Legacy rows cannot identify their original profile. Retain their denials while keeping
+      // surface defaults available, so an ambiguous resume never widens the original policy.
+      orchestrationProfile =
+        !isNewExecution && profileIsPinned === undefined
+          ? {
+              ...surfaceProfile,
+              deniedTools: [...new Set([...surfaceProfile.deniedTools, ...(execution.profileDeniedTools ?? [])])],
+            }
+          : surfaceProfile;
     } else if (isNewExecution) {
       // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
       // `OrchestrationDefaults` here - so no cast is needed.
@@ -1317,7 +1321,11 @@ async function processExecution(
       // itself does not survive a Lambda handoff (startPayload.agentId is gone on a
       // resume), and the delegation gate below reads these every invocation. Same
       // durability pattern as enableLattice.
-      await agentExecutionRepository.persistProfileDeniedTools(executionId, orchestrationProfile.deniedTools);
+      await agentExecutionRepository.persistProfileDeniedTools(
+        executionId,
+        orchestrationProfile.deniedTools,
+        Boolean(startPayload?.agentId)
+      );
     }
     if (orchestrationProfile) {
       logger.info('[Orchestration] Resolved profile', {
@@ -1850,6 +1858,8 @@ async function processExecution(
           findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
         },
         quests: questRepository,
+        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
+        caches: cacheRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -2129,16 +2139,13 @@ async function processExecution(
     // - inject brief (outermost, #57): gives the loop the real active brief in-context so it passes
     //   the exact problem to solve/edit instead of reconstructing it. Wraps last, so it augments real
     //   tool observations and leaves guard redirects (non-envelope strings) untouched.
-    const guardedPremiumTools = injectBriefContext(
-      guardPlanCompletion(
-        guardDecomposeOnce(premiumLlmTools, optiPlanState, () =>
-          logger.info('[opti] blocked a repeat optihashi_decompose call (advancing existing plan)', { executionId })
-        ),
-        optiPlanState,
-        () =>
-          logger.info('[opti] plan complete -- all planned steps solved; steering to final summary', { executionId })
-      )
-    );
+    // Registered in agentExecutor.agentExtensions.ts in that order; a contributed guard wraps inside them.
+    const guardedPremiumTools = executorAgentExtensions.applyToolMapGuards(premiumLlmTools, {
+      executionId,
+      logger,
+      surface: session.surface,
+      runState: optiPlanState,
+    });
 
     // Dedupe: a caller may already have enabled create_mission/mission_status;
     // a raw append would make buildSharedTools wrap the same tool twice.
@@ -3966,6 +3973,8 @@ async function processSubagentDispatch(
           findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
         },
         quests: questRepository,
+        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
+        caches: cacheRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),

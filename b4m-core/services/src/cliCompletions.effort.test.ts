@@ -43,9 +43,11 @@ import { executeCompletion } from './cliCompletions';
 
 const claude = (id: string, backend: 'anthropic' | 'bedrock', thinkingStyle?: 'adaptive') => ({
   id,
+  type: 'text' as const,
   backend,
   max_tokens: 128_000,
   can_think: true,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
   ...(thinkingStyle ? { thinkingStyle } : {}),
 });
 
@@ -55,7 +57,14 @@ const FABLE = claude(ChatModels.CLAUDE_FABLE_5, 'anthropic', 'adaptive');
 // Adaptive, but it only thinks when asked, so an injected effort would switch thinking on.
 const ADAPTIVE_ON_REQUEST = claude(ChatModels.CLAUDE_4_7_OPUS, 'anthropic', 'adaptive');
 const LEGACY_THINKER = claude(ChatModels.CLAUDE_4_6_SONNET, 'anthropic');
-const OPENAI = { id: ChatModels.GPT5_4, backend: 'openai', max_tokens: 128_000, can_think: true };
+const OPENAI = {
+  id: ChatModels.GPT5_4,
+  type: 'text' as const,
+  backend: 'openai',
+  max_tokens: 128_000,
+  can_think: true,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
+};
 
 function buildDb() {
   return {

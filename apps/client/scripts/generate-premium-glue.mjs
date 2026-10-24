@@ -15,6 +15,7 @@
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
+ *   server/premium-generated/premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
@@ -1398,6 +1399,40 @@ function generatePartnerSignupHooks(packages) {
   );
 }
 
+// Premium packages can contribute agent-executor extensions (b4mContributions.agentExtensionsExport
+// -> a module exporting `agentExtensions: AgentExtensionContribution`): a per-surface orchestration
+// profile and tool-map guards. The workers' executor registry imports this file statically, so like
+// the LLM tools it must exist in BOTH forms.
+function generateAgentExtensions(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumAgentExtensions.generated.ts');
+  const typeImport = `import type { AgentExtensionContribution } from '@bike4mind/agents';`;
+
+  const contributors = packages.filter(p => p.contributions.agentExtensionsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumAgentExtensions: AgentExtensionContribution[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.agentExtensionsExport, p.name, 'agentExtensionsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => `import { agentExtensions as extensions${i} } from '${p.contributions.agentExtensionsExport}';`)
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  extensions${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumAgentExtensions: AgentExtensionContribution[] = [\n${items}\n];\n`
+  );
+}
+
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 // Session fields a workspace owns, resolved at read time. Each id must name an open
@@ -1743,6 +1778,7 @@ generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
 generatePartnerSignupHooks(linkedPackages);
+generateAgentExtensions(linkedPackages);
 generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.

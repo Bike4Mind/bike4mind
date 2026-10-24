@@ -1,4 +1,5 @@
 import type { BackgroundProcessInfo } from '@shared/chat';
+import { shellCommandRan } from './sessionScripts';
 import { doubleWrapRefusal, refusalReason, resolveCwd, shellApproval } from './shellTools';
 import {
   capOutput,
@@ -116,6 +117,7 @@ export const bashBackground: ToolDefinition = {
     if (refused) throw new Error(`Refused: this command ${refused}. It was not run.`);
 
     const cwd = await resolveCwd(input, context.roots, context.workingDirectory);
+    shellCommandRan(context);
     const started = await registry.start({
       sessionId,
       command,

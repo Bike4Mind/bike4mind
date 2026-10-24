@@ -1,5 +1,29 @@
 # WAF policy notes
 
+## Sample policy and deployment-owned policies
+
+The two JSON files in this directory are a sample policy with round example
+rate limits. They are not tuned for any particular deployment. A deployment
+supplies its own policy in one of two ways:
+
+- overwrite `bike4mind-api-protection-prod.json` and
+  `bike4mind-api-protection-dev.json` here before SST runs, or
+- set `WAF_POLICY_DIR` to a directory holding files with those same two names
+  (absolute, or relative to the repo root). See `resolveWafPolicyDir` in
+  `infra/wafPolicy.ts`.
+
+To check a deployment-owned policy against the structural invariants (rule
+order, priorities, shadow rules staying in Count), point the suite at it:
+
+```sh
+WAF_POLICY_DIR=<dir> pnpm exec vitest run --dir infra wafPolicy
+```
+
+In that mode the tests that pin the sample's exact rate limits are skipped and
+everything else is enforced. Do not copy a deployment-owned policy into this
+directory and run the suite without `WAF_POLICY_DIR`: the sample-limit pins will
+fail by design.
+
 ## Bot Control telemetry
 
 Both stage policies run `AWSManagedRulesBotControlRuleSet` at the `COMMON`

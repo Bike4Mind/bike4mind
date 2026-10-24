@@ -186,6 +186,33 @@ describe('GET /api/v1/whats-new', () => {
     );
   });
 
+  it('includes the image when the note has one and omits the key otherwise', async () => {
+    const image = {
+      landscapeUrl: 'https://d111.cloudfront.net/wide.png',
+      portraitUrl: 'https://d111.cloudfront.net/tall.png',
+    };
+    mockListPublished.mockResolvedValueOnce({ items: [{ ...NOTES[0], image }, NOTES[1]], hasMore: false });
+    const body = (await run())._getJSONData();
+    expect(body.data[0].image).toEqual({
+      landscape_url: 'https://d111.cloudfront.net/wide.png',
+      portrait_url: 'https://d111.cloudfront.net/tall.png',
+    });
+    expect('image' in body.data[1]).toBe(false);
+  });
+
+  it('serves an uploaded image file as an absolute URL to the media route', async () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+    const image = {
+      landscapeUrl: null,
+      portraitUrl: 'https://files-bucket.s3.us-east-2.amazonaws.com/modals/still-9x16.png',
+    };
+    mockListPublished.mockResolvedValueOnce({ items: [{ ...NOTES[0], image }], hasMore: false });
+    const body = (await run())._getJSONData();
+    expect(body.data[0].image.portrait_url).toBe(
+      `https://app.example.com/api/v1/whats-new/media/${NOTES[0].id}/image-portrait`
+    );
+  });
+
   it('passes the request time to listPublished so embargoed notes stay out', async () => {
     const before = Date.now();
     await run();

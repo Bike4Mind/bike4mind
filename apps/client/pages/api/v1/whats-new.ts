@@ -12,7 +12,7 @@ import {
 } from '@server/utils/cursorPagination';
 import { findDeniedInNote, loadReleaseNotesConfig } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 import { fetchUpstreamFeed, getWhatsNewFeedUrl } from '@server/releaseNotes/upstreamFeed';
-import { toPublicFeedVideo } from '@server/releaseNotes/publicMedia';
+import { toPublicFeedImage, toPublicFeedVideo } from '@server/releaseNotes/publicMedia';
 
 const CURSOR_SCOPE = 'v1.whats-new';
 // The upstream is usually another deployment of this route, so its raw cursor would decode here as a local
@@ -31,6 +31,7 @@ const toPublicReleaseNote = (note: IReleaseNoteDocument): PublicReleaseNote => (
   published_at: note.publishAt.toISOString(),
   items: note.items.map(({ category, text, importance }) => ({ category, text, importance })),
   ...(note.video && { video: toPublicFeedVideo(note.id, note.video, Resource.fabFileBucket.name) }),
+  ...(note.image && { image: toPublicFeedImage(note.id, note.image, Resource.fabFileBucket.name) }),
 });
 
 type PageCursor = { kind: 'upstream'; cursor: string } | { kind: 'local'; after: TimeIdKeyset };

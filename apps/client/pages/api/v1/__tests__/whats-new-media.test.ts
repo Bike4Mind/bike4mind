@@ -73,6 +73,7 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const NOTE_ID = '65a000000000000000000003';
 const UPLOAD = 'https://files-bucket.s3.us-east-2.amazonaws.com/modals/wide.mp4';
 const SIGNED = 'https://files-bucket.s3.us-east-2.amazonaws.com/modals/wide.mp4?X-Amz-Signature=abc';
+const S3 = 'https://files-bucket.s3.us-east-2.amazonaws.com';
 const NOTE = {
   id: NOTE_ID,
   headline: 'Faster search',
@@ -83,6 +84,10 @@ const NOTE = {
     landscapePosterUrl: null,
     portraitUrl: 'https://d111.cloudfront.net/tall.mp4',
     portraitPosterUrl: null,
+  },
+  image: {
+    landscapeUrl: `${S3}/modals/still.png`,
+    portraitUrl: `${S3}/modals/still-9x16.png`,
   },
 };
 
@@ -128,6 +133,29 @@ describe('GET /api/v1/whats-new/media/{id}/{asset}', () => {
     expect(mockSign).toHaveBeenCalledWith('modals/wide.mp4', 'get', { expiresIn: 3600, audience: 'browser' });
     expect(res.getHeader('Cache-Control')).toBe('public, max-age=600, s-maxage=600');
     expect(mockFindFile).toHaveBeenCalledWith({ filePath: 'modals/wide.mp4' });
+  });
+
+  it('redirects image-landscape and image-portrait to signed URLs of the image uploads', async () => {
+    for (const [asset, key] of [
+      ['image-landscape', 'modals/still.png'],
+      ['image-portrait', 'modals/still-9x16.png'],
+    ]) {
+      const res = await run({ id: NOTE_ID, asset });
+      expect(res._getStatusCode()).toBe(303);
+      expect(mockSign).toHaveBeenLastCalledWith(key, 'get', { expiresIn: 3600, audience: 'browser' });
+    }
+  });
+
+  it('404s an image asset on a note that has only a video', async () => {
+    mockFindPublishedById.mockResolvedValue({ ...NOTE, image: undefined });
+    expect((await errorOf({ id: NOTE_ID, asset: 'image-landscape' })).statusCode).toBe(404);
+    expect(mockSign).not.toHaveBeenCalled();
+  });
+
+  it('404s an image upload that moderation holds or blocks', async () => {
+    mockFindFile.mockResolvedValueOnce({ _id: 'f1', moderationStatus: 'blocked' });
+    expect((await errorOf({ id: NOTE_ID, asset: 'image-landscape' })).statusCode).toBe(404);
+    expect(mockSign).not.toHaveBeenCalled();
   });
 
   it('looks the note up as published now', async () => {

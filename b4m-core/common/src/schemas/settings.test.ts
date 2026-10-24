@@ -198,8 +198,6 @@ describe('other object settings use makeObjectSetting', () => {
     'logoSettings',
     'RapidReplySettings',
     'releaseNotesConfig',
-    'whatsNewConfig',
-    'whatsNewSyncConfig',
   ] as const;
 
   it.each(objectSettings)('%s should parse JSON strings', settingKey => {

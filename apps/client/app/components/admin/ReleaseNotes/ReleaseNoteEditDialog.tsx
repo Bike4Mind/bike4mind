@@ -14,6 +14,7 @@ import {
   Select,
   Stack,
   Textarea,
+  Typography,
 } from '@mui/joy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { toast } from 'sonner';
@@ -42,6 +43,8 @@ const ReleaseNoteEditDialog: React.FC<Props> = ({ note, onClose }) => {
   const [video, setVideo] = useState<ModalVideo | null>(note.video ?? null);
   // Stored and uploaded URLs pass the form check whatever their host (see AdminModalVideoFields)
   const [trustedUrls, setTrustedUrls] = useState<ReadonlySet<string>>(() => new Set(videoUrlsOf(note.video)));
+  const [imageRemoved, setImageRemoved] = useState(false);
+  const hasImage = Boolean(note.image?.landscapeUrl || note.image?.portraitUrl);
   const { data: config } = useConfig();
   const videoChanged = VIDEO_FIELDS.some(field => (video?.[field] ?? null) !== (note.video?.[field] ?? null));
   const videoInvalid = Object.keys(getModalVideoErrors(video, { allowedUrls: trustedUrls })).length > 0;
@@ -51,7 +54,10 @@ const ReleaseNoteEditDialog: React.FC<Props> = ({ note, onClose }) => {
 
   const onSave = () =>
     edit.mutate(
-      { id: note.id, edit: { headline, summary, items, ...(videoChanged && { video }) } },
+      {
+        id: note.id,
+        edit: { headline, summary, items, ...(videoChanged && { video }), ...(imageRemoved && { image: null }) },
+      },
       {
         onSuccess: () => {
           toast.success('Release note saved');
@@ -127,6 +133,24 @@ const ReleaseNoteEditDialog: React.FC<Props> = ({ note, onClose }) => {
             >
               Add item
             </Button>
+            {hasImage && (
+              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                <Typography level="body-sm" data-testid="release-note-edit-image-status">
+                  {imageRemoved ? 'Still image is removed on save' : 'Still image attached (16:9 and 9:16)'}
+                </Typography>
+                {!imageRemoved && (
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="danger"
+                    onClick={() => setImageRemoved(true)}
+                    data-testid="release-note-edit-remove-image-btn"
+                  >
+                    Remove image
+                  </Button>
+                )}
+              </Stack>
+            )}
             <AdminModalVideoFields
               value={video}
               onChange={setVideo}

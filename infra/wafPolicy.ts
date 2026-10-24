@@ -1,13 +1,16 @@
 /**
  * WAF policy translation.
  *
- * Stage-specific source files in infra/waf/:
+ * Stage-specific source files, read from the policy directory (see resolveWafPolicyDir):
  *   - bike4mind-api-protection-prod.json  → production stage
  *   - bike4mind-api-protection-dev.json   → dev/staging + all PR preview stages
  *
- * The files are intentionally separate. The dev file carries a 10,000 req/5min rate limit
- * raised by PR #7514 to prevent Cypress CI from tripping the WAF during E2E runs — a
- * staging-only accommodation that must never ship to production (which uses 2,000 req/5min).
+ * The files committed in infra/waf/ are the sample policy that ships with the product. A
+ * deployment may set WAF_POLICY_DIR to its own directory holding the same two file names.
+ *
+ * The files are intentionally separate. The dev file carries a higher api-rate-limit than prod
+ * so Cypress CI does not trip the WAF during E2E runs, a staging-only accommodation that must
+ * never ship to production.
  *
  * IMPORTANT:
  * - IPSet ARNs in the JSON are placeholders replaced at deploy time by buildDevWafRuleJson.
@@ -141,12 +144,22 @@ export function parseWafBlockedIps(raw: string | undefined): string[] {
   return unique.length > 0 ? unique : [BLOCKED_IP_PLACEHOLDER];
 }
 
-function readExportJson(stage: string): JsonWafExport {
-  // SST bundles and evaluates infra in a generated `.sst/platform/...` directory in CI.
-  // Use the repository root (process.cwd()) to find the checked-in JSON regardless of bundling location.
+/**
+ * Directory holding the two stage policy files: WAF_POLICY_DIR (absolute, or relative to cwd)
+ * when set, otherwise the committed sample in <cwd>/infra/waf.
+ */
+export function resolveWafPolicyDir(env: NodeJS.ProcessEnv): string {
+  // SST bundles and evaluates infra in a generated `.sst/platform/...` directory in CI, so resolve
+  // against the repository root (process.cwd()) rather than this file's location.
   const repoRoot = process.cwd();
+  const override = env.WAF_POLICY_DIR?.trim();
+  return override ? path.resolve(repoRoot, override) : path.join(repoRoot, 'infra', 'waf');
+}
+
+function readExportJson(stage: string): JsonWafExport {
   const fileName = stage === 'production' ? 'bike4mind-api-protection-prod.json' : 'bike4mind-api-protection-dev.json';
-  const jsonPath = path.join(repoRoot, 'infra', 'waf', fileName);
+  // Read spelled out so scripts/check-deploy-contract.py sees it as a deploy-time env.
+  const jsonPath = path.join(resolveWafPolicyDir({ WAF_POLICY_DIR: process.env.WAF_POLICY_DIR }), fileName);
 
   const raw = fs.readFileSync(jsonPath, 'utf8');
   return JSON.parse(raw) as JsonWafExport;

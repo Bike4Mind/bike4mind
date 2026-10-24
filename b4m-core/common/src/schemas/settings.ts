@@ -513,6 +513,8 @@ export const SettingKeySchema = z.enum([
   'enableVoiceSession',
   'voiceV2Enabled',
   'elevenLabsServerApiKey',
+  'elevenLabsMusicConcurrencyLimit',
+  'elevenLabsSoundConcurrencyLimit',
   'voiceSessionAiVoice',
   'voiceSessionTranscriptionModel',
   'voiceSessionVadType',
@@ -528,9 +530,6 @@ export const SettingKeySchema = z.enum([
   'MaxDailyEmailAnalyses',
 
   // MODAL AUTOMATION SETTINGS
-  'whatsNewAutomationEnabled',
-  'whatsNewConfig',
-  'whatsNewSyncConfig',
   'releaseNotesConfig',
 
   // AGENT PROACTIVE MESSAGING SETTINGS
@@ -1292,145 +1291,6 @@ export const MusicGenerationSettingsSchema = z.object({
 
 export type MusicGenerationSettings = z.infer<typeof MusicGenerationSettingsSchema>;
 
-/**
- * Canonical repository and branch the What's New generator reads from.
- *
- * Every default in the What's New path (zod schema, settings registry, server
- * config service, cron/backfill fallbacks, admin form seed) must resolve here.
- * A stale slug is invisible in production: GitHubService.listMergedPullRequests
- * returns [] for a repository outside the connection allowlist, so generation
- * records "no PRs today" instead of an error and the surface silently goes dark.
- */
-export const WHATS_NEW_DEFAULT_REPOSITORY = 'Bike4Mind/bike4mind';
-export const WHATS_NEW_DEFAULT_TARGET_BRANCH = 'prod';
-
-// What's New Configuration Validation Limits
-// Single source of truth for all numeric constraints used in both frontend and backend
-export const WHATS_NEW_VALIDATION_LIMITS = {
-  // Model configuration
-  temperature: { min: 0, max: 2, default: 0.7 },
-  maxTokens: { min: 100, max: 10000, default: 2000 },
-  // Max 180000ms (3 min) to leave 2-minute buffer for post-LLM operations within 5-min Lambda timeout
-  timeoutMs: { min: 30000, max: 180000, default: 120000 },
-
-  // Modal configuration
-  modalPriority: { min: 1, max: 100, default: 10 },
-  modalExpiryDays: { min: 1, max: 365, default: 30 },
-  maxPreviousModals: { min: 0, max: 50, default: 10 },
-
-  // Validation limits (for generated content)
-  titleMaxLength: { min: 10, max: 200, default: 100 },
-  subtitleMaxLength: { min: 10, max: 500, default: 200 },
-  descriptionMaxLength: { min: 50, max: 10000, default: 2000 },
-
-  // Sanitization limits (for input content processing)
-  // These limits control how much content is sent to the LLM for processing
-  maxCommits: { min: 1, max: 200, default: 50 },
-  maxPullRequests: { min: 1, max: 100, default: 20 },
-  maxCommitMessageLength: { min: 50, max: 1000, default: 200 },
-  maxReleaseBodyLength: { min: 100, max: 10000, default: 2000 },
-  // maxPRTitleLength is intentionally not configurable via admin UI - it's a static
-  // sanitization limit used only during input processing, not a user-facing setting
-  maxPRTitleLength: { min: 10, max: 500, default: 200 },
-  maxPRBodyLength: { min: 100, max: 2000, default: 500 },
-  maxChangelogLength: { min: 100, max: 5000, default: 1000 },
-
-  // Prompt template
-  promptTemplate: { min: 50, max: 10000 },
-} as const;
-
-// What's New Configuration Schema
-// Uses WHATS_NEW_VALIDATION_LIMITS as the single source of truth for all constraints
-const L = WHATS_NEW_VALIDATION_LIMITS; // Shorthand for readability
-
-export const WhatsNewConfigSchema = z.object({
-  // Model configuration
-  modelId: z.string().default('gpt-4o-mini'),
-  temperature: z.number().min(L.temperature.min).max(L.temperature.max).default(L.temperature.default),
-  maxTokens: z.number().min(L.maxTokens.min).max(L.maxTokens.max).default(L.maxTokens.default),
-  timeoutMs: z.number().min(L.timeoutMs.min).max(L.timeoutMs.max).default(L.timeoutMs.default),
-
-  // Modal configuration
-  modalPriority: z.number().min(L.modalPriority.min).max(L.modalPriority.max).default(L.modalPriority.default),
-  modalExpiryDays: z.number().min(L.modalExpiryDays.min).max(L.modalExpiryDays.max).default(L.modalExpiryDays.default),
-  maxPreviousModals: z
-    .number()
-    .min(L.maxPreviousModals.min)
-    .max(L.maxPreviousModals.max)
-    .default(L.maxPreviousModals.default),
-
-  // Validation limits
-  titleMaxLength: z.number().min(L.titleMaxLength.min).max(L.titleMaxLength.max).default(L.titleMaxLength.default),
-  subtitleMaxLength: z
-    .number()
-    .min(L.subtitleMaxLength.min)
-    .max(L.subtitleMaxLength.max)
-    .default(L.subtitleMaxLength.default),
-  descriptionMaxLength: z
-    .number()
-    .min(L.descriptionMaxLength.min)
-    .max(L.descriptionMaxLength.max)
-    .default(L.descriptionMaxLength.default),
-
-  // Sanitization limits
-  maxCommits: z.number().min(L.maxCommits.min).max(L.maxCommits.max).default(L.maxCommits.default),
-  maxPullRequests: z.number().min(L.maxPullRequests.min).max(L.maxPullRequests.max).default(L.maxPullRequests.default),
-  maxReleaseBodyLength: z
-    .number()
-    .min(L.maxReleaseBodyLength.min)
-    .max(L.maxReleaseBodyLength.max)
-    .default(L.maxReleaseBodyLength.default),
-  maxCommitMessageLength: z
-    .number()
-    .min(L.maxCommitMessageLength.min)
-    .max(L.maxCommitMessageLength.max)
-    .default(L.maxCommitMessageLength.default),
-  maxPRBodyLength: z.number().min(L.maxPRBodyLength.min).max(L.maxPRBodyLength.max).default(L.maxPRBodyLength.default),
-  maxChangelogLength: z
-    .number()
-    .min(L.maxChangelogLength.min)
-    .max(L.maxChangelogLength.max)
-    .default(L.maxChangelogLength.default),
-
-  // GitHub repository configuration
-  repository: z
-    .string()
-    .regex(/^[\w.-]+\/[\w.-]+$/, 'Must be in owner/repo format (e.g., MyOrg/my-repo)')
-    .default(WHATS_NEW_DEFAULT_REPOSITORY),
-  targetBranch: z
-    .string()
-    .regex(/^[\w./-]+$/, 'Must be a valid branch name')
-    .default(WHATS_NEW_DEFAULT_TARGET_BRANCH),
-
-  // Custom prompt template (optional)
-  promptTemplate: z
-    .string()
-    .min(L.promptTemplate.min, `Prompt template must be at least ${L.promptTemplate.min} characters`)
-    .max(L.promptTemplate.max, `Prompt template cannot exceed ${L.promptTemplate.max.toLocaleString()} characters`)
-    .trim()
-    .optional(),
-});
-
-export type WhatsNewConfig = z.infer<typeof WhatsNewConfigSchema>;
-
-// What's New Sync Configuration Schema (for fork environments)
-export const WhatsNewSyncConfigSchema = z.object({
-  autoSyncEnabled: z.boolean().default(true),
-  lastSyncAt: z.iso.datetime().optional(),
-  lastSyncResult: z.enum(['success', 'skipped', 'failed']).optional(),
-  lastSyncModalId: z.string().optional(),
-  /** Error message from last sync attempt (only populated when lastSyncResult is 'failed') */
-  lastSyncError: z.string().max(500).optional(),
-  /**
-   * Admin override for distribution URL.
-   * Must be validated against domain allowlist (CloudFront/S3 only) before saving.
-   * Takes precedence over SST secret when set.
-   */
-  distributionUrlOverride: z.url().nullable().optional(),
-});
-
-export type WhatsNewSyncConfig = z.infer<typeof WhatsNewSyncConfigSchema>;
-
 // Context Telemetry Configuration Validation Limits
 export const CONTEXT_TELEMETRY_VALIDATION_LIMITS = {
   // Model configuration
@@ -1858,6 +1718,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'voiceSessionVadEagerness', order: 5 },
       { key: 'voiceV2Enabled', order: 6 },
       { key: 'elevenLabsServerApiKey', order: 7 },
+      { key: 'elevenLabsMusicConcurrencyLimit', order: 8 },
+      { key: 'elevenLabsSoundConcurrencyLimit', order: 9 },
     ],
   },
   XAI: {
@@ -4737,6 +4599,34 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
     order: 11,
   }),
+  // Defaults mirror the ElevenLabs plan's concurrency caps; raise them when the plan is upgraded.
+  // Read by runElevenLabsWithCapacity in @bike4mind/services.
+  elevenLabsMusicConcurrencyLimit: makeNumberSetting({
+    key: 'elevenLabsMusicConcurrencyLimit',
+    name: 'ElevenLabs Music Concurrency Limit',
+    defaultValue: 2,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many music generations from the music API may run at once on the server ElevenLabs key, across all users (async music generation jobs, which chat uses, are not counted). Match it to the ElevenLabs plan: extra requests wait briefly for a free slot instead of failing with a provider 429. Requests on a personal ElevenLabs key are not counted.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 12,
+  }),
+  elevenLabsSoundConcurrencyLimit: makeNumberSetting({
+    key: 'elevenLabsSoundConcurrencyLimit',
+    name: 'ElevenLabs Sound-Effects Concurrency Limit',
+    defaultValue: 5,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many sound-effect generations from the sound-effects API and chat may run at once on the server ElevenLabs key, across all users. Match it to the ElevenLabs plan: extra requests wait briefly for a free slot instead of failing with a provider 429. Requests on a personal ElevenLabs key are not counted.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 13,
+  }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',
     userReadable: true,
@@ -4861,61 +4751,6 @@ export const settingsMap = {
       'Maximum number of AI email analyses per user per 24-hour period. Prevents cost explosion from spam floods.',
     category: 'AI',
     order: 204,
-  }),
-  whatsNewAutomationEnabled: makeBooleanSetting({
-    key: 'whatsNewAutomationEnabled',
-    name: "Enable What's New Automation",
-    defaultValue: false,
-    description:
-      "Enable automated generation of What's New modals from release information. Disable to prevent automatic modal creation during releases.",
-    category: 'Admin',
-    order: 100,
-  }),
-  whatsNewConfig: makeObjectSetting({
-    key: 'whatsNewConfig',
-    name: "What's New Configuration",
-    defaultValue: {
-      // Model configuration
-      modelId: 'gpt-4o-mini',
-      temperature: 0.7,
-      maxTokens: 2000,
-      timeoutMs: 120000,
-      // Modal configuration
-      modalPriority: 10,
-      modalExpiryDays: 30,
-      maxPreviousModals: 10,
-      // Validation limits
-      titleMaxLength: 100,
-      subtitleMaxLength: 200,
-      descriptionMaxLength: 2000,
-      // Sanitization limits
-      maxCommits: 50,
-      maxPullRequests: 20,
-      maxReleaseBodyLength: 2000,
-      maxCommitMessageLength: 200,
-      maxPRBodyLength: 500,
-      maxChangelogLength: 1000,
-      // GitHub repository configuration
-      repository: WHATS_NEW_DEFAULT_REPOSITORY,
-      targetBranch: WHATS_NEW_DEFAULT_TARGET_BRANCH,
-    },
-    description:
-      "Configuration for automated What's New modal generation, including LLM model selection, prompt parameters, validation rules, and content sanitization limits.",
-    category: 'Admin',
-    order: 101,
-    schema: WhatsNewConfigSchema,
-  }),
-  whatsNewSyncConfig: makeObjectSetting({
-    key: 'whatsNewSyncConfig',
-    name: "What's New Sync Configuration",
-    defaultValue: {
-      autoSyncEnabled: true,
-    },
-    description:
-      "Configuration for What's New modal syncing from production. Used by fork/non-production environments to control automatic synchronization.",
-    category: 'Admin',
-    order: 102,
-    schema: WhatsNewSyncConfigSchema,
   }),
   releaseNotesConfig: makeObjectSetting({
     key: 'releaseNotesConfig',

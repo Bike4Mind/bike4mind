@@ -116,10 +116,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       const { modalId } = ModalIdBodySchema.parse(req.body);
 
       // Read existing variants before clearing. An internal-only modal (variants
-      // map present but no customer key) has raw internal text at top-level.
-      // Clearing variants reverts the doc to legacy mode, so any subsequent
-      // edit-path S3 sync would upload that internal text to fork environments.
-      // Reset content fields on those modals to prevent the leak.
+      // map present but no customer key) has raw internal text at top-level, and
+      // clearing variants reverts the doc to legacy mode, which then serves those
+      // top-level fields to every viewer. Reset content fields on those modals.
       const existing = await ModalModel.findById(modalId).lean();
       if (!existing) throw new NotFoundError('Modal not found');
 

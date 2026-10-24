@@ -178,6 +178,8 @@ export async function getCounterTotalsForLast24Hours(
           _id: user._id,
           email: user.email || user._id,
           interactions: user.interactions,
+          creditsSpent: user.creditsSpent || 0,
+          isNew: user.isNew || false,
           rankChange: user.rankChange || 'same',
           lastWeekRank: user.lastWeekRank || '>#20',
         })),

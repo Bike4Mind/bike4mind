@@ -11,6 +11,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 // assembled inline from the clean modules instead of wakeHandler's
 // buildDefaultWakeDeps for the same reason.
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps } from '@bike4mind/agents';
+import '@server/deepAgent/contributedToolbelts';
 import { enrollDeepAgent } from '@bike4mind/server-utils/deepAgent/enroll';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
