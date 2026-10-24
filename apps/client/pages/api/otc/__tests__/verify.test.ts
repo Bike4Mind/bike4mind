@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { CreditHolderType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import {
+  BadRequestError,
+  CreditHolderType,
+  PENDING_FREE_CREDITS_TAG,
+  RESERVED_USERNAME_MESSAGE,
+} from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
@@ -450,6 +455,25 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       event: 'credits_granted',
       metadata: { amount: 1000, source: 'signup', method: 'otc' },
     });
+  });
+
+  it('returns the reserved-username rejection with a fresh token so the user can pick another name', async () => {
+    mockRegisterViaOTC.mockRejectedValueOnce(new BadRequestError(RESERVED_USERNAME_MESSAGE));
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.username = 'persona-x';
+
+    const err = await handler(req, res).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(BadRequestError);
+    expect(err).toMatchObject({
+      message: RESERVED_USERNAME_MESSAGE,
+      additionalInfo: { pendingToken: expect.any(String) },
+    });
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.objectContaining({ username: 'persona-x', email: NON_DOMAIN_EMAIL }),
+      expect.anything()
+    );
+    expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
   });
 
   it('keeps a synthetic account out of the signup conversion', async () => {

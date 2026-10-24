@@ -113,6 +113,7 @@ export * from './utils/emailDomain';
 export * from './utils/requireEnv';
 export * from './utils/bedrockCredentials';
 export * from './utils/internalStaffDomains';
+export * from './utils/syntheticIdentity';
 export * from './utils/countCodePoints';
 export * from './utils/citationMarkers';
 export * from './utils/releaseNoteText';

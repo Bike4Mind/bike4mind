@@ -255,4 +255,14 @@ describe('POST /api/admin/bulk-create-users', () => {
 
     expect(h.createUser.mock.calls[0][0].username).toMatch(/^user-[0-9a-f]{8}$/);
   });
+
+  it('never derives the reserved test-persona prefix from an address', async () => {
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    await h.handler!(makeReq([{ email: 'persona-jo@b.test' }, { email: 'Persona-@b.test' }]), res);
+
+    const usernames = h.createUser.mock.calls.map(([params]) => params.username);
+    expect(usernames).toContain('jo');
+    expect(usernames.find(u => u !== 'jo')).toMatch(/^user-[0-9a-f]{8}$/);
+    expect(h.createUser.mock.calls.every(([params]) => params.allowReservedUsername === undefined)).toBe(true);
+  });
 });
