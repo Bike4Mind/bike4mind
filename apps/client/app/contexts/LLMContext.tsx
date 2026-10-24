@@ -344,6 +344,8 @@ export const useLLM = create(
       name: 'llm-settings',
       version: 7,
       migrate: (persistedState: any, version: number) => {
+        // Nothing to migrate in a missing or corrupt entry; the store keeps its defaults.
+        if (!persistedState || typeof persistedState !== 'object' || Array.isArray(persistedState)) return {};
         // Remap any persisted image-model ids that are now legacy/removed (e.g. dall-e-3, flux-dev).
         const remapLegacyImageModels = (state: Record<string, unknown>) => {
           for (const key of ['imageModel', 'lastUsedImageModel'] as const) {
@@ -389,12 +391,16 @@ export const useLLM = create(
         if (version < 6) {
           if (persistedState.output_format === 'jpeg') persistedState.output_format = 'png';
         }
-        // Migration v6->v7: a store that started empty and had its first model applied by session
-        // hydration kept the DEFAULTS placeholder as the ceiling (see the refit effect below). Clear
-        // that exact value once so it is re-derived for the current model. A deliberate choice of
-        // exactly the placeholder is indistinguishable and resets too; it is one slider move back.
+        // Migration v6->v7: a store whose first model was set without a budget (session hydration did,
+        // before it moved to selectSessionModel) kept the DEFAULTS placeholder as its ceiling (see the
+        // refit effect below). Clear that exact value once so it is re-derived. Only with no
+        // defaultTextModel: its one writer, the default-model effect, always replaces the placeholder,
+        // so an 8192 beside it was chosen later and is kept. Residue both ways: a deliberate 8192 on a
+        // store that effect never resolved resets; a pin whose model its fallback branch swapped stays.
         if (version < 7) {
-          if (persistedState.max_tokens === DEFAULTS.max_tokens) persistedState.max_tokens = 0;
+          if (persistedState.max_tokens === DEFAULTS.max_tokens && !persistedState.defaultTextModel) {
+            persistedState.max_tokens = 0;
+          }
         }
         return persistedState;
       },
@@ -678,10 +684,10 @@ export const LLMProvider: React.FC = () => {
     // does not fit. Clearing here would drop the flag before its run, and the next run would see a model
     // change with allowRaise on - the reset this fix exists to prevent.
     // An empty model is the fresh store (DEFAULTS, or after resetSettings), whose max_tokens is the
-    // placeholder rather than a choice. Recorded so the first model to land - very often the session
-    // pin applied by useHydrateModelFromSession, before the default-model effect above can run - counts
-    // as a switch and raises the placeholder. Without it that first fit saw no previous model, kept
-    // allowRaise off, and pinned 8192 for good on a model whose default is many times larger.
+    // placeholder rather than a choice. Recorded so a first model that lands without a budget, before
+    // the default-model effect above can run, counts as a switch and raises the placeholder (session
+    // hydration landed one that way until it moved to selectSessionModel). Without it that first fit
+    // saw no previous model, kept allowRaise off, and pinned 8192 for good.
     if (!activeModel) {
       refitModelRef.current = '';
       return;

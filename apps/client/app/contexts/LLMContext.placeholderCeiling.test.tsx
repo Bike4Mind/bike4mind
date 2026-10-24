@@ -1,11 +1,11 @@
 import { render, waitFor, cleanup, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// A fresh store (DEFAULTS: no model, the 8192 max_tokens placeholder) very often gets its first model
-// from session hydration (useHydrateModelFromSession -> setLLM({ model })) while admin settings are
-// still loading, so the default-model effect, which raises the placeholder, never runs. The refit
-// effect then saw that first model with no previous one, treated it as "the model the user is already
-// on", and kept 8192 for good - on a model whose default is many times larger.
+// A fresh store (DEFAULTS: no model, the 8192 max_tokens placeholder) can get its first model from a
+// write that leaves max_tokens alone - setLLM({ model }), which is how session hydration applied the
+// pin before it moved to selectSessionModel - while admin settings are still loading, so the
+// default-model effect, which raises the placeholder, never runs. The refit effect then saw that first
+// model with no previous one, treated it as "the model the user is already on", and kept 8192 for good.
 const h = vi.hoisted(() => ({ adminLoading: true }));
 
 const OPUS = { id: 'claude-opus-x', type: 'text', contextWindow: 1_000_000, max_tokens: 128_000 };
@@ -57,6 +57,14 @@ describe('LLMProvider refit effect - the DEFAULTS max_tokens placeholder', () =>
     await waitFor(() => expect(useLLM.getState().max_tokens).toBe(128_000));
   });
 
+  // Today's hydration path zeroes the budget for a model other than the preferred one, so it is fitted too.
+  it('fits the model default when selectSessionModel pins the first model of a fresh store', async () => {
+    render(<LLMProvider />);
+    act(() => useLLM.getState().selectSessionModel(OPUS.id));
+
+    await waitFor(() => expect(useLLM.getState().max_tokens).toBe(128_000));
+  });
+
   // The guard against over-fixing: a returning user's persisted store already has a model, and a
   // below-default value there is their own setting, which a reload must not discard.
   it('keeps a below-default value on the model the store was already on', async () => {
@@ -65,6 +73,21 @@ describe('LLMProvider refit effect - the DEFAULTS max_tokens placeholder', () =>
     render(<LLMProvider />);
 
     await waitFor(() => expect(useLLM.getState().model).toBe(OPUS.id));
+    expect(useLLM.getState().max_tokens).toBe(8192);
+  });
+
+  // Re-deriving is a model-switch rule: lowering the budget on the same model afterwards is not undone.
+  it('keeps an 8192 the user sets after the placeholder was raised, across a remount', async () => {
+    render(<LLMProvider />);
+    act(() => useLLM.getState().setLLM({ model: OPUS.id }));
+    await waitFor(() => expect(useLLM.getState().max_tokens).toBe(128_000));
+
+    act(() => useLLM.getState().setLLM({ max_tokens: 8192 }));
+    expect(useLLM.getState().max_tokens).toBe(8192);
+    cleanup();
+    render(<LLMProvider />);
+    await act(async () => {});
+
     expect(useLLM.getState().max_tokens).toBe(8192);
   });
 });
@@ -108,5 +131,55 @@ describe('llm-settings v6 -> v7 migration', () => {
     await rehydrateFrom({ model: OPUS.id, max_tokens: 8192 }, 7);
 
     expect(useLLM.getState().max_tokens).toBe(8192);
+  });
+
+  it('writes the migrated store back at v7, so a later 8192 survives the next load', async () => {
+    await rehydrateFrom({ model: OPUS.id, max_tokens: 8192 });
+    expect(JSON.parse(localStorage.getItem('llm-settings') ?? '{}').version).toBe(7);
+
+    act(() => useLLM.getState().setLLM({ max_tokens: 8192 }));
+    await useLLM.persist.rehydrate();
+
+    expect(useLLM.getState().max_tokens).toBe(8192);
+  });
+
+  // The default-model effect, the only writer of defaultTextModel, always replaces the placeholder,
+  // so an 8192 beside it was set afterwards and is honored like any other explicit budget.
+  it('keeps an 8192 in a store whose model the default-model effect resolved', async () => {
+    await rehydrateFrom({ model: OPUS.id, defaultTextModel: OPUS.id, max_tokens: 8192 });
+
+    expect(useLLM.getState().max_tokens).toBe(8192);
+  });
+
+  it('keeps every other persisted field', async () => {
+    await rehydrateFrom({
+      model: OPUS.id,
+      max_tokens: 8192,
+      temperature: 0.3,
+      lastUsedTextModel: OPUS.id,
+      tools: ['web_search'],
+      output_format: 'png',
+    });
+
+    expect(useLLM.getState()).toMatchObject({
+      model: OPUS.id,
+      max_tokens: 0,
+      temperature: 0.3,
+      lastUsedTextModel: OPUS.id,
+      tools: ['web_search'],
+      output_format: 'png',
+    });
+  });
+
+  it('falls back to defaults for a missing or corrupt entry instead of failing hydration', async () => {
+    for (const persisted of [null, 'garbage', [8192]]) {
+      useLLM.getState().resetSettings();
+      localStorage.setItem('llm-settings', JSON.stringify({ state: persisted, version: 6 }));
+      await useLLM.persist.rehydrate();
+
+      expect(useLLM.persist.hasHydrated()).toBe(true);
+      expect(useLLM.getState()).toMatchObject({ model: '', max_tokens: 8192 });
+      expect(useLLM.getState()).not.toHaveProperty('0');
+    }
   });
 });
