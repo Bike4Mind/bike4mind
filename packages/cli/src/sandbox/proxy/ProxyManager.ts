@@ -88,6 +88,8 @@ export class ProxyManager {
       https_proxy: proxyUrl,
       NO_PROXY: noProxy,
       no_proxy: noProxy,
+      // Node's fetch ignores the vars above unless opted in, and the sandbox blocks direct egress.
+      NODE_USE_ENV_PROXY: '1',
     };
   }
 

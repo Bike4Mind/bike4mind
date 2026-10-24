@@ -124,6 +124,7 @@ import {
   reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
+  withFederatedSharedKeys,
   type ICompletionOptions,
   PipelineTimer,
   resolveDeprecatedModelId,
@@ -177,7 +178,7 @@ import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
-import { getEffectiveLLMApiKeys } from '../apiKeyService';
+import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
@@ -2433,7 +2434,10 @@ export class ChatCompletionProcess {
       // without this the find returns undefined and the run dies with "Invalid LLM backend".
       const resolvedModelId = resolveDeprecatedModelId(model, 'ChatCompletionProcess');
       const modelInfo = models.find(m => m.id === resolvedModelId);
-      const llm = getLlmByModel(apiKeyTable, {
+      // Reuse trusted federation provenance across primary and fallback chat backends.
+      // Direct-SDK consumers below keep the original static key table.
+      const chatApiKeyTable = withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable));
+      const llm = getLlmByModel(chatApiKeyTable, {
         modelInfo,
         logger,
         endUserId: this.user.id,
@@ -5404,7 +5408,7 @@ export class ChatCompletionProcess {
                 currentModel,
                 fallbackModelId,
                 models,
-                apiKeyTable,
+                chatApiKeyTable,
                 logger,
                 {
                   // A timeout that reaches here has spent its one same-model retry. triedModelIds

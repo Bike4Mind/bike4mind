@@ -60,6 +60,7 @@ describe('tool side-effect declarations', () => {
       'save_content_to_data_lake',
       'blog_publish',
       'delegate_to_agent',
+      'bob_panel_read',
       'send_slack_message',
       'bash_execute',
       'delete_file',

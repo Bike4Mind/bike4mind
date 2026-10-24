@@ -41,4 +41,20 @@ describe('getCounterTotalsForLast24Hours - DAU/WAU inputs', () => {
     expect(empty.userActivity.weeklyActiveUsers).toBe(0);
     expect(absent.userActivity.weeklyActiveUsers).toBe(0);
   });
+
+  it('passes leaderboard spend and the new-account flag through', async () => {
+    const result = await run({
+      topUsers: [{ _id: 'u1', email: 'u1@example.com', interactions: 3, creditsSpent: 420, isNew: true }],
+    });
+
+    expect(result.userActivity.topUsers[0]).toEqual(
+      expect.objectContaining({ _id: 'u1', interactions: 3, creditsSpent: 420, isNew: true })
+    );
+  });
+
+  it('defaults spend and the new-account flag when the weekly facet omits them', async () => {
+    const result = await run({ topUsers: [{ _id: 'u1', email: 'u1@example.com', interactions: 3 }] });
+
+    expect(result.userActivity.topUsers[0]).toEqual(expect.objectContaining({ creditsSpent: 0, isNew: false }));
+  });
 });

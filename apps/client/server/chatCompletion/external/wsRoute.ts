@@ -1,4 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
@@ -232,6 +233,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               organizations: organizationRepository,
             },
             apiKeyInfo: apiKeyInfoForCompletion,
+            scopeActor: actorScopeForKey(apiKeyInfo),
             // Org-billed API keys settle to the org's shared pool.
             billingOrganizationId: apiKeyInfo?.organizationId,
             requestId,

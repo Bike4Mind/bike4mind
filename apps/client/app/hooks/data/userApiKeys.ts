@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding, type ApiKeyRateLimitUsage } from '@bike4mind/common';
+import { IUserApiKeyDocument, ApiKeyScopeValue, IEmbedBranding, type ApiKeyRateLimitUsage } from '@bike4mind/common';
 import type { CounterLockoutState } from '@server/utils/apiKeyRateLimitCheck';
 import { toast } from 'sonner';
 
@@ -33,7 +33,7 @@ function parseValidationError(error: any): string {
 
 export interface CreateUserApiKeyRequest {
   name: string;
-  scopes: ApiKeyScope[];
+  scopes: ApiKeyScopeValue[];
   expiresAt?: Date;
   rateLimit?: {
     requestsPerMinute: number;

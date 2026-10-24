@@ -137,6 +137,7 @@ describe('buildOpenApiDocument', () => {
     expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual([
       'invalid_request',
       'unknown_model',
+      'assistant_prefill_unsupported',
       'tool_search_unsupported',
       'all_tools_deferred',
       'deferred_tool_cache_control',

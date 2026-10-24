@@ -85,7 +85,9 @@ export const API_ERROR_CODES = [
   'org_storage_limit_exceeded',
   /** The file is larger than the platform's per-file size limit. */
   'file_too_large',
-  // Completions tool search (POST /api/ai/v1/completions); see COMPLETION_TOOL_ERROR_CODES.
+  // Completions request errors (POST /api/ai/v1/completions).
+  /** The selected model cannot continue a final assistant message. */
+  'assistant_prefill_unsupported',
   /** A tool search server tool, `tool_reference` or tool search block was sent for a model that cannot serve it here. */
   'tool_search_unsupported',
   /** Every tool had `defer_loading: true` and no server tool was sent, so nothing would be loaded. */

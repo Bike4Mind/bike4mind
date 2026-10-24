@@ -328,6 +328,26 @@ export interface PremiumEntitlementGrants {
   readonly internalStaffEntitlements?: readonly string[];
 }
 
+/**
+ * An API-key scope an overlay adds (`b4mContributions.apiKeyScopes`) to the built-in catalog in
+ * constants/apiKeyScopes.ts. Literal data, so the client bundle never imports overlay code. The value
+ * is `<resource>:<action>`; the `admin`, `cc-bridge`, `embed` and `datalake` resources are reserved.
+ * A contributed scope is never confined and is always self-mintable: the contract has no field for
+ * either. With `requiredEntitlement` set, the scope is offered to a user holding that key, and to
+ * every admin and developer-tagged user regardless (the bypass in isApiKeyScopeOffered, wider than
+ * requestHasEntitlement's admin-only one), so a route serving a paid feature must also check the
+ * entitlement itself. Two overlays giving one value different rows fail the build; an identical
+ * repeat collapses.
+ */
+export interface PremiumApiKeyScope {
+  readonly value: string;
+  readonly label: string;
+  readonly description: string;
+  /** `METHOD /path` lines shown in the scope docs; informational, never used for routing. */
+  readonly endpoints: readonly string[];
+  readonly requiredEntitlement?: string;
+}
+
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {
   /** The reply's quest id - the same key the UI side-effect bus dispatches as `dedupeKey`. */

@@ -5,12 +5,13 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
+import Switch from '@mui/joy/Switch';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { LOCAL_MODEL_PREFIX, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { effectiveContextLimit } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
@@ -24,7 +25,7 @@ import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import { GlobeIcon, PanelRightIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
-import { columnStackSx, contentColumnSx } from './layout';
+import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
@@ -262,12 +263,16 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     });
   }, []);
 
-  const selectSession = useCallback((sessionId: string) => {
-    // A screen takes over the same pane the transcript lives in, so picking a conversation has
-    // to put it back or the click reads as doing nothing.
-    setScreen('conversation');
-    setActiveId(sessionId);
-  }, []);
+  const selectSession = useCallback(
+    (sessionId: string) => {
+      // History search spans both modes, so the owning mode follows the selected result.
+      const selected = sessions.find(session => session.id === sessionId);
+      if (selected) setMode(selected.mode);
+      setScreen('conversation');
+      setActiveId(sessionId);
+    },
+    [sessions]
+  );
 
   const terminalOpen = !!activeId && terminalSessions.includes(activeId);
   const setTerminalOpen = useCallback((sessionId: string, open: boolean) => {
@@ -334,11 +339,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       ? `${modelOption.name} cannot read images. Pick a model that can, or remove the image before sending.`
       : null;
 
-  // A Code session with no project has no working directory, so main refuses the turn. Nothing
-  // is written out in prose: the unset folder chip a few pixels above is the thing to act on,
-  // and the composer names the state in one word where the reader already looks for "can I
-  // send?". Main's refusal stays as the guard, and surfaces through chat-send-error if a turn
-  // ever reaches it.
+  // A Code session with no project has no working directory, so main refuses the turn. The
+  // centered workspace form is the thing to act on, and the composer names the state in one word
+  // where the reader already looks for "can I send?". Main's refusal stays as the guard.
   const unbound = conversation.session?.mode === 'code' && !conversation.session.project;
 
   /**
@@ -376,16 +379,18 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // still this session's, and offering to open a second one for the same branch would be wrong.
   const hasPullRequest = !!pullRequest?.binding || (!!activeId && prSummaries.has(activeId));
   const spawned = useMemo(() => spawnedSessions(sessions, statuses, activeId), [sessions, statuses, activeId]);
+  const initialCodeSetup = conversation.session?.mode === 'code' && conversation.messages.length === 0;
 
   /**
-   * The session panel: a Code session with a folder only. An unbound one keeps its chips above the
-   * composer, since they are how the folder gets chosen, and a Chat session has nothing to put in it.
+   * The session panel: a Code session with a folder after its first message. Until then the same
+   * controls are centered in the empty transcript, and a Chat session has nothing to put in it.
    *
    * Docked when it fits beside the reading column, and then its open flag is remembered; on a
    * narrower pane it folds into the header button and opens as a popover, which is never left open
    * across conversations or launches.
    */
-  const panelProject = !opening && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
+  const panelProject =
+    !opening && !initialCodeSetup && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
   const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
   const panelShown = !!panelProject && (panelDocked ? panelPrefs.open : panelPopoverOpen);
   const bindingErrorHidden =
@@ -398,18 +403,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const closePanelPopover = useCallback(() => setPanelPopoverOpen(false), []);
   useEffect(() => setPanelPopoverOpen(false), [activeId, panelDocked, screen]);
 
-  /**
-   * What the composer's usage indicator reports: how full the window is, and what is left.
-   *
-   * The context figure comes from the last reply's LAST request, never from the turn's summed
-   * usage - see contextTokens. It is measured against the capped limit (effectiveContextLimit)
-   * rather than the raw window, and that limit is real even for a model that states no window:
-   * the cap applies either way.
-   *
-   * `turnOpen` is handed on so the figure survives the turn it is shown during: the reply being
-   * streamed has measured nothing yet, and without it the indicator would read as unknown from
-   * the moment the user pressed send until the reply landed. See latestReply.
-   */
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
     return {
@@ -417,10 +410,18 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       contextLimit: effectiveContextLimit(modelOption?.contextWindow),
       modelWindow: modelOption?.contextWindow ?? null,
       credits: credits.balance,
+      monthlyAllowance: credits.monthlyAllowance,
       ...(credits.error ? { creditsError: credits.error } : {}),
       lastTurn: reply?.usage ?? null,
     };
-  }, [conversation.messages, turnOpen, modelOption?.contextWindow, credits.balance, credits.error]);
+  }, [
+    conversation.messages,
+    turnOpen,
+    modelOption?.contextWindow,
+    credits.balance,
+    credits.monthlyAllowance,
+    credits.error,
+  ]);
 
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.
@@ -494,8 +495,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * the New button is a click on the sidebar and has to put the transcript back, the first-run
    * seeding below must not pull a user out of the screen they opened.
    *
-   * A Code session is created UNBOUND - no directory, no branch - and the chip row above the
-   * composer is where a project gets chosen. Creating one used to open the OS folder picker
+   * A Code session is created UNBOUND - no directory, no branch - and its empty transcript is where
+   * a project gets chosen. Creating one used to open the OS folder picker
    * first, which meant dismissing that dialog produced nothing at all: no session, no message,
    * and no way back in. Nothing is asked up front now, so there is nothing left to cancel.
    */
@@ -595,7 +596,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   );
 
   return (
-    <Box sx={{ position: 'relative', display: 'flex', height: '100vh', bgcolor: 'background.body' }} {...drop.handlers}>
+    <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
       <SpawnFailureToast />
       {drop.over && (
         <Box
@@ -702,6 +703,16 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   </IconButton>
                 </Tooltip>
               )}
+              {!opening && conversation.session && (
+                <Tooltip title="Keep this conversation and its visited pages in the local search index.">
+                  <Switch
+                    size="sm"
+                    checked={conversation.session.historyEnabled === true}
+                    onChange={event => void conversation.setHistory(event.target.checked)}
+                    slotProps={{ input: { 'aria-label': 'Local history', 'data-testid': 'chat-history-switch' } }}
+                  />
+                </Tooltip>
+              )}
               {/* Inside the reading column, not out at the window edge: a tooltip opening from
                   here cannot reach the pane, and a tooltip over the pane would be drawn behind
                   the web page - see agentBrowser.ts. */}
@@ -805,6 +816,28 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                             {mode === 'code' ? 'New Code session' : 'New conversation'}
                           </Button>
                         </Stack>
+                      }
+                      emptySession={
+                        initialCodeSetup ? (
+                          <Box
+                            sx={{ width: '100%', maxWidth: 420, minWidth: 0 }}
+                            data-testid="chat-code-workspace-setup"
+                          >
+                            <Typography level="title-sm" sx={{ mb: 1.5 }}>
+                              Set up this workspace
+                            </Typography>
+                            <SessionChips
+                              layout="embedded"
+                              project={conversation.session?.project ?? null}
+                              {...(conversation.session?.grantedDirectories
+                                ? { grantedDirectories: conversation.session.grantedDirectories }
+                                : {})}
+                              binding={conversation.project}
+                              settledTurns={conversation.settledTurns}
+                              preparing={conversation.preparing !== null}
+                            />
+                          </Box>
+                        ) : undefined
                       }
                       // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
                       // one parked at the approval gate - is still running, and Continue must not be
@@ -951,21 +984,22 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             onDismiss={spawnSuggestions.dismiss}
           />
 
-          {/* An unbound Code session: the chips are how a project is chosen, so they stay here,
-            where they cannot be hidden. Once bound they live in the session panel, unless a binding
-            error would have nowhere on screen to appear. */}
-          {conversation.session?.mode === 'code' && (!conversation.session.project || bindingErrorHidden) && (
-            <SessionChips
-              project={conversation.session.project ?? null}
-              {...(conversation.session.grantedDirectories
-                ? { grantedDirectories: conversation.session.grantedDirectories }
-                : {})}
-              binding={conversation.project}
-              settledTurns={conversation.settledTurns}
-              inUse={conversation.messages.length > 0}
-              preparing={conversation.preparing !== null}
-            />
-          )}
+          {/* After first use, an unbound session or a hidden panel error still needs these controls
+            above the composer. Empty Code sessions render them in the transcript instead. */}
+          {conversation.session?.mode === 'code' &&
+            !initialCodeSetup &&
+            (!conversation.session.project || bindingErrorHidden) && (
+              <SessionChips
+                project={conversation.session.project ?? null}
+                {...(conversation.session.grantedDirectories
+                  ? { grantedDirectories: conversation.session.grantedDirectories }
+                  : {})}
+                binding={conversation.project}
+                settledTurns={conversation.settledTurns}
+                inUse={conversation.messages.length > 0}
+                preparing={conversation.preparing !== null}
+              />
+            )}
           {conversation.session && conversation.session.mode !== 'code' && (
             <GrantedFolderChips
               directories={conversation.session.grantedDirectories ?? []}
@@ -980,7 +1014,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             streaming={turnOpen}
             attachments={draft}
             blockedReason={blockedReason}
-            notReady={unbound ? 'No folder' : null}
+            // Blocked rather than refused: a refused send has already cleared the box.
+            notReady={
+              auth?.reauthRequired && !conversation.session?.model.startsWith(LOCAL_MODEL_PREFIX)
+                ? 'Sign in'
+                : unbound
+                  ? 'No folder'
+                  : null
+            }
             usage={composerUsage}
             placeholder={
               conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'

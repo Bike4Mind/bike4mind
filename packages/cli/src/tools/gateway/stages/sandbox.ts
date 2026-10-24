@@ -39,17 +39,20 @@ export function prepareSandbox(
   } catch {
     // Not-yet-resolvable path: keep the lexical resolution.
   }
-  const decision = sandboxOrchestrator.shouldSandbox(command, cwd);
+  const decision = sandboxOrchestrator.shouldSandbox(command, cwd, workingDirectory => {
+    if (isPathAllowed(workingDirectory, allowedDirectories).allowed) return undefined;
+    return (
+      `working directory ${workingDirectory} is outside the sandbox writable root ` +
+      `(grant it with '/add-dir ${workingDirectory}' or run from within the workspace)`
+    );
+  });
 
   if (decision.type === 'blocked') {
     return { kind: 'blocked', message: blockCommand(sandboxOrchestrator, command, decision.reason) };
   }
 
   if (decision.type === 'sandbox') {
-    // Confine the writable root to the same allow-list the core file tools
-    // honor. A model-supplied cwd outside the workspace would otherwise
-    // become the sandbox's read-write bind; reject it (and drop the temp
-    // sandbox profile shouldSandbox already built) before it can execute.
+    // Defensive check for alternate orchestrators that do not invoke the pre-wrap validator.
     if (!isPathAllowed(cwd, allowedDirectories).allowed) {
       cleanupSandboxFiles(decision.wrappedCommand.cleanupPaths);
       return {

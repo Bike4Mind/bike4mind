@@ -1,5 +1,5 @@
 import { Connection, User, wsConnectTicketRepository } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyScopeValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
@@ -91,7 +91,7 @@ async function resolveWebTicket(
 async function resolveIdentity(
   token: string,
   logger: Logger
-): Promise<{ userId: string; scopes?: ApiKeyScope[] } & ConnectionAuth> {
+): Promise<{ userId: string; scopes?: ApiKeyScopeValue[] } & ConnectionAuth> {
   let jwtErr: unknown;
   try {
     const decoded = authTokenGenerator.verifyToken(token) as jwt.JwtPayload;
@@ -162,7 +162,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
     const ticketIdentity = await resolveWebTicket(event);
     let userId: string;
     let source: ConnectionSource;
-    let scopes: ApiKeyScope[] | undefined = undefined;
+    let scopes: ApiKeyScopeValue[] | undefined = undefined;
     let auth: ConnectionAuth;
     if (ticketIdentity) {
       const { userId: ticketUserId, source: ticketSource, ...ticketAuth } = ticketIdentity;

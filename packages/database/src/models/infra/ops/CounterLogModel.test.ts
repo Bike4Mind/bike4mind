@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { dayjs } from '@bike4mind/common';
 import { createMongoServer } from '../../../__test__/createMongoServer';
 import { CounterLog, counterLogRepository } from './CounterLogModel';
+import { CreditTransaction } from '../../billing/CreditTransactionModel';
 
 let mongod: MongoMemoryServer;
 const originalStaffDomains = process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS;
@@ -25,8 +26,10 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await CounterLog.deleteMany({});
   await mongoose.connection.collection('users').deleteMany({});
+  await mongoose.connection.collection('credittransactions').deleteMany({});
   process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS = 'staff.example.com';
 });
 
@@ -40,10 +43,21 @@ const eightDaysBefore = new Date('2026-05-24T12:00:00.000Z');
 const justBeforeWauBound = new Date('2026-05-25T12:00:00.000Z');
 const justAfterWauBound = new Date('2026-05-26T00:00:00.000Z');
 
-async function seedUser(email: string) {
+async function seedUser(email: string, createdAt?: Date) {
   const _id = new mongoose.Types.ObjectId();
-  await mongoose.connection.collection('users').insertOne({ _id, email });
+  await mongoose.connection.collection('users').insertOne({ _id, email, ...(createdAt ? { createdAt } : {}) });
   return _id.toString();
+}
+
+/** Usage rows are stored negative; `credits` here is the magnitude the report should show. */
+async function spendFor(userId: string, credits: number, createdAt: Date = inWindow) {
+  await mongoose.connection.collection('credittransactions').insertOne({
+    ownerId: userId,
+    ownerType: 'User',
+    type: 'text_generation_usage',
+    credits: -credits,
+    createdAt,
+  });
 }
 
 function logFor(userId: string, datetime: Date) {
@@ -244,15 +258,260 @@ describe('CounterLogRepository.metricsByDate - topUsers email', () => {
     expect(result.topUsers).toEqual([expect.objectContaining({ _id: userId, email: 'top@example.com' })]);
   });
 
-  it.each([
-    ['daily', undefined],
-    ['weekly', '2026-05-26'],
-  ])('returns a null email for a deleted user in the %s report', async (_label, startDate) => {
+  it('returns a null email for a deleted user in the weekly report', async () => {
     const orphanId = new mongoose.Types.ObjectId().toString();
     await CounterLog.insertMany([logFor(orphanId, inWindow)]);
 
-    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE, startDate);
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE, '2026-05-26');
 
     expect(result.topUsers).toEqual([expect.objectContaining({ _id: orphanId, email: null })]);
+  });
+
+  it('drops a deleted user from the daily report, where the leaderboard is people only', async () => {
+    const orphanId = new mongoose.Types.ObjectId().toString();
+    await CounterLog.insertMany([logFor(orphanId, inWindow)]);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(result.topUsers).toEqual([]);
+  });
+});
+
+describe('CounterLogRepository.metricsByDate - daily topUsers leaderboard', () => {
+  const rankedIds = (facet?: Array<{ _id: string }>) => (facet ?? []).map(u => u._id);
+
+  it('rejects when the spend query fails instead of returning an events-only ranking', async () => {
+    const userId = await seedUser('event-user@example.com');
+    await CounterLog.insertMany([logFor(userId, inWindow)]);
+    const aggregation = CreditTransaction.aggregate();
+    vi.spyOn(aggregation, 'exec').mockRejectedValueOnce(new Error('ledger unavailable'));
+    vi.spyOn(CreditTransaction, 'aggregate').mockReturnValueOnce(aggregation);
+
+    await expect(counterLogRepository.metricsByDate(REPORT_DATE)).rejects.toThrow('ledger unavailable');
+  });
+
+  it('does not query the spend ledger for weekly reports', async () => {
+    const aggregate = vi.spyOn(CreditTransaction, 'aggregate');
+
+    await counterLogRepository.metricsByDate(REPORT_DATE, '2026-05-26');
+
+    expect(aggregate).not.toHaveBeenCalled();
+  });
+
+  it('includes spenders with no counter events, even when the counter collection is empty', async () => {
+    const userId = await seedUser('api-only@example.com', sixDaysBefore);
+    await spendFor(userId, 500);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(result.topUsers).toEqual([
+      expect.objectContaining({
+        _id: userId,
+        email: 'api-only@example.com',
+        creditsSpent: 500,
+        interactions: 0,
+        isNew: true,
+      }),
+    ]);
+  });
+
+  it('combines ledger-only spenders and event-only users without duplicating users in both', async () => {
+    const apiOnly = await seedUser('api-only@example.com');
+    const both = await seedUser('both@example.com');
+    const eventOnly = await seedUser('events-only@example.com');
+    await spendFor(apiOnly, 500);
+    await spendFor(both, 100);
+    await CounterLog.insertMany([logFor(both, inWindow), logFor(eventOnly, inWindow), logFor(eventOnly, inWindow)]);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(rankedIds(result.topUsers)).toEqual([apiOnly, both, eventOnly]);
+    expect(result.topUsers?.map(user => user.interactions)).toEqual([0, 1, 2]);
+    expect(result.topUsers?.map(user => user.creditsSpent)).toEqual([500, 100, 0]);
+  });
+
+  it('applies user, owner, usage-type and date exclusions to ledger-only candidates', async () => {
+    const external = await seedUser('external@example.com');
+    const staff = await seedUser('staff@staff.example.com');
+    const oldSpend = await seedUser('old-spend@example.com');
+    const nonUsage = await seedUser('adjustment@example.com');
+    const org = await seedUser('org@example.com');
+    const orphan = new mongoose.Types.ObjectId().toString();
+    await spendFor(external, 1);
+    await spendFor(staff, 1000);
+    await spendFor(orphan, 1000);
+    await spendFor('SYSTEM', 1000);
+    await spendFor(oldSpend, 1000, outOfWindow);
+    await mongoose.connection.collection('credittransactions').insertMany([
+      { ownerId: org, ownerType: 'Organization', type: 'text_generation_usage', credits: -1000, createdAt: inWindow },
+      { ownerId: nonUsage, ownerType: 'User', type: 'generic_deduct', credits: -1000, createdAt: inWindow },
+    ]);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(rankedIds(result.topUsers)).toEqual([external]);
+  });
+
+  it('ranks all spenders before limiting, using events and then id for equal spend', async () => {
+    const userIds = await Promise.all(
+      Array.from({ length: 25 }, (_, index) => seedUser(`spender${index}@example.com`))
+    );
+    await Promise.all(userIds.map(userId => spendFor(userId, 10)));
+    const busier = userIds[24];
+    await CounterLog.insertMany([logFor(busier, inWindow), logFor(busier, inWindow), logFor(userIds[23], outOfWindow)]);
+    const free = await seedUser('free@example.com');
+    await CounterLog.insertMany(Array.from({ length: 30 }, () => logFor(free, inWindow)));
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(rankedIds(result.topUsers)).toEqual([
+      busier,
+      ...userIds
+        .filter(id => id !== busier)
+        .sort()
+        .slice(0, 19),
+    ]);
+    expect(result.topUsers?.[0].interactions).toBe(2);
+    expect(result.topUsers?.slice(1).every(user => user.interactions === 0)).toBe(true);
+  });
+
+  it('ranks by credits spent rather than event count', async () => {
+    const spender = await seedUser('spender@example.com');
+    const busy = await seedUser('busy@example.com');
+    await CounterLog.insertMany([
+      logFor(spender, inWindow),
+      logFor(busy, inWindow),
+      logFor(busy, inWindow),
+      logFor(busy, inWindow),
+    ]);
+    await spendFor(spender, 500);
+    await spendFor(busy, 10);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(rankedIds(result.topUsers)).toEqual([spender, busy]);
+    expect(result.topUsers?.[0]).toEqual(expect.objectContaining({ interactions: 1, creditsSpent: 500 }));
+  });
+
+  it('counts only in-window AI usage toward creditsSpent', async () => {
+    const user = await seedUser('mixed@example.com');
+    await CounterLog.insertMany([logFor(user, inWindow)]);
+    await spendFor(user, 50);
+    await spendFor(user, 900, new Date('2026-06-02T12:00:00.000Z'));
+    await mongoose.connection.collection('credittransactions').insertMany(
+      ['generic_deduct', 'transfer_credit'].map(type => ({
+        ownerId: user,
+        ownerType: 'User',
+        type,
+        credits: -700,
+        createdAt: inWindow,
+      }))
+    );
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(result.topUsers?.[0]).toEqual(expect.objectContaining({ creditsSpent: 50 }));
+  });
+
+  it('breaks a spend tie by event count', async () => {
+    // quieter is seeded first so its lower user id wins any id-based fallback; only the event tie-break puts busier ahead
+    const quieter = await seedUser('quieter@example.com');
+    const busier = await seedUser('busier@example.com');
+    await CounterLog.insertMany([logFor(quieter, inWindow), logFor(busier, inWindow), logFor(busier, inWindow)]);
+    await spendFor(quieter, 100);
+    await spendFor(busier, 100);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(rankedIds(result.topUsers)).toEqual([busier, quieter]);
+  });
+
+  it('excludes staff accounts even when they lead on both spend and events', async () => {
+    const staff = await seedUser('teammate@staff.example.com');
+    const external = await seedUser('customer@example.com');
+    await CounterLog.insertMany([logFor(staff, inWindow), logFor(staff, inWindow), logFor(external, inWindow)]);
+    await spendFor(staff, 1000);
+    await spendFor(external, 1);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(rankedIds(result.topUsers)).toEqual([external]);
+  });
+
+  it('drops non-user ids such as SYSTEM from the leaderboard', async () => {
+    const real = await seedUser('real@example.com');
+    await CounterLog.insertMany([logFor('SYSTEM', inWindow), logFor('SYSTEM', inWindow), logFor(real, inWindow)]);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(rankedIds(result.topUsers)).toEqual([real]);
+  });
+
+  it('only counts spend inside the report window', async () => {
+    const current = await seedUser('current@example.com');
+    const stale = await seedUser('stale@example.com');
+    await CounterLog.insertMany([
+      logFor(current, inWindow),
+      logFor(stale, inWindow),
+      logFor(stale, inWindow),
+      logFor(stale, inWindow),
+    ]);
+    await spendFor(current, 10);
+    await spendFor(stale, 1000, outOfWindow);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(rankedIds(result.topUsers)).toEqual([current, stale]);
+    expect(result.topUsers?.[1]).toEqual(expect.objectContaining({ creditsSpent: 0 }));
+  });
+
+  it('marks accounts created within 7 days of the window end as new', async () => {
+    const recent = await seedUser('recent@example.com', sixDaysBefore);
+    const veteran = await seedUser('veteran@example.com', eightDaysBefore);
+    await CounterLog.insertMany([logFor(recent, inWindow), logFor(veteran, inWindow)]);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    // Same spend, so the tie is broken by _id; assert by id rather than by order.
+    const byId = Object.fromEntries((result.topUsers ?? []).map(user => [user._id, user.isNew]));
+    expect(byId[recent]).toBe(true);
+    expect(byId[veteran]).toBe(false);
+  });
+
+  it.each(['events', 'ledger'] as const)(
+    'bounds new-account tags against the historical window for %s candidates',
+    async source => {
+      const atCutoff = await seedUser('at-cutoff@example.com', new Date('2026-05-25T23:59:59.999Z'));
+      const afterCutoff = await seedUser('after-cutoff@example.com', new Date('2026-05-26T00:00:00.000Z'));
+      const future = await seedUser('future@example.com', new Date('2026-06-02T00:00:00.000Z'));
+      const undated = await seedUser('undated@example.com');
+      const userIds = [atCutoff, afterCutoff, future, undated];
+      if (source === 'ledger') {
+        await Promise.all(userIds.map(userId => spendFor(userId, 1)));
+      } else {
+        await CounterLog.insertMany(userIds.map(userId => logFor(userId, inWindow)));
+      }
+
+      const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+      expect(Object.fromEntries((result.topUsers ?? []).map(user => [user._id, user.isNew]))).toEqual({
+        [atCutoff]: false,
+        [afterCutoff]: true,
+        [future]: false,
+        [undated]: false,
+      });
+    }
+  );
+
+  it('ranks a zero-spend user below every spender', async () => {
+    const free = await seedUser('free@example.com');
+    const spender = await seedUser('spender@example.com');
+    await CounterLog.insertMany([logFor(free, inWindow), logFor(free, inWindow), logFor(spender, inWindow)]);
+    await spendFor(spender, 1);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(rankedIds(result.topUsers)).toEqual([spender, free]);
+    expect(result.topUsers?.[1]).toEqual(expect.objectContaining({ creditsSpent: 0 }));
   });
 });

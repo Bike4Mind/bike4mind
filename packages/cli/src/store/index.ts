@@ -57,6 +57,7 @@ interface PermissionPromptState {
   args: unknown;
   preview?: string;
   canBeTrusted: boolean;
+  sessionScope?: string[] | null;
   kind?: PermissionPromptKind;
   resolve: (response: { action: PermissionResponse }) => void;
 }

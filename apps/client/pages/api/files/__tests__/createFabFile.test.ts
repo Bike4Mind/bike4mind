@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { KnowledgeType, createModalVideoSchema } from '@bike4mind/common';
+import { ApiKeyScope, KnowledgeType, createModalVideoSchema } from '@bike4mind/common';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 
@@ -75,6 +75,8 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-fab-bucket' } } }));
 
 import handler from '../createFabFile';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 
 const LAKE = {
   id: 'lake-1',
@@ -378,6 +380,61 @@ describe('POST /api/files/createFabFile - lake write authorization beyond the cr
   });
 });
 
+describe('POST /api/files/createFabFile - admin-owned API keys', () => {
+  const OTHER_LAKE = { ...LAKE, createdByUserId: 'someone-else', organizationId: 'org-1' };
+  const lakeTag = body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] });
+  const keyCaller = (scopes: ApiKeyScope[]) => {
+    const user = { id: 'u2', isAdmin: true };
+    return {
+      user: scopes.includes(ApiKeyScope.ADMIN) ? user : withholdAdminRole(user),
+      apiKeyInfo: { keyId: 'k1', scopes },
+    };
+  };
+  const callAs = (overrides: Record<string, unknown>, res: unknown) =>
+    (handler as (req: unknown, res: unknown) => Promise<void>)(req(lakeTag, 'u2', overrides), res);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findByDatalakeTag.mockResolvedValue(OTHER_LAKE);
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u2', isAdmin: true, storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+  });
+
+  it('refuses a key without the admin scope', async () => {
+    const { res } = makeRes();
+
+    await expect(callAs(keyCaller([ApiKeyScope.WRITE_FILES, ApiKeyScope.DATALAKE_WRITE]), res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses it in the service re-check as well', async () => {
+    vi.mocked(toAccessContext).mockResolvedValueOnce({
+      userId: 'u2',
+      isAdmin: true,
+      userTags: [],
+      entitlementKeys: [],
+      administeredOrgIds: [],
+    } as never);
+    const { res } = makeRes();
+
+    await expect(callAs(keyCaller([ApiKeyScope.WRITE_FILES, ApiKeyScope.DATALAKE_WRITE]), res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('admits a key holding the admin scope', async () => {
+    const { res } = makeRes();
+
+    await callAs(keyCaller([ApiKeyScope.ADMIN, ApiKeyScope.WRITE_FILES, ApiKeyScope.DATALAKE_WRITE]), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('POST /api/files/createFabFile - scope gate', () => {
   it('requires files:write, or release-notes:write for the narrowed form below, at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write', 'release-notes:write'] });
@@ -521,6 +578,12 @@ describe('POST /api/files/createFabFile - release-notes:write key', () => {
     const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string };
     expect(persisted.filePath).toMatch(/^modals\/.+\.mp4$/);
     expect(json.mock.calls[0][0]).toHaveProperty('mediaUrl');
+  });
+
+  it("uploads What's New media for a key whose admin owner has the role withheld", async () => {
+    const { res } = makeRes();
+    await run(mp4(), res, { ...releaseKey, user: withholdAdminRole({ id: 'u1', isAdmin: true }) });
+    expect(h.fabFileCreate).toHaveBeenCalled();
   });
 
   it.each([

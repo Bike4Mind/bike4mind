@@ -173,6 +173,16 @@ page's context and navigates to `/` to bootstrap the authenticated app. An agent
 (Claude Code + Playwright MCP) authenticates the same way — by cookie-seeding, not
 by a password/OTC UI round-trip.
 
+**Navigation re-seeds the token; a reload does not.** The access token is memory-only
+(`app/hooks/useAccessToken.ts`), so it does not survive a full page load. `fixtures.ts`
+overrides `page.goto` to route every root-relative URL through `/auth/success`, which re-seeds
+the token through the client router. `page.reload` is deliberately left unwrapped. So in any
+spec not tagged `@realauth`, re-read server state with `page.goto('/same/path')` rather than
+`page.reload()`: a raw reload cold-loads with no token and the router guard bounces to
+`/login?error=session_expired`. `@realauth` tests are the exception - `authState.current` is
+null for them, their gotos pass through untouched, and driving the real refresh-cookie cold
+boot is the point of those tests.
+
 `/api/test/create-user` also accepts **no `email`** (omit it or pass `null`) to mint an *emailless* account - the shape an OAuth signup with no provider-verified email produces (see `verifyCallback`'s create path). Such an account cannot receive a login one-time code, so enter it through the returned tokens or **Admin → Login as User**. The username must then end in `-e2e` so cleanup can still find it; the same two-tier rule as emails applies (`qa-emailless-e2e` is standing and never swept, `qa-emailless-12345678-e2e` is reclaimed by the aged sweep).
 
 Every created user gets the predefined tags (`Developer`, `Customer`, `Opti`) prepended to any `tags` you pass. Pass `includePredefinedTags: false` to get exactly the `tags` you pass (or none). That yields a non-developer user only if your `tags` also avoid every `DEVELOPER_USER_TAGS` alias (`b4m-core/common/src/schemas/user.ts`). Only a boolean `false` opts out.

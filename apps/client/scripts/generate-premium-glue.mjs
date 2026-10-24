@@ -15,6 +15,8 @@
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
+ *   server/premium-generated/premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
+ *   app/premium-generated/premiumAdminSettings.generated.ts - contributed admin setting definitions
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
@@ -22,6 +24,7 @@
  *   server/premium-generated/premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   app/premium-generated/premiumEntitlementGrants.generated.ts - entitlement registry rows
+ *   app/premium-generated/premiumApiKeyScopes.generated.ts - contributed API-key scopes
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
@@ -951,6 +954,100 @@ function generateEntitlementGrants(packages) {
   );
 }
 
+// --- Generate API-key scopes ---
+
+// API-key scopes (b4mContributions.apiKeyScopes), merged into the built-in catalog in
+// constants/apiKeyScopes.ts. Like the grants above, the built-in rows are TypeScript this script
+// cannot load, so a collision with them is resolved by the merge in that module, not here.
+const API_KEY_SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$/;
+// isWellFormedApiKeyScope (@bike4mind/common) caps stored values at this length.
+const API_KEY_SCOPE_VALUE_MAX = 100;
+// Resources bound to privileged or dedicated-flow keys; a contributed scope may not join them.
+const RESERVED_API_KEY_SCOPE_RESOURCES = ['admin', 'cc-bridge', 'embed', 'datalake'];
+const API_KEY_SCOPE_FIELDS = ['value', 'label', 'description', 'endpoints', 'requiredEntitlement'];
+const API_KEY_SCOPE_DESCRIPTION_MAX = 200;
+const API_KEY_SCOPE_ENDPOINTS_MAX = 50;
+const API_KEY_SCOPE_ENDPOINT_RE = /^(GET|POST|PUT|PATCH|DELETE) \/[A-Za-z0-9._~:/{}-]*$/;
+const API_KEY_SCOPE_ENDPOINT_MAX = 160;
+
+function generateApiKeyScopes(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumApiKeyScopes.generated.ts');
+  const typeImport = `import type { PremiumApiKeyScope } from '../premiumContract';`;
+
+  const fail = (pkg, detail) => {
+    throw new Error(`[codegen] invalid apiKeyScopes from package "${pkg.name}": ${detail}`);
+  };
+  const readText = (pkg, where, value, max) => {
+    if (typeof value !== 'string' || value.length > max || !GRANT_LABEL_RE.test(value) || /\p{Cc}/u.test(value)) {
+      fail(pkg, `${where} must be 1-${max} characters with no control characters or edge whitespace`);
+    }
+    return value;
+  };
+
+  const scopes = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.apiKeyScopes;
+    if (declared === undefined) continue;
+    if (!Array.isArray(declared)) fail(pkg, `expected an array, got ${JSON.stringify(declared)}`);
+    for (const entry of declared) {
+      if (!isPlainObject(entry)) fail(pkg, `rows must be objects, got ${JSON.stringify(entry)}`);
+      for (const field of Object.keys(entry)) {
+        if (!API_KEY_SCOPE_FIELDS.includes(field)) fail(pkg, `unknown field ${JSON.stringify(field)}`);
+      }
+      const { value } = entry;
+      if (typeof value !== 'string' || !API_KEY_SCOPE_VALUE_RE.test(value)) {
+        fail(pkg, `value ${JSON.stringify(value)} must match ${API_KEY_SCOPE_VALUE_RE}`);
+      }
+      if (value.length > API_KEY_SCOPE_VALUE_MAX) {
+        fail(pkg, `value ${JSON.stringify(value)} must be at most ${API_KEY_SCOPE_VALUE_MAX} characters`);
+      }
+      if (RESERVED_API_KEY_SCOPE_RESOURCES.includes(value.slice(0, value.indexOf(':')))) {
+        fail(pkg, `value ${JSON.stringify(value)} uses a reserved resource`);
+      }
+      const row = {
+        value,
+        label: readText(pkg, `label of "${value}"`, entry.label, GRANT_LABEL_MAX),
+        description: readText(pkg, `description of "${value}"`, entry.description, API_KEY_SCOPE_DESCRIPTION_MAX),
+        endpoints: [],
+      };
+      if (!Array.isArray(entry.endpoints) || entry.endpoints.length > API_KEY_SCOPE_ENDPOINTS_MAX) {
+        fail(pkg, `endpoints of "${value}" must be an array of at most ${API_KEY_SCOPE_ENDPOINTS_MAX} lines`);
+      }
+      for (const line of entry.endpoints) {
+        if (
+          typeof line !== 'string' ||
+          line.length > API_KEY_SCOPE_ENDPOINT_MAX ||
+          !API_KEY_SCOPE_ENDPOINT_RE.test(line)
+        ) {
+          fail(pkg, `endpoint ${JSON.stringify(line)} of "${value}" must look like "GET /api/path"`);
+        }
+        row.endpoints.push(line);
+      }
+      if (entry.requiredEntitlement !== undefined) {
+        if (typeof entry.requiredEntitlement !== 'string' || !GRANT_KEY_RE.test(entry.requiredEntitlement)) {
+          fail(pkg, `requiredEntitlement of "${value}" must be lowercase and match ${GRANT_KEY_RE}`);
+        }
+        row.requiredEntitlement = entry.requiredEntitlement;
+      }
+
+      const prior = scopes.get(value);
+      if (prior && JSON.stringify(prior.row) !== JSON.stringify(row)) {
+        throw new Error(
+          `[codegen] apiKeyScopes gives "${value}" different rows in packages "${prior.from}" and "${pkg.name}"; ` +
+            `declare it in one.`
+        );
+      }
+      if (!prior) scopes.set(value, { row, from: pkg.name });
+    }
+  }
+
+  const rows = [...scopes.values()].map(({ row }) => row);
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumApiKeyScopes: readonly PremiumApiKeyScope[] = ${JSON.stringify(rows, null, 2)};\n`
+  );
+}
+
 // --- Generate localStorage key prefixes ---
 
 // Overlays own localStorage keys core cannot name without naming their surface, so
@@ -1194,9 +1291,13 @@ function generateServerHandlerStubs(packages) {
       // forwards all named exports (handler, dispatch, ...) that SST references.
       assertModuleSpecifier(exportFrom, pkg.name, 'serverHandlerStubs.exportFrom');
 
+      // Cron and queue Lambdas do not go through baseApi, so each stub registers the contributed
+      // admin settings itself before the handler module reads one.
+      let registerSpec = relative(dirname(outPath), ADMIN_SETTINGS_REGISTER_MODULE).split(sep).join('/');
+      if (!registerSpec.startsWith('.')) registerSpec = `./${registerSpec}`;
       writeFile(
         outPath,
-        `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.serverHandlerStubs\nexport * from '${exportFrom}';\n`
+        `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.serverHandlerStubs\nimport '${registerSpec}';\nexport * from '${exportFrom}';\n`
       );
     }
   }
@@ -1300,6 +1401,77 @@ function generatePartnerSignupHooks(packages) {
   writeFile(
     outPath,
     `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumPartnerSignupHooks: PartnerSignupHook[] = [\n${spreads}\n];\n`
+  );
+}
+
+// Premium packages can contribute agent-executor extensions (b4mContributions.agentExtensionsExport
+// -> a module exporting `agentExtensions: AgentExtensionContribution`): a per-surface orchestration
+// profile and tool-map guards. The workers' executor registry imports this file statically, so like
+// the LLM tools it must exist in BOTH forms.
+function generateAgentExtensions(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumAgentExtensions.generated.ts');
+  const typeImport = `import type { AgentExtensionContribution } from '@bike4mind/agents';`;
+
+  const contributors = packages.filter(p => p.contributions.agentExtensionsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumAgentExtensions: AgentExtensionContribution[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.agentExtensionsExport, p.name, 'agentExtensionsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => `import { agentExtensions as extensions${i} } from '${p.contributions.agentExtensionsExport}';`)
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  extensions${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumAgentExtensions: AgentExtensionContribution[] = [\n${items}\n];\n`
+  );
+}
+
+// --- Generate admin setting contributions ---
+//
+// Premium packages can contribute admin setting definitions (b4mContributions.adminSettingsExport ->
+// a module exporting `adminSettings: SettingDefinition<string>[]`, built with core's make*Setting
+// factories). lib/settings/registerContributedSettings.ts imports this file for its side effect on
+// both the server and the client, so it must exist in BOTH forms and stay serializable data. Whatever the
+// export module imports reaches the client bundle: no server-only imports, and no secret defaults.
+const ADMIN_SETTINGS_REGISTER_MODULE = join(CLIENT_ROOT, 'lib/settings/registerContributedSettings');
+
+function generateAdminSettings(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumAdminSettings.generated.ts');
+  const typeImport = `import type { SettingDefinition } from '@bike4mind/common';`;
+
+  const contributors = packages.filter(p => p.contributions.adminSettingsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumAdminSettings: SettingDefinition<string>[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.adminSettingsExport, p.name, 'adminSettingsExport'));
+
+  const imports = contributors
+    .map((p, i) => `import { adminSettings as settings${i} } from '${p.contributions.adminSettingsExport}';`)
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...settings${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumAdminSettings: SettingDefinition<string>[] = [\n${items}\n];\n`
   );
 }
 
@@ -1648,6 +1820,8 @@ generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
 generatePartnerSignupHooks(linkedPackages);
+generateAgentExtensions(linkedPackages);
+generateAdminSettings(linkedPackages);
 generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
@@ -1661,5 +1835,6 @@ generateWorkspaceCopyEntitlements(packages);
 generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
 generateEntitlementGrants(packages);
+generateApiKeyScopes(packages);
 
 console.log('[codegen] done.');

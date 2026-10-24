@@ -224,6 +224,18 @@ describe('emitSignupFunnelEvents', () => {
       ['signup_completed', { method: 'github' }],
     ]);
   });
+
+  it("marks an admin-created account's stages as no action of its user", async () => {
+    // Still a signup, but not a day the new user was active: Overwatch keeps them out of DAU,
+    // and out of its new users, until their own first request.
+    await emitSignupFunnelEvents({ user: { id: 'u1' }, method: 'admin', emailVerified: true, creditsGranted: 50 });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'admin', userAction: false }],
+      ['credits_granted', { amount: 50, source: 'signup', method: 'admin', userAction: false }],
+      ['signup_completed', { method: 'admin', userAction: false }],
+    ]);
+  });
 });
 
 describe('emitEmailVerifiedFunnelEvents', () => {
@@ -237,6 +249,19 @@ describe('emitEmailVerifiedFunnelEvents', () => {
     expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
       ['email_verified', { method: 'otc' }],
       ['credits_granted', { amount: 70, source: 'signup', method: 'otc' }],
+    ]);
+  });
+
+  it('marks an admin verifying the email as no action of its user', async () => {
+    await emitEmailVerifiedFunnelEvents({
+      user: { id: 'u1', createdAt: new Date('2026-10-11T00:00:00Z') },
+      method: 'admin',
+      creditsGranted: 120,
+    });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'admin', userAction: false }],
+      ['credits_granted', { amount: 120, source: 'signup', method: 'admin', userAction: false }],
     ]);
   });
 

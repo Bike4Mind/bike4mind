@@ -1,8 +1,11 @@
 /**
  * @vitest-environment node
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { getDevWafMeta, buildDevWafRuleJson, parseWafBlockedIps } from '../wafPolicy';
+import { getDevWafMeta, buildDevWafRuleJson, parseWafBlockedIps, resolveWafPolicyDir } from '../wafPolicy';
 
 interface WafRule {
   Name: string;
@@ -18,6 +21,12 @@ interface WafRule {
 }
 
 const mockEmergencyIpSetArn = 'arn:aws:wafv2:us-east-1:123456789012:global/ipset/test-ipset/abc123';
+
+/**
+ * True when WAF_POLICY_DIR points the suite at a deployment's own policy rather than the committed
+ * sample. Structural invariants run either way; exact limits belong to each deployment.
+ */
+const externalPolicy = Boolean(process.env.WAF_POLICY_DIR);
 
 /** Suffix marking a rule as a Count-only clone of the production rule of the same base name. */
 const SHADOW_SUFFIX = '-prod-shadow';
@@ -115,6 +124,21 @@ const ingestExemptions = (): UriPathMatch[] =>
     textTransformations: ['LOWERCASE'],
   }));
 
+const BOT_CONTROL_RULE = 'AWS-AWSManagedRulesBotControlRuleSet';
+
+const hasBotControl = (
+  JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })) as WafRule[]
+).some(r => r.Name === BOT_CONTROL_RULE);
+
+// Prefix, not EXACTLY: the whole static and image trees are skipped. Full transformation chain so
+// an encoded or oddly cased path cannot dodge the skip, and cannot slip into it either.
+const botControlExemptions = (): UriPathMatch[] =>
+  ['/_next/static/', '/_next/image'].map(searchString => ({
+    searchString,
+    positionalConstraint: 'STARTS_WITH',
+    textTransformations: ['URL_DECODE', 'NORMALIZE_PATH', 'LOWERCASE'],
+  }));
+
 /**
  * Which managed rule groups may narrow themselves, and the complete exemption list each one
  * carries. Pinned as whole sets, because an assertion that only looks for what should be present
@@ -135,6 +159,8 @@ const EXPECTED_SCOPE_DOWNS: Record<string, UriPathMatch[]> = {
     ...ingestExemptions(),
   ],
   'AWS-AWSManagedRulesKnownBadInputsRuleSet': ingestExemptions(),
+  // A deployment-supplied policy may not have adopted Bot Control yet; the sample always has it.
+  ...(hasBotControl ? { [BOT_CONTROL_RULE]: botControlExemptions() } : {}),
 };
 
 /**
@@ -263,14 +289,23 @@ describe('wafPolicy', () => {
       expect(ipBlockRule.Statement.IPSetReferenceStatement.ARN).toBe(mockEmergencyIpSetArn);
     });
 
-    it('uses the elevated 10,000 req/5min rate limit for Cypress CI', () => {
+    it('aggregates the dev api rate limit by IP', () => {
       const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'dev' });
       const parsed = JSON.parse(ruleJson);
 
       const rateLimitRule = parsed.find((rule: WafRule) => rule.Name === 'api-rate-limit');
       expect(rateLimitRule).toBeDefined();
-      expect(rateLimitRule.Statement.RateBasedStatement.Limit).toBe(10000);
       expect(rateLimitRule.Statement.RateBasedStatement.AggregateKeyType).toBe('IP');
+    });
+
+    // Cypress CI runs against staging, so the dev limit may only ever be looser than production's.
+    it('keeps the dev api rate limit at or above the production one', () => {
+      const limitOf = (stage: string): number => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        // any: RateBasedStatement shape is deeply nested
+        return (rules.find(r => r.Name === 'api-rate-limit')!.Statement as any).RateBasedStatement.Limit;
+      };
+      expect(limitOf('dev')).toBeGreaterThanOrEqual(limitOf('production'));
     });
 
     it('includes AWS managed rule groups', () => {
@@ -450,7 +485,8 @@ describe('wafPolicy', () => {
       it(`exempts the scanner ingest paths identically in every scoped ${stage} group`, () => {
         const managed = managedRules(stage);
 
-        for (const ruleName of Object.keys(EXPECTED_SCOPE_DOWNS)) {
+        // Bot Control counts only and skips static paths; it is not a signature group.
+        for (const ruleName of Object.keys(EXPECTED_SCOPE_DOWNS).filter(n => n !== BOT_CONTROL_RULE)) {
           // any: see the helpers above
           const scopeDown = (managed.get(ruleName)!.Statement as any).ManagedRuleGroupStatement.ScopeDownStatement;
           const ingest = scopeDownExemptions(`${stage} ${ruleName} scope-down`, scopeDown).filter(m =>
@@ -595,9 +631,7 @@ describe('wafPolicy', () => {
         'STARTS_WITH /images/',
         'STARTS_WITH /scripts/',
       ]);
-      // Pinned, not bounded: this number is about to be retuned off a shadow reading, and a
-      // greater-than assertion would pass a 10x loosening while failing a tightening.
-      expect(rateBased.Limit).toBe(5000);
+      // The exact value is pinned in 'sample policy rate limits'.
       expect(rateBased.Limit).toBeGreaterThan(apiLimit);
     });
 
@@ -609,8 +643,8 @@ describe('wafPolicy', () => {
     // What has to be true before each rule flips back to Block:
     //   api-rate-limit         a week of CountedRequests on production traffic, not staging's,
     //                          since the January 0.7% was measured on the old blanket shape
-    //   default-rate-limit     5000 has no measurement under it anywhere yet
-    //   image-rate-limit       1000 likewise, and it is the one expensive non-API path
+    //   default-rate-limit     no measurement under it anywhere yet
+    //   image-rate-limit       likewise, and it is the one expensive non-API path
     //   ai-route, register     both shadows have read zero on staging for weeks, so a Count week
     //                          is the first real signal either has produced
     //   static-asset           a DoS backstop, so the reading matters least of the six
@@ -642,7 +676,11 @@ describe('wafPolicy', () => {
       expect(emergency).toBeDefined();
       expect(emergency!.Action).toEqual({ Block: {} });
 
-      for (const rule of rules.filter(r => (r.Statement as any).ManagedRuleGroupStatement)) {
+      // Bot Control is the one group that counts wholesale; the 'bot control in count' suite pins it.
+      const enforcing = rules.filter(
+        r => (r.Statement as any).ManagedRuleGroupStatement && r.Name !== BOT_CONTROL_RULE
+      );
+      for (const rule of enforcing) {
         expect(rule.OverrideAction, `${rule.Name} must not be overridden to Count wholesale`).toEqual({
           None: {},
         });
@@ -756,16 +794,7 @@ describe('wafPolicy', () => {
       expect(allowLlmRule.Priority).toBe(0);
     });
 
-    it('uses the tighter 2,000 req/5min rate limit for production', () => {
-      const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });
-      const parsed = JSON.parse(ruleJson);
-
-      const rateLimitRule = parsed.find((rule: WafRule) => rule.Name === 'api-rate-limit');
-      expect(rateLimitRule).toBeDefined();
-      expect(rateLimitRule.Statement.RateBasedStatement.Limit).toBe(2000);
-    });
-
-    // 2000 per IP per 5 min is a sane ceiling for API calls and a wrong one for a page load:
+    // An API-sized per-IP ceiling is sane for API calls and a wrong one for a page load:
     // roughly 56% of comparable traffic is /_next/static/ assets, and measured on staging the
     // unscoped form would have counted 331,374 of 517,542 requests in a day, with single IPs
     // reaching 18k in a 5-minute window. The limit was never the defect; applying it to every
@@ -793,7 +822,8 @@ describe('wafPolicy', () => {
       expect(assetRule).toBeDefined();
 
       const rateBased = (assetRule.Statement as any).RateBasedStatement;
-      expect(rateBased.Limit).toBe(50000);
+      const apiRule = parsed.find((rule: WafRule) => rule.Name === 'api-rate-limit');
+      expect(rateBased.Limit).toBeGreaterThan((apiRule.Statement as any).RateBasedStatement.Limit);
       // Only /_next/static/ is routed to the assets bucket: probed staging, /_next/static/x answers
       // from AmazonS3 while /_next/x and /_NEXT/static/x both come from the default origin. So the
       // carve-out stops here and everything else under /_next/ stays function-backed.
@@ -809,7 +839,6 @@ describe('wafPolicy', () => {
       const aiRule = parsed.find((rule: WafRule) => rule.Name === 'ai-route-rate-limit');
       expect(aiRule).toBeDefined();
       expect(aiRule.Priority).toBe(4);
-      expect(aiRule.Statement.RateBasedStatement.Limit).toBe(300);
     });
 
     it('has no duplicate priorities', () => {
@@ -926,6 +955,169 @@ describe('wafPolicy', () => {
       const pick = (stage: string) => forStage(stage).find(r => r.Name === ruleName);
       expect(pick('production')).toBeDefined();
       expect(pick('production')).toEqual(pick('dev'));
+    });
+  });
+
+  // Exact limits belong to each deployment, so these only pin the committed sample.
+  describe.skipIf(externalPolicy)('sample policy rate limits', () => {
+    // Pinned, not bounded: a greater-than assertion would pass a 10x loosening while failing a
+    // tightening.
+    const expected: Record<string, Record<string, number>> = {
+      production: {
+        'ai-route-rate-limit': 100,
+        'api-rate-limit': 1000,
+        'register-rate-limit': 50,
+        'static-asset-rate-limit': 20000,
+        'image-rate-limit': 500,
+        'default-rate-limit': 2000,
+      },
+      dev: {
+        'api-rate-limit': 5000,
+        'static-asset-rate-limit': 20000,
+        'register-rate-limit': 500,
+        'api-rate-limit-prod-shadow': 1000,
+        'ai-route-rate-limit-prod-shadow': 100,
+        'register-rate-limit-prod-shadow': 50,
+        'image-rate-limit-prod-shadow': 500,
+        'default-rate-limit-prod-shadow': 2000,
+        'static-asset-rate-limit-prod-shadow': 20000,
+      },
+    };
+
+    for (const [stage, limits] of Object.entries(expected)) {
+      it(`pins every ${stage} rate limit in the sample`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const actual = Object.fromEntries(
+          rules
+            // any: RateBasedStatement shape is deeply nested
+            .filter(r => (r.Statement as any).RateBasedStatement)
+            .map(r => [r.Name, (r.Statement as any).RateBasedStatement.Limit])
+        );
+        expect(actual).toEqual(limits);
+      });
+    }
+  });
+
+  // A deployment-supplied policy adopts the group when it is ready; the sample always carries it.
+  describe.skipIf(externalPolicy && !hasBotControl)('bot control in count', () => {
+    type Transformation = { Priority: number; Type: string };
+    type ByteMatch = { ByteMatchStatement: { TextTransformations: Transformation[] } };
+    type BotControlRule = Omit<WafRule, 'Statement'> & {
+      Statement: {
+        ManagedRuleGroupStatement: {
+          VendorName: string;
+          Name: string;
+          ManagedRuleGroupConfigs: unknown[];
+          RuleActionOverrides?: unknown[];
+          ScopeDownStatement: {
+            NotStatement: { Statement: { OrStatement: { Statements: ByteMatch[] } } };
+          };
+        };
+      };
+    };
+    const forStage = (stage: string): WafRule[] =>
+      JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+
+    const botControlForStage = (stage: string): BotControlRule | undefined =>
+      forStage(stage).find(rule => rule.Name === BOT_CONTROL_RULE) as BotControlRule | undefined;
+
+    for (const stage of ['dev', 'production']) {
+      it(`runs the group at Priority 20 on ${stage}`, () => {
+        const rule = botControlForStage(stage);
+        expect(rule).toBeDefined();
+        expect(rule!.Priority).toBe(20);
+        expect(rule!.Action).toBeUndefined();
+        const mgs = rule!.Statement.ManagedRuleGroupStatement;
+        expect(mgs.VendorName).toBe('AWS');
+        expect(mgs.Name).toBe('AWSManagedRulesBotControlRuleSet');
+      });
+
+      it(`uses the common inspection level on ${stage}, never targeted`, () => {
+        const rule = botControlForStage(stage);
+        const configs = rule!.Statement.ManagedRuleGroupStatement.ManagedRuleGroupConfigs;
+        expect(configs).toEqual([{ AWSManagedRulesBotControlRuleSet: { InspectionLevel: 'COMMON' } }]);
+        expect(JSON.stringify(rule)).not.toContain('TARGETED');
+      });
+
+      it(`counts the whole ${stage} group rather than blocking`, () => {
+        const rule = botControlForStage(stage);
+        expect(rule!.OverrideAction).toEqual({ Count: {} });
+        expect(rule!.Statement.ManagedRuleGroupStatement.RuleActionOverrides).toBeUndefined();
+      });
+
+      it(`skips exactly the static and image prefixes on ${stage}, decode then normalize then lowercase`, () => {
+        const rule = botControlForStage(stage);
+        const scopeDown = rule!.Statement.ManagedRuleGroupStatement.ScopeDownStatement;
+        const found = scopeDownExemptions(`${stage} ${BOT_CONTROL_RULE} scope-down`, scopeDown);
+        expect(found).toEqual(botControlExemptions());
+
+        const orderOf = (statement: ByteMatch) =>
+          [...statement.ByteMatchStatement.TextTransformations]
+            .sort((left, right) => left.Priority - right.Priority)
+            .map(transformation => transformation.Type);
+        for (const s of scopeDown.NotStatement.Statement.OrStatement.Statements) {
+          expect(orderOf(s)).toEqual(['URL_DECODE', 'NORMALIZE_PATH', 'LOWERCASE']);
+        }
+      });
+
+      it(`is the last ${stage} rule, by priority and by position`, () => {
+        const rules = forStage(stage);
+        const maxPriority = Math.max(...rules.map(r => r.Priority));
+        expect(rules.find(r => r.Priority === maxPriority)!.Name).toBe(BOT_CONTROL_RULE);
+        expect(rules[rules.length - 1].Name).toBe(BOT_CONTROL_RULE);
+      });
+    }
+
+    it('is identical between the two stage files', () => {
+      expect(botControlForStage('production')).toBeDefined();
+      expect(botControlForStage('production')).toEqual(botControlForStage('dev'));
+    });
+  });
+
+  describe('resolveWafPolicyDir', () => {
+    it('defaults to the committed sample under the working directory', () => {
+      expect(resolveWafPolicyDir({})).toBe(path.join(process.cwd(), 'infra', 'waf'));
+      expect(resolveWafPolicyDir({ WAF_POLICY_DIR: '  ' })).toBe(path.join(process.cwd(), 'infra', 'waf'));
+    });
+
+    it('uses an absolute WAF_POLICY_DIR as given', () => {
+      expect(resolveWafPolicyDir({ WAF_POLICY_DIR: '/opt/waf-policy' })).toBe('/opt/waf-policy');
+    });
+
+    it('resolves a relative WAF_POLICY_DIR against the working directory', () => {
+      expect(resolveWafPolicyDir({ WAF_POLICY_DIR: 'deploy/waf' })).toBe(path.join(process.cwd(), 'deploy', 'waf'));
+    });
+
+    it('loads the policy from WAF_POLICY_DIR when it is set', () => {
+      const sourceDir = resolveWafPolicyDir(process.env);
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'waf-policy-'));
+      const original = process.env.WAF_POLICY_DIR;
+      try {
+        for (const file of ['bike4mind-api-protection-prod.json', 'bike4mind-api-protection-dev.json']) {
+          const policy = JSON.parse(fs.readFileSync(path.join(sourceDir, file), 'utf8'));
+          const apiRule = policy.Rules.find((r: WafRule) => r.Name === 'api-rate-limit');
+          apiRule.Name = 'api-rate-limit-relocated';
+          apiRule.Statement.RateBasedStatement.Limit = 1234;
+          fs.writeFileSync(path.join(tempDir, file), JSON.stringify(policy));
+        }
+
+        process.env.WAF_POLICY_DIR = tempDir;
+        for (const stage of ['dev', 'production']) {
+          const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+          const relocated = rules.find(r => r.Name === 'api-rate-limit-relocated');
+          expect(relocated, stage).toBeDefined();
+          // any: RateBasedStatement shape is deeply nested
+          expect((relocated!.Statement as any).RateBasedStatement.Limit).toBe(1234);
+          expect(
+            rules.find(r => r.Name === 'api-rate-limit'),
+            stage
+          ).toBeUndefined();
+        }
+      } finally {
+        if (original === undefined) delete process.env.WAF_POLICY_DIR;
+        else process.env.WAF_POLICY_DIR = original;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
     });
   });
 

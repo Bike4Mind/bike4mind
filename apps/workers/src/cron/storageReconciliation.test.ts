@@ -247,6 +247,34 @@ describe('runStorageReconciliation', () => {
     expect(savedState()).toMatchObject({ afterId: 'u0399', checked: 400, passCompletedAt: null });
   });
 
+  it('resumes the pass across two hourly ticks without repairing', async () => {
+    let clock = NOW;
+    // The second list call crosses the 90s budget, so the first tick stops with a saved cursor.
+    mockListUserIdsAfter.mockImplementation(async () => {
+      clock += 60_000;
+      return users(BATCH_SIZE);
+    });
+
+    const firstTick = await runStorageReconciliation(options({ now: () => clock, timeBudgetMs: 90_000 }));
+
+    expect(firstTick).toMatchObject({ checked: BATCH_SIZE, passCompleted: false });
+    const cursor = savedState();
+    expect(cursor).toMatchObject({ phase: 'users', afterId: 'u0199', passCompletedAt: null });
+
+    clock = NOW + 3_600_000;
+    mockFindByKey.mockResolvedValue({ result: cursor });
+    mockListUserIdsAfter.mockReset().mockResolvedValueOnce(users(1, BATCH_SIZE)).mockResolvedValue([]);
+    // Non-zero drift with repair on: only the stability gate keeps the compare-and-set at the assertion below out of reach.
+    mockSumFileSizeByUserId.mockResolvedValueOnce(400);
+
+    const secondTick = await runStorageReconciliation(options({ now: () => clock, repair: true }));
+
+    expect(mockListUserIdsAfter).toHaveBeenCalledExactlyOnceWith('u0199', BATCH_SIZE);
+    expect(secondTick).toMatchObject({ checked: 1, passCompleted: true });
+    expect(savedState()).toMatchObject({ checked: BATCH_SIZE + 1, passCompletedAt: new Date(clock).toISOString() });
+    expect(mockSetCurrentStorageIfUnchanged).not.toHaveBeenCalled();
+  });
+
   it('skips while the completed pass is younger than the pass interval', async () => {
     mockFindByKey.mockResolvedValue({
       result: {
@@ -366,6 +394,62 @@ describe('runStorageReconciliation', () => {
     expect(result).toMatchObject({ checked: 2, passCompleted: true });
     expect(savedState()).toMatchObject({ afterId: 'u0001' });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('2 user drift record(s)'), expect.any(Error));
+  });
+
+  it('records drift and repairs nothing when metrics are off', async () => {
+    mockListUserIdsAfter.mockResolvedValueOnce(users(1));
+    mockSumFileSizeByUserId.mockResolvedValueOnce(400);
+
+    const result = await runStorageReconciliation(options({ emitMetrics: false }));
+
+    expect(mockAppendMany.mock.calls[0][0][0]).toMatchObject({
+      userId: 'u0000',
+      counter: 1000,
+      truth: 400,
+      drift: 600,
+      repaired: false,
+    });
+    expect(mockSetCurrentStorageIfUnchanged).not.toHaveBeenCalled();
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ checked: 1, drifted: 1, repaired: 0 });
+  });
+
+  it('emits no metric on the skipped-pass path when metrics are off', async () => {
+    mockFindByKey.mockResolvedValue({
+      result: {
+        afterId: 'u0002',
+        passStartedAt: new Date(NOW - 60_000).toISOString(),
+        passCompletedAt: new Date(NOW - 60_000).toISOString(),
+        checked: 3,
+        drifted: 0,
+        ceilingAlerted: false,
+      },
+    });
+
+    const result = await runStorageReconciliation(options({ emitMetrics: false }));
+
+    expect(result.skipped).toBe(true);
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
+  });
+
+  it('still emits on both paths when emitMetrics is omitted', async () => {
+    mockListUserIdsAfter.mockResolvedValueOnce(users(1));
+    await runStorageReconciliation(options());
+    expect(metric('StorageReconciliationRuns')).toBe(1);
+
+    mockFindByKey.mockResolvedValue({
+      result: {
+        afterId: 'u0002',
+        passStartedAt: new Date(NOW - 60_000).toISOString(),
+        passCompletedAt: new Date(NOW - 60_000).toISOString(),
+        checked: 3,
+        drifted: 0,
+        ceilingAlerted: false,
+      },
+    });
+    mockEmitMetrics.mockClear();
+    await runStorageReconciliation(options());
+    expect(metric('StorageReconciliationRuns')).toBe(1);
   });
 });
 

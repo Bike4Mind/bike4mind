@@ -103,6 +103,7 @@ vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProc
 import { registerExternalRoutes } from './sseRoute';
 import {
   ApiErrorSchema,
+  ApiKeyScope,
   BadRequestError,
   CompletionStreamEventSchema,
   createCompletionContract,
@@ -1060,5 +1061,34 @@ describe('POST /api/ai/v1/completions - failure analytics', () => {
       '[CLI_LLM] Handler error',
       expect.objectContaining({ upstreamStatus: undefined })
     );
+  });
+});
+
+describe('POST /api/ai/v1/completions - admin role on the reloaded owner', () => {
+  type ScopeActor = (<U extends { isAdmin?: boolean }>(actor: U) => U) | undefined;
+  const scopeActorOfCall = (): ScopeActor => mockExecuteCompletion.mock.calls[0][0].scopeActor;
+  const asKey = (scopes: string[]) =>
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', scopes },
+    });
+
+  it('withholds an admin owner role for a key without the admin scope', async () => {
+    asKey([ApiKeyScope.AI_CHAT]);
+    expect((await post()).status).toBe(200);
+    expect(scopeActorOfCall()?.({ isAdmin: true }).isAdmin).toBe(false);
+  });
+
+  it('keeps the role for a key with the admin scope', async () => {
+    asKey([ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN]);
+    expect((await post()).status).toBe(200);
+    expect(scopeActorOfCall()).toBeUndefined();
+  });
+
+  it('keeps the role for a JWT session', async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' });
+    expect((await postAs({})).status).toBe(200);
+    expect(scopeActorOfCall()).toBeUndefined();
   });
 });

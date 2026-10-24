@@ -11,8 +11,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import { IconButton } from '@mui/joy';
 import { Box, Drawer, Grid, Sheet, TabPanel, Tabs, Typography, Tooltip } from '@mui/joy';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
+import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
 import { useRouter } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
 import { lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { create } from 'zustand';
@@ -185,17 +185,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const { currentUser } = useUser();
 
   // LiveOps Triage tab visibility - show everywhere except fork production environments
-  const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useQuery({
-    queryKey: ['liveops-triage', 'env'],
-    queryFn: async () => {
-      const { data } = await api.get<{ stage: string; isForkProduction: boolean; showTab: boolean }>(
-        '/api/admin/liveops-triage-env'
-      );
-      return data;
-    },
-    enabled: currentUser?.isAdmin,
-    staleTime: 1000 * 60 * 60, // Cache for 1 hour - environment doesn't change
-  });
+  const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useLiveOpsTriageEnv(!!currentUser?.isAdmin);
   const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
 
   // Selecting a tab this screen cannot draw would leave the content pane blank, so the URL sync

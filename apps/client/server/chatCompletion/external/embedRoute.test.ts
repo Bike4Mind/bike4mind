@@ -1160,3 +1160,22 @@ describe('POST /api/embed/chat - anonymous mode stays stateless', () => {
     ]);
   });
 });
+
+describe('POST /api/embed/chat - admin role on the key owner', () => {
+  type ScopeActor = (<U extends { isAdmin?: boolean }>(actor: U) => U) | undefined;
+  const scopeActorOf = async (res: Response): Promise<ScopeActor> => {
+    expect(res.status).toBe(200);
+    await res.text();
+    return mockExecuteCompletion.mock.calls[0][0].scopeActor;
+  };
+
+  it('withholds an admin owner role for an anonymous visitor', async () => {
+    const scopeActor = await scopeActorOf(await post(CHAT));
+    expect(scopeActor?.({ isAdmin: true }).isAdmin).toBe(false);
+  });
+
+  it('keeps the role for a key that holds the admin scope', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, scopes: ['embed:chat', 'admin:*'] });
+    expect(await scopeActorOf(await post(CHAT))).toBeUndefined();
+  });
+});

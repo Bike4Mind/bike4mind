@@ -32,6 +32,8 @@ import {
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   completionsSupportsToolSearch,
+  supportsAssistantPrefill,
+  ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
   isClaudeModelId,
   type CreditHoldRecord,
   type ICacheStrategy,
@@ -66,7 +68,7 @@ import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { createModelAdmission, loadModelConfigurations } from './llm/modelAdmission';
-import { prepareWireTools } from './cliCompletionsToolSearch';
+import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
 
 /** Persistence boundary: implementations commit each callback and its hold transition atomically. */
@@ -144,6 +146,11 @@ export interface CompletionParams {
      */
     userApiKeys?: IUserApiKeyRepository;
   };
+  /**
+   * Applied to the reloaded caller before model admission, e.g. to withhold an admin role the
+   * authenticating API key does not grant. The org-membership check reads the stored role.
+   */
+  scopeActor?: <U extends { isAdmin?: boolean }>(actor: U) => U;
   /**
    * API key information if authenticated via API key
    * Used for credit transaction tracking and audit logging
@@ -496,14 +503,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
   }
 
+  // Modality is a property of the model, not its backend: an image/video model routed
+  // through a chat backend cannot be served by this text endpoint.
+  if (modelInfo && modelInfo.type !== 'text') {
+    throw new BadRequestError(
+      `Model '${params.model}' (type: ${modelInfo.type}) cannot be used for text completions.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
+
   // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
   const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
-  const [actor, modelConfigs] = await Promise.all([
+  const [storedActor, modelConfigs] = await Promise.all([
     db.users.findById(userId),
     loadModelConfigurations(db.adminSettings),
   ]);
+  const actor = storedActor && params.scopeActor ? params.scopeActor(storedActor) : storedActor;
   await createModelAdmission({
     user: actor ?? {},
     configs: modelConfigs,
@@ -511,6 +528,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
   }).assert(model);
+
+  if (modelInfo && !supportsAssistantPrefill(modelInfo) && hasAssistantPrefill(messages)) {
+    throw new BadRequestError(
+      `Model '${params.model}' does not support assistant message prefill. End the conversation with a user message.`,
+      { errorCode: ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE }
+    );
+  }
 
   const llm = getLlmByModel(apiKeys, {
     modelInfo,
