@@ -181,7 +181,8 @@ export function AccessGateEditor({
       </Box>
       {!isPublic ? (
         <Typography level="body-xs" sx={{ opacity: 0.75 }} data-testid={`${testIdPrefix}-needs-public`}>
-          Access gates apply to public artifacts. Set visibility to Public to add a passphrase or domain restriction.
+          Existing gates still protect private links. Set visibility to Public to edit the passphrase or domain
+          restriction.
         </Typography>
       ) : (
         <>

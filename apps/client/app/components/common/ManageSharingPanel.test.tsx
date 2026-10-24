@@ -1,13 +1,15 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: vi.fn(), patch: vi.fn().mockResolvedValue({ data: {} }) },
 }));
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 import { api } from '@client/app/contexts/ApiContext';
+import { toast } from 'sonner';
 import { ManageSharingPanel } from './ManageSharingPanel';
 
 const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
@@ -32,6 +34,10 @@ const renderPanel = async (artifact: Record<string, unknown>, visibility = 'publ
 };
 
 describe('ManageSharingPanel', () => {
+  beforeEach(() => {
+    (api.patch as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({ data: {} });
+  });
+
   it('open-public: shows share row, gate editor, and the embed editor', async () => {
     await renderPanel({ visibility: 'public', accessGate: null, embedOrigins: [], commentPolicy: 'none' });
     expect(screen.getByTestId('share-actions')).not.toBeNull();
@@ -48,6 +54,60 @@ describe('ManageSharingPanel', () => {
     });
     expect(screen.getByTestId('manage-gate-section')).not.toBeNull();
     expect(screen.queryByTestId('manage-embed-section')).toBeNull();
+  });
+
+  it('tells the parent about an applied gate, so the row badge can follow it', async () => {
+    const onGateChange = vi.fn();
+    apiGet.mockClear().mockResolvedValue({
+      data: { artifact: { visibility: 'public', accessGate: null, embedOrigins: [], commentPolicy: 'none' } },
+    });
+    render(
+      <Wrapper>
+        <ManageSharingPanel
+          publicId="pub-1"
+          title="My Artifact"
+          shareUrl="https://app.x/p/u/u1/s"
+          visibility="public"
+          onGateChange={onGateChange}
+        />
+      </Wrapper>
+    );
+    await screen.findByTestId('manage-sharing-panel');
+
+    fireEvent.click(screen.getByTestId('manage-gate-domain'));
+    fireEvent.change(screen.getByTestId('manage-gate-domains-input'), { target: { value: 'acme.com' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+
+    await waitFor(() => expect(onGateChange).toHaveBeenCalledWith({ kind: 'domain', allowedDomains: ['acme.com'] }));
+    // The panel's own state moved too: a gated page has no embed editor.
+    expect(screen.queryByTestId('manage-embed-section')).toBeNull();
+  });
+
+  it('does not tell the parent about a gate when the save fails', async () => {
+    const onGateChange = vi.fn();
+    (api.patch as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('x'));
+    apiGet.mockClear().mockResolvedValue({
+      data: { artifact: { visibility: 'public', accessGate: null, embedOrigins: [], commentPolicy: 'none' } },
+    });
+    render(
+      <Wrapper>
+        <ManageSharingPanel
+          publicId="pub-1"
+          title="My Artifact"
+          shareUrl="https://app.x/p/u/u1/s"
+          visibility="public"
+          onGateChange={onGateChange}
+        />
+      </Wrapper>
+    );
+    await screen.findByTestId('manage-sharing-panel');
+
+    fireEvent.click(screen.getByTestId('manage-gate-domain'));
+    fireEvent.change(screen.getByTestId('manage-gate-domains-input'), { target: { value: 'acme.com' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(onGateChange).not.toHaveBeenCalled();
   });
 
   it('private: hides embed and shows the gate needs-public hint', async () => {
