@@ -74,9 +74,9 @@ beforeEach(() => {
 });
 
 describe('POST /api/test/create-user', () => {
-  it('may mint a reserved test-persona username, since the persona harness creates its accounts here', async () => {
+  it('may mint a reserved test-persona username, since test tooling creates its accounts here', async () => {
     const { res, status } = makeRes();
-    await handler(makeReq({ email: 'b4m-personaari-1-e2e@test.com', username: 'persona-ari-1' }) as never, res);
+    await handler(makeReq({ email: 'qa-ari-1-e2e@test.com', username: 'persona-ari-1' }) as never, res);
 
     expect(status).toHaveBeenCalledWith(201);
     expect(h.createUser).toHaveBeenCalledWith(
