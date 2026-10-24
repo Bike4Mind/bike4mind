@@ -140,6 +140,16 @@ describe('ArtifactCover', () => {
     expect(renderCover('pub_x', '   desktop app mockup').textContent).toBe('D');
   });
 
+  it.each([
+    [' \u{1f6b2} Ride notes', '\u{1f6b2}'],
+    ['e\u0301tude', 'E\u0301'],
+    ['\u{1f469}\u200d\u{1f4bb} Planning', '\u{1f469}\u200d\u{1f4bb}'],
+    ['\u{1f1f5}\u{1f1ed} Routes', '\u{1f1f5}\u{1f1ed}'],
+    ['   ', ''],
+  ])('keeps the first visible grapheme intact for %j', (title, initial) => {
+    expect(renderCover('pub_x', title).textContent).toBe(initial);
+  });
+
   it('renders without a title', () => {
     expect(renderCover('pub_x').textContent).toBe('');
   });

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
@@ -1494,6 +1494,82 @@ describe('PublishedArtifactsTabContent - grid dialog focus, sharing state and na
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
     expect(document.activeElement).toBe(screen.getByTestId('published-artifact-card-more-pub-1'));
+  });
+
+  it('does not restore an earlier delete focus after another settings dialog is opened', async () => {
+    const other = { ...bundleRow, publicId: 'pub-2', title: 'Other artifact' };
+    let finishDelete = () => {};
+    vi.mocked(deletePublishedArtifact).mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          finishDelete = resolve;
+        })
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      mockList.mockResolvedValue(page([bundleRow, other]));
+      renderTab();
+      await screen.findByTestId('published-artifact-pub-1');
+      goGrid();
+      screen.getByTestId('published-artifact-card-more-pub-1').focus();
+      fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+      fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+      fireEvent.keyDown(screen.getByTestId('published-artifact-settings-modal'), { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+
+      const otherMore = screen.getByTestId('published-artifact-card-more-pub-2');
+      otherMore.focus();
+      fireEvent.click(otherMore);
+      mockList.mockResolvedValue(page([other]));
+      await act(async () => {
+        finishDelete();
+      });
+      await waitFor(() => expect(screen.queryByTestId('published-artifact-card-pub-1')).toBeNull());
+      expect(screen.getByTestId('published-artifact-settings-modal')).toBeTruthy();
+
+      fireEvent.keyDown(screen.getByTestId('published-artifact-settings-modal'), { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+      expect(document.activeElement).toBe(otherMore);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it.each(['card', 'search'] as const)('preserves delete focus ownership after Escape to %s', async focusAfterClose => {
+    const other = { ...bundleRow, publicId: 'pub-2', title: 'Other artifact' };
+    let finishDelete = () => {};
+    vi.mocked(deletePublishedArtifact).mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          finishDelete = resolve;
+        })
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      mockList.mockResolvedValue(page([bundleRow, other]));
+      renderTab();
+      await screen.findByTestId('published-artifact-pub-1');
+      goGrid();
+      const more = screen.getByTestId('published-artifact-card-more-pub-1');
+      more.focus();
+      fireEvent.click(more);
+      fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+      fireEvent.keyDown(screen.getByTestId('published-artifact-settings-modal'), { key: 'Escape' });
+      await waitFor(() => expect(document.activeElement).toBe(more));
+      const search = screen.getByTestId('published-artifacts-search');
+      if (focusAfterClose === 'search') search.focus();
+
+      mockList.mockResolvedValue(page([other]));
+      await act(async () => {
+        finishDelete();
+      });
+      await waitFor(() => expect(screen.queryByTestId('published-artifact-card-pub-1')).toBeNull());
+      expect(document.activeElement).toBe(
+        focusAfterClose === 'search' ? search : screen.getByTestId('published-artifact-card-title-pub-2')
+      );
+    } finally {
+      confirm.mockRestore();
+    }
   });
 
   it('opens the dialog with the sharing panel shut even when the list row left it open', async () => {

@@ -89,9 +89,11 @@ export interface ArtifactCoverProps {
 /** Letter size for the fill variant: a card thumbnail is a few hundred px wide, so a fixed size reads
  *  as a deliberate monogram rather than scaling with the card. */
 const FILL_LETTER_SIZE = 44;
+const titleSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
 export function ArtifactCover({ publicId, size = 28, title, ...rest }: ArtifactCoverProps) {
-  const initial = title?.trim()?.[0]?.toUpperCase() ?? '';
+  const [firstCharacter] = titleSegmenter.segment(title?.trim() ?? '');
+  const initial = firstCharacter?.segment.toUpperCase() ?? '';
   const fill = size === 'fill';
 
   return (

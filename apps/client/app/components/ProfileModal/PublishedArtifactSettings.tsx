@@ -144,7 +144,7 @@ export function PublishedArtifactSettings({
             onTagsChange(tags);
           }}
           slotProps={{ input: { 'data-testid': `published-artifact-tag-input-${a.publicId}` } }}
-          sx={{ flex: 1, minWidth: 200 }}
+          sx={{ flex: 1, minWidth: 0 }}
         />
         <Typography level="body-xs" sx={{ opacity: 0.6, whiteSpace: 'nowrap' }}>
           {(a.tags ?? []).length}/{PUBLISH_TAGS_MAX}

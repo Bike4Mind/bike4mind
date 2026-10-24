@@ -207,6 +207,7 @@ export default function PublishedArtifactsTabContent() {
   const searchRef = useRef<HTMLInputElement>(null);
   const headingRef = useRef<HTMLElement>(null);
   const pendingFocus = useRef<DeleteFocusTarget | null>(null);
+  const settingsSession = useRef(0);
   const [focusTick, setFocusTick] = useState(0);
   /** Ref callback for one artifact's title link, in either view. */
   const titleRef = (publicId: string) => (el: HTMLAnchorElement | null) => {
@@ -377,8 +378,14 @@ export default function PublishedArtifactsTabContent() {
     // `wasLastOnPage` is passed in by the caller, which knows the rendered row count, rather than
     // read from a ref: it decides whether this delete empties the current page. `focusTarget` is
     // worked out at click time for the same reason - the list it is derived from is about to change.
-    mutationFn: (v: { publicId: string; wasLastOnPage: boolean; focusTarget: DeleteFocusTarget }) =>
-      deletePublishedArtifact(v.publicId),
+    mutationFn: (v: {
+      publicId: string;
+      wasLastOnPage: boolean;
+      focusTarget: DeleteFocusTarget;
+      settingsSession: number;
+      focusOwner: Element | null;
+      focusCard: Element | null;
+    }) => deletePublishedArtifact(v.publicId),
     onSuccess: (_d, v) => {
       toast.success('Artifact deleted');
       // Step back a page when that was the last row on this one. Otherwise `skip` points past the
@@ -397,8 +404,14 @@ export default function PublishedArtifactsTabContent() {
       // to be refreshed too - otherwise deleting the last artifact carrying a label keeps offering
       // it for up to the staleTime.
       void qc.invalidateQueries({ queryKey: ['publish-tag-vocabulary'] });
-      pendingFocus.current = v.focusTarget;
-      setFocusTick(t => t + 1);
+      const stillOwnsFocus =
+        settingsId === v.publicId ||
+        v.focusOwner === document.activeElement ||
+        v.focusCard?.contains(document.activeElement);
+      if (v.settingsSession === settingsSession.current && stillOwnsFocus) {
+        pendingFocus.current = v.focusTarget;
+        setFocusTick(t => t + 1);
+      }
     },
     // A failed delete moves nothing: the dialog stays open and focus stays on the control used.
     onError: (e: unknown) => toast.error(apiError(e, 'Failed to delete')),
@@ -487,6 +500,8 @@ export default function PublishedArtifactsTabContent() {
   /** Open a card's dialog with its sharing panel shut, like a freshly expanded row - even when that
    *  artifact's panel was left open in the list view before switching to the grid. */
   const openSettings = (publicId: string) => {
+    settingsSession.current += 1;
+    pendingFocus.current = null;
     setManageOpen(open => (open === publicId ? null : open));
     setSettingsId(publicId);
   };
@@ -499,6 +514,7 @@ export default function PublishedArtifactsTabContent() {
     setSettingsId(null);
   }
   const closeSettings = () => {
+    pendingFocus.current = null;
     // Same rule as collapsing a row: a sharing panel never outlives the surface that hosts it.
     setManageOpen(open => (open === settingsId ? null : open));
     setSettingsId(null);
@@ -545,6 +561,9 @@ export default function PublishedArtifactsTabContent() {
         deleteMut.mutate({
           publicId: a.publicId,
           wasLastOnPage: artifacts.length <= 1,
+          settingsSession: settingsSession.current,
+          focusOwner: document.activeElement,
+          focusCard: titleLinks.current.get(a.publicId)?.closest('li') ?? null,
           // The whole library goes with this one only when nothing is filtering it, which is also
           // when the toolbar (and its search box) stops rendering.
           focusTarget: focusTargetAfterDelete(artifacts, a.publicId, total <= 1 && !filtering),
