@@ -40,6 +40,9 @@ export interface ManagedArtifact {
   /** Number of entries in the published version history (drives the version switcher
    *  and the single-version hint). 0/1 means no switcher yet; 2+ shows the switcher. */
   versionsCount?: number;
+  /** URL of a rendered preview of the page. Absent until the backend has produced one; the
+   *  Live Artifacts list falls back to a generated cover. */
+  thumbnailUrl?: string;
 }
 
 /** How a re-publish of an already-published artifact should land. */
