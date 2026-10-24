@@ -10,7 +10,11 @@ import AutorenewIcon from '@mui/icons-material/Autorenew';
 import LockResetIcon from '@mui/icons-material/LockReset';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
-import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
+import {
+  ClearGateConfirmModal,
+  StoredGateNote,
+  STORED_GATE_CLEARED_MESSAGE,
+} from '@client/app/components/common/StoredGateClear';
 import { generatePassphrase } from '@client/app/utils/generatePassphrase';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
@@ -39,15 +43,6 @@ const GATE_OPTIONS: Array<{ value: GateKind; label: string; icon: React.ReactNod
   { value: 'passphrase', label: 'Passphrase', icon: <KeyIcon sx={{ fontSize: 16 }} /> },
   { value: 'domain', label: 'Email domain', icon: <DomainIcon sx={{ fontSize: 16 }} /> },
 ];
-/** Who opens a non-public page at its own address (/p/...), which checks visibility and membership
- *  only, never a stored gate (checkVisibility). An unknown level is owner-only there, like private. */
-function pageAddressNote(visibility: string): string {
-  if (visibility === 'organization')
-    return 'Team members who open the page itself, not a private link, are not asked for it.';
-  if (visibility === 'project')
-    return 'Project members who open the page itself, not a private link, are not asked for it.';
-  return 'The page itself, not a private link, still opens only for you.';
-}
 /** Syntactic domain pre-filter (mirrors the server DOMAIN_RE); entries are then
  *  validated as real registrable domains and sent/stored AS ENTERED (never reduced). */
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
@@ -196,7 +191,7 @@ export function AccessGateEditor({
         gate === null
           ? isPublic
             ? 'Gate removed - open to anyone with the link'
-            : 'Gate cleared - private links no longer ask for it'
+            : STORED_GATE_CLEARED_MESSAGE
           : gate.kind === 'passphrase'
             ? 'Passphrase set - share it with your viewers'
             : 'Domain restriction applied'
@@ -248,31 +243,12 @@ export function AccessGateEditor({
       ) : (
         <>
           {hasPrivateLinkGate && (
-            <Sheet
-              variant="soft"
-              sx={{ borderRadius: 'md', p: 1, mb: 1 }}
+            <StoredGateNote
+              kind={liveGateKind}
+              visibility={visibility}
+              sx={{ mb: 1 }}
               data-testid={`${testIdPrefix}-private-link-note`}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.25 }}>
-                {liveGateKind === 'passphrase' ? (
-                  <KeyIcon sx={{ fontSize: 16 }} />
-                ) : (
-                  <DomainIcon sx={{ fontSize: 16 }} />
-                )}
-                <Typography level="body-sm" sx={{ fontWeight: 600 }}>
-                  {liveGateKind === 'passphrase' ? 'Passphrase gate' : 'Email domain gate'}
-                </Typography>
-              </Box>
-              {/* Mirrors the server: /a/<token> runs the stored gate at any visibility, while the
-                  page's own address (/p/...) checks visibility only. Keep in sync with
-                  checkShareGrant and checkVisibility. */}
-              <Typography level="body-xs">
-                {liveGateKind === 'passphrase'
-                  ? 'Private links to this page need the passphrase.'
-                  : 'Private links to this page need a verified email from an allowed domain.'}{' '}
-                {pageAddressNote(visibility)}
-              </Typography>
-            </Sheet>
+            />
           )}
           {/* The whole card is the click target (the Sheet owns onClick); the Radio
               is a read-only visual indicator with pointer-events disabled so it never
@@ -477,20 +453,12 @@ export function AccessGateEditor({
           </Box>
         </>
       )}
-      <ConfirmationModal
+      <ClearGateConfirmModal
         open={confirmingClear}
         onClose={() => setConfirmingClear(false)}
         onConfirm={clearGate}
         loading={busy}
-        title="Clear access gate"
-        description={
-          liveGateKind === 'passphrase'
-            ? 'Anyone with a private link to this page will open it without a passphrase. The current passphrase cannot be recovered.'
-            : 'Anyone with a private link to this page will open it without signing in.'
-        }
-        confirmText="Clear gate"
-        confirmColor="danger"
-        showWarningIcon
+        kind={liveGateKind === 'passphrase' ? 'passphrase' : 'domain'}
       />
     </Box>
   );

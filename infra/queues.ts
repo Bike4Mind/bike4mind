@@ -778,10 +778,15 @@ const questExportQueueSubscription = questExportQueue.subscribe(
 // permissions: no link, no secrets, no VPC, no environment of its own, only the logging role. It reads
 // the staged document through a short-lived presigned link and returns the image inline.
 // infra/__tests__/publishThumbnailRenderer.test.ts holds both sides of that split.
+// Each invocation also ends its own execution environment once its answer is delivered
+// (apps/workers/src/media/lambdaRuntimeExit.ts), so every render starts in a fresh runtime and
+// each REPORT line records that exit as Runtime.ExitError by design; the orchestrator still
+// receives an ordinary result.
 const publishThumbnailRenderer = new sst.aws.Function('PublishThumbnailRenderer', {
   handler: 'apps/workers/src/media/publishThumbnailRenderer.handler',
   runtime: 'nodejs24.x',
-  // Document fetch (15 s) + browser launch + the 35 s render deadline + encode and close.
+  // Runtime start (every invocation) + document fetch (15 s) + browser extraction and launch + the
+  // 35 s render deadline + encode, close and the teardown check (up to 5 s).
   timeout: '75 seconds',
   // Chromium needs the headroom; @sparticuz/chromium documents ~1.6 GB as its floor.
   memory: '2048 MB',
