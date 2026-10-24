@@ -7,7 +7,12 @@ import { HearthChannel } from '../models/hearth/HearthChannelModel';
 import { HearthActor } from '../models/hearth/HearthActorModel';
 import { HearthEventDoc, PRESENCE_EVENT_RETENTION_SECONDS } from '../models/hearth/HearthEventModel';
 import { HearthCursor } from '../models/hearth/HearthCursorModel';
-import { MongoHearthStore, hearthRepository } from '../models/hearth/MongoHearthStore';
+import {
+  HearthChannelCapError,
+  MAX_HEARTH_CHANNELS_PER_USER,
+  MongoHearthStore,
+  hearthRepository,
+} from '../models/hearth/MongoHearthStore';
 
 describe('Hearth models + MongoHearthStore', () => {
   let mongoServer: MongoMemoryServer;
@@ -231,6 +236,75 @@ describe('Hearth models + MongoHearthStore', () => {
 
     expect(theirs._id.toString()).not.toBe(mine._id.toString());
     expect(await hearthRepository.getOwnedChannel(USER, theirs._id.toString())).toBeNull();
+  });
+
+  describe('channel cap', () => {
+    const owned = () => ({ userId: new Types.ObjectId(USER) });
+
+    /** Seed exactly the ceiling; `agents` is one of them so the existing-name case is real. */
+    async function seedAtCap() {
+      await HearthChannel.insertMany(
+        Array.from({ length: MAX_HEARTH_CHANNELS_PER_USER }, (_, i) => ({
+          userId: new Types.ObjectId(USER),
+          name: i === 0 ? 'agents' : `seeded-${i}`,
+        }))
+      );
+    }
+
+    /** Resolve a refusal, failing the test if the promise fulfils instead. */
+    async function capRefusal(promise: Promise<unknown>): Promise<HearthChannelCapError> {
+      try {
+        await promise;
+      } catch (err) {
+        expect(err).toBeInstanceOf(HearthChannelCapError);
+        return err as HearthChannelCapError;
+      }
+      throw new Error('expected the channel cap to refuse');
+    }
+
+    it('ensureChannelByName refuses a new channel at the cap', async () => {
+      await seedAtCap();
+
+      const err = await capRefusal(hearthRepository.ensureChannelByName(USER, 'one-too-many'));
+
+      expect(err.statusCode).toBe(409);
+      expect(err.additionalInfo).toEqual({ code: 'channel_limit', limit: MAX_HEARTH_CHANNELS_PER_USER });
+      expect(await HearthChannel.countDocuments(owned())).toBe(MAX_HEARTH_CHANNELS_PER_USER);
+    });
+
+    it('ensureChannelByName still resolves an existing name at the cap', async () => {
+      await seedAtCap();
+
+      const channel = await hearthRepository.ensureChannelByName(USER, 'agents');
+
+      expect(channel.name).toBe('agents');
+      expect(await HearthChannel.countDocuments(owned())).toBe(MAX_HEARTH_CHANNELS_PER_USER);
+    });
+
+    it('createChannel enforces the same cap', async () => {
+      await seedAtCap();
+
+      const err = await capRefusal(hearthRepository.createChannel(USER, 'one-too-many'));
+
+      expect(err.statusCode).toBe(409);
+      expect(await HearthChannel.countDocuments(owned())).toBe(MAX_HEARTH_CHANNELS_PER_USER);
+    });
+
+    it('concurrent new names at the boundary never exceed the cap', async () => {
+      await HearthChannel.insertMany(
+        Array.from({ length: MAX_HEARTH_CHANNELS_PER_USER - 1 }, (_, i) => ({
+          userId: new Types.ObjectId(USER),
+          name: `seeded-${i}`,
+        }))
+      );
+
+      // Racers may all be refused; the invariant is the total, not who won.
+      await Promise.allSettled(
+        Array.from({ length: 8 }, (_, i) => hearthRepository.ensureChannelByName(USER, `racer-${i}`))
+      );
+
+      expect(await HearthChannel.countDocuments(owned())).toBeLessThanOrEqual(MAX_HEARTH_CHANNELS_PER_USER);
+    });
   });
 
   it('getOwnedChannel enforces ownership and tolerates malformed ids', async () => {
