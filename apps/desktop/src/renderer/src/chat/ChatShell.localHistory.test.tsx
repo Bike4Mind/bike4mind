@@ -47,6 +47,7 @@ const session = (id: string, title: string): ChatSessionSummary =>
 const SESSIONS = [session('first', 'First'), { ...session('second', 'Second'), mode: 'code' as const }];
 let model = 'local:ollama:qwen3:8b';
 const sendMessage = vi.fn(async () => ({ ok: true, messageId: 'reply' }));
+const getSession = vi.fn<(id: string) => Promise<ChatSession | null>>();
 const expiredAuth: AuthState = {
   status: 'signed-out',
   busy: 'idle',
@@ -74,6 +75,10 @@ beforeEach(() => {
   window.localStorage.clear();
   model = 'local:ollama:qwen3:8b';
   sendMessage.mockClear();
+  getSession.mockReset();
+  getSession.mockImplementation(
+    async id => ({ ...SESSIONS.find(entry => entry.id === id), model, messages: [] }) as unknown as ChatSession
+  );
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
     'IntersectionObserver',
@@ -91,8 +96,7 @@ beforeEach(() => {
       getAppInfo: async () => ({ homeDirectory: '/home/test' }),
       chat: quietBridge({
         listSessions: async () => SESSIONS,
-        getSession: async (id: string) =>
-          ({ ...SESSIONS.find(entry => entry.id === id), model, messages: [] }) as unknown as ChatSession,
+        getSession,
         sendMessage,
         searchHistory: async () => [
           {
@@ -182,5 +186,24 @@ describe('local model and history reachability', () => {
     await act(async () => el('local-history-result').click());
     await act(async () => undefined);
     expect(el('chat-session-title').textContent).toBe('Second');
+  });
+
+  it('hides the previous consent switch until a selected history result has loaded', async () => {
+    await renderShell();
+    expect(el('chat-history-switch')).not.toBeNull();
+    let resolveSession!: (session: ChatSession) => void;
+    getSession.mockReturnValue(
+      new Promise(resolve => {
+        resolveSession = resolve;
+      })
+    );
+    await act(async () => typeInto('chat-search-input', 'needle'));
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 150));
+    });
+    await act(async () => el('local-history-result').click());
+    expect(document.querySelector('[data-testid="chat-history-switch"]')).toBeNull();
+    await act(async () => resolveSession({ ...SESSIONS[1], model, messages: [] } as unknown as ChatSession));
+    expect(el('chat-history-switch')).not.toBeNull();
   });
 });

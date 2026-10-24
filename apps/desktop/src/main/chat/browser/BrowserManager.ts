@@ -949,7 +949,10 @@ export class BrowserManager implements BrowserProvider {
         this.push(sessionId);
         this.apply();
       },
-      onSnapshot: snapshot => void this.recordSnapshot(sessionId, snapshot),
+      onSnapshot: snapshot => {
+        // A script can settle after its tab closed or an account switch closed every tab.
+        if (this.sessions.get(sessionId)?.list.includes(tab)) void this.recordSnapshot(sessionId, snapshot);
+      },
       onWindowOpen: (url, fromAgent, background) => this.openFromPage(sessionId, tab, url, fromAgent, background),
       // Out of the input event first: Cmd+W destroys the very contents that is dispatching it.
       onShortcut: shortcut => setImmediate(() => void this.onShortcut(sessionId, shortcut)),

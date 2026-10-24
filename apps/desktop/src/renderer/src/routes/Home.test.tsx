@@ -6,6 +6,9 @@ import type { AuthState } from '@shared/auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Home } from './Home';
 
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
+
 // The real shell pulls in the whole chat stack; what matters here is whether Home keeps it
 // mounted, which a draft held in its own state shows directly.
 vi.mock('../chat/ChatShell', () => ({
@@ -57,6 +60,7 @@ let push: (state: AuthState) => void = () => {};
 const signIn = vi.fn(async () => {});
 
 beforeEach(() => {
+  navigate.mockClear();
   (window as unknown as { b4m: unknown }).b4m = {
     auth: {
       getState: async () => base,
@@ -167,6 +171,8 @@ it.each(['signed-out', 'unconfigured'] as const)('opens local chat without signi
   act(() => byTestId('auth-local-chat-btn')?.click());
   expect(byTestId('composer-input')).not.toBeNull();
   expect(signIn).not.toHaveBeenCalled();
+  act(() => byTestId('local-chat-settings-btn')?.click());
+  expect(navigate).toHaveBeenCalledWith({ to: '/settings' });
   act(() => byTestId('local-chat-signin-btn')?.click());
   expect(byTestId('composer-input')).toBeNull();
   expect(byTestId('auth-local-chat-btn')).not.toBeNull();

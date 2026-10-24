@@ -144,6 +144,16 @@ describe('OllamaLocal', () => {
     expect(sent.think).toBe(false);
   });
 
+  it.each([
+    ['length', 'max_tokens'],
+    ['stop', 'stop'],
+    [undefined, 'end_turn'],
+    ['custom', 'custom'],
+  ])('normalizes Ollama stop reason %s to %s', async (reason, expected) => {
+    const { events } = await streamWith(`${JSON.stringify({ done: true, done_reason: reason })}\n`);
+    expect(events).toEqual([{ type: 'content', stopReason: expected }]);
+  });
+
   it('excludes embedding-only models and models whose capabilities could not be inspected', async () => {
     vi.stubGlobal(
       'fetch',

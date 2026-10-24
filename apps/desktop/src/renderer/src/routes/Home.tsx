@@ -5,6 +5,7 @@ import Card from '@mui/joy/Card';
 import CircularProgress from '@mui/joy/CircularProgress';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import { useNavigate } from '@tanstack/react-router';
 import { ReauthNotice } from '../auth/ReauthNotice';
 import { SignInCard } from '../auth/SignInCard';
 import { SignedInPanel } from '../auth/SignedInPanel';
@@ -14,6 +15,7 @@ import { AppUpdateNotice } from '../chat/UpdateNotice';
 
 export function Home() {
   const state = useAuthState();
+  const navigate = useNavigate();
   const [localChat, setLocalChat] = useState(false);
   const chatScope = useRef('device-local');
   if (state && state.status !== 'initializing' && !state.reauthRequired) {
@@ -33,9 +35,18 @@ export function Home() {
             state?.status === 'signed-in' || state?.reauthRequired ? (
               <SignedInPanel state={state} status={status} />
             ) : (
-              <Button onClick={() => setLocalChat(false)} data-testid="local-chat-signin-btn">
-                Sign in
-              </Button>
+              <Stack spacing={1} sx={{ p: 1.5 }}>
+                <Button
+                  variant="plain"
+                  onClick={() => void navigate({ to: '/settings' })}
+                  data-testid="local-chat-settings-btn"
+                >
+                  Settings
+                </Button>
+                <Button onClick={() => setLocalChat(false)} data-testid="local-chat-signin-btn">
+                  Sign in
+                </Button>
+              </Stack>
             )
           }
         />

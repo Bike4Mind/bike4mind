@@ -1198,4 +1198,22 @@ describe('BrowserManager snapshot indexing', () => {
     expect(index).not.toHaveBeenCalled();
     manager.closeAll();
   });
+
+  it('ignores a late snapshot from a closed tab even if the same session reopened', async () => {
+    const index = vi.fn();
+    const manager = new BrowserManager(undefined, undefined, index);
+    const page = await manager.context('first', async () => undefined).page();
+    let finish: (value: typeof snapshot) => void = () => undefined;
+    contents.script = () =>
+      new Promise(resolve => {
+        finish = resolve;
+      });
+    const pending = page.snapshot(1000);
+    manager.closeAll();
+    await manager.context('first', async () => undefined).page();
+    finish(snapshot);
+    await pending;
+    expect(index).not.toHaveBeenCalled();
+    manager.closeAll();
+  });
 });

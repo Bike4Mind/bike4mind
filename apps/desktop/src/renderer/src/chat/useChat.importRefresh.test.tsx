@@ -201,6 +201,17 @@ it('does not apply a history toggle response to a different conversation', async
   expect(conversation.session?.historyEnabled).not.toBe(true);
 });
 
+it('does not change consent using the previous conversation while the selected one loads', async () => {
+  await show();
+  const pending = deferred<ChatSession | null>();
+  getSession.mockReturnValue(pending.promise);
+  await show('other');
+  expect(conversation.session?.id).toBe('cc-import');
+  await act(async () => conversation.setHistory(true));
+  expect(setSessionHistory).not.toHaveBeenCalled();
+  await act(async () => pending.resolve({ ...imported('other'), id: 'other' }));
+});
+
 it('applies history consent updates pushed by another window', async () => {
   await show();
   const { messages: _messages, ...summary } = imported('old');
@@ -210,4 +221,18 @@ it('applies history consent updates pushed by another window', async () => {
     });
     expect(conversation.session?.historyEnabled).toBe(enabled);
   }
+});
+
+it('re-reads consent when another window changes it during the initial session load', async () => {
+  const pending = deferred<ChatSession | null>();
+  getSession.mockReturnValueOnce(pending.promise);
+  await show();
+  const { messages: _messages, ...summary } = imported('old');
+  getSession.mockResolvedValue({ ...imported('old'), historyEnabled: true });
+  await act(async () => {
+    for (const listener of summaries) listener({ ...summary, messageCount: 1, historyEnabled: true });
+    pending.resolve(imported('old'));
+  });
+  expect(getSession).toHaveBeenCalledTimes(2);
+  expect(conversation.session?.historyEnabled).toBe(true);
 });

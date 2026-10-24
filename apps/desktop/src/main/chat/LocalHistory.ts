@@ -31,6 +31,7 @@ function safeContent(value: string): string {
 
 export class LocalHistory {
   private readonly db: DatabaseSync;
+  private captureRevision = 0;
 
   constructor(
     path: string,
@@ -54,6 +55,11 @@ export class LocalHistory {
     return this.scope();
   }
 
+  /** Invalidates pending reads when history is removed before their capture finishes. */
+  revision(): number {
+    return this.captureRevision;
+  }
+
   captureSession(session: ChatSession, expectedScope = this.scope()): void {
     if (!session.historyEnabled || !expectedScope || this.scope() !== expectedScope) return;
     const content = safeContent(
@@ -73,8 +79,8 @@ export class LocalHistory {
     );
   }
 
-  capturePage(sessionId: string, model: BrowserPageModel): void {
-    if (!this.scope()) return;
+  capturePage(sessionId: string, model: BrowserPageModel, expectedRevision = this.captureRevision): void {
+    if (!this.scope() || expectedRevision !== this.captureRevision) return;
     const content = safeContent(
       model.blocks
         .flatMap(block => ('text' in block ? [block.text] : block.kind === 'image' ? [block.alt] : []))
@@ -127,6 +133,7 @@ export class LocalHistory {
     const scope = this.scope();
     if (!scope) return { entries: 0 };
     this.db.prepare('DELETE FROM entries WHERE scope = ?').run(scope);
+    this.captureRevision += 1;
     this.changed();
     return this.state();
   }
@@ -134,6 +141,7 @@ export class LocalHistory {
   removeSession(sessionId: string, expectedScope = this.scope()): void {
     if (!expectedScope) return;
     this.db.prepare('DELETE FROM entries WHERE session_id = ? AND scope = ?').run(sessionId, expectedScope);
+    this.captureRevision += 1;
     this.changed();
   }
 

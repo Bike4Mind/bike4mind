@@ -214,5 +214,8 @@ function emitFrame(frame: unknown, onEvent: (event: CompletionStreamEvent) => vo
       : [];
   });
   if (tools.length > 0) onEvent({ type: 'tool_use', tools });
-  if (raw.done === true) onEvent({ type: 'content', stopReason: String(raw.done_reason ?? 'end_turn') });
+  if (raw.done === true) {
+    const stopReason = raw.done_reason === 'length' ? 'max_tokens' : String(raw.done_reason ?? 'end_turn');
+    onEvent({ type: 'content', stopReason });
+  }
 }

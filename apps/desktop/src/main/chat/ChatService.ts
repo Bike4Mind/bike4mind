@@ -1413,6 +1413,9 @@ export class ChatService {
     this.deps.videoJobs?.forgetSession(sessionId);
     await this.deps.media?.forgetSession(sessionId);
     if (deleteStoredSession) await this.deps.store.delete(sessionId);
+    // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
+    // Once the serialized delete has finished, no later append can resurrect the session.
+    this.deps.history?.removeSession(sessionId, historyScope);
     this.deps.activity?.forget(sessionId);
     this.deps.queue?.forget(sessionId);
     await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {
@@ -1994,7 +1997,7 @@ export class ChatService {
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
         // that was mid-turn takes delivery of anything that finished while it was busy.
         // Reporting to the PARENT writes a different session's file, so it needs no ordering here.
-        void this.settleSpawnedTurn(sessionId);
+        void this.settleSpawnedTurn(sessionId, session.model.startsWith(LOCAL_MODEL_PREFIX));
 
         // Awaited, and before the queue: both append to THIS session, and appendMessage is a
         // read-modify-write with no lock of its own - overlapping them would let the later
@@ -2642,7 +2645,7 @@ export class ChatService {
       const parsed = produced.map(round => ({ round, ...extractArtifacts(round.text) }));
       const newArtifacts = parsed.flatMap(entry => entry.artifacts);
       const published =
-        newArtifacts.length > 0 && this.deps.artifacts
+        !localTurn && newArtifacts.length > 0 && this.deps.artifacts
           ? await this.deps.artifacts.publish(newArtifacts, sessionId)
           : newArtifacts;
       // A resumed run only ever sees markup the rounds AFTER the interruption emitted - the
@@ -3182,6 +3185,10 @@ export class ChatService {
   private buildHostContext(session: ChatSession): HostContext | undefined {
     const project = session.project;
     if (!project) return undefined;
+    const visibleTitle = (target: Pick<ChatSession, 'title' | 'model'>): string =>
+      !session.model.startsWith(LOCAL_MODEL_PREFIX) && target.model.startsWith(LOCAL_MODEL_PREFIX)
+        ? 'Local conversation'
+        : target.title;
 
     const addressable = async (sessionId: string): Promise<ChatSession | null> => {
       if (!isValidSessionId(sessionId)) return null;
@@ -3208,18 +3215,21 @@ export class ChatService {
         return all
           .filter(entry => entry.project?.directory === project.directory)
           .filter(entry => includeArchived || !entry.archived)
-          .map(entry => this.toHostView(entry));
+          .map(entry => ({ ...this.toHostView(entry), title: visibleTitle(entry) }));
       },
 
       readSession: async sessionId => {
         const target = await addressable(sessionId);
+        if (target?.model.startsWith(LOCAL_MODEL_PREFIX) && !session.model.startsWith(LOCAL_MODEL_PREFIX)) {
+          throw new Error('A hosted model cannot read a device-local conversation. Open it directly to read it.');
+        }
         return target ? renderTranscript(target) : null;
       },
 
       setArchived: async (sessionId, archived) => {
         if (!(await addressable(sessionId))) return null;
         const updated = await this.setSessionArchived(sessionId, archived);
-        return updated ? this.toHostView(updated) : null;
+        return updated ? { ...this.toHostView(updated), title: visibleTitle(updated) } : null;
       },
 
       deleteSession: async sessionId => {
@@ -3228,7 +3238,10 @@ export class ChatService {
         return true;
       },
 
-      describeSession: async sessionId => (await addressable(sessionId))?.title ?? null,
+      describeSession: async sessionId => {
+        const target = await addressable(sessionId);
+        return target ? visibleTitle(target) : null;
+      },
 
       sendTo: async (targetId, message) => this.relayMessage(session, await addressable(targetId), targetId, message),
 
@@ -3514,6 +3527,14 @@ export class ChatService {
     if (!target) {
       return { ok: false, reason: 'no-target', message: 'No conversation with that id in this project.' };
     }
+    if (from.model.startsWith(LOCAL_MODEL_PREFIX) && !target.model.startsWith(LOCAL_MODEL_PREFIX)) {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        message:
+          'A device-local conversation cannot send messages to a hosted model. Choose a local conversation instead.',
+      };
+    }
     if (target.archived === true) {
       return {
         ok: false,
@@ -3576,7 +3597,11 @@ export class ChatService {
     this.flushQueue(targetId);
 
     this.deps.logger.debug(`CHAT: relayed a message from ${from.id} to ${targetId} at hop ${budget.hops + 1}`);
-    return { ok: true, sessionId: targetId, title: target.title, queued };
+    const title =
+      !from.model.startsWith(LOCAL_MODEL_PREFIX) && target.model.startsWith(LOCAL_MODEL_PREFIX)
+        ? 'Local conversation'
+        : target.title;
+    return { ok: true, sessionId: targetId, title, queued };
   }
 
   /**
@@ -3859,6 +3884,7 @@ export class ChatService {
       });
       if (!retained) await onFailed?.(reason);
       await this.deliverChildReport(parentId, {
+        localOnly: child.model.startsWith(LOCAL_MODEL_PREFIX),
         content:
           `The session you started, "${child.title}" (${child.id}), could not start and ${outcome}: ${reason} ` +
           (retained
@@ -3942,7 +3968,7 @@ export class ChatService {
    * is the unattended behaviour this task deliberately does not build. What lands instead is a
    * message the user reads and the model sees on the next turn either of them takes.
    */
-  private async settleSpawnedTurn(sessionId: string): Promise<void> {
+  private async settleSpawnedTurn(sessionId: string, localOnly: boolean): Promise<void> {
     const watch = this.spawnWatch.get(sessionId);
     if (!watch) return;
     this.spawnWatch.delete(sessionId);
@@ -3950,6 +3976,7 @@ export class ChatService {
     const child = await this.deps.store.get(sessionId);
     if (!child) return;
     await this.deliverChildReport(watch.parentSessionId, {
+      localOnly,
       content: describeChildOutcome(child),
       display: childOutcomeDisplay(child),
     });
@@ -3978,11 +4005,14 @@ export class ChatService {
     this.childReports.delete(sessionId);
 
     for (const report of queued) {
+      const parent = report.localOnly ? await this.deps.store.get(sessionId) : null;
+      const withheld = report.localOnly && !parent?.model.startsWith(LOCAL_MODEL_PREFIX);
+      const localNotice = 'A device-local child session finished. Open that conversation to read its report.';
       const message: ChatMessage = {
         id: randomUUID(),
         role: 'user',
-        content: report.content,
-        display: report.display,
+        content: withheld ? localNotice : report.content,
+        display: withheld ? localNotice : report.display,
         createdAt: new Date().toISOString(),
         system: true,
       };
@@ -5418,6 +5448,7 @@ async function streamLocalRound(
     await local.stream(request, onEvent, signal);
     return null;
   } catch (err) {
+    if (signal?.aborted) return null;
     return err instanceof Error ? err : new Error(String(err));
   }
 }
@@ -5554,10 +5585,11 @@ function renderTranscript(session: ChatSession): string {
  * childOutcomeDisplay. They are composed together and travel together so a report cannot reach
  * the transcript with only one of them.
  */
-interface ChildReport {
+type ChildReport = {
+  localOnly?: boolean;
   content: string;
   display: string;
-}
+};
 
 /**
  * What a finished spawned session tells its parent.

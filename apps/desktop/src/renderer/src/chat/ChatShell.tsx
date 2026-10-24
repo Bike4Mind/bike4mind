@@ -703,7 +703,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   </IconButton>
                 </Tooltip>
               )}
-              {conversation.session && (
+              {!opening && conversation.session && (
                 <Tooltip title="Keep this conversation and its visited pages in the local search index.">
                   <Switch
                     size="sm"
