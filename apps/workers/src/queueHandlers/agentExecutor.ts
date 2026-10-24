@@ -57,7 +57,7 @@ import {
   DEFAULT_OUTPUT_MAX_TOKENS,
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from '@bike4mind/fab-pipeline';
 import {
   applyWorkspaceSessionSettings,
   defaultEmbeddingModelForEnv,
@@ -789,7 +789,7 @@ export async function materializeAttachmentsForRun(args: {
   scope: Record<string, unknown>;
   lakeAccess: AttachmentLakeAccess;
   modelInfo?: ModelInfo;
-  apiKeyTable: ApiKeyTable;
+  apiKeyTable: EmbeddingKeyTable;
   logger: Logger;
   /** Told which pinned ids the stale-reference scrub detached, so the caller can trim its copy. */
   onKnowledgeIdsScrubbed?: (removed: string[]) => void;
@@ -2877,7 +2877,7 @@ async function processExecution(
               scope: fabFileReadScope,
               lakeAccess: await attachmentLakeAccess(),
               modelInfo,
-              apiKeyTable: apiKeyTable as ApiKeyTable,
+              apiKeyTable,
               logger,
             })
           : undefined;

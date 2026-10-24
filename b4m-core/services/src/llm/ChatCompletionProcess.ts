@@ -2434,8 +2434,10 @@ export class ChatCompletionProcess {
       // without this the find returns undefined and the run dies with "Invalid LLM backend".
       const resolvedModelId = resolveDeprecatedModelId(model, 'ChatCompletionProcess');
       const modelInfo = models.find(m => m.id === resolvedModelId);
-      // Federation reaches this backend only; apiKeyTable keeps static keys for the direct-SDK consumers below.
-      const llm = getLlmByModel(withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable)), {
+      // Reuse trusted federation provenance across primary and fallback chat backends.
+      // Direct-SDK consumers below keep the original static key table.
+      const chatApiKeyTable = withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable));
+      const llm = getLlmByModel(chatApiKeyTable, {
         modelInfo,
         logger,
         endUserId: this.user.id,
@@ -5406,7 +5408,7 @@ export class ChatCompletionProcess {
                 currentModel,
                 fallbackModelId,
                 models,
-                apiKeyTable,
+                chatApiKeyTable,
                 logger,
                 {
                   // A timeout that reaches here has spent its one same-model retry. triedModelIds

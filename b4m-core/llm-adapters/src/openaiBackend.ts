@@ -118,11 +118,11 @@ const effortMap_GPT5_1_2 = {
 } as const;
 
 /**
- * Key-table value meaning "authenticate through OpenAI workload identity federation": the client is
+ * Trusted constructor sentinel meaning "authenticate through OpenAI workload identity federation": the client is
  * built from OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE, with
  * the subject token from the PROVIDER_WIF_TOKEN_SOURCE source (see wifTokenSource).
  */
-export const OPENAI_FEDERATED_KEY = 'federated';
+export const OPENAI_FEDERATED_KEY = Symbol('OPENAI_FEDERATED_KEY');
 
 // One client per config so its exchanged-token cache outlives the per-request backend.
 const federatedOpenAIClients = new Map<string, OpenAI>();
@@ -177,7 +177,7 @@ export class OpenAIBackend implements ICompletionBackend {
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
-  constructor(apiKey: string, logger?: Logger, endUserId?: string) {
+  constructor(apiKey: string | typeof OPENAI_FEDERATED_KEY, logger?: Logger, endUserId?: string) {
     this._api = apiKey === OPENAI_FEDERATED_KEY ? federatedOpenAIClient() : new OpenAI({ apiKey });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;

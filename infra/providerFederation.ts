@@ -3,7 +3,7 @@
  * (b4m-core/llm-adapters providerAuth.ts, wifTokenSource.ts). Off unless the deploy sets
  * B4M_PROVIDER_AUTH_FEDERATED=true; off yields empty env and permissions, so the functions
  * spreading it are unchanged. Spread into every function that runs ChatCompletionProcess
- * (guarded by infra/__tests__/providerFederation.test.ts).
+ * (the listed functions are checked by infra/__tests__/providerFederation.test.ts).
  */
 export interface ProviderFederationDeployEnv {
   B4M_PROVIDER_AUTH_FEDERATED?: string;
@@ -19,7 +19,11 @@ export interface ProviderFederationDeployEnv {
 
 export interface ProviderFederation {
   environment: Record<string, string>;
-  permissions: Array<{ actions: string[]; resources: string[] }>;
+  permissions: Array<{
+    actions: string[];
+    resources: string[];
+    conditions: Array<{ test: string; variable: string; values: string[] }>;
+  }>;
 }
 
 const REQUIRED = [
@@ -53,7 +57,19 @@ export function buildProviderFederation(env: ProviderFederationDeployEnv): Provi
   return {
     environment,
     // GetWebIdentityToken supports no resource-level scoping.
-    permissions: [{ actions: ['sts:GetWebIdentityToken'], resources: ['*'] }],
+    permissions: [
+      {
+        actions: ['sts:GetWebIdentityToken'],
+        resources: ['*'],
+        conditions: [
+          {
+            test: 'ForAllValues:StringEquals',
+            variable: 'sts:IdentityTokenAudience',
+            values: [...new Set([environment.ANTHROPIC_WIF_AUDIENCE!, environment.OPENAI_WIF_AUDIENCE!])],
+          },
+        ],
+      },
+    ],
   };
 }
 

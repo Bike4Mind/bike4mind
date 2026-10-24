@@ -122,13 +122,13 @@ const TEMPERATURE_ONLY_MODELS = [
 
 // Timeout constants for detecting streaming hangs (known anthropic-sdk streaming-hang bug)
 /**
- * Key-table value meaning "authenticate through Anthropic workload identity federation": the
+ * Trusted constructor sentinel meaning "authenticate through Anthropic workload identity federation": the
  * client is built with no key, so the SDK resolves ANTHROPIC_FEDERATION_RULE_ID,
  * ANTHROPIC_ORGANIZATION_ID and ANTHROPIC_IDENTITY_TOKEN_FILE from the environment. An
  * ANTHROPIC_API_KEY left in the environment still wins, so CI must not set both. With
  * PROVIDER_WIF_TOKEN_SOURCE=aws-sts the credentials come from federatedAnthropicCredentials instead.
  */
-export const ANTHROPIC_FEDERATED_KEY = 'federated';
+export const ANTHROPIC_FEDERATED_KEY = Symbol('ANTHROPIC_FEDERATED_KEY');
 
 const INITIAL_TIMEOUT_MS = 30000; // 30s to first event
 const DEFAULT_IDLE_TIMEOUT_MS = 90000; // 90s between events for standard models
@@ -232,7 +232,7 @@ export class AnthropicBackend implements ICompletionBackend {
     this._dispatch.set(info);
   }
 
-  constructor(apiKey: string, logger?: Logger, endUserId?: string) {
+  constructor(apiKey: string | typeof ANTHROPIC_FEDERATED_KEY, logger?: Logger, endUserId?: string) {
     // Increase maxRetries from default (2) to 5 for better rate limit handling.
     // The SDK has built-in exponential backoff (500ms initial, 8s max, 25% jitter)
     // and respects Retry-After headers from 429 responses.

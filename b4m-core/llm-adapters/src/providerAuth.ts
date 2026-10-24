@@ -1,34 +1,41 @@
-import { ANTHROPIC_FEDERATED_KEY } from './anthropicBackend';
-import { OPENAI_FEDERATED_KEY } from './openaiBackend';
-
-/**
- * Which providers' effective key is the shared admin-setting key, the only kind the federation
- * gate may replace. Produced by sharedAdminKeyProviders in @bike4mind/auth.
- */
-export interface SharedKeySources {
+/** Providers resolved from a shared admin-setting key by @bike4mind/auth. */
+export type SharedKeySources = Readonly<{
   openai: boolean;
   anthropic: boolean;
-}
+}>;
 
-type FederatableKeys = { openai?: string | null; anthropic?: string | null };
+type FederatableKeys = { openai?: string | symbol | null; anthropic?: string | symbol | null };
+
+const federatedKeySources = new WeakMap<object, SharedKeySources>();
 
 export const isFederatedProviderAuth = (): boolean => process.env.B4M_PROVIDER_AUTH === 'federated';
 
+/** Federation provenance for a table retaining static key values; key strings never grant it. */
+export const federatedSharedKeyProviders = (keys: object): SharedKeySources | undefined =>
+  federatedKeySources.get(keys);
+
 /**
- * With B4M_PROVIDER_AUTH=federated, a copy of `keys` whose shared admin keys are replaced by the
- * federation sentinels; otherwise `keys` itself. Pass the result only to getLlmByModel: direct-SDK
- * consumers of the original table (moderation, embeddings, images) cannot use the sentinel.
+ * Mark a copy for federated backend construction while retaining static values for availability
+ * checks. Direct SDK consumers keep the original, unmarked table.
  */
 export function withFederatedSharedKeys<T extends FederatableKeys>(keys: T, sources: SharedKeySources | undefined): T {
   if (!isFederatedProviderAuth() || !sources) return keys;
-  const swap = (provider: keyof SharedKeySources) =>
+  const canFederate = (provider: keyof SharedKeySources) =>
     sources[provider] && !!keys[provider] && keys[provider] !== 'expired';
-  const openai = swap('openai');
-  const anthropic = swap('anthropic');
+  const openai = canFederate('openai');
+  const anthropic = canFederate('anthropic');
   if (!openai && !anthropic) return keys;
-  return {
-    ...keys,
-    ...(openai ? { openai: OPENAI_FEDERATED_KEY } : {}),
-    ...(anthropic ? { anthropic: ANTHROPIC_FEDERATED_KEY } : {}),
-  };
+  const copy = { ...keys };
+  federatedKeySources.set(copy, Object.freeze({ openai, anthropic }));
+  return copy;
+}
+
+/** Narrow inferred symbol-valued tables without accepting arbitrary symbols as credentials. */
+export function resolveProviderCredential<Sentinel extends symbol>(
+  key: string | symbol,
+  sentinel: Sentinel
+): string | Sentinel {
+  if (typeof key === 'string') return key;
+  if (key === sentinel) return sentinel;
+  throw new TypeError('Unrecognized federated provider credential');
 }

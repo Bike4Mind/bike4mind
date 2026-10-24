@@ -44,7 +44,19 @@ describe('buildProviderFederation', () => {
         OPENAI_SERVICE_ACCOUNT_ID: 'sa',
         OPENAI_WIF_AUDIENCE: 'openai-aud',
       },
-      permissions: [{ actions: ['sts:GetWebIdentityToken'], resources: ['*'] }],
+      permissions: [
+        {
+          actions: ['sts:GetWebIdentityToken'],
+          resources: ['*'],
+          conditions: [
+            {
+              test: 'ForAllValues:StringEquals',
+              variable: 'sts:IdentityTokenAudience',
+              values: ['anthropic-aud', 'openai-aud'],
+            },
+          ],
+        },
+      ],
     });
   });
 

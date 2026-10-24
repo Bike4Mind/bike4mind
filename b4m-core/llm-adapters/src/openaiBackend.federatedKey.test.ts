@@ -48,6 +48,10 @@ describe('OpenAIBackend federated key', () => {
     vi.unstubAllGlobals();
   });
 
+  it('treats the literal federated string as a static user key', () => {
+    expect(clientKey(new OpenAIBackend('federated'))).toBe('federated');
+  });
+
   it('passes a real key through unchanged', () => {
     expect(clientKey(new OpenAIBackend('sk-test'))).toBe('sk-test');
   });
