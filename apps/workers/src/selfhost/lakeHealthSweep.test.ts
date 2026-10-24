@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock('@workers/cron/lakeHealthSweep', () => ({ runLakeHealthSweep: run }));
-vi.mock('@server/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
 import { SelfHostWorker } from './selfHostWorker';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;

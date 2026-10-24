@@ -108,7 +108,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
 }));
 
 const mockSendToQueue = vi.fn();
-vi.mock('@server/utils/sqs', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   sendToQueue: (...args: unknown[]) => mockSendToQueue(...args),
 }));
 
@@ -121,7 +121,7 @@ const mockPostSreRevisionStartedMessage = vi.fn();
 const mockPostSreFixFailureMessage = vi.fn();
 const mockPostSreAnalysisFailureMessage = vi.fn();
 const mockPostSreRateLimitedMessage = vi.fn();
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreNoFixNeededMessage: (...args: unknown[]) => mockPostSreNoFixNeededMessage(...args),
   postSreRevisionStartedMessage: (...args: unknown[]) => mockPostSreRevisionStartedMessage(...args),
   postSreFixFailureMessage: (...args: unknown[]) => mockPostSreFixFailureMessage(...args),

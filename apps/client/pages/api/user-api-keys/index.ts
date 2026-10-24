@@ -18,8 +18,12 @@ import {
   IUserApiKeyDocument,
   UserApiKeyEvents,
 } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { USER_API_KEY_SCOPE_VALUES, isApiKeyScopeOffered } from '@client/app/constants/apiKeyScopes';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import {
+  USER_API_KEY_SCOPE_VALUES,
+  isApiKeyScopeOffered,
+  isKnownApiKeyScope,
+} from '@client/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { Request } from 'express';
 
@@ -146,15 +150,15 @@ const handler = baseApi()
     // other dedicated-flow scopes are intentionally absent from USER_API_KEY_SCOPE_VALUES
     // and must never be reachable here, regardless of what the request body contains.
     const requestedScopes = Array.isArray(scopes) ? scopes : [];
-    const invalidScopes = requestedScopes.filter(s => !USER_API_KEY_SCOPE_VALUES.includes(s as ApiKeyScope));
+    const invalidScopes = requestedScopes.filter(s => !USER_API_KEY_SCOPE_VALUES.includes(s));
     if (invalidScopes.length > 0) {
       throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
     }
 
-    // Product scopes (OptiHashi, Overwatch, Hearth) need the product too: the New-Key modal hides
+    // Product and contributed scopes need their product or entitlement too: the New-Key modal hides
     // them from users without it, and this keeps a hand-built request from minting one anyway.
     const scopeAccess = await resolveApiKeyScopeAccess(req);
-    const unentitledScopes = requestedScopes.filter(s => !isApiKeyScopeOffered(s as ApiKeyScope, scopeAccess));
+    const unentitledScopes = requestedScopes.filter(s => !isApiKeyScopeOffered(s, scopeAccess));
     if (unentitledScopes.length > 0) {
       throw new ForbiddenError(`Scope not available on your account: ${unentitledScopes.join(', ')}`);
     }
@@ -227,6 +231,7 @@ const handler = baseApi()
         },
         callerScopes: req.apiKeyInfo ? (req.apiKeyInfo.scopes ?? []) : undefined,
         callerExpiresAt: req.apiKeyInfo?.expiresAt,
+        isKnownScope: isKnownApiKeyScope,
       }
     );
 

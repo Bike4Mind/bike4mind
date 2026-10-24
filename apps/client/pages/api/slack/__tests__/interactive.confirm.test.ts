@@ -3,17 +3,18 @@ import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { WebClient } from '@slack/web-api';
 
 vi.mock('sst', () => ({ Resource: {} }));
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test', STAGE: 'test' },
   isDevelopment: () => false,
 }));
 vi.mock('@server/integrations/slack/slackWebhookVerification', () => ({
   verifySlackRequest: () => ({ valid: true }),
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: { create: () => ({ success: vi.fn(), failure: vi.fn() }) },
 }));
 vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: () => 'xoxb-test' }));
@@ -96,6 +97,7 @@ async function postAction(
     type: 'block_actions',
     user: { id: 'U123' },
     team: { id: 'T123', domain: 'test-workspace' },
+    channel: { id: 'C123' },
     actions: [{ action_id: actionId, value, ...extraAction }],
     ...(responseUrl ? { response_url: responseUrl } : {}),
     ...extraPayload,
@@ -111,10 +113,15 @@ async function postAction(
 }
 
 describe('POST /api/slack/interactive confirmation buttons', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Modal updates use the SDK's HTTP client rather than global fetch.
+    vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
     vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
@@ -159,7 +166,8 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
           QUEST_ID,
           expect.objectContaining({ id: 'user-1' }),
           expect.anything(),
-          PENDING_ACTION_TS
+          PENDING_ACTION_TS,
+          { slackTeamId: 'T123', channelId: 'C123' }
         );
         expect(cancelPendingActionOnQuest).not.toHaveBeenCalled();
       } else {
@@ -184,7 +192,8 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
         QUEST_ID,
         expect.objectContaining({ id: 'user-1' }),
         expect.anything(),
-        PENDING_ACTION_TS
+        PENDING_ACTION_TS,
+        { slackTeamId: 'T123', channelId: 'C123' }
       );
       expect(cancelPendingActionOnQuest).not.toHaveBeenCalled();
       return;

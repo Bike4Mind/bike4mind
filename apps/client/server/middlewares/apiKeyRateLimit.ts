@@ -1,7 +1,7 @@
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { RequestHandler } from 'express';
 import { checkApiKeyRateLimit, type RateLimitCounter } from '@server/utils/apiKeyRateLimitCheck';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { ApiKeyScope, API_KEY_RATE_LIMIT_HEADER_NAMES } from '@bike4mind/common';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
@@ -83,13 +83,14 @@ export const apiKeyRateLimit =
         // Emit per-product RateLimitHit metric for ingest keys so the Overwatch ops dashboard
         // can surface per-product rate pressure without a separate Lambda.
         if (req.apiKeyInfo?.scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) && req.apiKeyInfo.productId) {
-          emitMetric(
+          // Awaited: the 429 ends the invocation, and a frozen Lambda loses a pending emit.
+          await emitMetric(
             'Lumina5/OverwatchIngest',
             'RateLimitHit',
             1,
             { productId: req.apiKeyInfo.productId },
             StandardUnit.Count
-          ).catch(() => {});
+          );
         }
         throw new TooManyRequestsError(result.error || 'Rate limit exceeded');
       }

@@ -1,6 +1,6 @@
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
+import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Resource } from 'sst';
 import { adminSettingsRepository, releaseNoteRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';

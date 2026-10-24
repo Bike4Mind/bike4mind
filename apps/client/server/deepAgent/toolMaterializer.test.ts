@@ -25,11 +25,17 @@ vi.mock('@bike4mind/services/llm', async importOriginal => {
   };
 });
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: vi.fn().mockResolvedValue({ _id: 'owner-1', id: 'owner-1' }) },
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
+  userRepository: {
+    findById: vi.fn().mockResolvedValue({ _id: 'owner-1', id: 'owner-1' }),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   // Lakes disabled, so the save tool answers right after its adapter gate without writing.
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
   apiKeyRepository: {},
+  cacheRepository: {},
   dataLakeRepository: {
+    findByDatalakeTags: vi.fn().mockResolvedValue([]),
     findBySlug: vi.fn(),
     findBySlugAmongIds: vi.fn(),
     setStats: vi.fn(),
@@ -38,7 +44,10 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: { listActiveByLakes: vi.fn().mockResolvedValue([]), listByLake: vi.fn() },
   fallbackLakeSettingsRepository: {},
   // ToolContext.db.organizations is required since #1674 (org membership set).
-  organizationRepository: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+  organizationRepository: {
+    findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   fabFileChunkRepository: {},
   fabFileRepository: {},
   imageModerationIncidentRepository: {},
@@ -58,7 +67,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
 vi.mock('@bike4mind/server-utils/deepAgent/resolveBackend', () => ({
   buildSystemApiKeyTable: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({}),
   getGeneratedImageStorage: () => ({}),
 }));

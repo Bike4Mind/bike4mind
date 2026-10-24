@@ -8,9 +8,12 @@
  * - Process namespace isolation
  */
 import os from 'os';
+import path from 'path';
+import { lstatSync, mkdirSync, statSync } from 'fs';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
 import {
-  expandPath,
+  resolveSandboxPath,
+  getProtectedWorkspacePaths,
   isBinaryAvailable,
   type SandboxRuntime,
   type WrapCommandOptions,
@@ -36,8 +39,8 @@ export class BubblewrapRuntime implements SandboxRuntime {
 
   wrapCommand(options: WrapCommandOptions): WrappedCommand {
     const { command, cwd, filesystemConfig, env } = options;
-    const expandedDenied = filesystemConfig.deniedPaths.map(expandPath);
-    const expandedAllowed = filesystemConfig.allowedReadPaths.map(expandPath);
+    const expandedDenied = filesystemConfig.deniedPaths.map(resolveSandboxPath);
+    const expandedAllowed = filesystemConfig.allowedReadPaths.map(resolveSandboxPath);
 
     const args: string[] = [];
 
@@ -51,23 +54,52 @@ export class BubblewrapRuntime implements SandboxRuntime {
     args.push('--proc', SPECIAL_MOUNTS.proc);
     args.push('--tmpfs', SPECIAL_MOUNTS.tmp);
 
-    // Working directory: read-write bind
-    args.push('--bind', cwd, cwd);
-
-    // Home directory: bind read-only for tool configs, then overlay denied paths
+    // Parent mounts must precede child mounts or they shadow the writable cwd.
     const homeDir = os.homedir();
     args.push('--ro-bind', homeDir, homeDir);
 
     // Allowed read paths (already covered by home bind, but explicit for non-home paths)
     for (const allowedPath of expandedAllowed) {
-      if (!allowedPath.startsWith(homeDir)) {
+      if (allowedPath !== homeDir && !allowedPath.startsWith(`${homeDir}${path.sep}`)) {
         args.push('--ro-bind-try', allowedPath, allowedPath);
       }
     }
 
-    // Denied paths: mount empty tmpfs to hide contents
+    args.push('--bind', cwd, cwd);
+
+    // Protect the whole metadata directory, including config/hooks that do not exist yet.
+    // Git writes require the usual unsandboxed permission escalation.
+    const protectedPaths = getProtectedWorkspacePaths(cwd);
+    const resolvedCwd = resolveSandboxPath(cwd);
+    for (const protectedPath of protectedPaths) {
+      const resolvedPath = resolveSandboxPath(protectedPath);
+      if (resolvedCwd === resolvedPath || resolvedCwd.startsWith(`${resolvedPath}${path.sep}`)) {
+        throw new Error(`Cannot use protected metadata as sandbox cwd: ${cwd}`);
+      }
+    }
+    const projectDir = path.join(cwd, '.bike4mind');
+    mkdirSync(projectDir, { recursive: true });
+    for (const protectedPath of protectedPaths) {
+      try {
+        if (lstatSync(protectedPath).isSymbolicLink()) {
+          throw new Error(`Cannot protect sandbox metadata symlink: ${protectedPath}`);
+        }
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR'].includes(String(error.code)))) {
+          throw error;
+        }
+      }
+      const resolvedPath = resolveSandboxPath(protectedPath);
+      if (protectedPath === projectDir || pathKind(resolvedPath) !== 'missing') {
+        args.push('--ro-bind', resolvedPath, resolvedPath);
+      }
+    }
+
+    // Denied paths: hide dirs behind an empty tmpfs and files behind /dev/null; skip missing ones
     for (const deniedPath of expandedDenied) {
-      args.push('--tmpfs', deniedPath);
+      const kind = pathKind(deniedPath);
+      if (kind === 'dir') args.push('--tmpfs', deniedPath);
+      else if (kind === 'file') args.push('--ro-bind', '/dev/null', deniedPath);
     }
 
     // Write restrictions: if writeOnlyToWorkingDir, make home read-only
@@ -107,6 +139,17 @@ export class BubblewrapRuntime implements SandboxRuntime {
       env: env ?? {},
       commandString,
     };
+  }
+}
+
+function pathKind(p: string): 'dir' | 'file' | 'missing' {
+  try {
+    return statSync(p).isDirectory() ? 'dir' : 'file';
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR'].includes(String(error.code))) {
+      return 'missing';
+    }
+    throw error;
   }
 }
 

@@ -18,6 +18,7 @@ import { AuditLogFiltersSchema, type AuditLogFilters } from '../types/entities/a
 export const ADMIN_TAB_PARAM = 'tab';
 export const FEEDBACK_ID_PARAM = 'feedbackId';
 export const QUEST_ID_PARAM = 'questId';
+export const USER_ID_PARAM = 'userId';
 
 /**
  * URL-stable slug for the admin console's Feedback tab.
@@ -49,6 +50,31 @@ export function adminAuditLogPath(filters: AuditLogFilters = {}, entryId?: strin
     if (value !== undefined) params.set(key, value);
   }
   if (entryId) params.set(AUDIT_ENTRY_ID_PARAM, entryId);
+  return `/admin?${params.toString()}`;
+}
+
+/**
+ * Admin console Users tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. Moderation incidents
+ * have no review tab of their own yet, so incident links land here, next to the per-user compliance view.
+ */
+export const ADMIN_USERS_TAB_SLUG = 'users';
+export const MODERATION_INCIDENT_ID_PARAM = 'incidentId';
+
+/** Deep link to the admin console for one image moderation incident. */
+export function adminModerationIncidentPath(incidentId: string): string {
+  const params = new URLSearchParams({
+    [ADMIN_TAB_PARAM]: ADMIN_USERS_TAB_SLUG,
+    [MODERATION_INCIDENT_ID_PARAM]: incidentId,
+  });
+  return `/admin?${params.toString()}`;
+}
+
+/**
+ * Deep link to one user's admin profile. Ids here come from counter logs, so they are not trusted:
+ * URLSearchParams encoding keeps a crafted id from grafting extra params onto the link.
+ */
+export function adminUserProfilePath(userId: string): string {
+  const params = new URLSearchParams({ [ADMIN_TAB_PARAM]: ADMIN_USERS_TAB_SLUG, [USER_ID_PARAM]: userId });
   return `/admin?${params.toString()}`;
 }
 

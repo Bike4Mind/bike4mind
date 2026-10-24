@@ -1,7 +1,8 @@
 import { emailJobRepository, emailSendAttemptRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
@@ -44,6 +45,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       cancelledCount: (job.cancelledCount || 0) + cancelledCount,
     });
   }
+
+  await recordAdminActionFromRequest(req, {
+    action: 'email.job.cancelled',
+    target: { kind: 'settings', id, displayName: job.name },
+    summary: `cancelled ${cancelledCount} pending email(s) for job ${job.name}`,
+    details: { cancelledCount, recipientCount: recipientIds?.length ?? null, wholeJob: !recipientIds },
+  });
 
   return res.json({
     success: true,

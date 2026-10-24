@@ -76,6 +76,8 @@ export interface WebsocketContextValue {
   ) => () => void;
   resetLastJsonMessage: () => void;
   readyState: ReadyState;
+  /** Latches true on the first OPEN, telling a first connect apart from a reconnect. */
+  hasEverOpened: boolean;
   activeSubscriptions: ReadonlySet<string>;
   clientId: string;
 }
@@ -451,6 +453,12 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     return () => clearInterval(id);
   }, [probeLiveness]);
 
+  // Exposed to consumers so the composer can say "Connecting" rather than "Reconnecting" on the
+  // first connect. Kept apart from hasOpenedRef below, which must still read false inside the
+  // first-OPEN effect; this state is already true by then.
+  const [hasEverOpened, setHasEverOpened] = useState(false);
+  if (readyState === ReadyState.OPEN && !hasEverOpened) setHasEverOpened(true);
+
   // Catch-up after a reconnect: frames sent while the socket was down are gone for good, so
   // refetch once (see refetchAfterLostFrames). An incomplete turn then
   // resolves from the refreshed cache via useStreamingMessageMerge, which works even for a new
@@ -575,10 +583,19 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       subscribeToAction,
       resetLastJsonMessage,
       readyState: readyState,
+      hasEverOpened,
       activeSubscriptions,
       clientId,
     };
-  }, [readyState, trackedSendJsonMessage, subscribeToAction, resetLastJsonMessage, activeSubscriptions, clientId]);
+  }, [
+    readyState,
+    hasEverOpened,
+    trackedSendJsonMessage,
+    subscribeToAction,
+    resetLastJsonMessage,
+    activeSubscriptions,
+    clientId,
+  ]);
 
   // Dev-only: expose `sendJsonMessage` on window for forging messages from
   // the browser console. Used to test cc_agent_register before the bridge

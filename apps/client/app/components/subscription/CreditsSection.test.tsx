@@ -7,11 +7,13 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ICreditTransaction } from '@bike4mind/common';
 
-const { navigate, account } = vi.hoisted(() => ({
+const { navigate, account, purchaseToast } = vi.hoisted(() => ({
   navigate: vi.fn(),
+  purchaseToast: vi.fn(),
   account: { selectedAccount: null as null | { personal: boolean } },
 }));
 
+vi.mock('sonner', () => ({ toast: { success: purchaseToast } }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -27,10 +29,24 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({ useSelectedAccount: () => account }));
 vi.mock('../Credits/PaymentButton', () => ({
-  default: ({ label, packageId }: { label: ReactNode; packageId: string }) => (
-    <button type="button" data-testid="credits-purchase-btn" data-package={packageId}>
-      {label}
-    </button>
+  default: ({
+    label,
+    packageId,
+    onPayment,
+    onPaymentPending,
+  }: {
+    label: ReactNode;
+    packageId: string;
+    onPayment: (credits: number) => void;
+    onPaymentPending?: () => void;
+  }) => (
+    <>
+      <button type="button" data-testid="credits-purchase-btn" data-package={packageId}>
+        {label}
+      </button>
+      <button type="button" data-testid="payment-success" onClick={() => onPayment(33333)} />
+      <button type="button" data-testid="payment-pending" onClick={onPaymentPending} />
+    </>
   ),
 }));
 
@@ -51,7 +67,21 @@ const renderSection = (props: Partial<Parameters<typeof CreditsSection>[0]> = {}
 describe('CreditsSection', () => {
   beforeEach(() => {
     navigate.mockClear();
+    purchaseToast.mockClear();
     account.selectedAccount = null;
+  });
+
+  it('keeps pending separate from successful purchases and success notifications', () => {
+    const onPurchase = vi.fn();
+    const onPaymentPending = vi.fn();
+    renderSection({ onPurchase, onPaymentPending });
+    fireEvent.click(screen.getByTestId('payment-pending'));
+    expect(onPaymentPending).toHaveBeenCalledTimes(1);
+    expect(onPurchase).not.toHaveBeenCalled();
+    expect(purchaseToast).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('payment-success'));
+    expect(onPurchase).toHaveBeenCalledTimes(1);
+    expect(purchaseToast).toHaveBeenCalledTimes(1);
   });
 
   it('closes the modal and opens the profile usage tab from the usage link', () => {
@@ -62,6 +92,12 @@ describe('CreditsSection', () => {
     expect(navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'usage' } });
   });
 
+  it('starts on the $20 pack, not the middle one', () => {
+    renderSection();
+    expect(screen.getByTestId('credits-purchase-btn')).toHaveAttribute('data-package', 'package_25k');
+    expect(screen.getByRole('radio', { name: /33,333/ })).toBeChecked();
+  });
+
   it('has one purchase button that buys the selected pack', () => {
     renderSection();
     const buy = screen.getByTestId('credits-purchase-btn');
@@ -69,9 +105,13 @@ describe('CreditsSection', () => {
     expect(buy).toHaveAttribute('data-package', 'package_25k');
     expect(buy).toHaveTextContent('Buy 33,333 credits for $20');
 
-    fireEvent.click(screen.getByRole('radio', { name: /58,333/ }));
-    expect(screen.getByTestId('credits-purchase-btn')).toHaveAttribute('data-package', 'package_50k');
-    expect(screen.getByTestId('credits-purchase-btn')).toHaveTextContent('Buy 58,333 credits for $35');
+    fireEvent.click(screen.getByRole('radio', { name: /83,333/ }));
+    expect(screen.getByTestId('credits-purchase-btn')).toHaveAttribute('data-package', 'package_usd50');
+    expect(screen.getByTestId('credits-purchase-btn')).toHaveTextContent('Buy 83,333 credits for $50');
+
+    fireEvent.click(screen.getByRole('radio', { name: /166,667/ }));
+    expect(screen.getByTestId('credits-purchase-btn')).toHaveAttribute('data-package', 'package_usd100');
+    expect(screen.getByTestId('credits-purchase-btn')).toHaveTextContent('Buy 166,667 credits for $100');
   });
 
   it('card radios are not pinned to a fixed input size by global styles', () => {
@@ -85,7 +125,7 @@ describe('CreditsSection', () => {
 
   it('renders each pack as an overlay radio inside its card', () => {
     renderSection();
-    for (const id of ['package_10k', 'package_25k', 'package_50k']) {
+    for (const id of ['package_25k', 'package_usd50', 'package_usd100']) {
       const card = screen.getByTestId(`credits-pack-${id}`);
       const input = card.querySelector('input[type="radio"]') as HTMLInputElement;
       expect(input).not.toBeNull();
@@ -97,13 +137,13 @@ describe('CreditsSection', () => {
 
   it('marks each pack credit count with the decorative credit icon', () => {
     renderSection();
-    for (const id of ['package_10k', 'package_25k', 'package_50k']) {
+    for (const id of ['package_25k', 'package_usd50', 'package_usd100']) {
       const icon = screen.getByTestId(`credits-pack-${id}-icon`);
       expect(screen.getByTestId(`credits-pack-${id}`)).toContainElement(icon);
       expect(icon).toHaveAttribute('aria-hidden', 'true');
     }
     // Decorative: the radio's accessible name is still the number and "credits".
-    expect(screen.getByRole('radio', { name: /58,333\s*credits/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /166,667\s*credits/ })).toBeInTheDocument();
   });
 
   it('states the per-1,000 rate computed from the packs, with no best-value badge', () => {
@@ -122,6 +162,7 @@ describe('CreditsSection', () => {
   });
 
   it('lists purchases only, and shows placeholders while they load', () => {
+    // 16,667 credits for $10 is a retired pack: history renders from the ledger row, not the pack table.
     const purchase = {
       id: 't1',
       type: 'purchase',

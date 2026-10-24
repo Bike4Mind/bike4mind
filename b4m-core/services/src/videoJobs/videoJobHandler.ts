@@ -1,17 +1,18 @@
 import {
   billedVideoRequest,
-  estimateVideoCostCredits,
   estimateVideoCostUsd,
   getVideoModelCapabilities,
   MAX_INLINE_PROVIDER_OUTPUT_BYTES,
   validateAgainstCapabilities,
   videoFileExtension,
-  videoInputImageRef,
+  videoInputRef,
+  videoRequestInputs,
   type GenerationJobErrorCode,
   type IGenerationJobDocumentOf,
   type ValidatedVideoRequest,
   type VideoJobOutput,
   type VideoJobPayload,
+  usdToCreditsStochastic,
 } from '@bike4mind/common';
 import {
   ProviderSubmitError,
@@ -19,6 +20,7 @@ import {
   ProviderOutputTooLargeError,
   type ProviderJobHandle,
   type ProviderOutput,
+  type ResolvedInputImage,
   type ResolvedInputs,
   type VideoProvider,
   type VideoProviderContext,
@@ -93,7 +95,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
       // A billed block has no output to measure, so it is charged at the requested duration.
       const reported = job.state === 'succeeded' ? job.payload.reportedDurationSeconds : undefined;
       const billed = billedVideoRequest(caps, request, reported);
-      return { billed, credits: estimateVideoCostCredits(caps, billed), usd: estimateVideoCostUsd(caps, billed) };
+      const usd = estimateVideoCostUsd(caps, billed);
+      // Unbiased settlement against the round-up hold. A non-finite price stays NaN: the draw would read it as free.
+      return { billed, credits: Number.isFinite(usd) ? usdToCreditsStochastic(usd) : Number.NaN, usd };
     } catch (error) {
       deps.logger.error('video_job_estimate_failed', { jobId: job.id, model: request.model, error });
       return { billed: request, credits: Number.NaN, usd: null };
@@ -139,14 +143,13 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
     // Defensive: the catalog may have changed since the job was created.
     const validation = validateAgainstCapabilities(request, getVideoModelCapabilities(request.model));
     if (!validation.ok) return fail('provider_error', `stored request is no longer valid: ${validation.message}`);
-    const inputs: ResolvedInputs = {};
-    const inputImage = request.mode === 'image_to_video' ? videoInputImageRef(request) : null;
-    if (inputImage) {
-      const image = await deps.loadInputImage(job.requestedBy, inputImage);
-      if (!image) return fail('input_image_not_found', 'Input image not found');
-      inputs.inputImage = image;
+    const images: ResolvedInputImage[] = [];
+    for (const videoInput of videoRequestInputs(request)) {
+      const image = await deps.loadInputImage(job.requestedBy, videoInputRef(videoInput));
+      if (!image) return fail('input_image_not_found', `Input image not found (${videoInput.role})`);
+      images.push({ role: videoInput.role, ...image });
     }
-    return { provider, request: validation.request, inputs, ctx };
+    return { provider, request: validation.request, inputs: { images }, ctx };
   };
 
   return {

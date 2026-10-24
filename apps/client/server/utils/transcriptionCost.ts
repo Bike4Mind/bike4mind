@@ -1,6 +1,13 @@
 import { usdToCredits } from '@bike4mind/utils';
-import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
-import { BadRequestError } from '@server/utils/errors';
+import type { ILogger } from '@bike4mind/observability';
+import type { IUserDocument } from '@bike4mind/common';
+import {
+  assertPreflightCredits,
+  holdPreflightCredits,
+  InsufficientCreditsPreflightError,
+  type PreflightCreditHold,
+} from '@server/utils/creditPreflight';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 // File size is used as a proxy for duration since the actual duration is not
 // available pre-transcription. PCM baseline (16-bit 16kHz mono) is multiplied
@@ -26,6 +33,7 @@ export interface TranscriptionCost {
   credits: number;
 }
 
+// `credits` is the rounded-up pre-flight figure; the debit settles `costUsd` stochastically (transcribe.ts).
 export function estimateTranscriptionCost(contentLength: number, usdPerMinute: number): TranscriptionCost {
   const durationMinutes = (contentLength * COMPRESSION_FACTOR) / PCM_BYTES_PER_MINUTE;
   const costUsd = durationMinutes * usdPerMinute;
@@ -37,6 +45,26 @@ export function estimateTranscriptionCost(contentLength: number, usdPerMinute: n
 export async function assertTranscriptionCredits(userId: string, estimatedCredits: number): Promise<void> {
   try {
     await assertPreflightCredits({ userId, estimatedCredits, featureLabel: 'transcription' });
+  } catch (error) {
+    if (error instanceof InsufficientCreditsPreflightError) throw new BadRequestError(error.message);
+    throw error;
+  }
+}
+
+// The holding twin of assertTranscriptionCredits, run right before the provider call. Transcription
+// has no organization pool, so the reservation bills the user.
+export async function holdTranscriptionCredits(
+  user: IUserDocument,
+  estimatedCredits: number,
+  logger: ILogger
+): Promise<PreflightCreditHold> {
+  try {
+    return await holdPreflightCredits({
+      req: { user, logger },
+      requiredCredits: estimatedCredits,
+      featureLabel: 'transcription',
+      billingOrganizationId: null,
+    });
   } catch (error) {
     if (error instanceof InsufficientCreditsPreflightError) throw new BadRequestError(error.message);
     throw error;

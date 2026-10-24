@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Sheet, Typography, useTheme } from '@mui/joy';
-import { MailOutlined } from '@mui/icons-material';
+import MailOutlined from '@mui/icons-material/MailOutlined';
 
 const PhishingTestTab: React.FC = () => {
   const theme = useTheme();

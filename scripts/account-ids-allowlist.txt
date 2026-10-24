@@ -67,3 +67,6 @@ apps/client/public/static/lib/d3@[0-9.x]+\.js
 apps/client/public/scalar/scalar\.standalone\.js
 # AWS X-Ray trace-id fragment in a JSDoc example log line, not a Mongo id.
 b4m-core/utils/src/slack\.ts.*Root=1-
+# docs-site deploy config: the public docs hostname and the public site domain used as stage defaults.
+^docs-site/docusaurus\.config\.ts:[0-9]+:\s+url: process\.env\.DOCS_URL \|\| 'https://docs\.bike4mind\.com',$
+^docs-site/sst\.config\.ts:[0-9]+:\s+process\.env\.SERVER_DOMAIN \|\| \(\$app\.stage === 'production' \? 'bike4mind\.com' : 'staging\.bike4mind\.com'\);$

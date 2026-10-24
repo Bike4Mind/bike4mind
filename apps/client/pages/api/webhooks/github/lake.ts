@@ -33,15 +33,15 @@ import { Resource } from 'sst';
 import { isPlaceholderValue } from '@bike4mind/common';
 import { connectDB, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { getRawBody, PayloadTooLargeError, verifyGitHubSignature } from '@server/integrations/github/webhookUtils';
 import {
   isGitHubLakeRevocationEvent,
   parseGitHubLakeRevocation,
   resolveRevokedConnectionIds,
 } from '@server/integrations/github/dataLake/githubLakeRevocation';
-import { sendToQueue } from '@server/utils/sqs';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 
 const PushEventSchema = z.object({
   ref: z.string(),

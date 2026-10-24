@@ -1,8 +1,10 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
   buildCompletionStreamEvent,
+  HTTPError,
   IMessage,
   normalizeCompletionRequest,
   resolveApiCompletionSource,
@@ -32,13 +34,15 @@ import {
   type ApiKeyInfo,
 } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToConnection } from '@server/websocket/utils';
-import { Config } from '@server/utils/config';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
+import { getUserEntitlements } from '@server/entitlements';
 
 /**
  * CLI completions with WebSocket response streaming (`/api/ai/v1/ws-completions`), served by
@@ -123,6 +127,12 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           method: req.method,
         });
       } catch (apiKeyError) {
+        // The key check itself failed (database unreachable): retryable, not a bad credential.
+        if (isAuthInfraFailure(apiKeyError)) {
+          setAuthInfraFailureHeaders(res, apiKeyError);
+          res.status(apiKeyError.statusCode).json({ error: apiKeyError.message });
+          return;
+        }
         // A present-but-rate-limited key surfaces its error rather than falling through to JWT.
         if (apiKeyInfo) {
           res.status(429).json({ error: sanitizeErrorMessage(apiKeyError) });
@@ -194,6 +204,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         let finalCacheReadTokens = 0;
         let finalCacheWriteTokens = 0;
         let finalTurnUsage: TurnUsage[] | undefined;
+        let finalCreditsUsed: number | undefined;
         let hasToolCalls = false;
 
         try {
@@ -207,6 +218,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
 
           // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
           await executeCompletion({
+            getEntitlements: getUserEntitlements,
             creditHolds: createCompletionCreditHolds(logger),
             userId,
             model,
@@ -221,6 +233,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               organizations: organizationRepository,
             },
             apiKeyInfo: apiKeyInfoForCompletion,
+            scopeActor: actorScopeForKey(apiKeyInfo),
             // Org-billed API keys settle to the org's shared pool.
             billingOrganizationId: apiKeyInfo?.organizationId,
             requestId,
@@ -232,6 +245,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
               if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
               if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+              if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
               if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
               const chunk = buildCompletionStreamEvent(text, info);
@@ -264,12 +278,14 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             finalCacheReadTokens,
             finalCacheWriteTokens,
             finalTurnUsage,
+            finalCreditsUsed,
             hasToolCalls,
             db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
             logger,
           });
         } catch (error) {
-          logger.error('[CLI_WS_HTTP] Completion error:', error);
+          const level = error instanceof HTTPError && error.statusCode < 500 ? 'warn' : 'error';
+          logger[level]('[CLI_WS_HTTP] Completion error:', error);
           track(emitProcessingFailed('cli-ws', error));
 
           // The 202 is long gone - the error must reach the CLI over the WebSocket.

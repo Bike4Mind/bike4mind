@@ -1,9 +1,11 @@
 import { BaseStorage } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { DecisionToolRequest } from '../implementation/decide/request';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
+import type { ProviderSlotStore } from '../../../providerCapacity';
 import {
   IChatHistoryItemDocument,
   IChatHistoryItemRepository,
@@ -28,6 +30,8 @@ import {
   ILakeMembershipChangeEventRepository,
   ModelInfo,
   type AuthOrigin,
+  type CitableSource,
+  type DecisionResponse,
 } from '@bike4mind/common';
 
 /**
@@ -71,6 +75,23 @@ export type ToolLlmUsage = {
   costUsd: number;
 };
 
+export type { DecisionToolRequest } from '../implementation/decide/request';
+
+/**
+ * The host's execution seam for `decide`. Returns the same envelope the public route serializes,
+ * so a tool answer and an API answer cannot drift.
+ */
+export type DecideToolFn = (params: {
+  userId: string;
+  user: IUserDocument;
+  logger: Logger;
+  authOrigin: AuthOrigin;
+  /** Trusted turn principal and active billing account, never model-authored arguments. */
+  apiKeyId?: string;
+  organizationId?: string;
+  request: DecisionToolRequest;
+}) => Promise<DecisionResponse>;
+
 export interface ToolContext {
   /** The only principal signal a tool call carries - identical whether this turn is a live chat
    * message or an autonomous agent-executor run. Lake access audit events (recordLakeAccessEvent)
@@ -96,6 +117,8 @@ export interface ToolContext {
    * consumer - see its own doc comment.
    */
   questId?: string;
+  requestConfirmation?: (action: { tool: string; params: Record<string, unknown>; ts: number }) => Promise<void>;
+  slackDestination?: { workspaceId: string; channelId: string; threadTs: string };
   logger: Logger;
   db: GetEffectiveApiKeyAdapters['db'] & {
     latticeModels?: {
@@ -105,6 +128,8 @@ export interface ToolContext {
     };
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
+    /** Concurrency slots for the shared ElevenLabs key (runElevenLabsWithCapacity); absent runs unslotted. */
+    caches?: ProviderSlotStore;
     /**
      * The image tools bump the session's imageCount through this (see recordGeneratedImages).
      * `findAllByIds` pairs with `quests` below for resolveOwnedGeneratedImageUrl.
@@ -129,7 +154,9 @@ export interface ToolContext {
       // method semanticDataLakeSearch's residency gate depends on with no type error.
       | 'annResidentFabFileIds'
     >;
-    users?: Pick<IUserRepository, 'findById'>;
+    // incrementCurrentStorage: save_content_to_data_lake's lake join moves the file's billed bytes
+    // (reassignStorageOwner). Optional so a read-only host still type-checks; that tool refuses without it.
+    users?: Pick<IUserRepository, 'findById'> & Partial<Pick<IUserRepository, 'incrementCurrentStorage'>>;
     projects?: IProjectRepository;
     // 'find' is forwarded straight to createFabFile (persistGeneratedFileAsFabFile), for its
     // fallback tagger's prefix-overlap check.
@@ -154,7 +181,14 @@ export interface ToolContext {
       Partial<
         Pick<
           IDataLakeRepository,
-          'findAccessible' | 'findBySlug' | 'findBySlugAmongIds' | 'create' | 'setStats' | 'activateIfDraft'
+          | 'findAccessible'
+          | 'findBySlug'
+          | 'findBySlugAmongIds'
+          | 'create'
+          | 'setStats'
+          | 'activateIfDraft'
+          // The owner transfer a save's lake join triggers (reassignStorageOwner).
+          | 'findByDatalakeTags'
         >
       >;
     /**
@@ -183,7 +217,9 @@ export interface ToolContext {
      * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
      * an absent resolver would silently drop every org lake from retrieval.
      */
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'> &
+      // Same reason as `users.incrementCurrentStorage` above.
+      Partial<Pick<IOrganizationRepository, 'incrementCurrentStorage'>>;
     /**
      * Access-grant lookup shared by two independent optional features:
      * - the retrieval resolver's grant arm, so a lake the caller reaches only by an
@@ -360,6 +396,15 @@ export interface ToolContext {
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   imageGenerateStorage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;
+  /**
+   * Give `citables` their numbers in the turn's shared [N] sequence before the tool writes its
+   * output, and merge them into the turn. Returns one stamped copy per input, in input order
+   * (`metadata.citationIndex` is the number to label that result with), or undefined when the turn
+   * is not numbered; the tool then labels its results locally. Send the returned copies through
+   * statusUpdate as usual. Absent outside indexed-citation chat sessions. See
+   * citationNumbering.ts.
+   */
+  numberCitables?: (citables: CitableSource[]) => CitableSource[] | undefined;
   onStart?: (toolName: string, data: any) => Promise<void>;
   onFinish?: (toolName: string, data: any) => Promise<void>;
   llm: Pick<ICompletionBackend, 'complete'>;
@@ -385,6 +430,13 @@ export interface ToolContext {
    * write. Keep implementations pure arithmetic (see agentExecutor's addToolUsage).
    */
   onToolLlmUsage?: (usage: ToolLlmUsage) => void;
+  /**
+   * Runs one typed decision through the host's shared runner, so a `decide` call bills, retries
+   * and normalizes exactly as POST /api/v1/decisions does. Injected because that runner's credit
+   * hold lives in the app tier, which b4m-core cannot import. Absent (a lean harness, or a
+   * deployment with no decision provider) means the tool refuses rather than answering un-billed.
+   */
+  decide?: DecideToolFn;
   imageProcessorLambdaName?: string; // Lambda function name for image processing (edit_image, image_generation)
   /**
    * List of allowed directories for file operations.

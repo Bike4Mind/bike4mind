@@ -13,7 +13,16 @@ import { checkPublishQuota } from './checkPublishQuota';
 import { PUBLISH_QUOTAS } from '@bike4mind/common';
 
 /** Aggregate returns a single grouped row (or [] when no docs match). */
-function usage(totalBytes: number, count: number) {
+function usage(totalBytes: number) {
+  return [{ _id: null, totalBytes }];
+}
+
+/**
+ * A row that also reports a page count far past the old caps, so a count check reintroduced on
+ * the same aggregation would see it and fail these tests. checkPublishQuota.e2e.test.ts covers
+ * the same ground against a real database.
+ */
+function usageWithPages(totalBytes: number, count: number) {
   return [{ _id: null, totalBytes, count }];
 }
 
@@ -23,7 +32,7 @@ describe('checkPublishQuota', () => {
   });
 
   it('allows a publish that fits under both ladders', async () => {
-    aggregateMock.mockResolvedValue(usage(10 * 1024 * 1024, 5));
+    aggregateMock.mockResolvedValue(usage(10 * 1024 * 1024));
     const result = await checkPublishQuota({
       ownerId: 'u1',
       incoming: { bytes: 1024, fileCount: 1 },
@@ -41,54 +50,83 @@ describe('checkPublishQuota', () => {
     expect(aggregateMock).not.toHaveBeenCalled();
   });
 
-  it('rejects when the user artifact-count ceiling is reached', async () => {
-    aggregateMock.mockResolvedValue(usage(1024, PUBLISH_QUOTAS.user.maxArtifacts));
+  it('does not cap how many pages a user may publish while under the byte ceiling', async () => {
+    // 5,000 pages of ~10 KB each is far past the old 100-page cap but ~50 MB.
+    aggregateMock.mockResolvedValue(usageWithPages(5000 * 10 * 1024, 5000));
     const result = await checkPublishQuota({
       ownerId: 'u1',
-      incoming: { bytes: 1, fileCount: 1 },
+      incoming: { bytes: 10 * 1024, fileCount: 1 },
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('unreachable');
-    expect(result.status).toBe(413);
-    expect(result.code).toBe('quota_artifacts_exceeded');
-    expect(result.details.scope).toBe('user');
+    expect(result.ok).toBe(true);
+  });
+
+  it('does not cap how many pages an org may host while under the byte ceiling', async () => {
+    aggregateMock.mockResolvedValue(usageWithPages(5000 * 10 * 1024, 5000));
+    const result = await checkPublishQuota({
+      ownerId: 'u1',
+      orgScopeId: 'org1',
+      incoming: { bytes: 10 * 1024, fileCount: 1 },
+    });
+    expect(aggregateMock).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(true);
   });
 
   it('rejects when the incoming bytes would exceed the user byte ceiling', async () => {
-    aggregateMock.mockResolvedValue(usage(PUBLISH_QUOTAS.user.maxTotalBytes, 1));
+    aggregateMock.mockResolvedValue(usage(PUBLISH_QUOTAS.user.maxTotalBytes));
     const result = await checkPublishQuota({
       ownerId: 'u1',
       incoming: { bytes: 1024, fileCount: 1 },
     });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
+    expect(result.status).toBe(413);
     expect(result.code).toBe('quota_bytes_exceeded');
+    expect(result.details.scope).toBe('user');
   });
 
   it('checks the org ladder when publishing into an org scope', async () => {
-    // user ladder fine; org ladder over count.
+    // user ladder fine; org ladder over bytes.
     aggregateMock
-      .mockResolvedValueOnce(usage(1024, 1)) // user
-      .mockResolvedValueOnce(usage(1024, PUBLISH_QUOTAS.org.maxArtifacts)); // org
+      .mockResolvedValueOnce(usage(1024)) // user
+      .mockResolvedValueOnce(usage(PUBLISH_QUOTAS.org.maxTotalBytes)); // org
     const result = await checkPublishQuota({
       ownerId: 'u1',
       orgScopeId: 'org1',
-      incoming: { bytes: 1, fileCount: 1 },
+      incoming: { bytes: 1024, fileCount: 1 },
     });
     expect(aggregateMock).toHaveBeenCalledTimes(2);
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
-    expect(result.details.scope).toBe('org');
+    expect(result.status).toBe(413);
+    expect(result.code).toBe('quota_bytes_exceeded');
+    expect(result.details).toEqual({
+      scope: 'org',
+      limit: PUBLISH_QUOTAS.org.maxTotalBytes,
+      current: PUBLISH_QUOTAS.org.maxTotalBytes,
+      attempted: PUBLISH_QUOTAS.org.maxTotalBytes + 1024,
+    });
+  });
+
+  it('allows a publish that lands exactly on the byte ceiling and refuses one byte more', async () => {
+    const cap = PUBLISH_QUOTAS.user.maxTotalBytes;
+    aggregateMock.mockResolvedValue(usage(cap - 1024));
+
+    const exact = await checkPublishQuota({ ownerId: 'u1', incoming: { bytes: 1024, fileCount: 1 } });
+    expect(exact.ok).toBe(true);
+
+    const over = await checkPublishQuota({ ownerId: 'u1', incoming: { bytes: 1025, fileCount: 1 } });
+    if (over.ok) throw new Error('expected the byte cap to refuse the publish');
+    expect(over.details).toEqual({ scope: 'user', limit: cap, current: cap - 1024, attempted: cap + 1 });
   });
 
   it('does not check the org ladder for user/project scopes', async () => {
-    aggregateMock.mockResolvedValue(usage(1024, 1));
+    aggregateMock.mockResolvedValue(usage(1024));
     await checkPublishQuota({ ownerId: 'u1', incoming: { bytes: 1, fileCount: 1 } });
     expect(aggregateMock).toHaveBeenCalledTimes(1);
   });
 
   it('excludes the overwritten key from the usage aggregation', async () => {
-    aggregateMock.mockResolvedValue(usage(1024, 1));
+    aggregateMock.mockResolvedValue(usage(1024));
     await checkPublishQuota({
       ownerId: 'u1',
       incoming: { bytes: 1, fileCount: 1 },
@@ -98,6 +136,22 @@ describe('checkPublishQuota', () => {
     const match = pipeline[0].$match!;
     expect(match.deletedAt).toBeNull();
     expect(match.$nor).toEqual([{ tier: 'user', scopeId: 'u1', slug: 'my-page' }]);
+  });
+
+  it('excludes the overwritten key from the org aggregation too', async () => {
+    aggregateMock.mockResolvedValue(usage(1024));
+    const replacing = { tier: 'organization', scopeId: 'org1', slug: 'my-page' } as const;
+    await checkPublishQuota({
+      ownerId: 'u1',
+      orgScopeId: 'org1',
+      incoming: { bytes: 1, fileCount: 1 },
+      replacing,
+    });
+    expect(aggregateMock).toHaveBeenCalledTimes(2);
+    for (const [pipeline] of aggregateMock.mock.calls) {
+      const match = (pipeline as Array<{ $match?: Record<string, unknown> }>)[0].$match!;
+      expect(match.$nor).toEqual([replacing]);
+    }
   });
 
   it('treats an empty aggregation result as zero usage', async () => {

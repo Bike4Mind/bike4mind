@@ -31,12 +31,12 @@ vi.mock('@bike4mind/database', () => ({ userRepository: { findById: (...a: unkno
 vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn(async () => ({ clientId: 'c', clientSecret: 's', redirectUri: 'r' })),
 }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET } }));
 vi.mock('@server/auth/oauthFlowCookie', () => ({
   readStateNonceHash: (...a: unknown[]) => mockReadStateNonceHash(...a),
   clearStateNonce: (...a: unknown[]) => mockClearStateNonce(...a),
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: () => ({
       setUserId: vi.fn(),

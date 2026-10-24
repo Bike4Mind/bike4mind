@@ -19,20 +19,18 @@ import {
   Input,
   useTheme,
 } from '@mui/joy';
-import {
-  Image as ImageIcon,
-  Chat as ChatIcon,
-  Security as SecurityIcon,
-  Save as SaveIcon,
-  ArrowUpward as ArrowUpwardIcon,
-  ArrowDownward as ArrowDownwardIcon,
-  UnfoldMore as UnfoldMoreIcon,
-  ChevronLeft as ChevronLeftIcon,
-  ChevronRight as ChevronRightIcon,
-  FirstPage as FirstPageIcon,
-  LastPage as LastPageIcon,
-  Search as SearchIcon,
-} from '@mui/icons-material';
+import ImageIcon from '@mui/icons-material/Image';
+import ChatIcon from '@mui/icons-material/Chat';
+import SecurityIcon from '@mui/icons-material/Security';
+import SaveIcon from '@mui/icons-material/Save';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import FirstPageIcon from '@mui/icons-material/FirstPage';
+import LastPageIcon from '@mui/icons-material/LastPage';
+import SearchIcon from '@mui/icons-material/Search';
 import { LLMModelConfig, ModelBackend, normalizeEntitlementKey, isOAuthSourceTag } from '@bike4mind/common';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import {

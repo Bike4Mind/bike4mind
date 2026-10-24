@@ -19,6 +19,14 @@ const mockRefs = vi.hoisted(() => ({
   baseApiOptions: null as null | Record<string, unknown>,
 }));
 
+// The pinned client forwards to global fetch so these cases can stub the upstream.
+vi.mock('@bike4mind/fab-pipeline/ssrf', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline/ssrf')>()),
+  createPinnedFetch: () =>
+    Object.assign((input: string | URL, init?: RequestInit) => globalThis.fetch(input, init), {
+      close: async () => undefined,
+    }),
+}));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: any) => {
     mockRefs.baseApiOptions = options;
@@ -35,7 +43,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
 
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: TEST_SIGNING_SECRET } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: TEST_SIGNING_SECRET } }));
 
 const tryIncrement = vi.hoisted(() => vi.fn(async () => ({ success: true, expiresAt: new Date() })));
 vi.mock('@bike4mind/database', () => ({

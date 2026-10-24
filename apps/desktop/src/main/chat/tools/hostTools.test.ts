@@ -1,4 +1,4 @@
-import type { ChatSpawnSuggestion } from '@shared/chat';
+import { SPAWN_CHOICE_TEXT, type ChatSpawnSuggestion } from '@shared/chat';
 import { describe, expect, it, vi } from 'vitest';
 import { sessionSpawn, sessionSuggestionDismiss, sessionSuggestionUpdate } from './hostTools';
 import type { HostContext, SpawnSuggestionHost, ToolContext } from './types';
@@ -56,11 +56,37 @@ describe('session_spawn', () => {
     expect(await sessionSpawn.needsApproval?.({ prompt: 'x' }, context)).toBe(true);
 
     const prompt = await sessionSpawn.approval?.({ prompt: 'x', title: 'X' }, context);
-    expect(prompt?.choice?.options.map(option => option.id)).toEqual(['worktree', 'local']);
+    expect(prompt?.choice?.options.map(option => option.id)).toEqual(['worktree', 'local', 'here']);
 
     const result = await sessionSpawn.run({ prompt: 'x', placement: 'local' }, context);
     expect(host.spawn).toHaveBeenCalledWith('x', undefined, { kind: 'local' });
     expect(result).toContain('Started session child');
+  });
+
+  it('offers the three choices with the tray wording, and "Run here" redirects instead of running', async () => {
+    const { context } = contextWith();
+    const options = (await sessionSpawn.approval?.({ prompt: 'x' }, context))?.choice?.options ?? [];
+    expect(options.map(option => option.label)).toEqual([
+      SPAWN_CHOICE_TEXT.worktree.label,
+      SPAWN_CHOICE_TEXT.local.label,
+      SPAWN_CHOICE_TEXT.here.label,
+    ]);
+    expect(options.map(option => option.label)).toEqual([
+      'New session in a worktree',
+      'New session in this folder',
+      'Run here, in this conversation',
+    ]);
+    const here = options[2];
+    expect(here?.redirect).toBe(true);
+    expect(here?.redirect && here.note).toMatch(/Do the work yourself now/);
+    expect(here?.description).toBe(SPAWN_CHOICE_TEXT.here.hint);
+    expect(options[0]?.field?.name).toBe('branch');
+    expect(options[1]?.field).toBeUndefined();
+  });
+
+  it('tells the model the user can run a suggestion here', async () => {
+    const { context } = contextWith(suggestionHost());
+    expect(await sessionSpawn.run({ prompt: 'x' }, context)).toContain('run it here as\ntheir own next message');
   });
 });
 

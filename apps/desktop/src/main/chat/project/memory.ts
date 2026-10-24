@@ -1,7 +1,7 @@
-import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { isWithin, realpathNearest } from '../tools/paths';
-import { credentialPaths } from '../tools/sandbox';
+import { isWithin, physicalTarget } from '../tools/paths';
+import { protectionFor } from '../tools/sandbox';
 import { containerDirectory } from './git';
 
 /** The index, loaded into every session; one line per memory and never a memory's contents. */
@@ -25,7 +25,6 @@ const MEMORY_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export interface MemoryStore {
   /** <userInstructionsRoot>/projects/<slug>/memory, the one folder a memory may live in. */
   directory: string;
-  /** Kept so the credential deny list can exclude this root; see `deniedPaths`. */
   userInstructionsRoot: string;
 }
 
@@ -80,25 +79,6 @@ export function assertMemoryName(name: string): string {
 }
 
 /**
- * The credential stores, minus the instructions root itself.
- *
- * Same subtraction `instructions.ts:resolveAllowed` makes and for the same reason: that list
- * names ~/.claude, which is the folder this whole feature reads and writes inside, so the one
- * blanket entry cannot stand while every other store - ~/.ssh, ~/.aws, the app's own vault -
- * still must. What replaces it here is narrower than the .md rule there: a memory can only ever
- * be <store>/<kebab-case-name>.md, so .credentials.json is unnameable.
- *
- * Resolved like the roots are, because the candidate is compared after symlinks are collapsed
- * and a deny entry left in its unresolved spelling would never match one - and would fail open.
- * Not `realpathNearest`: a store that does not exist must stay itself rather than collapsing to
- * its nearest existing ancestor, which for ~/.ssh is the whole home folder.
- */
-async function deniedPaths(userInstructionsRoot: string): Promise<string[]> {
-  const paths = credentialPaths().filter(path => path !== userInstructionsRoot);
-  return Promise.all(paths.map(path => realpath(path).catch(() => resolve(path))));
-}
-
-/**
  * A memory file's path, proven to point at a memory.
  *
  * This is the part that has to hold. Nothing here is covered by the file tools' granted-roots
@@ -111,14 +91,10 @@ async function deniedPaths(userInstructionsRoot: string): Promise<string[]> {
 export async function resolveMemoryPath(store: MemoryStore, name: string): Promise<string> {
   const lexical = join(store.directory, `${assertMemoryName(name)}.md`);
 
-  const [real, root, denied] = await Promise.all([
-    realpathNearest(lexical),
-    realpathNearest(store.directory),
-    deniedPaths(store.userInstructionsRoot),
-  ]);
+  const [real, root] = await Promise.all([physicalTarget(lexical), physicalTarget(store.directory)]);
 
   if (!isWithin(root, real)) throw new Error(`Refused: ${name} does not resolve inside the memory folder.`);
-  if (denied.some(path => isWithin(path, real) || isWithin(path, lexical))) {
+  if (protectionFor([lexical, real], 'read')) {
     throw new Error(`Refused: ${name} resolves into a protected location.`);
   }
 

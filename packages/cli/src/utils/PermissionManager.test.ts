@@ -347,6 +347,60 @@ describe('PermissionManager', () => {
     });
   });
 
+  describe('trustCommandForSession', () => {
+    it('scopes shell tools by command and leaves other tools whole-tool', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      expect(manager.isCommandScoped('bash_execute')).toBe(true);
+      expect(manager.isCommandScoped('write_shell_stdin')).toBe(true);
+      expect(manager.isCommandScoped('edit_file')).toBe(false);
+    });
+
+    it('covers only commands made of approved scopes', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      expect(manager.trustCommandForSession('bash_execute', 'git status')).toEqual(['git status']);
+      expect(manager.needsPermission('bash_execute', { command: 'git status -s' })).toBe(false);
+      expect(manager.needsPermission('bash_execute', { command: 'git log' })).toBe(true);
+      expect(manager.needsPermission('bash_execute', { command: 'curl example.com' })).toBe(true);
+      expect(manager.needsPermission('bash_execute')).toBe(true);
+      expect(manager.isSessionTrusted('bash_execute')).toBe(false);
+    });
+
+    it.each([
+      ['rg pattern', 'rg --hostname-bin=/tmp/runner --heading pattern'],
+      ['rg pattern', 'rg $OPTIONS pattern'],
+      ['rg pattern', 'rg --* pattern'],
+      ['git log', 'git log --output=/tmp/out'],
+      ['sort names.txt', 'sort $OPTIONS names.txt'],
+      ['date', 'date -s 2026-10-22'],
+      ['file README.md', 'file -C -m rules'],
+      ['npm test', 'npm test --script-shell=/tmp/runner'],
+      ['pnpm test', 'pnpm test --dir=../other'],
+    ])('requires approval for %s escalating to %s', (approved, attempted) => {
+      const manager = new PermissionManager(new ToolCatalog());
+      expect(manager.trustCommandForSession('bash_execute', approved)).not.toBeNull();
+      expect(manager.needsPermission('bash_execute', { command: approved })).toBe(false);
+      expect(manager.needsPermission('bash_execute', { command: attempted })).toBe(true);
+    });
+
+    it('remembers nothing for a command it cannot scope, or for a denied tool', () => {
+      const manager = new PermissionManager(new ToolCatalog(), [], ['bash_execute']);
+      expect(manager.trustCommandForSession('bash_execute', 'git status')).toBeNull();
+      expect(manager.needsPermission('bash_execute', { command: 'git status' })).toBe(true);
+
+      const open = new PermissionManager(new ToolCatalog());
+      expect(open.trustCommandForSession('bash_execute', 'curl example.com')).toBeNull();
+      expect(open.needsPermission('bash_execute', { command: 'curl example.com' })).toBe(true);
+      expect(open.trustCommandForSession('write_shell_stdin', 'ls')).toBeNull();
+    });
+
+    it('is cleared with the rest of session trust', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      manager.trustCommandForSession('bash_execute', 'git status');
+      manager.clearSessionTrust();
+      expect(manager.needsPermission('bash_execute', { command: 'git status' })).toBe(true);
+    });
+  });
+
   describe('clearSessionTrust', () => {
     it('should clear all session-trusted tools', () => {
       const manager = new PermissionManager(new ToolCatalog());
@@ -522,6 +576,52 @@ describe('PermissionManager', () => {
       manager.clearSessionTrust();
       expect(manager.needsPermission('file_read')).toBe(false);
       expect(manager.needsPermission('edit_file')).toBe(true);
+    });
+  });
+
+  describe('sandbox auto-allow', () => {
+    it('skips the prompt for a sandboxed call to a tool whose descriptor declares the sandbox', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      manager.setSandboxState('auto-allow', true);
+      expect(manager.needsPermission('bash_execute', { isSandboxed: true })).toBe(false);
+      expect(manager.needsPermission('bash_execute', { isSandboxed: false })).toBe(true);
+    });
+
+    it('does not extend to a tool without the declaration', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      manager.setSandboxState('auto-allow', true);
+      expect(manager.needsPermission('write_shell_stdin', { isSandboxed: true })).toBe(true);
+    });
+
+    it('does not extend to a plugin that declares the sandbox itself', () => {
+      const catalog = new ToolCatalog();
+      catalog.register('plugin_shell', {
+        source: { kind: 'plugin', packageName: 'p' },
+        effect: 'execute',
+        approval: 'prompt_always',
+        commandArg: 'command',
+        sandbox: 'command',
+      });
+      const manager = new PermissionManager(catalog);
+      manager.setSandboxState('auto-allow', true);
+      expect(manager.needsPermission('plugin_shell', { isSandboxed: true })).toBe(true);
+    });
+  });
+
+  describe('sandbox escalation approvals', () => {
+    it('remembers an approval by key for the session', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      expect(manager.isSandboxEscalationApproved('k')).toBe(false);
+      manager.approveSandboxEscalation('k');
+      expect(manager.isSandboxEscalationApproved('k')).toBe(true);
+      expect(manager.isSandboxEscalationApproved('other')).toBe(false);
+    });
+
+    it('is cleared with the session trust', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      manager.approveSandboxEscalation('k');
+      manager.clearSessionTrust();
+      expect(manager.isSandboxEscalationApproved('k')).toBe(false);
     });
   });
 });

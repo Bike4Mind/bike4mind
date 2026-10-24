@@ -1,7 +1,7 @@
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { LOCAL_FILE_PROXY_BASE, resolveProxyTarget } from '@server/utils/appFileProxy';
+import { LOCAL_FILE_PROXY_BASE, resolveProxyTarget } from '@bike4mind/server-utils/utils/appFileProxy';
 import { Resource } from 'sst';
 import { Readable } from 'stream';
 

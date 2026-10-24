@@ -17,6 +17,8 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     provider: 'test',
     displayName: 'Test video (non-production)',
     modes: ['text_to_video', 'image_to_video'],
+    // Every role, so multi-input requests can be exercised end to end; the test provider ignores the images.
+    inputs: { first_frame: { max: 1 }, last_frame: { max: 1 }, reference: { max: 3 }, style: { max: 1 } },
     duration: { kind: 'range', min: 1, max: 10, step: 1 },
     aspectRatios: ['16:9', '9:16'],
     resolutions: ['720p'],
@@ -31,6 +33,7 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     provider: 'gemini-omni',
     displayName: 'Gemini Omni Flash',
     modes: ['text_to_video', 'image_to_video'],
+    inputs: { first_frame: { max: 1 } },
     duration: { kind: 'range', min: 3, max: 10, step: 1 },
     aspectRatios: ['16:9', '9:16'],
     resolutions: ['720p'],
@@ -45,6 +48,7 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     provider: 'xai',
     displayName: 'Grok Imagine Video 1.5',
     modes: ['text_to_video', 'image_to_video'],
+    inputs: { first_frame: { max: 1 } },
     duration: { kind: 'range', min: 1, max: 15, step: 1 },
     aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'],
     resolutions: ['480p', '720p'],
@@ -60,6 +64,7 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     provider: 'veo',
     displayName: 'Veo 3.1 Fast',
     modes: ['text_to_video', 'image_to_video'],
+    inputs: { first_frame: { max: 1 } },
     duration: { kind: 'discrete', values: [4, 6, 8] },
     aspectRatios: ['16:9', '9:16'],
     // 1080p ($0.12/s) and 4k are documented only for 8s clips, which a per-model duration list cannot express.

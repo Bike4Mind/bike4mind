@@ -3,7 +3,9 @@
  *
  * Generates an authorization code for a verified B4M session.
  * Called by the /oauth/authorize React page after the user is confirmed logged in.
- * Requires a valid B4M Bearer JWT (the same token used for all B4M API calls).
+ * Requires a valid B4M Bearer JWT (the same token used for all B4M API calls). jwtOnly: the code
+ * redeems for tokens that act as the user (a full session for first-party clients), so an API key
+ * must never mint one (see sessionGrantRoutesRejectApiKeys.test.ts).
  */
 
 import { z } from 'zod';
@@ -12,6 +14,7 @@ import { oauthGrantRepository } from '@bike4mind/database';
 import { generateAuthCode, validateClient } from '@server/auth/oauthServer';
 import { PKCE_S256_CHALLENGE_RE } from '@server/auth/pkce';
 import { decideConsent } from '@server/auth/oauthConsent';
+import { logOAuthError } from '@server/auth/oauthErrorLog';
 
 const RequestSchema = z.object({
   client_id: z.string(),
@@ -32,15 +35,19 @@ const RequestSchema = z.object({
   prompt: z.string().optional(),
 });
 
-const handler = baseApi({ auth: true }).post(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const user = (req as any).user;
+  const logError = (error: string, status: number) =>
+    logOAuthError(req.logger, { route: 'oauth/code', clientId: req.body?.client_id, error, status });
 
   if (!user) {
+    logError('Unauthorized', 401);
     return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
   }
 
   const parsed = RequestSchema.safeParse(req.body);
   if (!parsed.success) {
+    logError('invalid_request', 400);
     return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
   }
 
@@ -50,6 +57,7 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
   // is rejected rather than silently treated as S256 (RFC 7636 4.3): the client and server must agree
   // on the method, not have the server assume one.
   if (code_challenge && code_challenge_method !== 'S256') {
+    logError('invalid_request', 400);
     return res.status(400).json({
       error: 'invalid_request',
       error_description: 'code_challenge_method=S256 is required when code_challenge is present',
@@ -58,6 +66,7 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
 
   const client = await validateClient(client_id, redirect_uri);
   if (!client) {
+    logError('unauthorized_client', 400);
     return res
       .status(400)
       .json({ error: 'unauthorized_client', error_description: 'Unknown client or redirect_uri mismatch' });
@@ -67,6 +76,7 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
   // so the token endpoint never has to redeem a downgraded, PKCE-less code.
   const isConfidential = client.tokenEndpointAuthMethod === 'client_secret_post';
   if (!isConfidential && !code_challenge) {
+    logError('invalid_request', 400);
     return res
       .status(400)
       .json({ error: 'invalid_request', error_description: 'code_challenge is required (PKCE) for this client' });
@@ -76,8 +86,13 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
   // dropping it, so a client that asks for more than it may have gets a clear error instead of a
   // narrower grant it never notices.
   const requestedScopes = scope.split(' ').filter(Boolean);
-  const disallowedScopes = requestedScopes.filter(s => !client.allowedScopes.includes(s));
+  // offline_access is admitted for every relying party without a client-registration backfill: the
+  // user's consent prompt is the control, and it only yields a refresh token at /api/oauth/token.
+  const disallowedScopes = requestedScopes.filter(
+    s => !client.allowedScopes.includes(s) && !(s === 'offline_access' && client.clientType === 'relying-party')
+  );
   if (disallowedScopes.length > 0) {
+    logError('invalid_scope', 400);
     return res
       .status(400)
       .json({ error: 'invalid_scope', error_description: `Unsupported scope(s): ${disallowedScopes.join(' ')}` });

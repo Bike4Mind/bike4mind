@@ -11,7 +11,7 @@ const TARGET_ID = 'user-1';
  * addCredits/subtractCredits primitives run end-to-end (transaction record +
  * atomic increment) against in-memory fakes.
  */
-function makeAdapters(startingCredits: number, { withCreditTransactions = true } = {}) {
+function makeAdapters(startingCredits: number) {
   const target: any = {
     id: TARGET_ID,
     currentCredits: startingCredits,
@@ -47,10 +47,8 @@ function makeAdapters(startingCredits: number, { withCreditTransactions = true }
     friendship: {},
     userApiKeys: { deactivateAllByUserId: vi.fn().mockResolvedValue(undefined) },
     realtimeConnections: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
+    creditTransactions: { createTransaction },
   };
-  if (withCreditTransactions) {
-    db.creditTransactions = { createTransaction };
-  }
   return {
     adapters: { db },
     createTransaction,
@@ -226,14 +224,58 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     expect(incrementCredits).not.toHaveBeenCalled();
   });
 
-  it('falls back to the direct overwrite when no creditTransactions adapter is wired', async () => {
-    const { adapters, incrementCredits, update } = makeAdapters(100, { withCreditTransactions: false });
+  it('never writes currentCredits on the doc, so the ledger is the only balance writer', async () => {
+    const { adapters, createTransaction, update } = makeAdapters(100);
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150 }, adapters);
 
-    expect(incrementCredits).not.toHaveBeenCalled();
-    // Legacy path sets the balance directly on the doc write.
-    expect(update.mock.calls[0][0].currentCredits).toBe(150);
+    expect(createTransaction).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][0]).not.toHaveProperty('currentCredits');
+  });
+
+  it('returns the applied credit adjustment for the caller to audit', async () => {
+    const { adapters } = makeAdapters(100);
+
+    const result = await adminUpdateUser(
+      ADMIN_ID,
+      { id: TARGET_ID, creditDelta: -150, creditReason: ' Refund chargeback ' },
+      adapters
+    );
+
+    // The floor clamps the deduction to the balance; the returned delta is what was applied.
+    expect(result.creditAdjustment).toEqual({
+      credits: -100,
+      previousBalance: 100,
+      resultingBalance: 0,
+      note: 'Refund chargeback',
+      creditTransactionId: 'tx-1',
+    });
+  });
+
+  it('links a grant to the ledger row it wrote', async () => {
+    const { adapters, createTransaction } = makeAdapters(100);
+    createTransaction.mockResolvedValueOnce({ id: 'tx-grant' });
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 50 }, adapters);
+
+    expect(result.creditAdjustment?.creditTransactionId).toBe('tx-grant');
+  });
+
+  it('links a deduction to the ledger row it wrote', async () => {
+    const { adapters, createTransaction } = makeAdapters(100);
+    createTransaction.mockResolvedValueOnce({ id: 'tx-deduct' });
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -30 }, adapters);
+
+    expect(result.creditAdjustment?.creditTransactionId).toBe('tx-deduct');
+  });
+
+  it('returns no credit adjustment when the balance does not change', async () => {
+    const { adapters } = makeAdapters(100);
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, tags: ['vip'] }, adapters);
+
+    expect(result.creditAdjustment).toBeNull();
   });
 });
 
@@ -276,16 +318,6 @@ describe('adminUpdateUser - signed creditDelta path', () => {
       previousBalance: -100,
       resultingBalance: -150,
     });
-  });
-
-  it('applies a creditDelta to the doc write when no creditTransactions adapter is wired', async () => {
-    const { adapters, incrementCredits, update } = makeAdapters(100, { withCreditTransactions: false });
-
-    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 50 }, adapters);
-
-    // No ledger adapter: the delta must not be silently dropped - it lands on the doc write.
-    expect(incrementCredits).not.toHaveBeenCalled();
-    expect(update.mock.calls[0][0].currentCredits).toBe(150);
   });
 });
 

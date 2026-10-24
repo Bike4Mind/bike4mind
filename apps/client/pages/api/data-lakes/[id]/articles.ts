@@ -12,13 +12,13 @@ import {
   lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { getFileMembershipArm, type DataLakeMembershipArm, type IFabFileDocument } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
-import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
+import { firstQueryValue } from '@bike4mind/server-utils/dataLakes/firstQueryValue';
 
 interface ArticlesQuery {
   id: string;

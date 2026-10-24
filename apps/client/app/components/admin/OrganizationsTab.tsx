@@ -26,7 +26,8 @@ import {
   Typography,
 } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { IOrganizationDocument, WithId } from '@bike4mind/common';
+import { IOrganizationDocument, WithId, isValidAdminActionReason } from '@bike4mind/common';
+import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
 import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { toast } from 'sonner';
 import OrganizationProfileUpdated from './OrganizationProfileUpdated';
@@ -222,8 +223,8 @@ const OrganizationsTab: React.FC = () => {
 
   const handleCreateOrganization = async () => {
     if (grantMode) {
-      if (!newOrgName.trim() || !grantOwnerEmail.trim() || !grantReason.trim()) {
-        toast.error('Name, owner email, and reason are required for grants');
+      if (!newOrgName.trim() || !grantOwnerEmail.trim() || !isValidAdminActionReason(grantReason)) {
+        toast.error('Name, owner email, and a reason of at least 5 characters are required for grants');
         return;
       }
       try {
@@ -262,7 +263,7 @@ const OrganizationsTab: React.FC = () => {
       await topUpMutation.mutateAsync({
         organizationId: topUpOrg.id,
         credits: topUpCredits,
-        reason: topUpReason.trim() || undefined,
+        reason: topUpReason.trim(),
       });
       setTopUpOrg(null);
       setTopUpCredits(50_000);
@@ -361,6 +362,7 @@ const OrganizationsTab: React.FC = () => {
             <SearchBar
               handleChange={handleSearchChange}
               placeHolder="Search organizations..."
+              slotProps={{ input: { 'data-testid': 'admin-organizations-search-input' } }}
               debounceTimeout={300}
               endDecorator={isLoading && <CircularProgress size="sm" />}
             />
@@ -793,16 +795,12 @@ const OrganizationsTab: React.FC = () => {
                     data-testid="grant-credits-input"
                   />
                 </FormControl>
-                <FormControl>
-                  <FormLabel>Reason</FormLabel>
-                  <Textarea
-                    minRows={2}
-                    value={grantReason}
-                    onChange={e => setGrantReason(e.target.value)}
-                    placeholder="Why this org is being granted (e.g. 'demo for ACME')"
-                    data-testid="grant-reason-input"
-                  />
-                </FormControl>
+                <AdminReasonField
+                  value={grantReason}
+                  onChange={setGrantReason}
+                  placeholder="Why this org is being granted (e.g. 'demo for ACME')"
+                  data-testid="org-grant-reason-input"
+                />
               </>
             )}
           </Stack>
@@ -812,6 +810,7 @@ const OrganizationsTab: React.FC = () => {
             </Button>
             <Button
               loading={createOrganizationMutation.isPending || grantOrgMutation.isPending}
+              disabled={grantMode && !isValidAdminActionReason(grantReason)}
               onClick={handleCreateOrganization}
               data-testid={grantMode ? 'grant-org-submit' : 'create-org-submit'}
             >
@@ -839,21 +838,18 @@ const OrganizationsTab: React.FC = () => {
                   data-testid="topup-credits-input"
                 />
               </FormControl>
-              <FormControl>
-                <FormLabel>Reason (optional)</FormLabel>
-                <Textarea
-                  minRows={2}
-                  value={topUpReason}
-                  onChange={e => setTopUpReason(e.target.value)}
-                  data-testid="topup-reason-input"
-                />
-              </FormControl>
+              <AdminReasonField value={topUpReason} onChange={setTopUpReason} data-testid="org-topup-reason-input" />
             </Stack>
             <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
               <Button variant="outlined" color="neutral" onClick={() => setTopUpOrg(null)}>
                 Cancel
               </Button>
-              <Button loading={topUpMutation.isPending} onClick={handleTopUp} data-testid="topup-submit">
+              <Button
+                loading={topUpMutation.isPending}
+                disabled={!isValidAdminActionReason(topUpReason)}
+                onClick={handleTopUp}
+                data-testid="topup-submit"
+              >
                 Add credits
               </Button>
             </Stack>

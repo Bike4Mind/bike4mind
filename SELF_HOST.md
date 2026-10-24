@@ -7,7 +7,7 @@ Run the open core of Bike4Mind on your own hardware - a laptop, a server, or you
 1. Clone the repo and copy the env template.
 2. Generate the three security secrets and set your LLM provider key(s).
 3. `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`
-4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The first account becomes the admin.
+4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin (if it is unset, the first account to register with the emailed code does).
 5. Create an API key in the app and make your first API call with `curl`.
 
 ## Prerequisites
@@ -50,6 +50,12 @@ openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 > **Formatting:** compose reads `.env.selfhost` values verbatim - don't add comments on the same line as a value.
 
 **Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the three secrets above.
+
+**Choose the admin account** - set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email address you will sign in with, before you start the stack for the first time. That account becomes the admin on first sign-in. Sign in with the emailed one-time code the first time, not OAuth (for example GitHub): the bootstrap applies only to the email-code sign-in. If you leave it unset, the first account to register with the emailed code becomes the admin.
+
+```bash
+B4M_BOOTSTRAP_ADMIN_EMAIL=you@example.com
+```
 
 > **Serving on anything other than `http://localhost:3000`?** Set `APP_URL` to the origin your browser actually hits - a remapped `APP_HOST_PORT`, a LAN hostname, a tailnet name, or the public `https` origin of a reverse proxy in front of the app. `APP_URL` is the CSRF origin allow-list, and it fails closed: every state-changing request (saving settings, generating an API key, uploading) returns a 403, with a different message per cause. Unset, it is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected <your APP_URL>).` Reads keep working either way, which makes both look like a permissions bug rather than a config one.
 
@@ -184,7 +190,7 @@ Bike4Mind signs you in with a one-time code sent by email. In the self-host stac
 2. Open Mailpit at **`http://localhost:8025`** and read the code from the sign-in email.
 3. Enter the code and pick a username.
 
-**The first account created on a fresh install automatically becomes the admin** (no invite code needed). After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
+**On a fresh install, the account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin** (no invite code needed). Set it before the first start. If it is unset, the first account to register with the emailed code becomes the admin instead. After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
 
 For production use, point the `MAIL_*` variables at a real SMTP provider instead of Mailpit.
 
@@ -888,7 +894,7 @@ Whichever path you choose, do the checklist first.
   ```
 
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
-- [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the first account created becomes admin). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
+- [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the account matching `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes admin, or the first account created if it is unset). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
 - [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
 
 ### Read-only production configuration preflight
@@ -947,9 +953,9 @@ WEBSOCKET_URL=wss://<your-node>.tailXXXX.ts.net/ws
 Notes:
 
 - Nothing is published to the public internet - no ports are opened. Tailscale connects outbound (UDP) and traverses NAT, so a home box behind a router works without port-forwarding.
-- **If this host also has a public IP** (for example a cloud VM), the tailnet sidecar does not close the base stack's `0.0.0.0` publishes of `3000`/`3001`/`8788`. Firewall those (see the checklist) or use Path B (Caddy) instead.
+- **If this host also has a public IP** (for example a cloud VM), the tailnet sidecar binds the app's `3000` to loopback but does not close the base stack's `0.0.0.0` publishes of `3001`/`8788`. Firewall those (see the checklist) or use Path B (Caddy) instead.
 - **Published artifacts over the tailnet:** the app, chat, notebooks, and realtime run over the sidecar, but published artifact bundles derive their Content-Security-Policy from the `Host` header and `X-Forwarded-Proto`, and whether the sidecar's serve forwards those as the viewer needs is not verified. If a published `/p/` page fails to load its assets on the tailnet, use Path B (Caddy), which is verified correct on that header contract.
-- **Prefer a host install?** Instead of the sidecar you can install Tailscale on the host (`curl -fsSL https://tailscale.com/install.sh | sh`, `sudo tailscale up`) and run `tailscale serve` yourself to proxy `/` to `127.0.0.1:3000` and `/ws` to `127.0.0.1:3001`. Same result; run `tailscale serve --help` for the current flag syntax.
+- **Prefer a host install?** Instead of the sidecar you can install Tailscale on the host (`curl -fsSL https://tailscale.com/install.sh | sh`, `sudo tailscale up`) and run `tailscale serve` yourself to proxy `/` to `127.0.0.1:3000` and `/ws` to `127.0.0.1:3001`. Same result, except that you must set `TRUSTED_PROXY_HOPS=1` yourself and keep `:3000` loopback-bound or firewalled (see "Client IP and trusted proxies"); run `tailscale serve --help` for the current flag syntax.
 
 ### Path A variant: Headscale (self-hosted tailnet, no Tailscale account)
 
@@ -1049,15 +1055,15 @@ Behind a reverse proxy that peer is the proxy, so every visitor would share one 
 | Setup | `TRUSTED_PROXY_HOPS` |
 | --- | --- |
 | No proxy (direct `:3000`) | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket |
-| Tailscale sidecar (Path A) | unset - tailnet members then share the sidecar's rate-limit bucket, which suits a small private tailnet; whether `tailscale serve` writes `X-Forwarded-For` is not verified, so do not raise it without checking |
+| Tailscale sidecar (Path A, including the Headscale variant) | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
 | Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
 | Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
 | Kubernetes chart via `kubectl port-forward` | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front |
 | A CDN or load balancer in front of your proxy | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For` |
 
-With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. **Whenever `TRUSTED_PROXY_HOPS` is 1 or more, the app port must be reachable only through the proxy** (loopback-bound, as `compose.caddy.yaml` does, or firewalled): a client that reaches `:3000` directly supplies the whole `X-Forwarded-For` chain itself and can mint a new IP per request. Setting the value higher than your real proxy count lets clients spoof their IP the same way, and a value that is not a whole number fails every request loudly rather than guessing.
+With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. **Whenever `TRUSTED_PROXY_HOPS` is 1 or more, the app port must be reachable only through the proxy** (loopback-bound, as `compose.caddy.yaml` does, or firewalled): a client that reaches `:3000` directly supplies the whole `X-Forwarded-For` chain itself and can mint a new IP per request. Setting the value higher than your real proxy count lets clients spoof their IP the same way, and a value that is not a whole number stops the app from starting rather than guessing.
 
-**Upgrading an existing install:** earlier releases read `X-Real-IP` / `X-Forwarded-For` on self-host without being told to, so an install behind its own nginx, Traefik or load balancer got per-client IPs with no setting. After upgrading it gets the proxy's address instead, and every user shares one bucket - the 16th distinct person to request a sign-in code within 15 minutes gets `429 Rate limit exceeded`. If you run your own reverse proxy, add `TRUSTED_PROXY_HOPS=1` (or your real hop count) to `.env.selfhost` before upgrading and recreate the `app` container. Bundled-Caddy installs need nothing; `compose.caddy.yaml` sets it.
+**Upgrading an existing install:** earlier releases read `X-Real-IP` / `X-Forwarded-For` on self-host without being told to, so an install behind its own nginx, Traefik or load balancer got per-client IPs with no setting. After upgrading it gets the proxy's address instead, and every user shares one bucket - the 16th distinct person to request a sign-in code within 15 minutes gets `429 Rate limit exceeded`. If you run your own reverse proxy, add `TRUSTED_PROXY_HOPS=1` (or your real hop count) to `.env.selfhost` before upgrading and recreate the `app` container. Bundled-Caddy and Tailscale-sidecar installs need nothing; `compose.caddy.yaml` and `compose.tailscale.yaml` set it. The Tailscale override now binds the app port to `127.0.0.1` with the Compose `!override` tag, which needs Docker Compose v2.24+ (`docker compose version`), so reach the instance over the tailnet URL rather than `http://<host>:3000` from another machine.
 
 ## What you get (and don't)
 
@@ -1120,6 +1126,20 @@ The worker records health snapshots for active data lakes at 06:00 UTC, using th
 
 Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attempted-check timestamp advances so they cannot starve other lakes. The existing 2,000-lake cap and five concurrent computations remain; these are count bounds, not cancellation of a hung database request. This job reports health only. It neither repairs content nor runs inconsistency detection: absent or stale stored inconsistency results remain absent or stale. Other hosted maintenance jobs are not enabled by this registration.
 
+### Integration health checks
+
+The worker probes Slack, GitHub and Atlassian reachability every five minutes with the same unauthenticated checks hosted deployments run, and stores each result in MongoDB for the admin Integration Health dashboard. It emits no CloudWatch metrics and does not probe at startup, so a fresh container waits one full interval. Stored checks become eligible for MongoDB TTL cleanup after 25 hours.
+
+An install with no outbound HTTPS to `slack.com`, `api.github.com` or `api.atlassian.com` records those integrations as unhealthy on every run. Three consecutive failures open that integration's platform-wide circuit breaker, which blocks its callers: Slack message sends and updates return without sending, and GitHub and Atlassian MCP requests are refused as unavailable. Those integrations cannot work without that egress anyway, so there is no opt-out switch.
+
+A successful probe taking more than five seconds is also recorded as unhealthy. Three consecutive slow probes can therefore open the same circuit breaker even while the provider still responds.
+
+Probes use global `fetch`. If proxy support is added to an integration client, the probes must use equivalent proxy routing so a failed direct connection does not mark a working proxied integration as unavailable.
+
+### Storage counter drift check
+
+Every hour the worker compares each user's and organization's `currentStorageSize` counter with the bytes of the files charged to that owner, using the same sweep hosted deployments run. Self-host always runs it as a dry run: drift is recorded in MongoDB, and no counter is ever rewritten. One pass walks every owner across successive hourly ticks, completing when the last owner is visited (about a day on a typical install), and resumes from a cursor persisted in MongoDB, so a restarted worker continues the pass instead of starting it again. It sends no CloudWatch metrics, and the Slack drift alert posts only if a Slack webhook resolves: the LiveOps or default channel webhook in admin settings, or `SLACK_WEBHOOK_URL`. There is no run at startup.
+
 ### Daily telemetry retention
 
 The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.
@@ -1134,7 +1154,10 @@ Focused tests use disposable Mongo, exact retention boundaries and an injected l
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCleanup.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
 TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+pnpm --filter @bike4mind/workers test src/selfhost/selfHostWorker.dst.test.ts
 ```
+
+The last command covers the worker scheduler itself, not just this task. It switches the process to `America/New_York` at runtime and checks that daily UTC tasks keep their UTC slot across both transitions and across a restart, and that interval tasks restart their cadence from the moment the worker starts again.
 
 ## Daily API-key usage baselines
 
@@ -1316,9 +1339,12 @@ resource/provider configuration and outcome proof remain separate. `pending` is 
 capability decision linked to a shared roadmap epic (one for schedules, one for every other
 kind), not a per-gap issue. A
 `pending` queue or schedule that a self-host file now registers under the hosted name is
-reported as `Gap now has local wiring - review`. The infrastructure records excluded as
-separate workflows still require the associated consumer's broker configuration and recovery
-proof.
+reported as `Gap now has local wiring - review`. `excluded` records carry a one-line reason
+that the guard requires. Dead-letter infrastructure is excluded as a separate workflow, but
+still requires the associated consumer's broker configuration and recovery proof. A schedule
+that only serves the hosted deployment (production analytics, hosted announcements, hosted
+cloud-account scans, hosted error triage) is excluded as not applicable to a portable
+deployment, and needs no local registration.
 
 A hosted handler whose source file is missing fails the guard by name and path. The only
 accepted absence is a handler generated from a private overlay into the gitignored

@@ -1,5 +1,6 @@
 import {
   canAdministerOrganization,
+  canRevokeOrgMember,
   canManageMemberCreditBudgets,
   InviteType,
   IOrganizationDocument,
@@ -17,7 +18,7 @@ import { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import SearchIcon from '@mui/icons-material/Search';
 import { Box, Button, Card, Chip, IconButton, Input, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import AddIcon from '@mui/icons-material/Add';
 import { FC, Fragment, useCallback, useMemo, useState } from 'react';
@@ -113,13 +114,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     return result.sort((a, b) => (sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
   }, [users, search, sortOrder, pendingUsers, organization]);
 
-  // Each roster control mirrors the server predicate behind its own endpoint. The two sets differ:
-  // a manager may revoke but not invite, an appointed admin may invite but not revoke.
+  // Each roster control mirrors the server predicate behind its own endpoint; only the owner may
+  // revoke a manager.
   // Invites (create + cancel) gate on isOrgMember, then isOrgOwnerOrCurrentAdmin, in sharingService;
   // an appointed admin whose users[] row lacks read/write fails the first check.
   const canInviteMembers =
     !!currentUser && isOrgMember(currentUser, organization) && isOrgOwnerOrCurrentAdmin(currentUser, organization);
-  // DELETE /members/:userId gates on canAdministerOrganization in organizationService.revokeAccess.
+  // DELETE /members/:userId gates on canRevokeOrgMember in organizationService.revokeAccess, which
+  // also depends on the target; this coarse flag only decides whether the seats card shows.
   const canRevokeMembers = !!currentUser && canAdministerOrganization(currentUser, organization);
 
   // Mirrors the server gate on the credit-budget routes.
@@ -226,7 +228,11 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
 
             <Stack spacing={1}>
               <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Typography className="organization-members-seats-count" level="body-sm">
+                <Typography
+                  className="organization-members-seats-count"
+                  data-testid="organization-members-seats-count"
+                  level="body-sm"
+                >
                   {currentSeats} of {maxSeats || '∞'} seats used
                 </Typography>
                 <Typography
@@ -267,7 +273,12 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
             </Stack>
 
             {!hasAvailableSeats && (
-              <Typography className="organization-members-seats-limit" level="body-sm" color="danger">
+              <Typography
+                className="organization-members-seats-limit"
+                data-testid="organization-members-seats-limit"
+                level="body-sm"
+                color="danger"
+              >
                 You&apos;ve reached your seat limit. Upgrade your plan to add more members.
               </Typography>
             )}
@@ -282,6 +293,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         <Input
           className="organization-members-search-input"
           placeholder="Search by name or email"
+          slotProps={{ input: { 'data-testid': 'organization-members-search-input' } }}
           onChange={e => {
             debouncedSearch(e.target.value);
           }}
@@ -301,6 +313,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         <Box display="flex" gap="10px">
           <IconButton
             className="organization-members-sort-button"
+            data-testid="organization-members-sort-btn"
             variant="outlined"
             onClick={toggleSortOrder}
             title={`Sort ${sortOrder === 'desc' ? 'Z to A' : 'A to Z'}`}
@@ -318,6 +331,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                 )}
                 buttonLabel={t('organizations.modals.members.button_label', 'Add Member')}
                 buttonIcon={<AddIcon />}
+                triggerTestId="organization-members-add-btn"
                 items={modalUsers}
                 selectedIds={selectedUserIds}
                 onSelectIds={ids => {
@@ -398,7 +412,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
               organization={organization}
               user={user}
               canInviteMembers={canInviteMembers}
-              canRevokeMembers={canRevokeMembers}
+              canRevokeMembers={!!currentUser && canRevokeOrgMember(currentUser, organization, user.id)}
               canManageCreditBudgets={canManageCreditBudgets}
             />
           </Fragment>

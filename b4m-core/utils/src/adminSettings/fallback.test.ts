@@ -12,6 +12,11 @@ import { AxiosError } from 'axios';
 import { ApiError } from '@google/genai';
 import { ModelInfo, ModelBackend } from '@bike4mind/common';
 import { toProviderEndUserId } from '../llm';
+import {
+  LlmTimeoutError,
+  createAnthropicRequestTimeoutError,
+  createAnthropicStreamTimeoutError,
+} from '@bike4mind/llm-adapters';
 
 // Helper to create mock Axios errors
 function createAxiosError(status: number, code?: string): AxiosError {
@@ -286,6 +291,24 @@ describe('isSafetyRefusalError', () => {
 });
 
 describe('isOverloadedError', () => {
+  it.each([
+    ['stream idle', createAnthropicStreamTimeoutError('stream_idle', 90_000)],
+    ['first event', createAnthropicStreamTimeoutError('first_event', 30_000)],
+    ['request', createAnthropicRequestTimeoutError(60_000)],
+  ])('does not read our own %s timeout as provider overload', (_label, error) => {
+    expect(isOverloadedError(error)).toBe(false);
+  });
+
+  it('excludes a typed timeout even if its text mentions overload', () => {
+    const error = new LlmTimeoutError('stream_idle', 90_000, 'stream timeout - the model may be overloaded');
+    expect(isOverloadedError(error)).toBe(false);
+  });
+
+  it('still treats our timeouts as fallback-worthy', () => {
+    expect(shouldTriggerFallback(createAnthropicStreamTimeoutError('stream_idle', 90_000))).toBe(true);
+    expect(shouldTriggerFallback(createAnthropicRequestTimeoutError(60_000))).toBe(true);
+  });
+
   it('should return true for Axios 503', () => {
     expect(isOverloadedError(createAxiosError(503))).toBe(true);
   });
@@ -423,6 +446,38 @@ describe('getLlmWithFallback - forceSwitch option', () => {
       { forceSwitch: true }
     );
     expect(result).toBeNull();
+  });
+});
+
+describe('getLlmWithFallback - isAdmitted', () => {
+  const opus45 = createModelInfo({ id: 'claude-opus-4-5-20251101', name: 'Opus', backend: ModelBackend.Anthropic });
+  const sonnet46 = createModelInfo({ id: 'claude-sonnet-4-6', name: 'Sonnet', backend: ModelBackend.Anthropic });
+  const gated = createModelInfo({ id: 'claude-opus-4-6', name: 'Gated', backend: ModelBackend.Anthropic });
+  const apiKeyTable = { anthropic: 'valid-key' } as Record<string, string>;
+  const isAdmitted = async (id: string) => id !== gated.id;
+
+  it('drops a non-admitted frontend fallback and selects an admitted one automatically', async () => {
+    const result = await getLlmWithFallback(opus45, gated.id, [opus45, gated, sonnet46], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted,
+    });
+    expect(result!.model.id).toBe('claude-sonnet-4-6');
+  });
+
+  it('never selects a non-admitted model automatically', async () => {
+    const result = await getLlmWithFallback(opus45, undefined, [opus45, gated], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('still uses an admitted frontend fallback', async () => {
+    const result = await getLlmWithFallback(opus45, gated.id, [opus45, gated], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted: async () => true,
+    });
+    expect(result!.model.id).toBe(gated.id);
   });
 });
 
@@ -814,6 +869,41 @@ describe('getHttpStatus', () => {
 
   it('reads an AWS SDK $metadata status', () => {
     expect(getHttpStatus(Object.assign(new Error('unavailable'), { $metadata: { httpStatusCode: 503 } }))).toBe(503);
+  });
+
+  const awsStreamError = (name: string, extra: object = {}) =>
+    Object.assign(new Error('x'), { name, $fault: 'client', ...extra });
+
+  it.each([
+    ['ValidationException', 400],
+    ['AccessDeniedException', 403],
+    ['ResourceNotFoundException', 404],
+    ['ThrottlingException', 429],
+    ['TooManyRequestsException', 429],
+    ['InternalServerException', 500],
+    ['ServiceUnavailableException', 503],
+  ])('infers a status from the AWS SDK %s name when $metadata carries none (stream exceptions)', (name, status) => {
+    expect(getHttpStatus(awsStreamError(name))).toBe(status);
+  });
+
+  it.each([
+    ['$metadata', { $metadata: { httpStatusCode: 418 } }, 418],
+    ['a bare status field', { status: 503 }, 503],
+  ])('prefers %s over the name', (_label, extra, status) => {
+    expect(getHttpStatus(awsStreamError('ValidationException', extra))).toBe(status);
+  });
+
+  it('returns undefined for an unknown AWS exception name', () => {
+    expect(getHttpStatus(awsStreamError('ModelStreamErrorException'))).toBeUndefined();
+  });
+
+  it('does not resolve prototype keys as exception names', () => {
+    expect(getHttpStatus(awsStreamError('constructor'))).toBeUndefined();
+    expect(getHttpStatus(awsStreamError('toString'))).toBeUndefined();
+  });
+
+  it('ignores a matching name on an error that is not an AWS SDK exception', () => {
+    expect(getHttpStatus(Object.assign(new Error('x'), { name: 'ValidationException' }))).toBeUndefined();
   });
 
   it('returns undefined for an error without a status', () => {

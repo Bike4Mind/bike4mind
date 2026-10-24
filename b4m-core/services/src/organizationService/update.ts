@@ -1,4 +1,4 @@
-import { IOrganizationRepository, IUserDocument } from '@bike4mind/common';
+import { IOrganizationRepository, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -8,9 +8,10 @@ const updateSchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
   billingContact: z.string().optional(),
-  currentCredits: z.coerce.number().optional(),
   systemPrompt: z.string().max(10000).optional(), // ~2500 tokens
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
+  /** Decimal MB; null clears the override back to DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
 
 type UpdateParameters = z.infer<typeof updateSchema>;
@@ -42,7 +43,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
       : organization
   ) as NonNullable<typeof organization>;
 
-  const isManager = plain.managerId === user.id;
+  const isManager = (plain.adminUserIds ?? []).includes(user.id);
   const isOwner = plain.userId === user.id;
 
   // Persist ONLY the caller-editable fields this request changed, never a spread of
@@ -59,10 +60,6 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   // behavior. Authorization is already checked via findUpdateAccessById.
   if (rest.systemPrompt !== undefined) update.systemPrompt = rest.systemPrompt;
 
-  if (user.isAdmin && rest.currentCredits !== undefined) {
-    update.currentCredits = rest.currentCredits;
-  }
-
   // Platform-admin path only. Owners and appointed org admins set the default through
   // memberCreditBudget.setMemberCreditDefault (PUT /api/organizations/:id/member-credit-budget),
   // which this generic update cannot serve: appointed admins fail findUpdateAccessById above.
@@ -71,6 +68,13 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   // undefined, so `?? undefined` would leave the previous cap in place (a null PUT no-ops).
   if (user.isAdmin && rest.maxCreditsPerMember !== undefined) {
     update.maxCreditsPerMember = rest.maxCreditsPerMember ?? null;
+  }
+
+  // Platform-admin only: a manager must not raise their own org's quota. Same null-not-undefined
+  // rule as maxCreditsPerMember, so a cleared limit falls back to the default. Lowering it below
+  // current usage deletes nothing; checkStorageLimit just refuses new uploads.
+  if (user.isAdmin && rest.storageLimit !== undefined) {
+    update.storageLimit = rest.storageLimit ?? null;
   }
 
   const updated = await adapters.db.organizations.update(update);

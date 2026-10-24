@@ -21,8 +21,8 @@ import {
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { creditService } from '@bike4mind/services';
-import { emitMetrics as putMetrics } from '@server/utils/cloudwatch';
-import { Config } from '@server/utils/config';
+import { emitMetrics as putMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'creditHoldSweep' } });

@@ -1,6 +1,6 @@
 import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
@@ -12,7 +12,11 @@ import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
-import { readRefreshCookie, setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
+import {
+  LEGACY_REFRESH_COOKIE_SESSION_CUTOFF,
+  readRefreshCookieWithSource,
+  setRefreshCookie,
+} from '@bike4mind/server-utils/auth/refreshCookie';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
 import * as z from 'zod';
@@ -21,6 +25,14 @@ import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchem
 
 // Non-browser callers (CLI, OAuth flows) get the rotated token back in the body.
 const refreshSessionResponseSchema = selfSessionResponseSchema.extend({ refreshToken: z.string().optional() });
+
+async function assertLegacyCookieSessionEligible(token: string): Promise<void> {
+  const sid = authSessionService.parseRefreshToken(token)?.sid;
+  const session = sid ? await authSessionRepository.findBySid(sid) : null;
+  if (!session || new Date(session.createdAt).getTime() >= LEGACY_REFRESH_COOKIE_SESSION_CUTOFF.getTime()) {
+    throw new UnauthorizedError('Invalid refresh token');
+  }
+}
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -33,10 +45,11 @@ const handler = baseApi({ auth: false })
   .post(async (req, res) => {
     // Accept multiple field names: "token" (legacy B4M), "refreshToken" (camelCase), "refresh_token" (OAuth standard)
     const bodyToken = req.body.token || req.body.refreshToken || req.body.refresh_token;
-    const cookieToken = readRefreshCookie(req);
-    const token = bodyToken || cookieToken;
+    const cookie = readRefreshCookieWithSource(req);
+    const token = bodyToken || cookie?.token;
 
     if (!token) throw new UnauthorizedError('Refresh token is required');
+    if (!bodyToken && cookie?.legacy) await assertLegacyCookieSessionEligible(token);
 
     // Transport selection. A browser presents the token in the HttpOnly cookie and gets the
     // rotated one back the same way - never in the JSON body, which page scripts can read.

@@ -133,7 +133,7 @@ vi.mock('@workers/queueHandlers/notifySlackIndexingComplete', () => ({
 }));
 vi.mock('@workers/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifier: () => h.spendNotifier }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
 vi.mock('@bike4mind/common', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
@@ -196,7 +196,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
 import { sendToClient } from '@server/websocket/utils';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
+import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 import { dispatch } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;

@@ -32,9 +32,30 @@ The environment banner is always visible at the top of the admin panel. It uses 
 
 The banner includes a close button on the right side that navigates back to the previous page.
 
+## Dashboard Landing Page
+
+The admin panel opens on **Dashboard** by default. You can link directly to it with `/admin?tab=dashboard`; a link to another tab still opens that tab.
+
+- **Client usage** shows a chart and table of users and events by source, including Web, Desktop, and CLI. Sources can also describe entry points or automatic/manual triggers, so this is not a comparison of clients alone. Choose the last 24 hours, 7 days, or 30 days. Only events with source metadata are included. A user active in several sources is counted in each source's row, so adding the user counts does not give a distinct overall user count. The chart shows users per source; **Event share** measures each source's percentage of recorded events. Hover over, focus, or tap the help icons beside source names and metrics for explanations. Source help also shows the original recorded value; unrecognized values stay visible with a note that no explanation is available yet.
+- **More dashboards** appears when an installed extension contributes a dashboard entry. Each card opens that extension's registered route; the destination keeps its existing access rules.
+- **Explore admin** opens Feature activity (Event Metrics), User activity & reports (Analytics), Model performance (Model Metrics), Credits & costs (Credit Analytics), Users, and System health.
+- **Recent activity** shows events over time, categories, and the top tracked events across the last 7 UTC calendar days, including today. The server counts all matching events, so a busy day does not push earlier days out of the report. The time chart includes all seven dates, with zero for days without activity. Today is incomplete. These are event counts, not distinct users or a complete measure of feature adoption. The client usage chart has its own time range.
+
+Use **Refresh activity** to reload the activity summary. While activity loads or fails, client usage and the navigation shortcuts remain available. An empty summary means no matching events were recorded during the seven-day window; a request failure displays an error instead. If client usage is empty, check its selected time range: older events without source metadata do not appear there.
+
+This sample shows a busy day alongside earlier dates, including days with no events:
+
+![Seven UTC dates remain visible even when the latest day has more than 1,000 events](./admin-activity-full-window.png)
+
+Help icons across the landing page explain client types, events, categories, AI model response times, costs, and the activity summary's coverage. The three activity charts also have help: **Events Over Time** counts all recorded events by UTC date on the landing page, **Events by Category** groups related actions, and **Top 10 Events** ranks event names by frequency. These charts count recorded events, not distinct people. Recent activity uses UTC dates and includes zero-activity days; today is incomplete. Detailed Event Metrics uses the browser's time zone and shows dates with loaded events. Hover over, focus, or tap a help icon to read its explanation.
+
+The example below uses sample events to show the chart help:
+
+![Top 10 Events chart with help explaining that event frequency does not rank features by distinct users](./admin-dashboard-event-help.png)
+
 ## Sidebar Navigation
 
-The left sidebar uses an accordion group with three collapsible sections. Each section can be independently expanded or collapsed. All three sections are expanded by default.
+The **Dashboard** button stays above the collapsible sidebar sections, so you can always return to the overview. On a narrow screen, open the admin menu to reach it. Each section can be independently expanded or collapsed, and your preferences are saved.
 
 ### User Ops
 
@@ -96,8 +117,7 @@ The admin panel uses a vertical tab system where clicking a sidebar button activ
 
 ## Default Tab Behavior
 
-- The default active tab is **Users** when the admin panel opens.
-- If the `enableUserMigration` feature flag is active and the current tab is Users, the panel automatically switches to the **Migration** tab instead.
+- The default active tab is **Dashboard** when the admin panel first opens. Selecting another tab keeps it active during the current app session and updates the URL.
 
 ## Notification Badges
 

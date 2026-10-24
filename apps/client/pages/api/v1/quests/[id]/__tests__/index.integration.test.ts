@@ -47,12 +47,12 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ getSignedUrl: async (key: string) => `https://signed.example.invalid/${key}` }),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
-vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({
   dispatchQuestCallback: (...a: unknown[]) => mockDispatchQuestCallback(...a),
 }));
 

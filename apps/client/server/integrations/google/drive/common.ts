@@ -1,15 +1,18 @@
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { auth as googleAuth } from '@googleapis/drive';
 import dayjs from 'dayjs';
 import type { Response } from 'express';
 import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import { lakeConnectionOwnerOf, type LakeConnectionOwner } from '@bike4mind/common';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from '@server/integrations/google/drive/driveClient';
-import { isInvalidGrantError, isTerminalDriveGrantError } from '@server/integrations/google/drive/driveGrantErrors';
+import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/integrations/google/drive/driveClient';
+import {
+  isInvalidGrantError,
+  isTerminalDriveGrantError,
+} from '@bike4mind/server-utils/integrations/google/drive/driveGrantErrors';
 
 export { isInvalidGrantError, isTerminalDriveGrantError };
 
@@ -352,7 +355,12 @@ export async function getValidConnectionDriveAccessToken(
     if (connection.oauthRefreshToken) {
       const refreshToken = decryptConnectionRefreshToken(connection.oauthRefreshToken);
       if (refreshToken) {
-        const credentials = await refreshAccessToken(refreshToken);
+        // Same verdict as the user-grant path: raw invalid_grant would record Google's error string
+        // as lastError, and it is a reconnect (400) rather than a server fault.
+        const credentials = await refreshAccessToken(refreshToken).catch((e: unknown) => {
+          if (isInvalidGrantError(e)) throw new BadRequestError(DRIVE_RECONNECT_REQUIRED_MESSAGE);
+          throw e;
+        });
         if (credentials.access_token) return credentials.access_token;
       }
     }

@@ -218,7 +218,10 @@ class ImportHistoryJobRepository extends BaseRepository<IImportHistoryJob> {
     );
   }
 
-  async markComplete(id: string, stats: { processedItems: number; skippedItems: number }): Promise<void> {
+  async markComplete(
+    id: string,
+    stats: { processedItems: number; skippedItems: number; totalItems?: number }
+  ): Promise<void> {
     await this.model.updateOne(
       { _id: id },
       {
@@ -228,6 +231,7 @@ class ImportHistoryJobRepository extends BaseRepository<IImportHistoryJob> {
           currentStep: 'Import completed successfully',
           processedItems: stats.processedItems,
           skippedItems: stats.skippedItems,
+          ...(stats.totalItems !== undefined && { totalItems: stats.totalItems }),
           completedAt: new Date(),
           updatedAt: new Date(),
         },

@@ -47,6 +47,12 @@ export interface SystemPromptTextBlock {
   text?: string;
   /** True when this source contributed text that is deliberately not being returned. */
   redacted: boolean;
+  /**
+   * Where the text was actually sent. `user_turn` is a per-turn source relocated into the current
+   * user message; `mixed` is a source with some messages in each place (extra context that the
+   * caller flagged only in part).
+   */
+  placement: 'system' | 'user_turn' | 'mixed';
 }
 
 export interface SystemPromptTextDisclosure {
@@ -80,11 +86,20 @@ export function buildSystemPromptText(
   tagged: TaggedSystemMessage[],
   includedMessages?: ReadonlySet<IMessage>,
   maxTextChars: number = SYSTEM_PROMPT_TEXT_MAX_CHARS,
-  injectedBlocks: readonly BuilderInjectedBlock[] = []
+  injectedBlocks: readonly BuilderInjectedBlock[] = [],
+  perTurnMessages?: ReadonlySet<IMessage>
 ): SystemPromptTextDisclosure {
   const blocks: SystemPromptTextBlock[] = [];
   let charsUsed = 0;
   let sizeCapped = false;
+
+  // A source can be partly relocated: only the extra-context messages a caller flagged `perTurn`
+  // leave the system block. Report what actually happened rather than assuming the source's home.
+  const placementOf = (messages: IMessage[]): SystemPromptTextBlock['placement'] => {
+    const relocated = messages.filter(message => perTurnMessages?.has(message)).length;
+    if (relocated === 0) return 'system';
+    return relocated === messages.length ? 'user_turn' : 'mixed';
+  };
 
   for (const source of PROMPT_SOURCE_ORDER) {
     const messages = tagged.filter(t => t.source === source).map(t => t.message);
@@ -97,19 +112,20 @@ export function buildSystemPromptText(
     // contributed no message, because the breakdown inventories them unconditionally.
     if (messages.length === 0) {
       if (ALWAYS_ON_FLOOR_SOURCES.includes(source)) {
-        blocks.push({ source: origin, name, redacted: false });
+        blocks.push({ source: origin, name, redacted: false, placement: 'system' });
       }
       continue;
     }
 
+    const placement = placementOf(messages);
     const delivered = messages.filter(message => wasDelivered(message, includedMessages));
     if (delivered.length === 0) {
-      blocks.push({ source: origin, name, redacted: false });
+      blocks.push({ source: origin, name, redacted: false, placement });
       continue;
     }
 
     if (REDACTED_SOURCES.has(source)) {
-      blocks.push({ source: origin, name, redacted: true });
+      blocks.push({ source: origin, name, redacted: true, placement });
       continue;
     }
 
@@ -117,19 +133,19 @@ export function buildSystemPromptText(
     // nothing is being withheld either.
     const parts = delivered.map(m => m.content).filter((c): c is string => typeof c === 'string');
     if (parts.length === 0) {
-      blocks.push({ source: origin, name, redacted: false });
+      blocks.push({ source: origin, name, redacted: false, placement });
       continue;
     }
 
     const text = parts.join('\n\n');
     if (charsUsed + text.length > maxTextChars) {
       sizeCapped = true;
-      blocks.push({ source: origin, name, redacted: true });
+      blocks.push({ source: origin, name, redacted: true, placement });
       continue;
     }
 
     charsUsed += text.length;
-    blocks.push({ source: origin, name, text, redacted: false });
+    blocks.push({ source: origin, name, text, redacted: false, placement });
   }
 
   // Same complete-inventory contract as the loop above: a row per id regardless of gate/delivery,
@@ -138,16 +154,16 @@ export function buildSystemPromptText(
     const block = injectedBlocks.find(b => b.id === id);
     const { source, name } = INJECTED_BLOCK_METADATA[id];
     if (!block?.injected || !block.delivered || !block.content) {
-      blocks.push({ source, name, redacted: false });
+      blocks.push({ source, name, redacted: false, placement: 'system' });
       continue;
     }
     if (charsUsed + block.content.length > maxTextChars) {
       sizeCapped = true;
-      blocks.push({ source, name, redacted: true });
+      blocks.push({ source, name, redacted: true, placement: 'system' });
       continue;
     }
     charsUsed += block.content.length;
-    blocks.push({ source, name, text: block.content, redacted: false });
+    blocks.push({ source, name, text: block.content, redacted: false, placement: 'system' });
   }
 
   return { blocks, sizeCapped };

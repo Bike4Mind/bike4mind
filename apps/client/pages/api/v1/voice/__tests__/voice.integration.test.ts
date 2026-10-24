@@ -141,13 +141,14 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
+import { adminSettingsRepository } from '@bike4mind/database';
 import voicesHandler from '../voices';
 import sessionsHandler from '../sessions';
 import endHandler from '../sessions/[id]/end';
 import legacyVoicesHandler from '../../../voice/v2/voices';
 import legacySessionsHandler from '../../../voice/v2/sessions';
 import legacyEndHandler from '../../../voice/v2/sessions/[id]/end';
-import { MAX_SESSION_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
+import { MAX_SESSION_SECONDS, VOICE_SESSION_TOKEN_TTL_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import legacyAgentsHandler from '../../../voice/v2/agents';
 import {
   ApiKeyScope,
@@ -321,6 +322,16 @@ describe('POST /api/v1/voice/sessions', () => {
   const fireSessions = (opts: { apiKey?: string | null; body?: Record<string, unknown> } = {}) =>
     fire(sessionsHandler, { url: '/api/v1/voice/sessions', body: { sessionId: SESSION_ID }, ...opts });
 
+  it('reads all voice and credit settings directly before provisioning', async () => {
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: adminSettingsRepository },
+      { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'], skipCache: true }
+    );
+  });
+
   it('rejects a key lacking ai:generate (403) before taking a credit hold', async () => {
     validateWithScopes([ApiKeyScope.READ_FILES]);
     const { res, run } = fireSessions();
@@ -441,6 +452,39 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
     expect(mocks.openVoiceHold).not.toHaveBeenCalled();
+  });
+
+  it('gives a reconnect onto a live hold a token that expires with the hold, not a fresh window', async () => {
+    const startedAt = new Date(Date.now() - 4 * 60_000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+    });
+    const { res, run } = fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    const ttl = mocks.signVoiceSessionToken.mock.calls[0][1] as number;
+    // The hold's window is VOICE_SESSION_TOKEN_TTL_SECONDS from its start; four minutes are gone.
+    expect(ttl).toBeLessThanOrEqual(VOICE_SESSION_TOKEN_TTL_SECONDS - 4 * 60 + 1);
+    expect(ttl).toBeGreaterThan(0);
+  });
+
+  it('reserves afresh on a reconnect onto an ElevenLabs hold past its window', async () => {
+    const startedAt = new Date(Date.now() - (MAX_SESSION_SECONDS + 60) * 1000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      userId: 'user-1',
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+    });
+    const { res, run } = fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt);
+    expect(mocks.incrementCredits).toHaveBeenLastCalledWith('user-1', -RESERVED_CREDITS);
   });
 
   it('settles a realtime hold and reserves afresh on a reconnect, never reusing it', async () => {

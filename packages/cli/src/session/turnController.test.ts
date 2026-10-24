@@ -104,7 +104,15 @@ function seedSession(messages: Message[] = [], model = 'claude-sonnet-4-6'): Ses
 
 describe('runTurn', () => {
   beforeEach(() => {
-    useCliStore.setState({ session: null, pendingMessages: [], messageQueue: [], isThinking: false, sessionHolds: 0 });
+    useCliStore.setState({
+      session: null,
+      pendingMessages: [],
+      messageQueue: [],
+      isThinking: false,
+      sessionHolds: 0,
+      turnInFlight: false,
+      inputValue: '',
+    });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -614,14 +622,255 @@ describe('runTurn', () => {
       expect(await postEditDiagnostics.drain(1000)).toBeNull();
     });
 
-    it('passes no drain and collects nothing when the preference is off', async () => {
+    it('drains no diagnostics and collects nothing when the preference is off', async () => {
       seedSession([]);
       const { ctx, run, postEditDiagnostics } = diagnosticsCtx(false);
 
       await runTurn('hello', ctx);
 
-      expect((run.mock.calls[0][1] as RunOptions).drainFeedback).toBeUndefined();
+      const drain = (run.mock.calls[0][1] as RunOptions).drainFeedback;
+      expect(await drain!('turn')).toBeNull();
       expect(await postEditDiagnostics.drain(1000)).toBeNull();
+    });
+  });
+
+  describe('steer and follow-up queues', () => {
+    type Drain = (phase: 'turn' | 'final') => Promise<string | null>;
+    type QueueRunOptions = { signal: AbortSignal; drainFeedback: Drain };
+
+    function abortError(): Error {
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      return error;
+    }
+
+    /** What the user sees in the input and the queue - the two places a queued message can be. */
+    const queueState = () => {
+      const { messageQueue, inputValue } = useCliStore.getState();
+      return { messageQueue, inputValue };
+    };
+    const sessionMessages = () => useCliStore.getState().session!.messages.map(m => [m.role, m.content]);
+
+    /** ESC as index.tsx wires it: restore the queue to the input, then abort. */
+    function pressEsc(signalOwner: QueueRunOptions) {
+      useCliStore.getState().restoreQueueToInput();
+      (signalOwner as unknown as { controller: AbortController }).controller.abort();
+    }
+
+    /** Runs `script` as the agent with the turn's real options; the turn's controller rides along for pressEsc. */
+    function queueCtx(script: (options: QueueRunOptions, call: number) => Promise<AgentResult>) {
+      let controller: AbortController | null = null;
+      let call = 0;
+      const run = vi.fn(async (_query: unknown, options?: unknown) => {
+        const runOptions = Object.assign(options as QueueRunOptions, { controller });
+        return script(runOptions, call++);
+      });
+      const save = vi.fn(async () => undefined);
+      const ctx = makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        sessionStore: { save } as unknown as SessionStore,
+        setAbortController: c => {
+          if (c) controller = c;
+        },
+      });
+      return { ctx, run, save };
+    }
+
+    it('injects steers queued during a tool batch into the next request, coalesced in submission order', async () => {
+      seedSession([]);
+      const feedback: Array<string | null> = [];
+      const { ctx, run } = queueCtx(async options => {
+        useCliStore.getState().enqueueMessage('use pnpm');
+        useCliStore.getState().enqueueMessage('and skip the e2e tests');
+        feedback.push(await options.drainFeedback('turn'));
+        return makeResult();
+      });
+
+      await runTurn('run the tests', ctx);
+
+      expect(feedback[0]).toMatch(/while you were working[\s\S]*\n\nuse pnpm\n\nand skip the e2e tests$/);
+      expect(sessionMessages()).toEqual([
+        ['user', 'run the tests'],
+        ['user', 'use pnpm'],
+        ['user', 'and skip the e2e tests'],
+        ['assistant', 'agent reply'],
+      ]);
+      expect(useCliStore.getState().session!.messages[1].metadata).toEqual({ steered: true });
+      expect(queueState().messageQueue).toEqual([]);
+      expect(run).toHaveBeenCalledOnce();
+    });
+
+    it('delivers each steer once, at the first boundary after it was sent', async () => {
+      seedSession([]);
+      const feedback: Array<string | null> = [];
+      const { ctx } = queueCtx(async options => {
+        useCliStore.getState().enqueueMessage('first steer');
+        feedback.push(await options.drainFeedback('turn'));
+        feedback.push(await options.drainFeedback('turn'));
+        useCliStore.getState().enqueueMessage('second steer');
+        feedback.push(await options.drainFeedback('final'));
+        return makeResult();
+      });
+
+      await runTurn('go', ctx);
+
+      expect(feedback[0]).toMatch(/first steer$/);
+      expect(feedback[1]).toBeNull();
+      expect(feedback[2]).toMatch(/second steer$/);
+      expect(sessionMessages().map(([, content]) => content)).toEqual([
+        'go',
+        'first steer',
+        'second steer',
+        'agent reply',
+      ]);
+    });
+
+    it('leaves follow-ups queued past a steer drain and runs them as the next turn', async () => {
+      seedSession([]);
+      const feedback: Array<string | null> = [];
+      const { ctx, run } = queueCtx(async (options, call) => {
+        if (call === 0) {
+          useCliStore.getState().enqueueMessage('then write the changelog', 'followUp');
+          useCliStore.getState().enqueueMessage('use pnpm');
+          feedback.push(await options.drainFeedback('turn'));
+        }
+        return makeResult();
+      });
+
+      await runTurn('run the tests', ctx);
+
+      expect(feedback[0]).toMatch(/use pnpm$/);
+      expect(feedback[0]).not.toContain('changelog');
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[1][0]).toBe('then write the changelog');
+    });
+
+    it('runs a steer that never reached a request boundary as the next turn, in order with follow-ups', async () => {
+      seedSession([]);
+      const { ctx, run } = queueCtx(async (_options, call) => {
+        if (call === 0) {
+          useCliStore.getState().enqueueMessage('steer too late');
+          useCliStore.getState().enqueueMessage('follow up', 'followUp');
+        }
+        return makeResult();
+      });
+
+      await runTurn('first', ctx);
+
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[1][0]).toBe('steer too late\n\nfollow up');
+      expect(queueState().messageQueue).toEqual([]);
+    });
+
+    it('cancel mid-stream: queued input returns to the input, undelivered and not re-run', async () => {
+      seedSession([]);
+      useCliStore.getState().setInputValue('half-typed');
+      const { ctx, run, save } = queueCtx(async options => {
+        useCliStore.getState().enqueueMessage('use pnpm');
+        useCliStore.getState().enqueueMessage('later', 'followUp');
+        pressEsc(options);
+        throw abortError();
+      });
+
+      await runTurn('run the tests', ctx);
+
+      expect(queueState()).toEqual({ messageQueue: [], inputValue: 'use pnpm\nlater\nhalf-typed' });
+      expect(sessionMessages()).toEqual([
+        ['user', 'run the tests'],
+        ['assistant', expect.stringContaining('cancelled')],
+      ]);
+      expect(save).toHaveBeenCalledOnce();
+      expect(run).toHaveBeenCalledOnce();
+    });
+
+    it('cancel mid-tool: a drain after the abort delivers nothing, so the steer is not lost to the dead turn', async () => {
+      seedSession([]);
+      const feedback: Array<string | null> = [];
+      const { ctx, run } = queueCtx(async (options, call) => {
+        if (call === 0) {
+          useCliStore.getState().enqueueMessage('use pnpm');
+          // An abort that does not restore the queue (e.g. a denied permission prompt).
+          (options as unknown as { controller: AbortController }).controller.abort();
+          feedback.push(await options.drainFeedback('turn'));
+          return makeResult({ finalAnswer: 'Interrupted' });
+        }
+        return makeResult();
+      });
+
+      await runTurn('run the tests', ctx);
+
+      expect(feedback).toEqual([null]);
+      expect(sessionMessages()[1]).toEqual(['assistant', 'Interrupted']);
+      // Still queued when the turn settled, so it runs next rather than vanishing.
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[1][0]).toBe('use pnpm');
+    });
+
+    it('cancel racing completion: the finished turn is recorded once and post-cancel input runs once', async () => {
+      seedSession([]);
+      const { ctx, run, save } = queueCtx(async (options, call) => {
+        if (call === 0) {
+          useCliStore.getState().enqueueMessage('queued before esc');
+          // ESC lands after the agent finished but before the turn settled.
+          pressEsc(options);
+          pressEsc(options);
+          useCliStore.getState().enqueueMessage('sent after esc');
+        }
+        return makeResult({ finalAnswer: `reply ${call}` });
+      });
+
+      await runTurn('first', ctx);
+
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[1][0]).toBe('sent after esc');
+      expect(queueState()).toEqual({ messageQueue: [], inputValue: 'queued before esc' });
+      expect(sessionMessages()).toEqual([
+        ['user', 'first'],
+        ['assistant', 'reply 0'],
+        ['user', 'sent after esc'],
+        ['assistant', 'reply 1'],
+      ]);
+      expect(save).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps running queued follow-ups after a turn throws outside its error handling', async () => {
+      seedSession([]);
+      const { ctx, run } = queueCtx(async () => makeResult());
+      let historyCalls = 0;
+      ctx.commandHistoryStore = {
+        add: vi.fn(async () => {
+          if (historyCalls++ === 0) {
+            useCliStore.getState().enqueueMessage('next', 'followUp');
+            throw new Error('history file locked');
+          }
+        }),
+        list: vi.fn(async () => [] as string[]),
+      } as unknown as CommandHistoryStore;
+
+      await runTurn('first', ctx);
+
+      expect(run.mock.calls.map(c => c[0])).toEqual(['next']);
+      expect(useCliStore.getState().turnInFlight).toBe(false);
+    });
+
+    it('queues a turn started while one is in flight instead of running two agent loops at once', async () => {
+      seedSession([]);
+      let active = 0;
+      let maxActive = 0;
+      const { ctx, run } = queueCtx(async (_options, call) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        if (call === 0) await runTurn('from the tavern', ctx);
+        await Promise.resolve();
+        active--;
+        return makeResult();
+      });
+
+      await runTurn('first', ctx);
+
+      expect(maxActive).toBe(1);
+      expect(run.mock.calls.map(c => c[0])).toEqual(['first', 'from the tavern']);
+      expect(useCliStore.getState().turnInFlight).toBe(false);
     });
   });
 });

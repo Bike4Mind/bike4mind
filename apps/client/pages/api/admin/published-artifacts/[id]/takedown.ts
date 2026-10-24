@@ -1,6 +1,7 @@
 import { Request } from 'express';
 import { z } from 'zod';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { deletePublishThumbnail, enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, PublishedArtifactReport } from '@bike4mind/database';
@@ -9,10 +10,12 @@ import { invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
 /**
  * Admin takedown / restore for a public page.
  *   POST   -> take the page down: soft-delete it, mark moderationStatus
- *            'taken_down' with a reason, resolve its open reports, and purge
- *            the CDN so it stops serving immediately.
- *   DELETE -> restore a taken-down page (un-delete, back to 'active') and purge
- *            the CDN so the cached 404 stops serving immediately.
+ *            'taken_down' with a reason, resolve its open reports, purge
+ *            the CDN so it stops serving immediately, and delete its
+ *            owner-only thumbnail.
+ *   DELETE -> restore a taken-down page (un-delete, back to 'active'), purge
+ *            the CDN so the cached 404 stops serving immediately, and queue a
+ *            fresh thumbnail for a bundle.
  *
  * State changes use a single atomic findOneAndUpdate (not load-mutate-save) so
  * concurrent admin actions can't clobber each other.
@@ -45,8 +48,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           deletedAt: new Date(),
           deletedBy: String(req.user.id),
         },
+        $unset: { thumbnail: 1 },
       },
-      { new: true }
+      { new: false }
     );
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found or already taken down' });
@@ -62,6 +66,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     // (the short Cache-Control is only the backstop). Fire-and-forget: the
     // service swallows its own errors, so awaiting would only add AWS latency.
     void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+
+    // Delete only the record detached by this atomic write. A concurrent restore may already
+    // have a new thumbnail, so a prefix sweep would delete that fresh render too.
+    if (artifact.thumbnail?.key) {
+      await deletePublishThumbnail(publicId, artifact.thumbnail.key, req.logger);
+    }
 
     req.logger.info(
       `[PUBLISH] takedown ${publicId} by admin=${req.user.id} reason="${oneLine(parsed.data.reason ?? '')}"`
@@ -102,6 +112,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     // Purge the cached 404 so the restored page is reachable immediately.
     void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+
+    // The takedown deleted the thumbnail; render the restored version again. Never throws.
+    if (artifact.source?.kind === 'bundle' && artifact.sha256Index) {
+      await enqueuePublishThumbnail({ publicId, versionId: artifact.sha256Index }, req.logger);
+    }
 
     req.logger.info(`[PUBLISH] restore ${publicId} by admin=${req.user.id}`);
     return res.status(200).json({ ok: true });

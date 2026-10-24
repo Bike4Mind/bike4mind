@@ -54,6 +54,21 @@ describe('convertMessagesToOpenAIFormat - image content pass-through', () => {
     expect(result[0]).not.toHaveProperty('requiresTool');
     expect(result[0]).toEqual({ role: 'system', content: 'you MUST use the image_generation tool' });
   });
+
+  // Same contract for the other two control-only fields: `cache` declares an Anthropic breakpoint,
+  // `perTurn` marks a message the service moved into the user turn (and may leave behind for a
+  // caller that opted out of relocation). Neither provider should ever see them.
+  it('strips the cache and perTurn control fields instead of sending them to the provider', () => {
+    const anchored = { role: 'assistant', content: 'earlier answer', cache: true } as IMessage;
+    const perTurn = { role: 'system', content: 'view context', perTurn: true } as IMessage;
+
+    const result = convertMessagesToOpenAIFormat([anchored, perTurn]);
+
+    expect(result).toEqual([
+      { role: 'assistant', content: 'earlier answer' },
+      { role: 'system', content: 'view context' },
+    ]);
+  });
 });
 
 // Shape mirrors b4m-core/utils/src/llm/utils.ts's Priority 2 tool-pairing reconstruction

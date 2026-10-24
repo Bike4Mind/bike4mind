@@ -3,14 +3,18 @@ import { secretRotationRepository } from '@bike4mind/database/infra';
 import { postMessageToSlack } from '@bike4mind/utils';
 import { getSettingsMap } from '@bike4mind/utils';
 import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
-import { Config } from '@server/utils/config';
-import { SECRET_ROTATION_CONFIG } from '@client/lib/secretRotation/constants';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { SECRET_ROTATION_CONFIG } from '@bike4mind/server-utils/lib/secretRotation/constants';
+import { SECRET_ROTATION_GRACE_MS } from '@server/auth/secretRotationGrace';
 import { Resource } from 'sst';
 
 export async function handler() {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
 
   try {
+    // Retire rotated-out secrets whose grace window has closed. Kept out of the read paths so
+    // verifying a token never writes.
+    await secretRotationRepository.expirePreviousKey('JWT_SECRET', SECRET_ROTATION_GRACE_MS);
     const now = new Date();
     const warningThreshold = 7; // days before expiration to warn
 

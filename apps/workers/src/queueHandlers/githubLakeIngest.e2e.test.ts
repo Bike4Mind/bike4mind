@@ -40,16 +40,18 @@ const h = vi.hoisted(() => ({
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload, delete: h.storageDelete }) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ upload: h.upload, delete: h.storageDelete }),
+}));
 vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getSettingByName: async (key: string) =>
     key === 'EnableDataLakes' || key === 'EnableDataLakeGitHub' ? true : undefined,
 }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/integrations/github/dataLake/lakeAppClient')>()),
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient')>()),
   getGitHubLakeAppConfig: () => ({ appId: 'a', slug: 's', privateKey: 'k', clientId: 'c', clientSecret: 'x' }),
   getInstallationOctokit: async () => ({}),
   deleteInstallation: h.deleteInstallation,

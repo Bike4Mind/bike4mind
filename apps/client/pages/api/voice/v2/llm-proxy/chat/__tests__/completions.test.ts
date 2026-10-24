@@ -21,6 +21,8 @@ const {
   mockGetSettingsMap,
   mockInvoke,
   mockProcess,
+  mockWriteStaticCompletion,
+  mockInvokeOptions,
 } = vi.hoisted(() => ({
   mockVerifyVoiceSessionToken: vi.fn(),
   mockFindDuplicateQuests: vi.fn(),
@@ -28,12 +30,17 @@ const {
   mockGetSettingsMap: vi.fn(),
   mockInvoke: vi.fn(),
   mockProcess: vi.fn(),
+  mockWriteStaticCompletion: vi.fn(),
+  mockInvokeOptions: vi.fn(),
 }));
 
 // Bypass baseApi's whole middleware chain (connectDB, passport, api-key auth) - this
 // route only cares about the body its own handler builds, and `.post()` here hands
 // back the raw handler so tests can call it directly. Mirrors
 // pages/api/data-lakes/__tests__/semantic-search.test.ts.
+// The real billing helpers read repositories (and mongoose models via entitlements) the database mock lacks.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: vi.fn() }));
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
@@ -48,6 +55,16 @@ vi.mock('@server/voice/voiceSessionToken', () => ({
 }));
 
 vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({ premiumLlmTools: {} }));
+
+// The wiring module reads infra Resources at load; the resolver is the unit under test, not the job engine.
+const mockBuildVideoToolConfig = vi.fn();
+vi.mock('@server/generationJobs/wiring', () => ({
+  getVideoJobDeps: () => ({ deps: 'availability' }),
+  getCreateVideoJobDeps: () => ({ deps: 'create' }),
+}));
+vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({
+  buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
+}));
 
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({}),
@@ -80,6 +97,9 @@ vi.mock('@bike4mind/services/llm', () => ({
   ChatCompletionFeature: {},
   featureNames: {},
   ChatCompletionInvoke: class {
+    constructor(options: unknown) {
+      mockInvokeOptions(options);
+    }
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
     invoke = (...args: unknown[]) => mockInvoke(...args);
@@ -98,10 +118,11 @@ vi.mock('@bike4mind/voice', () => ({
   openAiSseChunk: () => 'chunk',
   openAiSseDone: () => 'done',
   stripSpokenThinking: (text: string) => text,
-  writeStaticCompletion: () => {},
+  writeStaticCompletion: (...args: unknown[]) => mockWriteStaticCompletion(...args),
 }));
 
 import handler from '../completions';
+import { VOICE_SESSION_TOKEN_TTL_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 // Minimal SSE-response double: only setHeader/write/end/on are ever touched by the
 // success path this test drives.
@@ -128,6 +149,9 @@ function makeReq() {
   };
 }
 
+// A hold opened a minute ago: inside the window its token may be served for.
+const recentHold = () => new Date(Date.now() - 60_000).toISOString();
+
 function primeSuccessfulTurn() {
   vi.clearAllMocks();
   mockVerifyVoiceSessionToken.mockReturnValue({
@@ -136,6 +160,7 @@ function primeSuccessfulTurn() {
     organizationId: undefined,
     reasoningModelId: 'test-model',
     authOrigin: 'session',
+    voiceHoldStartedAt: recentHold(),
   });
   mockFindDuplicateQuests.mockResolvedValue([]);
   mockRecordVoiceActivity.mockResolvedValue(true);
@@ -188,6 +213,7 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
       reasoningModelId: 'test-model',
       authOrigin: 'apiKey',
       apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
     });
 
     await handler(makeReq() as never, makeRes() as never);
@@ -210,17 +236,185 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
   });
 });
 
+describe('POST /api/voice/v2/llm-proxy/chat/completions - owner admin role', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  const turnWith = async (adminRoleWithheld: boolean | undefined) => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
+      ...(adminRoleWithheld === undefined ? {} : { adminRoleWithheld }),
+    });
+    mockUserFindById.mockResolvedValue({ id: 'user-1', isAdmin: true });
+    await handler(makeReq() as never, makeRes() as never);
+    return (mockInvokeOptions.mock.calls[0][0] as { user: { isAdmin: boolean } }).user;
+  };
+
+  it('withholds the admin role when the token says the minting key lacked the admin scope', async () => {
+    expect((await turnWith(true)).isAdmin).toBe(false);
+  });
+
+  it('keeps the admin role when the token carries no such claim', async () => {
+    expect((await turnWith(undefined)).isAdmin).toBe(true);
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - video generation', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  type VideoBody = { body: { tools?: string[] } };
+  type VideoProcessArg = VideoBody & { videoToolConfigResolver?: () => Promise<unknown> };
+
+  it('offers video_generation on both bodies and hands process() a resolver carrying the on-screen delivery note', async () => {
+    const config = { usableModels: ['test-video'], createJob: vi.fn() };
+    mockBuildVideoToolConfig.mockResolvedValue(config);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockInvoke.mock.calls[0][0] as VideoBody).body.tools).toContain('video_generation');
+    const processArg = mockProcess.mock.calls[0][0] as VideoProcessArg;
+    expect(processArg.body.tools).toContain('video_generation');
+    // The handler only hands over the resolver; process() (mocked here) is what runs the usable-model lookup.
+    expect(mockBuildVideoToolConfig).not.toHaveBeenCalled();
+    expect(await processArg.videoToolConfigResolver?.()).toEqual({
+      ...config,
+      createJob: expect.any(Function),
+      deliveryNote: expect.stringContaining('appears on screen in this session chat'),
+    });
+    expect(mockBuildVideoToolConfig).toHaveBeenCalledWith('user-1', {
+      availability: { deps: 'availability' },
+      createDeps: { deps: 'create' },
+    });
+  });
+
+  it('does not offer the tool, or a resolver, to a call minted by an API key', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockInvoke.mock.calls[0][0] as VideoBody).body.tools).not.toContain('video_generation');
+    const processArg = mockProcess.mock.calls[0][0] as VideoProcessArg;
+    expect(processArg.body.tools).not.toContain('video_generation');
+    expect(processArg.videoToolConfigResolver).toBeUndefined();
+    expect(mockBuildVideoToolConfig).not.toHaveBeenCalled();
+  });
+
+  it('keeps the inline built-ins alongside the video tool', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockProcess.mock.calls[0][0] as VideoBody).body.tools).toEqual(
+      expect.arrayContaining(['web_search', 'search_knowledge_base', 'video_generation'])
+    );
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - duplicate turns', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  // currentTurnUserMessage is mocked to 'hello there'
+  const quest = (overrides: Record<string, unknown>) => ({ prompt: 'hello there', status: 'done', ...overrides });
+
+  it('drops a retry while the original turn is still running, speaking nothing', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'running' })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockWriteStaticCompletion).toHaveBeenCalledWith(expect.anything(), expect.anything(), '');
+  });
+
+  // A dropped connection stops the quest but leaves the billed video job its tool call already created.
+  it('drops a retry of a stopped turn that already started a video job, and says so', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([
+      quest({ status: 'stopped', generationJobs: [{ id: 'job-1', kind: 'video' }] }),
+    ]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+    expect(mockWriteStaticCompletion).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('already being made')
+    );
+  });
+
+  it('drops a retry of a stopped turn that claimed a video start before its job ref was written', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'stopped', agentVideoClipsClaimed: 1 })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).not.toHaveBeenCalled();
+    expect(mockWriteStaticCompletion).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('already being made')
+    );
+  });
+
+  it('also recognizes a video job recorded on the legacy videoJobIds field', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'stopped', videoJobIds: ['job-1'] })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('still answers a retry of a stopped turn that never started a job', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'stopped' })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('still answers an identical repeat of a done turn that started a video job', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([
+      quest({ status: 'done', generationJobs: [{ id: 'job-1', kind: 'video' }] }),
+    ]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('still answers the same words after a non-video job, or a video job on a different prompt', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([
+      quest({ status: 'stopped', generationJobs: [{ id: 'song-1', kind: 'music' }] }),
+      quest({ prompt: 'something else', status: 'stopped', generationJobs: [{ id: 'job-2', kind: 'video' }] }),
+    ]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () => {
   beforeEach(primeSuccessfulTurn);
 
   it("marks the token's session connected and alive on every verified turn", async () => {
     await handler(makeReq() as never, makeRes() as never);
 
-    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), null);
+    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), expect.any(Date));
   });
 
   it('marks only the hold its token names', async () => {
-    const holdStartedAt = '2026-10-12T12:00:00.000Z';
+    const holdStartedAt = recentHold();
     mockVerifyVoiceSessionToken.mockReturnValue({
       userId: 'user-1',
       sessionId: 'session-1',
@@ -251,7 +445,7 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
       sessionId: 'session-1',
       organizationId: '',
       reasoningModelId: 'test-model',
-      voiceHoldStartedAt: '2026-10-12T12:00:00.000Z',
+      voiceHoldStartedAt: recentHold(),
     });
     // POST /end claimed the hold, so the activity write matches nothing.
     mockRecordVoiceActivity.mockResolvedValue(false);
@@ -267,19 +461,47 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
     expect(mockProcess).not.toHaveBeenCalled();
   });
 
-  it('serves a legacy token without a hold claim even when no hold matched', async () => {
-    mockRecordVoiceActivity.mockResolvedValue(false);
+  function expect402(status: ReturnType<typeof vi.fn>) {
+    expect(status).toHaveBeenCalledWith(402);
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  }
 
-    await handler(makeReq() as never, makeRes() as never);
+  it('refuses a legacy token that names no hold', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+    });
+    const status = vi.fn(() => ({ json: vi.fn() }));
 
-    expect(mockInvoke).toHaveBeenCalled();
+    await handler(makeReq() as never, { ...makeRes(), status } as never);
+
+    expect402(status);
   });
 
-  it('still answers the turn when recording the activity fails', async () => {
+  it('refuses a turn when recording the activity fails, rather than serving it unbilled', async () => {
     mockRecordVoiceActivity.mockRejectedValue(new Error('db blip'));
+    const status = vi.fn(() => ({ json: vi.fn() }));
 
-    await handler(makeReq() as never, makeRes() as never);
+    await handler(makeReq() as never, { ...makeRes(), status } as never);
 
-    expect(mockInvoke).toHaveBeenCalled();
+    expect402(status);
+  });
+
+  it("refuses a turn past the hold's window even while the hold is still open", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      voiceHoldStartedAt: new Date(Date.now() - (VOICE_SESSION_TOKEN_TTL_SECONDS + 1) * 1000).toISOString(),
+    });
+    const status = vi.fn(() => ({ json: vi.fn() }));
+
+    await handler(makeReq() as never, { ...makeRes(), status } as never);
+
+    expect402(status);
   });
 });

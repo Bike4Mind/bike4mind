@@ -10,12 +10,21 @@ vi.mock('./creditService', async importOriginal => ({
   subtractCredits: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  buildApiKeyTable: (keys: object) => keys,
   reasonsWithinOutputBudget: vi.fn(() => false),
+  isAdaptiveThinkingByDefault: vi.fn(() => false),
   // See cliCompletions.maxTokens.test.ts for coverage against the real implementation.
   resolveOutputMaxTokens: vi.fn(
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
   ),
-  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
+  getAvailableModels: vi.fn().mockResolvedValue([
+    {
+      id: 'test-model',
+      type: 'text',
+      backend: 'anthropic',
+      pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
+    },
+  ]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
     complete: vi.fn(async (_model, _messages, _options, onChunk) => {
@@ -234,8 +243,8 @@ describe('executeCompletion - org billing routing', () => {
   });
 
   it('bills the org for its billing owner, who holds no users[] row', async () => {
-    // assignManager/ownership never write a roster row, so a roster-only check would 403 the two
-    // principals most entitled to spend the pool.
+    // Ownership never writes a roster row, so a roster-only check would 403 the principal most
+    // entitled to spend the pool.
     const { db, organizations } = buildDb({ org: buildOrg({ userId: 'user1', users: [] }) });
 
     await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });

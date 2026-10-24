@@ -1,16 +1,17 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { verifySlackRequest } from '@server/integrations/slack/slackWebhookVerification';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { User, Session, connectDB } from '@bike4mind/database';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { createSession } from '@server/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { decryptToken } from '@server/security/tokenEncryption';
 import {
   SlackAuditLogger,
@@ -27,7 +28,7 @@ import {
 } from '@bike4mind/slack';
 import { Quest } from '@bike4mind/database/content';
 import { triggerImageGeneration } from '@bike4mind/slack';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 // Slack slash command schema
 const SlackCommandSchema = z.object({
@@ -47,6 +48,7 @@ const SlackCommandSchema = z.object({
 async function findUserBySlackId(slackUserId: string) {
   const user = await User.findOne({
     'slackSettings.slackUserId': slackUserId,
+    ...VERIFIED_SLACK_IDENTITY_FILTER,
   });
   return user;
 }
@@ -64,6 +66,7 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: st
 async function findUserBySlackIdWithToken(slackUserId: string) {
   const user = await User.findOne({
     'slackSettings.slackUserId': slackUserId,
+    ...VERIFIED_SLACK_IDENTITY_FILTER,
   }).select('+slackSettings.slackUserToken');
 
   // Debug: log what we found to verify stored slackUserId matches

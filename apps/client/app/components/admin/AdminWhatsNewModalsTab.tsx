@@ -7,7 +7,6 @@ import {
   Box,
   Button,
   Card,
-  Checkbox,
   Chip,
   CircularProgress,
   Divider,
@@ -34,14 +33,11 @@ import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import SyncIcon from '@mui/icons-material/Sync';
-import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import PendingIcon from '@mui/icons-material/Pending';
 import DeleteIcon from '@mui/icons-material/Delete';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
-import InfoIcon from '@mui/icons-material/Info';
 import { FieldTooltip } from '@client/app/components/help';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -49,20 +45,13 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorIcon from '@mui/icons-material/Error';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CodeIcon from '@mui/icons-material/Code';
-import WarningIcon from '@mui/icons-material/Warning';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import AnnouncementIcon from '@mui/icons-material/Announcement';
 import SaveIcon from '@mui/icons-material/Save';
-import { AdminWhatsNewConfiguration } from './AdminWhatsNewConfiguration';
-import { useGetSettingsValue, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { IModalDocument } from '@bike4mind/common';
+import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
 import {
   useGetWhatsNewModals,
-  useGetAvailableWhatsNewModals,
-  useGetWhatsNewSyncConfig,
-  useUpdateWhatsNewSyncConfig,
-  useImportWhatsNewModals,
-  useSyncLatestWhatsNewModal,
   useDeleteWhatsNewModal,
   useToggleWhatsNewModal,
   useCreateWhatsNewModal,
@@ -70,12 +59,8 @@ import {
   useGetHighlightsConfig,
   useUpdateHighlightsConfig,
   useGenerateHighlights,
-  useGetGenerationStatus,
-  useBackfillWhatsNew,
   useGetRawModalVariants,
   useUpdateWhatsNewModalVariants,
-  type AvailableModalEntry,
-  type GenerationStatusResponse,
 } from '@client/app/hooks/data/whatsNewModals';
 
 // Variant registry for client use (mirrors AUDIENCE_VARIANTS in @bike4mind/services but
@@ -117,12 +102,13 @@ import {
   getModalPriorityStatus,
   getStatusChipColor,
   getStatusLabel,
+  shouldShowWeeklyHighlights,
 } from './AdminWhatsNewModalsTab.utils';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import {
   HIGHLIGHTS_TEMPLATE_VARIABLES,
   getDefaultHighlightsTemplate,
-} from '@server/whatsNew/whatsNewHighlights.prompt';
+} from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.prompt';
 import { toast } from 'sonner';
 import { useMutation } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
@@ -145,22 +131,6 @@ function getMaxExpiryDate(): string {
   const date = new Date();
   date.setFullYear(date.getFullYear() + MAX_EXPIRY_YEARS);
   return date.toISOString().split('T')[0];
-}
-
-/**
- * Format a time distance in a human-readable format (e.g., "5 minutes ago")
- */
-function formatTimeAgo(date: Date): string {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMinutes = Math.floor(diffMs / (1000 * 60));
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffMinutes < 1) return 'less than a minute';
-  if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'}`;
-  if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'}`;
-  return `${diffDays} day${diffDays === 1 ? '' : 's'}`;
 }
 
 interface ExpiryStatus {
@@ -421,36 +391,20 @@ function WhatsNewErrorFallback() {
 /**
  * Admin tab for managing What's New modals.
  * Provides:
- * - Sync configuration (auto-sync toggle)
- * - Active modals section (local What's New modals)
- * - Available for sync section (modals from production S3)
+ * - Active modals section (hand-authored What's New modals)
+ * - Weekly highlights to Slack
  */
 export default function AdminWhatsNewModalsTab() {
-  // Get stage and source environment status from sync config endpoint
-  const { data: configData } = useGetWhatsNewSyncConfig();
-  const stage = configData?.stage || 'unknown';
-  // isSourceEnvironment is true when ENABLE_WHATS_NEW_DISTRIBUTION=true (main production only)
-  // This distinguishes main production from fork "production" stages
-  const isSourceEnvironment = configData?.isSourceEnvironment ?? false;
-  // isForkProduction is true when stage=production but NOT source environment
-  // Fork production defaults to auto-sync OFF (opt-in)
-  const isForkProduction = configData?.isForkProduction ?? false;
-  // distributionUrlConfigured is true when WHATS_NEW_DISTRIBUTION_URL is set
-  // Sync won't work without this URL configured
-  const distributionUrlConfigured = configData?.distributionUrlConfigured ?? false;
+  // isForkProduction distinguishes a fork's production stage from the source deployment. The
+  // highlights card stays on the main environments only (source prod, dev, PR previews).
+  const { data: env } = useLiveOpsTriageEnv();
+  const stage = env?.stage || 'unknown';
+  const isForkProduction = env?.isForkProduction ?? false;
 
   // Determine chip color based on environment type
   const getChipColor = () => {
-    if (isSourceEnvironment) return 'danger';
     if (isForkProduction) return 'warning';
     return 'success';
-  };
-
-  // Get environment label suffix
-  const getEnvironmentSuffix = () => {
-    if (isSourceEnvironment) return ' (Source)';
-    if (isForkProduction) return ' (Fork)';
-    return '';
   };
 
   return (
@@ -464,50 +418,20 @@ export default function AdminWhatsNewModalsTab() {
               <ContextHelpButton helpId="admin/whats-new" tooltipText="What's New Help" />
             </Stack>
             <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-              Manage What&apos;s New modals for your environment. These modals are automatically generated from
-              production releases.
+              Manage the hand-authored What&apos;s New modals shown in the app. Release notes are managed in the
+              Release Notes tab.
             </Typography>
             <Chip size="sm" variant="outlined" color={getChipColor()} sx={{ mt: 1 }}>
               Environment: {stage}
-              {getEnvironmentSuffix()}
+              {isForkProduction && ' (Fork)'}
             </Chip>
           </Box>
 
-          {/* Source environment alert */}
-          {isSourceEnvironment && (
-            <Alert variant="outlined" color="warning" startDecorator={<InfoIcon />}>
-              What&apos;s New sync is disabled in this environment. This is the source environment that generates and
-              distributes modals to other environments.
-            </Alert>
-          )}
-
-          {/* Sync Configuration - only for non-source environments */}
-          {!isSourceEnvironment && (
-            <>
-              {/* Info alert for fork production environments */}
-              {isForkProduction && distributionUrlConfigured && (
-                <Alert variant="outlined" color="neutral" startDecorator={<InfoIcon />}>
-                  This is a fork production environment. Auto-sync is disabled by default. Enable it below if you want
-                  to automatically receive What&apos;s New modals from the main production environment.
-                </Alert>
-              )}
-
-              {/* Sync Configuration - always visible so users can set the URL */}
-              <SyncConfigCard />
-            </>
-          )}
-
           {/* What's New Modals - ALWAYS visible (primary content) */}
-          <ActiveModalsCard hideCreate={isSourceEnvironment} isSourceEnvironment={isSourceEnvironment} />
-
-          {/* Available for Sync - only for non-source environments (secondary action) */}
-          {!isSourceEnvironment && distributionUrlConfigured && <AvailableModalsCard />}
-
-          {/* Daily Modal Generation - health, backfill, and config in one section */}
-          {(isSourceEnvironment || stage === 'dev' || stage.startsWith('pr')) && <DailyGenerationCard />}
+          <ActiveModalsCard />
 
           {/* Weekly Highlights to Slack - only for main environments (production, dev, or PR previews), not forks */}
-          {(isSourceEnvironment || stage === 'dev' || stage.startsWith('pr')) && <WeeklyHighlightsCard />}
+          {shouldShowWeeklyHighlights(env) && <WeeklyHighlightsCard />}
         </Stack>
       </Box>
     </ErrorBoundary>
@@ -515,284 +439,9 @@ export default function AdminWhatsNewModalsTab() {
 }
 
 /**
- * Check if a hostname matches an allowed domain pattern.
- * Supports both exact domain match and subdomain match.
- * This prevents bypass attacks like 'evilcloudfront.net'.
- */
-function isAllowedHostname(hostname: string, allowedDomain: string): boolean {
-  const baseDomain = allowedDomain.slice(1); // Remove leading dot
-  // Exact match or subdomain match (with the dot ensuring proper subdomain boundary)
-  return hostname === baseDomain || hostname.endsWith(allowedDomain);
-}
-
-/**
- * Client-side URL validation (matches server-side validateDistributionUrl)
- */
-function validateUrlClient(url: string): { valid: boolean; error?: string } {
-  if (!url) return { valid: true }; // Empty is allowed (clears override)
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'https:') {
-      return { valid: false, error: 'URL must use HTTPS' };
-    }
-    // Check CloudFront pattern
-    if (isAllowedHostname(parsed.hostname, '.cloudfront.net')) {
-      return { valid: true };
-    }
-    // Check the deployment's own custom domain (routes through CloudFront). Sourced from
-    // NEXT_PUBLIC_SERVER_DOMAIN with no brand fallback.
-    const serverDomain = process.env.NEXT_PUBLIC_SERVER_DOMAIN;
-    if (serverDomain && isAllowedHostname(parsed.hostname, `.${serverDomain}`)) {
-      return { valid: true };
-    }
-    // Check S3 patterns (global or regional)
-    if (
-      isAllowedHostname(parsed.hostname, '.s3.amazonaws.com') ||
-      parsed.hostname.match(/\.s3\.[a-z0-9-]+\.amazonaws\.com$/)
-    ) {
-      return { valid: true };
-    }
-    return {
-      valid: false,
-      error: 'URL must be a CloudFront, S3, or the configured deployment domain',
-    };
-  } catch {
-    return { valid: false, error: 'Invalid URL format' };
-  }
-}
-
-/**
- * Sync configuration card with auto-sync toggle, distribution URL override, and manual sync button.
- */
-function SyncConfigCard() {
-  const { data: configData, isLoading: configLoading, refetch: refetchConfig } = useGetWhatsNewSyncConfig();
-  const updateConfig = useUpdateWhatsNewSyncConfig();
-  const syncLatest = useSyncLatestWhatsNewModal();
-
-  const autoSyncEnabled = configData?.config?.autoSyncEnabled ?? true;
-
-  // URL override state
-  const [urlOverride, setUrlOverride] = useState('');
-  const [urlError, setUrlError] = useState<string | null>(null);
-  const [urlSuccess, setUrlSuccess] = useState<string | null>(null);
-  const [urlDirty, setUrlDirty] = useState(false);
-
-  // Initialize URL from config when data loads
-  useEffect(() => {
-    if (configData?.config?.distributionUrlOverride !== undefined) {
-      setUrlOverride(configData.config.distributionUrlOverride || '');
-      setUrlDirty(false);
-    }
-  }, [configData?.config?.distributionUrlOverride]);
-
-  // Auto-clear success message after 3 seconds
-  useEffect(() => {
-    if (urlSuccess) {
-      const timer = setTimeout(() => setUrlSuccess(null), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [urlSuccess]);
-
-  const handleUrlChange = (value: string) => {
-    setUrlOverride(value);
-    setUrlError(null);
-    setUrlSuccess(null);
-    setUrlDirty(true);
-  };
-
-  const handleSaveUrl = () => {
-    // Client-side validation
-    const validation = validateUrlClient(urlOverride);
-    if (!validation.valid) {
-      setUrlError(validation.error || 'Invalid URL');
-      return;
-    }
-
-    setUrlError(null);
-    setUrlSuccess(null);
-    updateConfig.mutate(
-      {
-        ...configData?.config,
-        distributionUrlOverride: urlOverride || null,
-      },
-      {
-        onSuccess: () => {
-          setUrlDirty(false);
-          setUrlSuccess('URL saved successfully');
-          refetchConfig();
-        },
-        onError: error => {
-          setUrlError(error instanceof Error ? error.message : 'Failed to save URL');
-        },
-      }
-    );
-  };
-
-  const handleClearUrl = () => {
-    // Immediately clear the input field
-    setUrlOverride('');
-    setUrlError(null);
-    setUrlSuccess(null);
-    setUrlDirty(false);
-    updateConfig.mutate(
-      {
-        ...configData?.config,
-        distributionUrlOverride: null,
-      },
-      {
-        onSuccess: () => {
-          setUrlSuccess('URL cleared');
-          refetchConfig();
-        },
-      }
-    );
-  };
-
-  return (
-    <Card variant="outlined">
-      <Box>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
-          <SyncIcon color="primary" />
-          <Typography level="title-lg">Sync Configuration</Typography>
-        </Stack>
-
-        {/* Distribution URL Override */}
-        <FormControl error={!!urlError} sx={{ mb: 2 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <FormLabel sx={{ m: 0 }}>Distribution URL</FormLabel>
-            <FieldTooltip
-              ariaLabel="Help: Distribution URL"
-              content="Override the default SST secret URL. Must be a CloudFront or S3 HTTPS URL. Leave empty to use SST secret."
-            />
-          </Box>
-          <Stack direction="row" spacing={1}>
-            <Input
-              placeholder="https://abc123.cloudfront.net/whats-new"
-              value={urlOverride}
-              onChange={e => handleUrlChange(e.target.value)}
-              disabled={configLoading || updateConfig.isPending}
-              sx={{ flex: 1 }}
-              data-testid="whats-new-distribution-url-input"
-            />
-            <Button
-              variant="soft"
-              onClick={handleSaveUrl}
-              disabled={updateConfig.isPending || !urlDirty}
-              loading={updateConfig.isPending}
-              data-testid="whats-new-distribution-url-save-btn"
-            >
-              Save
-            </Button>
-            {(configData?.config?.distributionUrlOverride || urlOverride) && (
-              <Button
-                variant="plain"
-                color="neutral"
-                onClick={handleClearUrl}
-                disabled={updateConfig.isPending || !urlOverride}
-                data-testid="whats-new-distribution-url-clear-btn"
-              >
-                Clear
-              </Button>
-            )}
-          </Stack>
-          {urlError && (
-            <Typography level="body-xs" color="danger" sx={{ mt: 0.5 }}>
-              {urlError}
-            </Typography>
-          )}
-          {urlSuccess && (
-            <Typography level="body-xs" color="success" sx={{ mt: 0.5 }}>
-              {urlSuccess}
-            </Typography>
-          )}
-          <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.tertiary' }}>
-            {configData?.distributionUrlConfigured ? (
-              <>Currently using: {configData.distributionUrlSource === 'admin' ? 'Admin override' : 'SST secret'}</>
-            ) : (
-              <>Not configured. Enter a URL above or configure the WHATS_NEW_DISTRIBUTION_URL SST secret.</>
-            )}
-          </Typography>
-        </FormControl>
-
-        <Divider sx={{ my: 2 }} />
-
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          spacing={{ xs: 1.5, sm: 3 }}
-          alignItems={{ xs: 'stretch', sm: 'center' }}
-        >
-          {/* Auto-sync toggle */}
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Switch
-              checked={autoSyncEnabled}
-              onChange={e => updateConfig.mutate({ ...configData?.config, autoSyncEnabled: e.target.checked })}
-              disabled={!configData?.distributionUrlConfigured || configLoading || updateConfig.isPending}
-            />
-            <Typography
-              level="body-sm"
-              sx={{ color: !configData?.distributionUrlConfigured ? 'text.tertiary' : undefined }}
-            >
-              Auto-sync enabled
-              <Tooltip title="When enabled, the cron job will automatically import the latest modal from production daily.">
-                <InfoIcon
-                  sx={{ ml: 0.5, fontSize: 14, color: 'text.tertiary' }}
-                  aria-label="Auto-sync information"
-                  role="img"
-                />
-              </Tooltip>
-            </Typography>
-          </Stack>
-
-          <Divider orientation="vertical" sx={{ display: { xs: 'none', sm: 'block' } }} />
-
-          {/* Manual sync buttons */}
-          <Stack direction="row" spacing={1} sx={{ flex: 1 }}>
-            <Button
-              variant="soft"
-              color="primary"
-              startDecorator={syncLatest.isPending ? <CircularProgress size="sm" /> : <SyncIcon />}
-              onClick={() => syncLatest.mutate()}
-              disabled={!configData?.distributionUrlConfigured || syncLatest.isPending}
-              data-testid="whats-new-sync-latest-btn"
-              sx={{ flex: 1 }}
-            >
-              Sync Latest
-            </Button>
-            <IconButton
-              variant="plain"
-              size="sm"
-              onClick={() => refetchConfig()}
-              disabled={configLoading}
-              aria-label="Refresh sync configuration"
-              data-testid="whats-new-sync-refresh-btn"
-            >
-              <RefreshIcon />
-            </IconButton>
-          </Stack>
-        </Stack>
-
-        {configData?.config?.lastSyncAt && (
-          <Typography level="body-xs" sx={{ mt: 1, color: 'text.tertiary' }}>
-            Last sync: {formatTimeAgo(new Date(configData.config.lastSyncAt))} ago
-            {configData.config.lastSyncResult && ` (${configData.config.lastSyncResult})`}
-          </Typography>
-        )}
-      </Box>
-    </Card>
-  );
-}
-
-interface ActiveModalsCardProps {
-  /** Hide the Create Modal button (used in source environment where modals are auto-generated) */
-  hideCreate?: boolean;
-  /** Whether this is the source environment (production) - affects empty state messaging */
-  isSourceEnvironment?: boolean;
-}
-
-/**
  * Active modals section showing local What's New modals.
  */
-function ActiveModalsCard({ hideCreate = false, isSourceEnvironment = false }: ActiveModalsCardProps) {
+function ActiveModalsCard() {
   const isMobile = useIsMobile();
   const { data: modals, isLoading, refetch } = useGetWhatsNewModals();
   const deleteModal = useDeleteWhatsNewModal();
@@ -1058,19 +707,17 @@ function ActiveModalsCard({ hideCreate = false, isSourceEnvironment = false }: A
             <Typography level="title-lg">What&apos;s New Modals</Typography>
           </Stack>
           <Stack direction="row" spacing={1} alignItems="center">
-            {!hideCreate && (
-              <Button
-                variant="soft"
-                color="primary"
-                size="sm"
-                startDecorator={<AddIcon />}
-                onClick={() => setShowCreateDialog(true)}
-                data-testid="whats-new-create-btn"
-                sx={{ flex: { xs: 1, sm: 'unset' } }}
-              >
-                Create Modal
-              </Button>
-            )}
+            <Button
+              variant="soft"
+              color="primary"
+              size="sm"
+              startDecorator={<AddIcon />}
+              onClick={() => setShowCreateDialog(true)}
+              data-testid="whats-new-create-btn"
+              sx={{ flex: { xs: 1, sm: 'unset' } }}
+            >
+              Create Modal
+            </Button>
             <IconButton
               variant="plain"
               size="sm"
@@ -1497,9 +1144,7 @@ function ActiveModalsCard({ hideCreate = false, isSourceEnvironment = false }: A
           </Box>
         ) : !modals?.length ? (
           <Alert variant="outlined" color="neutral">
-            {isSourceEnvironment
-              ? "No What's New modals found. Modals are auto-generated from production deployments."
-              : "No What's New modals found. Sync from production to import modals."}
+            No What&apos;s New modals found. Create one to announce a change in the app.
           </Alert>
         ) : (
           <Stack spacing={3}>
@@ -1676,576 +1321,6 @@ function ActiveModalsCard({ hideCreate = false, isSourceEnvironment = false }: A
           </Stack>
         )}
       </Box>
-    </Card>
-  );
-}
-
-/**
- * Available modals section showing modals available from production S3.
- * Only rendered when distribution URL is configured.
- */
-function AvailableModalsCard() {
-  const { data: availableData, isLoading, refetch } = useGetAvailableWhatsNewModals();
-  const importModals = useImportWhatsNewModals();
-  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
-
-  // Pagination state
-  const [availablePage, setAvailablePage] = useState(1);
-  const [availableItemsPerPage, setAvailableItemsPerPage] = useState(20);
-
-  const modals = availableData?.modals || [];
-  const availableModals = modals.filter(m => m.status === 'available');
-
-  // Calculate pagination
-  const availableTotalPages = Math.ceil(modals.length / availableItemsPerPage);
-  const availableStartIndex = (availablePage - 1) * availableItemsPerPage;
-  const availableEndIndex = availableStartIndex + availableItemsPerPage;
-  const paginatedModals = modals.slice(availableStartIndex, availableEndIndex);
-
-  // Reset to page 1 when total pages decrease below current page
-  useEffect(() => {
-    if (availablePage > 1 && availablePage > availableTotalPages) {
-      setAvailablePage(1);
-    }
-  }, [availableTotalPages, availablePage]);
-
-  // Pagination handlers
-  const handleAvailablePageChange = useCallback((page: number) => {
-    setAvailablePage(page);
-  }, []);
-
-  const handleAvailableItemsPerPageChange = useCallback((items: number) => {
-    setAvailableItemsPerPage(items);
-    setAvailablePage(1);
-  }, []);
-
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-      setSelectedKeys(new Set(availableModals.map(m => m.key)));
-    } else {
-      setSelectedKeys(new Set());
-    }
-  };
-
-  const handleSelectOne = (key: string, checked: boolean) => {
-    const newSet = new Set(selectedKeys);
-    if (checked) {
-      newSet.add(key);
-    } else {
-      newSet.delete(key);
-    }
-    setSelectedKeys(newSet);
-  };
-
-  const handleImportSelected = () => {
-    if (selectedKeys.size > 0) {
-      importModals.mutate(Array.from(selectedKeys), {
-        onSuccess: () => {
-          setSelectedKeys(new Set());
-          setAvailablePage(1);
-          refetch();
-        },
-      });
-    }
-  };
-
-  const handleImportAll = () => {
-    const keys = availableModals.map(m => m.key);
-    if (keys.length > 0) {
-      importModals.mutate(keys, {
-        onSuccess: () => {
-          setSelectedKeys(new Set());
-          setAvailablePage(1);
-          refetch();
-        },
-      });
-    }
-  };
-
-  const allSelected = availableModals.length > 0 && selectedKeys.size === availableModals.length;
-  const someSelected = selectedKeys.size > 0 && selectedKeys.size < availableModals.length;
-
-  return (
-    <Card variant="outlined">
-      <Box>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <CloudDownloadIcon color="primary" />
-            <Typography level="title-lg">Available for Sync</Typography>
-          </Stack>
-          <Stack direction="row" spacing={1}>
-            <Button
-              variant="soft"
-              color="primary"
-              size="sm"
-              startDecorator={importModals.isPending ? <CircularProgress size="sm" /> : <CloudDownloadIcon />}
-              onClick={handleImportSelected}
-              disabled={selectedKeys.size === 0 || importModals.isPending}
-              data-testid="whats-new-import-selected-btn"
-            >
-              Import Selected ({selectedKeys.size})
-            </Button>
-            <Button
-              variant="outlined"
-              color="primary"
-              size="sm"
-              onClick={handleImportAll}
-              disabled={availableModals.length === 0 || importModals.isPending}
-              data-testid="whats-new-import-all-btn"
-            >
-              Import All ({availableModals.length})
-            </Button>
-            <IconButton
-              variant="plain"
-              size="sm"
-              onClick={() => refetch()}
-              disabled={isLoading}
-              aria-label="Refresh available modals"
-              data-testid="whats-new-available-refresh-btn"
-            >
-              <RefreshIcon />
-            </IconButton>
-          </Stack>
-        </Stack>
-
-        {isLoading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-            <CircularProgress aria-label="Loading available modals" />
-          </Box>
-        ) : !modals.length ? (
-          <Alert variant="outlined" color="neutral">
-            No modals available from production. Check if the manifest is published.
-          </Alert>
-        ) : (
-          <>
-            <Sheet
-              variant="outlined"
-              sx={{ borderRadius: 'sm', overflow: 'auto' }}
-              data-testid="whats-new-available-table"
-            >
-              <Table stickyHeader aria-label="Available modals for sync table">
-                <thead>
-                  <tr>
-                    <th style={{ width: 40 }}>
-                      <Checkbox
-                        checked={allSelected}
-                        indeterminate={someSelected}
-                        onChange={e => handleSelectAll(e.target.checked)}
-                        disabled={availableModals.length === 0}
-                        slotProps={{ input: { 'aria-label': 'Select all available modals' } }}
-                      />
-                    </th>
-                    <th style={{ width: '35%' }}>Title</th>
-                    <th style={{ width: '15%' }}>Date</th>
-                    <th style={{ width: '15%' }}>Status</th>
-                    <th style={{ width: '20%' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paginatedModals.map((modal: AvailableModalEntry) => {
-                    const isAvailable = modal.status === 'available';
-                    const isSelected = selectedKeys.has(modal.key);
-
-                    return (
-                      <tr key={modal.key}>
-                        <td>
-                          <Checkbox
-                            checked={isSelected}
-                            onChange={e => handleSelectOne(modal.key, e.target.checked)}
-                            disabled={!isAvailable}
-                          />
-                        </td>
-                        <td>
-                          <Typography level="body-sm" noWrap sx={{ maxWidth: 250 }}>
-                            {modal.title}
-                          </Typography>
-                        </td>
-                        <td>
-                          <Typography level="body-xs">{modal.generatedDate || 'N/A'}</Typography>
-                        </td>
-                        <td>
-                          <Chip
-                            size="sm"
-                            variant="outlined"
-                            color={isAvailable ? 'success' : 'neutral'}
-                            startDecorator={isAvailable ? <PendingIcon /> : <CheckCircleIcon />}
-                          >
-                            {isAvailable ? 'Available' : 'Imported'}
-                          </Chip>
-                        </td>
-                        <td>
-                          {isAvailable && (
-                            <Button
-                              size="sm"
-                              variant="plain"
-                              startDecorator={<CloudDownloadIcon />}
-                              onClick={() =>
-                                importModals.mutate([modal.key], {
-                                  onSuccess: () => {
-                                    setAvailablePage(1);
-                                    refetch();
-                                  },
-                                })
-                              }
-                              disabled={importModals.isPending}
-                            >
-                              Import
-                            </Button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </Table>
-            </Sheet>
-
-            {/* Available Pagination Controls */}
-            {modals.length > availableItemsPerPage && (
-              <Box aria-live="polite" data-testid="whats-new-available-pagination">
-                <PaginationControls
-                  currentPage={availablePage}
-                  totalPages={availableTotalPages}
-                  itemsPerPage={availableItemsPerPage}
-                  totalItems={modals.length}
-                  onPageChange={handleAvailablePageChange}
-                  onItemsPerPageChange={handleAvailableItemsPerPageChange}
-                />
-              </Box>
-            )}
-          </>
-        )}
-      </Box>
-    </Card>
-  );
-}
-
-/**
- * Daily Generation Card - consolidated section for modal generation.
- * Includes enable toggle, health status, dry run / run now buttons (modal-based),
- * and collapsible configuration. Follows the LiveOps triage UX pattern.
- */
-function DailyGenerationCard() {
-  const { data: status, isLoading: statusLoading, refetch: refetchStatus } = useGetGenerationStatus();
-  const automationEnabled = useGetSettingsValue('whatsNewAutomationEnabled') as boolean | undefined;
-  const updateSettings = useUpdateSettings();
-  const backfill = useBackfillWhatsNew();
-
-  // Backfill modal state
-  const [backfillOpen, setBackfillOpen] = useState(false);
-  const [backfillDryRun, setBackfillDryRun] = useState(true);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-
-  // Check if no successful generation in 48+ hours
-  const [isStale, setIsStale] = useState(true);
-  useEffect(() => {
-    if (!status?.lastCompletedAt) {
-      setIsStale(true);
-      return;
-    }
-    const elapsed = Date.now() - new Date(status.lastCompletedAt).getTime();
-    setIsStale(elapsed > 48 * 60 * 60 * 1000);
-  }, [status?.lastCompletedAt]);
-
-  const getGenStatusColor = (
-    s: GenerationStatusResponse['lastStatus']
-  ): 'success' | 'danger' | 'warning' | 'neutral' => {
-    switch (s) {
-      case 'success':
-        return 'success';
-      case 'failed':
-        return 'danger';
-      case 'no_changes':
-      case 'skipped':
-      case 'no_prs':
-        return 'neutral';
-      default:
-        return 'warning';
-    }
-  };
-
-  const getGenStatusLabel = (s: GenerationStatusResponse['lastStatus']): string => {
-    switch (s) {
-      case 'success':
-        return 'Success';
-      case 'failed':
-        return 'Failed';
-      case 'no_changes':
-        return 'No User-Facing Changes';
-      case 'skipped':
-        return 'Skipped (Duplicate)';
-      case 'no_prs':
-        return 'No PRs Found';
-      default:
-        return 'Unknown';
-    }
-  };
-
-  const generateDates = (): string[] => {
-    if (!startDate || !endDate) return [];
-    const dates: string[] = [];
-    const current = new Date(startDate + 'T00:00:00Z');
-    const end = new Date(endDate + 'T00:00:00Z');
-    while (current <= end) {
-      dates.push(current.toISOString().split('T')[0]);
-      current.setUTCDate(current.getUTCDate() + 1);
-    }
-    return dates;
-  };
-
-  const handleRunSubmit = () => {
-    const dates = generateDates();
-    if (dates.length === 0) return;
-    backfill.mutate({ dates, dryRun: backfillDryRun });
-    setBackfillOpen(false);
-  };
-
-  return (
-    <Card variant="outlined">
-      <Box>
-        {/* Header */}
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          justifyContent="space-between"
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-          gap={1}
-          sx={{ mb: 1 }}
-        >
-          <Stack direction="row" spacing={1} alignItems="center">
-            <CodeIcon color="primary" />
-            <Typography level="title-lg">Daily Modal Generation</Typography>
-            {!statusLoading && (
-              <Chip size="sm" variant="outlined" color={automationEnabled ? 'success' : 'neutral'}>
-                {automationEnabled ? 'Enabled' : 'Disabled'}
-              </Chip>
-            )}
-          </Stack>
-          <Stack direction="row" spacing={1} sx={{ width: { xs: '100%', sm: 'auto' } }}>
-            <Button
-              size="sm"
-              variant="outlined"
-              startDecorator={<PlayArrowIcon />}
-              onClick={() => {
-                setBackfillDryRun(true);
-                setBackfillOpen(true);
-              }}
-              sx={{ flex: { xs: 1, sm: 'unset' } }}
-            >
-              Dry Run
-            </Button>
-            <Button
-              size="sm"
-              variant="solid"
-              color="success"
-              startDecorator={<PlayArrowIcon />}
-              onClick={() => {
-                setBackfillDryRun(false);
-                setBackfillOpen(true);
-              }}
-              sx={{ flex: { xs: 1, sm: 'unset' } }}
-            >
-              Run Now
-            </Button>
-            <IconButton
-              variant="plain"
-              size="sm"
-              onClick={() => refetchStatus()}
-              disabled={statusLoading}
-              aria-label="Refresh generation status"
-              data-testid="generation-refresh-btn"
-            >
-              <RefreshIcon />
-            </IconButton>
-          </Stack>
-        </Stack>
-
-        <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
-          Automated daily generation of What&apos;s New modals from merged pull requests. Runs daily at 1am CST
-          (production only).
-        </Typography>
-
-        {/* Last Run Status Alert (like Weekly Highlights) */}
-        {status?.lastStatus && (
-          <Alert
-            variant="outlined"
-            color={getGenStatusColor(status.lastStatus)}
-            startDecorator={
-              status.lastStatus === 'success' ? (
-                <CheckCircleIcon />
-              ) : status.lastStatus === 'failed' ? (
-                <ErrorIcon />
-              ) : (
-                <InfoIcon />
-              )
-            }
-            sx={{ mb: 2 }}
-          >
-            <Box>
-              <Typography level="body-sm" fontWeight="bold">
-                Last Run: {getGenStatusLabel(status.lastStatus)}
-              </Typography>
-              <Stack direction="row" spacing={2} flexWrap="wrap">
-                {status.lastCompletedAt && (
-                  <Typography level="body-xs">
-                    Completed: {new Date(status.lastCompletedAt).toLocaleString()}
-                  </Typography>
-                )}
-                {status.lastGeneratedDate && <Typography level="body-xs">Date: {status.lastGeneratedDate}</Typography>}
-                {status.lastModelUsed && <Typography level="body-xs">Model: {status.lastModelUsed}</Typography>}
-              </Stack>
-              {status.lastStatus === 'failed' && status.lastError && (
-                <Typography level="body-xs" sx={{ mt: 0.5 }}>
-                  Error: {status.lastError}
-                </Typography>
-              )}
-            </Box>
-          </Alert>
-        )}
-
-        {/* Staleness Warning */}
-        {isStale && status?.lastStatus !== null && (
-          <Alert variant="outlined" color="warning" startDecorator={<WarningIcon />} sx={{ mb: 2 }}>
-            No successful generation in the last 48 hours. Daily modal generation may not be running.
-          </Alert>
-        )}
-
-        {/* Backfill Results (shown inline after running) */}
-        {backfill.data && (
-          <Box sx={{ mb: 2 }}>
-            <Alert variant="outlined" color={backfill.data.failed.length > 0 ? 'warning' : 'success'} sx={{ mb: 1 }}>
-              {backfill.data.dryRun ? 'Dry run results' : 'Backfill results'}: {backfill.data.queued.length}{' '}
-              {backfill.data.dryRun ? 'would generate' : 'queued'}, {backfill.data.skipped.length} skipped,{' '}
-              {backfill.data.noPRs.length} no PRs, {backfill.data.failed.length} failed
-            </Alert>
-            {backfill.data.details.length > 0 && (
-              <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto', maxHeight: 300 }}>
-                <Table size="sm" stickyHeader>
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Status</th>
-                      <th>PRs</th>
-                      <th>Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {backfill.data.details.map(d => (
-                      <tr key={d.date}>
-                        <td>{d.date}</td>
-                        <td>
-                          <Chip
-                            size="sm"
-                            variant="outlined"
-                            color={
-                              d.status === 'queued' || d.status === 'would_generate'
-                                ? 'success'
-                                : d.status === 'failed'
-                                  ? 'danger'
-                                  : 'neutral'
-                            }
-                          >
-                            {d.status}
-                          </Chip>
-                        </td>
-                        <td>{d.prCount ?? '-'}</td>
-                        <td>
-                          <Typography level="body-xs">{d.reason || '-'}</Typography>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              </Sheet>
-            )}
-          </Box>
-        )}
-
-        {/* Configuration Accordion */}
-        <AccordionGroup>
-          <Accordion>
-            <AccordionSummary indicator={<ExpandMoreIcon />}>
-              <Typography level="title-sm">Configuration</Typography>
-            </AccordionSummary>
-            <AccordionDetails>
-              <Stack spacing={2} sx={{ pt: 1 }}>
-                {/* Enable/Disable Toggle */}
-                <Stack direction="row" spacing={2} alignItems="center">
-                  <Switch
-                    checked={automationEnabled ?? false}
-                    onChange={e => updateSettings.mutate({ key: 'whatsNewAutomationEnabled', value: e.target.checked })}
-                    color={automationEnabled ? 'success' : 'neutral'}
-                  />
-                  <Box>
-                    <Typography level="body-md" fontWeight="bold">
-                      {automationEnabled ? 'Enabled' : 'Disabled'}
-                    </Typography>
-                    <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                      Daily automated generation is {automationEnabled ? 'on' : 'off'}
-                    </Typography>
-                  </Box>
-                </Stack>
-                <Divider />
-                <AdminWhatsNewConfiguration />
-              </Stack>
-            </AccordionDetails>
-          </Accordion>
-        </AccordionGroup>
-      </Box>
-
-      {/* Run / Dry Run Modal (LiveOps pattern) */}
-      <Modal open={backfillOpen} onClose={() => setBackfillOpen(false)}>
-        <ModalDialog variant="outlined" sx={{ maxWidth: 400 }}>
-          <ModalClose />
-          <Typography level="h4" sx={{ mb: 2 }}>
-            {backfillDryRun ? 'Dry Run Generation?' : 'Run Generation Now?'}
-          </Typography>
-          <Typography level="body-sm" sx={{ mb: 2 }}>
-            {backfillDryRun
-              ? 'This will check which dates have merged PRs and preview what would be generated, without dispatching any jobs.'
-              : 'This will dispatch generation jobs for each date. Each date consumes an LLM call.'}
-          </Typography>
-          <Stack spacing={2} sx={{ mb: 2 }}>
-            <FormControl>
-              <FormLabel>Start Date</FormLabel>
-              <Input
-                type="date"
-                value={startDate}
-                onChange={e => setStartDate(e.target.value)}
-                slotProps={{ input: { max: new Date().toISOString().split('T')[0] } }}
-              />
-            </FormControl>
-            <FormControl>
-              <FormLabel>End Date</FormLabel>
-              <Input
-                type="date"
-                value={endDate}
-                onChange={e => setEndDate(e.target.value)}
-                slotProps={{ input: { max: new Date().toISOString().split('T')[0] } }}
-              />
-            </FormControl>
-          </Stack>
-          {!backfillDryRun && (
-            <Alert color="warning" variant="outlined" sx={{ mb: 2 }}>
-              <Typography level="body-sm">Real generation jobs will be dispatched!</Typography>
-            </Alert>
-          )}
-          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-            <Button variant="plain" color="neutral" onClick={() => setBackfillOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="solid"
-              color={backfillDryRun ? 'primary' : 'success'}
-              startDecorator={backfill.isPending ? <CircularProgress size="sm" /> : <PlayArrowIcon />}
-              onClick={handleRunSubmit}
-              disabled={!startDate || !endDate || backfill.isPending}
-            >
-              {backfillDryRun ? 'Run Dry Test' : 'Run Now'}
-            </Button>
-          </Box>
-        </ModalDialog>
-      </Modal>
     </Card>
   );
 }

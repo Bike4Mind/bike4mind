@@ -17,6 +17,10 @@ export type SkillReviewStatus = 'not_required' | 'pending' | 'auto_approved' | '
 /** Risk tier assigned by a passed scan; drives whether a human must approve. */
 export type SkillRiskTier = 'clean' | 'review' | 'high';
 
+/** A listing tag. Shared by the web PublishDialog, the server's validateListingTags and desktop. */
+export const SKILL_LISTING_TAG_PATTERN = /^[a-z0-9][a-z0-9-]{0,23}$/;
+export const SKILL_LISTING_MAX_TAGS = 5;
+
 /** `critical` fails the scan; `high` / `medium` raise the tier; `low` is informational. */
 export type SkillScanSeverity = 'critical' | 'high' | 'medium' | 'low';
 
@@ -65,6 +69,8 @@ export interface ISkillListing {
   pendingVersion?: number | null;
   /** Monotonic counter used to number new versions. */
   latestVersion: number;
+  /** Organization listings' Claude Code plugin name: assigned at first approval, never changed. */
+  claudePluginName?: string;
 
   // Denormalized from the current approved version so browse/search/cards read only the listing.
   name: string;

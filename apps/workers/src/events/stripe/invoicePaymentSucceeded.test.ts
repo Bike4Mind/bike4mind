@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { stripe } from '@server/integrations/stripe/stripe';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import {
   handleUserSubscriptionInvoice,
   handleOrganizationSubscriptionInvoice,
@@ -10,7 +10,7 @@ import { emitProductEvent } from '@server/analytics/emitActiveEvent';
 import { stableEventId } from '@server/analytics/signupEvents';
 import { userRepository } from '@bike4mind/database';
 
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     invoices: { retrieve: vi.fn() },
     subscriptions: { retrieve: vi.fn() },
@@ -28,13 +28,13 @@ vi.mock('@workers/lib/userSubscriptions/serverUtils', () => ({
   handleOrganizationSubscriptionInvoice: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Fixtures set metadata.stage: 'test'; pin the current stage to match so the
 // guard falls through for same-stage events (and trips on mismatch).
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test' },
 }));
 
@@ -168,6 +168,7 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
             value: 29.99,
             currency: 'USD',
             billingReason,
+            userAction: false,
           },
         ],
         [

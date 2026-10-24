@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: any) => fn,
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: vi.fn() }),
 }));
 
@@ -41,6 +41,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   researchAgentRepository: {},
   researchDataRepository: {},
+  projectRepository: {},
   Session: {},
   sessionRepository: {},
   User: {},

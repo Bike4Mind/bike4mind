@@ -29,7 +29,7 @@ type OTCVerifyResponse =
   | (IUserDocument & { accessToken: string })
   | { mfaRequired: true; userId: string; accessToken: string; passkeyAvailable?: boolean }
   | { mfaSetupRequired: true; userId: string; accessToken: string }
-  | { registrationRequired: true; email: string; pendingToken: string };
+  | { registrationRequired: true; registrationAllowed?: boolean; email: string; pendingToken: string };
 
 interface OTCRegisterResponse {
   user: IUserDocument;

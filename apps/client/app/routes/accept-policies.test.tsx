@@ -13,8 +13,9 @@ vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ history: {} }),
   useSearch: () => ({}),
 }));
+const mockCurrentUser = { id: 'u1', aupAcceptedVersion: undefined as string | undefined };
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'u1' }, setCurrentUser: vi.fn() }),
+  useUser: () => ({ currentUser: mockCurrentUser, setCurrentUser: vi.fn() }),
 }));
 // A plain mutable object (not a vi.fn() return-value mock) so both the hook call and the
 // imperative getState() call - which the component uses to re-read mfaPending live, not from
@@ -26,6 +27,8 @@ vi.mock('@client/app/hooks/useAccessToken', () => {
   return { useAccessToken };
 });
 const mockApiPost = vi.fn();
+const mockLogEvent = vi.hoisted(() => vi.fn());
+const mockLogPoliciesShown = vi.hoisted(() => vi.fn());
 const mockForceSessionExpiredRedirect = vi.fn().mockResolvedValue(undefined);
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { post: (...args: unknown[]) => mockApiPost(...args) },
@@ -39,6 +42,10 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 const mockUseGetIdentify = vi.fn();
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetIdentify: () => mockUseGetIdentify(),
+}));
+vi.mock('@client/app/hooks/data/analytics', () => ({
+  useLogEvent: () => ({ mutate: mockLogEvent }),
+  useLogPoliciesShown: () => ({ mutate: mockLogPoliciesShown }),
 }));
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/utils/authRedirect', () => ({ applyRedirect: vi.fn() }));
@@ -95,7 +102,38 @@ describe('AcceptPoliciesPage', () => {
     mockForceSessionExpiredRedirect.mockResolvedValue(undefined);
     mockAccessTokenState.accessToken = 'atk';
     mockAccessTokenState.mfaPending = false;
+    mockCurrentUser.aupAcceptedVersion = undefined;
     mockUseGetIdentify.mockReturnValue({ isError: false, error: null });
+  });
+
+  it('logs the policy interstitial when shown', () => {
+    renderPage();
+    expect(mockLogPoliciesShown).toHaveBeenCalledTimes(1);
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not log the interstitial as shown when there is no token and it redirects to login', () => {
+    mockAccessTokenState.accessToken = null;
+    renderPage();
+    expect(mockLogPoliciesShown).not.toHaveBeenCalled();
+  });
+
+  it('does not count a visit by an already-consented user who immediately redirects away', () => {
+    mockCurrentUser.aupAcceptedVersion = 'v1';
+    renderPage();
+    expect(mockLogPoliciesShown).not.toHaveBeenCalled();
+  });
+
+  it('does not count the interstitial while MFA is pending', () => {
+    mockAccessTokenState.mfaPending = true;
+    renderPage();
+    expect(mockLogPoliciesShown).not.toHaveBeenCalled();
+  });
+
+  it('does not count the interstitial while an unverifiable session redirects away', () => {
+    mockUseGetIdentify.mockReturnValue({ isError: true, error: alreadyRetried401 });
+    renderPage();
+    expect(mockLogPoliciesShown).not.toHaveBeenCalled();
   });
 
   // Regression guard for #59: the ToS/AUP/Privacy links in the acceptance-checkbox label must
@@ -197,6 +235,9 @@ describe('AcceptPoliciesPage', () => {
     acceptForm();
 
     await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(2), RETRY_WAIT_OPTS);
+    await waitFor(() =>
+      expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_accepted', metadata: { path: 'interstitial' } })
+    );
     expect(mockForceSessionExpiredRedirect).not.toHaveBeenCalled();
     expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
   });

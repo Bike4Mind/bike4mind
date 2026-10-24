@@ -1,7 +1,7 @@
 /**
  * Self-host entrypoint shim for the always-on chatCompletion server.
  *
- * The server (`server.ts` -> `@server/utils/config`) does `import { Resource } from 'sst'`
+ * The server (`server.ts` -> `@bike4mind/server-utils/utils/config`) does `import { Resource } from 'sst'`
  * and reads `Resource.*` at module-load time. In the hosted image SST injects those values;
  * the Next app resolves them via a turbopack build alias (`sst` -> `@bike4mind/resource`).
  * A plain `tsx`-run standalone server gets neither, so `import 'sst'` would hit the real SST
@@ -16,7 +16,12 @@
  * `require()`, so the ESM `module.register` resolve hook alone does NOT catch `sst`:
  *   - CJS: monkeypatch `Module._resolveFilename` (what tsx's compiled `require('sst')` hits).
  *   - ESM: register a resolve hook (for any genuinely ESM importer).
+ *
+ * It also installs esmWorkspacePackages.mjs first, so every self-host tsx process that loads this
+ * shim (chatCompletion, worker, agent executor) gets one instance per `@bike4mind/*` package, and
+ * the aliased `sst` resolves to the shim's ESM build like every other workspace package.
  */
+import './esmWorkspacePackages.mjs';
 import Module from 'node:module';
 import { register } from 'node:module';
 

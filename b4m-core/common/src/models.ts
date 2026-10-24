@@ -3,6 +3,7 @@ import { BEDROCK_ANTHROPIC_PREFIX } from './claudeModelId';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
+import type { IUsageEventRates, UsagePriceSource } from './types/entities/UsageEventTypes';
 import type { ImageModelCapabilities } from './utils/imageCapabilities';
 
 /**
@@ -174,6 +175,7 @@ export enum ChatModels {
   // GPT 5.4
   GPT5_4 = 'gpt-5.4',
   GPT5_4_MINI = 'gpt-5.4-mini',
+  GPT5_4_MINI_2026_03_17 = 'gpt-5.4-mini-2026-03-17',
   GPT5_4_NANO = 'gpt-5.4-nano',
 
   // GPT 5.5
@@ -201,6 +203,9 @@ export enum ChatModels {
   // Bedrock hosted DeepSeek models
   DEEPSEEK_R1_BEDROCK = 'us.deepseek.r1-v1:0',
   DEEPSEEK_V3_1 = 'deepseek.v3-v1:0',
+
+  // Served by the generic Converse backend (llm-adapters bedrockBackend/converse.ts).
+  NOVA_PRO_BEDROCK = 'us.amazon.nova-pro-v1:0',
 
   TITAN_TEXT_G1_LITE = 'amazon.titan-text-lite-v1',
   TITAN_TEXT_G1_EXPRESS = 'amazon.titan-text-express-v1',
@@ -321,9 +326,11 @@ export enum ChatModels {
   DEEPSEEK_FLASH = 'deepseek-flash',
   DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
 }
-export const CHAT_MODELS = Object.values(ChatModels);
-export const supportedChatModels = z.enum(ChatModels);
+// The dated snapshot is excluded until it has a catalog row: the adapter tables hold no entry for
+// it, so getAvailableModels returns no ModelInfo (pricing, limits) for it unless a catalog row adds one.
+export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17']);
 export type ChatModelName = z.infer<typeof supportedChatModels>;
+export const CHAT_MODELS: string[] = [...supportedChatModels.options];
 
 /**
  * Every `ChatModels` Gemini entry is named `gemini...` (see the GEMINI block above) - a prefix
@@ -357,6 +364,7 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5_2,
   ChatModels.GPT5_4,
   ChatModels.GPT5_4_MINI,
+  ChatModels.GPT5_4_MINI_2026_03_17,
   ChatModels.GPT5_4_NANO,
   ChatModels.GPT5_6_SOL,
   ChatModels.GPT5_6_LUNA,
@@ -446,6 +454,7 @@ export const REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: ReadonlySet<string
   ChatModels.GPT5_2,
   ChatModels.GPT5_4,
   ChatModels.GPT5_4_MINI,
+  ChatModels.GPT5_4_MINI_2026_03_17,
   ChatModels.GPT5_4_NANO,
   // GPT-5.6 (Sol/Luna/Terra) also hard-reject tools+reasoning_effort with a 400, but
   // unlike the 5.4 family the chat-path drop does NOT rescue them (they still 400 with
@@ -625,6 +634,8 @@ export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
 /**
  * All supported models
  */
+// Deliberately not excluding the dated snapshot (unlike supportedChatModels): this is used as the
+// ModelName type only, and excluding it narrows ModelName so ChatModels values stop assigning to it.
 export const supportedModels = z.enum({
   ...ChatModels,
   ...ImageModels,
@@ -632,6 +643,9 @@ export const supportedModels = z.enum({
 });
 
 export type ModelName = z.infer<typeof supportedModels>;
+
+/** Whether a model's rates came from a ModelPrice catalog row or the adapter's literal fallback. */
+export type ModelPriceSource = UsagePriceSource;
 
 export type ModelInfo = {
   id: ModelName;
@@ -675,6 +689,13 @@ export type ModelInfo = {
   thinkingStyle?: 'legacy' | 'adaptive';
   pricing: Record<number, PricingInfo>;
   /**
+   * Where `pricing` came from. 'catalog' when applyModelPriceCatalog overlaid a ModelPrice row;
+   * absent means the adapter literal priced the model. Read at settlement to stamp the UsageEvent.
+   */
+  priceSource?: ModelPriceSource;
+  /** The ModelPrice row in force when `priceSource` is 'catalog'. */
+  priceRowId?: string;
+  /**
    * Marks a model as deliberately costless (e.g. local Ollama), so zero-rate
    * pricing is intent, not a gap. Without this, a $0 cost for real usage
    * trips the [UNPRICED_MODEL] alarm in getTextModelCost.
@@ -717,6 +738,8 @@ export type ModelInfo = {
    * Format: YYYY-MM-DD
    */
   deprecationDate?: string;
+  /** Superseded but still selectable; folded into Older models in the picker. */
+  isSuperseded?: boolean;
   /**
    * Successor id for a model this adapter table is sunsetting. Rides into
    * `lifecycle.replacedBy` on the seed row, which is what feeds
@@ -818,6 +841,36 @@ const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number 
  */
 export const PUBLISHED_CACHE_READ_BACKENDS: ReadonlySet<string> = new Set([ModelBackend.Gemini, ModelBackend.XAI]);
 
+/** The per-token rates one pricing tier applies, in USD per token, as stored on a UsageEvent. */
+export type AppliedRates = IUsageEventRates;
+
+/**
+ * The rates costAtTier applies for a request whose whole prompt is `tierBasisTokens`, with the
+ * cache-read and cache-write defaults resolved, or null when the model has no priced tier. The one
+ * place tier selection and cache-rate defaults live, so a stamped rate can never disagree with the
+ * cost it explains.
+ */
+export const resolveAppliedRates = (model: ModelInfo, tierBasisTokens: number): Required<AppliedRates> | null => {
+  const tier = pricingTierForTokens(model, tierBasisTokens);
+  // Guard against a malformed or non-tiered pricing map (e.g. a flat
+  // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
+  // means "no cost", not a crash in post-processing.
+  const tierPricing = tier === null ? undefined : model.pricing[tier];
+  if (tier === null || !tierPricing) return null;
+
+  return {
+    tierKey: tier,
+    input: tierPricing.input,
+    output: tierPricing.output,
+    cacheRead:
+      tierPricing.cache_read ??
+      (PUBLISHED_CACHE_READ_BACKENDS.has(model.backend)
+        ? tierPricing.input
+        : tierPricing.input * CACHE_READ_MULTIPLIER),
+    cacheWrite: tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER,
+  };
+};
+
 const costAtTier = (
   model: ModelInfo,
   tierBasisTokens: number,
@@ -826,23 +879,14 @@ const costAtTier = (
   cacheReadTokens: number,
   cacheCreationTokens: number
 ): number => {
-  const tier = pricingTierForTokens(model, tierBasisTokens);
-  // Guard against a malformed or non-tiered pricing map (e.g. a flat
-  // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
-  // means "no cost", not a crash in post-processing.
-  const tierPricing = tier === null ? undefined : model.pricing[tier];
-  if (!tierPricing) return 0;
-
-  const cacheReadRate =
-    tierPricing.cache_read ??
-    (PUBLISHED_CACHE_READ_BACKENDS.has(model.backend) ? tierPricing.input : tierPricing.input * CACHE_READ_MULTIPLIER);
-  const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
+  const rates = resolveAppliedRates(model, tierBasisTokens);
+  if (!rates) return 0;
 
   return (
-    tierPricing.input * inputTokens +
-    tierPricing.output * outputTokens +
-    cacheReadRate * cacheReadTokens +
-    cacheWriteRate * cacheCreationTokens
+    rates.input * inputTokens +
+    rates.output * outputTokens +
+    rates.cacheRead * cacheReadTokens +
+    rates.cacheWrite * cacheCreationTokens
   );
 };
 

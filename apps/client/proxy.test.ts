@@ -43,19 +43,20 @@ describe('proxy CSP header', () => {
   it('global style-src does not contain the blanket https: wildcard', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
-    // style-src https: was narrowed — HTML artifacts load from /api/artifact-sandbox
-    // which sets its own per-response CSP with style-src https:. The global
-    // style-src keeps the explicit MailerLite host (the only external stylesheet
-    // the app itself loads) but no longer permits arbitrary https: stylesheets.
-    expect(csp).toContain("style-src 'self' 'unsafe-inline' https://assets.mailerlite.com");
-    // Ensure the blanket `https:` wildcard is not present (only the explicit MailerLite host).
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
     expect(csp).not.toMatch(/style-src [^;]*\bhttps:(?!\/\/)/);
   });
 
-  it('global style-src includes the MailerLite host so universal.css loads on app pages', () => {
+  it('does not admit executable or other resources from the retired marketing vendor', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/new'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
-    expect(csp).toContain('https://assets.mailerlite.com');
+    expect(csp).not.toContain('https://assets.mailerlite.com');
+  });
+
+  it('keeps sandbox-only script hosts out of the app CSP', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/new')).headers.get('Content-Security-Policy') ?? '';
+    expect(csp).not.toContain('unpkg.com');
+    expect(csp).not.toContain('cdn.tailwindcss.com');
   });
 
   it('allow-lists every host the ad pixels need, in each directive that governs them', () => {
@@ -85,6 +86,13 @@ describe('proxy CSP header', () => {
     const csp = response.headers.get('Content-Security-Policy') ?? '';
     const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
     expect(values).toContain('https://tile.openstreetmap.org');
+  });
+
+  it('connect-src allows the GitHub API the desktop download page reads its latest release from', () => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/desktop'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const connectSrc = (csp.match(/connect-src ([^;]*)/)?.[1] ?? '').split(/\s+/);
+    expect(connectSrc).toContain('https://api.github.com');
   });
 
   it('frame-src allows only the -nocookie YouTube host', () => {
@@ -217,6 +225,58 @@ describe('proxy security blocking', () => {
     } as unknown as NextRequest;
     const response = proxy(req);
     expect(response.status).toBe(400);
+  });
+
+  describe('logged source address', () => {
+    function blockTraversal(headers: Record<string, string>): string {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      proxy({
+        nextUrl: { pathname: '/../etc/passwd', hostname: 'app.bike4mind.com' },
+        url: 'https://app.bike4mind.com/../etc/passwd',
+        method: 'GET',
+        headers: new Headers(headers),
+      } as unknown as NextRequest);
+      return String(warn.mock.calls.at(-1)?.[0]);
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    });
+
+    it('logs the CloudFront viewer address, not the client-supplied x-forwarded-for', () => {
+      const line = blockTraversal({
+        'cloudfront-viewer-address': '198.51.100.7:51234',
+        'x-forwarded-for': '203.0.113.66',
+      });
+      expect(line).toContain('from 198.51.100.7');
+      expect(line).not.toContain('203.0.113.66');
+    });
+
+    it('logs unknown when only x-forwarded-for is present', () => {
+      expect(blockTraversal({ 'x-forwarded-for': '203.0.113.66' })).toContain('from unknown');
+    });
+
+    it('applies the same rule to the malformed-encoding line', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      proxy({
+        nextUrl: { pathname: '/%25zz', hostname: 'app.bike4mind.com' },
+        url: 'https://app.bike4mind.com/%25zz',
+        method: 'GET',
+        headers: new Headers({ 'x-forwarded-for': '203.0.113.66' }),
+      } as unknown as NextRequest);
+      const line = String(warn.mock.calls.at(-1)?.[0]);
+      expect(line).toContain('malformed URL encoding');
+      expect(line).toContain('from unknown');
+    });
+
+    it('logs the trusted x-forwarded-for hop on self-host', () => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
+      const line = blockTraversal({ 'x-forwarded-for': '203.0.113.66, 198.51.100.7' });
+      expect(line).toContain('from 198.51.100.7');
+      expect(line).not.toContain('203.0.113.66');
+    });
   });
 });
 
@@ -393,6 +453,50 @@ describe('proxy origin verification', () => {
   });
 });
 
+describe('proxy server-action probes', () => {
+  function makePost(url: string, headers: Record<string, string> = {}): NextRequest {
+    return { ...makeRequest(url, headers), method: 'POST' } as NextRequest;
+  }
+
+  it.each(['/', '/dashboard', '/api/health'])('404s a POST to %s carrying Next-Action + RSC headers', path => {
+    const response = proxy(makePost(`https://app.bike4mind.com${path}`, { 'Next-Action': 'x', RSC: '1' }));
+    expect(response.status).toBe(404);
+  });
+
+  it('404s a Next-Action header even without RSC', () => {
+    expect(proxy(makePost('https://app.bike4mind.com/', { 'Next-Action': 'x' })).status).toBe(404);
+  });
+
+  it('passes an ordinary API POST through', () => {
+    const response = proxy(makePost('https://app.bike4mind.com/api/health', { 'content-type': 'application/json' }));
+    expect(response.status).toBe(200);
+  });
+
+  describe('ordering against the [SECURITY] guards', () => {
+    beforeEach(() => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    });
+
+    it('still 403s and logs a direct-origin probe', () => {
+      vi.stubEnv('ORIGIN_VERIFY_SECRET', 'a'.repeat(48));
+      const response = proxy(makePost('https://abc.lambda-url.us-east-2.on.aws/', { 'Next-Action': 'x' }));
+      expect(response.status).toBe(403);
+      expect(String(vi.mocked(console.warn).mock.calls)).toContain('Blocked direct-origin request');
+    });
+
+    it('still 400s and logs a probe on a malformed path', () => {
+      const response = proxy(makePost('https://app.bike4mind.com/%25zz', { 'Next-Action': 'x' }));
+      expect(response.status).toBe(400);
+      expect(String(vi.mocked(console.warn).mock.calls)).toContain('Blocked malformed URL encoding');
+    });
+  });
+});
+
 describe('proxy configured object-store origin', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -458,5 +562,69 @@ describe('proxy configured object-store origin', () => {
   it.each(['/api/files', '/p/example', '/embed/chat'])('preserves policy exclusions for %s', path => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
     expect(proxy(makeRequest(`https://app.example.invalid${path}`)).headers.get('Content-Security-Policy')).toBeNull();
+  });
+});
+
+// The owner's management listing shows thumbnails as presigned GETs on the published-artifacts
+// bucket (server/services/publish/thumbnailUrl.ts). img-src governs the <img>; connect-src governs
+// the service worker's image-cache re-fetch. A policy that narrows either drops them silently.
+describe('proxy CSP admits owner-only artifact thumbnail links', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const admits = (csp: string, directive: string, url: string) => {
+    const { protocol, host, origin } = new URL(url);
+    const sources = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').trim().split(/\s+/);
+    return sources.some(source => {
+      if (source === origin) return true;
+      const wildcard = /^(https?:)\/\/\*\.([^/]+)$/.exec(source);
+      return !!wildcard && wildcard[1] === protocol && host.endsWith(`.${wildcard[2]}`);
+    });
+  };
+  const thumbnailPath = `/publish-thumbnails/pub1/${'a'.repeat(64)}.webp?X-Amz-Signature=fixture`;
+
+  it.each(['img-src', 'connect-src'])('%s admits a hosted presigned S3 link', directive => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const csp = proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy') ?? '';
+    expect(admits(csp, directive, `https://example-bucket.s3.us-east-1.amazonaws.com${thumbnailPath}`)).toBe(true);
+  });
+
+  it.each(['img-src', 'connect-src'])('%s admits a self-host object-store link', directive => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
+    const csp = proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy') ?? '';
+    expect(admits(csp, directive, `https://objects.example.invalid/example-bucket${thumbnailPath}`)).toBe(true);
+  });
+});
+
+describe("proxy upstream What's New feed origin", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const policy = () => proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy')!;
+  const sourcesOf = (csp: string, name: string) =>
+    csp
+      .split(';')
+      .map(part => part.trim().split(/\s+/))
+      .find(([directive]) => directive === name)!
+      .slice(1);
+
+  it('lets media, posters and the service worker load from the upstream origin', () => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', 'https://upstream.example.invalid/api/v1/whats-new');
+    const csp = policy();
+    for (const name of ['connect-src', 'img-src', 'media-src']) {
+      expect(sourcesOf(csp, name)).toContain('https://upstream.example.invalid');
+    }
+    expect(sourcesOf(csp, 'script-src')).not.toContain('https://upstream.example.invalid');
+  });
+
+  it('adds nothing for an unset or non-https feed', () => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', '');
+    const baseline = policy();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('WHATS_NEW_FEED_URL', 'http://upstream.example.invalid/api/v1/whats-new');
+    expect(policy()).toBe(baseline);
   });
 });

@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { isDevelopment } from '@server/utils/config';
+import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -17,8 +17,8 @@ import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { sendToQueue } from '@server/utils/sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
 
 /**

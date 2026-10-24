@@ -16,7 +16,6 @@ import {
   ForbiddenError,
   InternalServerError,
   NotFoundError,
-  isModelAccessible,
   isZodError,
   getSettingsByNames,
 } from '@bike4mind/utils';
@@ -26,6 +25,7 @@ import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
+import { createModelAdmission, loadModelConfigurations } from './modelAdmission';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { filterBuiltInTools } from './tools/toolManager';
@@ -83,6 +83,7 @@ export class ChatCompletionInvoke {
     userId,
     authOrigin,
     apiKeyId,
+    adminRoleWithheld,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
     userId: string;
@@ -90,6 +91,8 @@ export class ChatCompletionInvoke {
     authOrigin: AuthOrigin;
     /** Server-derived from `req.apiKeyInfo` - never from `body` (see QuestStartBodySchema.apiKeyId). */
     apiKeyId?: string;
+    /** See QuestStartBodySchema.adminRoleWithheld. */
+    adminRoleWithheld?: boolean;
   }) {
     // Fail at the door, not later in the worker that builds the tools.
     assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
@@ -132,6 +135,7 @@ export class ChatCompletionInvoke {
       allowedAgents,
       enableSlackTools,
       toolMode,
+      timezone,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
     // Parallelize independent operations: API keys, session, organization, and the correction
@@ -204,17 +208,28 @@ export class ChatCompletionInvoke {
         );
       }
     }
-    const model = modelInfo.find(m => m.id === resolvedModelId);
-    if (!model) throw new BadRequestError(`Invalid model: "${params.model}" is not available`);
     // A disabled model is still listed (so the picker can show it greyed out) but must never
     // run. Reject it here with a clean message rather than letting the request reach the backend
     // and fail with a raw provider error (e.g. the Anthropic 404 for gated Fable 5). This also
     // covers sessions/agents already pinned to a model that has since been disabled.
-    if (model.disabled) {
-      throw new BadRequestError(
-        `Model "${model.id}" is currently unavailable${model.disabledReason ? `: ${model.disabledReason}` : ''}`
-      );
-    }
+    const availableModel = (id: string, requested: string) => {
+      const found = modelInfo.find(m => m.id === id);
+      if (!found) throw new BadRequestError(`Invalid model: "${requested}" is not available`);
+      if (found.disabled) {
+        throw new BadRequestError(
+          `Model "${found.id}" is currently unavailable${found.disabledReason ? `: ${found.disabledReason}` : ''}`
+        );
+      }
+      return found;
+    };
+    const model = availableModel(resolvedModelId, params.model);
+
+    // Research mode runs every enabled configuration's model instead of the primary, so each must
+    // pass the same availability gate; the access gate below covers them too.
+    const researchModelIds = researchMode?.enabled
+      ? [...new Set(researchMode.configurations.filter(c => c.enabled).map(c => c.model))]
+      : [];
+    for (const researchModelId of researchModelIds) availableModel(researchModelId, researchModelId);
 
     // What promptMeta.model.type is allowed to record. A completion legitimately resolves to text,
     // image or video - the media backends run through this same path - and speech-to-text is the
@@ -325,7 +340,7 @@ export class ChatCompletionInvoke {
     }
 
     // Parallelize independent operations: quest ops + admin settings + session update
-    const [quest, defaultEmbeddingModel, modelConfigurations] = await Promise.all([
+    const [quest, defaultEmbeddingModel, modelConfigurations, enforceCredits] = await Promise.all([
       // Quest creation/update
       questId
         ? this.db.quests.findById(questId).then(async q => {
@@ -366,6 +381,7 @@ export class ChatCompletionInvoke {
             // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
             // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
             q.errorCode = undefined;
+            q.turnTiming = undefined;
             await this.db.quests.update(
               {
                 id: q.id,
@@ -382,7 +398,7 @@ export class ChatCompletionInvoke {
                 promptMeta: q.promptMeta,
                 agentIds: q.agentIds,
               },
-              { unset: ['errorCode'] }
+              { unset: ['errorCode', 'turnTiming'] }
             );
             return q;
           })
@@ -404,6 +420,7 @@ export class ChatCompletionInvoke {
       // Admin settings fetches
       this.db.adminSettings.getSettingsValue('defaultEmbeddingModel'),
       this.modelConfigurationsCache || this.getModelConfigurations(),
+      this.db.adminSettings.getSettingsValue('enforceCredits'),
 
       // Session update (fire-and-forget but ensure completion)
       sessionUpdatePromise,
@@ -420,28 +437,22 @@ export class ChatCompletionInvoke {
         throw new InternalServerError('Default embedding model not found or not supported');
       }
       const originalModel = model.id;
-
-      // Check if primary model is accessible
       const modelToUse = originalModel;
 
-      if (modelConfigurations.length > 0) {
-        const primaryModelConfig = modelConfigurations.find(config => config.id === originalModel);
-        if (primaryModelConfig) {
-          // Entitlement-aware admission: a tag-less subscriber can reach an
-          // entitlement-gated model via their resolved keys. Fail-safe to [].
-          // Only resolve when keys can change the outcome - skip the DB lookup
-          // for admins (always allowed) and for models with no allowedEntitlements
-          // (tag-only), keeping the entitlement branch inert.
-          const isAdmin = this.user.isAdmin || false;
-          const needsEntitlements = !isAdmin && (primaryModelConfig.allowedEntitlements?.length ?? 0) > 0;
-          const entitlementKeys = needsEntitlements ? await this.resolveEntitlementKeys() : [];
-          const hasUserAccess = isModelAccessible(primaryModelConfig, this.user.tags || [], isAdmin, entitlementKeys);
-
-          if (!primaryModelConfig.enabled || !hasUserAccess) {
-            this.logger.error(`Primary model ${originalModel} is not accessible and no fallback available`);
-            throw new ForbiddenError(`Model "${originalModel}" is not accessible and no fallback available`);
-          }
-        }
+      // Same admission rule as every other model-selection path (see ./modelAdmission). Research-mode
+      // configuration models are admitted by the same rule as the primary.
+      const admission = createModelAdmission({
+        user: this.user,
+        configs: modelConfigurations,
+        getEntitlements: () => this.resolveEntitlementKeys(),
+        models: modelInfo,
+        enforceCredits: enforceCredits === true,
+      });
+      for (const gatedModelId of [originalModel, ...researchModelIds]) {
+        await admission.assert(gatedModelId).catch(err => {
+          this.logger.error(`Model ${gatedModelId} is not admitted: ${(err as Error).message}`);
+          throw err;
+        });
       }
 
       let currentEmbeddingModel = embeddingModel;
@@ -484,6 +495,7 @@ export class ChatCompletionInvoke {
         deniedTools,
         authOrigin,
         apiKeyId,
+        ...(adminRoleWithheld ? { adminRoleWithheld } : {}),
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,
@@ -504,6 +516,7 @@ export class ChatCompletionInvoke {
         extraContextMessages,
         allowedAgents,
         enableSlackTools,
+        timezone,
       });
 
       if (this.invokeLambda && this.questStartParams) {
@@ -545,19 +558,5 @@ export class ChatCompletionInvoke {
     return quest;
   }
 
-  private getModelConfigurations = async (): Promise<LLMModelConfig[]> => {
-    try {
-      const setting = await this.db.adminSettings.findOne({ settingName: 'llmModelConfigurations' });
-      const configs = setting?.settingValue;
-
-      if (Array.isArray(configs)) {
-        return configs as LLMModelConfig[];
-      }
-
-      return [];
-    } catch (error) {
-      console.error('Failed to fetch model configurations:', error);
-      return [];
-    }
-  };
+  private getModelConfigurations = (): Promise<LLMModelConfig[]> => loadModelConfigurations(this.db.adminSettings);
 }

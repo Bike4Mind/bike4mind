@@ -72,6 +72,8 @@ beforeAll(() => {
         llmToolsExport: `${PKG_NAME}/tools`,
         systemPromptsExport: `${PKG_NAME}/prompts`,
         partnerSignupHooksExport: `${PKG_NAME}/signup-hooks`,
+        agentExtensionsExport: `${PKG_NAME}/agent-extensions`,
+        workspaceSessionSettingsExport: { opti: `${PKG_NAME}/session-settings` },
         migrationsExport: `${PKG_NAME}/server/migrations`,
         apiRouteStubs: [{ generatedPath: 'pages/api/premium-fakeoverlay/ping.ts', exportFrom: `${PKG_NAME}/api/ping` }],
         serverHandlerStubs: [
@@ -126,6 +128,20 @@ describe('hydrated but UNLINKED overlay', () => {
     );
     expect(signupHooks).not.toContain(PKG_NAME);
     expect(signupHooks).toContain('premiumPartnerSignupHooks: PartnerSignupHook[] = []');
+
+    const agentExtensions = readFileSync(
+      join(clientRoot, 'server/premium-generated/premiumAgentExtensions.generated.ts'),
+      'utf8'
+    );
+    expect(agentExtensions).not.toContain(PKG_NAME);
+    expect(agentExtensions).toContain('premiumAgentExtensions: AgentExtensionContribution[] = []');
+
+    const sessionSettings = readFileSync(
+      join(clientRoot, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts'),
+      'utf8'
+    );
+    expect(sessionSettings).not.toContain(PKG_NAME);
+    expect(sessionSettings).toContain('premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {}');
 
     const nav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNavItems.generated.ts'), 'utf8');
     expect(nav).not.toContain(PKG_NAME);
@@ -223,6 +239,21 @@ describe('hydrated AND linked overlay', () => {
       'utf8'
     );
     expect(signupHooks).toContain(`import { partnerSignupHooks as hooks0 } from '${PKG_NAME}/signup-hooks'`);
+
+    const agentExtensions = readFileSync(
+      join(clientRoot, 'server/premium-generated/premiumAgentExtensions.generated.ts'),
+      'utf8'
+    );
+    expect(agentExtensions).toContain(`import { agentExtensions as extensions0 } from '${PKG_NAME}/agent-extensions'`);
+
+    const sessionSettings = readFileSync(
+      join(clientRoot, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts'),
+      'utf8'
+    );
+    expect(sessionSettings).toContain(
+      `import { workspaceSessionSettings as settings0 } from '${PKG_NAME}/session-settings'`
+    );
+    expect(sessionSettings).toContain('"opti": settings0,');
 
     const stub = readFileSync(join(clientRoot, 'pages/api/premium-fakeoverlay/ping.ts'), 'utf8');
     expect(stub).toContain(`export { default } from '${PKG_NAME}/api/ping'`);

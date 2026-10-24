@@ -3,12 +3,17 @@ import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
 import type { StorageUsageGroup } from '../../storageBreakdown';
+import type { OrganizationStorageUploaderGroup } from '../../organizationStorage';
 
 // Define a type for the MIME types
 export type MimeType =
   'text/plain' | 'application/pdf' | 'text/csv' | 'application/json' | 'text/markdown' | 'text/html';
 
 export const MimeTypes: MimeType[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/json'];
+
+// Per-request cap on /api/files/tags/toggle. The route runs the whole batch in one transaction, one file
+// at a time, so an unbounded selection can outlive Mongo's 60s transaction lifetime; clients chunk.
+export const MAX_TOGGLE_TAGS_FILE_IDS = 100;
 
 // The Files type filter. getMimeTypeFilter (packages/database/src/queries/fabFileSearchQuery.ts) maps every value
 // to a query and FILE_TYPE_OPTIONS (apps/client/app/components/Files/Browser/constants.ts) labels every value.
@@ -469,6 +474,27 @@ export interface IFabFile {
    * write bumps). Only meaningful while `moderationStatus === 'scanning'`.
    */
   moderationClaimedAt?: Date;
+
+  /**
+   * ETag of the stored object version the moderation verdict covers, recorded before the bytes are
+   * read, so a verdict always covers that version or a newer one. A landing with a different ETag
+   * (the object was overwritten) resets the verdict to `pending` for a rescan. Opaque: a multipart
+   * upload's ETag has a `-N` suffix and is never compared as a hash.
+   */
+  moderationETag?: string;
+
+  /** Monotonic identity of moderation-version writes; distinguishes A -> B -> A from unchanged A. */
+  moderationRevision?: number;
+
+  /**
+   * Set by the doors that hand a client a URL to PUT this row's bytes to (a presign, or the self-host
+   * proxy). Only such a row's landing is judged by the measured-size gate (packages/server-utils/src/s3/uploadSizeGate.ts):
+   * a server-side door writes bytes it already holds, and judging those would discard its file.
+   */
+  clientUpload?: boolean;
+
+  /** Keeps rejected upload tombstones discoverable for object cleanup on event redelivery. */
+  uploadRejectedAt?: Date;
 
   /**
    * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
@@ -1165,6 +1191,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   summarizeChargedStorageByUserId(userId: string, options?: { maxTimeMS?: number }): Promise<StorageUsageGroup[]>;
 
   /**
+   * The rows `sumFileSizeByOrganizationId` sums, grouped by uploader (`userId`), largest first and
+   * capped at `limit` groups. `maxTimeMS` bounds the aggregate for orgs with very large file counts.
+   */
+  summarizeChargedStorageByOrganizationId(
+    organizationId: string,
+    options: { limit: number; maxTimeMS?: number }
+  ): Promise<OrganizationStorageUploaderGroup[]>;
+
+  /**
    * The live row's stored charge fields (see isStorageCharged in storageCharge.ts). Null when gone.
    */
   findChargeState(id: string): Promise<FabFileChargeState | null>;
@@ -1520,6 +1555,20 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * trail does, to tell a real removal from the losing half of two concurrent ones.
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
+
+  /**
+   * Restamps a live file's owning org (unset when `nextOrganizationId` is undefined, so the file
+   * bills its uploader again), but only while the stamp, the fields `chargedBytes` reads, and the set
+   * of stored tag names the owner was derived from still equal `expected`. Returns false when a
+   * concurrent write moved any of them, so the caller can re-read instead of moving a stale byte
+   * count between counters or stamping an owner a concurrent tag write already changed. See
+   * reassignStorageOwner in b4m-core/services/src/fabFileService/reassignStorageOwner.ts.
+   */
+  setOwnerOrganizationIfUnchanged(
+    fabFileId: string,
+    expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status' | 'tags'>,
+    nextOrganizationId: string | undefined
+  ): Promise<boolean>;
 
   /**
    * Atomically add each of `tagNames` to one file's tags array, skipping any already present.
@@ -2192,9 +2241,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * already soft-deleted, and `findById` hides those rows behind the soft-delete plugin.
    *
    * Optional for the same source-compatibility reason as `setLakeSupersession` above; the purge
-   * requires it locally.
+   * requires it locally. Moderation state rides along so the purge can keep an evidence-held
+   * file's bytes (see isModerationEvidenceHold).
    */
-  findStorageKeysByIds?(
-    fabFileIds: string[]
-  ): Promise<Array<{ id: string; filePath?: string; versions?: Array<Pick<IFabFileVersion, 'filePath'>> }>>;
+  findStorageKeysByIds?(fabFileIds: string[]): Promise<
+    Array<
+      {
+        id: string;
+        filePath?: string;
+        versions?: Array<Pick<IFabFileVersion, 'filePath'>>;
+      } & Pick<IFabFile, 'moderationStatus' | 'blockReason'>
+    >
+  >;
 }

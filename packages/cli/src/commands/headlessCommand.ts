@@ -17,7 +17,7 @@ import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/servi
 import { reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildSystemPrompt } from '../core/prompts';
 import { generateCliTools, buildCliToolList, PermissionManager, type AgentContext, requireApiUrl } from '../utils';
-import { ToolCatalog, wrapTools, type PermissionPromptKind } from '../tools/gateway/index.js';
+import { ToolCatalog, wrapTools } from '../tools/gateway/index.js';
 import { McpManager } from '../utils/mcpAdapter';
 import { buildProjectAgentStore, loadProjectContext } from '../bootstrap/projectStores.js';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -26,6 +26,7 @@ import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
 import { ApiClient } from '../auth/ApiClient';
 import { logger } from '../utils/Logger';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
 import { createAgentDelegateTool } from '../agents/delegateTool.js';
@@ -60,12 +61,11 @@ import { readFile } from 'fs/promises';
 import {
   HEADLESS_SCHEMA_VERSION,
   createHeadlessEmitter,
-  classifyToolRisk,
-  resolveHeadlessPermissionDecision,
   parseStringArray,
   parsePermissionPolicy,
   type HeadlessPermissionPolicy,
 } from './headlessProtocol.js';
+import { createHeadlessPromptFn } from './headlessPermissionPrompt.js';
 
 export type OutputFormat = 'text' | 'json' | 'stream-json';
 
@@ -231,7 +231,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       config.fallbackModels && config.fallbackModels.length > 0
         ? new FallbackLlmBackend(llm, config.fallbackModels, (fromModel, toModel, error) => {
             process.stderr.write(
-              `⚠️  Model "${fromModel}" failed (${error.message}). Falling back to "${toModel}"...\n`
+              `\u26A0\uFE0F  Model "${fromModel}" failed (${sanitizeTerminalText(error.message)}). Falling back to "${toModel}"...\n`
             );
           })
         : llm;
@@ -261,51 +261,15 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const emit = createHeadlessEmitter(runId, line => process.stdout.write(line));
     const streaming = outputFormat === 'stream-json';
 
-    // Permission prompt function for headless mode. Every gated tool surfaces a
-    // structured permission_request + permission_decision pair on the stream (so
-    // decisions are never silent), then resolves the decision. Precedence:
-    //   --dangerously-skip-permissions -> allow-once (explicit blanket override);
-    //   a --permission-policy -> its per-tool/per-risk verdict;
-    //   otherwise -> deny (safe default, no silent auto-approve).
-    const promptFn = (
-      toolName: string,
-      args: unknown,
-      _preview?: string,
-      kind?: PermissionPromptKind
-    ): Promise<{ action: 'allow-once' | 'allow-session' | 'allow-always' | 'deny' }> => {
-      const risk = classifyToolRisk(permissionManager.catalog.resolve(toolName), args);
-      if (streaming) {
-        emit({ type: 'permission_request', toolName, risk });
-      }
-
-      const decision = resolveHeadlessPermissionDecision({
-        dangerouslySkipPermissions,
-        isDirectoryGrant: kind === 'directory-grant',
-        toolName,
-        riskLevel: risk.level,
-        permissionPolicy,
-      });
-
-      if (streaming) {
-        emit({
-          type: 'permission_decision',
-          toolName,
-          action: decision.action,
-          reason: decision.reason,
-          risk: risk.level,
-        });
-      } else if (decision.action === 'deny') {
-        process.stderr.write(
-          `Warning: Tool "${toolName}" requires permission and was denied (${decision.reason}). ` +
-            `Grant it via --permission-policy, or --dangerously-skip-permissions to allow all tools.\n`
-        );
-      }
-
-      if (decision.action === 'allow-once') {
-        logger.debug(`[headless] Auto-allowing tool: ${toolName}`);
-      }
-      return Promise.resolve({ action: decision.action });
-    };
+    // Precedence: --dangerously-skip-permissions -> allow-once; a --permission-policy -> its
+    // per-tool/per-risk verdict; otherwise -> deny (no silent auto-approve).
+    const promptFn = createHeadlessPromptFn({
+      catalog: permissionManager.catalog,
+      dangerouslySkipPermissions,
+      permissionPolicy,
+      emit: streaming ? emit : null,
+      warn: message => process.stderr.write(message),
+    });
 
     // User question function - headless mode cannot respond interactively
     const userQuestionFn = (_payload: UserQuestionPayload): Promise<UserQuestionResponse> => {
@@ -537,7 +501,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // Output in the requested format
     switch (outputFormat) {
       case 'text':
-        process.stdout.write(result.finalAnswer + '\n');
+        // Sanitize only for a terminal; piped output is data and stays byte-exact.
+        process.stdout.write(
+          (process.stdout.isTTY ? sanitizeTerminalText(result.finalAnswer) : result.finalAnswer) + '\n'
+        );
         break;
 
       case 'json': {
@@ -593,7 +560,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     } else if (outputFormat === 'stream-json') {
       createHeadlessEmitter(runId, line => process.stdout.write(line))({ type: 'error', error: message });
     } else {
-      process.stderr.write(`Error: ${message}\n`);
+      process.stderr.write(`Error: ${sanitizeTerminalText(message)}\n`);
     }
 
     process.exit(1);

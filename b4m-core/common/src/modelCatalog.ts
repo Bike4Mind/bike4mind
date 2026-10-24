@@ -162,6 +162,7 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     disabledReason:
       record.disabledReason ?? record.autoDisabledReason ?? (retired ? 'retired by the provider' : undefined),
     // Absent means "not filtered": deprecation is never inferred by the adapter.
+    isSuperseded: record.lifecycle?.isSuperseded,
     deprecationDate: record.lifecycle?.deprecationDate,
     replacedBy: record.lifecycle?.replacedBy,
     trainingCutoff: record.trainingCutoff,
@@ -324,6 +325,7 @@ export function toModelRecord(info: ModelInfo): RenderableModelRecord {
     supportsImageVariation: info.supportsImageVariation,
     supportsSafetyTolerance: info.supportsSafetyTolerance,
     lifecycle: {
+      ...(info.isSuperseded !== undefined ? { isSuperseded: info.isSuperseded } : {}),
       ...(info.deprecationDate
         ? { status: 'deprecated' as const, deprecationDate: info.deprecationDate }
         : { status: 'active' as const }),

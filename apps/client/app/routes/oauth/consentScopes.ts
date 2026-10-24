@@ -1,3 +1,5 @@
+import { FEDERATED_ADMIN_STATUS_SCOPE } from '@bike4mind/common';
+
 /**
  * Human-readable labels for the OAuth scopes shown on the consent screen.
  *
@@ -19,11 +21,13 @@ const SCOPE_LABELS: Readonly<Record<string, string>> = {
   openid: 'Confirm who you are',
   profile: 'See your name and profile details',
   email: 'See your email address',
+  offline_access: 'Stay connected to your account when you are not using the app',
   'ai:chat': 'Use your Bike4Mind credits to generate AI responses',
   'ai:generate': 'Use your Bike4Mind credits to generate AI responses, images, video and audio',
   'ai:decide': 'Use your Bike4Mind credits to answer yes/no, pick-one and rating questions',
   // Keep in sync with the ME_READ description in app/constants/apiKeyScopes.ts.
   'me:read': 'See your name, plan, subscription, credit balance and feature access',
+  [FEDERATED_ADMIN_STATUS_SCOPE]: 'See whether you are a Bike4Mind administrator',
   'notebooks:read': 'View your notebooks and sessions',
   'notebooks:write': 'Create and modify your notebooks',
   'files:read': 'View your uploaded files',

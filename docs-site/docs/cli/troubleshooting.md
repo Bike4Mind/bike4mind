@@ -17,21 +17,25 @@ Solutions to common issues and frequently asked questions.
 **Solutions:**
 
 **1. Check if installed globally:**
+
 ```bash
 npm list -g @bike4mind/cli
 ```
 
 If not listed, install it:
+
 ```bash
 npm install -g @bike4mind/cli
 ```
 
 **2. Check your PATH:**
+
 ```bash
 echo $PATH
 ```
 
 Ensure npm's global bin directory is in your PATH:
+
 ```bash
 # Find npm global bin directory
 npm config get prefix
@@ -41,6 +45,7 @@ npm config get prefix
 ```
 
 **3. Add to PATH (if missing):**
+
 ```bash
 # For bash (~/.bashrc)
 export PATH="$PATH:$(npm config get prefix)/bin"
@@ -53,6 +58,7 @@ source ~/.bashrc  # or ~/.zshrc
 ```
 
 **4. Use npx as workaround:**
+
 ```bash
 npx @bike4mind/cli
 ```
@@ -66,6 +72,7 @@ npx @bike4mind/cli
 **Solution:** Use one of these methods:
 
 **Method 1: Fix npm permissions (recommended)**
+
 ```bash
 mkdir ~/.npm-global
 npm config set prefix '~/.npm-global'
@@ -75,16 +82,19 @@ npm install -g @bike4mind/cli
 ```
 
 **Method 2: Use npx (no install)**
+
 ```bash
 npx @bike4mind/cli
 ```
 
 **Method 3: Use sudo (not recommended)**
+
 ```bash
 sudo npm install -g @bike4mind/cli
 ```
 
 **Why avoid sudo?**
+
 - Can cause permission issues later
 - Security risk
 - Method 1 is better long-term solution
@@ -96,6 +106,7 @@ sudo npm install -g @bike4mind/cli
 **Problem:** Error about unsupported Node.js version.
 
 **Check version:**
+
 ```bash
 node --version
 ```
@@ -105,6 +116,7 @@ node --version
 **Update Node.js:**
 
 **Using nvm (recommended):**
+
 ```bash
 # Install nvm if needed
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
@@ -119,6 +131,7 @@ node --version  # Should show v24.x.x
 ```
 
 **Using official installer:**
+
 - Download from: https://nodejs.org/
 - Install LTS version (24.x recommended)
 
@@ -133,11 +146,13 @@ node --version  # Should show v24.x.x
 **Solutions:**
 
 **1. Check internet connection:**
+
 ```bash
 ping app.bike4mind.com
 ```
 
 **2. Clear existing tokens:**
+
 ```bash
 rm ~/.bike4mind/config.json
 b4m
@@ -145,6 +160,7 @@ b4m
 ```
 
 **3. Check file permissions:**
+
 ```bash
 ls -la ~/.bike4mind/config.json
 # Should show: -rw------- (600)
@@ -154,6 +170,7 @@ chmod 600 ~/.bike4mind/config.json
 ```
 
 **4. Try manual auth flow:**
+
 ```bash
 b4m
 /logout
@@ -163,6 +180,7 @@ b4m
 
 **5. Check for proxy/firewall:**
 If behind corporate proxy:
+
 ```bash
 export HTTP_PROXY=http://proxy.company.com:8080
 export HTTPS_PROXY=http://proxy.company.com:8080
@@ -178,6 +196,7 @@ b4m
 **Solutions:**
 
 **1. Check token expiration:**
+
 ```bash
 b4m
 /whoami
@@ -186,6 +205,7 @@ b4m
 ```
 
 **2. Verify API endpoint:**
+
 ```bash
 b4m
 /api-info
@@ -196,6 +216,7 @@ b4m
 ```
 
 **3. Clear and re-authenticate:**
+
 ```bash
 rm ~/.bike4mind/config.json
 b4m
@@ -221,6 +242,7 @@ b4m
 ```
 
 **Validate JSON:**
+
 ```bash
 # Check if JSON is valid
 cat ~/.bike4mind/config.json | python3 -m json.tool
@@ -238,17 +260,20 @@ cat ~/.bike4mind/config.json | jq .
 **Solutions:**
 
 **1. Check if directory exists:**
+
 ```bash
 ls ~/.bike4mind/
 ```
 
 **2. Create if missing:**
+
 ```bash
 mkdir -p ~/.bike4mind
 chmod 700 ~/.bike4mind
 ```
 
 **3. Fix permissions:**
+
 ```bash
 chmod 700 ~/.bike4mind
 chmod 600 ~/.bike4mind/config.json
@@ -258,6 +283,12 @@ chmod 600 ~/.bike4mind/config.json
 
 ## Tool Execution Issues
 
+### decide is missing or unavailable
+
+The CLI hides `decide` when the decision-model lookup fails or your account has no callable model. Activate an OpenAI or TypeSafe key in Profile > API Keys, or ask your administrator to configure one on the server. Local chat model availability alone does not enable this tool.
+
+Check that your agent's tool allowlist includes `decide` and its denylist does not exclude it. CLI eval runs exclude it deliberately. After correcting the configuration or connection, restart the CLI to rebuild its tools. Use `b4m --verbose` to check for a decision-model availability lookup failure.
+
 ### Tool API key errors
 
 **Problem:** "API key required" or "Invalid API key" errors.
@@ -265,6 +296,7 @@ chmod 600 ~/.bike4mind/config.json
 **Solutions:**
 
 **1. Add keys to config:**
+
 ```bash
 # Edit config
 nano ~/.bike4mind/config.json
@@ -279,6 +311,7 @@ nano ~/.bike4mind/config.json
 ```
 
 **2. Use environment variables:**
+
 ```bash
 export OPENWEATHER_API_KEY="your-key"
 export SERPER_API_KEY="your-key"
@@ -286,6 +319,7 @@ b4m
 ```
 
 **3. Verify keys are valid:**
+
 ```bash
 # Test OpenWeather key
 curl "https://api.openweathermap.org/data/2.5/weather?q=London&appid=YOUR_KEY"
@@ -305,17 +339,20 @@ curl -X POST "https://google.serper.dev/search" \
 **Solutions:**
 
 **1. Grant permission when asked:**
+
 ```
 Select: ✓ Always allow (trust this tool)
 ```
 
 **2. Trust bash_execute upfront:**
+
 ```bash
 b4m
 /trust bash_execute
 ```
 
 **3. Check tool isn't blocked:**
+
 ```bash
 b4m
 /trusted
@@ -335,18 +372,20 @@ b4m
 **Solutions:**
 
 **1. Check server is enabled:**
+
 ```json
 {
   "mcpServers": [
     {
       "name": "github",
-      "enabled": true  // Must be true!
+      "enabled": true // Must be true!
     }
   ]
 }
 ```
 
 **2. For Docker servers, check Docker:**
+
 ```bash
 # Check if Docker is running
 docker ps
@@ -357,21 +396,24 @@ docker ps
 ```
 
 **3. For internal servers, build packages:**
+
 ```bash
 cd /path/to/bike4mind
 pnpm core:build
 ```
 
 **4. Check environment variables:**
+
 ```json
 {
   "env": {
-    "GITHUB_ACCESS_TOKEN": "ghp_..."  // Must not be empty!
+    "GITHUB_ACCESS_TOKEN": "ghp_..." // Must not be empty!
   }
 }
 ```
 
 **5. View debug logs:**
+
 ```bash
 b4m --verbose
 # Look for MCP server startup errors
@@ -388,6 +430,7 @@ b4m --verbose
 **Causes & Solutions:**
 
 **1. Network latency:**
+
 ```bash
 # Test connection speed
 curl -w "@-" -o /dev/null -s https://app.bike4mind.com/api << 'EOF'
@@ -396,10 +439,12 @@ EOF
 ```
 
 **2. Large context:**
+
 - Avoid very large context files (keep under 10KB)
 - Split large tasks into smaller steps
 
 **3. Complex tool chains:**
+
 - Agent making many tool calls sequentially
 - This is normal for complex tasks
 
@@ -412,6 +457,7 @@ EOF
 **Solutions:**
 
 **1. Restart CLI regularly:**
+
 ```bash
 # After long sessions
 /exit
@@ -419,6 +465,7 @@ b4m
 ```
 
 **2. Limit session size:**
+
 ```bash
 # Save and start fresh after ~50 messages
 /save my-work
@@ -427,6 +474,7 @@ b4m
 ```
 
 **3. Check for memory leaks:**
+
 ```bash
 # Monitor memory usage
 top -pid $(pgrep -f bike4mind-cli)
@@ -443,18 +491,21 @@ top -pid $(pgrep -f bike4mind-cli)
 **Solutions:**
 
 **1. Check terminal support:**
+
 ```bash
 echo $TERM
 # Should be: xterm-256color or similar
 ```
 
 **2. Enable colors:**
+
 ```bash
 export TERM=xterm-256color
 b4m
 ```
 
 **3. Disable colors if needed:**
+
 ```bash
 export NO_COLOR=1
 b4m
@@ -469,10 +520,12 @@ b4m
 **Solution:**
 
 **1. Resize terminal:**
+
 - Make terminal wider
 - Most readable at 80-120 columns
 
 **2. Check terminal emulator:**
+
 - Use modern terminal (iTerm2, Windows Terminal, GNOME Terminal)
 - Avoid older terminals with limited rendering
 
@@ -485,11 +538,13 @@ b4m
 **Solutions:**
 
 **1. Use font with emoji support:**
+
 - JetBrains Mono (recommended)
 - Fira Code
 - Cascadia Code
 
 **2. Check locale:**
+
 ```bash
 echo $LANG
 # Should be: en_US.UTF-8 or similar
@@ -509,17 +564,20 @@ export LANG=en_US.UTF-8
 **Solutions:**
 
 **1. Check directory exists:**
+
 ```bash
 ls ~/.bike4mind/debug/
 ```
 
 **2. Create if missing:**
+
 ```bash
 mkdir -p ~/.bike4mind/debug
 chmod 755 ~/.bike4mind/debug
 ```
 
 **3. Check disk space:**
+
 ```bash
 df -h ~
 # Ensure sufficient space available
@@ -534,6 +592,7 @@ df -h ~
 **Solutions:**
 
 **1. Use correct flag:**
+
 ```bash
 b4m --verbose    # ✓ Correct
 b4m -v           # ✓ Also works
@@ -541,6 +600,7 @@ b4m verbose      # ✗ Wrong
 ```
 
 **2. Check if logs appear in file:**
+
 ```bash
 tail -f ~/.bike4mind/debug/*.txt
 # Even without --verbose, logs go to file
@@ -557,15 +617,18 @@ tail -f ~/.bike4mind/debug/*.txt
 **Solutions:**
 
 **1. Check internet:**
+
 ```bash
 ping app.bike4mind.com
 ```
 
 **2. Check firewall:**
+
 - Ensure outbound HTTPS (port 443) is allowed
 - Disable VPN temporarily to test
 
 **3. Check API endpoint:**
+
 ```bash
 b4m
 /api-info
@@ -576,6 +639,7 @@ b4m
 ```
 
 **4. Try custom DNS:**
+
 ```bash
 # Use Google DNS
 echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
@@ -590,23 +654,27 @@ echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
 **Solutions:**
 
 **1. Update Node.js:**
+
 ```bash
 node --version
 # Update to latest LTS if old
 ```
 
 **2. Check system time:**
+
 ```bash
 date
 # Ensure system clock is correct
 ```
 
 **3. Update certificates (macOS):**
+
 ```bash
 brew install ca-certificates
 ```
 
 **4. Update certificates (Linux):**
+
 ```bash
 sudo apt update
 sudo apt install ca-certificates
@@ -623,6 +691,7 @@ sudo apt install ca-certificates
 **Solutions:**
 
 **1. Check directory permissions:**
+
 ```bash
 ls -ld ~/.bike4mind/sessions/
 # Should be writable
@@ -633,11 +702,13 @@ chmod 755 ~/.bike4mind/sessions
 ```
 
 **2. Check disk space:**
+
 ```bash
 df -h ~
 ```
 
 **3. Try with different name:**
+
 ```bash
 /save test-session
 ```
@@ -651,17 +722,20 @@ df -h ~
 **Solutions:**
 
 **1. Check files exist:**
+
 ```bash
 ls -la ~/.bike4mind/sessions/
 ```
 
 **2. Validate JSON:**
+
 ```bash
 # Check if session files are valid JSON
 cat ~/.bike4mind/sessions/*.json | python3 -m json.tool
 ```
 
 **3. Remove corrupt sessions:**
+
 ```bash
 # Backup first
 cp -r ~/.bike4mind/sessions ~/.bike4mind/sessions.backup
@@ -679,6 +753,7 @@ rm ~/.bike4mind/sessions/corrupt-file.json
 **Cause:** Missing file or directory.
 
 **Solution:**
+
 ```bash
 # Recreate B4M directory structure
 mkdir -p ~/.bike4mind/{sessions,debug}
@@ -692,6 +767,7 @@ chmod 700 ~/.bike4mind
 **Cause:** Insufficient file permissions.
 
 **Solution:**
+
 ```bash
 # Fix permissions
 chmod 600 ~/.bike4mind/config.json
@@ -707,6 +783,7 @@ chmod 755 ~/.bike4mind/debug/
 **Cause:** Missing dependencies or build issue.
 
 **Solution:**
+
 ```bash
 # Reinstall CLI
 npm uninstall -g @bike4mind/cli
@@ -724,6 +801,7 @@ npm install -g @bike4mind/cli
 **Cause:** Network or API endpoint issue.
 
 **Solution:**
+
 ```bash
 # 1. Check internet
 ping app.bike4mind.com
@@ -751,6 +829,7 @@ b4m --verbose
 ```
 
 View debug logs:
+
 ```bash
 ls -ltr ~/.bike4mind/debug/ | tail -1  # Find latest log
 tail -100 ~/.bike4mind/debug/[latest-file].txt
@@ -788,6 +867,7 @@ tail -50 ~/.bike4mind/debug/*.txt
 **GitHub Issues:** https://github.com/bike4mind/bike4mind/issues
 
 **Include:**
+
 1. Clear description of problem
 2. Steps to reproduce
 3. Expected vs actual behavior
@@ -801,6 +881,7 @@ tail -50 ~/.bike4mind/debug/*.txt
 ### Q: Can I use B4M CLI offline?
 
 **A:** No, B4M CLI requires internet connection for:
+
 - Authentication
 - API requests to Bike4Mind
 - External tool APIs (weather, search, etc.)
@@ -812,6 +893,7 @@ Local models are supported via [Ollama](/cli/local-models) - point the CLI at yo
 ### Q: How much does B4M CLI cost?
 
 **A:** B4M CLI itself is free. You need:
+
 - Bike4Mind account (check [pricing](https://bike4mind.com/pricing))
 - Optional: Third-party API keys (OpenWeather, Serper) for specific tools
 
@@ -826,6 +908,7 @@ Local models are supported via [Ollama](/cli/local-models) - point the CLI at yo
 ### Q: Is my data secure?
 
 **A:** Yes:
+
 - Tokens stored with 600 permissions (owner-only)
 - HTTPS for all API communication
 - No data stored on device except sessions you explicitly save

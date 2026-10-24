@@ -16,7 +16,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { claimDedup: vi.fn().mockResolvedValue({ claimed: true }) },
 }));
 
-vi.mock('@server/services/telemetryFingerprint', () => ({
+vi.mock('@bike4mind/server-utils/services/telemetryFingerprint', () => ({
   generateTelemetryFingerprint: vi.fn().mockReturnValue('fp-abc123'),
   generateSemanticTelemetryFingerprint: vi.fn().mockReturnValue('sfp-def456'),
   extractFingerprintFromBody: vi.fn().mockReturnValue(null),
@@ -25,7 +25,7 @@ vi.mock('@server/services/telemetryFingerprint', () => ({
   formatPrimaryAnomaly: vi.fn((s: string) => s.replace('_', ' ')),
 }));
 
-vi.mock('@server/utils/markdownEscape', () => ({
+vi.mock('@bike4mind/server-utils/utils/markdownEscape', () => ({
   escapeMarkdown: vi.fn((s: string) => s),
 }));
 

@@ -37,8 +37,8 @@ export async function checkScopePermission(input: ScopePermissionInput): Promise
   }
 
   if (tier === 'user') {
-    // Own user scope only. scopeId may be the caller's id OR their username.
-    if (scopeId === String(user.id) || (user.username && scopeId === user.username)) {
+    // Display names are editable and cannot authorize a namespace.
+    if (scopeId === String(user.id)) {
       return { ok: true };
     }
     return { ok: false, status: 403, error: 'You can only publish to your own user scope' };

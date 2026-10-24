@@ -4,8 +4,8 @@ import { dispatch } from './whatsNewHighlights';
 import { AdminSettings, releaseNoteRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { ChatModels } from '@bike4mind/common';
-import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
-import { loadReleaseNotesConfig } from '@server/releaseNotes/adminReleaseNotes';
+import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { loadReleaseNotesConfig } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 
 vi.mock('@bike4mind/database', () => ({
   releaseNoteRepository: { findPublishedBetween: vi.fn() },
@@ -42,13 +42,13 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   return { ...actual, getAvailableModels: vi.fn(), getLlmByModel: vi.fn() };
 });
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitModalGenerationMetrics: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Only the stored config is stubbed; the denylist matching is the real helper.
-vi.mock('@server/releaseNotes/adminReleaseNotes', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/releaseNotes/adminReleaseNotes')>();
+vi.mock('@bike4mind/server-utils/releaseNotes/adminReleaseNotes', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/releaseNotes/adminReleaseNotes')>();
   return { ...actual, loadReleaseNotesConfig: vi.fn() };
 });
 

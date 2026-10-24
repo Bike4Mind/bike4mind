@@ -29,13 +29,17 @@ describe('ChatService generation tools', () => {
 
   async function build(options: { media: boolean; roots: string[] }): Promise<void> {
     const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-media-sessions-')), 'test-model');
-    events = [];
-    streams = [];
-    axiosPost = vi.fn().mockImplementation(() => {
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
+    const opened: PassThrough[] = [];
+    streams = opened;
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    axiosPost = boundPost;
     axiosGet = vi.fn().mockResolvedValue({ data: Buffer.from('png'), headers: { 'content-type': 'image/png' } });
     // The self-host shape: a relative file-proxy base, so a download goes back through the
     // authenticated client rather than out to a CDN.
@@ -47,7 +51,7 @@ describe('ChatService generation tools', () => {
       ({
         get: apiGet,
         post: apiPost,
-        getAxiosInstance: () => ({ post: axiosPost, get: axiosGet }),
+        getAxiosInstance: () => ({ post: boundPost, get: axiosGet }),
       }) as unknown as AuthenticatedApiClient;
 
     service = new ChatService({
@@ -55,11 +59,13 @@ describe('ChatService generation tools', () => {
       access: { list: async () => options.roots } as unknown as AccessStore,
       logger,
       // The image tool resolves its model through this, so it has to be real here.
-      models: new ModelCatalog({ logger, getApiClient, getEnvironmentUrl: () => 'http://localhost:3000' }),
+      models: new ModelCatalog({ logger, getApiClient, getEnvironmentUrl: () => 'http://localhost:3000' }, {
+        models: async () => [],
+      } as never),
       ...(options.media ? { media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-media-files-'))) } : {}),
       getApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   }
 

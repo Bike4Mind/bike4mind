@@ -7,20 +7,22 @@ const configured = { FLEET_USAGE_EXPORT_TOKEN: token, FLEET_USAGE_EXPORT_SCOPE: 
 
 describe('Fleet export dedicated authorization', () => {
   it('accepts only the dedicated bearer with both configured scopes', () => {
-    expect(authorizeFleetUsageExport(`Bearer ${token}`, configured)).toEqual(scope);
+    expect(authorizeFleetUsageExport(`Bearer ${token}`, configured)).toEqual({ status: 'authorized', scope });
   });
 
   it('refuses missing, wrong, cookie/JWT-like, and ordinary API-key credentials', () => {
     for (const header of [undefined, '', 'Bearer jwt', 'ApiKey ordinary-key', 'Bearer wrong']) {
-      expect(authorizeFleetUsageExport(header, configured)).toBeNull();
+      expect(authorizeFleetUsageExport(header, configured)).toEqual({ status: 'denied' });
     }
   });
 
-  it('fails closed for every unset, empty, malformed, or incomplete configuration', () => {
+  it('reports the route disabled for every unset, empty, malformed, or incomplete configuration', () => {
     for (const env of [
       {},
       { ...configured, FLEET_USAGE_EXPORT_TOKEN: '' },
       { ...configured, FLEET_USAGE_EXPORT_TOKEN: 'short' },
+      { ...configured, FLEET_USAGE_EXPORT_TOKEN: ` ${token}` },
+      { ...configured, FLEET_USAGE_EXPORT_TOKEN: `${token}\t` },
       { ...configured, FLEET_USAGE_EXPORT_SCOPE: '' },
       { ...configured, FLEET_USAGE_EXPORT_SCOPE: 'null' },
       { ...configured, FLEET_USAGE_EXPORT_SCOPE: '{}' },
@@ -31,7 +33,9 @@ describe('Fleet export dedicated authorization', () => {
         { ...scope, owners: [{ ownerId: 'owner', ownerType: 'Other' }] },
       ].map(value => ({ ...configured, FLEET_USAGE_EXPORT_SCOPE: JSON.stringify(value) })),
     ]) {
-      expect(authorizeFleetUsageExport(`Bearer ${token}`, env)).toBeNull();
+      const disabled = { status: 'disabled', misconfigured: !!env.FLEET_USAGE_EXPORT_TOKEN };
+      expect(authorizeFleetUsageExport(`Bearer ${token}`, env)).toEqual(disabled);
+      expect(authorizeFleetUsageExport(undefined, env)).toEqual(disabled);
     }
   });
 });

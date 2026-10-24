@@ -3,7 +3,7 @@ import { adminSettingsRepository, connectDB } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { dispatch as researchEngineDispatch } from '@workers/queueHandlers/researchEngineQueue';
 import { dispatch as fabFileChunkDispatch } from '@workers/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@workers/queueHandlers/fabFileVectorize';
@@ -37,8 +37,11 @@ import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerSkillMarketReviewSla } from './skillMarketReviewSla';
+import { registerAdminAuditAlerts } from './adminAuditAlerts';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
+import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
+import { registerStorageReconciliation } from './storageReconciliation';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
 import { registerLakeConnectorOrphanReap } from './lakeConnectorOrphanReap';
 import { dispatchSelfHostEvent } from './eventDispatch';
@@ -52,7 +55,7 @@ import {
   GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
   GENERATION_JOB_MAX_RECEIVE_COUNT,
   GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
-} from '@server/utils/sqsDelivery';
+} from '@bike4mind/server-utils/utils/sqsDelivery';
 
 /**
  * Self-host background worker entrypoint.
@@ -108,8 +111,11 @@ async function main() {
   registerQuestTimeoutSweep(worker);
   registerGenerationJobSweep(worker);
   registerSkillMarketReviewSla(worker);
+  registerAdminAuditAlerts(worker);
   registerRealtimeConnectionSweep(worker);
+  registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);
+  registerStorageReconciliation(worker);
   registerGitHubLakeReconcile(worker);
   registerLakeConnectorOrphanReap(worker);
   registerTelemetryCleanup(worker);

@@ -32,18 +32,21 @@ describe('ChatService artifacts', () => {
 
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-artifacts-')), 'test-model');
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     stream = new PassThrough();
     // One axios instance serves both the completion stream and the artifact create; they are
     // told apart by endpoint, exactly as they are in the app.
-    post = vi.fn().mockImplementation((endpoint: string) => {
+    const boundPost = vi.fn().mockImplementation((endpoint: string) => {
       if (endpoint === '/api/artifacts') return Promise.resolve({ status: 201, data: {} });
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
 
     const apiClient = {
       get: vi.fn().mockResolvedValue({ sseCompletionsUrl: '' }),
-      getAxiosInstance: () => ({ post }),
+      getAxiosInstance: () => ({ post: boundPost }),
     } as unknown as AuthenticatedApiClient;
 
     service = new ChatService({
@@ -53,7 +56,7 @@ describe('ChatService artifacts', () => {
       artifacts: new ArtifactPublisher(() => apiClient, { debug: vi.fn() }),
       getApiClient: () => apiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

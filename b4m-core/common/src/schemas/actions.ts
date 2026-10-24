@@ -8,6 +8,7 @@ import {
   hearthEventOriginSchema,
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
+import { TurnTimingSchema } from './turnTiming';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
@@ -89,14 +90,16 @@ export const CliCompletionRequestAction = z.object({
   accessToken: z.string(),
   requestId: z.uuid(),
   model: z.string(),
-  messages: z.array(
-    z.object({
-      role: z.enum(['user', 'assistant', 'system']),
-      content: z.union([z.string(), z.array(z.unknown())]),
-      // per-message cache flag (Anthropic only - silently ignored elsewhere)
-      cache: z.boolean().optional(),
-    })
-  ),
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant', 'system']),
+        content: z.union([z.string(), z.array(z.unknown())]),
+        // per-message cache flag (Anthropic only - silently ignored elsewhere)
+        cache: z.boolean().optional(),
+      })
+    )
+    .min(1),
   options: z
     .object({
       temperature: z.number().optional(),
@@ -452,6 +455,7 @@ export const StreamedChatCompletionAction = z.object({
       // Add fallback info to support backend fallback mechanism. Nullish: a whole-quest payload
       // carries the null that clears a stale value (see IChatHistoryItem.fallbackInfo).
       fallbackInfo: FallbackInfoSchema.nullish(),
+      turnTiming: TurnTimingSchema.optional(),
       // MCP confirmation action awaiting user approval (confirm/cancel buttons)
       pendingAction: z
         .object({
@@ -1475,6 +1479,17 @@ export const PermissionRequestAction = z.object({
   toolCallId: z.string().optional(),
 });
 
+export const ConfidenceGateAction = z.object({
+  action: z.literal('confidence_gate'),
+  executionId: z.string(),
+  /** 0-indexed wire convention, matching `permission_request` and `IterationStream`. */
+  iteration: z.number(),
+  /** 0..1, the agent's reported confidence for the paused iteration. */
+  confidence: z.number(),
+  /** Pre-formatted server copy, e.g. "2 iterations in a row below the 60% confidence threshold (latest 42%)". */
+  reason: z.string(),
+});
+
 /**
  * Persisted snapshot of a non-background child subagent execution. Replayed on
  * reconnect so `SubagentStepNest` can re-render the nested iteration
@@ -1533,6 +1548,7 @@ export const ChildExecutionSnapshotSchema: z.ZodType<ChildExecutionSnapshotShape
 
 export const ReconnectResultAction = z.object({
   action: z.literal('reconnect_result'),
+  requestId: z.string().optional(),
   found: z.boolean(),
   executionId: z.string().optional(),
   // The session the found run belongs to, so the client stamps it from the
@@ -1551,6 +1567,17 @@ export const ReconnectResultAction = z.object({
       // Carried through reconnect so a client that refreshes mid-pause still
       // has the identity `permission_response` needs - see `PermissionRequestAction`.
       toolCallId: z.string().optional(),
+    })
+    .optional(),
+  // Written atomically with `status: 'paused'` by the executor, so a reconnect
+  // to a gate-paused run gets both and can re-render the gate card.
+  pendingGate: z
+    .object({
+      /** 0-indexed wire convention, matching `ConfidenceGateAction` and `IterationStream`. */
+      iteration: z.number(),
+      confidence: z.number(),
+      reason: z.string(),
+      requestedAt: z.union([z.string(), z.date()]),
     })
     .optional(),
   totalCreditsUsed: z.number().optional(),
@@ -1661,6 +1688,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   SubagentFailedAction,
   SubagentProgressAction,
   PermissionRequestAction,
+  ConfidenceGateAction,
   ReconnectResultAction,
 ]);
 export type IMessageDataToClient = z.infer<typeof MessageDataToClient>;

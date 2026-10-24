@@ -39,12 +39,21 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: { applyCorpusAction: h.applyCorpusAction },
 }));
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   adminSettingsRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeCorpusActionRepository: {},
   dataLakeFindingRepository: {},
-  dataLakeRepository: { touchIfStable: h.touchIfStable },
-  fabFileRepository: {},
+  dataLakeRepository: { touchIfStable: h.touchIfStable, findByDatalakeTags: vi.fn().mockResolvedValue([]) },
+  fabFileRepository: { setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true) },
+  userRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
+  organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   lakeMembershipRemovalRepository: {},
   scopedSettingsRepository: {},
   withTransaction: async (fn: () => Promise<unknown>) => {

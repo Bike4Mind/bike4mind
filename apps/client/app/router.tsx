@@ -34,6 +34,8 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
+import { parseAdminSearch } from './components/admin/adminTabParams';
+import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
@@ -90,6 +92,7 @@ const SlackInstallPage = lazy(() => import('./routes/integrations/slack/install'
 const SlackSuccessPage = lazy(() => import('./routes/integrations/slack/success'));
 const SlackErrorPage = lazy(() => import('./routes/integrations/slack/error'));
 const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
+const DesktopDownloadPage = lazy(() => import('./routes/desktop'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
@@ -99,11 +102,10 @@ const StudioPage = lazy(() => import('./routes/studio/$modality'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // Shared coercion for the optional string search params nearly every route declares.
-// Identical to the inline form it replaces: falsy (missing or empty) becomes undefined,
-// anything else is String()-coerced. A few routes below deliberately keep a stricter
-// `typeof === 'string'` guard instead, which is not the same thing - do not fold those in.
+// A few routes below deliberately keep a stricter `typeof === 'string'` guard instead,
+// which is not the same thing - do not fold those in.
 const optionalStringParam = (search: Record<string, unknown>, key: string): string | undefined =>
-  search[key] ? String(search[key]) : undefined;
+  optionalStringSearchValue(search[key]);
 
 // AI-themed loading messages for route transitions
 const loadingMessages = [
@@ -1168,7 +1170,7 @@ const activateRoute = createRoute({
 });
 
 // Admin route (replaces /admin/index.tsx)
-const adminRoute = createRoute({
+export const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin',
   beforeLoad: ({ location }) => enforceConsentRedirect(location),
@@ -1182,18 +1184,10 @@ const adminRoute = createRoute({
       </ProviderBundle>
     </RestrictedPage>
   ),
-  // `tab` and `feedbackId` make the console addressable: a feedback deep link opens the Feedback
-  // tab focused on one record. `tab` is a stable slug, never the positional AdminTab enum value -
-  // see common/utils/deepLinks for why, and adminTabSlugs.ts for the slug <-> enum mapping.
-  validateSearch: (
-    search: Record<string, unknown>
-  ): { emergency_access?: string; tab?: string; feedbackId?: string } => {
-    return {
-      emergency_access: optionalStringParam(search, 'emergency_access'),
-      tab: optionalStringParam(search, 'tab'),
-      feedbackId: optionalStringParam(search, 'feedbackId'),
-    };
-  },
+  // `tab` (a stable slug, never the positional AdminTab enum value - see common/utils/deepLinks)
+  // makes the console addressable, and each tab's own params come from the registry in
+  // adminTabParams.ts, which the tab-sync hook rebuilds the URL from too.
+  validateSearch: parseAdminSearch,
 });
 
 // Email unsubscribe route - public page for managing email preferences
@@ -1210,6 +1204,17 @@ const emailUnsubscribeRoute = createRoute({
       token: optionalStringParam(search, 'token'),
     };
   },
+});
+
+// Desktop app download page - no layout, public, so it can be linked from anywhere.
+const desktopDownloadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/desktop',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <DesktopDownloadPage />
+    </Suspense>
+  ),
 });
 
 // OAuth Authorization endpoint - no layout, public
@@ -1314,6 +1319,7 @@ const routeTree = rootRoute.addChildren([
   slackSuccessRoute,
   slackErrorRoute,
   emailUnsubscribeRoute,
+  desktopDownloadRoute,
   // Atlassian integration routes (no layout)
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint

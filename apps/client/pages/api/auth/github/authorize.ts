@@ -1,7 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@server/utils/config';
-import { InternalServerError } from '@server/utils/errors';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { issueStateNonce } from '@server/auth/oauthFlowCookie';

@@ -10,6 +10,7 @@ const { mocks } = vi.hoisted(() => ({
     toastSuccess: vi.fn(),
     toastWarning: vi.fn(),
     getState: vi.fn(),
+    selectedAccount: vi.fn(),
     invalidateQueries: vi.fn(),
   },
 }));
@@ -35,8 +36,13 @@ vi.mock('@client/app/stores/useAudioGenSettings', () => ({
   useAudioGenSettings: { getState: () => mocks.getState() },
 }));
 
+vi.mock('@client/app/components/Credits/AccountSelector', () => ({
+  useSelectedAccount: { getState: () => ({ selectedAccount: mocks.selectedAccount() }) },
+}));
+
 import type { AudioGenMode } from '@client/app/stores/useAudioGenSettings';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE } from '@client/app/hooks/data/generationErrors';
 import { useGenerateAudio } from './useGenerateAudio';
 
 // A 4xx from the route arrives as an axios error carrying the JSON error body.
@@ -60,6 +66,7 @@ const generate = async (text = 'hello', mode: AudioGenMode = 'tts') => {
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.getState.mockReturnValue({ ttsProvider: 'openai', voice: '', format: 'mp3' });
+  mocks.selectedAccount.mockReturnValue({ id: 'u1', personal: true });
   URL.createObjectURL = vi.fn(() => 'blob:audio');
   URL.revokeObjectURL = vi.fn();
 });
@@ -149,6 +156,9 @@ describe('useGenerateAudio oversized audio', () => {
  * check here would show "you are out of credits" for a malformed request.
  */
 describe('useGenerateAudio credit exhaustion', () => {
+  // With no account selected the server picks the payer, so its own message is the best one available.
+  beforeEach(() => mocks.selectedAccount.mockReturnValue(null));
+
   it('surfaces the credits message from a classified 422', async () => {
     mocks.post.mockRejectedValue(
       axiosFailure(422, {
@@ -198,7 +208,7 @@ describe('useGenerateAudio sound effects', () => {
 
     expect(mocks.post).toHaveBeenCalledWith(
       '/api/ai/sound-effects',
-      { text: 'hello', durationSeconds: 3, promptInfluence: 0.5, encoding: 'base64' },
+      { text: 'hello', durationSeconds: 3, promptInfluence: 0.5, encoding: 'base64', organization_id: null },
       expect.not.objectContaining({ responseType: expect.anything() })
     );
     expect(result.current.result).toEqual({
@@ -209,6 +219,34 @@ describe('useGenerateAudio sound effects', () => {
       contentType: 'audio/mpeg',
     });
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Sound effect generated and saved to your Files.');
+  });
+
+  it('sends the team the switcher shows as the billing target', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'teamOrg', personal: false });
+    mocks.post.mockResolvedValue({ data: { audio: 'AAA=', contentType: 'audio/mpeg' } });
+
+    await generate('hello', 'sound-effects');
+
+    expect(mocks.post.mock.calls[0][1]).toMatchObject({ organization_id: 'teamOrg' });
+  });
+
+  it('sends the team the switcher shows on the speech request too', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'teamOrg', personal: false });
+    mocks.post.mockResolvedValue({ data: { audio: 'AAA=', format: 'mp3', contentType: 'audio/mpeg' } });
+
+    await generate('hello', 'tts');
+
+    expect(mocks.post.mock.calls[0][0]).toBe('/api/ai/tts');
+    expect(mocks.post.mock.calls[0][1]).toMatchObject({ organization_id: 'teamOrg' });
+  });
+
+  it('omits the billing target when no account is selected yet, leaving the server default', async () => {
+    mocks.selectedAccount.mockReturnValue(null);
+    mocks.post.mockResolvedValue({ data: { audio: 'AAA=', contentType: 'audio/mpeg' } });
+
+    await generate('hello', 'sound-effects');
+
+    expect(mocks.post.mock.calls[0][1]).not.toHaveProperty('organization_id');
   });
 
   it('plays a url-delivery response without creating an object URL', async () => {
@@ -366,5 +404,126 @@ describe('useGenerateAudio unmount', () => {
       expect(mocks.toastInfo).toHaveBeenCalledWith(expect.stringContaining('was unavailable'));
       expect(mocks.toastSuccess).toHaveBeenCalledWith('Audio generated and saved to your Files.');
     });
+  });
+});
+
+describe('useGenerateAudio credit balance refresh', () => {
+  it.each([
+    ['tts', true],
+    ['tts', false],
+    ['sound-effects', true],
+    ['sound-effects', false],
+  ] as const)('refreshes both balance caches after %s completes (saved: %s)', async (mode, saved) => {
+    mocks.post.mockResolvedValue({ data: { audio: 'AAA=', contentType: 'audio/mpeg', saved } });
+
+    await generate('hello', mode);
+
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+  });
+
+  it.each(['tts', 'sound-effects'] as const)('refreshes balances after a charged oversized %s response', async mode => {
+    mocks.post.mockRejectedValue(axiosFailure(413, { error: 'too big' }));
+
+    await generate('hello', mode);
+
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+  });
+
+  it('does not refresh balances when empty text never starts a request', async () => {
+    await generate('   ');
+
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the billed team after switching accounts and leaving during generation', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'teamOrg', personal: false });
+    let settle: (value: unknown) => void = () => {};
+    mocks.post.mockReturnValue(
+      new Promise(resolve => {
+        settle = resolve;
+      })
+    );
+    const { result, unmount } = renderHook(() => useGenerateAudio('tts'));
+    let pending: Promise<void> = Promise.resolve();
+    act(() => {
+      pending = result.current.generate('hello');
+    });
+    mocks.selectedAccount.mockReturnValue({ id: 'u1', personal: true });
+    unmount();
+
+    await act(async () => {
+      settle({ data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: false } });
+      await pending;
+    });
+
+    expect(mocks.post.mock.calls[0][1]).toMatchObject({ organization_id: 'teamOrg' });
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+  });
+});
+
+describe('useGenerateAudio billing account', () => {
+  const insufficient = axiosFailure(422, {
+    error: 'Insufficient credits for text-to-speech',
+    errorCode: 'insufficient_credits',
+  });
+
+  it('names the selected organization when it is out of credits', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'org1', name: 'Acme', personal: false });
+    mocks.post.mockRejectedValue(insufficient);
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Acme does not have enough credits for this audio.');
+  });
+
+  it('names personal credits when they are the ones out', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'u1', name: 'Me', personal: true });
+    mocks.post.mockRejectedValue(insufficient);
+
+    await generate('boom', 'sound-effects');
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Your personal credits are not enough for this audio.');
+  });
+
+  it('tells the user to switch accounts on a 403 while an organization is selected', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'org1', name: 'Acme', personal: false });
+    mocks.post.mockRejectedValue(axiosFailure(403, { error: 'Forbidden' }));
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith(GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE);
+  });
+
+  it('tells the user to switch accounts on a 403 in sound-effects mode too', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'org1', name: 'Acme', personal: false });
+    mocks.post.mockRejectedValue(axiosFailure(403, { error: 'Forbidden' }));
+
+    await generate('boom', 'sound-effects');
+
+    expect(mocks.toastError).toHaveBeenCalledWith(GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE);
+  });
+
+  it('leaves a 403 alone when the personal account is selected', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'u1', name: 'Me', personal: true });
+    mocks.post.mockRejectedValue(axiosFailure(403, { error: 'Forbidden' }));
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Forbidden');
+  });
+
+  it('names the account that was selected at submit, not the one selected when the request fails', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'org1', name: 'Acme', personal: false });
+    mocks.post.mockImplementation(async () => {
+      mocks.selectedAccount.mockReturnValue({ id: 'org2', name: 'Other', personal: false });
+      throw insufficient;
+    });
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Acme does not have enough credits for this audio.');
   });
 });

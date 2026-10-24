@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Unit test of the repository picker's list route. The connect lib (which has its own dedicated
 // unit tests) is mocked; the route itself only wires the request/nonce/config through.
@@ -28,7 +28,7 @@ vi.mock('@server/auth/oauthFlowCookie', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/auth/oauthFlowCookie')>();
   return { ...actual, readStateNonceHash: h.readStateNonceHash };
 });
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({

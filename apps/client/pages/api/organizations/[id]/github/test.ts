@@ -4,7 +4,7 @@
  * Tests the GitHub API connection and returns authentication info and latency.
  *
  * Security:
- * - Org owner or manager access required
+ * - Org owner or platform admin only - org managers are refused
  * - Rate limited to 30 tests per hour per organization
  * - Audit logged
  *
@@ -15,7 +15,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@server/services/githubService';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { logTestExecuted } from '@server/integrations/github/githubConnectionAuditLog';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
@@ -34,7 +34,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgAccess(user, orgId);
+    await verifyOrgOwner(user, orgId);
 
     const connection = await orgGitHubConnectionRepository.findByOrganizationId(orgId);
     if (!connection) {

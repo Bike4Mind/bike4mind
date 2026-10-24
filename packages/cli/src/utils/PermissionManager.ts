@@ -1,6 +1,8 @@
 import type { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import type { ToolCategory } from '../tools/gateway/toolDescriptor.js';
+import { sandboxedCommandArg } from '../tools/gateway/toolPolicy.js';
 import type { SandboxMode } from '../sandbox/types.js';
+import { sessionCommandPrefixes } from '../config/sessionCommandScope.js';
 
 /**
  * Manages tool permissions and trusted tools
@@ -15,12 +17,18 @@ import type { SandboxMode } from '../sandbox/types.js';
  * A tool's category comes from its descriptor in the injected catalog, which the permission
  * gateway (tools/gateway) also reads through `catalog`.
  */
+// Stdin to a live shell is input to whatever runs there, not a command line, so it has no scope.
+const UNREMEMBERED_COMMAND_TOOLS = new Set(['write_shell_stdin']);
+
 export class PermissionManager {
   private trustedTools: Set<string> = new Set();
   private sessionTrustedTools: Set<string> = new Set();
+  /** toolName -> command scopes approved for the session (see trustCommandForSession). */
+  private sessionTrustedCommands: Map<string, Set<string>> = new Map();
   private deniedTools: Set<string> = new Set();
   private _sandboxMode: SandboxMode = 'disabled';
   private _sandboxActive = false;
+  private sandboxEscalationApprovals: Set<string> = new Set();
 
   constructor(
     readonly catalog: ToolCatalog,
@@ -54,11 +62,12 @@ export class PermissionManager {
    * Note: denied tools from project config ALWAYS need permission (cannot be overridden locally)
    *
    * @param toolName - The tool being checked
+   * @param options.command - The call's command text, for a tool whose session trust is per command.
    * @param options.isSandboxed - If true, the command will run inside the OS-level sandbox.
-   *   In auto-allow mode, sandboxed bash_execute commands skip the permission prompt
+   *   In auto-allow mode, sandboxed commands (a core tool whose descriptor declares `sandbox`) skip the permission prompt
    *   because the sandbox provides the security boundary.
    */
-  needsPermission(toolName: string, options?: { isSandboxed?: boolean }): boolean {
+  needsPermission(toolName: string, options?: { isSandboxed?: boolean; command?: string }): boolean {
     const category = this.catalog.category(toolName);
 
     // Denied tools from project config ALWAYS need permission
@@ -71,15 +80,23 @@ export class PermissionManager {
       return false;
     }
 
-    // Sandbox auto-allow: sandboxed bash_execute commands skip permission
+    // Sandbox auto-allow: sandboxed commands skip permission
     // The OS-level sandbox provides the security boundary instead of user prompts
     // Must run before session trust check so sandbox enforcement is never bypassed
-    if (options?.isSandboxed && toolName === 'bash_execute' && this.isSandboxAutoAllow()) {
+    if (
+      options?.isSandboxed &&
+      sandboxedCommandArg(this.catalog.resolve(toolName)) !== undefined &&
+      this.isSandboxAutoAllow()
+    ) {
       return false;
     }
 
     // Session-trusted tools don't need permission (works for all categories including prompt_always)
     if (this.sessionTrustedTools.has(toolName)) {
+      return false;
+    }
+
+    if (options?.command !== undefined && this.isCommandSessionTrusted(toolName, options.command)) {
       return false;
     }
 
@@ -167,7 +184,8 @@ export class PermissionManager {
 
   /**
    * Trust a tool for the current session only (in-memory, no persistence)
-   * Works for all tool categories including prompt_always, but NOT project-denied tools
+   * Works for all tool categories including prompt_always, but NOT project-denied tools.
+   * For a command-scoped tool this trusts every command; a prompt answer uses trustCommandForSession.
    */
   trustToolForSession(toolName: string): boolean {
     if (this.deniedTools.has(toolName)) {
@@ -178,10 +196,53 @@ export class PermissionManager {
   }
 
   /**
+   * Whether "allow for this session" is scoped to the command rather than the whole tool: true
+   * for a tool that runs a shell command it declares (bash_execute, write_shell_stdin).
+   */
+  isCommandScoped(toolName: string): boolean {
+    return this.catalog.resolve(toolName)?.commandArg !== undefined;
+  }
+
+  /** The scopes "allow for this session" would remember for this call, or null for none. */
+  sessionScopeFor(toolName: string, command: string): string[] | null {
+    if (this.deniedTools.has(toolName) || UNREMEMBERED_COMMAND_TOOLS.has(toolName)) return null;
+    return sessionCommandPrefixes(command);
+  }
+
+  /**
+   * Trust, for the current session, later calls of this tool whose every simple command has a
+   * scope `command` has. Returns the scopes remembered, or null when nothing was remembered.
+   */
+  trustCommandForSession(toolName: string, command: string): string[] | null {
+    const prefixes = this.sessionScopeFor(toolName, command);
+    if (!prefixes) return null;
+    const approved = this.sessionTrustedCommands.get(toolName) ?? new Set<string>();
+    for (const prefix of prefixes) approved.add(prefix);
+    this.sessionTrustedCommands.set(toolName, approved);
+    return prefixes;
+  }
+
+  isCommandSessionTrusted(toolName: string, command: string): boolean {
+    const approved = this.sessionTrustedCommands.get(toolName);
+    if (!approved) return false;
+    const prefixes = sessionCommandPrefixes(command);
+    return prefixes !== null && prefixes.every(prefix => approved.has(prefix));
+  }
+
+  /**
    * Check if a tool is trusted for the current session
    */
   isSessionTrusted(toolName: string): boolean {
     return this.sessionTrustedTools.has(toolName);
+  }
+
+  /** Remember a session-scoped approval to run one command outside the sandbox. Never persisted. */
+  approveSandboxEscalation(key: string): void {
+    this.sandboxEscalationApprovals.add(key);
+  }
+
+  isSandboxEscalationApproved(key: string): boolean {
+    return this.sandboxEscalationApprovals.has(key);
   }
 
   /**
@@ -189,6 +250,8 @@ export class PermissionManager {
    */
   clearSessionTrust(): void {
     this.sessionTrustedTools.clear();
+    this.sessionTrustedCommands.clear();
+    this.sandboxEscalationApprovals.clear();
   }
 
   /**

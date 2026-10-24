@@ -1,13 +1,12 @@
 import { execFileSync, execSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { computeHelpCorpusHash } from '@bike4mind/infra';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
 import {
   researchEngineQueue,
   agentProactiveMessageQueue,
-  whatsNewHighlightsQueue,
   liveOpsTriageQueue,
   deepAgentWakeQueue,
   dataLakeTaxonomyQueue,
@@ -20,6 +19,7 @@ import {
   generationJobQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
+import { appUrlForLambdaEnv } from './router';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { websocketApi } from './websocket';
 
@@ -34,16 +34,6 @@ const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    permissions: [
-      {
-        actions: ['sqs:*'],
-        resources: ['*'],
-      },
-      {
-        actions: ['events:*'],
-        resources: ['*'],
-      },
-    ],
   },
 });
 
@@ -70,62 +60,91 @@ const userActivityReportFunction = new sst.aws.Function('userActivityReportFunct
   link: [...allSecrets],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
   },
   dev: false,
 });
 
 // Daily report - runs every day at 00:00 CST (05:00 UTC)
-const dailyUserActivityReport = new sst.aws.Cron('dailyUserActivityReport', {
-  // Expressions are in UTC+0. We want to run it every day at 00:00 CST.
-  schedule: 'cron(0 5 * * ? *)',
-  job: userActivityReportFunction.arn,
-  event: { reportType: 'daily' },
-  enabled: $app.stage === 'production',
-});
+const dailyUserActivityReport = runsScheduledJobs
+  ? new sst.aws.Cron('dailyUserActivityReport', {
+      // Expressions are in UTC+0. We want to run it every day at 00:00 CST.
+      schedule: 'cron(0 5 * * ? *)',
+      job: userActivityReportFunction.arn,
+      event: { reportType: 'daily' },
+      enabled: $app.stage === 'production',
+    })
+  : undefined;
 
 // Weekly report - runs every Monday at 00:00 CST (05:00 UTC)
-const weeklyUserActivityReport = new sst.aws.Cron('weeklyUserActivityReport', {
-  schedule: 'cron(0 5 ? * MON *)',
-  job: userActivityReportFunction.arn,
-  event: { reportType: 'weekly' },
-  enabled: $app.stage === 'production',
-});
+const weeklyUserActivityReport = runsScheduledJobs
+  ? new sst.aws.Cron('weeklyUserActivityReport', {
+      schedule: 'cron(0 5 ? * MON *)',
+      job: userActivityReportFunction.arn,
+      event: { reportType: 'weekly' },
+      enabled: $app.stage === 'production',
+    })
+  : undefined;
 
-const secretRotationNotifierCron = new sst.aws.Cron('secretRotationNotifier', {
-  // Daily check at 9am UTC (4am EST)
-  schedule: 'cron(0 9 * * ? *)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/secretRotationNotifier.handler',
-    runtime: 'nodejs24.x',
-    timeout: '1 minute',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const signupBaselineReport = runsScheduledJobs
+  ? new sst.aws.Cron('signupBaselineReport', {
+      schedule: 'cron(0 6 ? * MON *)',
+      enabled: $app.stage === 'production',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupBaselineReport.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+          SIGNUP_BASELINE_SINCE: process.env.SIGNUP_BASELINE_SINCE || '',
+          ANALYTICS_TEST_PATTERN: process.env.ANALYTICS_TEST_PATTERN || '',
+        },
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
+const secretRotationNotifierCron = runsScheduledJobs
+  ? new sst.aws.Cron('secretRotationNotifier', {
+      // Daily check at 9am UTC (4am EST)
+      schedule: 'cron(0 9 * * ? *)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/secretRotationNotifier.handler',
+        runtime: 'nodejs24.x',
+        timeout: '1 minute',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
 
 // [DELETION-FOOTPRINT] Team Metrics Refresh cron moved to @bike4mind/premium-pi
 // (contributeInfra in packages/premium/pi/src/infra.ts) during the Pi open-core carve.
 
 // API Key Baseline Calculation - runs daily at 2am UTC (9pm CST previous day)
 // Calculates normal usage patterns for each user's API keys based on last 30 days
-const apiKeyBaselineCalculation = new sst.aws.Cron('apiKeyBaselineCalculation', {
-  schedule: 'cron(0 2 * * ? *)', // Daily at 2am UTC
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/apiKeyBaselineCalculation.handler',
-    runtime: 'nodejs24.x',
-    timeout: '15 minutes', // May need time for users with many API keys
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const apiKeyBaselineCalculation = runsScheduledJobs
+  ? new sst.aws.Cron('apiKeyBaselineCalculation', {
+      schedule: 'cron(0 2 * * ? *)', // Daily at 2am UTC
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/apiKeyBaselineCalculation.handler',
+        runtime: 'nodejs24.x',
+        timeout: '15 minutes', // May need time for users with many API keys
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
 
 // Email campaign scheduler - runs every 5 minutes to check for scheduled campaigns
 const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
@@ -143,39 +162,6 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
 });
 
 /**
- * What's New Sync Cron
- * Fetches latest What's New modal from production S3 and imports to local DB.
- *
- * CRITICAL: Only enabled for non-production environments (dev, staging, forks)
- * - production: DISABLED - production is the source the others import from
- * - dev/staging/forks: ENABLED - imports modals from production
- *
- * Schedule: Daily at 9am UTC (3am CST)
- * Checks autoSyncEnabled config before importing.
- */
-const whatsNewSyncCron = new sst.aws.Cron('whatsNewSyncCron', {
-  schedule: 'cron(0 9 * * ? *)', // 9am UTC daily (3am CST)
-  function: {
-    handler: 'apps/workers/src/cron/whatsNewSync.handler',
-    vpc: lambdaVpc,
-    link: [...allSecrets],
-    timeout: '2 minutes',
-    runtime: 'nodejs24.x',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-    ],
-  },
-  // CRITICAL: Only enabled for non-production stages
-  enabled: $app.stage !== 'production',
-});
-
-/**
  * LiveOps Triage Dispatcher (Multi-Config)
  * Dispatches triage jobs to SQS for each enabled LiveOpsTriageConfig.
  *
@@ -186,217 +172,251 @@ const whatsNewSyncCron = new sst.aws.Cron('whatsNewSyncCron', {
  * Workers process jobs independently via SQS fan-out pattern.
  * Only enabled in production environment.
  */
-const liveopsTriageDispatcherCron = new sst.aws.Cron('liveopsTriageDispatcherCron', {
-  schedule: 'cron(0 2,8,14,20 * * ? *)', // Every 6 hours UTC
-  function: {
-    handler: 'apps/workers/src/cron/liveopsTriageDispatcher.handler',
-    vpc: lambdaVpc,
-    link: [...allSecrets, liveOpsTriageQueue],
-    timeout: '2 minutes',
-    runtime: 'nodejs24.x',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
+const liveopsTriageDispatcherCron = runsScheduledJobs
+  ? new sst.aws.Cron('liveopsTriageDispatcherCron', {
+      schedule: 'cron(0 2,8,14,20 * * ? *)', // Every 6 hours UTC
+      function: {
+        handler: 'apps/workers/src/cron/liveopsTriageDispatcher.handler',
+        vpc: lambdaVpc,
+        link: [...allSecrets, liveOpsTriageQueue],
+        timeout: '2 minutes',
+        runtime: 'nodejs24.x',
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+          {
+            actions: ['sqs:SendMessage'],
+            resources: [liveOpsTriageQueue.arn],
+          },
+        ],
       },
-      {
-        actions: ['sqs:SendMessage'],
-        resources: [liveOpsTriageQueue.arn],
-      },
-    ],
-  },
-  // Only enabled in production
-  enabled: $app.stage === 'production',
-});
-
-/**
- * What's New Weekly Highlights Cron
- * Generates a weekly summary of What's New modals and posts to Slack.
- *
- * Schedule: Weekly on Saturday at 2am CST (8:00 UTC)
- * Disabled; see `enabled` below.
- *
- * Workflow:
- * 1. Fetches What's New modals from the past 7 days
- * 2. Uses LLM to generate highlights summary
- * 3. Posts formatted highlights to configured Slack channel
- */
-const whatsNewHighlightsCron = new sst.aws.Cron('whatsNewHighlightsCron', {
-  schedule: 'cron(0 8 ? * SAT *)', // 2am CST / 8am UTC every Saturday
-  function: {
-    handler: 'apps/workers/src/cron/whatsNewHighlights.handler',
-    vpc: lambdaVpc,
-    link: [...allSecrets, whatsNewHighlightsQueue],
-    timeout: '2 minutes',
-    runtime: 'nodejs24.x',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-    ],
-  },
-  // Disabled: its only input was the generated What's New modals, which release notes replaced, so it
-  // would post a "no modals" warning every week.
-  enabled: false,
-});
+      // Only enabled in production
+      enabled: $app.stage === 'production',
+    })
+  : undefined;
 
 // Telemetry TTL Cleanup — GDPR Article 5(1)(e) storage limitation
 // Removes contextTelemetry from Quest documents older than 90 days
-const telemetryCleanupCron = new sst.aws.Cron('telemetryCleanup', {
-  schedule: 'cron(0 3 * * ? *)', // Daily at 3am UTC
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/telemetryCleanup.handler',
-    runtime: 'nodejs24.x',
-    timeout: '10 minutes',
-    link: [...allSecrets],
-    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const telemetryCleanupCron = runsScheduledJobs
+  ? new sst.aws.Cron('telemetryCleanup', {
+      schedule: 'cron(0 3 * * ? *)', // Daily at 3am UTC
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/telemetryCleanup.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
 
 // Credit Lot Sweep — reconciles the CreditLot parallel ledger against
 // currentCredits: assigns cumulative consumption soonest-to-expire-first and
 // expires stale remainders (see #190 design).
-const creditLotSweepCron = new sst.aws.Cron('creditLotSweep', {
-  schedule: 'cron(0 4 * * ? *)', // Daily at 4am UTC
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/creditLotSweep.handler',
-    runtime: 'nodejs24.x',
-    timeout: '10 minutes',
-    link: [...allSecrets],
-    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const creditLotSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('creditLotSweep', {
+      schedule: 'cron(0 4 * * ? *)', // Daily at 4am UTC
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/creditLotSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
 
 // Voice Hold Sweep - settles voice credit holds no client ever ended (closed tab, crashed browser,
 // failed connect) on connected time. Self-host twin: apps/workers/src/selfhost/voiceHoldSweep.ts;
 // keep the schedules in step. Settlement is DB-only and capped at VOICE_HOLD_SWEEP_LIMIT holds per
-// run. Overlapping runs (at-least-once delivery, async retry after a timeout) are safe because
-// settleVoiceHold claims each hold atomically, so a losing settler moves no credit.
-const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep', {
-  schedule: 'rate(5 minutes)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/voiceHoldSweep.handler',
-    runtime: 'nodejs24.x',
-    timeout: '4 minutes',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '1 week',
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+// run. Overlapping runs (at-least-once delivery) are safe because settleVoiceHold claims each hold
+// atomically, so a losing settler moves no credit.
+const voiceHoldSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('voiceHoldSweep', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/voiceHoldSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '4 minutes',
+        // The 5-minute schedule is the retry; Lambda's async retries would land one failed run in two alarm periods.
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        // The stale-hold alarms in infra/alarms.ts watch the counts this function publishes.
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
+// Admin Audit Alerts - posts critical Admin Audit Log entries and credit-grant bursts to the security
+// Slack webhook (AdminSettings SlackSecurityAlertsWebhookUrl; unset = off). The stored cursor only
+// advances past posted entries, so the next minute's run is the retry. APP_URL builds the entry links.
+// Self-host twin: apps/workers/src/selfhost/adminAuditAlerts.ts.
+const adminAuditAlertsCron = runsScheduledJobs
+  ? new sst.aws.Cron('adminAuditAlerts', {
+      schedule: 'rate(1 minute)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/adminAuditAlerts.handler',
+        runtime: 'nodejs24.x',
+        timeout: '50 seconds',
+        // The next minute's run is the retry; Lambda's async retries would overlap it.
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+          APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+        },
+        logging: {
+          retention: '1 month',
+        },
+      },
+    })
+  : undefined;
+
+// Data Lake Vector Index Keep-Warm - one wide $vectorSearch per queryable per-model Atlas index, so
+// forced retrieval's 3s ANN candidate pick does not hit a cold index after an idle stretch
+// and fall back to picking files by name. Skips itself while EnableDataLakeVectorSearch is off.
+// No self-host twin: self-host retrieval runs on OpenSearch.
+const dataLakeVectorIndexKeepWarmCron = runsScheduledJobs
+  ? new sst.aws.Cron('dataLakeVectorIndexKeepWarm', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/dataLakeVectorIndexKeepWarm.handler',
+        runtime: 'nodejs24.x',
+        // A query against an index that has already gone cold has taken 49s on production.
+        timeout: '2 minutes',
+        // The next run is the retry; Lambda's async retries would only stack more queries on mongot.
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        logging: {
+          retention: '1 month',
+        },
+      },
+    })
+  : undefined;
 
 // Credit Hold Sweep - refunds request credit holds whose process died between reserve and settle.
 // Self-host twin: apps/workers/src/selfhost/creditHoldSweep.ts; keep the schedules in step.
 // Overlapping runs are safe: each hold's claim and refund commit in one transaction.
-const creditHoldSweepCron = new sst.aws.Cron('creditHoldSweep', {
-  schedule: 'rate(15 minutes)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/creditHoldSweep.handler',
-    runtime: 'nodejs24.x',
-    timeout: '2 minutes',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
+const creditHoldSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('creditHoldSweep', {
+      schedule: 'rate(15 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/creditHoldSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
+        logging: {
+          retention: '1 week',
+        },
       },
-    ],
-    logging: {
-      retention: '1 week',
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 // Integration Health Check - runs every 5 minutes to probe external APIs
 // Probes: Slack, GitHub, Jira, Confluence
-const integrationHealthCheckCron = new sst.aws.Cron('integrationHealthCheck', {
-  schedule: 'rate(5 minutes)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/integrationHealthCheck.handler',
-    runtime: 'nodejs24.x',
-    timeout: '2 minutes',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
+const integrationHealthCheckCron = runsScheduledJobs
+  ? new sst.aws.Cron('integrationHealthCheck', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/integrationHealthCheck.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
       },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 // Cloud Security Scan - runs daily to evaluate baseline AWS configuration
-const cloudSecurityScanCron = new sst.aws.Cron('CloudSecurityScan', {
-  schedule: 'rate(1 day)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/client/server/security/cloudScan.handler',
-    runtime: 'nodejs24.x',
-    timeout: '5 minutes',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['iam:GetAccountSummary'],
-        resources: ['*'],
-      },
-      {
-        actions: ['s3:ListAllMyBuckets', 's3:GetBucketPublicAccessBlock', 's3:GetEncryptionConfiguration'],
-        resources: ['*'],
-      },
-      {
-        actions: ['cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus'],
-        resources: ['*'],
-      },
-      {
-        actions: ['ec2:DescribeSecurityGroups'],
-        resources: ['*'],
-      },
-      {
-        actions: [
-          'iam:GenerateCredentialReport',
-          'iam:GetCredentialReport',
-          'iam:ListPolicies',
-          'iam:GetPolicyVersion',
+const cloudSecurityScanCron = runsScheduledJobs
+  ? new sst.aws.Cron('CloudSecurityScan', {
+      schedule: 'rate(1 day)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/client/server/security/cloudScan.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['iam:GetAccountSummary'],
+            resources: ['*'],
+          },
+          {
+            actions: ['s3:ListAllMyBuckets', 's3:GetBucketPublicAccessBlock', 's3:GetEncryptionConfiguration'],
+            resources: ['*'],
+          },
+          {
+            actions: ['cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus'],
+            resources: ['*'],
+          },
+          {
+            actions: ['ec2:DescribeSecurityGroups'],
+            resources: ['*'],
+          },
+          {
+            actions: [
+              'iam:GenerateCredentialReport',
+              'iam:GetCredentialReport',
+              'iam:ListPolicies',
+              'iam:GetPolicyVersion',
+            ],
+            resources: ['*'],
+          },
+          {
+            actions: ['secretsmanager:ListSecrets'],
+            resources: ['*'],
+          },
         ],
-        resources: ['*'],
       },
-      {
-        actions: ['secretsmanager:ListSecrets'],
-        resources: ['*'],
-      },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 /**
  * Security Scan Scheduler
@@ -408,62 +428,59 @@ const cloudSecurityScanCron = new sst.aws.Cron('CloudSecurityScan', {
  *
  * Enabled for production and dev environments only.
  */
-const securityScanSchedulerCron = new sst.aws.Cron('securityScanScheduler', {
-  schedule: 'rate(1 hour)', // Check every hour
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/securityScanScheduler.handler',
-    runtime: 'nodejs24.x',
-    link: [...allSecrets],
-    timeout: '5 minutes',
-    memory: '512 MB',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['events:*'],
-        resources: ['*'],
+const securityScanSchedulerCron = runsScheduledJobs
+  ? new sst.aws.Cron('securityScanScheduler', {
+      schedule: 'rate(1 hour)', // Check every hour
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/securityScanScheduler.handler',
+        runtime: 'nodejs24.x',
+        link: [...allSecrets],
+        timeout: '5 minutes',
+        memory: '512 MB',
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
       },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 // Deep Agent Wake Scheduler — scans for agents whose next wake is due
 // (handoff.nextWakeAt <= now) and enqueues a wake per agent.
-const deepAgentWakeCron = new sst.aws.Cron('deepAgentWakeCron', {
-  schedule: 'rate(5 minutes)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/deepAgentWake.handler',
-    runtime: 'nodejs24.x',
-    link: [...allSecrets, deepAgentWakeQueue],
-    timeout: '2 minutes',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const deepAgentWakeCron = runsScheduledJobs
+  ? new sst.aws.Cron('deepAgentWakeCron', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/deepAgentWake.handler',
+        runtime: 'nodejs24.x',
+        link: [...allSecrets, deepAgentWakeQueue],
+        timeout: '2 minutes',
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
 
 // Data Lake Research Schedule - fires research configs whose cadence is due, skipping any lake whose
 // pending-proposal queue is at the config's review limit. 15 minutes is plenty for a daily-at-most
 // cadence; self-host drives the same tick from apps/workers/src/selfhost/main.ts.
-const dataLakeResearchScheduleCron = new sst.aws.Cron('dataLakeResearchScheduleCron', {
-  schedule: 'rate(15 minutes)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/dataLakeResearchSchedule.handler',
-    runtime: 'nodejs24.x',
-    link: [...allSecrets, dataLakeResearchQueue],
-    timeout: '2 minutes',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const dataLakeResearchScheduleCron = runsScheduledJobs
+  ? new sst.aws.Cron('dataLakeResearchScheduleCron', {
+      schedule: 'rate(15 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/dataLakeResearchSchedule.handler',
+        runtime: 'nodejs24.x',
+        link: [...allSecrets, dataLakeResearchQueue],
+        timeout: '2 minutes',
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
 
 /**
  * SRE Stale Dispatch Cleanup
@@ -472,20 +489,21 @@ const dataLakeResearchScheduleCron = new sst.aws.Cron('dataLakeResearchScheduleC
  * Schedule: Every 15 minutes
  * Enabled: production and dev environments
  */
-const sreStaleDispatchCron = new sst.aws.Cron('SreStaleDispatchCron', {
-  schedule: 'rate(15 minutes)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/sreStaleDispatch.handler',
-    runtime: 'nodejs24.x',
-    link: [...allSecrets],
-    timeout: '2 minutes',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const sreStaleDispatchCron = runsScheduledJobs
+  ? new sst.aws.Cron('SreStaleDispatchCron', {
+      schedule: 'rate(15 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/sreStaleDispatch.handler',
+        runtime: 'nodejs24.x',
+        link: [...allSecrets],
+        timeout: '2 minutes',
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
 
 /**
  * Active Defense — Attack Simulation
@@ -510,12 +528,13 @@ const attackSimulationFunction = new sst.aws.Function('attackSimulationFunction'
   },
 });
 
-const attackSimulationCron = new sst.aws.Cron('attackSimulationCron', {
-  schedule: 'cron(0 6 ? * SUN *)', // Sunday 06:00 UTC
-  job: attackSimulationFunction.arn,
-  event: { trigger: 'scheduled' },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const attackSimulationCron = runsScheduledJobs
+  ? new sst.aws.Cron('attackSimulationCron', {
+      schedule: 'cron(0 6 ? * SUN *)', // Sunday 06:00 UTC
+      job: attackSimulationFunction.arn,
+      event: { trigger: 'scheduled' },
+    })
+  : undefined;
 
 /**
  * Model Discovery
@@ -574,16 +593,16 @@ const MODEL_DISCOVERY_SCHEDULE_BY_STAGE: Record<string, `cron(${string})`> = {
   dev: 'cron(50 3,9,15,21 * * ? *)', // 03:50, 09:50, 15:50, 21:50 UTC
 };
 
-// The no-successful-run alarm in alarms.ts keys off this too; keep one source.
-const modelDiscoveryCronEnabled = ['production', 'dev'].includes($app.stage);
+// The no-successful-run alarm in alarms.ts keys off this too; keep one source. Preview stages never hammer providers.
+const modelDiscoveryCronEnabled = runsScheduledJobs;
 
-const modelDiscoveryCron = new sst.aws.Cron('modelDiscoveryCron', {
-  schedule: MODEL_DISCOVERY_SCHEDULE_BY_STAGE[$app.stage] ?? MODEL_DISCOVERY_SCHEDULE_BY_STAGE.production,
-  job: modelDiscoveryFunction.arn,
-  event: { trigger: 'cron' },
-  // Preview stages never hammer providers.
-  enabled: modelDiscoveryCronEnabled,
-});
+const modelDiscoveryCron = modelDiscoveryCronEnabled
+  ? new sst.aws.Cron('modelDiscoveryCron', {
+      schedule: MODEL_DISCOVERY_SCHEDULE_BY_STAGE[$app.stage] ?? MODEL_DISCOVERY_SCHEDULE_BY_STAGE.production,
+      job: modelDiscoveryFunction.arn,
+      event: { trigger: 'cron' },
+    })
+  : undefined;
 
 // Independent of modelDiscoveryCron: the check must still run when discovery stops.
 const modelDiscoveryStalenessFunction = new sst.aws.Function('modelDiscoveryStalenessFunction', {
@@ -603,11 +622,12 @@ const modelDiscoveryStalenessFunction = new sst.aws.Function('modelDiscoveryStal
   ],
 });
 
-const modelDiscoveryStalenessCron = new sst.aws.Cron('modelDiscoveryStalenessCron', {
-  schedule: 'rate(15 minutes)',
-  job: modelDiscoveryStalenessFunction.arn,
-  enabled: modelDiscoveryCronEnabled,
-});
+const modelDiscoveryStalenessCron = modelDiscoveryCronEnabled
+  ? new sst.aws.Cron('modelDiscoveryStalenessCron', {
+      schedule: 'rate(15 minutes)',
+      job: modelDiscoveryStalenessFunction.arn,
+    })
+  : undefined;
 
 /**
  * Data Lake Batch Reconcile (daily fallback)
@@ -618,37 +638,38 @@ const modelDiscoveryStalenessCron = new sst.aws.Cron('modelDiscoveryStalenessCro
  * Schedule: daily (5am UTC)
  * Enabled: production + dev
  */
-const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
-  schedule: 'cron(0 5 * * ? *)', // Daily at 5am UTC (after telemetry 3am / creditLot 4am)
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/dataLakeBatchReconcile.handler',
-    runtime: 'nodejs24.x',
-    timeout: '10 minutes',
-    // dataLakeTaxonomyQueue + websocketApi: the stuck-batch backstop calls
-    // enqueueTaxonomyAnalysisIfWanted, which needs Resource.dataLakeTaxonomyQueue.url to
-    // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
-    // live status update. fabFileChunkQueue: the un-chunked rescue sweep re-enqueues
-    // complete-but-never-chunked files for chunking. fabFileBucket: the moderation rescue sweep
-    // downloads stranded files to re-run the image scan.
-    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
+const dataLakeBatchReconcileCron = runsScheduledJobs
+  ? new sst.aws.Cron('dataLakeBatchReconcile', {
+      schedule: 'cron(0 5 * * ? *)', // Daily at 5am UTC (after telemetry 3am / creditLot 4am)
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/dataLakeBatchReconcile.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        // dataLakeTaxonomyQueue + websocketApi: the stuck-batch backstop calls
+        // enqueueTaxonomyAnalysisIfWanted, which needs Resource.dataLakeTaxonomyQueue.url to
+        // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
+        // live status update. fabFileChunkQueue: the un-chunked rescue sweep re-enqueues
+        // complete-but-never-chunked files for chunking. fabFileBucket: the moderation rescue sweep
+        // downloads stranded files to re-run the image scan.
+        link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+          // The moderation rescue sweep re-runs the image scan on stranded files.
+          {
+            actions: ['rekognition:DetectModerationLabels'],
+            resources: ['*'],
+          },
+        ],
       },
-      // The moderation rescue sweep re-runs the image scan on stranded files.
-      {
-        actions: ['rekognition:DetectModerationLabels'],
-        resources: ['*'],
-      },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 /**
  * Quest Timeout Sweep
@@ -661,28 +682,29 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
  * Schedule: every 5 minutes
  * Enabled: production + dev
  */
-const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
-  schedule: 'rate(5 minutes)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/questTimeoutSweep.handler',
-    runtime: 'nodejs24.x',
-    // generationCallbackQueue: a timed-out image/video generation job still owes its caller a
-    // completion callback, so the sweep enqueues one when it recovers a stuck quest.
-    link: [...allSecrets, generationCallbackQueue],
-    timeout: '2 minutes',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
+const questTimeoutSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('questTimeoutSweep', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/questTimeoutSweep.handler',
+        runtime: 'nodejs24.x',
+        // generationCallbackQueue: a timed-out image/video generation job still owes its caller a
+        // completion callback, so the sweep enqueues one when it recovers a stuck quest.
+        link: [...allSecrets, generationCallbackQueue],
+        timeout: '2 minutes',
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
       },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 /**
  * Generation Job Sweep
@@ -775,101 +797,105 @@ const realtimeConnectionSweepCron = new sst.aws.Cron('realtimeConnectionSweep', 
  * Schedule: hourly
  * Enabled: production + dev
  */
-const agentExecutionAbandonedSweepCron = new sst.aws.Cron('agentExecutionAbandonedSweep', {
-  schedule: 'rate(1 hour)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/agentExecutionAbandonedSweep.handler',
-    runtime: 'nodejs24.x',
-    link: [...allSecrets],
-    timeout: '2 minutes',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
+const agentExecutionAbandonedSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('agentExecutionAbandonedSweep', {
+      schedule: 'rate(1 hour)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/agentExecutionAbandonedSweep.handler',
+        runtime: 'nodejs24.x',
+        link: [...allSecrets],
+        timeout: '2 minutes',
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
       },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 // Spend Reconciliation -- fetches authoritative billing from Anthropic/OpenAI
 // admin APIs and compares against internal COGS estimates.
-const spendReconciliationCron = new sst.aws.Cron('spendReconciliation', {
-  schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/spendReconciliation.handler',
-    runtime: 'nodejs24.x',
-    timeout: '5 minutes',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const spendReconciliationCron = runsScheduledJobs
+  ? new sst.aws.Cron('spendReconciliation', {
+      schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/spendReconciliation.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
 
 // Credit Purchase Reconciliation -- alerts on Stripe credit purchases that
 // succeeded with no credit grant.
-const creditPurchaseReconciliationCron = new sst.aws.Cron('creditPurchaseReconciliation', {
-  schedule: 'cron(0 7 * * ? *)', // Daily at 7am UTC
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/creditPurchaseReconciliation.handler',
-    runtime: 'nodejs24.x',
-    timeout: '5 minutes',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '1 week',
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
+const creditPurchaseReconciliationCron = runsScheduledJobs
+  ? new sst.aws.Cron('creditPurchaseReconciliation', {
+      schedule: 'cron(0 7 * * ? *)', // Daily at 7am UTC
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/creditPurchaseReconciliation.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        logging: {
+          retention: '1 week',
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
       },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 // Storage Reconciliation -- compares each user's currentStorageSize with the bytes their charged
 // files hold, records drift and alerts over threshold. Dry run unless STORAGE_RECONCILIATION_REPAIR
 // is 'true'; a daily pass resumes across hourly invocations.
-const storageReconciliationCron = new sst.aws.Cron('storageReconciliation', {
-  schedule: 'rate(1 hour)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/storageReconciliation.handler',
-    runtime: 'nodejs24.x',
-    timeout: '5 minutes',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-      STORAGE_RECONCILIATION_REPAIR: 'false',
-      // The cron's alert thresholds, named here so tuning them does not require a code change.
-      STORAGE_DRIFT_ALERT_BYTES: String(100 * 1024 * 1024),
-      STORAGE_DRIFTED_USER_CEILING: '50',
-      STORAGE_DRIFT_CEILING_MIN_BYTES: String(1024 * 1024),
-    },
-    logging: {
-      retention: '1 week',
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
+const storageReconciliationCron = runsScheduledJobs
+  ? new sst.aws.Cron('storageReconciliation', {
+      schedule: 'rate(1 hour)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/storageReconciliation.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+          STORAGE_RECONCILIATION_REPAIR: 'false',
+          // The cron's alert thresholds, named here so tuning them does not require a code change.
+          STORAGE_DRIFT_ALERT_BYTES: String(100 * 1024 * 1024),
+          STORAGE_DRIFTED_USER_CEILING: '50',
+          STORAGE_DRIFT_CEILING_MIN_BYTES: String(1024 * 1024),
+        },
+        logging: {
+          retention: '1 week',
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
       },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 /**
  * Drive-as-Lake Re-sync Poll (#1591 E1)
@@ -881,22 +907,23 @@ const storageReconciliationCron = new sst.aws.Cron('storageReconciliation', {
  * packages/server-utils/src/integrations/google/drive/drivePollSchedule.ts)
  * Enabled: production + dev
  */
-const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
-  schedule: 'rate(1 hour)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/driveLakeResyncPoll.handler',
-    runtime: 'nodejs24.x',
-    timeout: '2 minutes',
-    // driveLakeIngestQueue: the poll enqueues each due connection onto the shared ingest handler,
-    // so it needs Resource.driveLakeIngestQueue.url and the sqs:SendMessage grant the link provides.
-    link: [...allSecrets, driveLakeIngestQueue],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const driveLakeResyncPollCron = runsScheduledJobs
+  ? new sst.aws.Cron('driveLakeResyncPoll', {
+      schedule: 'rate(1 hour)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/driveLakeResyncPoll.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        // driveLakeIngestQueue: the poll enqueues each due connection onto the shared ingest handler,
+        // so it needs Resource.driveLakeIngestQueue.url and the sqs:SendMessage grant the link provides.
+        link: [...allSecrets, driveLakeIngestQueue],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
 
 /**
  * GitHub-as-Lake Reconcile
@@ -908,22 +935,23 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
  * Schedule: every 15 minutes (a bounded batch of connections per run; see MAX_CHECKS_PER_RUN in the handler)
  * Enabled: production + dev
  */
-const githubLakeReconcileCron = new sst.aws.Cron('githubLakeReconcile', {
-  schedule: 'rate(15 minutes)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/githubLakeReconcile.handler',
-    runtime: 'nodejs24.x',
-    timeout: '5 minutes',
-    // githubLakeIngestQueue: a changed HEAD is enqueued onto the shared ingest handler, so the
-    // cron needs Resource.githubLakeIngestQueue.url and the sqs:SendMessage grant the link provides.
-    link: [...allSecrets, githubLakeIngestQueue],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const githubLakeReconcileCron = runsScheduledJobs
+  ? new sst.aws.Cron('githubLakeReconcile', {
+      schedule: 'rate(15 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/githubLakeReconcile.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        // githubLakeIngestQueue: a changed HEAD is enqueued onto the shared ingest handler, so the
+        // cron needs Resource.githubLakeIngestQueue.url and the sqs:SendMessage grant the link provides.
+        link: [...allSecrets, githubLakeIngestQueue],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
 
 /**
  * Data-Lake Connector Orphan Reap
@@ -935,22 +963,23 @@ const githubLakeReconcileCron = new sst.aws.Cron('githubLakeReconcile', {
  * Schedule: daily (a bounded batch per connector; see MAX_REAPS_PER_CONNECTOR in the handler)
  * Enabled: production + dev
  */
-const lakeConnectorOrphanReapCron = new sst.aws.Cron('lakeConnectorOrphanReap', {
-  schedule: 'rate(1 day)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/lakeConnectorOrphanReap.handler',
-    runtime: 'nodejs24.x',
-    timeout: '5 minutes',
-    // githubLakeRevokeQueue: releasing a GitHub binding hands a failed post-release uninstall to it
-    // (releaseGitHubLakeConnection, githubLakeConnection.ts).
-    link: [...allSecrets, githubLakeRevokeQueue],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+const lakeConnectorOrphanReapCron = runsScheduledJobs
+  ? new sst.aws.Cron('lakeConnectorOrphanReap', {
+      schedule: 'rate(1 day)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/lakeConnectorOrphanReap.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        // githubLakeRevokeQueue: releasing a GitHub binding hands a failed post-release uninstall to it
+        // (releaseGitHubLakeConnection, githubLakeConnection.ts).
+        link: [...allSecrets, githubLakeRevokeQueue],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
 
 /**
  * system-help data-lake re-sync
@@ -999,38 +1028,39 @@ const HELP_CORPUS_HASH = computeHelpCorpusHash({
   readIndex: () => readFileSync('apps/client/app/generated/help-index.json'),
 });
 
-const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
-  schedule: 'rate(6 hours)',
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/helpDatalakeIngest.handler',
-    runtime: 'nodejs24.x',
-    // Generous: a first run after a docs-wide edit re-embeds the whole corpus one chunk at a
-    // time. The steady state is a few seconds; the handler's own per-run create cap is what
-    // keeps a pathological corpus from reaching this ceiling.
-    timeout: '15 minutes',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-      HELP_CORPUS_VERSION: HELP_CORPUS_HASH,
-    },
-    copyFiles: [
-      { from: 'docs-site/docs', to: 'help-corpus/docs' },
-      { from: 'apps/client/app/generated/help-index.json', to: 'help-corpus/help-index.json' },
-    ],
-    // This cron embeds the whole help corpus through createHelpEmbedder, so it needs the same
-    // Bedrock grant the vectorize subscriber has (infra/queues.ts): an admin can point
-    // defaultEmbeddingModel at Titan, and a stage with no provider key falls back to it. Without
-    // this the first tick AccessDenies on every chunk and retries the whole corpus every 6 hours.
-    permissions: [
-      {
-        actions: ['bedrock:InvokeModel'],
-        resources: ['*'],
+const helpDatalakeIngestCron = runsScheduledJobs
+  ? new sst.aws.Cron('helpDatalakeIngest', {
+      schedule: 'rate(6 hours)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/helpDatalakeIngest.handler',
+        runtime: 'nodejs24.x',
+        // Generous: a first run after a docs-wide edit re-embeds the whole corpus one chunk at a
+        // time. The steady state is a few seconds; the handler's own per-run create cap is what
+        // keeps a pathological corpus from reaching this ceiling.
+        timeout: '15 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+          HELP_CORPUS_VERSION: HELP_CORPUS_HASH,
+        },
+        copyFiles: [
+          { from: 'docs-site/docs', to: 'help-corpus/docs' },
+          { from: 'apps/client/app/generated/help-index.json', to: 'help-corpus/help-index.json' },
+        ],
+        // This cron embeds the whole help corpus through createHelpEmbedder, so it needs the same
+        // Bedrock grant the vectorize subscriber has (infra/queues.ts): an admin can point
+        // defaultEmbeddingModel at Titan, and a stage with no provider key falls back to it. Without
+        // this the first tick AccessDenies on every chunk and retries the whole corpus every 6 hours.
+        permissions: [
+          {
+            actions: ['bedrock:InvokeModel'],
+            resources: ['*'],
+          },
+        ],
       },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 /**
  * Lake Health Sweep - scheduled counterpart to the on-demand GET /api/data-lakes/:id/health.
@@ -1040,26 +1070,27 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
  * Schedule: daily, after dataLakeBatchReconcile (5am UTC) so a batch that reconciler just forced
  * terminal is reflected in the same day's health.
  */
-const lakeHealthSweepCron = new sst.aws.Cron('lakeHealthSweep', {
-  schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/lakeHealthSweep.handler',
-    runtime: 'nodejs24.x',
-    timeout: '10 minutes',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
+const lakeHealthSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('lakeHealthSweep', {
+      schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/lakeHealthSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
       },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 /**
  * Scheduled cross-document inconsistency detection over every active lake.
@@ -1078,39 +1109,41 @@ const lakeHealthSweepCron = new sst.aws.Cron('lakeHealthSweep', {
  * inconsistency summary rather than computing it, so the other order would make every daily health
  * snapshot report counts a day old.
  */
-const lakeInconsistencySweepCron = new sst.aws.Cron('lakeInconsistencySweep', {
-  schedule: 'cron(0 4 * * ? *)', // Daily at 4am UTC
-  function: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/cron/lakeInconsistencySweep.handler',
-    runtime: 'nodejs24.x',
-    timeout: '15 minutes',
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
+const lakeInconsistencySweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('lakeInconsistencySweep', {
+      schedule: 'cron(0 4 * * ? *)', // Daily at 4am UTC
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/lakeInconsistencySweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '15 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
       },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;
 
 export {
+  adminAuditAlertsCron,
+  dataLakeVectorIndexKeepWarmCron,
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,
   weeklyUserActivityReport,
+  signupBaselineReport,
   secretRotationNotifierCron,
   scheduleTaskCron,
   apiKeyBaselineCalculation,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
-  whatsNewSyncCron,
   liveopsTriageDispatcherCron,
-  whatsNewHighlightsCron,
   cloudSecurityScanCron,
   integrationHealthCheckCron,
   securityScanSchedulerCron,

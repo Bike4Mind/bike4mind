@@ -1,7 +1,7 @@
 import { gzipSync } from 'node:zlib';
 import type { Request, Response } from 'express';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { emitMetrics } from '@server/utils/cloudwatch';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 
 /**
  * Send a JSON response, gzip-compressing it in-handler when it's large enough to matter and the
@@ -15,7 +15,8 @@ import { emitMetrics } from '@server/utils/cloudwatch';
  * re-gzips based on Accept-Encoding and would overwrite our Content-Encoding header, causing
  * double-compression/corruption. Do not reuse this helper on a route that moves to streaming.
  *
- * Callers must `return sendMaybeGzip(...)` - it is the sole response sender for the route.
+ * Callers must `return sendMaybeGzip(...)` - it is the sole response sender for the route, and the
+ * returned promise keeps the invocation alive until the size metric is sent.
  */
 
 /** Below Lambda's ~6MB hard limit with large headroom once gzip'd (repetitive JSON compresses ~85-90%). */
@@ -65,7 +66,7 @@ function appendVary(res: Response, value: string): void {
   res.setHeader('Vary', `${current}, ${value}`);
 }
 
-export function sendMaybeGzip(req: Request, res: Response, body: unknown): void {
+export async function sendMaybeGzip(req: Request, res: Response, body: unknown): Promise<void> {
   const serialized = Buffer.from(JSON.stringify(body));
   const uncompressedBytes = serialized.byteLength;
 
@@ -80,7 +81,9 @@ export function sendMaybeGzip(req: Request, res: Response, body: unknown): void 
   req.logger.withMetadata({ uncompressedBytes, route, compressed: shouldCompress }).info('api-response-size');
 
   if (uncompressedBytes >= LARGE_RESPONSE_BYTES_THRESHOLD) {
-    void emitMetrics(API_RESPONSE_NAMESPACE, [
+    // Awaited before responding: once the response is sent the Lambda can freeze, losing the metric
+    // or sending it later with an expired signature. Only >= 5 MB bodies pay the round trip.
+    await emitMetrics(API_RESPONSE_NAMESPACE, [
       {
         name: LARGE_API_RESPONSE_METRIC,
         value: uncompressedBytes,

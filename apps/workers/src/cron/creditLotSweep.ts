@@ -19,7 +19,7 @@ import {
 } from '@bike4mind/database';
 import { CreditHolderType, ICreditHolderMethods } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
 const contextToLogs = (context: Context) => ({

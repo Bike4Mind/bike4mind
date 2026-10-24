@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
+import {
+  UnauthorizedError,
+  ForbiddenError,
+  TooManyRequestsError,
+  ServiceUnavailableError,
+  InternalServerError,
+} from '@bike4mind/server-utils/utils/errors';
 
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
 vi.mock('@server/auth/mfaEnforcement', () => ({
@@ -7,7 +13,7 @@ vi.mock('@server/auth/mfaEnforcement', () => ({
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
 }));
 
@@ -656,5 +662,73 @@ describe('rate-limit errors carry their status and retry window', () => {
       additionalInfo: { retryAfter: 12, rateLimitHeaders: headers },
     });
     await expect(rejection).rejects.toThrow('Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.');
+  });
+});
+
+describe('API-key verification failures (credential miss vs infra failure)', () => {
+  const driverError = () =>
+    Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' });
+
+  describe('verifyApiKey', () => {
+    beforeEach(() => {
+      vi.mocked(extractApiKeyFromHeaders).mockReset().mockReturnValue('b4m_live_somekey');
+      vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    });
+
+    it('throws a 503 without driver text when the database is unreachable', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockRejectedValue(driverError());
+      const rejection = verifyApiKey({});
+      await expect(rejection).rejects.toBeInstanceOf(ServiceUnavailableError);
+      await expect(rejection).rejects.toMatchObject({
+        statusCode: 503,
+        message: 'Authentication temporarily unavailable',
+      });
+      await expect(rejection).rejects.not.toThrow(/ECONNREFUSED|10\.0\.0\.1/);
+    });
+
+    it('throws a 500 for an unexpected non-connection error', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockRejectedValue(new Error('boom'));
+      const rejection = verifyApiKey({});
+      await expect(rejection).rejects.toBeInstanceOf(InternalServerError);
+      await expect(rejection).rejects.toMatchObject({ statusCode: 500, message: 'Authentication failed' });
+    });
+
+    it('throws UnauthorizedError for an invalid key', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({ isValid: false, reason: 'not_found' });
+      const rejection = verifyApiKey({});
+      await expect(rejection).rejects.toBeInstanceOf(UnauthorizedError);
+      await expect(rejection).rejects.toMatchObject({ statusCode: 401 });
+    });
+
+    it('throws UnauthorizedError when no key is provided', async () => {
+      vi.mocked(extractApiKeyFromHeaders).mockReturnValue(undefined);
+      const rejection = verifyApiKey({});
+      await expect(rejection).rejects.toBeInstanceOf(UnauthorizedError);
+      await expect(rejection).rejects.toMatchObject({ statusCode: 401 });
+    });
+  });
+
+  describe('verifyEmbedKeyById', () => {
+    beforeEach(() => {
+      vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset();
+    });
+
+    it('throws a 503 without driver text when the database is unreachable', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKeyById).mockRejectedValue(driverError());
+      const rejection = verifyEmbedKeyById('key-1');
+      await expect(rejection).rejects.toBeInstanceOf(ServiceUnavailableError);
+      await expect(rejection).rejects.toMatchObject({
+        statusCode: 503,
+        message: 'Authentication temporarily unavailable',
+      });
+      await expect(rejection).rejects.not.toThrow(/ECONNREFUSED|10\.0\.0\.1/);
+    });
+
+    it('throws UnauthorizedError for an unknown key id', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({ isValid: false, reason: 'not_found' });
+      const rejection = verifyEmbedKeyById('key-1');
+      await expect(rejection).rejects.toBeInstanceOf(UnauthorizedError);
+      await expect(rejection).rejects.toMatchObject({ statusCode: 401 });
+    });
   });
 });

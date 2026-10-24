@@ -38,6 +38,68 @@ function withMove(calls: ChatToolCall[]): string {
 }
 
 describe('ToolCallList', () => {
+  describe('approval attribution', () => {
+    const decidedAt = '2026-10-22T00:00:00.000Z';
+    const attribution = (html: string) =>
+      [...html.matchAll(/data-testid="tool-call-approval-attribution"[^>]*>([^<]*)</g)].map(match => match[1]);
+
+    it('says who let a settled call run', () => {
+      const html = markup([
+        bash({
+          status: 'done',
+          approval: { outcome: 'allowed', decidedBy: { kind: 'user', answer: 'once' }, asked: true, decidedAt },
+        }),
+      ]);
+      expect(attribution(html)).toEqual(['Approved by you']);
+    });
+
+    it.each([
+      [{ kind: 'mode', mode: 'auto' } as const, 'allowed' as const, 'Auto-approved - Approve for me'],
+      [{ kind: 'rule', rule: 'Bash(git commit:*)' } as const, 'allowed' as const, 'Allowed by rule Bash(git commit:*)'],
+      [{ kind: 'chat-allowance' } as const, 'allowed' as const, 'Allowed in this chat'],
+      [{ kind: 'user', answer: 'always' } as const, 'allowed' as const, 'Approved by you - always in this chat'],
+      [{ kind: 'user', answer: 'deny' } as const, 'denied' as const, 'Declined by you'],
+      [{ kind: 'system', reason: 'stopped' } as const, 'denied' as const, 'Not run - reply stopped before approval'],
+      [{ kind: 'system', reason: 'app-quit' } as const, 'denied' as const, 'Not run - app quit before approval'],
+      [
+        { kind: 'system', reason: 'error', detail: 'outside every folder' } as const,
+        'denied' as const,
+        'Blocked - outside every folder',
+      ],
+    ])('reads %o as "%s"', (decidedBy, outcome, text) => {
+      const html = markup([
+        bash({
+          status: outcome === 'allowed' ? 'done' : 'denied',
+          approval: { outcome, decidedBy, asked: false, decidedAt },
+        }),
+      ]);
+      expect(attribution(html)).toEqual([text]);
+    });
+
+    it('says it once for a group answered the same way, and nothing for an ungated call', () => {
+      const auto = { outcome: 'allowed', decidedBy: { kind: 'mode', mode: 'auto' }, asked: false, decidedAt } as const;
+      const html = markup([
+        bash({ id: 'a', status: 'done', approval: auto }),
+        bash({ id: 'b', status: 'done', approval: auto }),
+        bash({ id: 'c', status: 'done' }),
+      ]);
+      expect(attribution(html)).toEqual(['Auto-approved - Approve for me']);
+      expect(attribution(markup([bash({ status: 'done' })]))).toEqual([]);
+    });
+  });
+
+  it('shows a failed permission save outside the collapsed tool result', () => {
+    const html = markup([
+      bash({
+        status: 'done',
+        notice: { kind: 'permissions-save-failed', text: 'Rules could not be saved: disk full.' },
+      }),
+    ]);
+    expect(html).toContain('data-testid="chat-tool-permissions-notice"');
+    expect(html).toContain('Permission rule was not saved');
+    expect(html).toContain('disk full');
+  });
+
   it('draws the approval card for a call waiting in this conversation', () => {
     const html = markup([awaiting()]);
     expect(html).toContain('data-testid="chat-tool-approval"');
@@ -52,7 +114,7 @@ describe('ToolCallList', () => {
    * The button says the action and nothing else. It used to carry the whole granted scope, so a
    * command touching two directories gave the broadest choice on the card the widest button.
    */
-  it('keeps the always-allow button to a fixed label and puts the scope beside it', () => {
+  it('keeps the allow-in-this-chat button to a fixed label and puts the scope beside it', () => {
     const html = markup([
       awaiting({
         approvalAlways: '`ls *`, `head *`, ~/Javascript/*, ./*',
@@ -60,7 +122,7 @@ describe('ToolCallList', () => {
       }),
     ]);
     const button = html.slice(html.indexOf('data-testid="chat-tool-approve-always"'));
-    expect(button.slice(0, button.indexOf('</button>'))).toContain('Always allow');
+    expect(button.slice(0, button.indexOf('</button>'))).toContain('Allow in this chat');
     expect(button.slice(0, button.indexOf('</button>'))).not.toContain('~/Javascript');
 
     expect(html).toContain('data-testid="chat-tool-approval-scope"');
@@ -76,6 +138,30 @@ describe('ToolCallList', () => {
     expect(html).toContain('data-testid="chat-tool-approve-always"');
     expect(html).toContain('data-testid="chat-tool-approval-scope"');
     expect(html).toContain('applies for the rest of this conversation');
+  });
+
+  it('offers the saving "Always allow" only when main derived a rule, and names the rule', () => {
+    expect(markup([awaiting()])).not.toContain('data-testid="chat-tool-approve-everywhere"');
+
+    const html = markup([awaiting({ approvalRules: ['Bash(gh pr create:*)'] })]);
+    const button = html.slice(html.indexOf('data-testid="chat-tool-approve-everywhere"'));
+    expect(button.slice(0, button.indexOf('</button>'))).toContain('Always allow');
+    expect(html).toContain('data-testid="chat-tool-approval-rules"');
+    expect(html).toContain('saves Bash(gh pr create:*) to Settings &gt; Permissions, so no session asks again');
+  });
+
+  it('says a bare rule covers every site or every call', () => {
+    const fetch = markup([awaiting({ name: 'web_fetch', approvalAlways: 'every site', approvalRules: ['WebFetch'] })]);
+    expect(fetch).toContain('&quot;Allow in this chat&quot; covers every site for the rest of this conversation');
+    expect(fetch).toContain('saves WebFetch (every site) to Settings');
+    expect(markup([awaiting({ name: 'session_send', approvalRules: ['session_send'] })])).toContain(
+      'saves session_send (every call) to Settings'
+    );
+  });
+
+  it('never offers the saving "Always allow" on a call that cannot be undone', () => {
+    const html = markup([awaiting({ approvalIrreversible: true, approvalRules: ['session_delete'] })]);
+    expect(html).not.toContain('data-testid="chat-tool-approve-everywhere"');
   });
 
   it('withholds "always" on a call that cannot be undone', () => {

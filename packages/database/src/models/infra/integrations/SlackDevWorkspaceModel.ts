@@ -1,12 +1,18 @@
+import { encryptAtRest, decryptAtRest, isSecretsAtRestConfigured } from '@bike4mind/utils/security';
 import mongoose, { Model, Schema } from 'mongoose';
 import { ISlackDevWorkspaceDocument, ISlackDevWorkspaceRepository } from '@bike4mind/common';
 import { softDeletePlugin } from '../../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
+function encryptWorkspaceSecret(value: string | undefined): string | undefined {
+  if (!value) return value;
+  if (!isSecretsAtRestConfigured()) throw new Error('Slack credential encryption is not configured');
+  return encryptAtRest(value);
+}
+
 const ModelName = 'SlackDevWorkspace';
 
-interface ISlackDevWorkspaceMethods {
-}
+interface ISlackDevWorkspaceMethods {}
 
 interface ISlackDevWorkspaceModel extends Model<ISlackDevWorkspaceDocument, {}, ISlackDevWorkspaceMethods> {}
 
@@ -27,20 +33,46 @@ const SlackDevWorkspaceSchema = new Schema<
     installedAt: { type: Date, required: false }, // Optional - set during OAuth installation
     // OAuth App Credentials (from manifest creation)
     slackClientId: { type: String, required: false, select: false }, // OAuth Client ID
-    slackClientSecret: { type: String, required: false, select: false }, // OAuth Client Secret (sensitive)
-    slackOAuthSigningSecret: { type: String, required: false, select: false }, // Signing secret for OAuth app
+    slackClientSecret: {
+      type: String,
+      required: false,
+      select: false,
+      set: encryptWorkspaceSecret,
+      get: (value: string | undefined) => (value ? decryptAtRest(value) : value),
+    }, // OAuth Client Secret (sensitive)
+    slackOAuthSigningSecret: {
+      type: String,
+      required: false,
+      select: false,
+      set: encryptWorkspaceSecret,
+      get: (value: string | undefined) => (value ? decryptAtRest(value) : value),
+    }, // Signing secret for OAuth app
     slackOAuthRedirectUri: { type: String, required: false }, // OAuth redirect URI
-    slackVerificationToken: { type: String, required: false, select: false }, // Verification token (legacy)
-    appConfigurationToken: { type: String, required: false, select: false }, // App config token for manifest management
+    slackVerificationToken: {
+      type: String,
+      required: false,
+      select: false,
+      set: encryptWorkspaceSecret,
+      get: (value: string | undefined) => (value ? decryptAtRest(value) : value),
+    }, // Verification token (legacy)
+    appConfigurationToken: {
+      type: String,
+      required: false,
+      select: false,
+      set: encryptWorkspaceSecret,
+      get: (value: string | undefined) => (value ? decryptAtRest(value) : value),
+    }, // App config token for manifest management
     enableWorkflowSteps: { type: Boolean, required: false, default: true }, // Workflow Steps require paid Slack plan
   },
   {
     timestamps: true,
     toJSON: {
       virtuals: true,
+      getters: true,
     },
     toObject: {
       virtuals: true,
+      getters: true,
     },
   }
 );

@@ -18,7 +18,6 @@ import {
   SessionListFilters,
   SessionOriginChannel,
   tagAttemptDueFilter,
-  VoiceHoldMarkers,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
@@ -122,7 +121,9 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     surface: { type: String, required: false },
     enabledTools: [{ type: String, required: false }],
     disabledTools: [{ type: String, required: false }],
+    autoAddedTools: [{ type: String, required: false }],
     disableUserIntegrations: { type: Boolean, required: false },
+    userSetFields: { type: [String], required: false, default: undefined },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
     // DELIBERATELY no default: absent must stay distinguishable from false, since `retrievalTags`
@@ -280,6 +281,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     voiceLastActivityAt: { type: Date, required: false, default: null },
     // No default: $inc needs the field absent or numeric, never null.
     voiceBilledCredits: { type: Number, required: false },
+    voiceHoldUserId: { type: String, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -521,6 +523,25 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     );
     return result.modifiedCount;
   }
+  async pullKnowledgeIdsFromSession(sessionId: string, fabFileIds: string[]) {
+    if (fabFileIds.length === 0 || !mongoose.isObjectIdOrHexString(sessionId)) return false;
+    // Matching on the ids too means a session holding none of them is not written at all, so its
+    // timestamps are not bumped (which would reorder it in the session list).
+    const result = await this.sessionModel.updateOne(
+      { _id: sessionId, knowledgeIds: { $in: fabFileIds } },
+      { $pull: { knowledgeIds: { $in: fabFileIds } } }
+    );
+    return result.modifiedCount > 0;
+  }
+  async pullKnowledgeIdsForUsers(userIds: string[], fabFileIds: string[]) {
+    if (userIds.length === 0 || fabFileIds.length === 0) return 0;
+    // `deletedAt: null` puts this on the (deletedAt, userId, lastUpdated) index and skips deleted notebooks.
+    const result = await this.sessionModel.updateMany(
+      { deletedAt: null, userId: { $in: userIds }, knowledgeIds: { $in: fabFileIds } },
+      { $pull: { knowledgeIds: { $in: fabFileIds } } }
+    );
+    return result.modifiedCount;
+  }
   /** Ids come from `project.sessionIds`, declared `[{ type: String }]` - see usableObjectIds. */
   async findAllByIds(ids: string[], options?: { includeDeleted?: boolean }) {
     const query = this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });
@@ -537,6 +558,11 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       throw new NotFoundError('Session not found');
     }
     return session;
+  }
+
+  async addAutoAddedTools(sessionId: string, toolNames: string[]) {
+    if (toolNames.length === 0) return;
+    await this.sessionModel.updateOne({ _id: sessionId }, { $addToSet: { autoAddedTools: { $each: toolNames } } });
   }
 
   async detachAgent(sessionId: string, agentId: string) {
@@ -743,17 +769,19 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
         },
-        $unset: { voiceBilledCredits: '' },
+        $unset: { voiceBilledCredits: '', voiceHoldUserId: '' },
       },
-      { new: false, projection: { voiceBilledCredits: 1 } }
+      { new: false, projection: { voiceBilledCredits: 1, voiceHoldUserId: 1 } }
     );
-    return before ? { billedCredits: before.voiceBilledCredits ?? null } : null;
+    return before
+      ? { billedCredits: before.voiceBilledCredits ?? null, payerId: before.voiceHoldUserId ?? null }
+      : null;
   }
 
   async openVoiceHold(
     sessionId: string,
     priorStartedAt: Date | null,
-    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
   ) {
     // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
     // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
@@ -774,6 +802,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceSessionStartedAt: hold.voiceSessionStartedAt,
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
+          voiceHoldUserId: hold.payerId,
           // Realtime holds are billed per response against this marker (server/websocket/voiceSessionEnded.ts).
           ...(hold.realtime ? { voiceBilledCredits: 0 } : {}),
         },
@@ -781,28 +810,6 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       }
     );
     return matchedCount === 1;
-  }
-
-  async restoreVoiceHold(
-    sessionId: string,
-    voiceReservedCredits: number,
-    startedAt: Date,
-    markers: VoiceHoldMarkers = {}
-  ) {
-    // Only while no newer call has started a hold on the session.
-    const { modifiedCount } = await this.sessionModel.updateOne(
-      { _id: sessionId, voiceSessionStartedAt: null },
-      {
-        $set: {
-          voiceReservedCredits,
-          voiceSessionStartedAt: startedAt,
-          voiceConnectedAt: markers.voiceConnectedAt ?? null,
-          voiceLastActivityAt: markers.voiceLastActivityAt ?? null,
-          ...(markers.voiceBilledCredits != null ? { voiceBilledCredits: markers.voiceBilledCredits } : {}),
-        },
-      }
-    );
-    return modifiedCount === 1;
   }
 
   async findSessionIdsByUserId(userId: string) {

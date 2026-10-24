@@ -170,6 +170,18 @@ describe('settleCreditHold', () => {
     );
   });
 
+  it('refunds the whole hold and writes no ledger row when the settled charge is 0', async () => {
+    const { adapters, state } = makeAdapters({ user: 100 });
+    const hold = await holdCredits(
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
+      adapters
+    );
+    const charged = await settleCreditHold(hold, 0, entry, { featureLabel: 'video', logger }, adapters);
+    expect(charged).toBe(0);
+    expect(state.user).toBe(100);
+    expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+  });
+
   it('never keeps more than it reserved', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     const hold = await holdCredits(
@@ -179,6 +191,36 @@ describe('settleCreditHold', () => {
     expect(await settleCreditHold(hold, 999, entry, { featureLabel: 'video', logger }, adapters)).toBe(30);
     expect(state.user).toBe(70);
   });
+
+  // Speech is quest-less but not special: it settles through the same org-aware ledger writer as
+  // everything else, so a member's speech spend reaches the same usage rollup.
+  it.each(['text_to_speech_usage', 'speech_to_text_usage'] as const)(
+    'settles %s through the shared refund policy and the org-aware ledger writer',
+    async type => {
+      const { adapters, state } = makeAdapters({ user: 100 });
+      const hold = await holdCredits(
+        { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'speech', logger },
+        adapters
+      );
+
+      const charged = await settleCreditHold(
+        hold,
+        20,
+        { type, model: 'speech-model', sessionId: 's1' },
+        { featureLabel: 'speech', logger },
+        adapters
+      );
+
+      expect(charged).toBe(20);
+      expect(state.user).toBe(80);
+      expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ type, credits: 20, model: 'speech-model', sessionId: 's1' }),
+        expect.anything(),
+        expect.objectContaining({ skipBalanceUpdate: true })
+      );
+      expect(adapters.users.incrementCredits).toHaveBeenCalledTimes(2);
+    }
+  );
 
   it('settles a hold that went through JSON, as a different process would', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });

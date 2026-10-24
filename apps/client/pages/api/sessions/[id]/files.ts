@@ -8,8 +8,8 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
-import { getFilesStorage } from '@server/utils/storage';
-import { toObjectIdString } from '@server/utils/objectId';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 
 const handler = baseApi()
   /**

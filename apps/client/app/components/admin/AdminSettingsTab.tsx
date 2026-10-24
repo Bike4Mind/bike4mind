@@ -1,18 +1,24 @@
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import {
   isBlankSettingValue,
+  allSettingDefinitions,
+  resolveSettingDefinition,
   settingsMap,
   SETTING_TABS,
+  type SettingDefinition,
   API_SERVICE_GROUPS,
   Category,
   CATEGORY_ICONS,
+  type SettingKey,
 } from '@bike4mind/common';
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
+import { useAdminSettingsSearchParams, type SettingSectionKey } from './useAdminSettingsSearchParams';
 import {
   Checkbox,
   FormControl,
   Input,
   LinearProgress,
+  Link,
   Sheet,
   Stack,
   Typography,
@@ -26,19 +32,19 @@ import {
   Divider,
   SvgIcon,
   type SvgIconProps,
-  Button,
-  FormLabel,
   Tooltip,
 } from '@mui/joy';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState, type ComponentProps } from 'react';
 import AdminSettingInputField from './AdminSettingInputField';
+import AdminStringListSettingField from './AdminStringListSettingField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
 import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
 import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
+import { AdminTab } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
 
 import AdminLogoUpload from './AdminLogoUpload';
-import { McpServerName } from '@bike4mind/common';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 
 import SmartToyIcon from '@mui/icons-material/SmartToy';
@@ -77,11 +83,8 @@ import SpeedIcon from '@mui/icons-material/Speed';
 const HEADER_HEIGHT = '100px';
 
 // Minimal searchable shape - the subset of a real setting definition that search
-// inspects. Derived from settingsMap so it stays in sync if those fields change.
-type SearchableSetting = Pick<
-  (typeof settingsMap)[keyof typeof settingsMap],
-  'key' | 'name' | 'description' | 'isSensitive'
->;
+// inspects. Derived from the definition type so it stays in sync if those fields change.
+type SearchableSetting = Pick<SettingDefinition<string>, 'key' | 'name' | 'description' | 'isSensitive'>;
 
 // Wrapper mapping a MUI icon component into the plain section-header icon that
 // IconMap exposes. Kept as a thin indirection so IconMap and its completeness
@@ -141,142 +144,34 @@ export const IconMap: IconMapType = {
 export const resolveSettingsIcon = (icon: string | undefined): React.FC<{ sx?: SvgIconProps['sx'] }> =>
   (icon && IconMap[icon]) || IconMap.Settings;
 
-const settingConfigs = Object.values(settingsMap);
+type SettingConfig = SettingDefinition<string>;
+// The field components are typed against the core catalog. A contributed definition has the same
+// runtime shape, and the update route accepts its key once registered.
+type CoreSettingConfig = (typeof settingsMap)[keyof typeof settingsMap];
 
-interface EnvVariable {
-  key: string;
-  value: string;
-}
+// Edited only on the Growth and Pricing tab (GROWTH_PRICING_SECTIONS in AdminGrowthPricingTab); the
+// Credits System group links there instead. ReferralCreditsAmount is on that tab too but keeps its
+// Referrals editor here, so it is not listed.
+export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
+  'allowOpenRegistration',
+  'defaultFreeCredits',
+  'enforceCredits',
+  'pricePerCredit',
+  'lowCreditsThreshold',
+  'enableTeamPlan',
+  'teamPlanMinSeats',
+  'teamPlanMaxSeats',
+  'teamPlanCreditsPerSeat',
+]);
 
-interface McpServerFormData {
-  name: McpServerName;
-  envVariables: EnvVariable[];
-  enabled: boolean;
-}
-
-const McpServerForm = () => {
-  const [formData, setFormData] = useState<McpServerFormData>({
-    name: '' as McpServerName,
-    envVariables: [{ key: '', value: '' }],
-    enabled: true,
-  });
-
-  const handleAddEnvVariable = () => {
-    setFormData(prev => ({
-      ...prev,
-      envVariables: [...prev.envVariables, { key: '', value: '' }],
-    }));
-  };
-
-  const handleRemoveEnvVariable = (index: number) => {
-    setFormData(prev => ({
-      ...prev,
-      envVariables: prev.envVariables.filter((_, i) => i !== index),
-    }));
-  };
-
-  const handleEnvVariableChange = (index: number, field: 'key' | 'value', value: string) => {
-    setFormData(prev => ({
-      ...prev,
-      envVariables: prev.envVariables.map((envVar, i) => (i === index ? { ...envVar, [field]: value } : envVar)),
-    }));
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const response = await fetch('/api/mcp-servers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to save MCP server');
-      }
-
-      const result = await response.json();
-      console.log('Server saved:', result);
-
-      setFormData({
-        name: '' as McpServerName,
-        envVariables: [{ key: '', value: '' }],
-        enabled: true,
-      });
-    } catch (error) {
-      console.error('Error saving MCP server:', error);
-    }
-  };
-
-  return (
-    <Card variant="outlined">
-      <CardContent>
-        <form onSubmit={handleSubmit}>
-          <Stack spacing={2}>
-            <Typography level="h4">MCP Server Configuration</Typography>
-
-            <FormControl>
-              <FormLabel>Server Name</FormLabel>
-              <Input
-                value={formData.name}
-                onChange={e => setFormData(prev => ({ ...prev, name: e.target.value as McpServerName }))}
-                required
-              />
-            </FormControl>
-
-            <FormControl>
-              <FormLabel>Enabled</FormLabel>
-              <Checkbox
-                checked={formData.enabled}
-                onChange={e => setFormData(prev => ({ ...prev, enabled: e.target.checked }))}
-              />
-            </FormControl>
-
-            <Typography level="title-md">Environment Variables</Typography>
-            {formData.envVariables.map((envVar, index) => (
-              <Stack key={index} direction="row" spacing={2} alignItems="center">
-                <FormControl>
-                  <FormLabel>Key</FormLabel>
-                  <Input
-                    value={envVar.key}
-                    onChange={e => handleEnvVariableChange(index, 'key', e.target.value)}
-                    required
-                  />
-                </FormControl>
-                <FormControl>
-                  <FormLabel>Value</FormLabel>
-                  <Input
-                    value={envVar.value}
-                    onChange={e => handleEnvVariableChange(index, 'value', e.target.value)}
-                    required
-                  />
-                </FormControl>
-                <Button color="danger" variant="soft" onClick={() => handleRemoveEnvVariable(index)} sx={{ mt: 2 }}>
-                  Remove
-                </Button>
-              </Stack>
-            ))}
-
-            <Button variant="outlined" color="neutral" onClick={handleAddEnvVariable} type="button">
-              Add Environment Variable
-            </Button>
-
-            <Button type="submit" color="primary">
-              Create Server
-            </Button>
-          </Stack>
-        </form>
-      </CardContent>
-    </Card>
-  );
-};
+// Settings whose value is a list of plain strings get the one-entry-per-line editor.
+const STRING_LIST_SETTING_KEYS = new Set<string>(['ImageModerationReviewerEmails', 'blockedEmailDomains']);
 
 const AdminSettingsTab: React.FC = () => {
-  const [searchTerm, setSearchTerm] = useState('');
+  const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
   const [allTabs, setAllTabs] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<string>(Object.keys(SETTING_TABS)[0]);
   const settingsFromServer = useSettingsFromServer();
+  const setAdminTab = useAdminModal(s => s.setActiveTab);
 
   // Index server values by setting name once, so the hot search/filter paths
   // don't re-scan the whole list per setting on every keystroke.
@@ -324,11 +219,19 @@ const AdminSettingsTab: React.FC = () => {
     [searchTerm, matchesSearch]
   );
 
+  // The Growth and Pricing keys have no editor here, so a search for one points to the tab instead.
+  const growthPricingMatchesSearch = useMemo(
+    () => !!searchTerm && [...GROWTH_PRICING_ONLY_KEYS].some(key => matchesSearch(settingsMap[key], searchTerm)),
+    [searchTerm, matchesSearch]
+  );
+
   const filteredSettings = useMemo(() => {
-    return settingConfigs.filter(settingConfig => {
-      const settingInfo = settingsMap[settingConfig.key];
+    return allSettingDefinitions().filter(settingConfig => {
+      const settingInfo = resolveSettingDefinition(settingConfig.key);
 
       if (!settingInfo) return false;
+
+      if ((GROWTH_PRICING_ONLY_KEYS as ReadonlySet<string>).has(settingConfig.key)) return false;
 
       // Hide settings that have dedicated custom UI in other admin tabs
       if (
@@ -341,10 +244,6 @@ const AdminSettingsTab: React.FC = () => {
           'recommendedModelIds',
           'RapidReplySettings',
           'SystemFiles',
-          // What's New settings are managed in the What's New Modals tab
-          'whatsNewAutomationEnabled',
-          'whatsNewConfig',
-          'whatsNewSyncConfig',
           // Release notes config is edited in the Release notes tab
           'releaseNotesConfig',
           // SRE Agent config has its own dedicated admin tab
@@ -368,7 +267,7 @@ const AdminSettingsTab: React.FC = () => {
       // Hide child settings when their parent setting is off
       if (settingInfo.dependsOn) {
         const parentValue = settingValueByName.get(settingInfo.dependsOn);
-        const parentDefault = settingsMap[settingInfo.dependsOn as keyof typeof settingsMap]?.defaultValue;
+        const parentDefault = resolveSettingDefinition(settingInfo.dependsOn)?.defaultValue;
         const isParentOn = parentValue !== undefined ? String(parentValue) === 'true' : parentDefault === true;
         if (!isParentOn) return false;
       }
@@ -398,12 +297,12 @@ const AdminSettingsTab: React.FC = () => {
     const tabGroups = Object.entries(SETTING_TABS).reduce(
       (acc, [tabId, tabInfo]) => {
         acc[tabId] = filteredSettings.filter(setting => {
-          const settingInfo = settingsMap[setting.key];
+          const settingInfo = resolveSettingDefinition(setting.key);
           return settingInfo?.category && tabInfo.categories.includes(settingInfo.category);
         });
         return acc;
       },
-      {} as Record<string, typeof settingConfigs>
+      {} as Record<string, SettingConfig[]>
     );
 
     // Then within each tab, group by category and group
@@ -411,7 +310,7 @@ const AdminSettingsTab: React.FC = () => {
       (tabAcc, [tabId, tabSettings]) => {
         const categorized = tabSettings.reduce(
           (categoryAcc, setting) => {
-            const settingInfo = settingsMap[setting.key];
+            const settingInfo = resolveSettingDefinition(setting.key);
             const category = settingInfo?.category ?? 'Uncategorized';
 
             if (!categoryAcc[category]) {
@@ -435,8 +334,8 @@ const AdminSettingsTab: React.FC = () => {
           {} as Record<
             Category,
             {
-              ungrouped: typeof settingConfigs;
-              groups: Record<string, typeof settingConfigs>;
+              ungrouped: SettingConfig[];
+              groups: Record<string, SettingConfig[]>;
             }
           >
         );
@@ -449,8 +348,8 @@ const AdminSettingsTab: React.FC = () => {
         Record<
           Category,
           {
-            ungrouped: typeof settingConfigs;
-            groups: Record<string, typeof settingConfigs>;
+            ungrouped: SettingConfig[];
+            groups: Record<string, SettingConfig[]>;
           }
         >
       >
@@ -473,7 +372,7 @@ const AdminSettingsTab: React.FC = () => {
     return grouped;
   }, [filteredSettings, logoMatchesSearch]);
 
-  const renderSettingGroup = (settings: typeof settingConfigs, groupName?: string, groupId?: string) => {
+  const renderSettingGroup = (settings: SettingConfig[], groupName?: string, groupId?: string) => {
     const groupInfo = groupId ? Object.values(API_SERVICE_GROUPS).find(g => g.id === groupId) : null;
     const IconComponent = resolveSettingsIcon(groupInfo?.icon);
 
@@ -482,19 +381,19 @@ const AdminSettingsTab: React.FC = () => {
     //   1. It has a dependsOn that points to another setting IN this group
     //   2. It is a boolean type
     const settingKeysInGroup = new Set(settings.map(s => s.key));
-    const inlineChildrenByParent = new Map<string, typeof settingConfigs>();
-    const topLevelSettings: typeof settingConfigs = [];
+    const inlineChildrenByParent = new Map<string, SettingConfig[]>();
+    const topLevelSettings: SettingConfig[] = [];
 
     for (const s of settings) {
-      const meta = settingsMap[s.key];
-      const dep = meta.dependsOn;
-      if (dep && settingKeysInGroup.has(dep) && meta.type === 'boolean') {
+      const meta = resolveSettingDefinition(s.key);
+      const dep = meta?.dependsOn;
+      if (dep && settingKeysInGroup.has(dep) && meta?.type === 'boolean') {
         // Resolve to a top-level parent: if dep is itself a child in this group
         // (its own dependsOn also points into the group), re-parent this grandchild
         // to the grandparent so the one-level subSettings render includes it.
         // Single-hop only - it resolves a grandchild (current max nesting), not a
         // 4+ level chain; a deeper chain would need a walk-to-root loop here.
-        const parentMeta = settingsMap[dep as keyof typeof settingsMap];
+        const parentMeta = resolveSettingDefinition(dep);
         const grandparentDep = parentMeta?.dependsOn;
         const resolvedParent = grandparentDep && settingKeysInGroup.has(grandparentDep) ? grandparentDep : dep;
         const children = inlineChildrenByParent.get(resolvedParent) ?? [];
@@ -539,11 +438,26 @@ const AdminSettingsTab: React.FC = () => {
                 setting: child,
                 defaultValue: settingValueByName.get(child.key) ?? child.defaultValue,
               }));
+              // A string-list setting gets a one-entry-per-line editor; the React key is the stored
+              // value so a save or refetch resets the draft. Keyed explicitly rather than by value
+              // shape: any future object setting with an array default would otherwise get this
+              // editor, and toStringList drops non-string entries.
+              if (setting.type === 'object' && STRING_LIST_SETTING_KEYS.has(setting.key)) {
+                const storedValue = settingValueByName.get(setting.key) ?? setting.defaultValue;
+                return (
+                  <AdminStringListSettingField
+                    key={`${setting.key}-${JSON.stringify(storedValue)}`}
+                    index={index}
+                    setting={setting as CoreSettingConfig}
+                    storedValue={storedValue}
+                  />
+                );
+              }
               return (
                 <AdminSettingInputField
                   key={`${setting.key}-${groupId || 'ungrouped'}-${setting.name}-${index}`}
                   index={index}
-                  setting={setting}
+                  setting={setting as CoreSettingConfig}
                   // clearDeletesRow: no stored row (or a blank one, which the resolver also reads as unset)
                   // means unset, NOT the declared default - pass null so the field renders its unset label.
                   defaultValue={
@@ -551,7 +465,7 @@ const AdminSettingsTab: React.FC = () => {
                       ? null
                       : (settingValueByName.get(setting.key) ?? setting.defaultValue)
                   }
-                  subSettings={subSettings}
+                  subSettings={subSettings as ComponentProps<typeof AdminSettingInputField>['subSettings']}
                 />
               );
             })}
@@ -560,6 +474,20 @@ const AdminSettingsTab: React.FC = () => {
           {/* The measured counterpart to this group's throughput levers. Scoped to this group
               rather than the AI category: it only makes sense next to the numbers it advises on. */}
           {groupId === API_SERVICE_GROUPS.DATA_LAKE_COST.id && <EmbeddingProviderLimits />}
+
+          {groupId === API_SERVICE_GROUPS.CREDITS.id && (
+            <Typography level="body-sm" sx={{ color: 'text.secondary', mt: 1 }}>
+              Signup, starter credits, credit pricing and team-plan limits are edited on{' '}
+              <Link
+                component="button"
+                onClick={() => setAdminTab(AdminTab.GrowthPricing)}
+                data-testid="admin-settings-credits-growth-pricing-link"
+              >
+                Growth and Pricing
+              </Link>
+              .
+            </Typography>
+          )}
         </CardContent>
       </Card>
     );
@@ -567,7 +495,7 @@ const AdminSettingsTab: React.FC = () => {
 
   const renderCategory = (
     category: string,
-    data: { ungrouped: typeof settingConfigs; groups: Record<string, typeof settingConfigs> }
+    data: { ungrouped: SettingConfig[]; groups: Record<string, SettingConfig[]> }
   ) => {
     const { ungrouped, groups } = data;
     const CategoryIconComponent = resolveSettingsIcon(CATEGORY_ICONS[category as keyof typeof CATEGORY_ICONS]);
@@ -600,7 +528,9 @@ const AdminSettingsTab: React.FC = () => {
         {Object.entries(groups).map(([groupId, groupSettings]) => {
           const groupInfo = Object.values(API_SERVICE_GROUPS).find(g => g.id === groupId);
           return renderSettingGroup(
-            groupSettings.sort((a, b) => (settingsMap[a.key].order || 0) - (settingsMap[b.key].order || 0)),
+            groupSettings.sort(
+              (a, b) => (resolveSettingDefinition(a.key)?.order || 0) - (resolveSettingDefinition(b.key)?.order || 0)
+            ),
             groupInfo?.name || groupId,
             groupId
           );
@@ -608,19 +538,6 @@ const AdminSettingsTab: React.FC = () => {
 
         {/* Render ungrouped settings */}
         {ungrouped.length > 0 && renderSettingGroup(ungrouped, undefined, `ungrouped-${category}`)}
-      </Stack>
-    );
-  };
-
-  const renderMcpContent = () => {
-    if (activeTab !== 'MCP') return null;
-
-    return (
-      <Stack spacing={2}>
-        <Typography level="h2" color="primary">
-          MCP Servers
-        </Typography>
-        <McpServerForm />
       </Stack>
     );
   };
@@ -652,6 +569,7 @@ const AdminSettingsTab: React.FC = () => {
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 fullWidth
+                slotProps={{ input: { 'data-testid': 'admin-settings-search-input' } }}
               />
             </FormControl>
             {searchTerm && (
@@ -677,22 +595,38 @@ const AdminSettingsTab: React.FC = () => {
             </FormControl>
           </Stack>
 
+          {growthPricingMatchesSearch && (
+            <Typography
+              level="body-sm"
+              sx={{ px: '1rem', pt: 1 }}
+              data-testid="admin-settings-search-growth-pricing-hint"
+            >
+              Signup, starter credits, credit pricing and team-plan limits are edited on{' '}
+              <Link
+                component="button"
+                onClick={() => setAdminTab(AdminTab.GrowthPricing)}
+                data-testid="admin-settings-search-growth-pricing-link"
+              >
+                Growth and Pricing
+              </Link>
+              .
+            </Typography>
+          )}
+
           {allTabs ? (
             <Stack
               spacing={3}
               sx={{ overflowY: 'auto', height: `calc(100vh - ${HEADER_HEIGHT} - 100px)`, p: '1rem' }}
               data-testid="admin-settings-all-tabs-results"
             >
-              {Object.entries(groupedSettings).flatMap(([tabId, tabCategories]) =>
-                tabId === 'MCP'
-                  ? []
-                  : Object.entries(tabCategories).map(([category, data]) => renderCategory(category, data))
+              {Object.values(groupedSettings).flatMap(tabCategories =>
+                Object.entries(tabCategories).map(([category, data]) => renderCategory(category, data))
               )}
             </Stack>
           ) : (
             <Tabs
-              value={activeTab}
-              onChange={(_, value) => setActiveTab(value as string)}
+              value={section}
+              onChange={(_, value) => setSection(value as SettingSectionKey)}
               sx={{ bgcolor: 'background.body' }}
             >
               <TabList
@@ -712,7 +646,8 @@ const AdminSettingsTab: React.FC = () => {
                     <Tab
                       key={tabId}
                       value={tabId}
-                      variant={activeTab === tabId ? 'soft' : 'plain'}
+                      variant={section === tabId ? 'soft' : 'plain'}
+                      data-testid={`admin-settings-section-tab-${tabInfo.id}`}
                       sx={{
                         borderRadius: 0,
                         minWidth: { xs: 'auto', md: 'unset' },
@@ -737,9 +672,7 @@ const AdminSettingsTab: React.FC = () => {
                       p: '1rem',
                     }}
                   >
-                    {tabId === 'MCP'
-                      ? renderMcpContent()
-                      : Object.entries(tabCategories).map(([category, data]) => renderCategory(category, data))}
+                    {Object.entries(tabCategories).map(([category, data]) => renderCategory(category, data))}
                   </Stack>
                 </TabPanel>
               ))}

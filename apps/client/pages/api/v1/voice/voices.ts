@@ -8,7 +8,7 @@ import { listVoicesContract } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { fetchElevenLabsVoices } from '@bike4mind/voice';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { BadGatewayError, ForbiddenError, HTTPError } from '@server/utils/errors';
+import { BadGatewayError, ForbiddenError, HTTPError } from '@bike4mind/server-utils/utils/errors';
 
 const handler = nextRouteForContract(listVoicesContract).get(async (req, res) => {
   const settings = await getSettingsMap(

@@ -1,5 +1,5 @@
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { getQuestContract } from '@bike4mind/common';
 import { toQuestPollBody } from '@server/utils/questPollBody';
@@ -8,7 +8,7 @@ import {
   resolveQuestTimeoutRecovery,
   STUCK_QUEST_RECOVERED_LOG,
 } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
-import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
+import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 
 // Reading a quest is the documented poll step after POST /api/chat, so the contract's scopes

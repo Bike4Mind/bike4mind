@@ -31,6 +31,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..'
 const SCAN_ROOTS = [
   'apps/client/pages',
   'apps/client/server',
+  'packages/server-utils/src',
   'apps/workers/src',
   'b4m-core/services/src',
   'b4m-core/slack/src',
@@ -222,8 +223,6 @@ const ALLOWLIST: Record<string, string> = {
     'githubService.getFileContent — GitHub repo content fetch for SRE code review, unrelated to FabFile storage',
   'apps/workers/src/queueHandlers/sreAnalysis.ts':
     'githubService.getFileContent — GitHub repo content fetch for SRE code review, unrelated to FabFile storage',
-  'apps/client/server/services/whatsNewDataCollector.ts':
-    'githubService.getFileContent — GitHub repo content fetch (CHANGELOG.md), unrelated to FabFile storage',
   'b4m-core/services/src/sreAgentService/tools.ts':
     'toolContext.getFileContent is wired to githubService.getFileContent — GitHub repo content fetch, unrelated to FabFile storage',
   'b4m-core/services/src/sreAgentService/index.ts':

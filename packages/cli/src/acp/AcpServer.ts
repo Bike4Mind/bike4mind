@@ -19,7 +19,6 @@
 import { randomUUID } from 'crypto';
 import { Mutex } from 'async-mutex';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import { createToolSearchTool } from '@bike4mind/agents';
 import type { AgentStep, AgentResult, ConversationMessage, ReActAgent } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 
@@ -32,13 +31,14 @@ import { requireApiUrl, buildCliToolList, type AgentContext } from '../utils';
 import { PermissionManager } from '../utils';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { PermissionResponse } from '../components';
-import { ToolCatalog } from '../tools/gateway/index.js';
+import { ToolCatalog, type PermissionPromptKind } from '../tools/gateway/index.js';
 import { logger } from '../utils/Logger';
 
 import { buildLlmBackend } from '../bootstrap/buildLlmBackend.js';
 import { buildSandbox } from '../bootstrap/buildSandbox.js';
 import { buildSupportingStores } from '../bootstrap/buildSupportingStores.js';
 import { buildAgent } from '../bootstrap/buildAgent.js';
+import { buildToolSearch } from '../bootstrap/buildToolSearch.js';
 import type { InteractionMode } from '../bootstrap/types.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { NotifyingLlmBackend } from '../llm/NotifyingLlmBackend.js';
@@ -458,8 +458,10 @@ export class AcpServer {
   private readonly promptFn = async (
     toolName: string,
     args: unknown,
-    preview?: string
+    preview?: string,
+    kind?: PermissionPromptKind
   ): Promise<{ action: PermissionResponse }> => {
+    const isSandboxEscalation = kind === 'sandbox-escalation';
     const turn = this.activeTurn;
     // No active turn should never happen, but deny rather than assume.
     if (!turn) return { action: 'deny' };
@@ -467,7 +469,7 @@ export class AcpServer {
     const toolCallId = `perm-${randomUUID()}`;
     const toolCall: schema.ToolCallUpdate = {
       toolCallId,
-      title: toolCallTitle(toolName, args),
+      title: `${isSandboxEscalation ? 'Run outside sandbox: ' : ''}${toolCallTitle(toolName, args)}`,
       kind: toolKind(toolName),
       status: 'pending',
       rawInput: args,
@@ -489,7 +491,11 @@ export class AcpServer {
         turn.client
           .request(
             methods.client.session.requestPermission,
-            { sessionId: turn.sessionId, toolCall, options: buildPermissionOptions() },
+            {
+              sessionId: turn.sessionId,
+              toolCall,
+              options: buildPermissionOptions({ allowAlways: !isSandboxEscalation }),
+            },
             { cancellationSignal: decisionController.signal }
           )
           .then(res => permissionResponseFromOutcome(res?.outcome))
@@ -499,6 +505,9 @@ export class AcpServer {
           decisionController.signal.addEventListener('abort', () => resolve('deny'), { once: true });
         }),
       ]);
+      // allow-always was never offered for an escalation; a client that answers it anyway
+      // (e.g. replaying a remembered choice) gets a deny, not a retry.
+      if (isSandboxEscalation && action === 'allow-always') return { action: 'deny' };
       return { action };
     } finally {
       clearTimeout(timer);
@@ -547,7 +556,7 @@ export class AcpServer {
     await this.mergeRemoteSkills(config, apiClient);
 
     const startupLog: string[] = [];
-    const { llm, wsManager, modelInfo } = await buildLlmBackend({ config, apiClient, tokenGetter, startupLog });
+    const { llm, wsManager, models, modelInfo } = await buildLlmBackend({ config, apiClient, tokenGetter, startupLog });
 
     const permissionManager = new PermissionManager(
       new ToolCatalog(),
@@ -588,26 +597,22 @@ export class AcpServer {
         onGroupCompletion: () => {},
       });
 
+    const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
+    const { llm: toolSearchLlm, toolSearchTool } = buildToolSearch({
+      llm,
+      models,
+      registry: deferredToolRegistry,
+      logger,
+      agentToolsRef,
+    });
+
     const llmWithFallback: ICompletionBackend =
       config.fallbackModels && config.fallbackModels.length > 0
-        ? new FallbackLlmBackend(llm, config.fallbackModels, (from, to, error) =>
+        ? new FallbackLlmBackend(toolSearchLlm, config.fallbackModels, (from, to, error) =>
             logger.debug(`[acp] Model "${from}" failed (${error.message}); falling back to "${to}"`)
           )
-        : llm;
+        : toolSearchLlm;
     const notifyingLlm = new NotifyingLlmBackend(llmWithFallback, backgroundManager);
-
-    const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
-    const toolSearchTool =
-      deferredToolRegistry.size() > 0
-        ? createToolSearchTool({
-            registry: deferredToolRegistry,
-            logger,
-            toolListAccessor: () => {
-              if (!agentToolsRef.current) throw new Error('tool_search invoked before agent context was wired');
-              return agentToolsRef.current;
-            },
-          })
-        : null;
 
     const cliTools = this.buildCliTools({
       config,

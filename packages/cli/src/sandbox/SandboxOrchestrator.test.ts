@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SandboxOrchestrator } from './SandboxOrchestrator.js';
+import os from 'os';
 import { DEFAULT_SANDBOX_CONFIG } from './types.js';
 import type { SandboxConfig, SandboxViolation } from './types.js';
 import type { SandboxRuntime, WrapCommandOptions } from './runtime/SandboxRuntimeAdapter.js';
@@ -163,6 +164,38 @@ describe('SandboxOrchestrator', () => {
       if (decision.type === 'unsandboxed') {
         expect(decision.requiresPermission).toBe(true);
       }
+    });
+  });
+
+  describe('filesystem defaults', () => {
+    it.each(['~/.npmrc', `${os.homedir()}/.npmrc`, '$HOME/.docker/config.json', '$HOME/.config/gh/../gh/hosts.yml'])(
+      'removes a saved allow for denied credential alias %s',
+      allowedPath => {
+        const saved = enabledConfig({
+          filesystem: {
+            writeOnlyToWorkingDir: true,
+            allowedReadPaths: [allowedPath, '$HOME/.gitconfig'],
+            deniedPaths: [],
+          },
+        });
+        const { filesystem } = new SandboxOrchestrator(saved, createMockRuntime()).getConfig();
+        expect(filesystem.allowedReadPaths).toEqual(['$HOME/.gitconfig']);
+        expect(saved.filesystem.allowedReadPaths).toContain(allowedPath);
+      }
+    );
+
+    it('enforces default denies on a saved config carrying older arrays', () => {
+      const saved = enabledConfig({
+        filesystem: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: ['$HOME/.gitconfig', '$HOME/.npmrc'],
+          deniedPaths: ['$HOME/.ssh', '/custom'],
+        },
+      });
+      const { filesystem } = new SandboxOrchestrator(saved, createMockRuntime()).getConfig();
+      expect(filesystem.deniedPaths).toEqual(expect.arrayContaining(DEFAULT_SANDBOX_CONFIG.filesystem.deniedPaths));
+      expect(filesystem.deniedPaths).toContain('/custom');
+      expect(filesystem.allowedReadPaths).toEqual(['$HOME/.gitconfig']);
     });
   });
 
@@ -351,7 +384,30 @@ describe('SandboxOrchestrator', () => {
 
       orchestrator.shouldSandbox('curl https://example.com', '/tmp');
 
-      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: true }));
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: true, proxyPort: 8888 }));
+    });
+
+    it('omits the proxy port when network is not granted', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), mockRuntime, createMockProxyManager(true, 8888));
+
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+
+      expect(wrapSpy.mock.calls[0][0]).not.toHaveProperty('proxyPort');
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
+    });
+
+    it('fails closed when a running proxy reports no port', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const config = enabledConfig({ network: { ...DEFAULT_SANDBOX_CONFIG.network, enabled: true } });
+      const orchestrator = new SandboxOrchestrator(config, mockRuntime, createMockProxyManager(true, null));
+
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+
+      expect(wrapSpy.mock.calls[0][0]).not.toHaveProperty('proxyPort');
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
     });
   });
 

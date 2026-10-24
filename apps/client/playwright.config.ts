@@ -76,6 +76,15 @@ const specProjects = [
     testMatch: /(?:^|\/)skills\.spec\.ts$/,
     auth: './e2e/.auth/skills-user.json',
   },
+  // Makes no model call; seeds its teams through the admin grant endpoint, so no Stripe either.
+  // teams-checkout.spec.ts is the Stripe half and self-skips off staging.
+  {
+    name: 'teams',
+    setupMatch: /(?:^|\/)teams\.setup\.ts$/,
+    testMatch: /(?:^|\/)teams(?:-checkout)?\.spec\.ts$/,
+    auth: './e2e/.auth/teams-user.json',
+    skipWarmup: true,
+  },
   {
     name: 'credits',
     setupMatch: /(?:^|\/)credits\.setup\.ts$/,
@@ -156,6 +165,12 @@ export default defineConfig({
   },
 
   projects: [
+    // CSS hit-target regressions use real Joy markup without authentication or a backend.
+    {
+      name: 'radio-hit-target',
+      testMatch: [/(?:^|\/)radio-hit-target\.spec\.tsx$/],
+      use: { ...devices['Desktop Chrome'] },
+    },
     // Core setup: admin, manager, invite code (runs first)
     {
       name: 'setup-core',

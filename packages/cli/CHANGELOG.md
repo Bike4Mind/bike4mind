@@ -1,5 +1,59 @@
 # @bike4mind/cli
 
+## 4.0.0
+
+### Major Changes
+
+- [#5483](https://github.com/Bike4Mind/bike4mind/pull/5483) [`bf81707`](https://github.com/Bike4Mind/bike4mind/commit/bf81707cf7211ad846748bc012454ec79e721504) Thanks [@choyno](https://github.com/choyno)! - require a bearer token for mcp serve --http
+
+### Minor Changes
+
+- [#5162](https://github.com/Bike4Mind/bike4mind/pull/5162) [`3d73686`](https://github.com/Bike4Mind/bike4mind/commit/3d7368634829f526d919c5b09bbb704d95c04348) Thanks [@julsanchez](https://github.com/julsanchez)! - upload local skills and publish them to the Skill Market
+
+- [#5168](https://github.com/Bike4Mind/bike4mind/pull/5168) [`cb1220f`](https://github.com/Bike4Mind/bike4mind/commit/cb1220fd8fb877a50bd8a5cefbb9124794d2a1c0) Thanks [@julsanchez](https://github.com/julsanchez)! - add b4m skills push to import a SKILL.md as a skill
+
+- [#5212](https://github.com/Bike4Mind/bike4mind/pull/5212) [`8541a8e`](https://github.com/Bike4Mind/bike4mind/commit/8541a8e776eacefc3f241e15060493355333cf92) Thanks [@jebie](https://github.com/jebie)! - load deferred tools via tool_reference on Anthropic models
+
+- [#5219](https://github.com/Bike4Mind/bike4mind/pull/5219) [`d8bd931`](https://github.com/Bike4Mind/bike4mind/commit/d8bd931acf4e64c953a632f500c87c8040743686) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - serve solver tools from the stdio MCP server
+
+- [#5315](https://github.com/Bike4Mind/bike4mind/pull/5315) [`758a71f`](https://github.com/Bike4Mind/bike4mind/commit/758a71f49506ea81f3e665f0e179e10b123d449c) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - add Bob site-read tools to the B4M MCP server
+
+- [#5428](https://github.com/Bike4Mind/bike4mind/pull/5428) [`d0f839c`](https://github.com/Bike4Mind/bike4mind/commit/d0f839cb64f6db020c5184c038dca4a971cfed47) Thanks [@jebie](https://github.com/jebie)! - native tool search on Bedrock
+
+- [#5430](https://github.com/Bike4Mind/bike4mind/pull/5430) [`ba24fb7`](https://github.com/Bike4Mind/bike4mind/commit/ba24fb71a1c8ef55208cd4799f380883d76329db) Thanks [@onoya](https://github.com/onoya)! - queue steering and follow-up messages with race-safe cancel
+
+- [#5452](https://github.com/Bike4Mind/bike4mind/pull/5452) [`753dde5`](https://github.com/Bike4Mind/bike4mind/commit/753dde5096907966ae493c52748f38522a774fb6) Thanks [@vinchi777](https://github.com/vinchi777)! - collapse skill groups and list only SKILL.md as a skill
+
+- [#5481](https://github.com/Bike4Mind/bike4mind/pull/5481) [`40fa1d2`](https://github.com/Bike4Mind/bike4mind/commit/40fa1d2890551fb9f2cf6933be3725652ee8e655) Thanks [@vinchi777](https://github.com/vinchi777)! - list every model-invocable skill in the agent prompt
+
+### Patch Changes
+
+- [#5240](https://github.com/Bike4Mind/bike4mind/pull/5240) [`06b1887`](https://github.com/Bike4Mind/bike4mind/commit/06b1887b08c3fc4544168b6421e5aacfd1509627) Thanks [@jarlacut](https://github.com/jarlacut)! - return retryable 503 when Ollama or local image listing fails
+
+- [#5300](https://github.com/Bike4Mind/bike4mind/pull/5300) [`40c9433`](https://github.com/Bike4Mind/bike4mind/commit/40c9433f8be4b9c7df8bd1ddffe9d0fe24cb062e) Thanks [@vinchi777](https://github.com/vinchi777)! - show a started session before its worktree is ready
+
+- [#5313](https://github.com/Bike4Mind/bike4mind/pull/5313) [`e9a2ece`](https://github.com/Bike4Mind/bike4mind/commit/e9a2ece4478baa42ad0a3e4d95752d8e79c7a9a5) Thanks [@onoya](https://github.com/onoya)! - run redaction, output cap and checkpoint in the tool gateway
+
+- [#5460](https://github.com/Bike4Mind/bike4mind/pull/5460) [`0741792`](https://github.com/Bike4Mind/bike4mind/commit/074179264f77d6c72938e1d9769c906727d1b801) Thanks [@vinchi777](https://github.com/vinchi777)! - classify upstream caller errors
+
+- [#5507](https://github.com/Bike4Mind/bike4mind/pull/5507) [`920dd45`](https://github.com/Bike4Mind/bike4mind/commit/920dd4527f5a7e68dab5043cf5ec6fef7f6eb9d4) Thanks [@jjmarfa](https://github.com/jjmarfa)! - report hearth hook stdin errors and failed POSTs
+
+## 3.4.0
+
+### Minor Changes
+
+- [#5191](https://github.com/Bike4Mind/bike4mind/pull/5191) [`a68d013`](https://github.com/Bike4Mind/bike4mind/commit/a68d013d2a4c7a59268f3bfbb2ed9b343a0a36c0) Thanks [@jjmarfa](https://github.com/jjmarfa)! - Add the `decide` server tool to the CLI and shared tool schemas, with deployment-aware availability and permission handling.
+
+- [#5154](https://github.com/Bike4Mind/bike4mind/pull/5154) [`2d33506`](https://github.com/Bike4Mind/bike4mind/commit/2d33506efd4f95460139dedb554780ac544be23c) Thanks [@julsanchez](https://github.com/julsanchez)! - export skills to Claude Code as SKILL.md and import SKILL.md into new skills
+
+## 3.3.0
+
+### Minor Changes
+
+- [#4996](https://github.com/Bike4Mind/bike4mind/pull/4996) [`de55441`](https://github.com/Bike4Mind/bike4mind/commit/de554410692906f78ff0c6f51c6edbdb26b4b760) Thanks [@onoya](https://github.com/onoya)! - ask before retrying a sandbox-denied command outside the sandbox
+
+- [#5161](https://github.com/Bike4Mind/bike4mind/pull/5161) [`ded54cd`](https://github.com/Bike4Mind/bike4mind/commit/ded54cd85be360b44f87070416c46c30918a627f) Thanks [@julsanchez](https://github.com/julsanchez)! - RemoteSkillSource: opt-in `includeImports` (Skill Market imports kept and marked `untrusted`, for hosts that run them wrapped as untrusted content) and `invalidate()` to refetch inside the TTL. CLI behaviour is unchanged.
+
 ## 3.2.0
 
 ### Minor Changes

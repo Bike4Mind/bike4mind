@@ -1,9 +1,11 @@
 import { Logger } from '@bike4mind/observability';
+import type { ToolResultValidator } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
+import { FAILED_RESULT_SCORE } from '../../base/resultValidators';
 import { GetEffectiveApiKeyAdapters, getFirecrawlConfig } from '../../../../apiKeyService';
-import { CitableSource } from '@bike4mind/common';
+import { CitableSource, UnprocessableEntityError } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
-import { createFirecrawlApp } from './firecrawlApp';
+import { createFirecrawlApp, type FirecrawlClient, type FirecrawlScrapeParams } from './firecrawlApp';
 import { plainFetchScrape } from './plainFetch';
 import { UnsafeScrapeTargetError } from './errors';
 import { resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
@@ -80,6 +82,14 @@ export function webFetchBody(result: WebFetchResult): string {
     return `[web_fetch: offset ${result.offset} is at or beyond the end of the content (~${result.originalChars} chars); nothing further to read.]`;
   }
   return result.truncated ? result.markdown + truncationMarker(result) : result.markdown;
+}
+
+/**
+ * Leads an indexed turn's fetched page with the number the turn gave it (ToolContext.numberCitables).
+ * A directive for the same reason as INDEXED_TOOL_CITATION_RULE.
+ */
+export function webFetchCitationLine(citationIndex: number): string {
+  return `This page is source [${citationIndex}]. Cite content from it ONLY as [${citationIndex}], placed immediately after the claim it supports.\n\n`;
 }
 
 function isPdfUrl(url: string): boolean {
@@ -162,6 +172,34 @@ type FirecrawlFetchOptions = {
 };
 
 /**
+ * Firecrawl refused the target site itself (its 403 "we do not support this site"). A property of
+ * the URL, not a fault of ours, so it is a 422: /api/tools/web-fetch logs it at warn instead of
+ * paging, and the web_fetch tool turns it into a hint to use web_search. Only 403 - Firecrawl's
+ * 401/402/429 are our key, credits or rate limit and must keep surfacing as server errors.
+ */
+export class UnsupportedScrapeTargetError extends UnprocessableEntityError {
+  // `cause` is the FirecrawlError, typed as Error so the published .d.ts never references
+  // firecrawl-js: its types pull in DOM-only names a non-DOM consumer can't resolve.
+  constructor(url: string, cause: Error) {
+    super(`This site can't be fetched: the web scraper does not support ${new URL(url).hostname}.`);
+    this.name = 'UnsupportedScrapeTargetError';
+    this.cause = cause;
+  }
+}
+
+/** Scrape after a 1s wait for client-side rendering, retrying without the action where Firecrawl rejects actions. */
+async function scrapeAfterRenderWait(app: FirecrawlClient, url: string, params: FirecrawlScrapeParams) {
+  try {
+    return await app.scrapeUrl(url, { ...params, actions: [{ type: 'wait' as const, milliseconds: 1000 }] });
+  } catch (scrapeError) {
+    const msg = scrapeError instanceof Error ? scrapeError.message : '';
+    if (!msg.includes('Actions are not supported')) throw scrapeError;
+    Logger.globalInstance.log('📥 WebFetch Tool: Actions not supported, retrying without actions...');
+    return app.scrapeUrl(url, params);
+  }
+}
+
+/**
  * Fetch URL content using Firecrawl (shared function, no ToolContext)
  * Pattern follows serpApiSearch from websearch tool
  *
@@ -224,28 +262,13 @@ export async function firecrawlFetch(
 
   const startedAt = Date.now();
   let result;
-  if (isPdf) {
-    result = await app.scrapeUrl(url, baseParams);
-  } else {
-    try {
-      result = await app.scrapeUrl(url, {
-        ...baseParams,
-        actions: [
-          {
-            type: 'wait' as const,
-            milliseconds: 1000,
-          },
-        ],
-      });
-    } catch (scrapeError) {
-      const msg = scrapeError instanceof Error ? scrapeError.message : '';
-      if (msg.includes('Actions are not supported')) {
-        Logger.globalInstance.log('📥 WebFetch Tool: Actions not supported, retrying without actions...');
-        result = await app.scrapeUrl(url, baseParams);
-      } else {
-        throw scrapeError;
-      }
+  try {
+    result = isPdf ? await app.scrapeUrl(url, baseParams) : await scrapeAfterRenderWait(app, url, baseParams);
+  } catch (scrapeError) {
+    if (scrapeError instanceof FirecrawlError && scrapeError.statusCode === 403) {
+      throw new UnsupportedScrapeTargetError(url, scrapeError);
     }
+    throw scrapeError;
   }
   const durationMs = Date.now() - startedAt;
 
@@ -318,6 +341,52 @@ async function buildWebFetchResult(
   };
 }
 
+// Expected failures web_fetch returns as text rather than throwing, so the agent can carry on.
+// Firecrawl rethrows its 403 as UnsupportedScrapeTargetError.
+const FIRECRAWL_FAILURE_MESSAGES: Record<number, { userMessage: string; statusLabel: string }> = {
+  400: {
+    userMessage: `This site requires advanced browser features that are not available. Try using web_search to find the information instead.`,
+    statusLabel: 'actions not supported',
+  },
+  403: {
+    userMessage: `This site cannot be accessed by the web scraper \u2014 it blocks automated access or is not supported. Try using web_search to find the information instead.`,
+    statusLabel: 'site not supported',
+  },
+  408: {
+    userMessage: `The page timed out before loading completely \u2014 the site may be slow or require heavy JavaScript rendering. Try using web_search to find the information instead.`,
+    statusLabel: 'scrape timed out',
+  },
+  502: {
+    userMessage: `The website returned a Bad Gateway error \u2014 it may be temporarily unavailable. Try again later or use web_search to find the information instead.`,
+    statusLabel: 'bad gateway',
+  },
+  503: {
+    userMessage: `The website is temporarily unavailable (Service Unavailable). Try again later or use web_search to find the information instead.`,
+    statusLabel: 'service unavailable',
+  },
+  504: {
+    userMessage: `The website took too long to respond (Gateway Timeout). Try again later or use web_search to find the information instead.`,
+    statusLabel: 'gateway timeout',
+  },
+};
+
+const WEB_FETCH_PDF_TOO_LARGE_MSG =
+  'This PDF is too large to process via URL. Please download the file and upload it directly instead.';
+
+const WEB_FETCH_UNREACHABLE_MSG =
+  'The page could not be reached \u2014 the server may be down, unreachable, or blocking automated access. ' +
+  'Try using web_search to find the information instead.';
+
+const WEB_FETCH_FAILURE_MESSAGES = new Set([
+  ...Object.values(FIRECRAWL_FAILURE_MESSAGES).map(m => m.userMessage),
+  WEB_FETCH_PDF_TOO_LARGE_MSG,
+  WEB_FETCH_UNREACHABLE_MSG,
+]);
+
+/** Scores the failures web_fetch reports as text; a fetched page is left to the default score. */
+export const validateWebFetchResult: ToolResultValidator = result =>
+  WEB_FETCH_FAILURE_MESSAGES.has(result) ? FAILED_RESULT_SCORE : undefined;
+
 export const webFetchTool: ToolDefinition = {
   name: 'web_fetch',
   implementation: (context: ToolContext) => ({
@@ -348,10 +417,15 @@ export const webFetchTool: ToolDefinition = {
           },
         };
 
+        const citationIndex = context.numberCitables?.([citable])?.[0].metadata?.citationIndex;
         await context.statusUpdate(
           {
             promptMeta: {
-              citables: [citable],
+              citables: [
+                citationIndex === undefined
+                  ? citable
+                  : { ...citable, metadata: { ...citable.metadata, citationIndex } },
+              ],
             },
           },
           'WebFetch completed successfully'
@@ -361,43 +435,24 @@ export const webFetchTool: ToolDefinition = {
 
         // Surface truncation in-band (with the next offset to continue) so the model reasons
         // about incompleteness rather than assuming it received the whole page.
-        return webFetchBody(result);
+        return (citationIndex === undefined ? '' : webFetchCitationLine(citationIndex)) + webFetchBody(result);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
         // 400/403/408 + 502/503/504 are expected external failures - return user-friendly message
-        // so the agent can continue rather than treating this as a hard failure
-        if (error instanceof FirecrawlError && [400, 403, 408, 502, 503, 504].includes(error.statusCode)) {
-          const statusMessages: Record<number, { userMessage: string; statusLabel: string }> = {
-            400: {
-              userMessage: `This site requires advanced browser features that are not available. Try using web_search to find the information instead.`,
-              statusLabel: 'actions not supported',
-            },
-            403: {
-              userMessage: `This site cannot be accessed by the web scraper — it blocks automated access or is not supported. Try using web_search to find the information instead.`,
-              statusLabel: 'site not supported',
-            },
-            408: {
-              userMessage: `The page timed out before loading completely — the site may be slow or require heavy JavaScript rendering. Try using web_search to find the information instead.`,
-              statusLabel: 'scrape timed out',
-            },
-            502: {
-              userMessage: `The website returned a Bad Gateway error — it may be temporarily unavailable. Try again later or use web_search to find the information instead.`,
-              statusLabel: 'bad gateway',
-            },
-            503: {
-              userMessage: `The website is temporarily unavailable (Service Unavailable). Try again later or use web_search to find the information instead.`,
-              statusLabel: 'service unavailable',
-            },
-            504: {
-              userMessage: `The website took too long to respond (Gateway Timeout). Try again later or use web_search to find the information instead.`,
-              statusLabel: 'gateway timeout',
-            },
-          };
-          const { userMessage, statusLabel } = statusMessages[error.statusCode];
+        // so the agent can continue rather than treating this as a hard failure.
+        // firecrawlFetch rethrows Firecrawl's 403 as UnsupportedScrapeTargetError.
+        const firecrawlStatus =
+          error instanceof UnsupportedScrapeTargetError
+            ? 403
+            : error instanceof FirecrawlError
+              ? error.statusCode
+              : undefined;
+        if (firecrawlStatus !== undefined && firecrawlStatus in FIRECRAWL_FAILURE_MESSAGES) {
+          const { userMessage, statusLabel } = FIRECRAWL_FAILURE_MESSAGES[firecrawlStatus];
           context.logger.warn('WebFetch expected Firecrawl failure', {
             url: params.url,
-            statusCode: error.statusCode,
+            statusCode: firecrawlStatus,
             error: errorMessage,
           });
           await context.statusUpdate({}, `WebFetch: ${statusLabel}`);
@@ -411,7 +466,7 @@ export const webFetchTool: ToolDefinition = {
             error: errorMessage,
           });
           await context.statusUpdate({}, 'WebFetch: PDF too large');
-          return `This PDF is too large to process via URL. Please download the file and upload it directly instead.`;
+          return WEB_FETCH_PDF_TOO_LARGE_MSG;
         }
 
         // Network-level errors (no response, connection reset, blocked redirect, ...) - return a
@@ -437,7 +492,7 @@ export const webFetchTool: ToolDefinition = {
             error: errorMessage,
           });
           await context.statusUpdate({}, 'WebFetch: network error');
-          return `The page could not be reached — the server may be down, unreachable, or blocking automated access. Try using web_search to find the information instead.`;
+          return WEB_FETCH_UNREACHABLE_MSG;
         }
 
         // Unexpected errors - log as error and rethrow
@@ -446,6 +501,7 @@ export const webFetchTool: ToolDefinition = {
         throw error;
       }
     },
+    validateResult: validateWebFetchResult,
     toolSchema: {
       name: 'web_fetch',
       description:

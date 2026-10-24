@@ -1,8 +1,8 @@
 import { connectDB } from '@bike4mind/database';
 import { HTTPError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
-import { registerToolGearObserver } from '@server/services/gears/toolGearObserver';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
 import { contextToLogs } from '@server/utils/logger';
 import { Context, SQSEvent } from 'aws-lambda';
 

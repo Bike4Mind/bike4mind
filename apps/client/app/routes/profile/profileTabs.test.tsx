@@ -190,11 +190,15 @@ describe('ProfilePage tab strip', () => {
     expect(strip).not.toHaveTextContent('mementos.title');
   });
 
-  it('redirects the legacy ?tab=admin-settings deep link to /admin', () => {
+  it('redirects the legacy ?tab=admin-settings deep link to the Admin Settings tab', () => {
     searchValue = { tab: 'admin-settings' };
     renderPage();
 
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', replace: true });
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/admin',
+      search: { tab: 'admin-settings' },
+      replace: true,
+    });
   });
 
   it('redirects legacy Settings deep links to the matching sub-tab', () => {

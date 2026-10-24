@@ -7,7 +7,7 @@ const repo = vi.hoisted(() => ({
 }));
 const settleStrandedQuests = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({ agentExecutionRepository: repo }));
-vi.mock('@server/utils/settleStrandedQuests', () => ({ settleStrandedQuests }));
+vi.mock('@bike4mind/server-utils/utils/settleStrandedQuests', () => ({ settleStrandedQuests }));
 
 import { settleDroppedExecution } from './droppedExecution';
 

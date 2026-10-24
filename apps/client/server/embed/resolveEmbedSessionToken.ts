@@ -5,7 +5,8 @@ import { verifyEmbedSessionToken, type EmbedSessionContext } from './embedSessio
  * Verify a minted embed session token and re-load the live key behind it, so a token
  * cannot outlive a revoked/disabled key within its TTL. Shared by every surface that
  * accepts the token (the chat route and /api/embed/history) so the rule cannot drift.
- * @throws Error on any invalid token or key (callers map it to 401).
+ * @throws Error on any invalid token or key (callers map it to 401); a 5xx HTTPError (see
+ * toApiKeyAuthError) when the key check itself fails, which callers map ahead of the 401.
  */
 export async function resolveEmbedSessionToken(
   bearer: string

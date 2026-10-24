@@ -2,15 +2,18 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
-import { BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
-import { checkRateLimit, verifyJwtToken } from '@server/cli/auth';
+import { ApiKeyScope, BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
+import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { Connection } from '@bike4mind/database/social';
 import { sendToConnection } from '@server/websocket/utils';
-import { emitMetrics } from '@server/utils/cloudwatch';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -32,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   usageEventRepository: {},
   organizationRepository: {},
-  userApiKeyRepository: {},
+  userApiKeyRepository: { findById: vi.fn().mockResolvedValue(null) },
 }));
 
 // No registered connection by default, so the handler answers 400 right after authentication and
@@ -48,11 +51,13 @@ vi.mock('@server/cli/auth', () => ({
 
 vi.mock('@server/utils/logCompletionAnalytics', () => ({ logCompletionAnalytics: vi.fn() }));
 vi.mock('@server/websocket/utils', () => ({ sendToConnection: vi.fn() }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
 vi.mock('sst', () => ({
   Resource: { App: { stage: 'test' }, websocket: { managementEndpoint: 'wss://example.test' } },
 }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
 
 import { registerWsCompletionRoutes } from './wsRoute';
 
@@ -107,6 +112,43 @@ describe('JWT rate limiting', () => {
   it('answers 401 when the limiter rejects', async () => {
     vi.mocked(checkRateLimit).mockRejectedValue(new Error('Rate limit exceeded.'));
     expect((await postAs({ 'user-agent': 'b4m-cli/1.0.0' })).status).toBe(401);
+  });
+});
+
+describe('API-key auth failures', () => {
+  it('answers 503 with Retry-After and no driver text when the database is unreachable, without consulting JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('5');
+    const body = await response.json();
+    expect(body).toEqual({ error: 'Authentication temporarily unavailable' });
+    expect(JSON.stringify(body)).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+    expect(vi.mocked(verifyJwtToken)).not.toHaveBeenCalled();
+  });
+
+  it('answers 500 with a fixed message for an unexpected key-check failure', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(toApiKeyAuthError(new Error('boom')));
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Authentication failed' });
+    expect(vi.mocked(verifyJwtToken)).not.toHaveBeenCalled();
+  });
+
+  it('answers 401 for an unknown key and an invalid JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(new Error('Invalid authorization token'));
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: 'Authentication failed' });
   });
 });
 
@@ -225,6 +267,7 @@ describe('completion analytics', () => {
         cacheReadInputTokens: 301_000,
         cacheCreationInputTokens: 500,
         turnUsage,
+        creditsUsed: 7,
       });
       // A trailing frame without the breakdown must not clear the latched one.
       await onChunk([''], { stopReason: 'end_turn' });
@@ -240,7 +283,33 @@ describe('completion analytics', () => {
         finalCacheReadTokens: 301_000,
         finalCacheWriteTokens: 500,
         finalTurnUsage: turnUsage,
+        finalCreditsUsed: 7,
       })
     );
+  });
+});
+
+describe('admin role on the reloaded owner', () => {
+  type ScopeActor = (<U extends { isAdmin?: boolean }>(actor: U) => U) | undefined;
+  const runAs = async (scopes?: ApiKeyScope[]): Promise<ScopeActor> => {
+    if (scopes) vi.mocked(verifyApiKey).mockResolvedValueOnce({ userId: 'u1', keyId: 'k1', scopes } as never);
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+    return vi.mocked(executeCompletion).mock.calls[0][0].scopeActor;
+  };
+
+  it('withholds an admin owner role for a key without the admin scope', async () => {
+    const scopeActor = await runAs([ApiKeyScope.AI_CHAT]);
+    expect(scopeActor?.({ isAdmin: true }).isAdmin).toBe(false);
+  });
+
+  it('keeps the role for a key with the admin scope', async () => {
+    expect(await runAs([ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN])).toBeUndefined();
+  });
+
+  it('keeps the role for a JWT session', async () => {
+    expect(await runAs()).toBeUndefined();
   });
 });

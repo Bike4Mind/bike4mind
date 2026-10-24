@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CreditHolderType,
   IChatHistoryItemDocument,
@@ -9,6 +10,9 @@ import {
   ModelInfo,
   materializePromptMetaSession,
   type GenerationJobRef,
+  type CitableSource,
+  usdToCreditsStochastic,
+  type UsagePriceStamp,
 } from '@bike4mind/common';
 import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -19,8 +23,14 @@ import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
 import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';
 import { mergeRetrievalSummary } from './retrievalSummaryMerge';
+import {
+  assignCitationIndices,
+  citableKey,
+  mergeKeepsCitationNumbering,
+  stripCitationIndices,
+} from './citationNumbering';
 import { ToolDefinition, type ToolContext } from './base/types';
-import { validateUserCredits, validateAudioCredits } from './base/utils';
+import { validateImageCredits, validateAudioCredits } from './base/utils';
 import { estimateImageCredits } from '../../imageCost';
 import {
   toImageCostInput,
@@ -39,6 +49,7 @@ import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
 import { usageEventStatusForFinish } from '../earlyStopStamp';
+import type { ModelAdmission } from '../modelAdmission';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
@@ -56,6 +67,8 @@ export function buildToolUsageEvent(params: {
   cacheWriteTokens?: number;
   /** Provider stop reason of the underlying completion, when the tool wraps one (e.g. delegate_to_agent). */
   finishReason?: string;
+  /** Rate provenance for costUsd (buildUsagePriceStamp), from a caller that priced a text model. */
+  priceStamp?: UsagePriceStamp;
   /**
    * Defaults to 'tool'. The audio tool passes the feature its direct endpoint
    * writes (sound_effects, text_to_speech), so a track counts as a track
@@ -80,6 +93,7 @@ export function buildToolUsageEvent(params: {
     units: params.units,
     costUsd: params.costUsd,
     creditsCharged: params.creditsCharged,
+    ...params.priceStamp,
     // Same refund key the chat/CLI completion paths record: see usageEventStatusForFinish.
     status: usageEventStatusForFinish(params.finishReason),
   };
@@ -120,6 +134,8 @@ export interface ToolBuilderConfig {
   apiKeyId?: ToolContext['apiKeyId'];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
   retrievalFilter?: ToolContext['retrievalFilter'];
+  /** The session's citationStyle; 'indexed' gives tools ToolContext.numberCitables. */
+  citationStyle?: 'named' | 'indexed';
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
   /** Attached file ids, forwarded to the tool context (see ToolContext.attachedFileIds). */
@@ -169,6 +185,10 @@ export interface ToolBuilderConfig {
    * preamble while the tool executes. No-op when omitted.
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
+  /** The turn's model admission, forwarded to the delegation tools (see ToolBuilderDeps.modelAdmission). */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
+  /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
+  decide?: ToolContext['decide'];
 }
 
 // Short spoken preambles for tools whose latency would otherwise leave the
@@ -251,6 +271,56 @@ function resolveToolStatus(toolName: string, data: any): string | null {
 }
 
 /**
+ * Append `incoming` citables to `existing`, deduped by stable identity (citableKey), and decide
+ * whether the turn keeps its [N] numbering (see citationNumbering.ts).
+ */
+function mergeCitables(existing: CitableSource[], incoming: CitableSource[]): CitableSource[] {
+  const mergedCitables = [...existing, ...incoming];
+  // Dedup keeps ONE entry per identity but prefers the one carrying a passage anchor: the same
+  // file can be cited by a file-level arm and a chunk-level one on the same turn, and keeping
+  // whichever merely arrived first would silently drop the chip the reader can deep-link from
+  // (#3038). The winner takes the loser's POSITION, because a citation index [N] refers to this
+  // array's order - reordering here would repoint every marker after it.
+  const hasPassageAnchor = (citable: (typeof mergedCitables)[number]): boolean =>
+    typeof citable?.metadata?.fullContext === 'string' && citable.metadata.fullContext.length > 0;
+  const citableIndexByKey = new Map<string, number>();
+  const dedupedCitables: typeof mergedCitables = [];
+  for (const citable of mergedCitables) {
+    const key = citableKey(citable);
+    if (!key) continue;
+    const existingIndex = citableIndexByKey.get(key);
+    if (existingIndex === undefined) {
+      citableIndexByKey.set(key, dedupedCitables.length);
+      dedupedCitables.push(citable);
+      continue;
+    }
+    const winner =
+      !hasPassageAnchor(dedupedCitables[existingIndex]) && hasPassageAnchor(citable)
+        ? citable
+        : dedupedCitables[existingIndex];
+    // Unioned across both chips rather than riding on the anchor rule above (#3041): the anchor
+    // and the conflict marks are independent signals written by different arms, and
+    // knowledgeBaseRetrieve stamps conflictsWith while deliberately never carrying an anchor. So
+    // whenever a search chip for the same file also lands this turn, letting the anchor decide
+    // alone would silently drop the marks - the reader would lose a warning the model still got.
+    // Array.isArray because these arrive off a stored document, where metadata is Mixed.
+    const conflictsWith = [
+      ...new Set(
+        [dedupedCitables[existingIndex], citable].flatMap(c =>
+          Array.isArray(c?.metadata?.conflictsWith) ? c.metadata.conflictsWith : []
+        )
+      ),
+    ];
+    // Copied, never mutated in place: the loser may be the caller's own object.
+    dedupedCitables[existingIndex] = conflictsWith.length
+      ? { ...winner, metadata: { ...winner.metadata, conflictsWith } }
+      : winner;
+  }
+  if (!incoming.length || mergeKeepsCitationNumbering(incoming, dedupedCitables)) return dedupedCitables;
+  return stripCitationIndices(dedupedCitables);
+}
+
+/**
  * Apply a partial status-update change set onto the live quest object.
  *
  * Most fields are overwritten wholesale via Object.assign, but four fields
@@ -296,56 +366,7 @@ export function applyQuestStatusChanges(
   } = changes;
 
   if (changedPromptMeta && quest.promptMeta) {
-    const mergedCitables = [...(quest.promptMeta.citables || []), ...(changedPromptMeta.citables || [])];
-    // Dedup keeps ONE entry per identity but prefers the one carrying a passage anchor: the same
-    // file can be cited by a file-level arm and a chunk-level one on the same turn, and keeping
-    // whichever merely arrived first would silently drop the chip the reader can deep-link from
-    // (#3038). The winner takes the loser's POSITION, because a citation index [N] refers to this
-    // array's order - reordering here would repoint every marker after it.
-    const hasPassageAnchor = (citable: (typeof mergedCitables)[number]): boolean =>
-      typeof citable?.metadata?.fullContext === 'string' && citable.metadata.fullContext.length > 0;
-    const citableIndexByKey = new Map<string, number>();
-    const dedupedCitables: typeof mergedCitables = [];
-    for (const citable of mergedCitables) {
-      const key = citable.id || citable.url || citable.title;
-      if (!key) continue;
-      const existingIndex = citableIndexByKey.get(key);
-      if (existingIndex === undefined) {
-        citableIndexByKey.set(key, dedupedCitables.length);
-        dedupedCitables.push(citable);
-        continue;
-      }
-      const winner =
-        !hasPassageAnchor(dedupedCitables[existingIndex]) && hasPassageAnchor(citable)
-          ? citable
-          : dedupedCitables[existingIndex];
-      // Unioned across both chips rather than riding on the anchor rule above (#3041): the anchor
-      // and the conflict marks are independent signals written by different arms, and
-      // knowledgeBaseRetrieve stamps conflictsWith while deliberately never carrying an anchor. So
-      // whenever a search chip for the same file also lands this turn, letting the anchor decide
-      // alone would silently drop the marks - the reader would lose a warning the model still got.
-      // Array.isArray because these arrive off a stored document, where metadata is Mixed.
-      const conflictsWith = [
-        ...new Set(
-          [dedupedCitables[existingIndex], citable].flatMap(c =>
-            Array.isArray(c?.metadata?.conflictsWith) ? c.metadata.conflictsWith : []
-          )
-        ),
-      ];
-      // Copied, never mutated in place: the loser may be the caller's own object.
-      dedupedCitables[existingIndex] = conflictsWith.length
-        ? { ...winner, metadata: { ...winner.metadata, conflictsWith } }
-        : winner;
-    }
-    // Tool results number their own sources 1., 2., so once any tool citable lands a [N] is ambiguous;
-    // dropping the forced-retrieval stamps makes the client's citationMarkersLinkable gate fail safe.
-    const finalCitables = changedPromptMeta.citables?.length
-      ? dedupedCitables.map(citable => {
-          if (citable.metadata?.citationIndex === undefined) return citable;
-          const { citationIndex: _stamp, ...metadata } = citable.metadata;
-          return { ...citable, metadata };
-        })
-      : dedupedCitables;
+    const finalCitables = mergeCitables(quest.promptMeta.citables || [], changedPromptMeta.citables || []);
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = materializePromptMetaSession(
@@ -363,7 +384,13 @@ export function applyQuestStatusChanges(
       { sessionId: quest.sessionId, userId }
     );
   } else if (changedPromptMeta) {
-    quest.promptMeta = materializePromptMetaSession(changedPromptMeta, { sessionId: quest.sessionId, userId });
+    // Deduped and numbered like the branch above, so a turn whose first citables come from a tool
+    // still gets a citables array the [N] markers can index.
+    const citables = changedPromptMeta.citables ? mergeCitables([], changedPromptMeta.citables) : undefined;
+    quest.promptMeta = materializePromptMetaSession(
+      { ...changedPromptMeta, ...(citables ? { citables } : {}) },
+      { sessionId: quest.sessionId, userId }
+    );
   }
 
   if (changedImages) {
@@ -417,6 +444,8 @@ export interface BuildToolsArgs {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
   };
+  /** See `ToolBuilderDeps.subagentModels`. */
+  subagentModels?: ModelInfo[];
   agentOnlyMcpServers?: string[];
   apiKeyTable?: ApiKeyTable;
   getAbortSignal?: () => AbortSignal | undefined;
@@ -472,6 +501,20 @@ export interface BuildToolPromptArgs {
   extraContextMessages: ExtraContextMessage[];
 }
 
+// The tools whose onToolStart records a gate estimate (gateImageCredits, gateAudioCredits).
+const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image', 'audio_generation']);
+// Reuse one async context store for the process; each tool invocation gets a unique token.
+const gatedToolInvocation = new AsyncLocalStorage<symbol>();
+
+/**
+ * The tool prompt, split by who shares it. `guidance` depends only on which tools are offered and
+ * on admin settings, so it is identical across users and belongs in the shareable cached prefix
+ * (source `toolPrompt`); `context` carries the user's timezone, their MCP integrations, the
+ * session's conversation entities and the agent roster (source `toolContext`), and must sit
+ * behind that prefix - see PER_CALLER_AUTHORED_SOURCES in systemPromptSources.ts.
+ */
+export type ToolPromptMessages = { guidance: IMessage | null; context: IMessage | null };
+
 export class ToolBuilder {
   constructor(private readonly deps: ToolBuilderConfig) {}
 
@@ -492,6 +535,8 @@ export class ToolBuilder {
     const queue = this.deps.toolCreditsMap.get(toolName) ?? [];
     queue.push(credits);
     this.deps.toolCreditsMap.set(toolName, queue);
+    // This call's gate estimate is now superseded by its settled charge.
+    this.releaseGatedToolCredits(toolName);
     // Only a charging call contributes: a zero-credit call is absent from the aggregate
     // ledger row's amount, so recording anything for it would be misleading.
     // ASSUMES this queue only ever carries positive charges, which every call site holds
@@ -508,6 +553,54 @@ export class ToolBuilder {
     if (credits > 0) this.deps.toolCreditModels.add(model ?? UNATTRIBUTED_TOOL_CHARGE);
   }
 
+  /** Each invocation owns its estimate, including when same-name calls finish out of order. */
+  private readonly gatedToolCredits = new Map<string, Map<symbol, number>>();
+
+  private trackGatedCalls(tools: ICompletionOptionTools[]): ICompletionOptionTools[];
+  private trackGatedCalls(tools: ICompletionOptionTools[] | undefined): ICompletionOptionTools[] | undefined;
+  private trackGatedCalls(tools: ICompletionOptionTools[] | undefined): ICompletionOptionTools[] | undefined {
+    return tools?.map(tool => {
+      const name = tool.toolSchema.name;
+      if (!GATED_TOOL_NAMES.has(name)) return tool;
+      const toolFn: ICompletionOptionTools['toolFn'] = (...args) => {
+        const invocation = Symbol(name);
+        return gatedToolInvocation.run(invocation, async () => {
+          try {
+            return await tool.toolFn(...args);
+          } finally {
+            this.gatedToolCredits.get(name)?.delete(invocation);
+          }
+        });
+      };
+      return { ...tool, toolFn };
+    });
+  }
+
+  private releaseGatedToolCredits(toolName: string): void {
+    const estimates = this.gatedToolCredits.get(toolName);
+    // Direct gate/settle callers are sequential; wrapped tools carry their invocation across awaits.
+    const invocation = gatedToolInvocation.getStore() ?? estimates?.keys().next().value;
+    if (invocation !== undefined) estimates?.delete(invocation);
+  }
+
+  /** Credits this turn has committed to tool calls: settled charges plus in-flight gate estimates. */
+  private committedToolCredits(): number {
+    let total = 0;
+    for (const queue of this.deps.toolCreditsMap.values()) {
+      for (const credits of queue) total += credits;
+    }
+    for (const estimates of this.gatedToolCredits.values()) {
+      for (const credits of estimates.values()) total += credits;
+    }
+    return total;
+  }
+
+  private recordGatedToolCredits(toolName: string, credits: number): void {
+    const estimates = this.gatedToolCredits.get(toolName) ?? new Map<symbol, number>();
+    estimates.set(gatedToolInvocation.getStore() ?? Symbol(toolName), credits);
+    this.gatedToolCredits.set(toolName, estimates);
+  }
+
   /**
    * Up-front affordability gate for audio_generation (onToolStart): throws
    * insufficient_credits before the paid provider call. Speech is gated on a conservative
@@ -517,7 +610,14 @@ export class ToolBuilder {
    */
   gateAudioCredits(data: AudioCostInput, enforceCredits: boolean, organization?: IOrganizationDocument | null): void {
     if (!enforceCredits || !this.deps.db.creditTransactions) return;
-    validateAudioCredits(this.deps.user, data, this.deps.logger, organization);
+    const { requiredCredits } = validateAudioCredits(
+      this.deps.user,
+      data,
+      this.deps.logger,
+      organization,
+      this.committedToolCredits()
+    );
+    this.recordGatedToolCredits('audio_generation', requiredCredits);
   }
 
   /**
@@ -554,7 +654,9 @@ export class ToolBuilder {
               model: data.model,
               characters: data.characters ?? 0,
             };
-      const { requiredCredits: creditsUsed, usdCost, units } = estimateAudioCredits(costInput);
+      // The gate prices the round-up; the charge is the unbiased draw on the exact cost (may be 0).
+      const { usdCost, units } = estimateAudioCredits(costInput);
+      const creditsUsed = usdToCreditsStochastic(usdCost);
       // Speech always resolves a real model id; a sound effect has none, so qualify it by
       // provider (e.g. "elevenlabs-sound_effect") instead of the bare kind so per-model
       // COGS analytics stays clean.
@@ -633,14 +735,16 @@ export class ToolBuilder {
   ): Promise<void> {
     const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
     if (!modelInfo) return;
-    await validateUserCredits(
+    const { requiredCredits } = validateImageCredits(
       this.deps.user,
       modelInfo,
       data.n || 1,
       toImageCostInput(toolName, data),
       this.deps.logger,
-      organization
+      organization,
+      this.committedToolCredits()
     );
+    this.recordGatedToolCredits(toolName, requiredCredits);
   }
 
   /**
@@ -661,11 +765,9 @@ export class ToolBuilder {
     const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
     if (modelInfo) {
       const units = data.n || 1;
-      const { requiredCredits: creditsUsed, usdCost } = estimateImageCredits(
-        modelInfo,
-        units,
-        toImageCostInput(toolName, data)
-      );
+      // The gate prices the round-up; the charge is the unbiased draw on the exact cost (may be 0).
+      const { usdCost } = estimateImageCredits(modelInfo, units, toImageCostInput(toolName, data));
+      const creditsUsed = usdToCreditsStochastic(usdCost);
       this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
       this.reserveToolCredits(toolName, creditsUsed, modelInfo.id);
       quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
@@ -843,6 +945,7 @@ export class ToolBuilder {
     model,
     organization,
     precomputed,
+    subagentModels,
     agentOnlyMcpServers = [],
     apiKeyTable,
     getAbortSignal,
@@ -851,7 +954,7 @@ export class ToolBuilder {
     externalTools,
     toolAvailability,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
-    return buildSharedTools(
+    const tools = buildSharedTools(
       {
         userId: this.deps.user.id,
         user: this.deps.user,
@@ -871,6 +974,7 @@ export class ToolBuilder {
         organizationId: organization?.id,
         authOrigin: this.deps.authOrigin,
         apiKeyId: this.deps.apiKeyId,
+        decide: this.deps.decide,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,
@@ -878,9 +982,11 @@ export class ToolBuilder {
         llm,
         model,
         precomputed,
+        subagentModels,
         apiKeyTable,
         thinking,
         agentStore,
+        modelAdmission: this.deps.modelAdmission,
       },
       {
         onStatusUpdate: async (changes, status) => {
@@ -924,7 +1030,7 @@ export class ToolBuilder {
 
           // video_generation and music_generation bill in their job's create step, not here.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
-            this.deps.logger.info(`Tool ${toolName} started with data: ${JSON.stringify(data)}`);
+            this.deps.logger.info(`Tool ${toolName} started`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
             await this.gateImageCredits(
               toolName,
@@ -943,7 +1049,7 @@ export class ToolBuilder {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolFinish: async (toolName: string, data: any) => {
           if (toolName === 'deep_research') {
-            this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
+            this.deps.logger.info(`Tool ${toolName} finished`);
             quest.deepResearchState = data;
             await saveQuest(quest);
           }
@@ -969,7 +1075,7 @@ export class ToolBuilder {
           }
           // Settle image billing HERE, like audio: a provider error returns before onFinish.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
-            this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
+            this.deps.logger.info(`Tool ${toolName} finished`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
             this.settleImageCredits(
               toolName,
@@ -1004,7 +1110,10 @@ export class ToolBuilder {
           });
         },
         onPendingAction: async action => {
-          quest.pendingAction = action;
+          // Monotonic so a Confirm button's ts always identifies the action it was rendered for.
+          quest.pendingAction = quest.pendingAction
+            ? { ...action, ts: Math.max(action.ts, quest.pendingAction.ts + 1) }
+            : action;
           await saveQuest(quest);
           this.deps.logger.debug(`[MCP] pendingAction saved to quest ${quest.id}`);
         },
@@ -1015,6 +1124,29 @@ export class ToolBuilder {
         },
         sessionId: quest.sessionId,
         questId: quest.id,
+        slackDestination: quest.slackNotification
+          ? {
+              workspaceId: quest.slackNotification.workspaceId,
+              channelId: quest.slackNotification.channelId,
+              threadTs: quest.slackNotification.threadTs,
+            }
+          : undefined,
+        // Synchronous so parallel tool calls cannot claim the same numbers: the stamped citables
+        // land on the live quest before the next call reads its length.
+        numberCitables:
+          this.deps.citationStyle === 'indexed'
+            ? citables => {
+                const stamped = assignCitationIndices(quest.promptMeta?.citables ?? [], citables);
+                if (stamped) {
+                  applyQuestStatusChanges(
+                    quest,
+                    { promptMeta: { citables: stamped } } as Partial<IChatHistoryItemDocument>,
+                    this.deps.user.id
+                  );
+                }
+                return stamped;
+              }
+            : undefined,
         onSubagentCredits: (credits, meta) => {
           this.reserveToolCredits('delegate_to_agent', credits, meta?.model);
           // No meta == model unresolvable; skip rather than fabricate a zero-cost event.
@@ -1036,6 +1168,7 @@ export class ToolBuilder {
                 cachedInputTokens: meta.cacheReadTokens,
                 cacheWriteTokens: meta.cacheWriteTokens,
                 finishReason: meta.finishReason,
+                priceStamp: meta.priceStamp,
               })
             );
           }
@@ -1063,14 +1196,18 @@ export class ToolBuilder {
         getAbortSignal,
         externalTools,
         toolAvailability,
+        // Subagents get the same wrapper the returned array does, so a failed inner call drops
+        // its gate estimate instead of leaving this turn looking over-committed.
+        wrapChildTools: childTools => this.trackGatedCalls(childTools),
       }
     );
+    return this.trackGatedCalls(tools);
   }
 
   /**
-   * Build a single tool-related system prompt combining: tool prompt from DB, blog draft workflow,
-   * MCP integration guidance, conversation context, and agent delegation guidance.
-   * Returns a single IMessage or null if there's nothing to add.
+   * Build the tool-related system prompts: tool prompt from DB, blog draft workflow, MCP integration
+   * guidance, conversation context, and agent delegation guidance, split into the shareable
+   * `guidance` and the per-caller `context` (see ToolPromptMessages). Either is null when empty.
    *
    * NOTE: not pure. Every invocation writes to the session via
    * `extractAndSaveEntitiesFromUserMessage` to persist entities for later reference resolution
@@ -1094,8 +1231,9 @@ export class ToolBuilder {
     processStartTime,
     agentStore,
     extraContextMessages,
-  }: BuildToolPromptArgs): Promise<IMessage | null> {
+  }: BuildToolPromptArgs): Promise<ToolPromptMessages> {
     const sections: string[] = [];
+    const contextSections: string[] = [];
 
     // 1. Tool prompt from DB (custom prompt attached to tool)
     if (toolPromptId) {
@@ -1199,14 +1337,17 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
     // it deliberately omits the time of day, so the model must call the tool for
     // anything clock-level.
     if (hasCurrentDateTime) {
-      const timezoneHint = userTimezone
-        ? ` The user's timezone is \`${userTimezone}\` — pass it as the \`timezone\` parameter.`
-        : '';
       sections.push(
         `# CURRENT TIME\n\n` +
           `For the current time of day, or to timestamp an action at the moment it executes, ` +
-          `call the \`current_datetime\` tool — never guess or invent the time.${timezoneHint}`
+          `call the \`current_datetime\` tool \u2014 never guess or invent the time.`
       );
+      // Per user, so it lives in the context half rather than in the shared guidance above.
+      if (userTimezone) {
+        contextSections.push(
+          `The user's timezone is \`${userTimezone}\` - pass it as the \`timezone\` parameter to \`current_datetime\`.`
+        );
+      }
     }
 
     // 3c. Web-search freshness nudge. Gated on the tool actually being enabled: the ambient
@@ -1252,7 +1393,7 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
         })
         .join('\n');
 
-      sections.push(`## Connected Integrations
+      contextSections.push(`## Connected Integrations
 
 You have access to the following external integrations:
 
@@ -1282,7 +1423,7 @@ ${integrationList}
 
       const contextMessage = await getConversationContextSystemMessage(sessionId, this.deps.db.sessions);
       if (contextMessage) {
-        sections.push(contextMessage.content);
+        contextSections.push(contextMessage.content);
         logger.info('🧠 [ConversationContext] Added context to tool prompt');
       }
     } catch (contextErr) {
@@ -1305,7 +1446,7 @@ ${integrationList}
       const agents = agentStore.getAllAgents();
       const agentList = agents.map(a => `- **${a.name}**: ${a.description}`).join('\n');
 
-      sections.push(`## Agent Delegation
+      contextSections.push(`## Agent Delegation
 
 You have the \`delegate_to_agent\` tool which lets you delegate tasks to specialized autonomous agents. Each agent runs independently with its own reasoning loop and tools.
 
@@ -1323,10 +1464,8 @@ ${agentList}
       });
     }
 
-    if (sections.length === 0) {
-      return null;
-    }
-
-    return { role: 'system', content: sections.join('\n\n') };
+    const toMessage = (parts: string[]): IMessage | null =>
+      parts.length === 0 ? null : { role: 'system', content: parts.join('\n\n') };
+    return { guidance: toMessage(sections), context: toMessage(contextSections) };
   }
 }

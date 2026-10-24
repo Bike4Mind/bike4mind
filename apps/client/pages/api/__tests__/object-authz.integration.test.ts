@@ -138,7 +138,7 @@ import agentsHandler from '../sessions/[id]/agents';
 import autoRenameHandler from '../sessions/[id]/auto-rename';
 import rollHandler from '../roll';
 import rapidReplyHandler from '../ai/rapid-reply';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 if (!Config.JWT_SECRET) throw new Error('JWT_SECRET not provisioned in test env');
 const REAL_SECRET = String(Config.JWT_SECRET);

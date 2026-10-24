@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
-import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
+import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';
 
 /**
  * GET /api/system-prompts/activatable

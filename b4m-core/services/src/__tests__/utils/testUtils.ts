@@ -60,6 +60,7 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   searchAccessible: vi.fn(),
   listAccessibleAfterId: vi.fn(),
   removeSession: vi.fn(),
+  pullFileReferences: vi.fn(),
   findAllBySessionId: vi.fn(),
 });
 
@@ -111,6 +112,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   updateTagsByUserId: vi.fn(),
   dedupeTagByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
+  setOwnerOrganizationIfUnchanged: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
   pushTagReturningPriorState: vi.fn().mockResolvedValue(null),
   bulkUpdateTags: vi.fn(),
@@ -180,6 +182,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   sumFileSizeByUserId: vi.fn(),
   sumFileSizeByOrganizationId: vi.fn(),
   summarizeChargedStorageByUserId: vi.fn(),
+  summarizeChargedStorageByOrganizationId: vi.fn(),
   commitContentRewrite: vi.fn(),
   findChargeState: vi.fn(),
 });
@@ -211,12 +214,16 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     incrementImageCount: vi.fn(),
     findAllWithKnowledgeId: vi.fn(),
     pullKnowledgeIds: vi.fn(),
+    pullKnowledgeIdsFromSession: vi.fn(),
+    pullKnowledgeIdsForUsers: vi.fn(),
     searchByUserId: vi.fn(),
     listByUserId: vi.fn(),
     findRecentlyUpdatedByUserId: vi.fn(),
     findAllByIds: vi.fn(),
     findSessionIdsByUserId: vi.fn(),
     attachAgent: vi.fn(),
+    // Returns a promise so the caller's `.catch(...)` on the auto-add write works in every test.
+    addAutoAddedTools: vi.fn().mockResolvedValue(undefined),
     detachAgent: vi.fn(),
     getAttachedAgents: vi.fn(),
     addArtifact: vi.fn(),
@@ -230,7 +237,6 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     findStaleVoiceHolds: vi.fn(),
     claimVoiceHold: vi.fn(),
     openVoiceHold: vi.fn(),
-    restoreVoiceHold: vi.fn(),
     recordVoiceActivity: vi.fn(),
   });
 
@@ -269,6 +275,8 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     addTagsToUser: vi.fn(),
     removeGroupFromUser: vi.fn(),
     recordReferrals: vi.fn(),
+    reserveReferrals: vi.fn(),
+    settleReferrals: vi.fn(),
     removeGroupsFromUser: vi.fn(),
     findUserIdsByGroupIds: vi.fn(),
     findByIds: vi.fn(),
@@ -296,6 +304,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     atomicEnableMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
+    pullSystemFilesForUsers: vi.fn(),
     setModerationStatus: vi.fn(),
     recordModerationAppeal: vi.fn(),
   });
@@ -335,6 +344,8 @@ export const createMockCreditTransactionRepository = (): MockedObject<ICreditTra
     findByOwnerWithFilters: vi.fn(),
     queryLedgerPage: vi.fn(),
     queryAdminAdjustmentsPage: vi.fn(),
+    dailyNetCreditsForOwner: vi.fn(),
+    findAdminAdjustmentsForUser: vi.fn(),
     apiKeyUsageForOwner: vi.fn(),
     sourceUsageForOwner: vi.fn(),
   });

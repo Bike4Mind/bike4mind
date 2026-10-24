@@ -2,7 +2,7 @@ import { Permission } from '@bike4mind/common';
 import { FabFile, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 const handler = baseApi()

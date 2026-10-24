@@ -18,14 +18,14 @@ const cut = (source: string, start: string, end: string) => {
 };
 
 describe('lakeConnectorOrphanReap cron', () => {
-  const cron = cut(CRON, "const lakeConnectorOrphanReapCron = new sst.aws.Cron('lakeConnectorOrphanReap'", '\n});');
+  const cron = cut(CRON, 'const lakeConnectorOrphanReapCron = runsScheduledJobs', '\n  : undefined;');
 
   it('runs the workers reap handler daily in the VPC', () => {
     expect(cron).toMatch(/schedule:\s*'rate\(1 day\)'/);
     expect(cron).toMatch(/handler:\s*'apps\/workers\/src\/cron\/lakeConnectorOrphanReap\.handler'/);
     expect(cron).toMatch(/vpc:\s*lambdaVpc/);
     expect(cron).toMatch(/timeout:\s*'5 minutes'/);
-    expect(cron).toMatch(/enabled:\s*\['production',\s*'dev'\]\.includes\(\$app\.stage\)/);
+    expect(cron).toMatch(/=\s*runsScheduledJobs\s*\?\s*new sst\.aws\.Cron\(/);
   });
 
   it('links the revoke queue a GitHub release defers a failed uninstall to, alongside the secrets', () => {

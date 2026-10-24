@@ -1,5 +1,14 @@
 export const isPreviewStage = process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test($app.stage);
 const isStagingStage = $app.stage === 'dev';
+
+/**
+ * Whether this stage creates its scheduled crons at all. Only production and dev do; every other
+ * stage (PR previews, shared-dev, personal stages) skips them outright rather than deploying
+ * them disabled: a disabled EventBridge rule still counts against the default bus's per-account
+ * rule quota, which every preview in the account shares.
+ * Crons that should also run on previews (infra/cron.ts) are created unconditionally.
+ */
+export const runsScheduledJobs = ['production', 'dev'].includes($app.stage);
 /** Stages that run at full production scale (reserved concurrency, full memory, etc.).
  * Declared in @bike4mind/infra so the admin System Secrets page reads the same roster. */
 import { PRODUCTION_STAGES } from '@bike4mind/infra';
@@ -76,13 +85,6 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   // Curated domain->display-name map for internal-org analytics grouping (#350). Runtime-read by
   // inferOrganizationFromEmail in the report cron. No brand fallback; empty == title-cased domain.
   NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES: process.env.NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES || '',
-  // Enable What's New modal distribution (S3 upload) for main production only
-  // Fork environments should NOT set this - they consume via WHATS_NEW_DISTRIBUTION_URL
-  ENABLE_WHATS_NEW_DISTRIBUTION: process.env.ENABLE_WHATS_NEW_DISTRIBUTION || '',
-  // Extra SSRF-allowlisted host suffix(es) for the What's New distribution URL (open-core #9392).
-  // Comma-separated; no brand fallback (empty == only CloudFront/S3 + SERVER_DOMAIN allowed). Lets
-  // a fork pull the upstream feed from a custom domain that isn't CloudFront/S3 or its own host.
-  WHATS_NEW_ALLOWED_DISTRIBUTION_HOSTS: process.env.WHATS_NEW_ALLOWED_DISTRIBUTION_HOSTS || '',
   // Enable E2E test endpoints (/api/test/*) on preview and staging deployments
   E2E_ENDPOINTS_ENABLED: isPreviewStage || isStagingStage ? 'true' : '',
   // Suppress punycode deprecation warning (DEP0040) from SST's transitive aws-sdk v2 dependency

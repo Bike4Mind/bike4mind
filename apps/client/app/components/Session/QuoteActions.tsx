@@ -1,4 +1,4 @@
-import { Close } from '@mui/icons-material';
+import Close from '@mui/icons-material/Close';
 import { Button, Box } from '@mui/joy';
 import React, { FC, useCallback, useEffect, useRef, useState } from 'react';
 import { useChatInput } from '@client/app/hooks/useChatInput';

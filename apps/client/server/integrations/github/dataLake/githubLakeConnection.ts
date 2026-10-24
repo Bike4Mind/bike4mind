@@ -35,14 +35,14 @@ import {
   assertLakeConnectorFree,
   withConnectionId,
   withLakeConnectorClaim,
-} from '@server/dataLakes/assertLakeConnectorFree';
+} from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import {
   purgeConnectionIngestedFiles,
   type PurgeConnectionLogger,
 } from '@server/dataLakes/purgeConnectionIngestedFiles';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
-import { serializeError } from '@server/utils/serializeError';
-import { sendToQueue } from '@server/utils/sqs';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import {
   BadRequestError,
   ConflictError,
@@ -50,7 +50,7 @@ import {
   HTTPError,
   HttpStatus,
   NotFoundError,
-} from '@server/utils/errors';
+} from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import {
   consumeGitHubLakeAuthGrant,
@@ -69,7 +69,7 @@ import {
   listUserInstallations,
   type GitHubLakeAppConfig,
   type GitHubLakeUserInstallation,
-} from './lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import { findInstallationPolicyViolation } from './lakeAppPolicy';
 
 export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state', expiresIn: '10m' } as const;

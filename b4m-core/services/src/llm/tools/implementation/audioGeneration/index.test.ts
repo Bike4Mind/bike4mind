@@ -23,12 +23,21 @@ vi.mock('../../../../apiKeyService', async importOriginal => {
   return { ...actual, getEffectiveApiKey: mockGetEffectiveApiKey };
 });
 
+// Pass-through capacity gate by default; the gate itself is covered in providerCapacity's own tests.
+const mockRunWithCapacity = vi.fn();
+vi.mock('../../../../providerCapacity', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../providerCapacity')>();
+  return { ...actual, runElevenLabsWithCapacity: mockRunWithCapacity };
+});
+
 vi.mock('../../helpers/persistGeneratedFile', () => ({
   saveGeneratedAssetFromTool: mockSaveAsset,
 }));
 
 // Imported after the mocks so the tool picks up the mocked dependencies.
 const { audioGenerationTool } = await import('./index');
+const { aiSoundService } = await import('@bike4mind/utils');
+const { ProviderBusyError } = await import('../../../../providerCapacity');
 
 function createFakeContext(): ToolContext & {
   onStart: ReturnType<typeof vi.fn>;
@@ -64,6 +73,11 @@ describe('audio_generation tool', () => {
     mockGenerate.mockReset();
     mockGetEffectiveApiKey.mockReset();
     mockSaveAsset.mockClear();
+    mockRunWithCapacity
+      .mockReset()
+      .mockImplementation((_args: unknown, attempt: (call: { timeoutMs: number }) => unknown) =>
+        attempt({ timeoutMs: 45_000 })
+      );
     mockSynthesize.mockResolvedValue({
       audio: Buffer.from('fake-mp3'),
       contentType: 'audio/mpeg',
@@ -127,6 +141,32 @@ describe('audio_generation tool', () => {
       paths: ['stored-key.mp3'],
     });
     expect(result).toBe('Successfully generated sound effect');
+    expect(mockRunWithCapacity).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'sound', db: context.db }),
+      expect.any(Function)
+    );
+  });
+
+  it('forwards the capacity-granted timeout into the sound generator factory', async () => {
+    mockRunWithCapacity.mockImplementation((_args: unknown, attempt: (call: { timeoutMs: number }) => unknown) =>
+      attempt({ timeoutMs: 12_345 })
+    );
+    const context = createFakeContext();
+
+    await run(context, { kind: 'sound_effect', text: 'dog barking' });
+
+    expect(aiSoundService).toHaveBeenCalledWith('elevenlabs', 'provider-key', context.logger, { timeoutMs: 12_345 });
+  });
+
+  it('tells the model to retry later, without billing, when the sound-effects provider is at capacity', async () => {
+    mockRunWithCapacity.mockRejectedValue(new ProviderBusyError('elevenlabs', 'slots_exhausted', 5));
+    const context = createFakeContext();
+
+    const result = await run(context, { kind: 'sound_effect', text: 'dog barking' });
+
+    expect(result).toBe('Error: the elevenlabs sound-effects service is busy right now. Try again in about 5 seconds.');
+    expect(mockGenerate).not.toHaveBeenCalled();
+    expect(context.onFinish).not.toHaveBeenCalled();
   });
 
   it('rejects empty text without gating credits or calling a provider', async () => {
@@ -148,15 +188,17 @@ describe('audio_generation tool', () => {
     expect(context.onFinish).not.toHaveBeenCalled();
   });
 
-  it('sanitizes the provider error in the tool result (logs detail) without storing or billing', async () => {
+  it('sanitizes the provider error in the tool result and logs without storing or billing', async () => {
     mockSynthesize.mockRejectedValue(new Error('provider exploded: key sk-abc123 rejected at https://api.example'));
     const context = createFakeContext();
     const result = await run(context, { kind: 'speech', text: 'boom' }, { ttsProvider: 'openai' });
     // The model sees a generic message; the raw vendor string (key hint / URL) must not leak.
     expect(result).toBe('Error: TTS request rejected by the openai provider.');
     expect(result).not.toMatch(/sk-abc123|api\.example/);
-    // The detail is still logged for operators.
-    expect(context.logger.error).toHaveBeenCalledWith(expect.stringContaining('provider exploded'));
+    expect(context.logger.error).toHaveBeenCalledWith('[audio_generation] speech generation failed', {
+      errorType: 'Error',
+    });
+    expect(JSON.stringify(vi.mocked(context.logger.error).mock.calls)).not.toMatch(/sk-abc123|api\.example/);
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
     // A failed generation must not settle a charge - onFinish is never reached.
     expect(context.onFinish).not.toHaveBeenCalled();
@@ -164,10 +206,17 @@ describe('audio_generation tool', () => {
 
   it('rejects an over-length sound-effect description before gating or calling the provider', async () => {
     const context = createFakeContext();
-    const result = await run(context, { kind: 'sound_effect', text: 'x'.repeat(1001) });
-    expect(result).toMatch(/too long/i);
+    const result = await run(context, { kind: 'sound_effect', text: 'x'.repeat(451) });
+    expect(result).toMatch(/too long \(max 450 characters\)/i);
     expect(context.onStart).not.toHaveBeenCalled();
     expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a sound-effect description of exactly 450 characters', async () => {
+    const context = createFakeContext();
+    const result = await run(context, { kind: 'sound_effect', text: 'x'.repeat(450) });
+    expect(result).not.toMatch(/too long/i);
+    expect(mockGenerate).toHaveBeenCalled();
   });
 
   it('rejects a model-supplied durationSeconds outside 0.5-30 before any paid call', async () => {

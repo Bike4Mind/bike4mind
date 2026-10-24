@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import {
   adminSettingsRepository,
@@ -9,7 +10,6 @@ import {
   defineAbilitiesFor,
   fabFileChunkRepository,
   fabFileRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   latticeModelRepository,
   mcpServerRepository,
@@ -32,7 +32,7 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import {
   ChatModels,
   bedrockClientCredentials,
@@ -51,18 +51,21 @@ import { ApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-a
 import { getSettingsByNames, ITokenizer, TiktokenTokenizer } from '@bike4mind/utils';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
+import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
-import { Config } from '@server/utils/config';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 import { LLMEvents, TelemetryEvents } from '@server/utils/eventBus';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 /**
  * Publish telemetry alert events to EventBridge for async processing.
@@ -124,7 +127,7 @@ type DefaultChatCompletionOptions = Omit<
 // pulled this file in (e.g. just to grab `getSharedTokenizer`).
 //
 // The factory below defers all Resource access to first invocation, matching the lazy
-// pattern in `@server/utils/storage` and the queueHandler service factories. Memoization
+// pattern in `@bike4mind/server-utils/utils/storage` and the queueHandler service factories. Memoization
 // preserves the prior reference-equality semantics for callers that spread the object.
 let _defaultChatCompletionOptions: DefaultChatCompletionOptions | undefined;
 
@@ -183,7 +186,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       // Audit trail for images blocked by the image_generation/edit_image tools'
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
-      imageModerationIncidents: imageModerationIncidentRepository,
+      imageModerationIncidents,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
       ...lakeWriteToolDb,
@@ -197,6 +200,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     // @deprecated: Use scope instead
     abilityGetter: defineAbilitiesFor,
     workspaceDeniedTools: premiumWorkspaceDeniedTools,
+    workspaceSessionSettings: premiumWorkspaceSessionSettings,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Resolve entitlement keys so ALL chat surfaces (chat/opti/voice/ai-llm/rapid-reply/slack)
@@ -278,6 +282,9 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
         },
       };
     },
+    // The `decide` tool's host seam: the same runner, credit hold and retry the public decisions
+    // route uses, so a tool answer and an API answer are one code path.
+    decide: params => runDecisionTool({ ...params, source: params.authOrigin === 'apiKey' ? 'api' : 'web' }),
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,

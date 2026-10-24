@@ -194,18 +194,19 @@ describe('settlePublication - re-publish rewrites the existing record in place',
 
 describe('settlePublication - quota', () => {
   it('returns the quota rejection and writes nothing', async () => {
+    const details = { scope: 'user', limit: 100, current: 99, attempted: 104 };
     mocks.checkPublishQuota.mockResolvedValue({
       ok: false,
       status: 413,
       error: 'over',
-      code: 'quota_exceeded',
-      details: { x: 1 },
+      code: 'quota_bytes_exceeded',
+      details,
     });
     const result = await settlePublication(input());
     expect(result).toEqual({
       ok: false,
       status: 413,
-      body: { error: 'over', code: 'quota_exceeded', details: { x: 1 } },
+      body: { error: 'over', code: 'quota_bytes_exceeded', details },
     });
     expect(mocks.findOneAndUpdate).not.toHaveBeenCalled();
   });

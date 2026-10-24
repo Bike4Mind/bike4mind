@@ -1,4 +1,5 @@
 import {
+  BadRequestError,
   ChatModels,
   IMessage,
   ImageModels,
@@ -30,6 +31,7 @@ import type {
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -61,6 +63,7 @@ import {
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
 import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import { selectedWifTokenSource, subjectTokenSource } from './wifTokenSource';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -88,7 +91,12 @@ const GPT5_1_MODELS: string[] = [ChatModels.GPT5_1, ChatModels.GPT5_1_CHAT_LATES
 
 const GPT5_2_MODELS: string[] = [ChatModels.GPT5_2, ChatModels.GPT5_2_CHAT_LATEST];
 
-const GPT5_4_MODELS: string[] = [ChatModels.GPT5_4, ChatModels.GPT5_4_MINI, ChatModels.GPT5_4_NANO];
+const GPT5_4_MODELS: string[] = [
+  ChatModels.GPT5_4,
+  ChatModels.GPT5_4_MINI,
+  ChatModels.GPT5_4_MINI_2026_03_17,
+  ChatModels.GPT5_4_NANO,
+];
 
 const GPT5_5_MODELS: string[] = [ChatModels.GPT5_5];
 
@@ -110,27 +118,14 @@ const effortMap_GPT5_1_2 = {
 } as const;
 
 /**
- * Key-table value meaning "authenticate through OpenAI workload identity federation": the client is
+ * Trusted constructor sentinel meaning "authenticate through OpenAI workload identity federation": the client is
  * built from OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE, with
- * the subject token taken from the GitHub Actions OIDC endpoint (the job needs `id-token: write`).
+ * the subject token from the PROVIDER_WIF_TOKEN_SOURCE source (see wifTokenSource).
  */
-export const OPENAI_FEDERATED_KEY = 'federated';
+export const OPENAI_FEDERATED_KEY = Symbol('OPENAI_FEDERATED_KEY');
 
-/** A fresh GitHub Actions identity token for `audience`; the SDK calls this again on each exchange. */
-export async function githubActionsIdToken(audience: string): Promise<string> {
-  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-  const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-  if (!url || !requestToken) {
-    throw new Error('ACTIONS_ID_TOKEN_REQUEST_URL is not set; the job needs `id-token: write` permission');
-  }
-  const res = await fetch(`${url}&audience=${encodeURIComponent(audience)}`, {
-    headers: { Authorization: `Bearer ${requestToken}` },
-  });
-  if (!res.ok) throw new Error(`GitHub identity token request failed with status ${res.status}`);
-  const body = (await res.json()) as { value?: string };
-  if (!body.value) throw new Error('GitHub identity token response had no value');
-  return body.value;
-}
+// One client per config so its exchanged-token cache outlives the per-request backend.
+const federatedOpenAIClients = new Map<string, OpenAI>();
 
 function federatedOpenAIClient(): OpenAI {
   const identityProviderId = process.env.OPENAI_IDENTITY_PROVIDER_ID;
@@ -141,15 +136,23 @@ function federatedOpenAIClient(): OpenAI {
       'OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE are required for federated OpenAI auth'
     );
   }
-  // apiKey: null keeps an OPENAI_API_KEY in the environment from colliding with workloadIdentity.
-  return new OpenAI({
-    apiKey: null,
-    workloadIdentity: {
-      identityProviderId,
-      serviceAccountId,
-      provider: { tokenType: 'jwt', getToken: () => githubActionsIdToken(audience) },
-    },
-  });
+  const source = selectedWifTokenSource();
+  const cacheKey = JSON.stringify([identityProviderId, serviceAccountId, audience, source]);
+  let client = federatedOpenAIClients.get(cacheKey);
+  if (!client) {
+    const getSubjectToken = subjectTokenSource(source);
+    // apiKey: null keeps an OPENAI_API_KEY in the environment from colliding with workloadIdentity.
+    client = new OpenAI({
+      apiKey: null,
+      workloadIdentity: {
+        identityProviderId,
+        serviceAccountId,
+        provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
+      },
+    });
+    federatedOpenAIClients.set(cacheKey, client);
+  }
+  return client;
 }
 
 /**
@@ -174,7 +177,7 @@ export class OpenAIBackend implements ICompletionBackend {
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
-  constructor(apiKey: string, logger?: Logger, endUserId?: string) {
+  constructor(apiKey: string | typeof OPENAI_FEDERATED_KEY, logger?: Logger, endUserId?: string) {
     this._api = apiKey === OPENAI_FEDERATED_KEY ? federatedOpenAIClient() : new OpenAI({ apiKey });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
@@ -213,6 +216,7 @@ export class OpenAIBackend implements ICompletionBackend {
     return [
       {
         id: ChatModels.GPT4_1,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1',
         backend: ModelBackend.OpenAI,
@@ -239,6 +243,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_1_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1 Mini',
         backend: ModelBackend.OpenAI,
@@ -264,6 +269,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_1_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1 Nano',
         backend: ModelBackend.OpenAI,
@@ -333,6 +339,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.O3,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'O3',
         backend: ModelBackend.OpenAI,
@@ -447,6 +454,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // rate applies once the prompt exceeds 272k input tokens (long context).
       {
         id: ChatModels.GPT5_6_SOL,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Sol',
         backend: ModelBackend.OpenAI,
@@ -472,6 +480,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_6_TERRA,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Terra',
         backend: ModelBackend.OpenAI,
@@ -495,6 +504,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_6_LUNA,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Luna',
         backend: ModelBackend.OpenAI,
@@ -520,6 +530,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.5
       {
         id: ChatModels.GPT5_5,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.5',
         backend: ModelBackend.OpenAI,
@@ -528,7 +539,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: false,
         pricing: {
-          1_050_000: { input: 5.0 / 1_000_000, output: 30.0 / 1_000_000 }, // $5.00 / 1M Input tokens, $30.00 / 1M Output tokens
+          272_000: { input: 5.0 / 1_000_000, output: 30.0 / 1_000_000 }, // <=272k: $5.00 / 1M in, $30.00 / 1M out
+          1_050_000: { input: 10.0 / 1_000_000, output: 45.0 / 1_000_000 }, // >272k: $10.00 / 1M in, $45.00 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -544,6 +556,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.4
       {
         id: ChatModels.GPT5_4,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4',
         backend: ModelBackend.OpenAI,
@@ -552,9 +565,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          // List is $2.50/$15 per 1M up to 272k and $5/$22.50 above. Held flat until agent runs
-          // pick the tier per request: summed run input would cross 272k and bill at the upper rate.
-          400000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 },
+          272_000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 }, // <=272k: $2.50 / 1M in, $15.00 / 1M out
+          1_050_000: { input: 5.0 / 1_000_000, output: 22.5 / 1_000_000 }, // >272k: $5.00 / 1M in, $22.50 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -568,6 +580,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_4_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4 Mini',
         backend: ModelBackend.OpenAI,
@@ -590,6 +603,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_4_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4 Nano',
         backend: ModelBackend.OpenAI,
@@ -614,6 +628,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.2
       {
         id: ChatModels.GPT5_2,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.2',
         backend: ModelBackend.OpenAI,
@@ -661,6 +676,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.1
       {
         id: ChatModels.GPT5_1,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.1',
         backend: ModelBackend.OpenAI,
@@ -709,6 +725,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT-5 Family
       {
         id: ChatModels.GPT5,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5',
         backend: ModelBackend.OpenAI,
@@ -732,6 +749,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5 Mini',
         backend: ModelBackend.OpenAI,
@@ -754,6 +772,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5 Nano',
         backend: ModelBackend.OpenAI,
@@ -800,6 +819,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4o,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4o',
         backend: ModelBackend.OpenAI,
@@ -820,6 +840,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4o_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4o Mini',
         backend: ModelBackend.OpenAI,
@@ -840,6 +861,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_TURBO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4 Turbo',
         backend: ModelBackend.OpenAI,
@@ -860,6 +882,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4',
         backend: ModelBackend.OpenAI,
@@ -1030,6 +1053,10 @@ export class OpenAIBackend implements ICompletionBackend {
 
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
+    const requestStartedAt = options._internal?.requestStartedAt ?? Date.now();
+    if (options._internal?.requestStartedAt === undefined) {
+      options = { ...options, _internal: { ...options._internal, requestStartedAt } };
+    }
 
     // Multi-turn token accumulators. Each OpenAI API call (every recursive
     // tool round-trip) is billed independently, so we add each turn's usage
@@ -1232,6 +1259,8 @@ export class OpenAIBackend implements ICompletionBackend {
       (parameters as any).response_format = { type: 'text' };
     }
 
+    const roundStart = Date.now();
+    let firstChunkAt: number | null = null;
     // Wrap with retry for transient network errors (TLS abort, fetch terminated)
     const response = await withRetry(
       () =>
@@ -1246,8 +1275,11 @@ export class OpenAIBackend implements ICompletionBackend {
         isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
         logger: this.logger,
         abortSignal: options.abortSignal,
+        onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
       }
     ).then(r => r.result);
+    // Non-streaming: the full response is back here. Streaming: reassigned once the stream is drained.
+    let modelDoneAt = Date.now();
     let inputTokens = 0;
     let outputTokens = 0;
     let reasoningTokens: number | undefined;
@@ -1402,10 +1434,7 @@ export class OpenAIBackend implements ICompletionBackend {
               }
 
               const resultStr = outcome.result.toString();
-              this.logger.debug(
-                `[Tool Result] Tool executed for ${outcome.name}:`,
-                resultStr.substring(0, 200) + '...'
-              );
+              this.logger.debug('[Tool Result] Tool executed', { name: outcome.name, resultLength: resultStr.length });
 
               // Track per-outcome whether this specific tool streamed an artifact, which picks
               // the placeholder the model sees (delivered vs removed) - every result is still
@@ -1449,6 +1478,17 @@ export class OpenAIBackend implements ICompletionBackend {
             const requestedToolNames = c.message.tool_calls.flatMap(call =>
               call.type === 'function' ? [call.function.name] : []
             );
+            logToolRound(this.logger, {
+              model,
+              round: toolCallCount,
+              msToFirstChunk: null,
+              modelMs: modelDoneAt - roundStart,
+              roundMs: Date.now() - roundStart,
+              sinceRequestMs: Date.now() - requestStartedAt,
+              stopReason: c.finish_reason ?? null,
+              tools: summarizeToolOutcomes(outcomes),
+            });
+
             if (shouldEndTurnAfterTools(requestedToolNames, options.tools, c.message.content)) {
               this.logger.info('[Tool Execution] Ending turn: answer already in hand, only end-of-turn tools ran', {
                 model,
@@ -1556,6 +1596,16 @@ export class OpenAIBackend implements ICompletionBackend {
       // Terminal turn - no choice had tool_calls (otherwise we'd have returned
       // above). Emit accumulated total plus this turn's tokens.
       const finishReason = normalizeOpenAIFinishReason(response.choices[0]?.finish_reason);
+      logToolRound(this.logger, {
+        model,
+        round: toolCallCount,
+        msToFirstChunk: null,
+        modelMs: modelDoneAt - roundStart,
+        roundMs: Date.now() - roundStart,
+        sinceRequestMs: Date.now() - requestStartedAt,
+        stopReason: response.choices[0]?.finish_reason ?? null,
+        tools: [],
+      });
       const completionInfo = {
         ...splitCacheInclusiveInput(accumInputTokens + (response.usage?.prompt_tokens || 0), totalCacheReadTokens),
         outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
@@ -1585,6 +1635,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // This round's visible answer text, for shouldEndTurnAfterTools.
     let streamedRoundText = '';
     for await (const chunk of response) {
+      firstChunkAt ??= Date.now();
       chunkCount++;
       const streamedText: string[] = [];
       if (chunk.usage) {
@@ -1662,6 +1713,7 @@ export class OpenAIBackend implements ICompletionBackend {
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
       });
     }
+    modelDoneAt = Date.now();
 
     this.logger.debug('[OpenAI] Streaming completed', {
       totalChunks: chunkCount,
@@ -1700,6 +1752,19 @@ export class OpenAIBackend implements ICompletionBackend {
       if (cacheStats) {
         logCacheStats(this.logger, cacheStats, { streaming: true });
       }
+    }
+
+    if (isO1Model || func.length === 0) {
+      logToolRound(this.logger, {
+        model,
+        round: toolCallCount,
+        msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+        modelMs: modelDoneAt - roundStart,
+        roundMs: Date.now() - roundStart,
+        sinceRequestMs: Date.now() - requestStartedAt,
+        stopReason: streamFinishReason ?? null,
+        tools: [],
+      });
     }
 
     // When response_format=json_schema is set on the streaming path with no
@@ -1753,7 +1818,10 @@ export class OpenAIBackend implements ICompletionBackend {
             const parsedParams = JSON.parse(parameters);
             resolvedTools.push({ id, name, parameters, parsedParams, toolFn, isMcpTool: toolDef?._isMcpTool ?? false });
           } catch {
-            this.logger.warn('JSON parse error for tool parameters (skipping):', { name, parameters });
+            this.logger.warn('JSON parse error for tool parameters (skipping):', {
+              name,
+              parameterLength: parameters.length,
+            });
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
             recordToolResult(
@@ -1840,7 +1908,7 @@ export class OpenAIBackend implements ICompletionBackend {
           }
 
           const resultStr = outcome.result.toString();
-          this.logger.debug(`[Tool Result] Tool executed for ${outcome.name}:`, resultStr.substring(0, 200) + '...');
+          this.logger.debug('[Tool Result] Tool executed', { name: outcome.name, resultLength: resultStr.length });
 
           // Track per-outcome whether this specific tool streamed an artifact, which picks the
           // placeholder the model sees (delivered vs removed) - every result is still sanitized
@@ -1889,6 +1957,17 @@ export class OpenAIBackend implements ICompletionBackend {
         }
 
         const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
+        logToolRound(this.logger, {
+          model,
+          round: toolCallCount,
+          msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+          modelMs: modelDoneAt - roundStart,
+          roundMs: Date.now() - roundStart,
+          sinceRequestMs: Date.now() - requestStartedAt,
+          stopReason: streamFinishReason ?? null,
+          tools: summarizeToolOutcomes(outcomes),
+        });
+
         if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
           this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
             model,
@@ -1987,7 +2066,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
     const mergedContent = options.omitIdentityReminder
       ? callerSystem
-      : appendIdentityReminder(callerSystem, buildIdentityReminder(model));
+      : appendIdentityReminder(callerSystem, buildIdentityReminder(model, options.modelDisplayName));
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',
@@ -1997,6 +2076,17 @@ export class OpenAIBackend implements ICompletionBackend {
     // Convert B4M standard format (tool_use/tool_result) to OpenAI format (tool_calls/role:tool).
     // Exclude system messages from the body - they are now consolidated into systemMessage above.
     const nonSystemMessages = filteredMessages.filter(m => m.role !== 'system');
+    const hasEffectiveMessage = nonSystemMessages.some(message =>
+      'tool_calls' in message && Array.isArray(message.tool_calls) && message.tool_calls.length > 0
+        ? true
+        : typeof message.content === 'string'
+          ? message.content.trim().length > 0
+          : Array.isArray(message.content) &&
+            message.content.some(block => block.type !== 'text' || Boolean(block.text?.trim()))
+    );
+    if (!hasEffectiveMessage) {
+      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
+    }
     const convertedMessages = convertMessagesToOpenAIFormat(nonSystemMessages);
     const formattedMessages = convertedMessages as OpenAI.ChatCompletionMessageParam[];
 
@@ -2133,6 +2223,8 @@ export class OpenAIBackend implements ICompletionBackend {
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     const toolCallCount = options._internal?.toolCallCount ?? 0;
+    // Always set by complete() before it routes here.
+    const requestStartedAt = options._internal?.requestStartedAt ?? Date.now();
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
     const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
@@ -2169,6 +2261,8 @@ export class OpenAIBackend implements ICompletionBackend {
 
     // withRetry wraps stream establishment only; a mid-stream failure surfaces during
     // iteration below and is not retried (mirrors the chat streaming path).
+    const roundStart = Date.now();
+    let firstChunkAt: number | null = null;
     const stream = await withRetry(() => this._api.responses.create(params, { signal: options.abortSignal }), {
       maxRetries: 3,
       initialDelayMs: 500,
@@ -2177,6 +2271,7 @@ export class OpenAIBackend implements ICompletionBackend {
       isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
       logger: this.logger,
       abortSignal: options.abortSignal,
+      onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
     }).then(r => r.result);
 
     // Stream text deltas live; capture the terminal Response for usage + tool handling.
@@ -2192,6 +2287,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // This round's visible answer text, for shouldEndTurnAfterTools.
     let streamedRoundText = '';
     for await (const event of stream) {
+      firstChunkAt ??= Date.now();
       if (event.type === 'response.output_text.delta') {
         streamedRoundText += event.delta;
         await callback([event.delta], {
@@ -2225,6 +2321,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // read from finalResponse below. Do NOT also accumulate tool arguments from the *.delta
       // events here - that would double-append against the terminal item's complete arguments.
     }
+    const modelDoneAt = Date.now();
 
     if (!finalResponse) {
       // The openai SDK swallows an abort mid-SSE and ends the iterator quietly; surface it as an
@@ -2257,6 +2354,16 @@ export class OpenAIBackend implements ICompletionBackend {
       // per-choice finish_reason string; map it onto the same stopReason vocabulary
       // the chat-completions path uses.
       const stopReason = normalizeOpenAIResponsesStopReason(finalResponse.incomplete_details?.reason);
+      logToolRound(this.logger, {
+        model,
+        round: toolCallCount,
+        msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+        modelMs: modelDoneAt - roundStart,
+        roundMs: Date.now() - roundStart,
+        sinceRequestMs: Date.now() - requestStartedAt,
+        stopReason: finalResponse.incomplete_details?.reason ?? finalResponse.status ?? null,
+        tools: [],
+      });
       await callback([], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
@@ -2375,6 +2482,23 @@ export class OpenAIBackend implements ICompletionBackend {
     const anyMcpTool = resolved.some(r => r.isMcpTool);
 
     const requestedToolNames = functionCalls.map(fc => fc.name);
+    logToolRound(this.logger, {
+      model,
+      round: toolCallCount,
+      msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+      modelMs: modelDoneAt - roundStart,
+      roundMs: Date.now() - roundStart,
+      sinceRequestMs: Date.now() - requestStartedAt,
+      stopReason: finalResponse.incomplete_details?.reason ?? finalResponse.status ?? null,
+      tools: summarizeToolOutcomes(
+        batchOutcomes.map((outcome, i) => ({
+          ok: outcome.ok,
+          name: resolved[i].name,
+          result: outcome.ok ? outcome.result.result : undefined,
+        }))
+      ),
+    });
+
     if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
       this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
         model,

@@ -7,7 +7,7 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, sreErrorTrackingRepository, cacheRepository } from '@bike4mind/database';
 import { SreAgentConfigSchema, getConfiguredRepoSlugs, resolveFullConfig } from '@bike4mind/common';
 import { GitHubService } from '@server/services/githubService';
@@ -17,7 +17,7 @@ import {
   computeIssueFingerprint,
   type SreIssuePayload,
   type SreDispatchResult,
-} from '@server/integrations/github/sreWebhookDispatch';
+} from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 

@@ -36,7 +36,7 @@ third, independent signal.
   whole PR vs `git merge-base(base, head)` — the three-dot "Files changed"
   semantics — not the per-push `before..after` range. Without this, a synchronize
   that also merges/rebases `main` in would carry all of main's deployable files and
-  force a spurious deploy of a docs-only PR. `push` to main/prod keeps the per-push
+  force a spurious deploy of a docs-only PR. `push` to main keeps the per-push
   range (no PR to scope to), and `merge_group` uses the queue entry's own
   `base_sha..head_sha`, which is that entry's own change rather than the whole batch:
   `base_sha` is the commit the entry was built on (the target-branch tip, or the

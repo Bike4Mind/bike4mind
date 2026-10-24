@@ -81,9 +81,10 @@ jobs:
           # branch since it diverged from main, so unrelated commits landing on
           # main after the branch was cut don't trigger a false-positive publish.
           if git diff --quiet main...HEAD -- \
-              b4m-core/ packages/cli/ \
+              b4m-core/ packages/cli/ packages/sdk/ \
               ':(exclude)b4m-core/*/docs' \
               ':(exclude)packages/cli/docs' \
+              ':(exclude)packages/sdk/docs' \
               ':(exclude,glob)**/*.md' \
               ':(exclude,glob)**/test/**' \
               ':(exclude,glob)**/__tests__/**' \
@@ -93,7 +94,7 @@ jobs:
               ':(exclude,glob)**/*.spec.ts' \
               ':(exclude,glob)**/*.spec.tsx'; then
             echo "has-changes=false" >> $GITHUB_OUTPUT
-            echo "No publishable changes in b4m-core/ or packages/cli/ vs main"
+            echo "No publishable changes in b4m-core/, packages/cli/ or packages/sdk/ vs main"
           else
             echo "has-changes=true" >> $GITHUB_OUTPUT
           fi
@@ -139,11 +140,12 @@ jobs:
             ["b4m-core/mcp"]="@bike4mind/mcp"
             ["b4m-core/slack"]="@bike4mind/slack"
             ["packages/cli"]="@bike4mind/cli"
+            ["packages/sdk"]="@bike4mind/sdk"
           )
 
           # Get changed files introduced by this branch (merge-base diff,
           # consistent with the `Check for changes vs main` step above).
-          CHANGED_FILES=$(git diff --name-only main...HEAD -- b4m-core/ packages/cli/)
+          CHANGED_FILES=$(git diff --name-only main...HEAD -- b4m-core/ packages/cli/ packages/sdk/)
 
           # Determine which packages changed
           declare -A CHANGED_PKGS

@@ -6,10 +6,10 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { organizationService, creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType, IOrganizationDocument } from '@bike4mind/common';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
@@ -18,7 +18,12 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import {
+  denySelfAdminAction,
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@server/utils/adminAudit';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -32,7 +37,6 @@ const GrantSubscriptionSchema = z.object({
   organizationId: z.string().optional(), // For existing team subscriptions
   durationMonths: z.number().min(1).max(12).prefault(1), // How many months to grant
   billingOwnerId: z.string().optional(), // User ID of the billing owner (maps to organization.userId)
-  managerId: z.string().optional(), // User ID of the team manager
 });
 
 interface RequestQuery {
@@ -56,12 +60,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       organizationId,
       durationMonths,
       billingOwnerId,
-      managerId,
     } = GrantSubscriptionSchema.parse(req.body);
 
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');
     }
+    if (isSelfOrImpersonator(req.user, userId)) {
+      await denySelfAdminAction(req, {
+        action: 'user.subscription.denied',
+        attempted: 'user.subscription.granted',
+        target: { kind: 'user', id: userId, displayName: req.user.email ?? req.user.username },
+      });
+    }
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     if (seats < teamPlan.minSeats) {
       throw new BadRequestError(`Team grants need at least ${teamPlan.minSeats} seats`);
@@ -89,12 +100,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         priceId,
         durationMonths,
         grantedBy: req.user.id,
-        onGranted: async ({ credits }) => {
+        onGranted: async ({ credits, creditTransactionId }) => {
           await recordAdminActionFromRequest(req, {
             action: 'user.subscription.granted',
             target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
             summary: `granted individual subscription for ${durationMonths} month(s)`,
+            reason,
             details: { subscriptionType: 'individual', priceId, credits, durationMonths },
+            related: creditTransactionId ? { creditTransactionId } : undefined,
           });
         },
       });
@@ -169,7 +182,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             personal: false,
             stripeCustomerId: null, // Admin granted subscriptions don't need Stripe customer
             billingOwnerId: billingOwnerId, // Optional billing owner
-            managerId: managerId, // Optional team manager
           },
           {
             db: {
@@ -214,7 +226,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
         // Add credits to organization
         const creditsToAdd = seats * teamPlan.creditsPerSeat * durationMonths;
-        await creditService.addCredits(
+        const { creditTransactionId } = await creditService.addCreditsWithLedgerRow(
           {
             ownerId: targetOrganization.id,
             ownerType: CreditHolderType.Organization,
@@ -243,13 +255,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
           organizationId: targetOrganization.id,
           summary: `granted team subscription with ${seats} seats for ${durationMonths} month(s)`,
+          reason,
           details: {
             subscriptionType: 'team',
             seats,
-            credits: seats * teamPlan.creditsPerSeat * durationMonths,
+            credits: creditsToAdd,
             durationMonths,
             organizationOwnerId: targetOrganization.userId,
           },
+          related: creditTransactionId ? { creditTransactionId } : undefined,
         });
 
         req.logger.info(`Admin ${req.user.id} granted team subscription to organization ${targetOrganization.id}`, {

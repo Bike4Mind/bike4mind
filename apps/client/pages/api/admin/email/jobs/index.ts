@@ -1,9 +1,10 @@
 import { emailJobRepository, emailTemplateRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { assertParseableDate } from '@server/utils/dateParam';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const RecipientFilterSchema = z
   .object({
@@ -96,6 +97,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       clickedCount: 0,
       totalEmailsSent: 0,
       createdBy: req.user.id,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'email.job.created',
+      target: { kind: 'settings', id: job.id, displayName: job.name },
+      summary: `created email job ${job.name}`,
+      details: { templateId, isTestMode: Boolean(job.isTestMode) },
     });
 
     return res.status(201).json(job);

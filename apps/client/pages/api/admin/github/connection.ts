@@ -17,19 +17,21 @@
 
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { orgGitHubConnectionRepository } from '@bike4mind/database';
+import { orgGitHubConnectionRepository, withTransaction } from '@bike4mind/database';
 import { encryptSecret, isEncrypted, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { Config } from '@server/utils/config';
-import { BadRequestError, InternalServerError, NotFoundError, ensureAdmin } from '@server/utils/errors';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { BadRequestError, InternalServerError, NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { validatePrivateKeyFormat } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
 import {
   ApiKeyScope,
+  type AuditChange,
   IOrgGitHubConnectionDocument,
   IOrgGitHubConnectionResponse,
   IOrgGitHubConnectionHealth,
 } from '@bike4mind/common';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const logger = new Logger({ metadata: { component: 'admin-github-connection' } });
 
@@ -141,6 +143,23 @@ function buildResponse(
   return response;
 }
 
+const GITHUB_CONNECTION_DISPLAY_NAME = 'System GitHub connection';
+
+function diffUpdate(existing: IOrgGitHubConnectionDocument, data: z.infer<typeof UpdateSchema>): AuditChange[] {
+  const changes: AuditChange[] = [];
+  const beforeRepositories = existing.allowedRepositories ?? [];
+  if (
+    data.allowedRepositories !== undefined &&
+    JSON.stringify(beforeRepositories) !== JSON.stringify(data.allowedRepositories)
+  ) {
+    changes.push({ field: 'allowedRepositories', before: beforeRepositories, after: data.allowedRepositories });
+  }
+  if (data.enabled !== undefined && data.enabled !== existing.enabled) {
+    changes.push({ field: 'enabled', before: existing.enabled, after: data.enabled });
+  }
+  return changes;
+}
+
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   // Rate limit all connection operations (GET/POST/PUT/DELETE) to prevent brute-force and abuse
   .use(
@@ -213,7 +232,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       };
     }
 
-    const connection = await orgGitHubConnectionRepository.create(connectionData);
+    const connection = await withTransaction(async () => {
+      const created = await orgGitHubConnectionRepository.create(connectionData);
+      await recordAdminActionFromRequest(req, {
+        action: 'integration.github_connection.created',
+        target: { kind: 'settings', id: created.id, displayName: GITHUB_CONNECTION_DISPLAY_NAME },
+        summary: `created ${data.connectionType} github connection`,
+        details: {
+          connectionType: data.connectionType,
+          ...(data.connectionType === 'github_app' ? { appId: data.appId, installationId: data.installationId } : {}),
+          allowedRepositories: connectionData.allowedRepositories,
+        },
+      });
+      return created;
+    });
 
     logger.info('[Admin] Created GitHub connection', {
       connectionId: connection.id,
@@ -297,16 +329,25 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new NotFoundError('No GitHub connection found');
     }
 
-    // Update the connection
-    const updated = await orgGitHubConnectionRepository.update({
-      id: connection.id,
-      allowedRepositories: data.allowedRepositories,
-      enabled: data.enabled,
-    });
+    const updated = await withTransaction(async () => {
+      const result = await orgGitHubConnectionRepository.update({
+        id: connection.id,
+        allowedRepositories: data.allowedRepositories,
+        enabled: data.enabled,
+      });
 
-    if (!updated) {
-      throw new NotFoundError('Failed to update connection');
-    }
+      if (!result) {
+        throw new NotFoundError('Failed to update connection');
+      }
+
+      await recordAdminActionFromRequest(req, {
+        action: 'integration.github_connection.updated',
+        target: { kind: 'settings', id: connection.id, displayName: GITHUB_CONNECTION_DISPLAY_NAME },
+        summary: 'updated github connection',
+        changes: diffUpdate(connection, data),
+      });
+      return result;
+    });
 
     logger.info('[Admin] Updated GitHub connection', {
       connectionId: connection.id,
@@ -362,7 +403,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new NotFoundError('No GitHub connection found');
     }
 
-    await orgGitHubConnectionRepository.delete(connection.id);
+    await withTransaction(async () => {
+      await orgGitHubConnectionRepository.delete(connection.id);
+      await recordAdminActionFromRequest(req, {
+        action: 'integration.github_connection.deleted',
+        target: { kind: 'settings', id: connection.id, displayName: GITHUB_CONNECTION_DISPLAY_NAME },
+        summary: `deleted ${connection.connectionType} github connection`,
+        details: { connectionType: connection.connectionType },
+      });
+    });
 
     logger.info('[Admin] Deleted GitHub connection', {
       connectionId: connection.id,

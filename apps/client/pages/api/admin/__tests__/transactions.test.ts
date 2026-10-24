@@ -25,9 +25,9 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: { queryLedgerPage: (...a: unknown[]) => mockQueryLedgerPage(...a) },
 }));
 
-const mockVerifyOrgAccess = vi.fn();
+const mockVerifyOrgOwner = vi.fn();
 vi.mock('@server/utils/orgAccess', () => ({
-  verifyOrgAccess: (...a: unknown[]) => mockVerifyOrgAccess(...a),
+  verifyOrgOwner: (...a: unknown[]) => mockVerifyOrgOwner(...a),
 }));
 
 vi.mock('@server/utils/resolveUserNames', () => ({
@@ -52,7 +52,7 @@ function call(options: { isAdmin?: boolean; hasUser?: boolean; query?: object })
 describe('GET /api/admin/transactions — access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockVerifyOrgAccess.mockResolvedValue({ id: ORG });
+    mockVerifyOrgOwner.mockResolvedValue({ id: ORG });
     mockQueryLedgerPage.mockResolvedValue({ data: [], total: 0 });
   });
 
@@ -67,14 +67,14 @@ describe('GET /api/admin/transactions — access', () => {
     expect(mockQueryLedgerPage).not.toHaveBeenCalled();
   });
 
-  it('gates access through verifyOrgAccess for the requested org', async () => {
+  it('gates access through verifyOrgOwner for the requested org', async () => {
     const { run } = call({ isAdmin: false });
     await run();
-    expect(mockVerifyOrgAccess).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, ORG);
+    expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, ORG);
   });
 
-  it('propagates verifyOrgAccess denial and never queries the ledger', async () => {
-    mockVerifyOrgAccess.mockRejectedValue(new NotFoundError('Organization not found'));
+  it('propagates verifyOrgOwner denial and never queries the ledger', async () => {
+    mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
     const { run } = call({ isAdmin: false });
     await expect(run()).rejects.toThrow(/not found/i);
     expect(mockQueryLedgerPage).not.toHaveBeenCalled();

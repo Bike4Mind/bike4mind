@@ -7,6 +7,7 @@ import type {
   CookieImportResult,
   CookieImportState,
 } from './browserCookies';
+import type { ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   AddAttachmentsResult,
@@ -19,6 +20,9 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatImageAction,
+  ChatImageActionResult,
+  ChatImageRef,
   ChatModelCatalog,
   ChatMoveToBackgroundResult,
   ChatQueueEvent,
@@ -46,7 +50,29 @@ import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { SidebarSectionsState } from './sidebarSections';
+import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsState } from './skills';
+import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
+import type {
+  SkillMarketDetailResult,
+  SkillMarketFilters,
+  SkillMarketImportRequest,
+  SkillMarketImportResult,
+  SkillMarketImportsResult,
+  SkillMarketListingRef,
+  SkillMarketPage,
+  SkillMarketWebTarget,
+  SkillActionResult,
+  SkillLocalRef,
+  SkillMarketOrgsResult,
+  SkillMyListingsResult,
+  SkillPublishRequest,
+  SkillSaveRequest,
+  SkillSaveResult,
+  SkillSubmitResult,
+  SkillSubmitVersionRequest,
+  SkillUploadPreview,
+} from './skillMarket';
 import type {
   TerminalAttachment,
   TerminalCreateRequest,
@@ -58,6 +84,7 @@ import type {
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LocalHistoryResult, LocalHistoryState } from './history';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -89,7 +116,13 @@ export const IPC_CHANNELS = {
   /** main -> renderer push of the integration's state; never carries the key. */
   fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
+  chatListSuggestionModels: 'chat:list-suggestion-models',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSetSessionHistory: 'chat:set-session-history',
+  chatSearchHistory: 'chat:search-history',
+  chatClearHistory: 'chat:clear-history',
+  chatHistoryState: 'chat:history-state',
+  chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
@@ -106,6 +139,7 @@ export const IPC_CHANNELS = {
   chatListRecentFolders: 'chat:list-recent-folders',
   chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
+  chatWorkspaceChanges: 'chat:workspace-changes',
   chatAddContextDirectory: 'chat:add-context-directory',
   chatRemoveContextDirectory: 'chat:remove-context-directory',
   chatGetSession: 'chat:get-session',
@@ -133,6 +167,8 @@ export const IPC_CHANNELS = {
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatImageAction: 'chat:image-action',
+  chatAttachImage: 'chat:attach-image',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -168,6 +204,24 @@ export const IPC_CHANNELS = {
    * nothing the MODEL can reach may widen this - the same rule as toolsGrantAccess.
    */
   chatSetProjectSkillsTrusted: 'chat:set-project-skills-trusted',
+  skillMarketBrowse: 'skills:market-browse',
+  skillMarketRecommended: 'skills:market-recommended',
+  skillMarketListing: 'skills:market-listing',
+  /** Only from the Import / Update buttons: it writes a skill to the user's account. */
+  skillMarketImport: 'skills:market-import',
+  skillMarketImports: 'skills:market-imports',
+  skillMarketOpenOnWeb: 'skills:market-open-on-web',
+  skillMarketReadLocal: 'skills:market-read-local',
+  skillMarketPickUpload: 'skills:market-pick-upload',
+  /** The writes below run only from a click in the upload dialog or My listings. */
+  skillMarketSave: 'skills:market-save',
+  skillMarketOrgs: 'skills:market-orgs',
+  skillMarketPublish: 'skills:market-publish',
+  skillMarketSubmitVersion: 'skills:market-submit-version',
+  skillMarketMine: 'skills:market-mine',
+  skillMarketWithdraw: 'skills:market-withdraw',
+  skillMarketCopyShareLink: 'skills:market-copy-share-link',
+  skillMarketOpenSource: 'skills:market-open-source',
   mcpGetServers: 'mcp:get-servers',
   mcpAddServer: 'mcp:add-server',
   mcpUpdateServer: 'mcp:update-server',
@@ -179,9 +233,33 @@ export const IPC_CHANNELS = {
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
+  /**
+   * Standing permission rules. Renderer -> main only, from Settings: like toolsGrantAccess,
+   * nothing the MODEL can reach may write a rule.
+   */
+  permissionsGetState: 'permissions:get-state',
+  permissionsSetRules: 'permissions:set-rules',
+  permissionsSetSharing: 'permissions:set-sharing',
+  /**
+   * Import from Claude, Settings only. No channel takes a path: folders and export files are
+   * picked through native dialogs in main, and the importer only ever reads them.
+   */
+  claudeImportGetState: 'claude:get-import-state',
+  claudeImportSetCodeSettings: 'claude:set-code-import',
+  claudeImportPickCodeFolder: 'claude:pick-code-folder',
+  claudeImportSyncCode: 'claude:sync-code',
+  claudeImportChatExport: 'claude:import-chat-export',
+  claudeImportSetWatchFolder: 'claude:set-watch-folder',
+  claudeImportRemove: 'claude:remove-imported',
+  /** main -> renderer push of the import state. */
+  claudeImportStateChanged: 'claude:import-state-changed',
+  /** main -> renderer push, batched: imported sessions were added or changed, so re-list. */
+  claudeImportedSessionsChanged: 'claude:imported-sessions-changed',
   updateGetState: 'update:get-state',
   updateCheck: 'update:check',
   updateDownload: 'update:download',
+  /** Hide the floating update notice for one version; main persists it. */
+  updateDismiss: 'update:dismiss',
   /** The one channel that can end this process. Main gates it on work in flight. */
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
@@ -422,6 +500,8 @@ export interface DesktopApi {
     /** Resolves when the check finishes; the OUTCOME arrives on onStateChanged. */
     check(): Promise<void>;
     download(): Promise<void>;
+    /** Hide the "update available" notice for this version only. Arrives back on onStateChanged. */
+    dismiss(version: string): Promise<void>;
     /**
      * Restart into the new version. Without `force` this reports what is still running and
      * does nothing, so the renderer can put that to the user before anything is lost.
@@ -483,8 +563,15 @@ export interface DesktopApi {
      * the main-process cache, which is what a "try again" affordance needs.
      */
     listModels(force?: boolean): Promise<ChatModelCatalog>;
+    /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
+    listSuggestionModels(): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null>;
+    searchHistory(query: string): Promise<LocalHistoryResult[]>;
+    clearHistory(): Promise<LocalHistoryState>;
+    historyState(): Promise<LocalHistoryState>;
+    onHistoryChanged(listener: () => void): () => void;
     /** How hard this conversation's model should think. Null when the session is gone. */
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
@@ -517,6 +604,11 @@ export interface DesktopApi {
     removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
     inspectProject(directory: string): Promise<ProjectInspection>;
+    /**
+     * What this Code session's working directory has changed against its base branch, for the
+     * changes bar above the composer. Null when there is nothing to show or git cannot answer.
+     */
+    workspaceChanges(sessionId: string): Promise<WorkspaceChanges | null>;
     /**
      * Share one more folder with this conversation: `path` when given (`/add-dir <path>`), the
      * folder picker otherwise. Allowed at any point in the session, a running turn included.
@@ -558,8 +650,9 @@ export interface DesktopApi {
      * whether to call is the renderer's decision (see promptSuggestions.ts).
      *
      * The result is a DRAFT for the input box. Nothing on this channel can send a message.
+     * `model` is the Settings pick; null or omitted is automatic.
      */
-    suggestNextPrompt(sessionId: string): Promise<string | null>;
+    suggestNextPrompt(sessionId: string, model?: string | null): Promise<string | null>;
     /**
      * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
      * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
@@ -597,6 +690,10 @@ export interface DesktopApi {
     readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
     /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
     discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
+    /** One image context menu item, run in main against a ref main resolves itself. Never rejects. */
+    imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
+    /** Add a thread image to this session's draft, through the same intake as a paste. */
+    attachImage(sessionId: string, image: ChatImageRef): Promise<AddAttachmentsResult>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.
@@ -694,6 +791,44 @@ export interface DesktopApi {
     setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
   };
   /**
+   * The Skill Market, read through main (SkillMarket.ts). Nothing here rejects: a signed-out or
+   * failed call comes back as `error` (or `ok: false`) on the result, which the panel renders.
+   */
+  skillMarket: {
+    /** One page of listings, 1-based, with the web's filters. */
+    browse(filters: SkillMarketFilters, page: number): Promise<SkillMarketPage>;
+    recommended(): Promise<SkillMarketPage>;
+    /** A listing's detail, with an update offer when the user's imported copy is behind. */
+    listing(ref: SkillMarketListingRef): Promise<SkillMarketDetailResult>;
+    /**
+     * Import a listing, or update an imported copy in place. On success the next skills read
+     * (picker, Customize, a turn) sees it without waiting for the account-skill cache.
+     */
+    importListing(request: SkillMarketImportRequest): Promise<SkillMarketImportResult>;
+    /** The account's market imports, and which have a newer approved version. */
+    imports(): Promise<SkillMarketImportsResult>;
+    /** Open a market page on the web. False when there was nothing valid to open. */
+    openOnWeb(target: SkillMarketWebTarget): Promise<boolean>;
+    /**
+     * Publishing. Main reads only a skill Customize listed for this session, or what the user
+     * picks in the native dialog. Every write runs only from an explicit click, never from chat.
+     */
+    readLocalSkill(ref: SkillLocalRef): Promise<SkillUploadPreview>;
+    pickUploadSource(): Promise<SkillUploadPreview>;
+    /** `create` answers `name_taken` rather than overwrite; `update` replaces `targetSkillId`. */
+    saveSkill(request: SkillSaveRequest): Promise<SkillSaveResult>;
+    organizations(): Promise<SkillMarketOrgsResult>;
+    publish(request: SkillPublishRequest): Promise<SkillSubmitResult>;
+    /** Writes `fields` to the listing's source skill (when given), then submits a version of it. */
+    submitVersion(request: SkillSubmitVersionRequest): Promise<SkillSubmitResult>;
+    mine(): Promise<SkillMyListingsResult>;
+    withdraw(listingId: string): Promise<SkillActionResult>;
+    /** Copies an unlisted listing's share link; main builds it so the token stays there. */
+    copyShareLink(listingId: string): Promise<SkillActionResult>;
+    /** Opens an exported file's source link. False when the link is not openable. */
+    openSource(url: string): Promise<boolean>;
+  };
+  /**
    * The agent's browser, as something the user can watch.
    *
    * The page takes the user's own clicks and keystrokes directly, and the agent drives it
@@ -773,6 +908,30 @@ export interface DesktopApi {
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
     grantAccess(): Promise<ToolAccessState>;
     revokeAccess(root: string): Promise<ToolAccessState>;
+  };
+  permissions: {
+    getState(): Promise<PermissionsState>;
+    /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
+    setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
+    setSharing(share: boolean): Promise<PermissionsState>;
+  };
+  claudeImport: {
+    getState(): Promise<ClaudeImportState>;
+    setCodeSettings(patch: {
+      enabled?: boolean;
+      includeSubagents?: boolean;
+      projects?: 'all' | string[];
+    }): Promise<ClaudeImportState>;
+    /** Opens a folder picker in main; `reset` goes back to the default folder instead. */
+    pickCodeFolder(reset: boolean): Promise<ClaudeImportState>;
+    syncCode(): Promise<ClaudeImportState>;
+    /** Opens a file picker in main for an export .zip or conversations.json. */
+    importChatExport(): Promise<ClaudeImportResult>;
+    /** Opens a folder picker in main; `clear` stops watching instead. */
+    setWatchFolder(clear: boolean): Promise<ClaudeImportState>;
+    remove(kind: 'claude-code' | 'claude-chat'): Promise<ClaudeRemoveResult>;
+    onStateChanged(listener: (state: ClaudeImportState) => void): () => void;
+    onSessionsChanged(listener: () => void): () => void;
   };
   pullRequests: {
     /**

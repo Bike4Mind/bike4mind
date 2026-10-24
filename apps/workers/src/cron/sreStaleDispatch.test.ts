@@ -52,7 +52,7 @@ vi.mock('@bike4mind/observability', () => {
   };
 });
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://localhost:27017/%STAGE%',
     STAGE: 'dev',
@@ -63,7 +63,7 @@ vi.mock('sst', () => ({
   Resource: { App: { stage: 'dev' } },
 }));
 
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreTimeoutSummaryMessage: vi.fn().mockResolvedValue(undefined),
 }));
 

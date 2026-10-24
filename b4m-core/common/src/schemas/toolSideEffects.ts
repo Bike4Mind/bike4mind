@@ -56,9 +56,12 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   list_my_data_lakes: 'none',
   chess_engine: 'none',
   fmp_financial_data: 'none',
-  bob_panel_read: 'none',
   // Expands a stored instruction template into text for the next turn; writes nothing.
   skill: 'none',
+  // Classifies text the caller already holds: no stored write, no outbound action on anyone's
+  // behalf. Its spend is capped by the same up-front credit reservation the route uses, which is
+  // why auto-allowing it is the same call deep_research makes.
+  decide: 'none',
 
   // Emit an <artifact> block or a UI suggestion and nothing else.
   recharts: 'local',
@@ -84,6 +87,9 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   blog_edit: 'external',
   blog_draft: 'external',
   delegate_to_agent: 'external',
+  // Starts a Bob site read that bills the user's credits and publishes its report as them: a
+  // stored write made on their behalf, unlike deep_research's spend, so agent mode asks first.
+  bob_panel_read: 'external',
 };
 
 /**

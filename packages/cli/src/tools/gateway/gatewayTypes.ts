@@ -12,24 +12,33 @@ export type ToolArgs = Record<string, unknown>;
  * What a permission prompt is asking about. 'tool' is a normal tool-call gate;
  * 'directory-grant' is a request to widen the filesystem allow-list, which is a
  * separate decision (deny-by-default in headless, never inheriting the tool's
- * own verdict). Passed as an optional 4th arg so existing 3-arg prompt callbacks
- * remain valid; a headless callback reads it to fail closed on scope widening.
+ * own verdict); 'sandbox-escalation' is a request to re-run a sandbox-denied command
+ * without the sandbox, never approved by auto-accept, trust or allow-lists. `kind` is
+ * optional so existing 3-arg prompt callbacks stay assignable, but every wrapper that
+ * forwards the callback must forward it too - dropping it turns an escalation into a
+ * plain 'tool' question.
  */
-export type PermissionPromptKind = 'tool' | 'directory-grant';
+export type PermissionPromptKind = 'tool' | 'directory-grant' | 'sandbox-escalation';
+
+export type PermissionPromptOptions = {
+  /**
+   * What "allow for this session" would remember: undefined trusts the whole tool, null means
+   * nothing would be remembered so the option is not offered. Computed from the call's own args,
+   * since the args shown may be the sandbox-wrapped command.
+   */
+  sessionScope?: string[] | null;
+};
 
 export type ShowPermissionPrompt = (
   toolName: string,
   args: unknown,
-  preview?: string
+  preview?: string,
+  kind?: PermissionPromptKind,
+  options?: PermissionPromptOptions
 ) => Promise<{ action: PermissionResponse }>;
 
-/** The prompt callback as the directory-grant retry calls it, with the prompt kind. */
-export type ShowKindedPermissionPrompt = (
-  toolName: string,
-  args: unknown,
-  preview?: string,
-  kind?: PermissionPromptKind
-) => Promise<{ action: PermissionResponse }>;
+/** The same callback under its kind-aware name; kept so call sites read at the point of use. */
+export type ShowKindedPermissionPrompt = ShowPermissionPrompt;
 
 /**
  * Per-agent state the tool wrappers share with their entry point.

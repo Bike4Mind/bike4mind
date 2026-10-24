@@ -4,19 +4,21 @@
  * Tells a federated app's *server* whether its signed-in user is a B4M admin
  * (`User.isAdmin`), so the app can admit B4M admins to its own ops console
  * without keeping a separate admin list. Same client auth and ID-token trust as
- * /api/oauth/ai-token (see that file and server/auth/verifyFederatedIdToken.ts),
- * but nothing is minted and nothing is released beyond the boolean, so there is
- * no scope or consent gate. The grant gate still applies (enforced): without it a
+ * /api/oauth/ai-token (see that file and server/auth/verifyFederatedIdToken.ts).
+ * Nothing is minted and nothing is released beyond the boolean, but the answer is
+ * still gated on the opt-in `federated:admin-status` scope: the client must be
+ * registered for it (allowedScopes) and be a relying party, and the user's grant
+ * must cover it (federatedGrantGate.ts, enforced). Without the grant gate a
  * relying-party client's pool could name any B4M user in `identities[]` and learn
- * whether they are an admin. The grant gate does not cover first-party clients
- * (the default clientType): on the 'identities' path they can ask about any user
- * their pool names, as on /api/oauth/ai-token, until OAUTH_AI_TOKEN_REQUIRE_SUB=true.
+ * whether they are an admin. The grant gate exempts first-party clients, so the
+ * scope gate refuses them outright: only a relying party can use this endpoint.
  *
  * Response: 200 { is_admin: boolean }. A subject that resolves to no B4M user,
  * or to a blocked (banned, suspended, disputed) account, is simply not an admin.
  */
 
 import { z } from 'zod';
+import { FEDERATED_ADMIN_STATUS_SCOPE } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { cacheRepository } from '@bike4mind/database';
@@ -24,6 +26,7 @@ import { userService } from '@bike4mind/services';
 import { oauthClientRepository, userRepository } from '@bike4mind/database/auth';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
+import { logOAuthError } from '@server/auth/oauthErrorLog';
 
 /** Per-`client_id` budget. A federated app caches the answer per user for minutes. */
 const PER_CLIENT_RATE_LIMIT = 300;
@@ -40,8 +43,12 @@ const handler = baseApi({ auth: false })
   // Coarse per-IP flood backstop; bounds the bcrypt work in verifyClientSecret.
   .use(rateLimit({ limit: PER_CLIENT_RATE_LIMIT, windowMs: RATE_WINDOW_MS, bucket: 'oauth-federated-admin' }))
   .post(async (req, res) => {
+    const logError = (error: string, status: number) =>
+      logOAuthError(req.logger, { route: 'oauth/federated-admin', clientId: req.body?.client_id, error, status });
+
     const parsed = FederatedAdminRequestSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
+      logError('invalid_request', 400);
       return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
     }
 
@@ -50,6 +57,7 @@ const handler = baseApi({ auth: false })
     // 1. Client auth.
     const client = await oauthClientRepository.verifyClientSecret(client_id, client_secret);
     if (!client) {
+      logError('invalid_client', 401);
       return res
         .status(401)
         .json({ error: 'invalid_client', error_description: 'Unknown client or invalid client_secret' });
@@ -58,9 +66,26 @@ const handler = baseApi({ auth: false })
     // 2. Federation gate - only clients with a federated trust config can present ID tokens.
     const federatedIdp = client.federatedIdp;
     if (!federatedIdp) {
+      logError('access_denied', 403);
       return res.status(403).json({
         error: 'access_denied',
         error_description: 'Client is not configured for federated identity',
+      });
+    }
+
+    // 2.5. Client scope gate (why first-party is refused: see the header). A legacy doc with no
+    //      clientType is refused. Rollout: a client that called this before the scope existed 403s here
+    //      until an operator grants it (seed-oauth-client.ts TARGET_CLIENT_ID) - do that before deploying.
+    //      Audit query:
+    //        db.oauthclients.find({ federatedIdp: { $exists: true }, allowedScopes: { $nin: ['federated:admin-status'] } })
+    const isRelyingParty = client.clientType === 'relying-party';
+    if (!isRelyingParty || !(client.allowedScopes ?? []).includes(FEDERATED_ADMIN_STATUS_SCOPE)) {
+      logError('invalid_scope', 403);
+      return res.status(403).json({
+        error: 'invalid_scope',
+        error_description: isRelyingParty
+          ? `Client is not registered for ${FEDERATED_ADMIN_STATUS_SCOPE}`
+          : `${FEDERATED_ADMIN_STATUS_SCOPE} is available only to relying-party clients`,
       });
     }
 
@@ -73,6 +98,7 @@ const handler = baseApi({ auth: false })
     if (!rl.success) {
       const retryAfter = Math.max(1, Math.ceil((rl.expiresAt.getTime() - Date.now()) / 1000));
       res.setHeader('Retry-After', retryAfter);
+      logError('temporarily_unavailable', 429);
       return res.status(429).json({
         error: 'temporarily_unavailable',
         error_description: `Rate limit exceeded. Try again in ${retryAfter} seconds.`,
@@ -86,6 +112,7 @@ const handler = baseApi({ auth: false })
     } catch (err) {
       if (err instanceof FederatedIdTokenError) {
         req.logger.warn(`[OAUTH_FEDERATED_ADMIN] ID token rejected for client ${client_id}: ${err.message}`);
+        logError('invalid_grant', 401);
         return res.status(401).json({ error: 'invalid_grant', error_description: 'Invalid ID token' });
       }
       throw err;
@@ -97,19 +124,21 @@ const handler = baseApi({ auth: false })
       );
     }
 
-    // 4.5. Grant gate - relying-party clients only; see federatedGrantGate.ts. Enforced from the
-    //      start: this surface has no pre-grant callers to migrate.
+    // 4.5. Grant gate - see federatedGrantGate.ts; the grant must cover the scope. Enforced, no grace:
+    //      grants made before the scope existed lack it, so those users must re-consent (authorize
+    //      with the scope) before this answers for them.
     const grantRejection = await checkFederatedGrant({
       client,
       clientId: client_id,
       userId: b4mUserId,
-      scopes: [],
+      scopes: [FEDERATED_ADMIN_STATUS_SCOPE],
       logger: req.logger,
       logTag: 'OAUTH_FEDERATED_ADMIN',
       enforce: true,
     });
     if (grantRejection) {
       const { status, ...body } = grantRejection;
+      logError(body.error, status);
       return res.status(status).json(body);
     }
 

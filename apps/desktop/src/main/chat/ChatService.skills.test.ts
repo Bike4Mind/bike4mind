@@ -14,6 +14,9 @@ import { SkillCatalog, type RemoteSkills } from './skills/SkillCatalog';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
+// Skill authorization tests must not depend on the user's login-shell startup.
+vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => process.env.PATH ?? '' }));
+
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
@@ -68,22 +71,39 @@ describe('ChatService and skills', () => {
               body: 'Summarise $ARGUMENTS',
               userId: 'me',
             },
+            {
+              id: 'a2',
+              name: 'market-pick',
+              description: 'Fetch a page.',
+              body: 'Fetch $ARGUMENTS',
+              userId: 'me',
+              importedFrom: { listingId: 'l1', versionId: 'v1' },
+            },
           ],
         }),
         getCurrentUser: async () => ({ id: 'me' }),
       } as unknown as ConstructorParameters<typeof RemoteSkillSource>[0];
       const key = remoteSkillsKey('http://localhost:3000', 'me');
-      return { key, source: new RemoteSkillSource(api, { cacheFilePath: join(base, `${key}.json`) }) };
+      return {
+        key,
+        source: new RemoteSkillSource(api, { cacheFilePath: join(base, `${key}.json`), includeImports: true }),
+      };
     };
     catalog = new SkillCatalog(new ProjectTrustStore(join(base, 'trust.json')), accountSkills);
     for (const key of Object.keys(turnLimits) as (keyof typeof turnLimits)[]) delete turnLimits[key];
-    events = [];
-    streams = [];
-    post = vi.fn().mockImplementation(() => {
+    // Bound to this test's own objects, not read through the describe-level lets at call time: the
+    // previous test's disposed service can still emit the 'done' of its aborted reply after this
+    // hook has run, and counted here it would end a turn() wait before this test's reply has settled.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
+    const opened: PassThrough[] = [];
+    streams = opened;
+    const calls = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = calls;
     service = new ChatService({
       store: new SessionStore(join(base, 'sessions'), 'test-model'),
       access: { list: async () => [] } as unknown as AccessStore,
@@ -91,14 +111,14 @@ describe('ChatService and skills', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: calls }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       userInstructionsRoot: join(base, 'user'),
       skills: catalog,
       approvals: new ApprovalGate(),
       turnLimits,
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 
@@ -110,7 +130,8 @@ describe('ChatService and skills', () => {
   });
 
   async function turn(sessionId: string, text: string, expectedPosts: number): Promise<Record<string, unknown>> {
-    await service.send(sessionId, text);
+    const result = await service.send(sessionId, text);
+    if (!result.ok) throw new Error(result.error);
     await vi.waitUntil(() => post.mock.calls.length === expectedPosts, { timeout: 5000, interval: 5 });
     const stream = streams[expectedPosts - 1];
     stream.write(frame({ type: 'content', text: 'ok', stopReason: 'end_turn' }));
@@ -119,6 +140,8 @@ describe('ChatService and skills', () => {
       timeout: 5000,
       interval: 5,
     });
+    // The done event precedes cleanup of the active turn.
+    await vi.waitUntil(() => !service.isSessionBusy(sessionId), { timeout: 5000, interval: 5 });
     return post.mock.calls[expectedPosts - 1][1];
   }
 
@@ -273,6 +296,62 @@ describe('ChatService and skills', () => {
     const first = systemText(await turn(id, 'first', 1));
     await skill(project, 'late-arrival', ['---', 'description: Added mid-session.', '---', '', 'Late.']);
     expect(systemText(await turn(id, 'second', 2))).toBe(first);
+  });
+
+  it('sends a /name Skill Market import wrapped as untrusted, and taints the reply it starts', async () => {
+    const id = await session();
+    await service.send(id, '/market-pick https://example.com/');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+
+    const messages = post.mock.calls[0][1].messages as { role: string; content: unknown }[];
+    const sent = JSON.stringify(messages[messages.length - 1].content);
+    expect(sent).toContain('shared by a Skill Market author');
+    expect(sent).toMatch(/<<<UNTRUSTED_SKILL_CONTENT [0-9a-f]{16}>>>\\nFetch https:\/\/example.com\//);
+    expect((await service.getSession(id))?.messages[0]?.skill).toMatchObject({ name: 'market-pick', imported: true });
+
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'c1', name: 'web_fetch', arguments: JSON.stringify({ url: 'https://example.com/' }) }],
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(
+      () => events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval'),
+      { timeout: 5000, interval: 5 }
+    );
+    const asked = events
+      .map(event => (event.type === 'tool-start' ? event.call : null))
+      .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
+    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
+  });
+
+  it('sends a skill named mid-message as typed, with a note telling the model to run it', async () => {
+    const id = await session();
+    await catalog.setTrusted(project, true);
+
+    const body = await turn(id, 'the build is green, so /ship-it please', 1);
+    const messages = body.messages as { role: string; content: unknown }[];
+    const sent = JSON.stringify(messages[messages.length - 1].content);
+    expect(sent).toContain('the build is green, so /ship-it please');
+    expect(sent).toContain('The user invoked the skill /ship-it in this message');
+    // Not a leading invocation, so the turn is the user's words, not an expanded body.
+    expect((await service.getSession(id))?.messages[0]).toMatchObject({
+      content: 'the build is green, so /ship-it please',
+    });
+    expect((await service.getSession(id))?.messages[0]?.skill).toBeUndefined();
+  });
+
+  it('refuses a user-only skill named mid-message instead of sending it as literal text', async () => {
+    const id = await session();
+    await catalog.setTrusted(project, true);
+
+    const result = await service.send(id, 'keep these in /my-notes for later');
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('/my-notes can only be run at the start'),
+    });
+    expect(post).not.toHaveBeenCalled();
   });
 
   it('records an account skill send as account, so the thread can label it', async () => {

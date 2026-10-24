@@ -2,11 +2,11 @@ import { Context } from 'aws-lambda';
 import { randomUUID } from 'crypto';
 import { sessionAgentConfigRepository, sessionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { connectDB } from '@bike4mind/database';
 import { Resource } from 'sst';
 import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),

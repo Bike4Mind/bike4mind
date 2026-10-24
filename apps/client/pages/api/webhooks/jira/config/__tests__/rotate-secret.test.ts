@@ -36,7 +36,7 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (value: string) => `enc(${value})`,
   decryptSecret: (value: string) => value.replace(/^enc\((.*)\)$/, '$1'),
 }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 vi.mock('@server/integrations/jira/atlassianTokenManager', () => ({
   AtlassianTokenManager: { getValidTokens: h.getValidTokens },
   AtlassianReconnectRequiredError: class extends Error {},

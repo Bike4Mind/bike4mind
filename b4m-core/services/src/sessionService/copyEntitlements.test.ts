@@ -82,18 +82,26 @@ function cloneAdapters() {
 const copies = {
   fork: async (resolveSurfaceAccess: () => Promise<SurfaceAccessUser>) => {
     const { db } = forkAdapters();
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, resolveSurfaceAccess });
+    await forkSession(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, resolveSurfaceAccess, workspaceSessionSettings: {} }
+    );
     return db.sessions.create.mock.calls[0][0].surface;
   },
   snip: async (resolveSurfaceAccess: () => Promise<SurfaceAccessUser>) => {
     const { db } = forkAdapters();
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, resolveSurfaceAccess });
+    await snipSession(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, resolveSurfaceAccess, workspaceSessionSettings: {} }
+    );
     return db.sessions.create.mock.calls[0][0].surface;
   },
   // A share holder (the session's owner is someone else): clone is the copy a non-owner can make.
   clone: async (resolveSurfaceAccess: () => Promise<SurfaceAccessUser>) => {
     const { db } = cloneAdapters();
-    await cloneSession('caller-1', { id: 'session-1' }, { db, resolveSurfaceAccess });
+    await cloneSession('caller-1', { id: 'session-1' }, { db, resolveSurfaceAccess, workspaceSessionSettings: {} });
     return db.sessions.create.mock.calls[0][0].surface;
   },
 };

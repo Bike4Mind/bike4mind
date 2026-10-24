@@ -6,7 +6,11 @@ is consistent across endpoints rather than per-endpoint improvisation.
 
 **Public** means API-key-callable: it appears in `CONTRACTS`, is registered into the
 OpenAPI spec, and someone outside the SPA can call it. Internal SPA-backend routes under
-`pages/api/*` are out of scope and stay plain handlers.
+`pages/api/*` are out of scope and stay plain handlers, but a new one must declare
+`auth: 'jwtOnly'` (the api-key chain is not installed in that mode). Otherwise it is
+treated as potentially API-key-callable and must be a contract under `/api/v1`. A route
+that is deliberately unauthenticated (`auth: false`) has no jwtOnly form, so it needs a
+last-resort entry in `scripts/contract-gate-api-key-allowlist.txt` with a `# reason`.
 
 Anything marked **[gated]** is asserted structurally by
 `assertContractConventions.ts`, which runs at spec-generation time - a violation fails
@@ -147,11 +151,14 @@ re-deciding per endpoint:
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
 | Model id unknown or not available to the caller | `400` | `unknown_model` |
+| Assistant prefill sent for a model that does not support it | `400` | `assistant_prefill_unsupported` |
 | Tool search server tool, `tool_reference` or tool search block sent for a model that cannot serve it on this route | `400` | `tool_search_unsupported` |
 | Every tool is `defer_loading: true` and no tool search server tool is sent (native tool search models only) | `400` | `all_tools_deferred` |
 | A deferred tool also carries `cache_control` (native tool search models only) | `400` | `deferred_tool_cache_control` |
-| A `tool_reference` names a tool absent from the request's `tools`, or carries no string `tool_name` (native tool search models only) | `400` | `unknown_tool_reference` |
-| The model's provider is not configured on this deployment | `503` | `provider_not_configured` |
+| A `tool_reference` (native tool search models only) or a `tool_addition` / `tool_removal` block (native tool changes models only) names a tool absent from the request's `tools`, or a `tool_reference` carries no string `tool_name` | `400` | `unknown_tool_reference` |
+| A `tool_addition` / `tool_removal` system message is sent for a model that cannot serve it on this route | `400` | `tool_changes_unsupported` |
+| A `tool_addition` / `tool_removal` message is malformed (not strictly typed `tool_reference` blocks only) or misplaced | `400` | `invalid_tool_change` |
+| The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
@@ -160,6 +167,7 @@ re-deciding per endpoint:
 | Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
 | Per-file size cap exceeded | `400` | `file_too_large` |
 | Rate limit exceeded | `429` | - |
+| Database unreachable while authenticating the credential | `503` | - (`Retry-After`; the credential was not judged, so retry rather than re-prompt for a key) |
 | A blocking request ran past its server-side deadline (the work is ended, not left running) | `504` | `request_timeout` |
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
@@ -322,6 +330,9 @@ for the whole window. Removing an alias is a major-version change.
   old path stays and keeps working.
 - The other roots in the tree (`/api/ai/v1`, `/api/voice/v2`, `/api/overwatch/v1`) are
   frozen, as is unversioned `/api/*`. They keep serving; nothing new is added to them.
+  `scripts/check-contract-gate.sh` enforces this for every handler outside `pages/api/v1`
+  (these roots included): it must declare `auth: 'jwtOnly'` or be listed in
+  `scripts/contract-gate-api-key-allowlist.txt`.
 - `LEGACY_PUBLIC_PATHS` in `assertContractConventions.ts` is the baseline: the seven paths
   already shipped in `apps/client/public/openapi.json` when this rule landed. **The list is
   frozen - entries are only ever removed.** Adding to it is the thing this convention

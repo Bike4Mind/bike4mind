@@ -17,6 +17,8 @@ import {
   researchEngineQueueSubscription,
   slackExportQueueSubscription,
   questExportQueueSubscription,
+  publishThumbnailQueueSubscription,
+  publishThumbnailRenderer,
   dataLakeCleanupQueueSubscription,
   driveDisconnectPurgeQueueSubscription,
   githubLakeIngestQueueSubscription,
@@ -155,6 +157,10 @@ const fabFileBucketLogGroups = fabFileBucketNotification.nodes.functions.apply(f
   $util.all(functions.map(f => f.nodes.logGroup.apply(lg => lg?.name)))
 );
 
+// Sweep crons exist only on stages that run scheduled jobs (runsScheduledJobs in constants.ts).
+const cronLogGroup = (cron: sst.aws.Cron | undefined) =>
+  cron?.nodes.function.apply(fn => fn.nodes.logGroup.apply(lg => lg?.name));
+
 // Handle optional web server log group
 const webServerLogGroup = web.nodes.server ? web.nodes.server.nodes.logGroup.apply(lg => lg?.name) : undefined;
 
@@ -184,6 +190,8 @@ const individualLogGroups = $util.all([
   researchEngineQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   slackExportQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   questExportQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  publishThumbnailQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  publishThumbnailRenderer.nodes.logGroup.apply(lg => lg?.name),
   dataLakeCleanupQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   driveDisconnectPurgeQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   githubLakeIngestQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
@@ -200,8 +208,8 @@ const individualLogGroups = $util.all([
   // Agent runs that stall/crash and the sweeps that detect them previously had no
   // subscription, so LiveOps only heard about them if a user complained (GH #3228).
   agentExecutor.nodes.logGroup.apply(lg => lg?.name),
-  questTimeoutSweepCron.nodes.function.apply(fn => fn.nodes.logGroup.apply(lg => lg?.name)),
-  agentExecutionAbandonedSweepCron.nodes.function.apply(fn => fn.nodes.logGroup.apply(lg => lg?.name)),
+  cronLogGroup(questTimeoutSweepCron),
+  cronLogGroup(agentExecutionAbandonedSweepCron),
 ]);
 
 let logSubscriptions: $util.Output<aws.cloudwatch.LogSubscriptionFilter[]> = $util.output([]);
@@ -213,12 +221,8 @@ if (!$dev) {
   // 2 subscription filters per log group, and these now use both) and the ChatCompletion
   // Fargate group's JSON error filter.
   const agentExecutorLogGroup = agentExecutor.nodes.logGroup.apply(lg => lg?.name);
-  const questTimeoutSweepLogGroup = questTimeoutSweepCron.nodes.function.apply(fn =>
-    fn.nodes.logGroup.apply(lg => lg?.name)
-  );
-  const agentExecutionAbandonedSweepLogGroup = agentExecutionAbandonedSweepCron.nodes.function.apply(fn =>
-    fn.nodes.logGroup.apply(lg => lg?.name)
-  );
+  const questTimeoutSweepLogGroup = cronLogGroup(questTimeoutSweepCron);
+  const agentExecutionAbandonedSweepLogGroup = cronLogGroup(agentExecutionAbandonedSweepCron);
   const agentContinuationLogGroup = agentContinuationQueueSubscription.nodes.function.nodes.logGroup.apply(
     lg => lg?.name
   );

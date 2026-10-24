@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
 
-vi.mock('@server/utils/storage', () => {
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   const storage = { download: vi.fn().mockResolvedValue(Buffer.from('file-bytes')) };
   return { getFilesStorage: () => storage };
 });
@@ -39,14 +39,14 @@ vi.mock('@bike4mind/slack', () => {
 });
 
 import { fabFileRepository, Quest, Session } from '@bike4mind/database';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { JIRA_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import handler from '../confirm';
 
 const SESSION_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';

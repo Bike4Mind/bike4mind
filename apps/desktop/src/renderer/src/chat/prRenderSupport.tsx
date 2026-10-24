@@ -8,16 +8,17 @@ import { SessionList } from './SessionList';
 
 /** Test-only: the bar and a one-row sidebar rendered to markup, for the PR colour tests. */
 
-export const STATES: { display: PrDisplayState; state: PrState; isDraft: boolean }[] = [
+export const STATES: { display: PrDisplayState; state: PrState; isDraft: boolean; queued?: boolean }[] = [
   { display: 'open', state: 'OPEN', isDraft: false },
   { display: 'draft', state: 'OPEN', isDraft: true },
+  { display: 'queued', state: 'OPEN', isDraft: false, queued: true },
   { display: 'merged', state: 'MERGED', isDraft: false },
   { display: 'closed', state: 'CLOSED', isDraft: false },
 ];
 
 const URL = 'https://github.com/example-org/widgets/pull/611';
 
-function barState(state: PrState, isDraft: boolean): PrBarState {
+function barState(state: PrState, isDraft: boolean, queued: boolean): PrBarState {
   return {
     sessionId: 'session-1',
     binding: { owner: 'example-org', repo: 'widgets', number: 611, url: URL, source: 'shell', boundAt: '' },
@@ -47,7 +48,7 @@ function barState(state: PrState, isDraft: boolean): PrBarState {
     },
     gh: 'ok',
     refreshing: false,
-    autoMerge: { mode: null },
+    autoMerge: queued ? { mode: null, queued: { position: 1 } } : { mode: null },
     autoFix: { status: 'off', attempts: 0, max: 5 },
   };
 }
@@ -55,11 +56,11 @@ function barState(state: PrState, isDraft: boolean): PrBarState {
 // The fields the sidebar reads; the rest of a summary is irrelevant to a row's marker.
 const SESSION = { id: 'session-1', title: 'Ladder', mode: 'code', messageCount: 1 } as ChatSessionSummary;
 
-export function renderBar(mode: 'light' | 'dark', state: PrState, isDraft: boolean): string {
+export function renderBar(mode: 'light' | 'dark', state: PrState, isDraft: boolean, queued = false): string {
   return renderToStaticMarkup(
     <CssVarsProvider defaultMode={mode}>
       <PrStatusBar
-        state={barState(state, isDraft)}
+        state={barState(state, isDraft, queued)}
         onDismiss={async () => ({ ok: true })}
         onRefresh={() => {}}
         onSetOption={async () => ({ ok: true })}

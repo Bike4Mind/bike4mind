@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
 import { decideScopeGate, parseStagedScopes } from './apiKeyScopeGate';
+
+vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+  premiumApiKeyScopes: [
+    { value: 'acme:read', label: 'Acme: Read', description: 'Read Acme records', endpoints: ['GET /api/acme'] },
+  ],
+}));
 
 const NONE = new Set<string>();
 
@@ -137,6 +143,28 @@ describe('decideScopeGate', () => {
     ).toEqual({ outcome: 'allow' });
   });
 
+  describe('Bob scopes', () => {
+    // The two gate shapes these scopes are built for (the routes ship in the Bob overlay,
+    // not here): a door that admits either scope, and a run-only gate on the verbs that
+    // start work. Held scopes are the stored strings a key carries, so these also pin the
+    // wire values.
+    const BOB_DOOR = [ApiKeyScope.BOB_READ, ApiKeyScope.BOB_RUN, ApiKeyScope.ADMIN];
+    const BOB_RUN_GATE = [ApiKeyScope.BOB_RUN, ApiKeyScope.ADMIN];
+    const held = (...scopes: string[]) => scopes as ApiKeyScope[];
+
+    it('admits a bob:run key at a door requiring bob:read or bob:run, and refuses a notebooks-only key', () => {
+      expect(decideScopeGate(BOB_DOOR, held('bob:run'), NONE)).toEqual({ outcome: 'allow' });
+      expect(decideScopeGate(BOB_DOOR, held('bob:read'), NONE)).toEqual({ outcome: 'allow' });
+      expect(decideScopeGate(BOB_DOOR, held('notebooks:read'), NONE)).toEqual({ outcome: 'deny' });
+    });
+
+    it('refuses a bob:read key where bob:run is required - reading never implies spending', () => {
+      expect(decideScopeGate(BOB_RUN_GATE, held('bob:read'), NONE)).toEqual({ outcome: 'deny' });
+      // Control: the same gate admits the scope it names, so the refusal is about bob:read.
+      expect(decideScopeGate(BOB_RUN_GATE, held('bob:run'), NONE)).toEqual({ outcome: 'allow' });
+    });
+  });
+
   describe('alsoRequiredScopes (AND)', () => {
     it('allows when both the OR match and every AND scope are held', () => {
       const also = [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE];
@@ -184,5 +212,36 @@ describe('decideScopeGate', () => {
       const held = [ApiKeyScope.EMBED_CHAT, ApiKeyScope.OPTIHASHI_READ];
       expect(decideScopeGate([ApiKeyScope.EMBED_CHAT], held, NONE, also)).toEqual({ outcome: 'allow' });
     });
+  });
+});
+
+describe('contributed scopes', () => {
+  it('stages a contributed scope and still rejects an unknown one', () => {
+    const { staged, rejected } = parseStagedScopes('acme:read,acme:write');
+    expect([...staged]).toEqual(['acme:read']);
+    expect(rejected).toEqual(['acme:write']);
+  });
+
+  it('allows a key holding the contributed scope and denies one without it', () => {
+    expect(decideScopeGate(['acme:read'], ['acme:read'], NONE)).toEqual({ outcome: 'allow' });
+    expect(decideScopeGate(['acme:read'], [ApiKeyScope.READ_NOTEBOOKS], NONE)).toEqual({ outcome: 'deny' });
+  });
+
+  it('lets a key without the contributed scope through only while it is staged', () => {
+    const { staged } = parseStagedScopes('acme:read');
+    expect(decideScopeGate(['acme:read'], [ApiKeyScope.READ_NOTEBOOKS], staged)).toEqual({
+      outcome: 'stagedAllow',
+      stagedScopes: ['acme:read'],
+    });
+  });
+
+  it('does not treat a contributed-only key as confined on a scope-less route', () => {
+    expect(decideScopeGate(undefined, ['acme:read'], NONE)).toEqual({ outcome: 'allow' });
+  });
+
+  it('still denies a confined key on a contributed route, staged or not', () => {
+    const { staged } = parseStagedScopes('acme:read');
+    expect(decideScopeGate(['acme:read'], [ApiKeyScope.EMBED_CHAT], staged)).toEqual({ outcome: 'deny' });
+    expect(decideScopeGate(['acme:read'], [ApiKeyScope.EMBED_CHAT, 'acme:read'], NONE)).toEqual({ outcome: 'allow' });
   });
 });

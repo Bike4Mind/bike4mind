@@ -2,7 +2,7 @@ import {
   IUserDocument,
   IOrganizationDocument,
   DEFAULT_STORAGE_LIMIT_MB,
-  DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB,
+  organizationStorageLimitBytes,
   StorageLimitError,
   storageLimitToBytes,
 } from '@bike4mind/common';
@@ -25,7 +25,7 @@ export const checkStorageLimit = async (user: IUserDocument, fileSize: number) =
 
 /** Cumulative: every file the org owns (FabFile.organizationId) counts, whoever uploaded it. */
 export const checkOrganizationStorageLimit = async (organization: IOrganizationDocument, fileSize: number) => {
-  const storageLimit = storageLimitToBytes(organization.storageLimit ?? DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB);
+  const storageLimit = organizationStorageLimitBytes(organization);
   const currentStorageSize = organization.currentStorageSize ?? 0;
   if (fileSize + currentStorageSize > storageLimit) {
     throw new StorageLimitError('Organization storage limit exceeded', {

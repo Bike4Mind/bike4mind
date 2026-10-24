@@ -2,12 +2,12 @@ import { Ability } from '@server/auth/ability';
 import {
   ApiKeyBillingOwnerType,
   ApiKeyCompletionSource,
-  ApiKeyScope,
+  ApiKeyScopeValue,
   IUserApiKeyRateLimit,
   IUserDocument,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import type { EntitlementKey } from '@client/lib/entitlements/types';
+import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 
 declare global {
   namespace Express {
@@ -15,7 +15,7 @@ declare global {
 
     interface ApiKeyInfo {
       keyId: string;
-      scopes: ApiKeyScope[];
+      scopes: ApiKeyScopeValue[];
       rateLimit: IUserApiKeyRateLimit;
       expiresAt?: Date;
       /** Overwatch product this key is bound to. Set only for OVERWATCH_INGEST_WRITE keys. */

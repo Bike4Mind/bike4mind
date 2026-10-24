@@ -7,7 +7,7 @@ export const MODEL_SEARCH_DEBOUNCE_MS = 600;
  * Single source of truth - keep both consumers in sync by importing from here. Names must
  * match the model selector exactly.
  */
-export const MONITORED_MODELS = ['Claude Opus 4.7', 'GPT-5.5'] as const;
+export const MONITORED_MODELS = ['Claude Opus 5.5', 'GPT-5.6 Sol'] as const;
 
 /**
  * Spec-user key for the second account the notebook-export-bytes suite imports as. The round trip
@@ -16,6 +16,21 @@ export const MONITORED_MODELS = ['Claude Opus 4.7', 'GPT-5.5'] as const;
  * setup file, which registers a setup test on import.
  */
 export const NOTEBOOK_EXPORT_IMPORTER_KEY = 'notebookExportBytesImporter';
+
+/**
+ * Spec-user key for the non-admin account the skills suite switches to. The skills spec user is an
+ * admin (the global share toggles are admin-only), so the non-admin share path needs a second user;
+ * skills.setup.ts creates it. Shared here for the same reason as NOTEBOOK_EXPORT_IMPORTER_KEY.
+ */
+export const SKILLS_MEMBER_KEY = 'skillsMember';
+
+/**
+ * Spec-user keys for the extra accounts the teams suite needs: no project authenticates as them, the
+ * spec opens isolated pages for them via openPageAs. teams.setup.ts creates them.
+ */
+export const TEAMS_MEMBER_KEY = 'teamsMember';
+export const TEAMS_MANAGER_KEY = 'teamsManager';
+export const TEAMS_INVITEE_KEY = 'teamsInvitee';
 
 /** Centralized timeout constants for E2E tests (in milliseconds). */
 export const TIMEOUTS = {

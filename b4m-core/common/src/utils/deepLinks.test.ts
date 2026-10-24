@@ -3,11 +3,15 @@ import {
   ADMIN_FEEDBACK_TAB_SLUG,
   ADMIN_AUDIT_LOG_TAB_SLUG,
   ADMIN_TAB_PARAM,
+  ADMIN_USERS_TAB_SLUG,
   AUDIT_ENTRY_ID_PARAM,
   FEEDBACK_ID_PARAM,
+  MODERATION_INCIDENT_ID_PARAM,
   QUEST_ID_PARAM,
   adminAuditLogPath,
   adminFeedbackRecordPath,
+  adminModerationIncidentPath,
+  adminUserProfilePath,
   sessionPath,
   sessionTurnPath,
   toAbsoluteUrl,
@@ -19,6 +23,13 @@ describe('deepLinks', () => {
     expect(url.pathname).toBe('/admin');
     expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_FEEDBACK_TAB_SLUG);
     expect(url.searchParams.get(FEEDBACK_ID_PARAM)).toBe('fb-1');
+  });
+
+  it('addresses a moderation incident by tab slug and id', () => {
+    const url = new URL(adminModerationIncidentPath('inc-1'), 'https://app.example');
+    expect(url.pathname).toBe('/admin');
+    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_USERS_TAB_SLUG);
+    expect(url.searchParams.get(MODERATION_INCIDENT_ID_PARAM)).toBe('inc-1');
   });
 
   it('uses a stable slug rather than the positional AdminTab enum value', () => {
@@ -43,6 +54,17 @@ describe('deepLinks', () => {
     const record = new URL(adminFeedbackRecordPath('fb-1&tab=users'), 'https://app.example');
     expect(record.searchParams.get(FEEDBACK_ID_PARAM)).toBe('fb-1&tab=users');
     expect(record.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_FEEDBACK_TAB_SLUG);
+  });
+
+  it('opens one user on the admin Users tab', () => {
+    const url = new URL(adminUserProfilePath('abc123'), 'https://app.example');
+    expect(url.pathname).toBe('/admin');
+    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_USERS_TAB_SLUG);
+    expect(url.searchParams.get('userId')).toBe('abc123');
+
+    const crafted = new URL(adminUserProfilePath('x&tab=billing'), 'https://app.example');
+    expect(crafted.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_USERS_TAB_SLUG);
+    expect(crafted.searchParams.get('userId')).toBe('x&tab=billing');
   });
 
   it('joins an origin whether or not it carries a trailing slash', () => {

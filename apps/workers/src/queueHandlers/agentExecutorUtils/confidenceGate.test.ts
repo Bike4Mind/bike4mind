@@ -1,6 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { AgentStep } from '@bike4mind/agents';
-import { evaluateConfidenceGate, type ConfidenceGateInput } from './confidenceGate';
+import {
+  decideIterationConfidencePause,
+  evaluateConfidenceGate,
+  formatConfidenceGateReason,
+  isPausingLowConfidenceStreak,
+  recordAndDecideConfidencePause,
+  type ConfidenceGateEvaluation,
+  type ConfidenceGateInput,
+} from './confidenceGate';
 
 // Observation steps as ReActAgent emits them: `toolFailed` is the explicit failure
 // flag, independent of the result text and of how the call was scored.
@@ -31,22 +39,24 @@ describe('evaluateConfidenceGate', () => {
     expect(evaluateConfidenceGate(input([failed(), observation(0.7)]))).toEqual({
       iteration: 2,
       confidence: 0.7,
-      pause: false,
+      belowThreshold: false,
+      pausable: true,
     });
   });
 
-  it('still pauses on low confidence from calls that ran, alongside a failed one', () => {
+  it('still flags low confidence from calls that ran, alongside a failed one', () => {
     expect(evaluateConfidenceGate(input([failed(), observation(0.3)]))).toEqual({
       iteration: 2,
       confidence: 0.3,
-      pause: true,
+      belowThreshold: true,
+      pausable: true,
     });
   });
 
   it('counts a low-scored result that did not fail (e.g. text starting with "Error:")', () => {
     const gate = evaluateConfidenceGate(input([observation(0.1), observation(0.7)]));
     expect(gate?.confidence).toBeCloseTo(0.4);
-    expect(gate?.pause).toBe(true);
+    expect(gate?.belowThreshold).toBe(true);
   });
 
   it("falls back to the agent's own confidence when the steps do not reproduce it", () => {
@@ -54,19 +64,21 @@ describe('evaluateConfidenceGate', () => {
     expect(evaluateConfidenceGate(input(steps, { gate: { iteration: 2, confidence: 0.25 } }))).toEqual({
       iteration: 2,
       confidence: 0.25,
-      pause: true,
+      belowThreshold: true,
+      pausable: true,
     });
     expect(evaluateConfidenceGate(input([], { gate: { iteration: 2, confidence: 0.25 } }))?.confidence).toBe(0.25);
   });
 
-  it('evaluates but does not pause a completed or iteration-capped run', () => {
+  it('evaluates but cannot pause a completed or iteration-capped run', () => {
     const steps = [observation(0.3)];
     expect(evaluateConfidenceGate(input(steps, { isComplete: true }))).toEqual({
       iteration: 2,
       confidence: 0.3,
-      pause: false,
+      belowThreshold: true,
+      pausable: false,
     });
-    expect(evaluateConfidenceGate(input(steps, { reachedMaxIterations: true }))?.pause).toBe(false);
+    expect(evaluateConfidenceGate(input(steps, { reachedMaxIterations: true }))?.pausable).toBe(false);
   });
 
   it('does not evaluate when no tools ran', () => {
@@ -74,6 +86,92 @@ describe('evaluateConfidenceGate', () => {
   });
 
   it('honors a threshold of 0 as a disabled gate', () => {
-    expect(evaluateConfidenceGate(input([observation(0.3)], { threshold: 0 }))?.pause).toBe(false);
+    expect(evaluateConfidenceGate(input([observation(0.3)], { threshold: 0 }))?.belowThreshold).toBe(false);
+  });
+});
+
+describe('isPausingLowConfidenceStreak', () => {
+  it('lets a single low iteration through and pauses from the second consecutive one', () => {
+    expect(isPausingLowConfidenceStreak(0)).toBe(false);
+    expect(isPausingLowConfidenceStreak(1)).toBe(false);
+    expect(isPausingLowConfidenceStreak(2)).toBe(true);
+    expect(isPausingLowConfidenceStreak(3)).toBe(true);
+  });
+});
+
+describe('formatConfidenceGateReason', () => {
+  it('names the confidence, the threshold and the streak length', () => {
+    expect(formatConfidenceGateReason(0.3, 0.6, 2)).toBe(
+      '2 iterations in a row below the 60% confidence threshold (latest 30%)'
+    );
+  });
+});
+
+describe('recordAndDecideConfidencePause', () => {
+  const evaluation = (overrides: Partial<ConfidenceGateEvaluation> = {}): ConfidenceGateEvaluation => ({
+    iteration: 2,
+    confidence: 0.3,
+    belowThreshold: true,
+    pausable: true,
+    ...overrides,
+  });
+
+  it('records whether the iteration was below the threshold, not whether it can pause', async () => {
+    const record = vi.fn(async () => 1);
+    await recordAndDecideConfidencePause(evaluation({ belowThreshold: false, pausable: true }), record);
+    expect(record).toHaveBeenCalledWith(0.3, { belowThreshold: false });
+  });
+
+  it('does not pause on the first low iteration and pauses on the second', async () => {
+    expect(
+      await recordAndDecideConfidencePause(
+        evaluation(),
+        vi.fn(async () => 1)
+      )
+    ).toEqual({
+      pause: false,
+      lowConfidenceStreak: 1,
+    });
+    expect(
+      await recordAndDecideConfidencePause(
+        evaluation(),
+        vi.fn(async () => 2)
+      )
+    ).toEqual({
+      pause: true,
+      lowConfidenceStreak: 2,
+    });
+  });
+
+  it('does not pause a completed run even on a streak', async () => {
+    const decision = await recordAndDecideConfidencePause(
+      evaluation({ pausable: false }),
+      vi.fn(async () => 2)
+    );
+    expect(decision.pause).toBe(false);
+  });
+});
+
+describe('decideIterationConfidencePause', () => {
+  const evaluation = (overrides: Partial<ConfidenceGateEvaluation> = {}): ConfidenceGateEvaluation => ({
+    iteration: 2,
+    confidence: 0.3,
+    belowThreshold: true,
+    pausable: true,
+    ...overrides,
+  });
+
+  it('a single low iteration does not pause', async () => {
+    const record = vi.fn(async () => 1);
+    const low = evaluation({ belowThreshold: true, pausable: true });
+    expect(await decideIterationConfidencePause(low, record)).toEqual({ pause: false, lowConfidenceStreak: 1 });
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(low.confidence, { belowThreshold: true });
+  });
+
+  it('a gate-skipped iteration leaves the streak alone', async () => {
+    const record = vi.fn(async () => 5);
+    expect(await decideIterationConfidencePause(null, record)).toBeNull();
+    expect(record).not.toHaveBeenCalled();
   });
 });

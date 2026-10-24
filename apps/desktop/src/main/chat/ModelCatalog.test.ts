@@ -1,5 +1,5 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { publicVideoModel } from './media/__fixtures__/videoModels';
 import { ModelCatalog, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
 
@@ -39,6 +39,18 @@ describe('selectUsableModels', () => {
     });
   });
 
+  it('gives a thinking switch only to an Ollama model the server says can think', () => {
+    const [thinker, plain, hosted] = selectUsableModels([
+      wireModel({ id: 'qwen3:8b', backend: 'ollama', can_think: true }),
+      wireModel({ id: 'llama3.2', backend: 'ollama', can_think: false }),
+      wireModel({ id: 'claude-sonnet-4-5-20250929', backend: 'anthropic', can_think: true }),
+    ]);
+
+    expect(thinker).toMatchObject({ thinkingToggle: true });
+    expect(plain).not.toHaveProperty('thinkingToggle');
+    expect(hosted).not.toHaveProperty('thinkingToggle');
+  });
+
   it('treats a non-array payload as no models rather than throwing', () => {
     expect(selectUsableModels(undefined)).toEqual([]);
     expect(selectUsableModels({ models: [] })).toEqual([]);
@@ -74,20 +86,103 @@ describe('ModelCatalog', () => {
   let environmentUrl: string;
   let catalog: ModelCatalog;
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     get = vi.fn().mockResolvedValue({ models: [wireModel(), wireModel({ id: 'dall-e-3', type: 'image' })] });
     environmentUrl = 'http://localhost:3000';
-    catalog = new ModelCatalog({
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
-      getEnvironmentUrl: () => environmentUrl,
-    });
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      { models: async () => [] } as never
+    );
   });
 
   it('serves a second read from cache', async () => {
     expect((await catalog.list()).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929']);
     await catalog.list();
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('expires a catalog containing local models quickly so a stopped runtime disappears', async () => {
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.list();
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5_001);
+    local.models.mockResolvedValue([]);
+    expect((await catalog.list()).models.some(model => model.id.startsWith('local:'))).toBe(false);
+  });
+
+  it('discovers a newly started local runtime without expiring or refetching the hosted list', async () => {
+    const local = { models: vi.fn().mockResolvedValue([]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.list();
+    local.models.mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5_001);
+    expect((await catalog.list()).models.map(model => model.id)).toEqual([
+      'claude-sonnet-4-5-20250929',
+      'local:ollama:qwen',
+    ]);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('offers local models while signed out or the hosted catalog fails (%s)', async failed => {
+    if (failed) get.mockRejectedValue(new Error('offline'));
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => (failed ? ({ get } as unknown as AuthenticatedApiClient) : null),
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      { models: async () => [{ id: 'local:ollama:qwen', name: 'qwen' }] } as never
+    );
+    expect(await catalog.list()).toEqual({ models: [{ id: 'local:ollama:qwen', name: 'qwen' }] });
+    if (!failed) expect(get).not.toHaveBeenCalled();
+  });
+
+  it('retains thinking capability through an expired failed read without offering stale models', async () => {
+    get.mockResolvedValueOnce({ models: [wireModel({ id: 'qwen3:8b', backend: 'ollama', can_think: true })] });
+    await catalog.list();
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 60_000);
+    get.mockRejectedValueOnce(new Error('temporary failure'));
+
+    expect(await catalog.list()).toMatchObject({ models: [], error: expect.any(String) });
+    expect(catalog.cached()).toBeNull();
+    expect(catalog.lastKnownThinkingToggle('qwen3:8b')).toBe(true);
+    expect(catalog.lastKnownThinkingToggle('unknown')).toBeUndefined();
+
+    environmentUrl = 'https://other.example.com';
+    expect(catalog.lastKnownThinkingToggle('qwen3:8b')).toBeUndefined();
+  });
+
+  it('forgets old thinking capabilities when a successful refresh removes the model', async () => {
+    get.mockResolvedValueOnce({ models: [wireModel({ id: 'qwen3:8b', backend: 'ollama', can_think: true })] });
+    await catalog.list();
+    get.mockResolvedValueOnce({ models: [] });
+    await catalog.list(true);
+    get.mockRejectedValueOnce(new Error('temporary failure'));
+    await catalog.list();
+
+    expect(catalog.lastKnownThinkingToggle('qwen3:8b')).toBeUndefined();
   });
 
   it('refetches when the environment changed, so one server never shows another one models', async () => {
@@ -124,11 +219,14 @@ describe('ModelCatalog', () => {
   });
 
   it('refuses to guess while signed out', async () => {
-    catalog = new ModelCatalog({
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      getApiClient: () => null,
-      getEnvironmentUrl: () => environmentUrl,
-    });
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      { models: async () => [] } as never
+    );
 
     expect((await catalog.list()).error).toMatch(/sign in/i);
   });

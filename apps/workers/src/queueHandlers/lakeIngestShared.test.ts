@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   organizationRepository: {
     findById: async (id: string) => ({ id, currentStorageSize: 0 }),
     incrementCurrentStorage: h.incrementCurrentStorage,
@@ -53,7 +54,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
 vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
 
 import { createLakeIngestRetirer, ingestLakeFile } from './lakeIngestShared';

@@ -1,4 +1,5 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
+import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
 import { hasLakeArms } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import {
   citationTagDescription,
@@ -109,6 +110,10 @@ function semanticConflictPassages(results: SemanticChunkResult[], maxChunkChars:
   return results.map(r => ({ fabFileId: r.fileId, text: servedPassageText(r, maxChunkChars).text }));
 }
 
+/** A result heading's label: the turn's shared `[N]` when it has one, else its local position. */
+const citationLabel = (citationNumber: number | undefined, index: number): string =>
+  citationNumber === undefined ? `${index + 1}.` : `[${citationNumber}]`;
+
 /**
  * Format semantic passages WITH their content so the model can answer without retrieving.
  *
@@ -147,7 +152,9 @@ function formatSemanticResults(
   scan?: SemanticSearchScanAccounting,
   skipNotice?: SkipNotice | null,
   logger?: Logger,
-  bounding?: { budgetBound: boolean; droppedCount: number }
+  bounding?: { budgetBound: boolean; droppedCount: number },
+  /** fileId -> the turn's shared [N] (emitSemanticCitables); absent when the turn is not numbered. */
+  citationNumbers?: ReadonlyMap<string, number>
 ): string {
   let clippedCount = 0;
   let longestChars = 0;
@@ -170,7 +177,7 @@ function formatSemanticResults(
     // parenthetical rather than folded into it - the leading tokens of this shape are what
     // defangRetrievedContent matches on. Never from `createdAt` (#3047).
     return (
-      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})${documentDateClause(r.documentDate)}\n` +
+      `${citationLabel(citationNumbers?.get(r.fileId), i)} **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})${documentDateClause(r.documentDate)}\n` +
       text
     );
   });
@@ -221,6 +228,7 @@ function formatSemanticResults(
     budgetNote +
     `Found ${results.length} relevant passage(s) in the knowledge base \u2014 the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
     `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+    (citationNumbers?.size ? `${INDEXED_TOOL_CITATION_RULE}\n\n` : '') +
     conflictNote +
     renderRetrievedContentBlock(blocks)
   );
@@ -446,17 +454,17 @@ async function emitSemanticCitables(
    * concept (agent-scoped), which leaves the field off so the chip is not mislabelled as library.
    */
   originLakes?: ResolvedLakeAccess[]
-): Promise<void> {
+): Promise<Map<string, number> | undefined> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article).
   // `ranked` is score-descending, so the chunk that survives the dedup is the file's BEST hit,
   // and that is the passage chunkId/fullContext anchor the reader is deep-linked to.
   const seenFile = new Set<string>();
-  const citables: CitableSource[] = [];
+  const unnumberedCitables: CitableSource[] = [];
   for (const r of ranked) {
     if (seenFile.has(r.fileId)) continue;
     seenFile.add(r.fileId);
     const conflictsWith = conflictsByFileId.get(r.fileId);
-    citables.push({
+    unnumberedCitables.push({
       id: r.fileId,
       type: 'document',
       title: r.fileName,
@@ -487,6 +495,8 @@ async function emitSemanticCitables(
       },
     });
   }
+  const numberedCitables = context.numberCitables?.(unnumberedCitables);
+  const citables = numberedCitables ?? unnumberedCitables;
   const names = citables.slice(0, 3).map(c => prettyFileName(c.title));
   const more = citables.length > 3 ? ` +${citables.length - 3} more` : '';
   // Appended to the one found-status rather than a second update, which would read as a bug.
@@ -525,6 +535,7 @@ async function emitSemanticCitables(
     } as any,
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
   );
+  return numberedCitables ? citationNumbersById(numberedCitables) : undefined;
 }
 
 /**
@@ -790,7 +801,7 @@ async function trySemanticKbSearch(
     // One pass over the served passages, feeding the chips below and the model's note further down,
     // so the reader is marked with exactly the conflicts the model is warned about (#3041).
     const conflict = buildRetrievalConflictSignal(semanticConflictPassages(ranked, budgets.maxChunkChars));
-    await emitSemanticCitables(
+    const citationNumbers = await emitSemanticCitables(
       context,
       ranked,
       'the data lake',
@@ -825,7 +836,8 @@ async function trySemanticKbSearch(
           // pass above returns its input untouched when the cap is off, so it is not a ceiling
           // bound of its own.
           droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
-        }
+        },
+        citationNumbers
       ),
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
@@ -947,7 +959,7 @@ async function tryScopedSemanticKbSearch(
     const ranked = bound.kept;
     // Same single pass as the owner-scoped arm above; see its comment.
     const conflict = buildRetrievalConflictSignal(semanticConflictPassages(ranked, budgets.maxChunkChars));
-    await emitSemanticCitables(
+    const citationNumbers = await emitSemanticCitables(
       context,
       ranked,
       "this agent's knowledge base",
@@ -976,7 +988,8 @@ async function tryScopedSemanticKbSearch(
           // pass above returns its input untouched when the cap is off, so it is not a ceiling
           // bound of its own.
           droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
-        }
+        },
+        citationNumbers
       ),
       skipNotice,
       datalakeTags: [],
@@ -1137,7 +1150,11 @@ interface KnowledgeBaseSearchParams {
  * at all - which is worse than the delimited case, not better. No untrusted block wraps this: it
  * returns no document text, and the block would say "this is data" about our own listing.
  */
-function formatSearchResults(files: IFabFileDocument[]): string {
+function formatSearchResults(
+  files: IFabFileDocument[],
+  /** fileId -> the turn's shared [N]; absent when the turn is not numbered. */
+  citationNumbers?: ReadonlyMap<string, number>
+): string {
   if (files.length === 0) {
     return 'No documents found matching your search query in your knowledge base.';
   }
@@ -1152,7 +1169,7 @@ function formatSearchResults(files: IFabFileDocument[]): string {
     const pipeline = stall ? `\n   Pipeline: ${stall}` : '';
 
     return (
-      `${index + 1}. **${toContentLabel(file.fileName)}** (ID: ${file.id})\n` +
+      `${citationLabel(citationNumbers?.get(file.id), index)} **${toContentLabel(file.fileName)}** (ID: ${file.id})\n` +
       `   Type: ${fileType} | MIME: ${file.mimeType}\n` +
       `   Tags: ${tags}${pipeline}${notes}`
     );
@@ -1161,6 +1178,7 @@ function formatSearchResults(files: IFabFileDocument[]): string {
   return (
     `Found ${files.length} document(s) in your knowledge base:\n\n` +
     formattedFiles.join('\n\n') +
+    (citationNumbers?.size ? `\n\n${INDEXED_TOOL_CITATION_RULE}` : '') +
     '\n\n*Use retrieve_knowledge_content with a file ID or tags to read the actual document content.*'
   );
 }
@@ -1549,6 +1567,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // sum-of-completions volume is the documented shape. A keyword pass that THREW never
           // reaches here; the outer catch writes 'failed' with no volume.
           const keywordArmNoHitsInjected = { chunks: 0, chars: 0 };
+          let keywordCitationNumbers: Map<string, number> | undefined;
 
           // Emit citable source chips so search results appear as clickable citations.
           // No metadata.chunkId/fullContext here, deliberately: this is the KEYWORD arm, ranking
@@ -1556,7 +1575,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // chunk was scored, so there is no cited passage to deep-link to - a chunk anchor here
           // could only be a guess, and the reader lands on the whole document, which is honest.
           if (rankedResults.length > 0) {
-            const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
+            const unnumberedCitables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
               const fileTagNames = file.tags?.map(t => t.name) || [];
               return {
                 id: file.id,
@@ -1585,6 +1604,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 },
               };
             });
+            const numberedCitables = context.numberCitables?.(unnumberedCitables);
+            const citables = numberedCitables ?? unnumberedCitables;
+            if (numberedCitables) keywordCitationNumbers = citationNumbersById(numberedCitables);
 
             // Surface what we FOUND in the live status (not just "searching") so the user
             // watches the agent work the data lake. Clean up the raw "[Category] 01 Name.md"
@@ -1692,7 +1714,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           }
 
           return (
-            formatSearchResults(rankedResults) +
+            formatSearchResults(rankedResults, keywordCitationNumbers) +
             formatSkipNotice(semantic.skipNotice) +
             attachmentInlineNotice(context, rankedResults)
           );

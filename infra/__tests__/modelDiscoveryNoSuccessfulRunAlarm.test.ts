@@ -17,18 +17,21 @@ const checkerSource = readFileSync(path.join(repoRoot, 'apps/workers/src/cron/mo
 const alarm = alarmsSource.match(
   /new aws\.cloudwatch\.MetricAlarm\('modelDiscoveryNoSuccessfulRun', \{[\s\S]*?\n {4}\}\);/
 )?.[0];
-const stalenessCron = cronSource.match(/new sst\.aws\.Cron\('modelDiscoveryStalenessCron', \{[\s\S]*?\n\}\);/)?.[0];
-const discoveryCron = cronSource.match(/new sst\.aws\.Cron\('modelDiscoveryCron', \{[\s\S]*?\n\}\);/)?.[0];
+const stalenessCron = cronSource.match(
+  /const modelDiscoveryStalenessCron = modelDiscoveryCronEnabled\s*\? new sst\.aws\.Cron\('modelDiscoveryStalenessCron', \{[\s\S]*?\n {4}\}\)/
+)?.[0];
+const discoveryCron = cronSource.match(
+  /const modelDiscoveryCron = modelDiscoveryCronEnabled\s*\? new sst\.aws\.Cron\('modelDiscoveryCron', \{[\s\S]*?\n {4}\}\)/
+)?.[0];
 const checkerErrorAlarm = alarmsSource.match(
   /new aws\.cloudwatch\.MetricAlarm\('modelDiscoveryStalenessCheckErrors', \{[\s\S]*?\n {4}\}\);/
 )?.[0];
 
 describe('model discovery no-successful-run alarm', () => {
   it('runs the staleness check independently wherever discovery runs', () => {
-    expect(discoveryCron).toMatch(/enabled: modelDiscoveryCronEnabled/);
+    expect(discoveryCron).toBeDefined();
     expect(stalenessCron).toMatch(/schedule: 'rate\(15 minutes\)'/);
     expect(stalenessCron).toMatch(/job: modelDiscoveryStalenessFunction\.arn/);
-    expect(stalenessCron).toMatch(/enabled: modelDiscoveryCronEnabled/);
     expect(alarmsSource).toMatch(
       /if \(modelDiscoveryCronEnabled\) \{\s*new aws\.cloudwatch\.MetricAlarm\('modelDiscoveryNoSuccessfulRun'/
     );

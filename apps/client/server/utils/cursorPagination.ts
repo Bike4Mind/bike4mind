@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { UnprocessableEntityError } from '@server/utils/errors';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Server half of the public-API pagination convention (b4m-core/common/src/api-contract/CONVENTIONS.md,

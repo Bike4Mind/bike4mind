@@ -48,7 +48,8 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: { touchIfStable: h.touchIfStable },
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
+  dataLakeRepository: { touchIfStable: h.touchIfStable, findByDatalakeTags: vi.fn().mockResolvedValue([]) },
   withTransaction: async (fn: () => Promise<unknown>) => {
     h.tx.push('enter');
     const out = await fn();
@@ -56,7 +57,15 @@ vi.mock('@bike4mind/database', () => ({
     return out;
   },
   dataLakeAccessGrantRepository: {},
-  fabFileRepository: {},
+  fabFileRepository: { setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true) },
+  userRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
+  organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   lakeMembershipDecisionRepository: {},
   lakeMembershipRemovalRepository: {},
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },

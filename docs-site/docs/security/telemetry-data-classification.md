@@ -62,22 +62,56 @@ through the shared consent-gated attribution reader.
 
 Account creation emits a `signup` event to each Overwatch product named by the
 consenting visitor's campaign touches, for products this deployment holds an
-ingest key for. The host product is excluded, because its own funnel already
-counts its signups.
+ingest key for. The host product is excluded from `signup`, because it already
+receives `signup_completed` for every new account from the signup funnel.
 
-A later payment by that account emits a `purchase` event to the same products:
+A later payment by that account emits a `purchase` event to the host product and
+to the same products:
 each paid individual subscription invoice (first charge, renewal, or seat change,
 from the invoice webhook) and each credit pack (from the payment-intent webhook). The
 credited product comes from the touches stored on the user at signup, not from
 the purchase, because a webhook has no browser and a credit-pack payment carries
-no attribution. Organization invoices are excluded because the checkout user's
-signup source is not the organization's acquisition source. Zero-amount invoices,
-refunds, disputes, and synthetic users send nothing. Each event carries the amount
-collected in major units, the currency, whether it was a subscription or credits,
-and the invoice billing reason. It is
+no attribution. The host product's copy needs no touch, so a user with none stored
+still produces it, with no campaign. Organization invoices are excluded because the
+checkout user's signup source is not the organization's acquisition source.
+Zero-amount invoices, refunds, disputes, and synthetic users send nothing. Each
+event carries the amount collected in the currency's major unit (dollars, or whole
+yen), the currency, whether it was a subscription or credits, and the invoice
+billing reason. It is
 keyed on the Stripe invoice or payment intent, so a redelivered webhook does not
 count twice. Overwatch has no purchase stage in its funnel yet, so these events
 are stored as raw events only.
+
+The rest of an individual subscription's lifecycle, and the account's, goes to the
+host product and to the same products in the same way:
+
+- `payment_failed`: a failed subscription invoice (amount due, currency, attempt
+  number, billing reason), once per attempt, or a failed credit-pack payment
+  (amount, currency), once per failed confirmation.
+- `subscription_ended`: from the subscription-deleted webhook, whatever ended it.
+  Carries Stripe's cancellation reason, the plan name and interval, and whole days
+  from the subscription's start to its end.
+- `plan_changed`: the subscription moved to another price. Carries the plan names
+  and intervals on each side and whether it was an upgrade, a downgrade or the same
+  tier, by plan tier.
+- `subscription_cancel_scheduled` and `subscription_cancel_reverted`: a period-end
+  cancellation being set, or withdrawn. Carries the plan name and interval.
+- `account_deleted`: an admin deleted the account. Sent after the deletion
+  commits, from the account as it stood just before it, so like every event here it
+  carries the user's pseudonym, and the host copy carries the stored first-touch
+  campaign. Carries whether the account was a subscriber and whole days since
+  signup. Deleting the account does not erase Overwatch's records keyed by that
+  pseudonym, this event and the account's earlier events included.
+
+Plans are named by plan name and interval, never by Stripe price id. Organization
+subscriptions send none of these. Every copy of these events, and of `purchase`,
+carries `metadata.userAction: false`, because each arrives from a webhook, a worker
+or an admin rather than from the user's own request, and Overwatch would otherwise
+count the user as active on that day. For the same reason, `signup_completed` and
+the other signup-funnel events for an account an admin created carry it too, as do
+`email_verified` and `credits_granted` when an admin verifies an account's email.
+Overwatch also leaves `userAction: false` signups out of its funnel's signup count,
+so an account an admin created is not counted as a signup.
 
 Because the touches were recorded with consent at signup, a purchase is credited
 from them even if the visitor later withdraws cookie consent: the webhook has no
@@ -91,9 +125,10 @@ makes. Nothing in this app or at the ingest end checks it against where the
 visitor actually came from, so anyone who puts `?utm_source=<product>` on a link
 they share can cause a real signup to be credited to that product. This is the
 only place where a client-supplied string selects which product's record is
-written; every other emit sends to a product its caller fixed. Every event
-carries `metadata.attribution: 'self-reported'` so a consumer can identify and
-filter it.
+written; every other emit sends to a product its caller fixed. Every event sent
+to a credited product carries `metadata.attribution: 'self-reported'` so a consumer
+can identify and filter it. The host product's copies carry no such marker: the
+host observed the payment or the change itself.
 
 This stream is directional by owner decision, and it stays directional: it is
 never upgraded into a verified one. Do not use these events, or any Overwatch
@@ -147,9 +182,11 @@ already see the denial.
   invoice's processing and the MongoDB subscription record.
 - The admin subscription API includes acquisition, but the subscription table
   has no dedicated acquisition column.
-- For a missing cross-product purchase, check the user's stored signup acquisition,
-  the source product's ingest key, and the purchase failure warning in analytics logs.
-  Organization invoices do not emit cross-product purchases.
+- For a missing cross-product purchase or lifecycle event, check the user's stored
+  signup acquisition, the source product's ingest key, and the billing event failure
+  warning in analytics logs. Organization subscriptions emit none of them.
+- For one missing from the host product, check the host's own ingest key: its copy
+  needs no stored acquisition.
 
 ## API-key usage log
 
@@ -162,6 +199,19 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Latency        | Response time in milliseconds     | 90 days (TTL index) | Usage stats                                      |
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
+
+## Chat turn timing
+
+Each chat reply records where its wall-clock time went, so a slow or retried reply can be diagnosed from the reply itself. The record holds durations, counts and provider metadata only: no prompt or reply text. It is shown in the reply's Answer diagnosis panel, and a short summary with a copyable turn ID appears under replies that retried, switched model or took a minute or more.
+
+| Data           | Storage                                                                                         | Lifetime             | Purpose                                                                      |
+| -------------- | ----------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------- |
+| Durations      | `turnTiming` on the reply: queue, context build, concurrency wait and total, in ms              | Lives with the reply | Find which phase made a reply slow                                           |
+| Retries        | `turnTiming.retries`: reason, HTTP status, Retry-After, provider request id, delay, model, time | Lives with the reply | Tell provider load from stalls; cite a provider request id in a support case |
+| Model switches | `turnTiming.fallbackHops`: a count                                                              | Lives with the reply | Show that a reply moved to a fallback model                                  |
+| Retry metric   | CloudWatch metric `ChatRetry`, dimensioned by stage, reason and model; no user or reply id      | CloudWatch retention | Retry rate by cause and model                                                |
+
+The record also ships to clients: on the live reply frames and in the `GET /api/v1/quests/{id}` poll body. It is not redacted for people a session is shared with, matching the session message API they can already call, which returns the same fields: the record carries no prompt or reply text, and the model and provider request ids appear there too.
 
 ## Integrations gallery usage
 

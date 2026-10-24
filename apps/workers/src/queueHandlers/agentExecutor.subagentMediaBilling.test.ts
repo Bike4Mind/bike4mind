@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
 import { ImageModels } from '@bike4mind/common';
 
 // Generated media a dispatched subagent produces is paid upstream whether or not the run
@@ -50,7 +55,7 @@ vi.mock('./agentExecutor.subagentToolConfig', async () => {
   return { ...actual, buildSubagentToolConfig: vi.fn().mockReturnValue({}) };
 });
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn().mockReturnValue({}),
   getGeneratedImageStorage: vi.fn().mockReturnValue({}),
 }));
@@ -170,6 +175,8 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.agentRepository, 'listForUser').mockResolvedValue([] as never);
   vi.spyOn(actual.agentRepository, 'listForOrganization').mockResolvedValue([] as never);
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
+  // No model configurations; an unread one fails the run closed (see loadRunnableModels).
+  vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 

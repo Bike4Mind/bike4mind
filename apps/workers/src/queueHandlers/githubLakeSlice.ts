@@ -28,12 +28,12 @@ import {
 import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
 import defineAbilitiesFor from '@server/auth/ability';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import {
   getBlobBytes,
   getRecursiveTree,
   gitHubRateLimitDelaySeconds,
-} from '@server/integrations/github/dataLake/lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import {
   checkLakeFileContent,
   classifyTreeEntry,

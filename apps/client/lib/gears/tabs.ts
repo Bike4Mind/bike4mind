@@ -34,13 +34,16 @@ export const GENERATOR_KEYS: readonly string[] = ['image', 'video', 'music', 'so
  *  one broken out so far; MCP and the chat imports are the obvious next. */
 export const INTEGRATION_KEYS: readonly string[] = ['slack'];
 
+const ADVANCED_DESTINATION_KEYS: readonly string[] = ['hearth'];
+
 interface TabbedGear {
   key: string;
   kind: 'destination' | 'skill';
 }
 
 /** Whether a gear belongs on the Gears page's Getting Started tab. */
-export const isGettingStarted = (gear: TabbedGear) => gear.key === GETTING_STARTED_LEAD || gear.kind === 'destination';
+export const isGettingStarted = (gear: TabbedGear) =>
+  gear.key === GETTING_STARTED_LEAD || (gear.kind === 'destination' && !ADVANCED_DESTINATION_KEYS.includes(gear.key));
 
 /** The gears on each tab, in the order the tab shows them. */
 export function groupGearsByTab<T extends TabbedGear>(gears: readonly T[]): Record<GearsTabKey, T[]> {
@@ -52,7 +55,7 @@ export function groupGearsByTab<T extends TabbedGear>(gears: readonly T[]): Reco
     ],
     features: gears.filter(
       g =>
-        g.kind === 'skill' &&
+        (g.kind === 'skill' || ADVANCED_DESTINATION_KEYS.includes(g.key)) &&
         g.key !== GETTING_STARTED_LEAD &&
         !GENERATOR_KEYS.includes(g.key) &&
         !INTEGRATION_KEYS.includes(g.key)

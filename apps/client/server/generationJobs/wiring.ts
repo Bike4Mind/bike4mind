@@ -56,11 +56,13 @@ import {
   XaiVideoProvider,
   type VideoProvider,
 } from '@bike4mind/utils/videoProviders';
-import { isValidObjectId } from '@server/utils/objectId';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { sendToQueue } from '@server/utils/sqs';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { deliverJobToSlack } from './slackJobDelivery';
+import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 // Must outlive the worker timeout (5 min, infra/queues.ts generationJobQueue) so two workers never overlap on
 // one job, and stay under the queue visibility timeout (6 min).
@@ -264,8 +266,13 @@ const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ ke
   return { s3Key: key };
 };
 
+// Both are read once per job on a long-lived queue host, and decide whether the job debits, so
+// they bypass the process cache (names lists must stay complete under skipCache).
 const getSettings: VideoJobDeps['getSettings'] = async () => {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits', 'videoGeneration'], skipCache: true }
+  );
   return {
     enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
     videoGeneration: getSettingsValue('videoGeneration', settings),
@@ -273,7 +280,10 @@ const getSettings: VideoJobDeps['getSettings'] = async () => {
 };
 
 const getMusicSettings: MusicJobDeps['getSettings'] = async () => {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits', 'musicGeneration'], skipCache: true }
+  );
   return {
     enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
     musicGeneration: getSettingsValue('musicGeneration', settings),
@@ -355,7 +365,14 @@ const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, c
 
 const notify = async (job: IGenerationJobDocument): Promise<void> => {
   const sender = new ClientMessageSender({ connections: Connection }, logger);
-  await sender.sendToClient(job.requestedBy, Resource.websocket.managementEndpoint, toJobUpdate(job));
+  // Independent channels: a websocket failure must not swallow the Slack post, nor the reverse.
+  const results = await Promise.allSettled([
+    sender.sendToClient(job.requestedBy, Resource.websocket.managementEndpoint, toJobUpdate(job)),
+    deliverJobToSlack(job, createSlackJobDeliveryDeps(logger)),
+  ]);
+  for (const result of results) {
+    if (result.status === 'rejected') throw result.reason;
+  }
 };
 
 let videoJobDeps: VideoJobDeps | undefined;

@@ -6,17 +6,24 @@
  * Bills connected time up to the call's last sign of life (voiceLastActivityAt: client heartbeats
  * and provider turns), capped at the hold; a call that never connected costs nothing. A realtime
  * hold stays open for its whole call, so it is only stale past the realtime hold's own window; it
- * keeps at least what its responses billed and pays the open-time floor up to the last frame the
- * server saw. Settles through settleVoiceHold, the same claim-then-refund rule as the end
- * endpoint, so a concurrent end and a second sweep run are both no-ops. Every settlement writes
- * one voice_hold_settled line.
+ * keeps at least what its responses billed and pays the open-time floor up to the sweep (capped at
+ * the hold's window), since its activity markers come only from the client. Settles through
+ * settleVoiceHold, the same claim-then-refund rule as the end endpoint, so a concurrent end and a
+ * second sweep run are both no-ops. Every settlement writes one voice_hold_settled line.
+ *
+ * The hosted handler publishes each run's settled and failed counts, which the
+ * voiceStaleHoldsSettled and voiceHoldSweepFailures alarms in infra/alarms.ts watch. The
+ * self-host twin calls runVoiceHoldSweep directly, so it never waits on a CloudWatch it lacks.
  *
  * Schedule: rate(5 minutes).
  */
+import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { connectDB, sessionRepository } from '@bike4mind/database';
+import { VOICE_METRICS, VOICE_NAMESPACE } from '@bike4mind/infra';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
-import { lastSeenAt, settleVoiceHold } from '@server/voice/settleVoiceHold';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { lastSeenAt, settleVoiceHold } from '@bike4mind/server-utils/voice/settleVoiceHold';
 import { MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { Resource } from 'sst';
 
@@ -55,7 +62,7 @@ export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHo
 
   for (const hold of holds) {
     try {
-      const settlement = await settleVoiceHold(hold, lastSeenAt(hold), 'sweep');
+      const settlement = await settleVoiceHold(hold, lastSeenAt(hold), 'sweep', now);
       if (!settlement.settled) {
         result.alreadySettled++;
         continue;
@@ -73,6 +80,22 @@ export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHo
 }
 
 export async function handler(): Promise<VoiceHoldSweepResult> {
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
-  return runVoiceHoldSweep();
+  const stage = Resource.App.stage;
+  const publish = (settled: number, failed: number) =>
+    emitMetrics(VOICE_NAMESPACE, [
+      { name: VOICE_METRICS.HoldSweepSettled, value: settled, dimensions: { Stage: stage }, unit: StandardUnit.Count },
+      { name: VOICE_METRICS.HoldSweepFailed, value: failed, dimensions: { Stage: stage }, unit: StandardUnit.Count },
+    ]);
+
+  let result: VoiceHoldSweepResult;
+  try {
+    await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
+    result = await runVoiceHoldSweep();
+  } catch (err) {
+    // A run that never reached the holds emits nothing otherwise, and notBreaching reads that as OK.
+    await publish(0, 1);
+    throw err;
+  }
+  await publish(result.settled, result.failed);
+  return result;
 }

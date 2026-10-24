@@ -137,58 +137,58 @@ describe('OrganizationMembers roster controls', () => {
     expectControls({ invite: true, revoke: true });
   });
 
-  it('gives a manager without an admin row Revoke but not Add or Cancel Invite', () => {
-    renderMembers(buildOrg({ managerId: 'viewer' }));
-    expectControls({ invite: false, revoke: true });
-  });
-
-  it('gives an appointed admin with a users[] row Add and Cancel Invite but not Revoke', () => {
+  it('gives a manager (adminUserIds) with a users[] row every control', () => {
     renderMembers(
       buildOrg({
         adminUserIds: ['viewer'],
         users: [{ userId: 'viewer', permissions: [Permission.read] }] as IOrganizationDocument['users'],
       })
     );
-    expectControls({ invite: true, revoke: false });
+    expectControls({ invite: true, revoke: true });
   });
 
-  it('gives a stale appointed admin with no users[] row nothing', () => {
+  // revokeAccess refuses a manager removing another manager (it would edit the Managers list).
+  it('withholds Revoke on another manager card from a manager', () => {
+    renderMembers(
+      buildOrg({
+        adminUserIds: ['viewer', 'm1'],
+        users: [
+          { userId: 'viewer', permissions: [Permission.read] },
+          { userId: 'm1', permissions: [Permission.read] },
+        ] as IOrganizationDocument['users'],
+      })
+    );
+    expect(screen.getByTestId('member-card-m1').getAttribute('data-revoke')).toBe('false');
+    expect(screen.getByTestId('member-card-p1').getAttribute('data-revoke')).toBe('true');
+  });
+
+  it('gives a stale manager entry with no users[] row nothing', () => {
     renderMembers(buildOrg({ adminUserIds: ['viewer'] }));
     expectControls({ invite: false, revoke: false });
   });
 
   // The appointment route could persist an admin row with no permissions; isOrgMember rejects it
-  // before the invite routes reach the admin check.
-  it('gives an appointed admin whose users[] row confers no membership nothing', () => {
+  // before the invite routes reach the admin check. Revoke runs canAdministerOrganization, which -
+  // like isOrgOwnerOrCurrentAdmin - needs only a bare users[] row.
+  it('gives a manager whose users[] row confers no membership Revoke but not Add or Cancel Invite', () => {
     renderMembers(
       buildOrg({
         adminUserIds: ['viewer'],
         users: [{ userId: 'viewer', permissions: [] }] as unknown as IOrganizationDocument['users'],
       })
     );
-    expectControls({ invite: false, revoke: false });
-    expect(screen.queryByTestId('organization-members-seats-card')).toBeNull();
+    expectControls({ invite: false, revoke: true });
+    expect(screen.queryByTestId('organization-members-seats-card')).not.toBeNull();
   });
 
-  it('gives an appointed admin whose users[] row has no permissions field nothing', () => {
+  it('gives a manager whose users[] row has no permissions field Revoke but not Add or Cancel Invite', () => {
     renderMembers(
       buildOrg({
         adminUserIds: ['viewer'],
         users: [{ userId: 'viewer' }] as unknown as IOrganizationDocument['users'],
       })
     );
-    expectControls({ invite: false, revoke: false });
-  });
-
-  it('does not treat an empty managerId as matching an empty viewer id', () => {
-    mocks.viewer = { id: '', isAdmin: false };
-    renderMembers(buildOrg({ managerId: '' }));
-    expectControls({ invite: false, revoke: false });
-  });
-
-  it('does not grant Revoke on a null managerId', () => {
-    renderMembers(buildOrg({ managerId: null } as unknown as Partial<IOrganizationDocument>));
-    expectControls({ invite: false, revoke: false });
+    expectControls({ invite: false, revoke: true });
   });
 
   // The admin panel (admin/OrganizationsTab.tsx) renders this same component for a platform admin.
@@ -209,13 +209,6 @@ describe('OrganizationMembers roster controls', () => {
     renderMembers(buildOrg({ users: [shareUpdateRow('viewer')] as IOrganizationDocument['users'] }));
     expect(screen.queryByTestId('organization-members-add-no-seats-btn')).toBeNull();
     expect(screen.queryByTestId('organization-members-seats-card')).toBeNull();
-  });
-
-  it('shows the seat card, but no Add Member button, to a manager without an admin row', () => {
-    mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
-    renderMembers(buildOrg({ managerId: 'viewer' }));
-    expect(screen.getByTestId('organization-members-seats-card')).toBeTruthy();
-    expect(screen.queryByTestId('organization-members-add-no-seats-btn')).toBeNull();
   });
 
   it('shows the no-seats Add Member button to the owner', () => {

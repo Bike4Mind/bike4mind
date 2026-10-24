@@ -56,7 +56,21 @@ describe('ChatService interrupting a running tool', () => {
         finishNavigation = resolve;
       }),
     back: async () => undefined,
-    snapshot: async () => ({ url: 'http://localhost:3080/app', title: 'App', text: 'late page', truncated: false }),
+    snapshot: async () => ({
+      url: 'http://localhost:3080/app',
+      title: 'App',
+      text: 'late page',
+      truncated: false,
+      model: {
+        url: 'http://localhost:3080/app',
+        title: 'App',
+        capturedAt: '2026-10-24T12:00:00.000Z',
+        blocks: [],
+        actions: [],
+        claims: [],
+        truncated: false,
+      },
+    }),
     click: async () => 'Add',
     scroll: async () => 'Add',
     fill: async () => 'filled',
@@ -73,17 +87,21 @@ describe('ChatService interrupting a running tool', () => {
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-interrupt-')));
-    events = [];
-    streams = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
+    const opened: PassThrough[] = [];
+    streams = opened;
     finishNavigation = undefined;
     finishHung = undefined;
     hungReport = undefined;
     stoppedLoading = 0;
-    post = vi.fn().mockImplementation(() => {
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
     const models: ChatModelOption[] = [{ id: 'test-model', name: 'Test', backend: 'openai' }];
     const browser: BrowserProvider = {
       context: (_sessionId, keepScreenshot) => ({
@@ -115,10 +133,10 @@ describe('ChatService interrupting a running tool', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

@@ -1,6 +1,8 @@
 import { Box, Typography, Link, IconButton, LinearProgress, Chip, Button, Tooltip } from '@mui/joy';
 import { FC, useState } from 'react';
-import { OpenInNew, FileDownload, AttachFile } from '@mui/icons-material';
+import OpenInNew from '@mui/icons-material/OpenInNew';
+import FileDownload from '@mui/icons-material/FileDownload';
+import AttachFile from '@mui/icons-material/AttachFile';
 import { DiscoveredLink } from '@bike4mind/common';
 import axios from 'axios';
 import { toast } from 'sonner';

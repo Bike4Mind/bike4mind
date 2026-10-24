@@ -142,7 +142,8 @@ const updateBodySchema = z.object({
       }),
     ])
     .optional(),
-  useOwnCredits: z.boolean().optional(),
+  // No `useOwnCredits`: the credit source is fixed when `createAgent` funds the agent, so an
+  // update can never flip an agent onto a balance it was not funded with.
   systemPrompt: z.string().optional(),
   lastSystemPromptGeneratedAt: dateParamSchema.optional(),
   // The seven fields below keep the imperative validators in `agentValidation.ts`, which already

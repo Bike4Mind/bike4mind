@@ -9,9 +9,10 @@ import {
   IApiKeyRepository,
   IAdminSettingsRepository,
   type CompletionSource,
+  usdToCreditsExpected,
 } from '@bike4mind/common';
-import { usdToCredits, getSettingsByNames } from '@bike4mind/utils';
-import { getAvailableModels, ApiKeyTable } from '@bike4mind/llm-adapters';
+import { getSettingsByNames } from '@bike4mind/utils';
+import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import { resolveOpenAiBareModelAlias } from '@bike4mind/services/cliCompletions';
@@ -46,6 +47,8 @@ interface SuccessAnalyticsParams extends BaseAnalyticsParams {
   finalCacheWriteTokens?: number;
   /** Per-request usage from the completion frames, when the adapter reports it (see getTurnsCost). */
   finalTurnUsage?: TurnUsage[];
+  /** Credits executeCompletion settled for this completion (its final chunk's creditsUsed); preferred over re-pricing. */
+  finalCreditsUsed?: number;
   hasToolCalls: boolean;
   error?: never;
 }
@@ -58,6 +61,7 @@ interface FailureAnalyticsParams extends BaseAnalyticsParams {
   finalCacheReadTokens?: never;
   finalCacheWriteTokens?: never;
   finalTurnUsage?: never;
+  finalCreditsUsed?: never;
   hasToolCalls?: never;
   modelInfo?: never;
 }
@@ -85,6 +89,7 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
       finalCacheReadTokens,
       finalCacheWriteTokens,
       finalTurnUsage,
+      finalCreditsUsed,
       hasToolCalls,
       db,
     } = params;
@@ -94,14 +99,18 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
       // Get effective API keys (user keys or fallback to admin demo keys)
       const apiKeys = await apiKeyService.getEffectiveLLMApiKeys(userId, { db, getSettingsByNames });
 
-      const models = await getAvailableModels(apiKeys as ApiKeyTable);
+      // Same table executeCompletion builds, so this hits its model-list cache entry instead of evicting it.
+      const models = await getAvailableModels(buildApiKeyTable(apiKeys));
       // Same resolution executeCompletion applies to the request before billing it, so a
       // bare OpenAI alias (e.g. "gpt-4.1") that the completion succeeded on doesn't come
       // back here as "model not found" and log a spurious zero-credit event.
       const resolvedModelId = resolveOpenAiBareModelAlias(body.model);
       const modelInfo = models.find(m => m.id === (resolvedModelId as ChatModels));
 
-      if (modelInfo && finalInputTokens > 0 && finalOutputTokens > 0) {
+      if (finalCreditsUsed !== undefined) {
+        // The settled figure, even when the adapter reported no output tokens.
+        creditsUsed = finalCreditsUsed;
+      } else if (modelInfo && finalInputTokens > 0 && finalOutputTokens > 0) {
         const costInUsd = finalTurnUsage?.length
           ? getTurnsCost(modelInfo, finalTurnUsage)
           : getTextModelCost(
@@ -109,9 +118,11 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
               finalInputTokens,
               finalOutputTokens,
               finalCacheReadTokens ?? 0,
-              finalCacheWriteTokens ?? 0
+              finalCacheWriteTokens ?? 0,
+              finalInputTokens + (finalCacheReadTokens ?? 0) + (finalCacheWriteTokens ?? 0)
             );
-        creditsUsed = usdToCredits(costInUsd); // markup applied here
+        // Settlement is stochastic, so the fallback is its expectation, not a round-up.
+        creditsUsed = usdToCreditsExpected(costInUsd);
       } else if (!modelInfo) {
         // Model not found - log warning but don't fail analytics
         logger.error('[COMPLETION_ANALYTICS] Model not found for credits calculation:', { model: body.model });

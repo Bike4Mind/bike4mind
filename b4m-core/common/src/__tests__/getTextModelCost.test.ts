@@ -204,6 +204,29 @@ describe('getTextModelCost tierBasisTokens', () => {
   it('picks the tier on the given basis while pricing the given counts', () => {
     expect(getTextModelCost(gpt54, 20_000, 0, 0, 0, 300_000)).toBeCloseTo(20_000 * perM(5), 10);
   });
+
+  it('prices a cached long prompt on the tier its whole prompt falls in', () => {
+    // The aggregate fallbacks pass input + cache read + cache write as the basis, which for one
+    // request is exactly what getTurnsCost tiers on.
+    const [input, cacheRead, cacheWrite, output] = [20_000, 250_000, 10_000, 2_000];
+    const cost = getTextModelCost(gpt54, input, output, cacheRead, cacheWrite, input + cacheRead + cacheWrite);
+
+    expect(cost).toBeCloseTo(
+      getTurnsCost(gpt54, [
+        {
+          inputTokens: input,
+          cacheReadInputTokens: cacheRead,
+          cacheCreationInputTokens: cacheWrite,
+          outputTokens: output,
+        },
+      ]),
+      10
+    );
+    expect(cost).toBeCloseTo(
+      input * perM(5) + cacheRead * perM(0.5) + cacheWrite * perM(5) * 1.25 + output * perM(22.5),
+      10
+    );
+  });
 });
 
 describe('cache-read default rate', () => {

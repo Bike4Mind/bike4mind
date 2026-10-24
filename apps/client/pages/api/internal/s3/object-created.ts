@@ -2,14 +2,17 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FabFile, User, adminSettingsRepository, withTransaction } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry } from '@server/s3/utils';
-import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
-import { sendToQueue } from '@server/utils/sqs';
-import { getFilesStorage } from '@server/utils/storage';
+import { isUntrackedFabFileKey } from '@bike4mind/server-utils/s3/untrackedFabFileKey';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
+import { recordLandedObject } from '@server/s3/moderationScan';
+import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
+import { recordRejectedUploadBatch } from '@server/s3/recordRejectedUploadBatch';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
-import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
+import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 import { Resource } from 'sst';
 import type { Context, S3Event } from 'aws-lambda';
@@ -35,7 +38,7 @@ import crypto from 'crypto';
 
 interface MinioS3Record {
   eventTime?: string;
-  s3?: { bucket?: { name?: string }; object?: { key?: string; size?: number } };
+  s3?: { bucket?: { name?: string }; object?: { key?: string; size?: number; eTag?: string } };
 }
 
 /**
@@ -134,42 +137,58 @@ const handler = baseApi({ auth: false }).post(
       }
 
       // Retry/backoff: the notification can beat the metadata write.
-      const metadata = await findWithRetry(() => FabFile.findOne({ filePath: objectKey }), 4, 500);
+      const metadata = await findWithRetry(
+        () =>
+          FabFile.findOne(
+            { filePath: objectKey, $or: [{ deletedAt: null }, { uploadRejectedAt: { $ne: null } }] },
+            null,
+            { includeDeleted: true }
+          ),
+        4,
+        500
+      );
       if (!metadata) {
         req.logger.warn(`Metadata not found for uploaded file: ${objectKey}`);
         continue;
       }
 
       const statusBeforeUpload = metadata.status;
+      const payloadSize = record.s3?.object?.size;
+      const size = metadata.uploadRejectedAt
+        ? 0
+        : typeof payloadSize === 'number' && Number.isFinite(payloadSize) && payloadSize >= 0
+          ? payloadSize
+          : (await getFilesStorage().getMetadata(objectKey)).size;
+      // Unjudged bytes must not go complete; a 500 has MinIO redeliver the event.
+      if (size === undefined) throw new Error(`No object size for ${objectKey}; upload not admitted`);
+
+      // Same measured-size gate as the hosted event (objectCreated.ts), before the row is complete.
+      if (!(await admitLandedUpload(metadata, size, objectKey, req.logger))) {
+        await recordRejectedUploadBatch(metadata, req.logger);
+        continue;
+      }
+
       metadata.status = 'complete';
       await metadata.save();
+
+      // Reconcile against the current stored version before scanning. A failed HEAD or a competing
+      // reconciliation must retry, so an old event cannot reopen a newer terminal verdict.
+      await recordLandedObject(metadata._id, objectKey);
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
 
       // Charged from the stored object's size, never the row's client-claimed fileSize. The
       // storageChargedAt claim makes a redelivery free. A failure must not 500: the row is already
       // complete and a redelivery would enqueue chunking twice.
       try {
-        const payloadSize = record.s3?.object?.size;
-        const size =
-          typeof payloadSize === 'number' && Number.isFinite(payloadSize) && payloadSize >= 0
-            ? payloadSize
-            : (await getFilesStorage().getMetadata(objectKey)).size;
-        if (size === undefined) {
-          req.logger.warn(`No object size for ${objectKey}; storage not charged`);
-        } else {
-          const eventTime = record.eventTime ? new Date(record.eventTime) : undefined;
-          const uploadedAt = eventTime && !isNaN(eventTime.getTime()) ? eventTime : new Date();
-          await withTransaction(async session => {
-            const user = await User.findById(metadata.userId).session(session);
-            // A won claim records `size` as the row's fileSize, so a later refund and the recalc agree.
-            if (
-              user &&
-              (await chargeUploadedObject(metadata._id, user, size, uploadedAt, statusBeforeUpload, session))
-            ) {
-              await user.save({ session });
-            }
-          });
-        }
+        const eventTime = record.eventTime ? new Date(record.eventTime) : undefined;
+        const uploadedAt = eventTime && !isNaN(eventTime.getTime()) ? eventTime : new Date();
+        await withTransaction(async session => {
+          const user = await User.findById(metadata.userId).session(session);
+          // A won claim records `size` as the row's fileSize, so a later refund and the recalc agree.
+          if (user && (await chargeUploadedObject(metadata._id, user, size, uploadedAt, statusBeforeUpload, session))) {
+            await user.save({ session });
+          }
+        });
       } catch (error) {
         req.logger.error(`Failed to charge storage for ${objectKey}: ${error}`);
       }

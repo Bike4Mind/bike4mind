@@ -13,7 +13,7 @@ import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/Se
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 import { FallbackInfoSchema } from './llm';
 import { SystemPromptDetailSchema } from './contextTelemetry';
-import { COMPLETION_TOOL_ERROR_CODES } from './cliCompletions';
+import { ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE, COMPLETION_TOOL_ERROR_CODES } from './cliCompletions';
 import { ChatToolModeSchema } from './promptMeta';
 
 /**
@@ -358,11 +358,18 @@ export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
 });
 
 /**
- * 400 for a `model` the caller cannot use, or a refused tool search request; `errorCode` is absent on the
- * other 400s (e.g. malformed JSON).
+ * 400 for provider-rejected caller input, a `model` the caller cannot use, or a refused tool search
+ * request; `errorCode` is absent on the other 400s (e.g. malformed JSON).
  */
 export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
-  errorCode: z.enum([UNKNOWN_MODEL_ERROR_CODE, ...COMPLETION_TOOL_ERROR_CODES]).optional(),
+  errorCode: z
+    .enum([
+      'invalid_request',
+      UNKNOWN_MODEL_ERROR_CODE,
+      ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
+      ...COMPLETION_TOOL_ERROR_CODES,
+    ])
+    .optional(),
 });
 
 /** @deprecated Use CompletionsBadRequestErrorSchema; kept so the published export does not break. */
@@ -387,8 +394,9 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
 });
 
 /**
- * 403 on the v1 media create routes: the scope refusal above, or an organization-billed API key sent with
- * another billing organization (apps/client/server/billing/resolveMediaBillingOrgId.ts).
+ * 403 on the v1 media create routes and POST /api/v1/agent-executions: the scope refusal above, or an
+ * organization-billed API key sent with another billing organization
+ * (apps/client/server/billing/resolveMediaBillingOrgId.ts).
  */
 export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
   errorCode: z.literal(BILLING_ORGANIZATION_MISMATCH_ERROR_CODE).optional(),

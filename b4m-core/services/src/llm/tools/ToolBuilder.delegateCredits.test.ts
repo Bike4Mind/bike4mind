@@ -54,11 +54,12 @@ const mockDelegation = (model: string, totalCredits = 40) =>
 const buildDelegateTool = () => {
   const toolCreditsMap = new Map<string, number[]>();
   const toolCreditModels = new Set<string>();
+  const recordUsage = vi.fn().mockResolvedValue(undefined);
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
   const deps = {
     user: { id: 'u1', currentCredits: 1_000_000 },
     logger,
-    db: { creditTransactions: {}, usageEvents: { record: vi.fn().mockResolvedValue(undefined) } },
+    db: { creditTransactions: {}, usageEvents: { record: recordUsage } },
     toolCreditsMap,
     toolCreditModels,
     subagentTelemetryData: [],
@@ -89,6 +90,7 @@ const buildDelegateTool = () => {
     delegateTool: delegateTool as unknown as { toolFn: (args: unknown) => Promise<unknown> },
     toolCreditsMap,
     toolCreditModels,
+    recordUsage,
   };
 };
 
@@ -133,12 +135,50 @@ describe('ToolBuilder delegate_to_agent credit attribution', () => {
     expect(resolveAggregateToolModel(toolCreditModels)).toBeUndefined();
   });
 
-  it('contributes nothing for a zero-credit delegation', async () => {
-    mockDelegation('gpt-4.1-nano-not-listed', 0);
-    const { delegateTool, toolCreditModels } = buildDelegateTool();
+  it('records the attribution as a usage event carrying the subagent price stamp', async () => {
+    // The stamp is built in delegateToAgent and handed over by onSubagentCredits; this drives the
+    // whole hop, so dropping the handoff leaves the cost unattributable in the margin report.
+    mockDelegation(PARENT_MODEL);
+    const { delegateTool, recordUsage } = buildDelegateTool();
 
     await delegateTool.toolFn({ task: 'research', agent: 'researcher' });
 
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(recordUsage.mock.calls[0][0]).toMatchObject({
+      model: PARENT_MODEL,
+      priceSource: 'literal',
+      rates: { tierKey: 128_000, input: 0.4, output: 1.6 },
+    });
+  });
+
+  it('contributes nothing for a zero-credit delegation', async () => {
+    mockDelegation('gpt-4.1-nano-not-listed', 0);
+    const { delegateTool, toolCreditsMap, toolCreditModels, recordUsage } = buildDelegateTool();
+
+    await delegateTool.toolFn({ task: 'research', agent: 'researcher' });
+
+    // The zero charge still queues: the row settles the sum of every call.
+    expect(toolCreditsMap.get('delegate_to_agent')).toEqual([0]);
     expect(toolCreditModels.size).toBe(0);
+    // Unresolvable model: no usage event is fabricated.
+    expect(recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('records a zero-credit usage event when the subagent model resolves', async () => {
+    mockDelegation(PARENT_MODEL, 0);
+    const { delegateTool, toolCreditsMap, toolCreditModels, recordUsage } = buildDelegateTool();
+
+    await delegateTool.toolFn({ task: 'research', agent: 'researcher' });
+
+    expect(toolCreditsMap.get('delegate_to_agent')).toEqual([0]);
+    expect(toolCreditModels.size).toBe(0);
+    // A settled 0 is a real call with a real provider cost, not an unbilled one.
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(recordUsage.mock.calls[0][0]).toMatchObject({
+      creditsCharged: 0,
+      costUsd: expect.any(Number),
+      model: PARENT_MODEL,
+    });
+    expect(recordUsage.mock.calls[0][0].costUsd).toBeGreaterThan(0);
   });
 });

@@ -33,7 +33,7 @@ const mockConfig: Record<string, string | undefined> = {
   SECRET_ENCRYPTION_KEY: currentKey,
   SECRET_ENCRYPTION_KEY_PREVIOUS: previousKey,
 };
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({}, { get: (_t, key: string) => mockConfig[key] }),
 }));
 
@@ -64,7 +64,7 @@ vi.mock('@bike4mind/observability', () => {
 
 const mockDispatchIssueToSre = vi.fn().mockResolvedValue({ dispatched: true });
 const mockSyncSreIssueStateFromWebhook = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/integrations/github/sreWebhookDispatch', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => ({
   dispatchIssueToSre: (...args: unknown[]) => mockDispatchIssueToSre(...args),
   syncSreIssueStateFromWebhook: (...args: unknown[]) => mockSyncSreIssueStateFromWebhook(...args),
   SreIssuePayloadSchema: { safeParse: (payload: unknown) => ({ success: true, data: payload }) },
@@ -89,7 +89,7 @@ vi.mock('@server/integrations/github/WebhookAuditLogger', () => ({
   extractWebhookMetadata: vi.fn(() => ({})),
 }));
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: vi.fn(() => ({ failure: vi.fn(), success: vi.fn(), setUserId: vi.fn() })),
   },

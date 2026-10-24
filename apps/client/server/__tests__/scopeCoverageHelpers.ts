@@ -146,7 +146,7 @@ export function extractRequiredScopesGate(
   callPattern: string = 'baseApi\\('
 ): string | undefined {
   const gate = new RegExp(
-    `${callPattern}\\{[^}]*requiredScopes:\\s*(${prefix}_(?:READ|WRITE|READ_OR_WRITE)(?:_OR_GENERATE)?_SCOPES)\\b[^}]*\\}\\)`
+    `${callPattern}\\{[^}]*requiredScopes:\\s*(${prefix}_(?:READ|WRITE|READ_OR_WRITE)(?:_OR_GENERATE|_OR_RELEASE_NOTES)?_SCOPES)\\b[^}]*\\}\\)`
   );
   return stripComments(source).match(gate)?.[1];
 }
@@ -229,3 +229,6 @@ function skipQuotedSpan(source: string, start: number): number {
  * secretRotationsApiKeyScopeCoverage.test.ts.
  */
 export const ADMIN_GATE = /requiredScopes:\s*\[\s*ApiKeyScope\.ADMIN\s*,?\s*\]/;
+
+export const ADMIN_OR_RELEASE_NOTES_WRITE_GATE =
+  /requiredScopes:\s*\[\s*ApiKeyScope\.ADMIN\s*,\s*ApiKeyScope\.RELEASE_NOTES_WRITE\s*,?\s*\]/;

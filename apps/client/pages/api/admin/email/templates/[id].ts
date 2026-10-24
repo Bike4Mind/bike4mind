@@ -1,8 +1,9 @@
 import { emailTemplateRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailCategory } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
+import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 // The spread below reaches `BaseRepository.update`, which builds a `$set` -- so these cast
 // before validators run. `isActive` is Boolean-typed (throws `CastError kind='Boolean'` on 2,
@@ -83,6 +84,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       ...(isActive !== undefined && { isActive }),
     });
 
+    await recordAdminActionFromRequest(req, {
+      action: 'email.template.updated',
+      target: { kind: 'settings', id, displayName: updated?.name ?? existing.name },
+      summary: `updated email template ${updated?.name ?? existing.name}`,
+      details: { updatedFields: definedKeys(parsedBody.data) },
+    });
+
     return res.json(updated);
   })
   .delete(async (req, res) => {
@@ -98,6 +106,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     await emailTemplateRepository.delete(id);
+
+    await recordAdminActionFromRequest(req, {
+      action: 'email.template.deleted',
+      target: { kind: 'settings', id, displayName: existing.name },
+      summary: `deleted email template ${existing.name}`,
+      details: { slug: existing.slug, category: existing.category },
+    });
 
     return res.json({ success: true });
   });

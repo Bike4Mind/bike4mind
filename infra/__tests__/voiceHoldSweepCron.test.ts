@@ -19,20 +19,27 @@ const cut = (source: string, start: string, end: string) => {
 };
 
 describe('voiceHoldSweep cron', () => {
-  const cron = cut(CRON, "const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep'", '\n});');
+  const cron = cut(CRON, 'const voiceHoldSweepCron = runsScheduledJobs', '\n  : undefined;');
 
   it('runs the workers sweep handler every 5 minutes in the VPC, in production and dev', () => {
     expect(cron).toMatch(/schedule:\s*'rate\(5 minutes\)'/);
     expect(cron).toMatch(/handler:\s*'apps\/workers\/src\/cron\/voiceHoldSweep\.handler'/);
     expect(cron).toMatch(/vpc:\s*lambdaVpc/);
     expect(cron).toMatch(/link:\s*\[\.\.\.allSecrets\]/);
-    expect(cron).toMatch(/enabled:\s*\['production',\s*'dev'\]\.includes\(\$app\.stage\)/);
+    expect(cron).toMatch(/retries:\s*0/);
+    expect(cron).toMatch(/=\s*runsScheduledJobs\s*\?\s*new sst\.aws\.Cron\(/);
   });
 
   it('times out before the next run starts', () => {
     const timeout = cron.match(/timeout:\s*'(\d+) minutes'/);
     expect(timeout).not.toBeNull();
     expect(Number(timeout?.[1])).toBeLessThan(5);
+  });
+
+  // Without the grant every PutMetricData is denied and swallowed, so the stale-hold alarms never
+  // see a datapoint and stay OK forever.
+  it('may publish the metrics the stale-hold alarms watch', () => {
+    expect(cron).toMatch(/actions:\s*\['cloudwatch:PutMetricData'\]/);
   });
 
   it('keeps the self-host twin on the same interval', () => {

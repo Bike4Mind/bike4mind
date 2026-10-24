@@ -49,6 +49,14 @@ describe('createFabFileOnServerWithUpload PUT routing', () => {
     expect(axiosPut).toHaveBeenCalledWith('https://s3.amazonaws.com/b/x?X-Amz=1', fakeFile, expect.anything());
     expect(apiPut).not.toHaveBeenCalled();
   });
+
+  it('declares the byte length it uploads, whatever size the caller passed', async () => {
+    apiPost.mockResolvedValue({ data: { id: 'ff1', presignedUrl: '/api/files/ff1/upload', filePath: 'x.txt' } });
+
+    await createFabFileOnServerWithUpload({ fileSize: 999 } as CreateFabFileRequestInputType, fakeFile);
+
+    expect(apiPost.mock.calls[0][1]).toMatchObject({ fileSize: 11 });
+  });
 });
 
 describe('moderateFabFileNow', () => {

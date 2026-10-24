@@ -1,6 +1,6 @@
 import { FabFile } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
+import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 
 // A scan finishes in seconds, so a row still awaiting moderation past this is stranded, not

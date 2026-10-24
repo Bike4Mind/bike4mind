@@ -4,10 +4,8 @@
  * covers the arguments, which the helper cannot check for itself and which a reader cannot infer
  * from a green unit suite.
  *
- * The load-bearing one is the holder: `userId` must be the SESSION OWNER and `requesterId` the
- * caller. Both are strings on the same request, so swapping them type-checks, passes every unit
- * test, and silently gates the wrong balance in both directions - a broke requester blocking a
- * funded owner's summary, and a broke owner's work billed against a funded requester.
+ * The load-bearing one is the holder: `userId` must be the CALLER, the payer the queued job bills,
+ * never the session owner on a sharee's behalf.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -77,13 +75,12 @@ describe('session operational credit pre-flight wiring', () => {
   });
 
   describe('POST /api/sessions/[id]/tag', () => {
-    it('bills the session owner and names the requester, sized to the single tag it queues', async () => {
+    it('bills the requester, not the session owner, sized to the single tag it queues', async () => {
       await run(tagHandler);
 
       expect(mockAssertCredits).toHaveBeenCalledWith(
         expect.objectContaining({
-          userId: OWNER_ID,
-          requesterId: REQUESTER_ID,
+          userId: REQUESTER_ID,
           operationCount: 1,
           operation: 'session tagging',
         })
@@ -100,13 +97,21 @@ describe('session operational credit pre-flight wiring', () => {
     it('names the requester on the queued job so the write re-checks their access', async () => {
       await run(tagHandler);
 
-      expect(mockPublishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: REQUESTER_ID });
+      expect(mockPublishTag).toHaveBeenCalledWith({
+        sessionId: SESSION_ID,
+        requesterId: REQUESTER_ID,
+        payerId: REQUESTER_ID,
+      });
     });
 
-    it('names no requester for an admin, so the job re-checks as the owner', async () => {
+    it('names no requester for an admin, so the job re-checks as the owner, but bills the admin', async () => {
       await run(tagHandler, { id: REQUESTER_ID, isAdmin: true });
 
-      expect(mockPublishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: undefined });
+      expect(mockPublishTag).toHaveBeenCalledWith({
+        sessionId: SESSION_ID,
+        requesterId: undefined,
+        payerId: REQUESTER_ID,
+      });
     });
 
     it('checks credits before publishing, not after', async () => {
@@ -119,13 +124,12 @@ describe('session operational credit pre-flight wiring', () => {
   describe('POST /api/sessions/[id]/summary', () => {
     // Summarize publishes with `callTagging`, so it must be priced at the summary PLUS the tag it
     // cascades to - pricing it at 1 would under-charge every manual summary on the platform.
-    it('bills the session owner for both the summary and the tag it cascades to', async () => {
+    it('bills the requester, not the session owner, for both the summary and the tag it cascades to', async () => {
       await run(summaryHandler);
 
       expect(mockAssertCredits).toHaveBeenCalledWith(
         expect.objectContaining({
-          userId: OWNER_ID,
-          requesterId: REQUESTER_ID,
+          userId: REQUESTER_ID,
           operationCount: 2,
           operation: 'session summarization',
         })
@@ -150,13 +154,17 @@ describe('session operational credit pre-flight wiring', () => {
     it('names the requester on the queued job so the write re-checks their access', async () => {
       await run(summaryHandler);
 
-      expect(mockPublishSummarize).toHaveBeenCalledWith(expect.objectContaining({ requesterId: REQUESTER_ID }));
+      expect(mockPublishSummarize).toHaveBeenCalledWith(
+        expect.objectContaining({ requesterId: REQUESTER_ID, payerId: REQUESTER_ID })
+      );
     });
 
-    it('names no requester for an admin, so the job re-checks as the owner', async () => {
+    it('names no requester for an admin, so the job re-checks as the owner, but bills the admin', async () => {
       await run(summaryHandler, { id: REQUESTER_ID, isAdmin: true });
 
-      expect(mockPublishSummarize).toHaveBeenCalledWith(expect.objectContaining({ requesterId: undefined }));
+      expect(mockPublishSummarize).toHaveBeenCalledWith(
+        expect.objectContaining({ requesterId: undefined, payerId: REQUESTER_ID })
+      );
     });
   });
 });

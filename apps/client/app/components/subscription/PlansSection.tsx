@@ -10,7 +10,10 @@ import {
   resolveSubscriptionSource,
   SubscriptionSource,
 } from '@client/lib/subscriptions/types';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
+import {
+  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
+  TEAM_PLAN_UNAVAILABLE_MESSAGE,
+} from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
 import { Box, Button, Skeleton, Stack, Tab, tabClasses, TabList, Tabs, Tooltip, Typography } from '@mui/joy';
@@ -22,7 +25,7 @@ import PlanCard from './PlanCard';
 import { isPopularPlan } from './isPopularPlan';
 import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
-import { useAnswerCostReference } from '@client/app/hooks/useAnswerCostReference';
+import { useSelectedModelAnswerCost } from '@client/app/hooks/useSelectedModelAnswerCost';
 import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
 
 // Bullets, credits and copy come from the shared plan table so this section and the server-side plan
@@ -51,7 +54,7 @@ export const PlansSectionSkeleton = () => (
 );
 
 /** Plan cards for the Billing modal: Professional for individuals, Team for businesses. */
-export const PlansSection = () => {
+export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?: () => void }) => {
   const { t } = useTranslation();
   const [audience, setAudience] = useState<PlanAudience>(PlanAudience.Personal);
   // The starter-credits line is only true while sign-ups are actually granted something.
@@ -96,7 +99,7 @@ export const PlansSection = () => {
   // Multiplied in integer cents, then converted once, so a whole-dollar total stays an integer ("$70").
   const teamPlanMinimumPrice = teamSeatPrice === undefined ? undefined : (teamSeatPrice * teamMinSeats) / 100;
   const teamPlanCredits = teamMinSeats * teamCreditsPerSeat;
-  const answerCostReference = useAnswerCostReference();
+  const answerCost = useSelectedModelAnswerCost();
 
   const subscriptionPlans: SubscriptionPlanDetail[] = useMemo(
     () => [
@@ -221,7 +224,7 @@ export const PlansSection = () => {
                 key={plan.priceId}
                 name={plan.name}
                 credits={plan.credits}
-                answersEstimate={formatAnswersEstimate(plan.credits, answerCostReference)}
+                answersEstimate={formatAnswersEstimate(plan.credits, answerCost)}
                 description={plan.description}
                 price={centsToDollars(priceMap?.[plan.priceId])}
                 interval={plan.interval}
@@ -238,6 +241,7 @@ export const PlansSection = () => {
                     <SubscribeButton
                       priceId={plan.priceId}
                       planName={plan.name}
+                      onSubscriptionChanged={onSubscriptionChanged}
                       cancellableSubscriptions={cancellableSubscriptions}
                     />
                   </Stack>
@@ -254,7 +258,7 @@ export const PlansSection = () => {
           description="Collaborative AI workspace with shared resources and advanced project management."
           price={teamPlanMinimumPrice}
           credits={teamPlanCredits}
-          answersEstimate={formatAnswersEstimate(teamPlanCredits, answerCostReference)}
+          answersEstimate={formatAnswersEstimate(teamPlanCredits, answerCost)}
           interval="month"
           isFeatured
           features={[

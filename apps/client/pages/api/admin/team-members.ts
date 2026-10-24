@@ -1,7 +1,13 @@
 import { internalTeamMemberRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { ApiKeyScope, InternalTeamMemberSchema } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import {
+  ApiKeyScope,
+  InternalTeamMemberSchema,
+  internalTeamMemberListResponseSchema,
+  internalTeamMemberResponseSchema,
+} from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { z } from 'zod';
 
 const TeamMemberCreateSchema = InternalTeamMemberSchema.omit({ isActive: true }).extend({
@@ -28,7 +34,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       ? await internalTeamMemberRepository.find({}, { sort: { name: 1 } })
       : await internalTeamMemberRepository.findAllActive();
 
-    return res.json(members);
+    return respond(res, internalTeamMemberListResponseSchema, members);
   })
   .post(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);
@@ -53,7 +59,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       isActive: payload.isActive ?? true,
     });
 
-    return res.status(201).json(created);
+    return respond(res, internalTeamMemberResponseSchema, created, 201);
   })
   .put(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);
@@ -72,7 +78,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError('Team member not found.');
     }
 
-    return res.json(updated);
+    return respond(res, internalTeamMemberResponseSchema, updated);
   })
   .delete(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);

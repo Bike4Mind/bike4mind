@@ -1,6 +1,8 @@
 import React from 'react';
 import { Box, Chip, CircularProgress, Sheet, Stack, Typography, useTheme } from '@mui/joy';
-import { History as HistoryIcon, Lock, Warning } from '@mui/icons-material';
+import HistoryIcon from '@mui/icons-material/History';
+import Lock from '@mui/icons-material/Lock';
+import Warning from '@mui/icons-material/Warning';
 import { useGetAllRecentSecurityEvents } from '@client/app/hooks/data/admin';
 import type { UserSecurityEvent, SuspiciousPatternSummary } from '@client/app/hooks/data/admin';
 import type { IAuthFailLogDocument } from '@bike4mind/database';

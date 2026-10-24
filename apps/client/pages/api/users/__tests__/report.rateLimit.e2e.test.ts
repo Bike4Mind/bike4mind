@@ -27,7 +27,7 @@ const mockRefs = vi.hoisted(() => ({
   generateDailyReport: vi.fn().mockResolvedValue({ rows: [] }),
 }));
 
-vi.mock('@server/services/gears/toolGearObserver', () => ({ registerToolGearObserver: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/gears/toolGearObserver', () => ({ registerToolGearObserver: vi.fn() }));
 vi.mock('@server/middlewares/logging', () => ({
   logging: (req: Record<string, unknown>, _res: unknown, next: () => void) => {
     const logger: Record<string, unknown> = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -51,7 +51,7 @@ vi.mock('@server/auth/auth', () => ({
 vi.mock('@server/analytics/analyticsMiddleware', () => ({
   analyticsMiddleware: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%', STAGE: 'test' },
   isDevelopment: () => true,
 }));

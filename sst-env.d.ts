@@ -317,6 +317,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "MEMORY_KEY_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "SECRET_ENCRYPTION_KEY": {
       "type": "sst.sst.Secret"
       "value": string
@@ -377,18 +381,9 @@ declare module "sst" {
       "arn": string
       "type": "sst.aws.SnsTopic"
     }
-    "SlackEventBus": {
-      "arn": string
-      "name": string
-      "type": "sst.aws.Bus"
-    }
     "SlackQuestProcessor": {
       "name": string
       "type": "sst.aws.Function"
-    }
-    "WHATS_NEW_DISTRIBUTION_URL": {
-      "type": "sst.sst.Secret"
-      "value": string
     }
     "YOUTUBE_API_KEY": {
       "type": "sst.sst.Secret"
@@ -773,10 +768,6 @@ declare module "sst" {
       "managementEndpoint": string
       "type": "sst.aws.ApiGatewayWebSocket"
       "url": string
-    }
-    "whatsNewDistributionId": {
-      "type": "sst.sst.Linkable"
-      "value": string
     }
     "whatsNewGenerationQueue": {
       "type": "sst.aws.Queue"

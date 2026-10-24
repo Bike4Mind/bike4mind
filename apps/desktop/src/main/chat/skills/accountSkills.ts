@@ -68,6 +68,8 @@ export function accountSkillsProvider(auth: SkillsAuth, userData: string): Remot
       key,
       source: new RemoteSkillSource(boundedClient(api), {
         cacheFilePath: join(userData, 'remote-skills', `${key}.json`),
+        // Kept, and run wrapped as untrusted by expandSkill.
+        includeImports: true,
       }),
     };
     return last;

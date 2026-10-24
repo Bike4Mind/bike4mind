@@ -60,12 +60,14 @@ import {
   OpenaiModerationsService,
   TiktokenTokenizer,
   usdToCredits,
+  usdToCreditsStochastic,
   UnprocessableEntityError,
   OpenAIImageService,
   BFLImageService,
   XAIImageService,
   GeminiImageService,
   ImageEditResponse,
+  ImageModerationBlockedError,
   BaseStorage,
   getSettingsByNames,
   downloadImageAsBuffer,
@@ -94,7 +96,7 @@ import { CostInput } from './imageCostCalculator/types';
 import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
-import { startQuestHeartbeat } from './questHeartbeat';
+import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 
 /**
  * The tier a GPT-Image request is both billed at and rendered at: standard -> medium,
@@ -182,7 +184,12 @@ interface IImageGenerationServiceOptions {
    * Wiring this lets image-only sessions accumulate long-term context just like chat sessions -
    * the resolver in `resolveImagePrompt` then has more than the last 6 turns to ground on.
    */
-  invokeSummarizeSession?: (sessionId: string, trigger: PersistedSessionSummaryTrigger) => Promise<void>;
+  invokeSummarizeSession?: (
+    sessionId: string,
+    trigger: PersistedSessionSummaryTrigger,
+    /** The image requester, who pays for the summary even on a session they only share. */
+    payerId: string
+  ) => Promise<void>;
   /** Lambda function name for image processing (from SST Resource.ImageProcessor.name) */
   imageProcessorLambdaName?: string;
   /** Checks a generated image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
@@ -249,7 +256,7 @@ export class ImageGenerationService {
    * one indexed quest count (or zero when throttled). Errors are logged and never propagate -
    * summarization is best-effort and must not affect the image-gen response.
    */
-  private async maybeSummarizeAfterImage(sessionId: string, logger: Logger): Promise<void> {
+  private async maybeSummarizeAfterImage(sessionId: string, payerId: string, logger: Logger): Promise<void> {
     if (!this.invokeSummarizeSession) return;
     const session = await this.db.sessions.findById(sessionId);
     if (!session) {
@@ -260,7 +267,7 @@ export class ImageGenerationService {
     const decision = await shouldSummarizeSession(session, { db: this.db, logger });
     if (decision[0]) {
       logger.info(`Triggering notebook summarization from image-gen for session ${sessionId}`);
-      await this.invokeSummarizeSession(sessionId, decision[1]);
+      await this.invokeSummarizeSession(sessionId, decision[1], payerId);
     }
   }
 
@@ -558,7 +565,7 @@ export class ImageGenerationService {
       );
     }
 
-    // usdCost returned only for usage-event analytics; billing still uses requiredCredits.
+    // requiredCredits only gates the request (rounded up); the final debit settles usdCost stochastically.
     return { requiredCredits, usdCost: usdCost * n + inputUsd };
   }
 
@@ -835,22 +842,12 @@ export class ImageGenerationService {
 
     const quest = await this.db.quests.findById(questId);
     if (!quest) throw new NotFoundError('Quest not found');
+    // A duplicate delivery of an already-settled job must not flip it back to running.
+    if (isSettledQuestStatus(quest.status)) {
+      logger.warn('Image generation skipped: quest already settled', { questId, status: quest.status });
+      return;
+    }
     quest.status = 'running';
-
-    // Fetch user and organization in parallel
-    const [user, organization] = await Promise.all([
-      this.db.users.findById(userId),
-      organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
-    ]);
-    if (!user) throw new NotFoundError('User not found');
-
-    // Owner-wide lake access for scoping the input-image lookup: a lake-only image the workbench
-    // admitted must still resolve here. Absent resolver (or a resolution outage) degrades to
-    // owner/share/global-read only - never widens, never fails the run.
-    const lakeAccess = this.resolveLakeAccess ? await this.resolveLakeAccess(user, logger) : undefined;
-
-    const settings = await getSettingsMap(this.db);
-    const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
     const parseQuestToStreamPayload = (quest: IChatHistoryItemDocument) => {
       return {
@@ -874,6 +871,23 @@ export class ImageGenerationService {
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-heartbeat');
+
+      // Fetch user and organization in parallel
+      const [user, organization] = await Promise.all([
+        this.db.users.findById(userId),
+        organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
+      ]);
+      if (!user) throw new NotFoundError('User not found');
+
+      // Owner-wide lake access for scoping the input-image lookup: a lake-only image the workbench
+      // admitted must still resolve here. Absent resolver (or a resolution outage) degrades to
+      // owner/share/global-read only - never widens, never fails the run.
+      const lakeAccess = this.resolveLakeAccess ? await this.resolveLakeAccess(user, logger) : undefined;
+
+      // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
+      // and this host may outlive the admin's write to either.
+      const settings = await getSettingsMap(this.db, { skipCache: true });
+      const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
       const apiKeyTable = await getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames });
       const models = await getAvailableModels(apiKeyTable);
@@ -909,8 +923,6 @@ export class ImageGenerationService {
         quest: parseQuestToStreamPayload(quest),
         statusMessage: 'Preparing to paint...',
       });
-
-      const settings = await getSettingsMap(this.db);
 
       if (getSettingsValue('ModerationEnabled', settings)) {
         this.addStatusToQuest(quest, 'Checking prompt...', userId);
@@ -1449,7 +1461,14 @@ export class ImageGenerationService {
             incidents: this.db.imageModerationIncidents,
             buffer,
             mimeType: `image/${fileType?.ext ?? 'png'}`,
-            incidentMeta: { userId, sessionId: quest.sessionId, questId, provider: modelInfo.backend, model },
+            incidentMeta: {
+              userId,
+              sessionId: quest.sessionId,
+              questId,
+              provider: modelInfo.backend,
+              model,
+              surface: 'generation',
+            },
             logger,
           });
 
@@ -1517,6 +1536,18 @@ export class ImageGenerationService {
         totalResponseTime,
       });
 
+      // Per-image prices are exact, so the final debit is the unbiased draw on usageCostUsd
+      // (may be 0), replacing the rounded-up pre-flight figure.
+      const creditTransactions = this.db.creditTransactions;
+      const settlement =
+        adminSettingsEnforceCredits &&
+        typeof quest.creditsUsed === 'number' &&
+        Number.isFinite(quest.creditsUsed) &&
+        creditTransactions
+          ? { creditTransactions, credits: usdToCreditsStochastic(usageCostUsd) }
+          : undefined;
+      if (settlement) quest.creditsUsed = settlement.credits;
+
       await this.db.quests.update({
         id: quest.id,
         reply: quest.reply,
@@ -1533,7 +1564,7 @@ export class ImageGenerationService {
         await this.invokeSessionAutoNaming(sessionId, userId);
       }
 
-      this.maybeSummarizeAfterImage(sessionId, logger).catch(err =>
+      this.maybeSummarizeAfterImage(sessionId, userId, logger).catch(err =>
         logger.error('Error in fire-and-forget image-gen summarize check:', err)
       );
 
@@ -1556,31 +1587,28 @@ export class ImageGenerationService {
         statusMessage: null,
       });
 
-      // Deduct credits after successful generation
-      if (
-        adminSettingsEnforceCredits &&
-        typeof quest.creditsUsed === 'number' &&
-        Number.isFinite(quest.creditsUsed) &&
-        !!this.db.creditTransactions
-      ) {
-        await deductCreditsWithOrgSupport(
-          {
-            type: 'image_generation_usage',
-            user,
-            organization,
-            credits: quest.creditsUsed,
-            sessionId,
-            questId,
-            model,
-          },
-          {
-            db: {
-              creditTransactions: this.db.creditTransactions,
-              users: this.db.users,
-              organizations: this.db.organizations,
+      // Deduct credits after successful generation. A zero draw writes no ledger row; the usage event still lands.
+      if (settlement) {
+        if (settlement.credits > 0) {
+          await deductCreditsWithOrgSupport(
+            {
+              type: 'image_generation_usage',
+              user,
+              organization,
+              credits: settlement.credits,
+              sessionId,
+              questId,
+              model,
             },
-          }
-        );
+            {
+              db: {
+                creditTransactions: settlement.creditTransactions,
+                users: this.db.users,
+                organizations: this.db.organizations,
+              },
+            }
+          );
+        }
 
         // Dual-write usage event: analytics only, never billing. Awaited because a write still in
         // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
@@ -1604,7 +1632,7 @@ export class ImageGenerationService {
             cacheWriteTokens: 0,
             units: billedN,
             costUsd: usageCostUsd,
-            creditsCharged: quest.creditsUsed,
+            creditsCharged: settlement.credits,
             status: 'ok',
             latencyMs: Date.now() - startTime,
           })
@@ -1635,7 +1663,12 @@ export class ImageGenerationService {
         )
       );
     } catch (error) {
-      logger.error('Error processing image generation:', error);
+      if (error instanceof ImageModerationBlockedError) {
+        // The user's prompt was refused: expected, so keep it out of the error-level Slack alerts.
+        logger.warn('Image generation blocked by content policy:', { requestId: error.requestId });
+      } else {
+        logger.error('Error processing image generation:', error);
+      }
       this.addStatusToQuest(quest, `Error: ${(error as Error).message}`, userId);
       quest.reply = (error as Error).message;
       quest.type = 'error';

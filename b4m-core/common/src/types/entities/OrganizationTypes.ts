@@ -38,10 +38,6 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * The user ID of the owner of the organization
    */
   userId: string;
-  /**
-   * The user ID of the team manager (optional, separate from billing owner)
-   */
-  managerId?: string | null;
   userDetails: Array<IUserDetails> | null;
   logoFileId?: string | null; // File ID of the organization's logo
 
@@ -49,8 +45,8 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   logo?: IAppFileDocument | null;
   stripeCustomerId?: string | null;
 
-  /** Cumulative storage ceiling in decimal MB; unset means DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
-  storageLimit?: number;
+  /** Cumulative storage ceiling in decimal MB; unset or null means DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  storageLimit?: number | null;
 
   /**
    * Bytes held by files this org OWNS (FabFile.organizationId), whoever uploaded them. Unset reads
@@ -83,8 +79,8 @@ export interface IOrganizationDocument extends IOrganization, IShareableDocument
  * The org ACL - billing owner plus `users[]` rows granting read/write, the predicate behind
  * `findMembershipOrgIds` - is who the ORG says its members are. The stamp population is who
  * org-stamped content actually names: `Feedback.organizationId` is copied from the author's own
- * `User.organizationId` pointer at write time, never from `users[]`. A manager listed only in
- * `managerId`, an appointed org admin, or a seat whose ACL row lags therefore authors org-stamped
+ * `User.organizationId` pointer at write time, never from `users[]`. A manager without a member row
+ * or a seat whose ACL row lags therefore authors org-stamped
  * rows while matching no ACL row, and an ACL-derived `$in` drops those rows with nothing to show
  * for it. Callers scope on the union and surface the two one-sided lists rather than quietly
  * picking a population.
@@ -172,7 +168,8 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   ): Promise<IOrganizationDocument | null>;
 
   /**
-   * IDs of every organization the user administers (billing owner or manager).
+   * IDs of every organization the user administers: billing owner, or a current manager (an
+   * `adminUserIds` entry with a `users[]` row) - the set `canAdministerOrganization` admits.
    *
    * @param userId - The user ID
    * @returns Bare list of organization IDs, suitable for an `$in` filter
@@ -191,8 +188,7 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
 
   /**
    * IDs of every organization whose plan applies to the user: everything `findMembershipOrgIds`
-   * returns PLUS orgs where the user is the manager (`managerId`) or an appointed admin
-   * (`adminUserIds`) without a member row. For plan/entitlement resolution ONLY - never feed it
+   * returns PLUS orgs where the user is a manager (`adminUserIds`) without a member row. For plan/entitlement resolution ONLY - never feed it
    * into data access (lake scope, `AccessContext.organizationIds`).
    */
   findPlanHolderOrgIds(userId: string): Promise<string[]>;
@@ -204,10 +200,10 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   findMemberUserIds(organizationId: string): Promise<OrgMemberPopulation>;
 
   /**
-   * IDs of every organization where the user holds admin RIGHTS: billing owner (`userId`), team
-   * manager (`managerId`), OR an appointed org admin (`adminUserIds`). Broader than
-   * `findIdsAdministeredBy` (which omits appointed admins) - deliberately a separate method so its
-   * existing consumers keep their narrower semantics. This is the org-admin set data-lake management
+   * IDs of every organization where the user holds admin RIGHTS: billing owner (`userId`) OR a
+   * manager (`adminUserIds`), with or without a `users[]` row. Broader than `findIdsAdministeredBy`
+   * (which also requires the row) - deliberately a separate method so its consumers keep their own
+   * semantics. This is the org-admin set data-lake management
    * consults: an org admin may manage any lake scoped to that org (see `canManageLake`). Returns a
    * bare id list, suitable for an `$in` filter or membership test.
    */
@@ -232,7 +228,7 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    */
   ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
 
-  /** Remove a member from users/userDetails/adminUserIds and vacate managerId if theirs (one targeted, idempotent update). */
+  /** Remove a member from users/userDetails/adminUserIds (one targeted, idempotent update). */
   removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**

@@ -80,12 +80,14 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: h.storageDelete }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ delete: h.storageDelete }),
+}));
 vi.mock('@server/utils/auditLog', () => ({
   logAuditEvent: h.logAuditEvent,
   DataLakeAuditEvents: { LAKE_DOCUMENT_PURGED: 'LAKE_DOCUMENT_PURGED' },
 }));
-vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags', () => ({
   recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
 }));
 vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ shredMemoryFromSource: h.shredMemoryFromSource }));
@@ -109,6 +111,7 @@ const RECEIPT = {
   storageObjectDeleted: true,
   storageObjectsTotal: 1,
   storageObjectsRemaining: 0,
+  heldForModeration: false,
   retrievalIndexOutcome: 'collocated',
   verified: true,
   purgedAt: '2026-01-01T00:00:00.000Z',

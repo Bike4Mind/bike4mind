@@ -13,7 +13,7 @@ import {
 } from '@bike4mind/common';
 import { canSeeListing, findListing, memberOrgIdsFor, skillContentHash } from '@server/skillMarket/market';
 import { validateSkillName } from '@server/utils/skillValidation';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 
 const bodySchema = z.object({
   token: z.string().max(64).optional(),
@@ -91,8 +91,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
       if (!target || target.userId !== userId || target.importedFrom?.listingId !== String(listing.id)) {
         throw new NotFoundError('Imported copy not found');
       }
-      // A global copy reaches everyone, and the listing's bar can be lower than Public (an org or
-      // unlisted version auto-approves at the `review` tier). Content changes to a global skill go
+      // A global copy reaches everyone; legacy org/unlisted versions may have auto-approved at
+      // the `review` tier. Content changes to a global skill go
       // through `scanGlobalSkillUpdate` on PUT instead; see `globalSkillScanFor` in skillAccess.ts.
       if ((target.isGlobalRead || target.isGlobalWrite) && !req.user!.isAdmin) {
         throw new BadRequestError(
@@ -104,7 +104,17 @@ const handler = baseApi({ auth: 'jwtOnly' })
           code: 'local_changes',
         });
       }
-      skill = await skillRepository.update({ id: target.id, ...content }, { new: true });
+      // Both writes must notice a concurrent change, or unscanned content can land on a global skill:
+      // into a global copy (super-admin only) the write is guarded on the read `__v`, so it and a
+      // racing scanned PUT can't combine; into a non-global copy it 409s if the copy went global.
+      const isGlobal = Boolean(target.isGlobalRead || target.isGlobalWrite);
+      skill = isGlobal
+        ? await skillRepository.updateGuarded(
+            { id: target.id, __v: (target as { __v?: number }).__v, ...content } as Partial<ISkillDocument>,
+            { new: true }
+          )
+        : await skillRepository.updateIfNonGlobal({ id: target.id, ...content }, { new: true });
+      if (!skill) throw new NotFoundError('Imported copy not found');
     } else {
       const name = body.name !== undefined ? validateSkillName(body.name) : snap.name;
       try {

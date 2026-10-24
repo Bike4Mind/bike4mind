@@ -123,6 +123,7 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'aws.cloudwatch.MetricAlarm', reason: 'Alarm only; delivery is inventoried at the topic subscription.' },
   { shape: 'aws.cloudwatch.Dashboard', reason: 'Observability view, no compute.' },
   { shape: 'aws.cloudwatch.LogMetricFilter', reason: 'Metric extraction feeding alarms, no compute.' },
+  { shape: 'aws.ssm.Parameter', reason: 'Secret storage for ECS task secrets, no compute.' },
   { shape: 'aws.cloudwatch.LogGroup', reason: 'Log storage, no compute.' },
   { shape: 'aws.lambda.Permission', reason: 'IAM grant for an inventoried trigger.' },
   { shape: 'aws.sqs.QueuePolicy', reason: 'IAM grant for an inventoried queue.' },

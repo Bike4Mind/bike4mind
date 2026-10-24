@@ -41,11 +41,11 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/resolveActiveOrg', () => ({
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({
   resolveActiveOrg: async (_req: unknown, orgId?: string) => {
     if (!orgId?.trim()) return undefined;
     if (orgId === 'foreign-org') {
-      const { ForbiddenError } = await import('@server/utils/errors');
+      const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
       throw new ForbiddenError('You are not a member of the selected organization.');
     }
     return orgId;
@@ -74,8 +74,8 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-// Pulled in transitively by @server/utils/artifactGate, which imports it from the ./llm subpath -
-// mocking it on the barrel intercepted nothing and let the real module load.
+// @bike4mind/server-utils/utils/artifactGate imports this leaf directly; mocking the services
+// barrel does not intercept it.
 vi.mock('@bike4mind/services/llm/artifactGating', () => ({
   resolveArtifactsEnabled: (adminEnabled: boolean, requestedByCaller: boolean | undefined) =>
     adminEnabled && requestedByCaller !== false,

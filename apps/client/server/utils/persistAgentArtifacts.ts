@@ -20,7 +20,7 @@
 import type { ArtifactType } from '@bike4mind/common';
 import type { artifactService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 // Deliberately the CLIENT parser, not `@bike4mind/utils` (which the other server
 // callers use). Only this one exports `generateCompleteArtifactId`, and its exact
 // `artifact_{type}_{identifier}_{timestamp}_{index}` shape is what
@@ -37,11 +37,9 @@ import {
   generateCompleteArtifactId,
   parseArtifactsWithFallback,
 } from '@client/app/utils/artifactParser';
-// Static, unlike the barrels below - but note it pulls `@bike4mind/services` in transitively for
-// `resolveArtifactsEnabled`, so the dynamic imports below no longer keep that barrel off this path.
-// They stay because the barrel was already reachable from `agentExecute.ts` five other ways, so
-// nothing gets heavier either way; the injectable deps still earn their keep for test isolation.
-import { resolveAgentArtifactGate } from './artifactGate';
+// The gate gets `resolveArtifactsEnabled` from the services leaf entry point. The persistence
+// dependencies below stay lazy and injectable for tests.
+import { resolveAgentArtifactGate } from '@bike4mind/server-utils/utils/artifactGate';
 import { createLazyArtifactSourceRefsGuard } from './artifactSourceRefsGuards';
 
 /** Upper bound on rows written per run; excess is dropped and logged, never silent. */
@@ -121,9 +119,7 @@ export function buildAgentArtifactPayloads(args: {
 }
 
 /**
- * Injected so a test can drive this without a live database. Not a barrel guard: `./artifactGate`
- * already reaches @bike4mind/services statically, and @bike4mind/database is reachable from
- * `agentExecute.ts` regardless.
+ * Injected so tests can drive persistence without a live database or loading service/database barrels.
  */
 export interface PersistAgentArtifactsDeps {
   /**
@@ -156,8 +152,7 @@ function defaultDeps(sourceRefsGuard?: artifactService.ArtifactSourceRefsGuard):
       const { userRepository } = await import('@bike4mind/database');
       return userRepository.findById(userId);
     });
-  // Dynamic imports (same reason as the eventBus import in persistRunAsQuest):
-  // keep the barrels off this module's import graph so it stays cheap to load.
+  // Defer loading the service/database barrels until a persistence operation needs them.
   return {
     isArtifactsEnabled: async callerEnableArtifacts => {
       const { adminSettingsRepository } = await import('@bike4mind/database');

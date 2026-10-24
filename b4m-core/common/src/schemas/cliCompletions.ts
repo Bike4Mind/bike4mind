@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 // Specific file, not the `../types` barrel - this module is imported by
 // completions.contract.ts, which must stay off the barrel (see the note there).
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
@@ -53,8 +54,8 @@ export const CompletionCustomToolSchema = z.object({
       .optional()
       .describe(
         'Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. ' +
-          'Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other ' +
-          'model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, ' +
+          'Honoured only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; on every other ' +
+          'model it is ignored and the tool is sent as usual. At least one tool, ' +
           'or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`).'
       ),
     cache_control: z
@@ -80,8 +81,8 @@ export type ToolSearchServerTool = z.infer<typeof ToolSearchServerToolSchema>;
 export const CompletionServerToolSchema = z.object({
   serverTool: ToolSearchServerToolSchema.describe(
     'A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and ' +
-      'only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, ' +
-      'Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
+      'only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; any other model is ' +
+      'refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
   ),
 });
 
@@ -105,8 +106,45 @@ export const COMPLETION_TOOL_ERROR_CODES = [
   'all_tools_deferred',
   'deferred_tool_cache_control',
   'unknown_tool_reference',
+  'tool_changes_unsupported',
+  'invalid_tool_change',
 ] as const satisfies readonly ApiErrorCode[];
 export type CompletionToolErrorCode = (typeof COMPLETION_TOOL_ERROR_CODES)[number];
+
+export const ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE = 'assistant_prefill_unsupported' as const satisfies ApiErrorCode;
+
+export const TOOL_CHANGE_BLOCK_TYPES = ['tool_addition', 'tool_removal'] as const;
+
+/**
+ * One block of a mid-conversation tool change: a `system`-role message whose content holds only these.
+ * Strict on purpose: the provider takes a name reference to a tool already in `tools`, never an inline
+ * definition or an MCP reference.
+ */
+export const ToolChangeBlockSchema = z
+  .object({
+    type: z.enum(TOOL_CHANGE_BLOCK_TYPES),
+    tool: z.object({ type: z.literal('tool_reference'), name: z.string().min(1) }).strict(),
+  })
+  .strict();
+
+export type ToolChangeBlock = z.infer<typeof ToolChangeBlockSchema>;
+
+export const ToolChangeMessageContentSchema = z.array(ToolChangeBlockSchema).min(1);
+
+/** Whether a content block is shaped like a tool change, whether or not it is a valid one. */
+export function isToolChangeBlockType(block: unknown): boolean {
+  const type = (block as { type?: unknown } | null | undefined)?.type;
+  return typeof type === 'string' && (TOOL_CHANGE_BLOCK_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * A system message of tool change blocks. Unlike every other system message it is not hoisted into the
+ * provider's system prompt: its position between turns is the point. Shared by the request validation
+ * (services/cliCompletionsToolSearch.ts) and the Anthropic adapter, which must agree on what counts.
+ */
+export function isToolChangeMessage(message: { role: string; content?: unknown }): boolean {
+  return message.role === 'system' && Array.isArray(message.content) && message.content.some(isToolChangeBlockType);
+}
 
 /**
  * JSON Schema definition for structured output. The `schema` field is a full
@@ -136,7 +174,20 @@ export type ResponseFormat = z.infer<typeof ResponseFormatSchema>;
  */
 export const CompletionMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
-  content: z.union([z.string(), z.array(z.any())]),
+  content: z
+    .union([z.string(), z.array(z.any())])
+    .describe(
+      'A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / ' +
+        '`tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in ' +
+        '`tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ' +
+        'ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose ' +
+        '`supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with ' +
+        '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). ' +
+        'A final non-blank assistant turn is an assistant prefill, except a server-tool continuation ending in ' +
+        '`server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. It is accepted only ' +
+        'when the selected model has `supports_assistant_prefill: true`; otherwise the request returns `400` with ' +
+        '`errorCode: "assistant_prefill_unsupported"` without changing the message.'
+    ),
   cache: z.boolean().optional(),
 });
 
@@ -154,7 +205,7 @@ export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
  */
 export const CompletionRequestSchema = z.object({
   model: z.string().max(256),
-  messages: z.array(CompletionMessageSchema),
+  messages: z.array(CompletionMessageSchema).min(1),
   response_format: ResponseFormatSchema.optional(),
   stream: z.boolean().optional(),
   tools: z.array(CompletionToolSchema).optional(),
@@ -175,11 +226,11 @@ export const CompletionRequestSchema = z.object({
         .object({
           enabled: z.boolean(),
           // 1024 is the smallest legacy thinking budget the Anthropic API accepts.
-          budget_tokens: z.number().int().min(1024).optional(),
+          budget_tokens: z.number().int().min(1024).max(MAX_THINKING_BUDGET_TOKENS).optional(),
         })
         .optional()
         .describe(
-          'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking.'
+          'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking.'
         ),
     })
     .optional(),
@@ -267,6 +318,7 @@ const CompletionContentEventSchema = z.object({
  */
 export const COMPLETION_SSE_ERROR_CODES = [
   ...QUEST_ERROR_CODES,
+  'invalid_request',
   'provider_error',
   'provider_rejected',
   'content_blocked',
@@ -279,9 +331,9 @@ export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number]
  * real status instead; see completions.contract.ts.
  *
  * `code` is the machine-readable classifier: a billing code when settlement runs out mid-generation,
- * `provider_rejected` / `provider_error` when the model provider fails, `content_blocked` when the
- * model's safety classifier declined the request. Optional; callers must never match on the prose
- * `message`.
+ * `invalid_request` when the provider rejects caller-controlled input, `provider_rejected` /
+ * `provider_error` when the model provider fails, `content_blocked` when the model's safety classifier
+ * declined the request. Optional; callers must never match on the prose `message`.
  *
  * The field is `code` rather than the conventions' `errorCode` because this frame shipped that way
  * and is a published wire shape.

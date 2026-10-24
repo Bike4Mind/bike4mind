@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import type { ServerSubagentTracker } from '@bike4mind/services/llm';
+import { OPTI_SURFACE } from '@bike4mind/common';
+
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
 
 // Drives the real `handler` through a continuation message so the top-level `processExecution`
 // builds its toolDeps, and asserts what it hands `buildSharedTools`. Module mocks mirror
@@ -79,7 +86,7 @@ vi.mock('./agentExecutor.musicToolConfig', async () => {
   };
 });
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn().mockReturnValue({}),
   getGeneratedImageStorage: vi.fn().mockReturnValue({}),
 }));
@@ -93,11 +100,14 @@ vi.mock('@bike4mind/llm-adapters', async () => {
   };
 });
 
+const deductCreditsMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
 vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return {
     ...actual,
     apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
+    creditService: { ...actual.creditService, deductCreditsWithOrgSupport: deductCreditsMock },
   };
 });
 
@@ -111,6 +121,9 @@ vi.mock('@bike4mind/services/llm', async () => {
     buildSharedTools: (...args: unknown[]) => buildSharedToolsMock(...args),
     ServerAgentStore: class {
       getAllAgents() {
+        return [];
+      }
+      getExclusiveMcpServers() {
         return [];
       }
       getAgent() {
@@ -130,6 +143,55 @@ vi.mock('@bike4mind/services/llm', async () => {
 });
 
 vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
+
+const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
+vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+  premiumWorkspaceSessionSettings: {
+    'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
+  },
+}));
+
+vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({
+  premiumLlmTools: { fixture_tool: { name: 'fixture_tool' } },
+}));
+
+vi.mock('@server/premium-generated/premiumAgentExtensions.generated', () => ({
+  premiumAgentExtensions: [
+    {
+      surfaceProfiles: [
+        {
+          id: 'fixture-profile',
+          surface: 'fixture-surface',
+          build: () => ({
+            id: 'fixture-profile',
+            name: 'Fixture profile',
+            allowedTools: ['fixture_tool'],
+            deniedTools: [],
+            maxIterations: { quick: 5, medium: 15, very_thorough: 30 },
+            defaultThoroughness: 'medium',
+            isSynthetic: true,
+          }),
+        },
+      ],
+    },
+  ],
+}));
+
+// Pass-through spies, so the real registry still resolves and guards while the calls are observable.
+vi.mock('./agentExecutor.agentExtensions', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutor.agentExtensions')>(
+    './agentExecutor.agentExtensions'
+  );
+  const real = actual.executorAgentExtensions;
+  return {
+    ...actual,
+    executorAgentExtensions: {
+      ...real,
+      resolveSurfaceProfile: vi.fn(real.resolveSurfaceProfile),
+      applyToolMapGuards: vi.fn(real.applyToolMapGuards),
+    },
+  };
+});
 
 const execDoc = {
   id: 'exec-1',
@@ -167,6 +229,9 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.agentRepository, 'listForUser').mockResolvedValue([] as never);
   vi.spyOn(actual.agentRepository, 'listForOrganization').mockResolvedValue([] as never);
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
+  vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
+  vi.spyOn(repo, 'markComplete').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'incrementCreditsUsed').mockResolvedValue(undefined as never);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 
@@ -293,6 +358,325 @@ describe('processExecution tool deps', () => {
     });
   });
 
+  // Every iteration settles with an unconditional debit, so admission must require one whole
+  // iteration's worth of credits, not merely a positive balance.
+  describe('credit admission', () => {
+    const pricedModel = {
+      id: 'claude-sonnet-5',
+      type: 'text',
+      name: 'Sonnet',
+      backend: 'anthropic',
+      max_tokens: 64_000,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+    };
+
+    async function admitWith({ credits, doc = execDoc }: { credits: number; doc?: Record<string, unknown> }) {
+      const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+      const { adminSettingsRepository, agentExecutionRepository, User } = await import('@bike4mind/database');
+      vi.mocked(getAvailableModels).mockResolvedValueOnce([pricedModel] as never);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation(
+        (async (key: string) => key === 'enforceCredits') as never
+      );
+      vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: credits } as never);
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      const { handler } = await import('./agentExecutor');
+      await handler(continuationEvent(), lambdaContext).catch(() => undefined);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+      return { markFailed: vi.mocked(agentExecutionRepository.markFailed) };
+    }
+
+    it('refuses a run whose balance cannot cover one iteration, before any tool or model work', async () => {
+      const { markFailed } = await admitWith({ credits: 1 });
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    it('admits a run whose balance covers one iteration', async () => {
+      const { markFailed } = await admitWith({ credits: 100_000 });
+
+      // The harness stops the run at tool building, which markFailed reports on its own terms.
+      expect(markFailed).not.toHaveBeenCalledWith('exec-1', {
+        message: 'Insufficient credits to run agent execution',
+      });
+      expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
+    });
+
+    // A resumed run prices its next request at the size of the last one it sent, so a long run
+    // stops once its context outgrows the balance rather than once the balance hits zero.
+    it('refuses a resumed run whose last request alone outruns the balance', async () => {
+      const resumed = {
+        ...execDoc,
+        checkpoint: { iteration: 3, steps: [], turnUsage: [{ inputTokens: 150_000, outputTokens: 500 }] },
+      };
+      const { markFailed } = await admitWith({ credits: 1_000, doc: resumed });
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    // Its children already spent from this balance; refusing the wake would strand their results.
+    it('admits a DAG aggregation wake whose balance is short of a full iteration', async () => {
+      const wake = {
+        ...execDoc,
+        status: 'awaiting_dag_children',
+        dagSpec: { nodes: [] },
+        waitingOnDagChildren: { toolUseId: 'tool-1' },
+      };
+      const { markFailed } = await admitWith({ credits: 1, doc: wake });
+
+      expect(markFailed).not.toHaveBeenCalledWith('exec-1', {
+        message: 'Insufficient credits to run agent execution',
+      });
+    });
+  });
+
+  describe('model access and subagent billing', () => {
+    const runModel = { id: 'claude-sonnet-5', type: 'text', name: 'Sonnet', backend: 'anthropic' };
+
+    async function runWithModels(models: unknown[], configurations?: unknown[]) {
+      const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+      const { adminSettingsRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(getAvailableModels).mockResolvedValueOnce(models as never);
+      if (configurations) {
+        vi.mocked(adminSettingsRepository.findOne).mockResolvedValueOnce({ settingValue: configurations } as never);
+      }
+      const { handler } = await import('./agentExecutor');
+      await handler(continuationEvent(), lambdaContext).catch(() => undefined);
+      return { markFailed: vi.mocked(agentExecutionRepository.markFailed) };
+    }
+
+    it('refuses a run on a disabled model before any tool or model work', async () => {
+      const { markFailed } = await runWithModels([{ ...runModel, disabled: true }]);
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Model "claude-sonnet-5" is not available to this user',
+      });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a run on a model gated to a tag the user does not hold', async () => {
+      const { markFailed } = await runWithModels(
+        [runModel],
+        [{ id: 'claude-sonnet-5', enabled: true, allowedUserTags: ['pro'] }]
+      );
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Model "claude-sonnet-5" is not available to this user',
+      });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    it('offers delegation only the models this user may run', async () => {
+      await runWithModels([runModel, { ...runModel, id: 'paused-model', disabled: true }]);
+
+      const deps = buildSharedToolsMock.mock.calls[0][0] as { subagentModels: Array<{ id: string }> };
+      expect(deps.subagentModels.map(m => m.id)).toEqual(['claude-sonnet-5']);
+    });
+
+    async function subagentTracker() {
+      await runWithModels([runModel]);
+      return (buildSharedToolsMock.mock.calls[0][1] as { subagentTracker: ServerSubagentTracker }).subagentTracker;
+    }
+
+    const childResult = {
+      agentName: 'researcher',
+      model: 'claude-sonnet-5',
+      finalAnswer: 'found it',
+      steps: [],
+      completionInfo: {
+        totalCredits: 7,
+        totalInputTokens: 10,
+        totalOutputTokens: 5,
+        totalTokens: 15,
+        iterations: 1,
+        toolCalls: 0,
+        reachedMaxIterations: false,
+      },
+    } as unknown as Parameters<ServerSubagentTracker['onComplete']>[0]['result'];
+
+    it("charges an in-process subagent's tokens to the run's payer", async () => {
+      const tracker = await subagentTracker();
+      await tracker.onComplete({ childExecutionId: 'child-1', result: childResult });
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'text_generation_usage',
+          user: expect.objectContaining({ id: 'user-1' }),
+          credits: 7,
+          model: 'claude-sonnet-5',
+          inputTokens: 10,
+          outputTokens: 5,
+          questId: 'quest-1',
+        }),
+        expect.anything()
+      );
+    });
+
+    it("charges a timed-out in-process subagent's partial spend", async () => {
+      const tracker = await subagentTracker();
+      await tracker.onFailure({
+        childExecutionId: 'child-1',
+        error: 'aborted',
+        isTimeout: true,
+        partialResult: childResult,
+      });
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
+    });
+
+    // The orchestrator swallows a throw from these hooks, so a charge placed after the terminal
+    // write would be lost whenever that write failed.
+    it('charges an in-process subagent even when its completion write fails', async () => {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const tracker = await subagentTracker();
+      vi.mocked(agentExecutionRepository.markComplete).mockRejectedValueOnce(new Error('db down'));
+
+      await expect(tracker.onComplete({ childExecutionId: 'child-1', result: childResult })).rejects.toThrow('db down');
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
+    });
+
+    it('charges a failed in-process subagent even when its failure write fails', async () => {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const tracker = await subagentTracker();
+      vi.mocked(agentExecutionRepository.markFailed).mockRejectedValueOnce(new Error('db down'));
+
+      await expect(
+        tracker.onFailure({ childExecutionId: 'child-1', error: 'boom', isTimeout: false, partialResult: childResult })
+      ).rejects.toThrow('db down');
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
+    });
+
+    // Reached only by spend no tracker bills, e.g. a subagent that ran untracked after
+    // `tracker.onStart` failed.
+    it('charges untracked subagent spend reported through onSubagentCredits', async () => {
+      await runWithModels([runModel]);
+      const callbacks = buildSharedToolsMock.mock.calls[0][1] as {
+        onSubagentCredits: (
+          credits: number,
+          meta?: { model: string; inputTokens: number; outputTokens: number }
+        ) => Promise<void>;
+      };
+
+      await callbacks.onSubagentCredits(4, { model: 'claude-sonnet-5', inputTokens: 2, outputTokens: 1 });
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'text_generation_usage',
+          credits: 4,
+          model: 'claude-sonnet-5',
+          inputTokens: 2,
+          outputTokens: 1,
+          questId: 'quest-1',
+        }),
+        expect.anything()
+      );
+    });
+
+    it('refuses a run when the model configurations cannot be read', async () => {
+      const { adminSettingsRepository } = await import('@bike4mind/database');
+      vi.mocked(adminSettingsRepository.findOne).mockRejectedValueOnce(new Error('settings down'));
+
+      const { markFailed } = await runWithModels([runModel]);
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Unable to load model configuration. Please retry.',
+      });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    it('preserves an aggregation-only wake when model configuration cannot be read', async () => {
+      const { adminSettingsRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(adminSettingsRepository.findOne).mockRejectedValueOnce(new Error('settings down'));
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({
+        ...execDoc,
+        status: 'awaiting_dag_children',
+        dagSpec: { nodes: [] },
+        waitingOnDagChildren: { toolUseId: 'tool-1' },
+      } as never);
+
+      const { markFailed } = await runWithModels([runModel]);
+
+      expect(markFailed).not.toHaveBeenCalledWith('exec-1', {
+        message: 'Unable to load model configuration. Please retry.',
+      });
+      expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // In-process subagents never pass `processSubagentDispatch`'s admission, so the delegation
+  // itself checks the payer's live balance.
+  describe('in-process subagent balance admission', () => {
+    const pricedModel = {
+      id: 'claude-sonnet-5',
+      type: 'text',
+      name: 'Sonnet',
+      backend: 'anthropic',
+      max_tokens: 64_000,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+    };
+
+    async function toolDepsWith(enforceCredits: boolean) {
+      const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+      const { adminSettingsRepository, User } = await import('@bike4mind/database');
+      vi.mocked(getAvailableModels).mockResolvedValueOnce([pricedModel] as never);
+      // Enough to pass the run's own admission.
+      vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100_000 } as never);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation(
+        (async (key: string) => key === 'enforceCredits' && enforceCredits) as never
+      );
+      try {
+        return (await runWithSession(baseSession)) as {
+          checkInsufficientCredits?: (model: string) => Promise<boolean>;
+        };
+      } finally {
+        vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+      }
+    }
+
+    it("refuses a delegation the payer's live balance cannot start when credits are enforced", async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const deps = await toolDepsWith(true);
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ currentCredits: 1 } as never);
+
+      await expect(deps.checkInsufficientCredits!('claude-sonnet-5')).resolves.toBe(true);
+      expect(findUser).toHaveBeenCalledWith('user-1');
+    });
+
+    it('rechecks the organization that pays for the run rather than the personal wallet', async () => {
+      const { agentExecutionRepository, organizationRepository, userRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({
+        ...execDoc,
+        organizationId: 'org-1',
+      } as never);
+      vi.mocked(organizationRepository.findById).mockResolvedValueOnce({
+        id: 'org-1',
+        currentCredits: 100_000,
+      } as never);
+      const deps = await toolDepsWith(true);
+      vi.mocked(organizationRepository.findById)
+        .mockClear()
+        .mockResolvedValueOnce({ currentCredits: 1 } as never);
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValue({ currentCredits: 100_000 } as never);
+      findUser.mockClear();
+
+      await expect(deps.checkInsufficientCredits!('claude-sonnet-5')).resolves.toBe(true);
+
+      expect(organizationRepository.findById).toHaveBeenCalledExactlyOnceWith('org-1');
+      expect(findUser).not.toHaveBeenCalled();
+    });
+
+    it('is not wired when credits are not enforced', async () => {
+      const deps = await toolDepsWith(false);
+
+      expect(deps.checkInsufficientCredits).toBeUndefined();
+    });
+  });
+
   it('resolves an unset library flag to included for a session with no explicit lake scope', async () => {
     const deps = await runWithSession(baseSession);
 
@@ -303,5 +687,241 @@ describe('processExecution tool deps', () => {
     const deps = await runWithSession({ ...baseSession, includeLibraryFiles: false, forceKnowledgeRetrieval: false });
 
     expect(deps.sessionIncludeLibraryFiles).toBe(true);
+  });
+
+  describe('contributed workspace session settings', () => {
+    it('withholds delegation when the workspace resolves integrations off', async () => {
+      resolveWorkspaceSettings.mockResolvedValue({ disableUserIntegrations: true });
+      const deps = await runWithSession({
+        ...baseSession,
+        surface: 'settings-workspace',
+        disableUserIntegrations: false,
+      });
+
+      expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
+      expect(deps.agentStore).toBeUndefined();
+    });
+
+    it('drops a baked integrations opt-out the workspace no longer resolves', async () => {
+      resolveWorkspaceSettings.mockResolvedValue({});
+      const deps = await runWithSession({ ...baseSession, surface: 'settings-workspace' });
+
+      expect(deps.agentStore).toBeDefined();
+    });
+
+    it('fails closed when the resolver throws: the run never reaches tool building', async () => {
+      resolveWorkspaceSettings.mockRejectedValue(new Error('workspace lookup failed'));
+      const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(sessionRepository.findById).mockResolvedValue({
+        ...baseSession,
+        surface: 'settings-workspace',
+        disableUserIntegrations: false,
+      } as never);
+      const { handler } = await import('./agentExecutor');
+
+      await expect(handler(continuationEvent(), lambdaContext)).resolves.toEqual({ batchItemFailures: [] });
+
+      expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+      expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith(
+        'exec-1',
+        expect.objectContaining({
+          message: 'Workspace session settings resolver for "settings-workspace" failed',
+        })
+      );
+    });
+
+    it('keeps the stored flag on a session outside any contributed workspace', async () => {
+      const deps = await runWithSession(baseSession);
+
+      expect(resolveWorkspaceSettings).not.toHaveBeenCalled();
+      expect(deps.agentStore).toBeUndefined();
+    });
+  });
+
+  describe('agent extensions', () => {
+    async function registry() {
+      const { executorAgentExtensions } = await import('./agentExecutor.agentExtensions');
+      return {
+        resolve: vi.mocked(executorAgentExtensions.resolveSurfaceProfile),
+        guard: vi.mocked(executorAgentExtensions.applyToolMapGuards),
+      };
+    }
+
+    it('resolves the surface profile on a continuation, then guards the contributed tools', async () => {
+      const { resolve, guard } = await registry();
+      guard.mockImplementationOnce(
+        tools =>
+          Object.fromEntries(
+            Object.entries(tools).map(([k, t]) => [k, { ...(t as object), guarded: true }])
+          ) as typeof tools
+      );
+      await runWithSession({ ...baseSession, surface: OPTI_SURFACE });
+
+      expect(resolve).toHaveBeenCalledWith(
+        OPTI_SURFACE,
+        expect.objectContaining({ executionId: 'exec-1', contributedToolNames: ['fixture_tool'] })
+      );
+      const profile = resolve.mock.results[0].value;
+      expect(profile.id).toBe('synthetic:opti-orchestration');
+      expect(profile.allowedTools).toContain('fixture_tool');
+
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(resolve.mock.invocationCallOrder[0]).toBeLessThan(guard.mock.invocationCallOrder[0]);
+      const [tools, ctx] = guard.mock.calls[0];
+      expect(Object.keys(tools)).toEqual(['fixture_tool']);
+      expect(ctx).toEqual(expect.objectContaining({ executionId: 'exec-1', runState: expect.any(Object) }));
+      const guarded = guard.mock.results[0].value;
+      const { externalTools, enabledTools, sessionDisabledTools } = buildSharedToolsMock.mock.calls[0][2] as {
+        externalTools: Record<string, unknown>;
+        enabledTools: string[];
+        sessionDisabledTools: string[];
+      };
+      expect(externalTools.fixture_tool).toBe(guarded.fixture_tool);
+      expect(externalTools.fixture_tool).not.toBe(tools.fixture_tool);
+      expect(externalTools.fixture_tool).toHaveProperty('guarded', true);
+      // The resolved profile, not the execution doc, is what shapes the toolbelt: its denials reach the build.
+      expect(sessionDisabledTools).toEqual(expect.arrayContaining(profile.deniedTools));
+      expect(enabledTools).toContain('fixture_tool');
+    });
+
+    it('preserves a pinned agent and its denials through a continuation on a contributed surface', async () => {
+      const { resolve, guard } = await registry();
+      const { sessionRepository, agentRepository, agentExecutionRepository, adminSettingsRepository } =
+        await import('@bike4mind/database');
+      const session = { ...baseSession, surface: 'fixture-surface', disableUserIntegrations: false };
+      vi.mocked(sessionRepository.findById).mockResolvedValue(session as never);
+      const pinnedDenials = ['web_search', 'fixture__write', 'delegate_to_agent', 'coordinate_task'];
+      const findAgent = vi.spyOn(agentRepository, 'findById').mockResolvedValue({
+        id: 'agent-1',
+        name: 'Pinned agent',
+        allowedTools: ['fixture_tool', 'web_search'],
+        deniedTools: pinnedDenials,
+      } as never);
+      // Only a new execution resolves memento gates; the continuation-only harness never mocked it.
+      const persistGates = vi
+        .spyOn(agentExecutionRepository, 'persistResolvedMementoGates')
+        .mockResolvedValue(undefined as never);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation((async (key: string) =>
+        key === 'orchestrationDefaults' ? undefined : false) as never);
+      const { handler } = await import('./agentExecutor');
+      const start = {
+        executionId: 'exec-1',
+        userId: 'user-1',
+        sessionId: 'session-1',
+        query: 'q',
+        model: 'claude-sonnet-5',
+        connectionId: 'conn-1',
+        agentId: 'agent-1',
+      };
+      await handler(start as never, lambdaContext).catch(() => undefined);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+      findAgent.mockRestore();
+      persistGates.mockRestore();
+
+      expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(agentExecutionRepository.persistProfileDeniedTools).toHaveBeenCalledExactlyOnceWith(
+        'exec-1',
+        pinnedDenials,
+        true
+      );
+      const [, persistedDenials, profileIsPinned] = vi.mocked(agentExecutionRepository.persistProfileDeniedTools).mock
+        .calls[0];
+      const [, persistedTools] = vi.mocked(agentExecutionRepository.persistResolvedEnabledTools).mock.calls[0];
+      vi.clearAllMocks();
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({
+        ...execDoc,
+        profileIsPinned,
+        profileDeniedTools: persistedDenials,
+        resolvedEnabledTools: persistedTools,
+      } as never);
+
+      const deps = await runWithSession(session);
+
+      expect(resolve).not.toHaveBeenCalled();
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(deps.agentStore).toBeUndefined();
+      expect(deps.dagDispatcher).toBeUndefined();
+      const options = buildSharedToolsMock.mock.calls[0][2];
+      expect(options.enabledTools).toContain('fixture_tool');
+      expect(options.enabledTools).not.toContain('web_search');
+      expect(options.sessionDisabledTools).toEqual(expect.arrayContaining(pinnedDenials));
+    });
+
+    it.each([undefined, false])(
+      'keeps stored denials only for unknown legacy provenance (%s)',
+      async profileIsPinned => {
+        const { resolve } = await registry();
+        const { agentExecutionRepository } = await import('@bike4mind/database');
+        const persistedDenials = ['web_search', 'fixture__write', 'delegate_to_agent', 'coordinate_task'];
+        vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({
+          ...execDoc,
+          profileIsPinned,
+          profileDeniedTools: persistedDenials,
+          resolvedEnabledTools: ['fixture_tool', 'web_search'],
+        } as never);
+
+        const deps = await runWithSession({
+          ...baseSession,
+          surface: 'fixture-surface',
+          disableUserIntegrations: false,
+        });
+
+        expect(resolve).toHaveBeenCalledTimes(1);
+        expect(resolve.mock.results[0].value.deniedTools).toEqual([]);
+        const options = buildSharedToolsMock.mock.calls[0][2];
+        expect(options.enabledTools).toContain('fixture_tool');
+        if (profileIsPinned === undefined) {
+          expect(options.enabledTools).not.toContain('web_search');
+          expect(options.sessionDisabledTools).toEqual(expect.arrayContaining(persistedDenials));
+          expect(deps.agentStore).toBeUndefined();
+          expect(deps.dagDispatcher).toBeUndefined();
+        } else {
+          expect(options.enabledTools).toContain('web_search');
+          expect(options.sessionDisabledTools).toEqual([]);
+          expect(deps.agentStore).toBeDefined();
+          expect(deps.dagDispatcher).toBeDefined();
+        }
+      }
+    );
+
+    it('records an unpinned surface profile for later continuations', async () => {
+      const { resolve } = await registry();
+      const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(sessionRepository.findById).mockResolvedValue({ ...baseSession, surface: 'fixture-surface' } as never);
+      const persistGates = vi
+        .spyOn(agentExecutionRepository, 'persistResolvedMementoGates')
+        .mockResolvedValue(undefined as never);
+      try {
+        const { handler } = await import('./agentExecutor');
+        await handler(
+          {
+            executionId: 'exec-1',
+            userId: 'user-1',
+            sessionId: 'session-1',
+            query: 'q',
+            model: 'claude-sonnet-5',
+            connectionId: 'conn-1',
+          },
+          lambdaContext
+        );
+      } finally {
+        persistGates.mockRestore();
+      }
+
+      expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(agentExecutionRepository.persistProfileDeniedTools).toHaveBeenCalledExactlyOnceWith('exec-1', [], false);
+    });
+
+    it('falls through to the default profile on a surface with none registered, still guarding tools', async () => {
+      const { resolve, guard } = await registry();
+      await runWithSession({ ...baseSession, surface: 'unregistered-surface' });
+
+      expect(resolve.mock.results[0].value).toBeUndefined();
+      expect(guard).toHaveBeenCalledTimes(1);
+    });
   });
 });

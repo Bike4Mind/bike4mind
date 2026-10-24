@@ -16,7 +16,7 @@ import {
 } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ProjectEvents, redactSessionsForClient } from '@bike4mind/common';
-import { ActivityType } from '@client/config/activityType';
+import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { z } from 'zod';
 import { SessionEvents } from '@server/utils/eventBus';
 import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
@@ -100,6 +100,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       // rather than failing the attach - the client types this response as ISessionDocument[],
       // leaving the warning log as where a skipped summary surfaces (#1852).
       const summarizableSessionIds = await filterSessionIdsByOperationalCredits(sessions, {
+        payerId: req.user.id,
         operationsPerSession: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
         operation: 'session summarization',
         logger: req.logger,
@@ -121,7 +122,12 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
             { ability: req.ability }
           );
           if (!summarizableSessionIds.has(session.id)) return;
-          await SessionEvents.Summarize.publish({ sessionId: session.id, callTagging: true, trigger: 'project' });
+          await SessionEvents.Summarize.publish({
+            sessionId: session.id,
+            callTagging: true,
+            trigger: 'project',
+            payerId: req.user.id,
+          });
         })
       );
 

@@ -44,7 +44,7 @@ vi.mock('@server/models/Subscription', () => ({
 const mockRetrieve = vi.fn();
 const mockCancel = vi.fn();
 const mockUpdate = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     subscriptions: {
       retrieve: (...args: unknown[]) => mockRetrieve(...args),
@@ -60,7 +60,7 @@ vi.mock('@server/integrations/stripe/dunning', () => ({
 }));
 
 const mockEmitMetric = vi.fn();
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 

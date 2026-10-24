@@ -17,7 +17,7 @@ import { SecopsTriageConfigSchema, SECOPS_TRIAGE_SCAN_SOURCES } from '@bike4mind
 import { GitHubService } from '@server/services/githubService';
 import { createSecopsTriageService } from '@workers/services/secopsTriageService';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { Resource } from 'sst';

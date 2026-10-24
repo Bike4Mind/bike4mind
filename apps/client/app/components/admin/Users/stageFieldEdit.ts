@@ -1,4 +1,4 @@
-import { isEqual } from 'lodash';
+import isEqual from 'lodash/isEqual';
 import type { IUserDocument } from '@bike4mind/common';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import type { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';

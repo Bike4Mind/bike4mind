@@ -6,12 +6,14 @@ import {
   shouldPersistGeneratedAudio,
   generateMusicContract,
   MusicGenerationVendor,
+  usdToCreditsStochastic,
 } from '@bike4mind/common';
-import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
-import { apiKeyService, estimateMusicCredits } from '@bike4mind/services';
+import { adminSettingsRepository, apiKeyRepository, cacheRepository, usageEventRepository } from '@bike4mind/database';
+import { apiKeyService, estimateMusicCredits, ProviderBusyError, runElevenLabsWithCapacity } from '@bike4mind/services';
 import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
@@ -31,8 +33,8 @@ const SUPPORTS_OUTPUT_FORMAT: Record<MusicGenerationVendor, (format: string) => 
 
 // Provider-agnostic background-music generation. Meters usage: because the cost
 // is deterministic (the requested length is forced on the provider, so the
-// generated track always matches what we bill), it RESERVES the exact charge
-// before calling the provider and settles it on success / refunds it on failure
+// generated track always matches what we bill), it RESERVES the rounded-up
+// charge before calling the provider and settles the exact cost on success / refunds it on failure
 // - so a charge can never fail after the audio is produced. Bills the
 // organization's shared pool for org-billed API keys and for org-seat members;
 // otherwise the user. All billing is gated on the enforceCredits admin setting,
@@ -67,7 +69,10 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
     return res.status(503).json({ error: `No ${provider} API key configured` });
   }
 
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
   // Cost is deterministic from the request (length-driven), so the same estimate
@@ -119,21 +124,43 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
   let audio: Buffer;
   let contentType: string;
   try {
-    const musicService = aiMusicService(provider, apiKey, req.logger);
-    ({ audio, contentType } = await musicService.generate(prompt, { lengthMs, forceInstrumental, modelId, format }));
+    ({ audio, contentType } = await runElevenLabsWithCapacity(
+      {
+        operation: 'music',
+        apiKey,
+        db: { adminSettings: adminSettingsRepository, caches: cacheRepository },
+        logger: req.logger,
+      },
+      ({ timeoutMs }) =>
+        aiMusicService(provider, apiKey, req.logger, { timeoutMs }).generate(prompt, {
+          lengthMs,
+          forceInstrumental,
+          modelId,
+          format,
+        })
+    ));
   } catch (error) {
+    // Log before refunding, so a refund that throws cannot swallow the original failure.
+    if (error instanceof ProviderBusyError) {
+      req.logger.warn('Music generation deferred: provider at capacity', { provider, reason: error.reason });
+      // Refund the reserved credits - a failed generation incurs no provider cost.
+      await reservation.refund();
+      // Only a 429'd attempt reached the provider; a request that never got a slot made no call to record.
+      if (error.reason === 'upstream_rate_limited') recordUsage('error', 0, 0);
+      throw providerBusyHttpError(error);
+    }
     req.logger.error('Music generation failed', {
       provider,
       error: error instanceof Error ? error.message : 'Unknown error',
     });
-    // Refund the reserved credits - a failed generation incurs no provider cost.
     await reservation.refund();
     recordUsage('error', 0, 0);
     return res.status(502).json({ error: 'Music generation failed' });
   }
 
-  // Settle the full reservation: the provider generates exactly the billed length.
-  const creditsCharged = await reservation.settle(reservation.reservedCredits, {
+  // The provider generates exactly the billed length, so settle that exact cost; the round-up held at
+  // reservation is refunded.
+  const creditsCharged = await reservation.settle(usdToCreditsStochastic(usdCost), {
     type: 'music_generation_usage',
     sessionId,
     model: modelId,

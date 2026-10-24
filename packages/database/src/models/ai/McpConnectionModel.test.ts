@@ -4,14 +4,16 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import {
   MCP_CONNECTION_LIMITS,
   MCP_CONNECTION_SECRET_PATHS,
+  McpConnectionCapError,
   McpConnectionProtectedFieldError,
   McpConnectionSlugConflictError,
+  McpToolVersionConflictError,
   toMcpConnectionPublic,
   type IMcpConnectionDocument,
   type IMcpConnectionTool,
 } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { McpConnection, mcpConnectionRepository } from './McpConnectionModel';
+import { McpConnection, mcpConnectionRepository, measureStoredMcpToolsBytes } from './McpConnectionModel';
 
 type CreateInput = Omit<IMcpConnectionDocument, 'id' | 'createdAt' | 'updatedAt'>;
 
@@ -119,6 +121,47 @@ describe('McpConnectionModel', () => {
     await McpConnection.deleteMany({});
   });
 
+  it('preserves empty schema objects through create, discovery and every full read', async () => {
+    const inputSchema = { type: 'object', properties: {}, $defs: { empty: { default: {} } } };
+    const created = await mcpConnectionRepository.create(
+      apiKeyConnection({
+        tools: [tool('noop', { inputSchema })],
+      })
+    );
+    expect(created.tools[0]?.inputSchema).toEqual(inputSchema);
+    const discovered = await mcpConnectionRepository.updateDiscovery(created.id, {
+      tools: [tool('noop', { inputSchema })],
+      fingerprint: 'empty-schema',
+      expectedFingerprint: null,
+      expectedRevision: 0,
+    });
+    const reads = [
+      discovered,
+      await mcpConnectionRepository.findById(created.id),
+      await mcpConnectionRepository.findByIdForOwner(created.id, OWNER),
+      await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER),
+      ...(await mcpConnectionRepository.listForUser('user-1')),
+    ];
+    for (const read of reads) expect(read?.tools[0]?.inputSchema).toEqual(inputSchema);
+  });
+
+  it('refuses a failure status from an API key that has since been rotated', async () => {
+    const created = await mcpConnectionRepository.create(apiKeyConnection());
+    await mcpConnectionRepository.setApiKey(created.id, OWNER, {
+      headerName: 'Authorization',
+      scheme: 'Bearer',
+      valueEnc: 'enc:new',
+      last4: '****',
+    });
+    const failure = { code: 'auth_required' as const, message: 'Old key rejected' };
+    expect(await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', failure, 'enc:key')).toBeNull();
+    expect((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))?.status).toBe('connected');
+    expect(await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', failure, 'enc:new')).toMatchObject({
+      status: 'needs_reconnect',
+      lastError: failure,
+    });
+  });
+
   describe('indexes', () => {
     it('declares the design indexes by name', async () => {
       const indexes = await McpConnection.collection.indexes();
@@ -186,6 +229,7 @@ describe('McpConnectionModel', () => {
           tools: [],
           fingerprint: 'fp',
           expectedFingerprint: null,
+          expectedRevision: 0,
         }),
         await mcpConnectionRepository.rename(created.id, OWNER, 'Renamed'),
         await mcpConnectionRepository.setEnabled(created.id, OWNER, true),
@@ -489,6 +533,7 @@ describe('McpConnectionModel', () => {
         tools: [tool('create_issue', { annotations: { readOnlyHint: false } })],
         fingerprint: 'fp-1',
         expectedFingerprint: null,
+        expectedRevision: 0,
         detectedTransport: 'streamable-http',
         serverInfo: { name: 'linear', version: '1.0.0' },
         dropped: 2,
@@ -500,12 +545,71 @@ describe('McpConnectionModel', () => {
       expect(updated?.tools[0]).toMatchObject({ name: 'create_issue', state: 'pending_review', enabled: false });
     });
 
+    it('updateDiscovery drops a result that ran on a rotated API key and keeps one on the current key', async () => {
+      const created = await mcpConnectionRepository.create(apiKeyConnection());
+      await mcpConnectionRepository.setApiKey(created.id, OWNER, {
+        headerName: 'Authorization',
+        scheme: 'Bearer',
+        valueEnc: 'enc:rotated',
+        last4: 'wxyz',
+      });
+      const base = { tools: [tool('a')], fingerprint: 'fp-1', expectedFingerprint: null, expectedRevision: 0 };
+      expect(
+        await mcpConnectionRepository.updateDiscovery(created.id, {
+          ...base,
+          markConnected: true,
+          expectedApiKeyValueEnc: 'enc:key',
+        })
+      ).toBeNull();
+      const untouched = await McpConnection.findById(created.id);
+      expect(untouched?.toolsFingerprint ?? null).toBeNull();
+      expect(untouched?.tools ?? []).toHaveLength(0);
+
+      const stored = await mcpConnectionRepository.updateDiscovery(created.id, {
+        ...base,
+        markConnected: true,
+        expectedApiKeyValueEnc: 'enc:rotated',
+      });
+      expect(stored?.status).toBe('connected');
+    });
+
+    it('updateDiscovery with markConnected connects and clears lastError and authChallenge in one write', async () => {
+      const created = await mcpConnectionRepository.create(
+        apiKeyConnection({ status: 'error', lastError: { code: 'timeout', message: 'slow', at: new Date() } })
+      );
+      await mcpConnectionRepository.setPendingAuth(created.id, { scope: 'tools.read', message: 'sign in' });
+      const updated = await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a')],
+        fingerprint: 'fp-1',
+        expectedFingerprint: null,
+        expectedRevision: 0,
+        markConnected: true,
+      });
+      expect(updated?.status).toBe('connected');
+      expect(updated?.lastError).toBeUndefined();
+      expect(updated?.authChallenge).toBeUndefined();
+
+      // An OAuth connection whose token was cleared does not match, like a lost compare-and-set.
+      const oauth = await mcpConnectionRepository.create(baseConnection({ slug: 'oauthy', status: 'needs_reconnect' }));
+      await mcpConnectionRepository.clearOAuthTokens(oauth.id, OWNER);
+      expect(
+        await mcpConnectionRepository.updateDiscovery(oauth.id, {
+          tools: [tool('a')],
+          fingerprint: 'fp-1',
+          expectedFingerprint: null,
+          expectedRevision: 0,
+          markConnected: true,
+        })
+      ).toBeNull();
+    });
+
     it('a discovery diffed against a stale fingerprint loses and leaves the review choices alone', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       await mcpConnectionRepository.updateDiscovery(created.id, {
         tools: [tool('a')],
         fingerprint: 'fp-1',
         expectedFingerprint: null,
+        expectedRevision: 0,
       });
       await mcpConnectionRepository.setToolSettings(created.id, OWNER, [
         { name: 'a', enabled: true, state: 'active', approval: 'always_allow' },
@@ -517,11 +621,13 @@ describe('McpConnectionModel', () => {
           tools: [tool('a', { enabled: true, state: 'active', approval: 'always_allow' }), tool('b')],
           fingerprint: 'fp-2',
           expectedFingerprint: 'fp-1',
+          expectedRevision: 2,
         }),
         mcpConnectionRepository.updateDiscovery(created.id, {
           tools: [tool('a')],
           fingerprint: 'fp-3',
           expectedFingerprint: 'fp-1',
+          expectedRevision: 2,
         }),
       ]);
       expect([first, second].filter(r => r !== null)).toHaveLength(1);
@@ -532,6 +638,7 @@ describe('McpConnectionModel', () => {
           tools: [],
           fingerprint: 'fp-x',
           expectedFingerprint: null,
+          expectedRevision: 0,
         })
       ).toBeNull();
 
@@ -545,6 +652,7 @@ describe('McpConnectionModel', () => {
         tools: [tool('a'), tool('b'), tool('c')],
         fingerprint: 'fp-1',
         expectedFingerprint: null,
+        expectedRevision: 0,
       });
 
       const updated = await mcpConnectionRepository.setToolSettings(created.id, OWNER, [
@@ -568,6 +676,51 @@ describe('McpConnectionModel', () => {
         await mcpConnectionRepository.setToolSettings(created.id, { ownerType: 'user', ownerKey: 'user-2' }, [
           { name: 'a', enabled: false },
         ])
+      ).toBeNull();
+    });
+
+    it('updateSettings renames, toggles and reviews in one write, bound to the reviewed version', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a', { versionHash: 'v-a1' }), tool('b', { versionHash: 'v-b1' })],
+        fingerprint: 'fp-1',
+        expectedFingerprint: null,
+        expectedRevision: 0,
+      });
+
+      const updated = await mcpConnectionRepository.updateSettings(created.id, OWNER, {
+        displayName: 'Linear (work)',
+        enabled: false,
+        tools: [{ name: 'a', versionHash: 'v-a1', enabled: true, state: 'active' }],
+      });
+      expect(updated).toMatchObject({ displayName: 'Linear (work)', enabled: false, toolsRevision: 2 });
+      expect(updated?.tools.map(t => [t.name, t.enabled, t.state])).toEqual([
+        ['a', true, 'active'],
+        ['b', false, 'pending_review'],
+      ]);
+
+      // The server changed `b` after the reviewer loaded it: nothing in the write lands.
+      await expect(
+        mcpConnectionRepository.updateSettings(created.id, OWNER, {
+          displayName: 'Should not land',
+          tools: [
+            { name: 'a', versionHash: 'v-a1', approval: 'always_allow' },
+            { name: 'b', versionHash: 'v-b0', enabled: true, state: 'active' },
+          ],
+        })
+      ).rejects.toThrow(McpToolVersionConflictError);
+      const after = await mcpConnectionRepository.findById(created.id);
+      expect(after).toMatchObject({ displayName: 'Linear (work)', toolsRevision: 2 });
+      expect(after?.tools.map(t => [t.name, t.enabled, t.approval])).toEqual([
+        ['a', true, 'default'],
+        ['b', false, 'default'],
+      ]);
+
+      // Another owner reads as not found rather than as a conflict.
+      expect(
+        await mcpConnectionRepository.updateSettings(created.id, OTHER_USER_OWNER, {
+          tools: [{ name: 'a', versionHash: 'stale', enabled: false }],
+        })
       ).toBeNull();
     });
 
@@ -741,6 +894,7 @@ describe('McpConnectionModel', () => {
         tools: [tool('t', { inputSchema: { type: 'object', properties: { q: { type: 'string' } } } })],
         fingerprint: 'fp',
         expectedFingerprint: null,
+        expectedRevision: 0,
       });
 
       const all = await mcpConnectionRepository.listForUser('user-1');
@@ -757,6 +911,7 @@ describe('McpConnectionModel', () => {
         tools: [tool('t')],
         fingerprint: 'fp',
         expectedFingerprint: null,
+        expectedRevision: 0,
       });
       await mcpConnectionRepository.create(orgDefinition());
 
@@ -781,6 +936,7 @@ describe('McpConnectionModel', () => {
           tools: tooMany,
           fingerprint: 'fp',
           expectedFingerprint: null,
+          expectedRevision: 0,
         })
       ).rejects.toThrow(/tools/);
 
@@ -792,6 +948,7 @@ describe('McpConnectionModel', () => {
           tools: huge,
           fingerprint: 'fp',
           expectedFingerprint: null,
+          expectedRevision: 0,
         })
       ).rejects.toThrow(/tools/);
       await expect(mcpConnectionRepository.create(baseConnection({ slug: 'big', tools: tooMany }))).rejects.toThrow(
@@ -829,6 +986,7 @@ describe('McpConnectionModel', () => {
         tools: [],
         fingerprint: 'fp',
         expectedFingerprint: null,
+        expectedRevision: 0,
         serverInfo: { name: 'n'.repeat(500), version: '1' },
       });
       expect(discovered?.serverInfo?.name).toHaveLength(MCP_CONNECTION_LIMITS.serverInfoFieldLength);
@@ -985,6 +1143,210 @@ describe('McpConnectionModel', () => {
     });
   });
 
+  describe('tools revision', () => {
+    const discover = (id: string, expectedFingerprint: string | null, expectedRevision: number, tools = [tool('a')]) =>
+      mcpConnectionRepository.updateDiscovery(id, {
+        tools,
+        fingerprint: `fp-${tools.length}`,
+        expectedFingerprint,
+        expectedRevision,
+      });
+
+    it('starts at 0 and is bumped by every discovery and every review write', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      expect((await mcpConnectionRepository.findById(created.id))?.toolsRevision).toBe(0);
+
+      expect((await discover(created.id, null, 0))?.toolsRevision).toBe(1);
+      const reviewed = await mcpConnectionRepository.setToolSettings(created.id, OWNER, [{ name: 'a', enabled: true }]);
+      expect(reviewed?.toolsRevision).toBe(2);
+    });
+
+    it('a review saved between the discovery read and its write survives: the write loses and must re-merge', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await discover(created.id, null, 0);
+
+      // Discovery reads the connection (fp-1, revision 1) and starts merging...
+      const read = await mcpConnectionRepository.findById(created.id);
+      // ...the user approves the tool meanwhile...
+      await mcpConnectionRepository.setToolSettings(created.id, OWNER, [
+        { name: 'a', enabled: true, state: 'active', approval: 'always_allow' },
+      ]);
+      // ...and the discovery write, merged against the stale read, must not land.
+      const stale = await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a'), tool('b')],
+        fingerprint: 'fp-2',
+        expectedFingerprint: read!.toolsFingerprint ?? null,
+        expectedRevision: read!.toolsRevision ?? 0,
+      });
+      expect(stale).toBeNull();
+      const afterLoss = await mcpConnectionRepository.findById(created.id);
+      expect(afterLoss?.tools[0]).toMatchObject({
+        name: 'a',
+        enabled: true,
+        state: 'active',
+        approval: 'always_allow',
+      });
+
+      // The retry re-reads and re-merges against the current revision, and lands.
+      const retried = await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a', { enabled: true, state: 'active', approval: 'always_allow' }), tool('b')],
+        fingerprint: 'fp-2',
+        expectedFingerprint: afterLoss!.toolsFingerprint ?? null,
+        expectedRevision: afterLoss!.toolsRevision ?? 0,
+      });
+      expect(retried?.tools.map(t => [t.name, t.enabled])).toEqual([
+        ['a', true],
+        ['b', false],
+      ]);
+    });
+
+    it('treats a document written before the field existed as revision 0', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await McpConnection.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(created.id) },
+        { $unset: { toolsRevision: 1 } }
+      );
+      expect((await discover(created.id, null, 0))?.toolsRevision).toBe(1);
+    });
+
+    it('the generic writers refuse the tools fields', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      for (const patch of [{ tools: [] }, { toolsFingerprint: 'x' }, { toolsRevision: 9 }]) {
+        await expect(mcpConnectionRepository.update({ id: created.id, ...patch })).rejects.toThrow(
+          McpConnectionProtectedFieldError
+        );
+      }
+    });
+  });
+
+  describe('tool input schemas', () => {
+    const jsonSchema = {
+      $schema: 'http://json-schema.org/draft-07/schema#',
+      type: 'object',
+      properties: { 'issue.id': { $ref: '#/$defs/id' }, 'tilde~key': { type: 'string' }, '~d': { type: 'number' } },
+      $defs: { id: { type: 'string', pattern: '^[a-z]+$' } },
+      required: ['issue.id'],
+    };
+
+    it('round-trips $-prefixed and dotted keys through discovery, every read and the hot path', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      const updated = await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a', { inputSchema: jsonSchema })],
+        fingerprint: 'fp-1',
+        expectedFingerprint: null,
+        expectedRevision: 0,
+      });
+      expect(updated?.tools[0]?.inputSchema).toEqual(jsonSchema);
+      expect((await mcpConnectionRepository.findById(created.id))?.tools[0]?.inputSchema).toEqual(jsonSchema);
+      expect((await mcpConnectionRepository.listForUser('user-1'))[0]?.tools[0]?.inputSchema).toEqual(jsonSchema);
+      expect((await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER))?.tools[0]?.inputSchema).toEqual(
+        jsonSchema
+      );
+    });
+
+    it('measures the stored size with the schema keys escaped', () => {
+      const plain = [tool('a', { inputSchema: { type: 'object' } })];
+      const escaped = [tool('a', { inputSchema: { $defs: {}, 'a.b': 1 } })];
+      expect(measureStoredMcpToolsBytes(plain)).toBe(Buffer.byteLength(JSON.stringify(plain)));
+      // `$defs` -> `~ddefs` and `a.b` -> `a~pb`: one extra byte each.
+      expect(measureStoredMcpToolsBytes(escaped)).toBe(Buffer.byteLength(JSON.stringify(escaped)) + 2);
+
+      let deep: Record<string, unknown> = {};
+      for (let i = 0; i < 10_000; i++) deep = { a: deep };
+      expect(() => measureStoredMcpToolsBytes([tool('a', { inputSchema: deep })])).toThrow(RangeError);
+    });
+
+    it('round-trips through create too', async () => {
+      const created = await mcpConnectionRepository.create(
+        baseConnection({ tools: [tool('a', { inputSchema: jsonSchema })] })
+      );
+      expect(created.tools[0]?.inputSchema).toEqual(jsonSchema);
+      expect((await mcpConnectionRepository.findById(created.id))?.tools[0]?.inputSchema).toEqual(jsonSchema);
+    });
+  });
+
+  describe('API key rotation and pending auth', () => {
+    it('setApiKey replaces the key for the owner of an api_key connection only', async () => {
+      const created = await mcpConnectionRepository.create(apiKeyConnection());
+      const rotation = { headerName: 'X-Api-Key', scheme: 'raw' as const, valueEnc: 'enc:new-key', last4: 'wxyz' };
+
+      expect(await mcpConnectionRepository.setApiKey(created.id, OTHER_USER_OWNER, rotation)).toBeNull();
+      const rotated = await mcpConnectionRepository.setApiKey(created.id, OWNER, rotation);
+      expect(rotated?.auth.apiKey).toEqual({ headerName: 'X-Api-Key', scheme: 'raw', last4: 'wxyz' });
+      const withCredentials = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
+      expect(withCredentials?.auth.apiKey?.valueEnc).toBe('enc:new-key');
+
+      const oauth = await mcpConnectionRepository.create(baseConnection({ slug: 'oauthy' }));
+      expect(await mcpConnectionRepository.setApiKey(oauth.id, OWNER, rotation)).toBeNull();
+    });
+
+    it('setPendingAuth records the challenge and the reason, and drops an over-long URL', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection({ auth: { kind: 'none' }, status: 'error' }));
+      const updated = await mcpConnectionRepository.setPendingAuth(created.id, {
+        resourceMetadataUrl: 'https://auth.example.com/.well-known/oauth-protected-resource/mcp',
+        scope: 'tools.read',
+        message: 'The server requires sign-in',
+      });
+      expect(updated).toMatchObject({
+        status: 'pending_auth',
+        authChallenge: {
+          resourceMetadataUrl: 'https://auth.example.com/.well-known/oauth-protected-resource/mcp',
+          scope: 'tools.read',
+        },
+        lastError: { code: 'auth_required', message: 'The server requires sign-in', requiredScope: 'tools.read' },
+      });
+
+      const long = await mcpConnectionRepository.setPendingAuth(created.id, {
+        resourceMetadataUrl: `https://auth.example.com/${'x'.repeat(MCP_CONNECTION_LIMITS.authChallengeUrlLength)}`,
+        message: 'again',
+      });
+      expect(long?.authChallenge?.resourceMetadataUrl).toBeUndefined();
+      expect(toMcpConnectionPublic(long!)).not.toHaveProperty('authChallenge');
+    });
+  });
+
+  describe('connection cap', () => {
+    const connectionNumber = (n: number) =>
+      apiKeyConnection({ slug: `conn_${n}`, urlEnc: `enc:url-${n}`, urlHost: `mcp${n}.example.com` });
+
+    it('refuses the create that would pass the cap', async () => {
+      for (let n = 0; n < 3; n++) await mcpConnectionRepository.createWithinUserCap(connectionNumber(n), 3);
+      await expect(mcpConnectionRepository.createWithinUserCap(connectionNumber(3), 3)).rejects.toThrow(
+        McpConnectionCapError
+      );
+      expect(await mcpConnectionRepository.countForUser('user-1')).toBe(3);
+    });
+
+    it('lets an uncontended create under the cap through', async () => {
+      for (let n = 0; n < 2; n++) await mcpConnectionRepository.createWithinUserCap(connectionNumber(n), 3);
+      await expect(mcpConnectionRepository.createWithinUserCap(connectionNumber(2), 3)).resolves.toMatchObject({
+        slug: 'conn_2',
+      });
+      expect(await mcpConnectionRepository.countForUser('user-1')).toBe(3);
+    });
+
+    it('never exceeds the cap under concurrent creates', async () => {
+      for (let n = 0; n < 2; n++) await mcpConnectionRepository.createWithinUserCap(connectionNumber(n), 3);
+      const results = await Promise.allSettled(
+        Array.from({ length: 8 }, (_, i) => mcpConnectionRepository.createWithinUserCap(connectionNumber(10 + i), 3))
+      );
+      const created = results.filter(r => r.status === 'fulfilled').length;
+      const rejected = results.filter(r => r.status === 'rejected');
+      expect(created).toBeLessThanOrEqual(1);
+      for (const failure of rejected)
+        expect((failure as PromiseRejectedResult).reason).toBeInstanceOf(McpConnectionCapError);
+      expect(await mcpConnectionRepository.countForUser('user-1')).toBeLessThanOrEqual(3);
+    });
+
+    it('counts per user, and refuses an org definition', async () => {
+      await mcpConnectionRepository.createWithinUserCap(connectionNumber(0), 1);
+      await expect(
+        mcpConnectionRepository.createWithinUserCap(apiKeyConnection({ ownerKey: 'user-2', userId: 'user-2' }), 1)
+      ).resolves.toMatchObject({ userId: 'user-2' });
+      await expect(mcpConnectionRepository.createWithinUserCap(orgDefinition(), 5)).rejects.toThrow(/user connections/);
+    });
+  });
+
   describe('malformed ids', () => {
     const BAD_ID = 'not-an-id';
     it.each([
@@ -1005,10 +1367,27 @@ describe('McpConnectionModel', () => {
       [
         'updateDiscovery',
         () =>
-          mcpConnectionRepository.updateDiscovery(BAD_ID, { tools: [], fingerprint: 'f', expectedFingerprint: null }),
+          mcpConnectionRepository.updateDiscovery(BAD_ID, {
+            tools: [],
+            fingerprint: 'f',
+            expectedFingerprint: null,
+            expectedRevision: 0,
+          }),
         null,
       ],
       ['deleteForOwner', () => mcpConnectionRepository.deleteForOwner(BAD_ID, OWNER), false],
+      [
+        'setApiKey',
+        () =>
+          mcpConnectionRepository.setApiKey(BAD_ID, OWNER, {
+            headerName: 'X',
+            scheme: 'raw',
+            valueEnc: 'e',
+            last4: '1',
+          }),
+        null,
+      ],
+      ['setPendingAuth', () => mcpConnectionRepository.setPendingAuth(BAD_ID, { message: 'm' }), null],
     ])('%s returns its empty value for a malformed id without throwing', async (_name, call, expected) => {
       expect(await call()).toBe(expected);
     });

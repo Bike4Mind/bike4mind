@@ -47,6 +47,21 @@ describe('makeCodeExecuteTool', () => {
     expect(out).toContain('Error: boom');
   });
 
+  it('caps a huge thrown error so one observation stays bounded', async () => {
+    const tool = makeCodeExecuteTool({ session });
+    const out = await tool.toolFn({ code: 'throw new Error("x".repeat(200000));' });
+    expect(out).toContain('chars truncated');
+    expect(out.length).toBeLessThan(7200);
+  });
+
+  it('caps stdout and error together to one shared budget', async () => {
+    const tool = makeCodeExecuteTool({ session });
+    const out = await tool.toolFn({ code: 'console.log("a".repeat(6900)); throw new Error("b".repeat(200000));' });
+    expect(out).toContain('--- stdout ---');
+    expect(out).toContain('--- error ---');
+    expect(out.length).toBeLessThan(7300);
+  });
+
   it('rejects empty code with a clear message rather than silently no-oping', async () => {
     const tool = makeCodeExecuteTool({ session });
     const out = await tool.toolFn({ code: '   ' });

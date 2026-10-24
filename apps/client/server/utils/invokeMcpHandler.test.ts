@@ -14,21 +14,24 @@ const {
   mockGetBreaker,
   mockClassifyOperation,
   mockRecordCircuitBreakerRejection,
+  mockFlushBreakerMetrics,
 } = vi.hoisted(() => ({
   mockIsMcpServerAvailable: vi.fn(),
   mockLocalMcpHandler: vi.fn(),
   mockGetBreaker: vi.fn(),
   mockClassifyOperation: vi.fn(),
   mockRecordCircuitBreakerRejection: vi.fn(),
+  mockFlushBreakerMetrics: vi.fn(),
 }));
 
 vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
   isMcpServerAvailable: mockIsMcpServerAvailable,
 }));
 
-vi.mock('@server/services/mcpCircuitBreakers', () => ({
+vi.mock('@bike4mind/server-utils/services/mcpCircuitBreakers', () => ({
   getBreaker: mockGetBreaker,
   classifyOperation: mockClassifyOperation,
+  flushBreakerMetrics: mockFlushBreakerMetrics,
   CircuitBreakerError,
 }));
 
@@ -51,12 +54,12 @@ vi.mock('@bike4mind/database', () => ({
   INTEGRATION_AUDIT_INTEGRATION_NAMES: ['github', 'atlassian', 'slack', 'linear', 'notion', 'optihashi'],
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordRateLimitEvent: vi.fn(),
   recordCircuitBreakerRejection: mockRecordCircuitBreakerRejection,
 }));
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: vi.fn().mockReturnValue({
       success: vi.fn(),
@@ -102,6 +105,7 @@ describe('invokeMcpHandler circuit breaker', () => {
     mockGetBreaker.mockReturnValue(createMockBreaker());
     mockClassifyOperation.mockReturnValue('read');
     mockRecordCircuitBreakerRejection.mockResolvedValue(undefined);
+    mockFlushBreakerMetrics.mockResolvedValue(undefined);
   });
 
   describe('DB-backed circuit breaker (Layer 1)', () => {
@@ -233,6 +237,64 @@ describe('invokeMcpHandler circuit breaker', () => {
       await expect(invokeMcpHandler(payload)).rejects.toThrow();
 
       expect(mockRecordCircuitBreakerRejection).toHaveBeenCalledWith('github');
+    });
+
+    // The throw ends the invocation, so the rejection metric must land before it.
+    it('does not throw the rejection until the rejection metric has settled', async () => {
+      mockGetBreaker.mockReturnValue(createOpenBreaker('github'));
+      let releaseMetric: () => void = () => {};
+      mockRecordCircuitBreakerRejection.mockReturnValueOnce(
+        new Promise<void>(resolve => {
+          releaseMetric = resolve;
+        })
+      );
+      let settled = false;
+
+      const call = invokeMcpHandler({
+        name: 'github',
+        action: 'callTool',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0]).catch((error: unknown) => {
+        settled = true;
+        throw error;
+      });
+      const outcome = expect(call).rejects.toThrow('temporarily unavailable');
+
+      await vi.waitFor(() => expect(mockRecordCircuitBreakerRejection).toHaveBeenCalledWith('github'));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+
+      releaseMetric();
+      await outcome;
+    });
+
+    // Transition metrics are started inside the breaker; the invocation must drain them before it returns.
+    it('does not settle until pending breaker transition metrics are flushed', async () => {
+      let releaseFlush: () => void = () => {};
+      mockFlushBreakerMetrics.mockReturnValueOnce(
+        new Promise<void>(resolve => {
+          releaseFlush = resolve;
+        })
+      );
+      let settled = false;
+
+      const call = invokeMcpHandler({
+        name: 'github',
+        action: 'callTool',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0]).then(result => {
+        settled = true;
+        return result;
+      });
+
+      await vi.waitFor(() => expect(mockFlushBreakerMetrics).toHaveBeenCalled());
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+
+      releaseFlush();
+      await expect(call).resolves.toEqual({ result: 'ok' });
     });
 
     it('should propagate non-CircuitBreakerError errors unchanged', async () => {

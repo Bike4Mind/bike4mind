@@ -9,7 +9,7 @@
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { requireEnv } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { oauthClientRepository, oauthAuthorizationCodeRepository, IOAuthClientDocument } from '@bike4mind/database';
 import { PKCE_CODE_VERIFIER_RE, PKCE_S256_CHALLENGE_RE } from './pkce';
 
@@ -219,7 +219,8 @@ export function getOidcDiscovery() {
     response_types_supported: ['code'],
     subject_types_supported: ['public'],
     id_token_signing_alg_values_supported: ['RS256'],
-    scopes_supported: ['openid', 'email', 'profile'],
+    scopes_supported: ['openid', 'email', 'profile', 'offline_access'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
     // The token endpoint reads client_secret only from the POST body, and public clients
     // (PKCE, no secret) are supported - so advertise exactly those two, not client_secret_basic.
     token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],

@@ -1,5 +1,15 @@
 import { IChatHistoryItem, ISessionRepository, IUser } from '@bike4mind/common';
 
+/**
+ * Conversations enumerated and batched, the same unit `onProgress` reports. Not a success
+ * count: a conversation failing schema validation is skipped without being counted, so
+ * `processedItems` can exceed what actually landed.
+ */
+export type ImportHistoryResult = {
+  processedItems: number;
+  totalItems: number;
+};
+
 export type ImportHistoryAdapters = {
   db: {
     withTransaction: <T>(fn: () => Promise<T>) => Promise<T>;

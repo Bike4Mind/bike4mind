@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash } from 'node:crypto';
-import { getPublishedArtifactsStorage } from '@server/utils/storage';
+import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact } from '@bike4mind/database';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import { validateBundle, buildPublishUrlPath, invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
@@ -182,6 +183,9 @@ const handler = baseApi().post(async (req, res) => {
     // version is visible immediately, not after the TTL. Only public pages are
     // CDN-cached (gated are no-store). Best-effort, never throws.
     if (artifact.visibility === 'public') void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+
+    // Best-effort, never throws: the restored version gets its own owner-only thumbnail.
+    await enqueuePublishThumbnail({ publicId, versionId: newSha }, req.logger);
 
     const url = buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug);
     req.logger.info(`[RESTORE] ${publicId} → restored ${targetSha.slice(0, 12)} as new version ${newSha.slice(0, 12)}`);

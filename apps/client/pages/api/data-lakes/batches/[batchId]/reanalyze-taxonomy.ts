@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { isDevelopment } from '@server/utils/config';
+import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { analyzeBatchTaxonomy, claimBatchForAnalysis } from '@server/dataLakes/analyzeBatchTaxonomy';
 import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
 import {
@@ -21,6 +21,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { dataLakeBatchRepository, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { assertRequestCanAfford } from '@server/billing/meterPlatformCompletion';
 
 // Shared with the automatic post-upload trigger (see taxonomyRateLimit.ts) - a manual
 // re-analyze is still a real OpenAI spend per click, same as the automatic path.
@@ -42,11 +43,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   // POST: manually re-run AI tag inference for an already-analyzed (or failed) batch. Shares
   // its claim/sample/infer/store/notify orchestration with the automatic post-upload queue
   // handler via analyzeBatchTaxonomy - see that function for the guarded-claim details.
-  .post(async (req: Request, res) => {
+  .post(async (req, res) => {
     const { batchId } = req.query as { batchId: string };
     const { context } = ReanalyzeTaxonomyRequestInput.parse(req.body);
     const userId = req.user.id;
 
+    // Refuse before claiming the batch: a 422 here leaves it in its prior ready/failed state.
+    await assertRequestCanAfford(req);
     const ctx = await toAccessContext(req);
     // The gate and the claim serialize against a concurrent revoke; the inference call runs after
     // commit (see `serializeLakeClaim`), so a transaction retry never repeats it.
@@ -76,6 +79,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       result = await analyzeBatchTaxonomy(batchId, batch.dataLakeId, userId, req.logger, {
         claimHeldByCaller: true,
         context,
+        req,
       });
     } catch (error) {
       // Unlike the queue handler, there's no SQS retry available on this synchronous

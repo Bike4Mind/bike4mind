@@ -13,7 +13,7 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: any, _res: any, next: any) => next(),
 }));
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.fn() }));
@@ -51,8 +51,14 @@ vi.mock('@bike4mind/services', () => ({
 const mockRevokeBySid = vi.fn();
 const mockFindBySid = vi.fn();
 const mockEndConnections = vi.fn();
+const mockUserFindById = vi.fn();
+const mockRecordForActor = vi.fn();
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionForActor: (...args: any[]) => mockRecordForActor(...args),
+}));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: {},
+  userRepository: { findById: (...args: any[]) => mockUserFindById(...args) },
   realtimeConnectionRepository: { endConnections: (...args: any[]) => mockEndConnections(...args) },
   authSessionRepository: {
     revokeBySid: (...args: any[]) => mockRevokeBySid(...args),
@@ -121,6 +127,8 @@ describe('POST /api/auth/returnToAdmin', () => {
     vi.clearAllMocks();
     mockRevokeBySid.mockResolvedValue(undefined);
     mockEndConnections.mockResolvedValue({ connectionIds: [] });
+    mockRecordForActor.mockResolvedValue(null);
+    mockUserFindById.mockResolvedValue({ id: 'cust-1', name: 'Customer', username: 'customer' });
     mockRotateSession.mockResolvedValue({
       status: 'rotated',
       user: { id: 'admin-1' },
@@ -131,7 +139,7 @@ describe('POST /api/auth/returnToAdmin', () => {
       impersonatedBy: null,
     });
     // The impersonation session this admin created.
-    mockFindBySid.mockResolvedValue({ sid: 'cust-sid', impersonatedBy: 'admin-1' });
+    mockFindBySid.mockResolvedValue({ sid: 'cust-sid', userId: 'cust-1', impersonatedBy: 'admin-1' });
   });
 
   it('restores the admin session: rotates the parked token into the primary cookie and clears the return cookie', async () => {
@@ -236,5 +244,66 @@ describe('POST /api/auth/returnToAdmin', () => {
 
     await expect(handler(req as any, res as any)).rejects.toBeInstanceOf(Error);
     expect(mockRotateSession).not.toHaveBeenCalled();
+  });
+
+  describe('impersonation end audit', () => {
+    const cookie = 'b4m_rt=cust-sid.cust-secret; b4m_rt_admin=admin-sid.admin-secret';
+
+    it('records user.impersonation.ended as the restored admin when the rotation succeeded', async () => {
+      mockRotateSession.mockResolvedValue({
+        status: 'rotated',
+        user: { id: 'admin-1', username: 'admin', name: 'Admin', isAdmin: true },
+        userId: 'admin-1',
+        accessToken: 'admin-access',
+        refreshToken: 'admin-refresh-rotated',
+        sid: 'admin-sid',
+        impersonatedBy: null,
+      });
+      const { req, res } = post(cookie);
+
+      await handler(req as any, res as any);
+
+      expect(mockRecordForActor).toHaveBeenCalledTimes(1);
+      const [, actor, input] = mockRecordForActor.mock.calls[0];
+      expect(actor).toMatchObject({ kind: 'user', userId: 'admin-1', impersonatedUserId: 'cust-1' });
+      expect(input).toMatchObject({
+        action: 'user.impersonation.ended',
+        target: { kind: 'user', id: 'cust-1', displayName: 'Customer' },
+        related: { impersonationSessionId: 'cust-sid' },
+      });
+    });
+
+    it('records nothing when the rotation coalesced, so a double click writes one entry', async () => {
+      mockRotateSession.mockResolvedValue({
+        status: 'coalesced',
+        user: { id: 'admin-1' },
+        userId: 'admin-1',
+        accessToken: 'admin-access',
+        sid: 'admin-sid',
+        impersonatedBy: null,
+      });
+      const { req, res } = post(cookie);
+
+      await handler(req as any, res as any);
+
+      expect(mockRecordForActor).not.toHaveBeenCalled();
+    });
+
+    it("records nothing when the impersonation session is not this admin's", async () => {
+      mockFindBySid.mockResolvedValue({ sid: 'cust-sid', userId: 'cust-1', impersonatedBy: 'a-different-admin' });
+      const { req, res } = post(cookie);
+
+      await handler(req as any, res as any);
+
+      expect(mockRecordForActor).not.toHaveBeenCalled();
+    });
+
+    it('records nothing when there is no impersonation cookie to name a session', async () => {
+      const { req, res } = post('b4m_rt_admin=admin-sid.admin-secret');
+
+      await handler(req as any, res as any);
+
+      expect(mockRecordForActor).not.toHaveBeenCalled();
+    });
   });
 });

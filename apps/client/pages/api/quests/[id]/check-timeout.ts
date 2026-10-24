@@ -1,13 +1,13 @@
 import { chatMessageResponseSchema, redactPromptMetaForViewer } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { respond } from '@server/utils/respond';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import {
   resolveQuestTimeoutRecovery,
   STUCK_QUEST_RECOVERED_LOG,
 } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
-import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
+import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 import type { Request } from 'express';
 
 const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, res) => {

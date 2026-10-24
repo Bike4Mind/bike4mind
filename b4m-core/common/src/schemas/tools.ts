@@ -8,7 +8,7 @@ import { z } from 'zod';
  * SUPPORTED_TOOLS in packages/server-utils/src/cli/toolsHandler.shared.ts.
  */
 export const ToolExecutionRequestSchema = z.object({
-  toolName: z.enum(['weather_info', 'web_search', 'web_fetch']),
+  toolName: z.enum(['weather_info', 'web_search', 'web_fetch', 'decide']),
   input: z.record(z.string(), z.unknown()),
 });
 

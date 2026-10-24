@@ -19,6 +19,15 @@ import {
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
+import { isPartnerDomainSignupAllowed } from '@server/utils/auth/partnerSignupBypass';
+import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
+import {
+  BOOTSTRAP_ADMIN_EMAIL_ENV,
+  claimBootstrapAdmin,
+  configuredBootstrapAdminEmail,
+  releaseBootstrapAdminClaim,
+  resolveBootstrapAdmin,
+} from '@server/utils/auth/bootstrapAdmin';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -33,12 +42,12 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
-import { emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
+import { emitEmailVerifiedFunnelEvents, emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import * as z from 'zod';
@@ -171,6 +180,24 @@ const handler = baseApi({ auth: false })
         return res.status(403).json({ error: 'This account has been suspended.' });
       }
 
+      // A configured bootstrap admin whose account was created but never promoted (a write failed
+      // after creation) is promoted on this sign-in, so the install is not left without an admin.
+      if (
+        process.env.B4M_SELF_HOST === 'true' &&
+        !existingUser.isAdmin &&
+        normalizedEmail === configuredBootstrapAdminEmail() &&
+        (await userRepository.count({ isAdmin: true })) === 0
+      ) {
+        try {
+          await userRepository.update({ id: existingUser.id, isAdmin: true });
+          existingUser.isAdmin = true;
+          req.logger.info('Self-host bootstrap: configured admin promoted on sign-in', { userId: existingUser.id });
+        } catch (err) {
+          // Best-effort like the verified flag below: the nonce is already rotated, and the next sign-in retries.
+          req.logger.warn('Self-host bootstrap: sign-in promotion failed', { userId: existingUser.id, err });
+        }
+      }
+
       // OTC proves email ownership - mark verified on first successful sign-in.
       // Best-effort: the nonce is already rotated, so a transient write failure on this
       // bookkeeping must not 500 a proven login (the retry would dead-end as "Invalid
@@ -210,6 +237,11 @@ const handler = baseApi({ auth: false })
           }
           if (grants.currentCredits !== null) existingUser.currentCredits = grants.currentCredits;
           if (grants.joinedOrganizationId) existingUser.organizationId = grants.joinedOrganizationId;
+          await emitEmailVerifiedFunnelEvents({
+            user: existingUser,
+            method: 'otc',
+            creditsGranted: grants.creditsGranted + grants.subscriptionCreditsGranted,
+          });
         } catch (err) {
           req.logger.error('OTC login emailVerified update failed', err);
         }
@@ -296,6 +328,15 @@ const handler = baseApi({ auth: false })
 
     // --- NEW USER REGISTRATION ---
     // Reached only after a correct code, so this is enumeration-safe.
+    // A fresh self-host install admits its bootstrap account and promotes it to admin below.
+    const isSelfHost = process.env.B4M_SELF_HOST === 'true';
+    const bootstrap = resolveBootstrapAdmin({
+      isSelfHost,
+      userCount: isSelfHost ? await userRepository.count({}) : 0,
+      email: normalizedEmail,
+      bootstrapEmail: configuredBootstrapAdminEmail(),
+    });
+
     // If no username was supplied, this is a login attempt for an email with no account:
     // signal the client to collect a username and finish registration inline. The code is
     // single-use (the nonce was already rotated above), so hand back a re-issued token
@@ -303,26 +344,31 @@ const handler = baseApi({ auth: false })
     // registration in one continuous flow with NO second OTC email (same pattern as the
     // wrong-code re-issue above). Only reachable post-verification, so it leaks nothing.
     if (!username || typeof username !== 'string') {
+      const partnerAllowed = !bootstrap.eligible && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
       const registrationToken = jwt.sign({ email: tokenPayload.email, attempts, jti: newNonce }, Config.JWT_SECRET, {
         algorithm: 'HS256',
         expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)),
       });
       return res.status(200).json({
         registrationRequired: true,
+        registrationAllowed: bootstrap.eligible || partnerAllowed || (await isOpenRegistrationAllowed()),
         email: normalizedEmail,
         pendingToken: registrationToken,
       });
     }
 
-    // Self-host bootstrap: a fresh install has no admin to issue invites or enable
-    // open registration, so the first account skips the invite gate and gets admin.
-    const isBootstrapUser = process.env.B4M_SELF_HOST === 'true' && (await userRepository.count({})) === 0;
+    // Only the claim winner is the bootstrap user; anyone else registers under the normal rules.
+    let bootstrapClaimId: string | null = null;
 
     // Register + finalize (email-verified state, deferred free-credit grant) in one
     // service call. registerViaOTC grants credits BEFORE dropping the pending tag, so
     // a grant failure leaves a retry breadcrumb rather than losing credits.
     let newUser: Awaited<ReturnType<typeof userService.registerViaOTC>>;
     try {
+      // Inside the try so a claim or lookup failure still re-issues the token (the nonce is spent).
+      bootstrapClaimId = bootstrap.eligible ? await claimBootstrapAdmin() : null;
+      const partnerDomainAllowed =
+        bootstrapClaimId === null && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
       newUser = await userService.registerViaOTC(
         {
           username: username.trim(),
@@ -362,10 +408,15 @@ const handler = baseApi({ auth: false })
             creditLots: creditLotRepository,
           },
           logger: req.logger,
-          skipInviteCheck: isBootstrapUser,
+          skipInviteCheck: bootstrapClaimId !== null || partnerDomainAllowed,
         }
       );
     } catch (err) {
+      if (bootstrapClaimId) {
+        await releaseBootstrapAdminClaim(bootstrapClaimId).catch(releaseErr =>
+          req.logger.error('Self-host bootstrap claim release failed', releaseErr)
+        );
+      }
       // Registration failed AFTER the single-use nonce was rotated above, so the token the
       // client is holding can never validate again - without a re-issue every retry dies as a
       // generic "Invalid code." Re-issue with the rotated nonce so the user can fix
@@ -390,8 +441,15 @@ const handler = baseApi({ auth: false })
       throw new InternalServerError('Registration failed. Please try again.', { pendingToken: reissuedToken });
     }
 
+    const isBootstrapUser = bootstrapClaimId !== null;
+
     // Promote the self-host bootstrap account so the instance has an admin from day one.
     if (isBootstrapUser && newUser?.id) {
+      if (bootstrap.unconfigured) {
+        req.logger.warn(
+          `Self-host bootstrap admin email is not configured; set ${BOOTSTRAP_ADMIN_EMAIL_ENV} to choose the first admin. Promoting the first registered user instead.`
+        );
+      }
       const promoted = await userRepository.update({ id: newUser.id, isAdmin: true });
       if (promoted) newUser = promoted;
       req.logger.info('Self-host bootstrap: first registered user promoted to admin', { userId: newUser.id });
@@ -440,13 +498,12 @@ const handler = baseApi({ auth: false })
     }
     const funnelUser = { id: newUser.id, ...signupFunnel };
     await emitFunnelEvent({ user: funnelUser, event: 'email_verified', metadata: { method: 'otc' } });
-    if ((newUser.currentCredits ?? 0) > 0) {
-      await emitFunnelEvent({
-        user: funnelUser,
-        event: 'credits_granted',
-        metadata: { amount: newUser.currentCredits, source: 'signup', method: 'otc' },
-      });
-    }
+    await emitFunnelEvent({
+      user: funnelUser,
+      event: 'credits_granted',
+      metadata: { amount: newUser.currentCredits ?? 0, source: 'signup', method: 'otc' },
+    });
+    await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' } });
 
     const registrationSession = await authSessionService.issueSession(
       newUser.id,

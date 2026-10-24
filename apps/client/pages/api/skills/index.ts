@@ -12,8 +12,8 @@ import {
   validateSkillArgumentHint,
   validateSkillAllowedTools,
 } from '@server/utils/skillValidation';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
-import { ensureAdmin } from '@server/utils/errors';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { ShareableSkill, canManageSkillSharingWith, redactShareRosterForViewer } from '@server/utils/skillAccess';
 import { attachMarketStatus } from '@server/skillMarket/marketStatus';
@@ -48,8 +48,7 @@ async function resolveCreateScope(
     return { isSystem: true };
   }
 
-  // Org-scoped: verifyOrgAccess throws NotFound/Forbidden if the caller isn't
-  // an admin, owner, or manager of the target organization.
+  // verifyOrgAccess admits the same set that can later manage the skill (skillAccess.isOrgAdminFor).
   await verifyOrgAccess(user, scope.organizationId as string);
   return { organizationId: scope.organizationId as string };
 }

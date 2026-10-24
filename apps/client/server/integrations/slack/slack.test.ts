@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // Mock the SST-backed Config so the test never touches `Resource`.
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: mocks.config,
 }));
 
@@ -45,7 +45,7 @@ vi.mock('@bike4mind/services', () => ({
   escapeSlackText: (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordFeedbackDeliverySuccess: vi.fn(),
   recordFeedbackDeliveryFailure: vi.fn(),
   recordFeedbackDeliverySkipped: vi.fn(),
@@ -64,7 +64,7 @@ import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
   recordFeedbackDeliverySkipped,
-} from '@server/utils/cloudwatch';
+} from '@bike4mind/server-utils/utils/cloudwatch';
 
 describe('resolveSlackWebhookUrl', () => {
   const channelUrl = 'https://hooks.slack.com/services/channel';
@@ -439,5 +439,18 @@ describe('postEmailMirrorToSlack', () => {
     mocks.post.mockRejectedValue(Object.assign(new Error('timeout of 5000ms exceeded'), { code: 'ECONNABORTED' }));
     await expect(postEmailMirrorToSlack(payload)).resolves.toBeUndefined();
     expect(Logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays silent when only a general webhook is configured', async () => {
+    // The mirror carries private email content, so it must never fall back to the default or
+    // feedback channel: an audit webhook that is not set means no mirror at all.
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackDefaultWebhookUrl: 'https://hooks.slack.com/services/general',
+      SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback',
+    });
+
+    await postEmailMirrorToSlack(payload);
+
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 });

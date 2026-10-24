@@ -1,7 +1,7 @@
 /**
  * Browser stand-in for the node:crypto helpers that the `@bike4mind/common` barrel pulls
  * in (createHash/createHmac, reached from artifactHelpers, anonymousSessionId and
- * lakeConfigAudit). The renderer is sandboxed with no node builtins, so that import has to
+ * lakeConfigAudit; timingSafeEqual, from signedImageUrl). The renderer is sandboxed with no node builtins, so that import has to
  * resolve to something or the bundle will not link at all.
  *
  * These throw instead of no-opping, which is the one way this differs from the
@@ -28,4 +28,8 @@ export function createHmac(_algorithm: string, _key: unknown): never {
   return unavailable('createHmac');
 }
 
-export default { createHash, createHmac };
+export function timingSafeEqual(_a: unknown, _b: unknown): never {
+  return unavailable('timingSafeEqual');
+}
+
+export default { createHash, createHmac, timingSafeEqual };

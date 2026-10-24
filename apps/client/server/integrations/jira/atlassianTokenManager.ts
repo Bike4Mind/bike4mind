@@ -95,7 +95,7 @@ export class AtlassianTokenManager {
     if (!tokenData.access_token || typeof tokenData.expires_in !== 'number') {
       throw new Error('Access token or expiry missing from Atlassian response');
     }
-    const nextRefreshToken = tokenData.refresh_token ?? user.atlassianConnect.refreshToken;
+    const nextRefreshToken = tokenData.refresh_token ?? decryptToken(user.atlassianConnect.refreshToken);
     if (!nextRefreshToken) {
       throw new Error('Refresh token missing from Atlassian response');
     }
@@ -136,11 +136,14 @@ export class AtlassianTokenManager {
     if (atlassianServer) {
       await mcpServerRepository.update({
         id: atlassianServer.id,
-        envVariables: encryptEnvVariables([
-          { key: 'ATLASSIAN_ACCESS_TOKEN', value: tokenData.access_token },
-          { key: 'ATLASSIAN_CLOUD_ID', value: selectedResource.id },
-          { key: 'ATLASSIAN_SITE_URL', value: siteUrl },
-        ]),
+        envVariables: encryptEnvVariables(
+          [
+            { key: 'ATLASSIAN_ACCESS_TOKEN', value: tokenData.access_token },
+            { key: 'ATLASSIAN_CLOUD_ID', value: selectedResource.id },
+            { key: 'ATLASSIAN_SITE_URL', value: siteUrl },
+          ],
+          atlassianServer
+        ),
       });
       console.log(
         `✅ Updated Atlassian MCP server with refreshed tokens (site: ${selectedResource.name || selectedResource.id})`

@@ -48,6 +48,15 @@ describe('ChatService agent browser', () => {
       title: 'App',
       text: pageUrl.startsWith('https://mail.') ? 'your code is 123456' : '[1] button "Add"',
       truncated: false,
+      model: {
+        url: pageUrl,
+        title: 'App',
+        capturedAt: '2026-10-24T12:00:00.000Z',
+        blocks: [],
+        actions: [],
+        claims: [],
+        truncated: false,
+      },
     }),
     click: async () => 'Add',
     scroll: async () => 'Add',
@@ -67,15 +76,19 @@ describe('ChatService agent browser', () => {
     imported = [];
     approvals = new ApprovalGate();
     granted = [root];
-    events = [];
-    streams = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
+    const opened: PassThrough[] = [];
+    streams = opened;
     closed = [];
     models = [{ id: 'test-model', name: 'Test', backend: 'openai' }];
-    post = vi.fn().mockImplementation(() => {
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
     const browser: BrowserProvider = {
       context: (_sessionId, keepScreenshot) => ({
         page: async () => page,
@@ -104,10 +117,10 @@ describe('ChatService agent browser', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 
@@ -195,7 +208,7 @@ describe('ChatService agent browser', () => {
     expect(messages[resultTurn + 1]).toEqual({
       role: 'user',
       content: [
-        { type: 'text', text: 'Screenshot from the browser_screenshot call above.' },
+        { type: 'text', text: 'Image from the browser_screenshot call above.' },
         {
           type: 'image',
           source: { type: 'base64', media_type: 'image/png', data: Buffer.from([137, 80, 78, 71]).toString('base64') },

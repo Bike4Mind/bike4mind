@@ -28,6 +28,7 @@ import {
 import { buildRetrievalConflictSignal, type RetrievalPassage } from '../../../../dataLakeService/retrievalConflictNote';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
+import { INDEXED_TOOL_CITATION_RULE } from '../../citationNumbering';
 import { attributeAccessedLakeIds, citableOriginFor } from '../../../../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 
@@ -610,7 +611,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // assembled, so computing it down there could never reach them.
           const conflict = buildRetrievalConflictSignal(conflictPassages);
 
-          const citables: CitableSource[] = retrievedFiles.map((file, index) => {
+          const unnumberedCitables: CitableSource[] = retrievedFiles.map((file, index) => {
             const conflictsWith = conflict.conflictsByFileId.get(file.id);
             const fileTagNames = file.tags?.map(t => t.name) || [];
             return {
@@ -640,6 +641,16 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               },
             };
           });
+
+          const numberedCitables = context.numberCitables?.(unnumberedCitables);
+          const citables = numberedCitables ?? unnumberedCitables;
+          // sections, retrievedFiles and citables are pushed in the same iteration, so index i is
+          // one file across all three. The heading is ours at column 0 (forced retrieval's shape).
+          const labelledSections = numberedCitables
+            ? sections.map((section, i) =>
+                section.replace(/^### /, `### [${numberedCitables[i].metadata?.citationIndex}] `)
+              )
+            : sections;
 
           // citables mirrors retrievedFiles 1:1 and is therefore always non-empty here (the
           // retrievedFiles.length === 0 case returns above, before this point). retrieval is
@@ -673,7 +684,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // The conflict note below is last of our column-0 framing, nearest the content it
           // describes: the documents the caller named disagree, so say so rather than pick a side.
           const result =
-            header + '\n' + `${GROUNDED_NO_INVENTION_RULE}\n\n` + conflict.note + renderRetrievedContentBlock(sections);
+            header +
+            '\n' +
+            `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+            (numberedCitables ? `${INDEXED_TOOL_CITATION_RULE}\n\n` : '') +
+            conflict.note +
+            renderRetrievedContentBlock(labelledSections);
 
           // Retrieval-scoped lake-prompt injection (#1108): prepend the operating instructions of
           // the trusted lakes this content came from. Skipped for the agent-scoped branch, which

@@ -10,12 +10,16 @@ import { getImageEdit } from '@server/imageGenerations/imageEdit';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
+import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@server/utils/orgAccess';
 import { editImageContract } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
 
 const handler = nextRouteForContract(editImageContract).post(async (req, res) => {
-  const { callbackUrl, ...body } = req.validated;
+  assertNoStrayBillingOrgKeys(req.body);
+  // organization_id is the request alias; only the mapped value goes on to the queue.
+  const requestedOrgId = resolveBillingOrgInput(req.validated);
+  const { callbackUrl, organization_id: _orgAlias, ...body } = req.validated;
   assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
@@ -29,7 +33,7 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   });
 
   // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
-  const effectiveOrgId = await resolveMediaBillingOrgId(req, body.organizationId);
+  const effectiveOrgId = await resolveMediaBillingOrgId(req, requestedOrgId);
 
   const quest = await getImageEdit().invoke({
     userId: req.user.id,

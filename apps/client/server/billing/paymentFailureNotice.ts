@@ -3,9 +3,9 @@ import type { Logger } from '@bike4mind/observability';
 import { requireEnv } from '@bike4mind/common';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
-import { stripe } from '@server/integrations/stripe/stripe';
+import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { EmailEvents } from '@server/utils/eventBus';
 import {
   buildCanceledForNonPaymentEmail,

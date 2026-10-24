@@ -1,11 +1,9 @@
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
-import {
-  OpenInFullOutlined as ExpandIcon,
-  ContentCopyOutlined as CopyIcon,
-  SaveOutlined as SaveIcon,
-} from '@mui/icons-material';
+import ExpandIcon from '@mui/icons-material/OpenInFullOutlined';
+import CopyIcon from '@mui/icons-material/ContentCopyOutlined';
+import SaveIcon from '@mui/icons-material/SaveOutlined';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
@@ -18,6 +16,7 @@ import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
 import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
 import { artifactFileName } from '@client/app/utils/artifactFileName';
 import { getCodeFileType } from './codeArtifactFileType';
+import { CodeBlockActionControls, useCodeBlockActionOutlet } from '@client/app/components/common/CodeBlockActions';
 
 interface CodeArtifactData {
   title: string;
@@ -37,6 +36,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
   const { currentSession, setCurrentSession, currentSessionId } = useSessions();
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const { setWorkBenchFiles } = useWorkBenchActions();
+  const { outputSlot, outlet } = useCodeBlockActionOutlet();
 
   // Reveals the rest of a truncated body in place. There is no card-level fold: bounding
   // the body is the truncation's job, and Show less puts it back.
@@ -207,6 +207,8 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             className="code-artifact-actions"
             sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}
           >
+            <CodeBlockActionControls code={data.code} language={data.language || 'text'} outputSlot={outputSlot} />
+
             <Tooltip title="Copy code to clipboard" placement="top">
               <IconButton size="sm" variant="plain" color="neutral" sx={actionButtonSx} onClick={handleCopy}>
                 <CopyIcon />
@@ -298,6 +300,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             )}
           </>
         )}
+        {outlet}
       </Box>
     </Card>
   );

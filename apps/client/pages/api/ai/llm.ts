@@ -10,8 +10,9 @@ import {
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -82,8 +83,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
 
     // Resolve the billing org from the client-supplied value, rejecting any org the caller is
     // not a member of (a bare body value would otherwise let A bill B's credit pool).
-    // null = personal account, undefined = fall back to the caller's own org.
-    const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
+    // null = personal account, undefined = fall back to the caller's own org. An org-billed
+    // API key always bills its own org, as on the v1 media routes; naming another is a 403.
+    const effectiveOrgId = await resolveRequestBillingOrgId(req, invokeParams.organizationId);
 
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: reqSessionId,
@@ -106,8 +108,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // RESOLVES the id rather than testing membership: an allowlisted id an admin has disabled (or a
     // lake bound to a since-delisted id) would otherwise suppress the identity here while the
     // completion path injects nothing, leaving the session with no system prompt at all.
-    // Prepended ahead of any client-sent context.
-    if (!(await sessionWillInjectAuthoredPrompt(session))) {
+    // Prepended ahead of any client-sent context. The quest runs in another process that reloads and
+    // re-resolves the session, so this resolve is not threaded through; a mismatch only moves the identity.
+    if (!(await sessionWillInjectAuthoredPrompt(session, { user: req.user, logger: req.logger }))) {
       const identityPrompts = await loadBaseIdentitySystemPromptMessages(req.logger);
       if (identityPrompts.length > 0) {
         invokeParams.extraContextMessages = [...identityPrompts, ...(invokeParams.extraContextMessages ?? [])];
@@ -142,6 +145,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...requestTurnAuth(req),
+      adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
     });
 
     // Handle case where quest creation failed (session or quest not found during invoke)

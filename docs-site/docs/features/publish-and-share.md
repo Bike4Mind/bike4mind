@@ -79,6 +79,9 @@ Never rely on a URL being hard to guess. If content shouldn't be seen by everyon
 
 All publish endpoints require auth (`x-api-key` or a bearer token). See the [Publish & Share Cookbook](./publish-and-share-cookbook.md) for copy-paste recipes.
 
+For a user-scoped bundle, set `scopeId` to your authenticated user ID. Your editable
+display name or username does not select a publishing namespace.
+
 | Method & path | Purpose |
 |---|---|
 | `POST /api/publish/reply` | Publish a reply (`{ sessionId, messageId }`) |
@@ -89,3 +92,40 @@ All publish endpoints require auth (`x-api-key` or a bearer token). See the [Pub
 | `GET /api/publish/artifacts/{publicId}` | Fetch one |
 | `PATCH /api/publish/artifacts/{publicId}` | Update title/description/visibility, or `{"discoverable": true\|false}` to change the search listing |
 | `DELETE /api/publish/artifacts/{publicId}` | Unpublish (soft-delete) |
+
+## Troubleshooting
+
+- If a user-scoped upload returns 403, check that `scopeId` is your user ID.
+- After too many incorrect passphrase attempts, wait for the retry interval before
+  trying again. The limit applies to your IP address for that artifact.
+- A bundle can hold several pages. Any other `.html` file in it opens at its own URL
+  (for example `/p/u/{scopeId}/{slug}/guide/intro.html`) in the same protected viewer as
+  the main page, and one passphrase unlock covers every page in the bundle. Link pages
+  to each other with relative links such as `guide/intro.html` or `../index.html`.
+- PDFs, MP4/WebM video, audio and common image formats in a bundle open in the browser
+  when linked, and `<video>`/`<audio>` elements play with seeking, including on
+  passphrase-protected pages. They are delivered from file storage through short-lived
+  links issued after the access check. Use MP4 rather than HLS for video.
+- Those storage links stay valid until they expire: 15 minutes for a file you open or
+  download. Media playing in a passphrase-protected page keeps working until the unlock
+  that opened the page expires (at most 2 hours). On pages protected by sign-in, an
+  organization, an email domain or a protected share link, media links last 15 minutes,
+  so a long video can stop seeking after that; reload the page to get fresh links.
+  Unpublishing an artifact, changing its passphrase, revoking a share link or removing
+  someone from an organization does not revoke links already issued. Treat those changes
+  as taking effect once those windows have passed.
+- A script in the page that loads its own audio, video or PDF (for example with `fetch`)
+  gets the file from the page's own address, so it works as long as the file is under
+  about 4 MB. Larger files, and files played by a plain `<video>`/`<audio>` element, come
+  from file storage.
+- An HTML export, and a protected page on a deployment without file storage links,
+  include media files directly in the page while they fit (3 MB per file, 6 MB in all).
+  Files that do not fit are left out, and the response names them in its
+  `X-Publish-Dropped-Asset-Names` header.
+- Do not put a `%` in a bundle file or folder name. Such a file cannot be opened from a link
+  or by its URL; rename it (for example `100-percent.pdf`) before publishing.
+- Other files (archives, SVG, data files) download when opened. Add `?download=1` to any
+  file's URL, a page's included, to download it instead of viewing it.
+- WebAssembly modules are served as `application/octet-stream`, so
+  `WebAssembly.instantiateStreaming` rejects them. Load them with
+  `WebAssembly.instantiate` on the fetched bytes instead.

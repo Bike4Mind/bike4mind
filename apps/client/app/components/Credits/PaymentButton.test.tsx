@@ -37,12 +37,14 @@ vi.mock('./PaymentModal', () => ({
     onClose,
     onConfirmResult,
     onPayment,
+    onPaymentPending,
     productName,
   }: {
     isOpen: boolean;
     onClose: () => void;
     onConfirmResult: (result: ConfirmResult) => void;
     onPayment: () => void;
+    onPaymentPending?: () => void;
     productName: string;
   }) =>
     isOpen ? (
@@ -50,6 +52,7 @@ vi.mock('./PaymentModal', () => ({
         <span data-testid="payment-modal-title">{productName}</span>
         <button data-testid="payment-modal-confirm-btn" onClick={() => onConfirmResult(confirmResult)} />
         <button data-testid="payment-modal-pay-btn" onClick={onPayment} />
+        <button data-testid="payment-modal-pending-btn" onClick={onPaymentPending} />
         <button data-testid="payment-modal-close-btn" onClick={onClose} />
       </div>
     ) : null,
@@ -63,7 +66,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 const renderButton = () =>
   render(
     <TestWrapper>
-      <PaymentButton transactionType={TransactionType.Package} packageId={CreditPackageId.A} onPayment={vi.fn()} />
+      <PaymentButton transactionType={TransactionType.Package} packageId={CreditPackageId.Usd20} onPayment={vi.fn()} />
     </TestWrapper>
   );
 
@@ -78,6 +81,27 @@ describe('PaymentButton funnel events', () => {
     });
   });
 
+  it('propagates retrieved pending state and does not abandon the checkout on close', async () => {
+    const onPayment = vi.fn();
+    const onPaymentPending = vi.fn();
+    render(
+      <TestWrapper>
+        <PaymentButton
+          transactionType={TransactionType.Package}
+          packageId={CreditPackageId.Usd20}
+          onPayment={onPayment}
+          onPaymentPending={onPaymentPending}
+        />
+      </TestWrapper>
+    );
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+    await userEvent.click(await screen.findByTestId('payment-modal-pending-btn'));
+    await userEvent.click(screen.getByTestId('payment-modal-close-btn'));
+    expect(onPaymentPending).toHaveBeenCalledTimes(1);
+    expect(onPayment).not.toHaveBeenCalled();
+    expect(loggedTypes()).not.toContain(CreditPurchaseEvents.PAYMENT_ABANDONED);
+  });
+
   it('records the request, the opened form and the confirm result against the intent', async () => {
     renderButton();
 
@@ -87,7 +111,7 @@ describe('PaymentButton funnel events', () => {
 
     expect(logEvent).toHaveBeenCalledWith({
       type: CreditPurchaseEvents.CHECKOUT_REQUESTED,
-      metadata: { transactionType: TransactionType.Package, packageId: CreditPackageId.A },
+      metadata: { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
     });
     expect(logEvent).toHaveBeenCalledWith({
       type: CreditPurchaseEvents.PAYMENT_FORM_OPENED,
@@ -162,7 +186,11 @@ describe('PaymentButton start-payment requests', () => {
     apiPost.mockReturnValue(new Promise(resolve => (resolveStart = resolve)));
     const ui = () => (
       <TestWrapper>
-        <PaymentButton transactionType={TransactionType.Package} packageId={CreditPackageId.A} onPayment={vi.fn()} />
+        <PaymentButton
+          transactionType={TransactionType.Package}
+          packageId={CreditPackageId.Usd20}
+          onPayment={vi.fn()}
+        />
       </TestWrapper>
     );
     const { rerender } = render(ui());
@@ -219,23 +247,23 @@ describe('PaymentButton start-payment requests', () => {
         <PaymentButton transactionType={TransactionType.Package} packageId={packageId} onPayment={onPayment} />
       </TestWrapper>
     );
-    const { rerender } = render(ui(CreditPackageId.A));
+    const { rerender } = render(ui(CreditPackageId.Usd20));
 
     await userEvent.click(screen.getByTestId('credits-purchase-btn'));
-    rerender(ui(CreditPackageId.C));
+    rerender(ui(CreditPackageId.Usd100));
     resolveStart({ data: { clientSecret: 'pi_1_secret_x', publishableKey: 'pk_test', paymentIntentId: 'pi_1' } });
 
-    const packA = CREDIT_PACKAGES[CreditPackageId.A];
+    const pack20 = CREDIT_PACKAGES[CreditPackageId.Usd20];
     expect(await screen.findByTestId('payment-modal-title')).toHaveTextContent(
-      `${formatCreditAmount(packA.credits)} Credits Package`
+      `${formatCreditAmount(pack20.credits)} Credits Package`
     );
     await userEvent.click(screen.getByTestId('payment-modal-pay-btn'));
 
     expect(apiPost).toHaveBeenCalledTimes(1);
     expect(apiPost.mock.calls[0][1]).toEqual({
       transactionType: TransactionType.Package,
-      packageId: CreditPackageId.A,
+      packageId: CreditPackageId.Usd20,
     });
-    expect(onPayment).toHaveBeenCalledWith(packA.credits);
+    expect(onPayment).toHaveBeenCalledWith(pack20.credits);
   });
 });

@@ -5,6 +5,7 @@ export {
   getViewById,
   getFilteredViews,
   getViewSummaryForLLM,
+  getAdminViewSummaryForLLM,
   isNavigableFeaturePath,
   resolveNavigationIntents,
 } from './viewRegistry';

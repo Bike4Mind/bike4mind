@@ -2,7 +2,7 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { AppFile } from '@bike4mind/database/content';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { z } from 'zod';
 

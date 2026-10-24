@@ -30,7 +30,7 @@ vi.mock('@server/dataLakes/dataLakeScopes', () => ({
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
 vi.mock('@server/dataLakes/resolveLakeListRetrievalScope', () => ({ resolveLakeListRetrievalScope: mockResolveScope }));
-vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { listAllDataLakes: mockListAll, listDataLakes: mockList },
 }));

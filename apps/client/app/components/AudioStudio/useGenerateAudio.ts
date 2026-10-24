@@ -9,7 +9,11 @@ import {
   type TtsBase64Response,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { invalidateGenerationCreditBalances } from '@client/app/hooks/data/generationCreditBalances';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import { describeGenerationError } from '@client/app/hooks/data/generationErrors';
+import { switcherBillingTarget } from '@client/app/hooks/data/generationBillingTarget';
 import { getErrorMessage } from '@client/app/utils/error';
 import { toPlayableAudio } from '@client/app/utils/generatedAudio';
 import { useAudioGenSettings, type AudioGenMode } from '@client/app/stores/useAudioGenSettings';
@@ -137,6 +141,9 @@ export function useGenerateAudio(mode: AudioGenMode) {
       const { ttsProvider, voice, format, languageCode, durationSeconds, promptInfluence } =
         useAudioGenSettings.getState();
 
+      // Snapshot the billed account at submit so an error names who was charged even if the switcher moves meanwhile.
+      const billingAccount = useSelectedAccount.getState().selectedAccount;
+
       setIsGenerating(true);
       releaseObjectUrl();
       setResult(null);
@@ -153,6 +160,8 @@ export function useGenerateAudio(mode: AudioGenMode) {
                   format,
                   languageCode: ttsProvider === 'elevenlabs' && languageCode ? languageCode : undefined,
                   encoding: 'base64',
+                  // The account the switcher shows, read at submit: null is personal, an id is that team.
+                  ...switcherBillingTarget(),
                 },
               }
             : {
@@ -162,6 +171,7 @@ export function useGenerateAudio(mode: AudioGenMode) {
                   durationSeconds: durationSeconds ?? undefined,
                   promptInfluence,
                   encoding: 'base64',
+                  ...switcherBillingTarget(),
                 },
               };
 
@@ -203,7 +213,13 @@ export function useGenerateAudio(mode: AudioGenMode) {
       } catch (error) {
         const parsed = parseError(error);
 
-        if (parsed.status === 413) {
+        const billsSelectedAccount =
+          billingAccount && (parsed.status === 403 || parsed.errorCode === 'insufficient_credits');
+
+        if (billsSelectedAccount) {
+          // The shared copy names the paying account; the server's "have X, need Y" text does not.
+          toast.error(describeGenerationError([], {}, error, parsed.message, { noun: 'audio', billingAccount }));
+        } else if (parsed.status === 413) {
           // Oversized audio normally comes back as a URL; a 413 means storing it failed too.
           toast.error('The generated audio was too large to return. Try again, or use shorter text.');
         } else if (parsed.errorCode === 'provider_rejected') {
@@ -214,18 +230,20 @@ export function useGenerateAudio(mode: AudioGenMode) {
         } else if (parsed.status === 401) {
           toast.error('No provider API key is configured. Ask your administrator to set one up.');
         } else if (parsed.errorCode === 'insufficient_credits') {
-          // Prefer the server's specific "you have X, need Y" message when it
-          // carries the figures (sound-effects and music routes). `bodyMessage`, not
-          // `message`: the latter would substitute a bare "Error: 422".
+          // Only reached before the account list loads, since a selection takes
+          // the branch above. Until then the server's "you have X, need Y" figures
+          // are the only credit context: `bodyMessage`, not `message`, which would
+          // substitute a bare "Error: 422".
           toast.error(parsed.bodyMessage ?? 'You do not have enough credits to generate this audio.');
         } else {
           toast.error(parsed.message);
         }
       } finally {
+        void invalidateGenerationCreditBalances(queryClient);
         setIsGenerating(false);
       }
     },
-    [mode, notifySaveOutcome, releaseObjectUrl]
+    [mode, notifySaveOutcome, queryClient, releaseObjectUrl]
   );
 
   return { generate, isGenerating, result };

@@ -73,7 +73,7 @@ export interface ModerateUploadedFileArgs {
     incidents: { record(input: ImageModerationIncident): Promise<unknown> };
     buffer: Buffer;
     mimeType: string;
-    incidentMeta: { userId: string; fabFileId: string; provider: string; model: string };
+    incidentMeta: { userId: string; fabFileId: string; provider: string; model: string; surface: 'upload' };
     logger: Logger;
   }) => Promise<void>;
   logger: Logger;
@@ -174,7 +174,7 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
       incidents,
       buffer,
       mimeType: effectiveMimeType,
-      incidentMeta: { userId, fabFileId, provider: 'upload', model: 'upload' },
+      incidentMeta: { userId, fabFileId, provider: 'upload', model: 'upload', surface: 'upload' },
       logger,
     });
     return { moderationStatus: 'clean', correctedMimeType };

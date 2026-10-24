@@ -42,10 +42,12 @@ import { executeCompletion } from './cliCompletions';
 
 const ADAPTIVE_MODEL = {
   id: 'adaptive-model',
+  type: 'text',
   backend: 'anthropic',
   max_tokens: 128_000,
   can_think: true,
   thinkingStyle: 'adaptive' as const,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
 };
 
 function buildDb() {
@@ -121,7 +123,14 @@ describe('executeCompletion - thinking', () => {
   });
 
   describe('Ollama', () => {
-    const OLLAMA_THINKING_MODEL = { id: 'qwen3:8b', backend: 'ollama', max_tokens: 8192, can_think: true };
+    const OLLAMA_THINKING_MODEL = {
+      id: 'qwen3:8b',
+      type: 'text',
+      backend: 'ollama',
+      max_tokens: 8192,
+      can_think: true,
+      freeToRun: true,
+    };
 
     it.each([
       ['turned thinking off', { thinking: { enabled: false } }],

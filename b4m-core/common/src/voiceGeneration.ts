@@ -2,7 +2,7 @@ import z from 'zod';
 import type { ApiErrorCode } from './apiErrorCodes';
 // The specific file, not the `./schemas` barrel - the barrel drags in an unbuilt
 // dist in the CI openapi job (same note as tts.contract.ts).
-import { ApiErrorSchema } from './schemas/chat';
+import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema } from './schemas/chat';
 import {
   extendGeneratedAudioResponseSchema,
   generatedAudioRequestFields,
@@ -84,6 +84,18 @@ export const ttsRequestSchema = z.object({
   // that mispronounces short, isolated tokens (a bare "2", acronyms, names).
   // Best-effort: ignored by providers/models that don't support it.
   languageCode: ttsLanguageCodeSchema.optional(),
+  organization_id: z
+    .string()
+    .trim()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe(
+      'The organization to bill: one you belong to, or null for your personal credits. Omitted bills your ' +
+        'personal credits, as this endpoint always has. An organization-billed API key always bills its own ' +
+        "organization: omit this or set it to the key's organization; any other value, null included, is " +
+        'rejected with a 403 (`errorCode: billing_organization_mismatch`).'
+    ),
   ...generatedAudioRequestFields,
 });
 
@@ -146,6 +158,11 @@ export const TTS_ERROR_CODES = [
  * this handler's written bodies is a gap in the handler rather than something to
  * enshrine in a schema.
  */
+/** 403 body: the `ai:generate` scope refusal (`required_scopes`), or a billing refusal. */
+export const ttsForbiddenResponseSchema = BillingOrganizationForbiddenErrorSchema.extend({
+  provider: supportedVoiceGenerationVendor.optional(),
+});
+
 export const ttsErrorResponseSchema = ApiErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
   errorCode: z.enum(TTS_ERROR_CODES).optional(),

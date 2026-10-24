@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_TOOL_CALLS_CEILING } from '../constants/llmLimits';
 import { DATA_LAKE_GROUNDING_MODES } from '../constants/dataLakes';
 import { SESSION_ORIGIN_CHANNELS } from '../types/entities/SessionTypes';
 import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
@@ -235,7 +236,7 @@ export const CreateSessionRequestSchema = z.object({
   retrievalVectorizedOnly: z.boolean().optional(),
   citationStyle: z.enum(['named', 'indexed']).optional(),
   temperature: z.number().optional(),
-  maxToolCalls: z.number().int().positive().optional(),
+  maxToolCalls: z.number().int().positive().max(MAX_TOOL_CALLS_CEILING).optional(),
   autoNamePlaceholder: z.string().optional(),
   tags: z.array(SessionTagSchema).optional(),
   lastUsedModel: z.string().nullish(),

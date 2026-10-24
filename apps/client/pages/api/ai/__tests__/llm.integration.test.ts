@@ -27,6 +27,7 @@ const {
   mockWillInjectAuthoredPrompt,
   mockLoadIdentityPrompts,
   mockOrgFindAccessibleById,
+  mockOrgFindById,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -38,6 +39,7 @@ const {
   mockWillInjectAuthoredPrompt: vi.fn(),
   mockLoadIdentityPrompts: vi.fn(),
   mockOrgFindAccessibleById: vi.fn(),
+  mockOrgFindById: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -107,6 +109,8 @@ vi.mock('@bike4mind/database', async orig => {
     // is stubbed, so the billing wiring (route -> resolver -> gate) is exercised end to end.
     organizationRepository: {
       ...(actual.organizationRepository as object),
+      // The org-billed key path reads the key's org via organizationRepository.findById.
+      findById: (...a: unknown[]) => mockOrgFindById(...a),
       shareable: {
         ...((actual.organizationRepository as { shareable?: object })?.shareable ?? {}),
         findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
@@ -150,7 +154,7 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import handler from '../llm';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 const OWN_ORG = '650000000000000000000abc';
@@ -397,6 +401,16 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(invoked().authOrigin).toBe('session');
       expect(invoked().apiKeyId).toBeUndefined();
     });
+
+    it.each([
+      ['withholds', [ApiKeyScope.AI_CHAT], true],
+      ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], false],
+    ] as const)('%s the admin role on the queued quest for a key with scopes %j', async (_, scopes, withheld) => {
+      validateWithScopes([...scopes]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
+    });
   });
 
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
@@ -435,6 +449,73 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke.mock.calls[0][0].body.organizationId).toBe(OWN_ORG);
+  });
+
+  describe('an org-billed API key', () => {
+    const KEY_ORG = '650000000000000000000111';
+
+    function validateOrgBilledKey() {
+      mockValidate.mockResolvedValue({
+        isValid: true,
+        keyId: 'k1',
+        userId: 'user-1',
+        scopes: [ApiKeyScope.AI_CHAT],
+        rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: KEY_ORG,
+      });
+    }
+
+    beforeEach(() => {
+      validateOrgBilledKey();
+      mockOrgFindById.mockResolvedValue({ id: KEY_ORG, userId: 'owner', users: [{ userId: 'user-1' }] });
+    });
+
+    it("bills the key's org when the body omits organizationId", async () => {
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke.mock.calls[0][0].body.organizationId).toBe(KEY_ORG);
+      expect(mockOrgFindAccessibleById).not.toHaveBeenCalled();
+    });
+
+    it("accepts the key's own org in the body", async () => {
+      const { req, res } = fire({ body: { organizationId: KEY_ORG } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke.mock.calls[0][0].body.organizationId).toBe(KEY_ORG);
+    });
+
+    it.each([
+      ['another org', FOREIGN_ORG],
+      ['personal credits (null)', null],
+      ['an empty organization id', ''],
+    ])('refuses a body naming %s with a 403 billing_organization_mismatch', async (_label, organizationId) => {
+      const { req, res } = fire({ body: { organizationId } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData().errorCode).toBe('billing_organization_mismatch');
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('refuses with a 400 when the key holder has left the org', async () => {
+      mockOrgFindById.mockResolvedValue({ id: KEY_ORG, userId: 'owner', users: [] });
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('refuses with a 400 when the key organization no longer exists', async () => {
+      mockOrgFindById.mockResolvedValue(null);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
   });
 
   // invoke()'s own parse already rejects a bad systemPrompt, but only after getOrCreateSession

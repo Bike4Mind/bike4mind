@@ -6,7 +6,7 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
@@ -65,6 +65,7 @@ const handler = baseApi().post(
       const presignedUrl = await storage.getSignedUrl(fileKey, 'put', {
         expiresIn: 600,
         ContentType: data.mimeType,
+        ContentLength: data.fileSize,
       });
 
       // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.

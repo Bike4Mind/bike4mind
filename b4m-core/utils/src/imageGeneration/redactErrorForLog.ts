@@ -1,3 +1,4 @@
+import { redactLogValue } from '@bike4mind/observability';
 import axios from 'axios';
 
 /**
@@ -11,19 +12,13 @@ import axios from 'axios';
 export function redactErrorForLog(error: unknown): unknown {
   if (axios.isAxiosError(error)) {
     return {
-      message: error.message,
+      message: 'Provider request failed',
       code: error.code,
       status: error.response?.status,
-      data: error.response?.data,
-      endpoint: error.config?.url,
       method: error.config?.method,
       // headers intentionally omitted - request headers carry the x-key API secret.
     };
   }
 
-  if (error instanceof Error) {
-    return { message: error.message, name: error.name, stack: error.stack };
-  }
-
-  return error;
+  return redactLogValue(error);
 }

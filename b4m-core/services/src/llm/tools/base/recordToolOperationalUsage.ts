@@ -1,4 +1,4 @@
-import { getTextModelCost, getTurnsCost } from '@bike4mind/common';
+import { buildUsagePriceStamp, getTextModelCost, getTurnsCost } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordOperationalUsage } from '../../../billing';
 import type { ToolContext } from './types';
@@ -63,7 +63,14 @@ export async function recordToolOperationalUsage(
       ? 0
       : turnUsage?.length
         ? getTurnsCost(modelInfo, turnUsage)
-        : getTextModelCost(modelInfo, inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens);
+        : getTextModelCost(
+            modelInfo,
+            inputTokens,
+            outputTokens,
+            cachedInputTokens,
+            cacheWriteTokens,
+            inputTokens + cachedInputTokens + cacheWriteTokens
+          );
 
     // Report the spend to a billing host (e.g. the agent executor) so nested tool
     // generation is folded into its ledger rather than billed at zero (#630). Fired
@@ -93,6 +100,12 @@ export async function recordToolOperationalUsage(
         cachedInputTokens,
         cacheWriteTokens,
         costUsd,
+        priceStamp: modelInfo
+          ? buildUsagePriceStamp(modelInfo, {
+              turns: turnUsage,
+              tierBasisTokens: inputTokens + cachedInputTokens + cacheWriteTokens,
+            })
+          : undefined,
         latencyMs: Date.now() - startTime,
         source: 'system',
         finishReason: completionInfo?.stopReason,

@@ -22,7 +22,7 @@ import {
 } from '@bike4mind/server-utils/integrations/github/githubWorkflowTrigger';
 import { handler as runCloudScan } from '@server/security/cloudScan';
 import { handler as runWafScan } from '@server/security/wafScan';
-import { calculateNextRunTime } from '@server/utils/scheduleCalculator';
+import { calculateNextRunTime } from '@bike4mind/server-utils/utils/scheduleCalculator';
 import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
 
 interface ScanResult {

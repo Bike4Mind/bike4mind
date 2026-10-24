@@ -11,6 +11,11 @@ describe('AuditLogFiltersSchema', () => {
   it('accepts an empty object', () => {
     expect(AuditLogFiltersSchema.safeParse({}).success).toBe(true);
   });
+
+  it('rejects the derived user source, which is never stored', () => {
+    expect(AuditLogFiltersSchema.safeParse({ source: 'user' }).success).toBe(false);
+    expect(AuditLogFiltersSchema.safeParse({ source: 'admin_ui' }).success).toBe(true);
+  });
 });
 
 describe('catalogue', () => {

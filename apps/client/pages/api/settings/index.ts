@@ -2,7 +2,7 @@ import { AdminSettings } from '@bike4mind/database/infra';
 import { redactSettingSecrets, type AdminSettingDoc } from '@bike4mind/common';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin } from '@server/utils/errors';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 
 // Get Admin Settings - returns the FULL AdminSettings collection, and is admin-only.
 //
@@ -14,8 +14,8 @@ import { ensureAdmin } from '@server/utils/errors';
 //
 // Sensitive values are masked on the way out (the same redactor /api/settings/fetch uses):
 // the stored value is encrypted at rest, and only the mask (real last-4) is returned for
-// any setting tagged `isSensitive` in settingsMap, or for a `settingName` with no entry
-// there at all (fail closed - an orphaned/renamed key defaults to masked, not plaintext).
+// any setting tagged `isSensitive` in the merged core/contributed definitions, or for a
+// `settingName` with no definition at all (fail closed - an orphaned/renamed key defaults to masked, not plaintext).
 const handler = baseApi().get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 

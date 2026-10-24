@@ -1,7 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash } from 'node:crypto';
 import * as cheerio from 'cheerio';
-import { getPublishedArtifactsStorage } from '@server/utils/storage';
+import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact, Annotation } from '@bike4mind/database';
 import type { IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import { validateBundle, buildPublishUrlPath, invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
@@ -279,6 +280,9 @@ const handler = baseApi().post(async (req, res) => {
     // revision is visible immediately, not after the TTL. Only public pages are
     // CDN-cached (gated are no-store). Best-effort, never throws.
     if (artifact.visibility === 'public') void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+
+    // Best-effort, never throws: the revised version gets its own owner-only thumbnail.
+    await enqueuePublishThumbnail({ publicId, versionId: newIndexSha }, req.logger);
 
     const url = buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug);
     req.logger.info(`[REVISE] ${publicId} → new version sha=${newIndexSha.slice(0, 12)} applied=${open.length}`);

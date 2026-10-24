@@ -1,6 +1,6 @@
 import { IChatHistoryItem, ISessionDocument, stripSearchResultCardFences } from '@bike4mind/common';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
-import { visibleReplyForExport } from '@client/shared/replyUtils';
+import { visibleReplyForExport } from '@bike4mind/server-utils/shared/replyUtils';
 import { requestedModelId } from '@client/app/utils/answeringModel';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';

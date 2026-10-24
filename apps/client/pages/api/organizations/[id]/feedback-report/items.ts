@@ -12,7 +12,7 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { clampedIntParam } from '@server/utils/dateParam';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { resolveReportWindow } from '@server/utils/orgFeedbackWindow';
 import { Request, Response } from 'express';
