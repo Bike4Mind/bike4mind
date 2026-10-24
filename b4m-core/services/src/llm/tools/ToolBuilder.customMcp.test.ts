@@ -129,7 +129,7 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
           logger,
           processStartTime: Date.now(),
         } as never)
-      )?.content;
+      )?.context?.content;
 
     expect(await build(true)).toContain(CUSTOM_MCP_DATA_NOTICE);
     expect(await build(false)).not.toContain(CUSTOM_MCP_DATA_NOTICE);
