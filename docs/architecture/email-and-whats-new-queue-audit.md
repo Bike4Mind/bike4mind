@@ -6,7 +6,7 @@ Audit of the three queue pairs that each run their own consumer Lambda: email ma
 
 Merge two queues into one queue + one consumer Lambda only where **consumer profile, retry policy and memory class all match**. Otherwise keep them separate. If in doubt, keep.
 
-"Consumer profile" follows the existing SRE merge precedent (`infra/queues.ts`, comment above `sreJobQueueDLQ`): timeout, queue visibility, memory, IAM and resource links, and batch shape. It does not mean byte-identical handler code; that merge put two different handlers behind one dispatch discriminated by a `jobType` field.
+"Consumer profile" is timeout, queue visibility, memory, IAM and resource links, and batch shape. The existing SRE merge precedent (`infra/queues.ts`, comment above `sreJobQueueDLQ`) names timeout, memory and IAM as the shared profile; visibility, links and batch shape are added here as the remaining subscription fields, as `sreJobQueue` and `sreJobQueueSubscription` configure them. It does not mean byte-identical handler code; that merge put two different handlers behind one dispatch discriminated by a `jobType` field.
 
 ## Verdicts
 
@@ -119,7 +119,7 @@ Every in-repo file a merged queue touches:
 - `b4m-core/resource/src/manifestCoverage.test.ts`: exemptions for both queues.
 - `packages/scripts/src/selfhostParityPolicy.ts`: queue parity entries for both queues (and both DLQs); the only schedule entry is `whatsNewHighlightsCron`.
 - `infra/__tests__/releaseNotesQueue.test.ts`: matches the release-notes subscription by variable name and handler.
-- Worker tests (`pnpm --filter @bike4mind/workers test`): `apps/workers/src/queueHandlers/whatsNewHighlights.test.ts` and `whatsNewHighlights.model.test.ts` build highlights payloads without `kind`, so a required discriminator breaks them; `releaseNotes.test.ts` and `releaseNotes.e2e.test.ts` hardcode `kind: 'release-notes'` and may need touching depending on the routing shape. Fix the fixtures; do not make `kind` optional.
+- Worker tests (`pnpm --filter @bike4mind/workers test`, plus `pnpm --filter @bike4mind/workers test:integration` for `releaseNotes.e2e.test.ts`, which the default lane excludes): `apps/workers/src/queueHandlers/whatsNewHighlights.test.ts` and `whatsNewHighlights.model.test.ts` build highlights payloads without `kind`, so a required discriminator breaks them; `releaseNotes.test.ts` and `releaseNotes.e2e.test.ts` hardcode `kind: 'release-notes'` and may need touching depending on the routing shape. Fix the fixtures; do not make `kind` optional.
 - `sst-env.d.ts`: checked-in resource types for both queues and DLQs; stale after a queue is removed until the next deploy regenerates it.
 - `docs-site/docs/deployment/architecture.md`: the published queue table row for `whatsNewGenerationQueue` (docs-site auto-deploys on merge).
 - Handlers and producers: `apps/workers/src/queueHandlers/releaseNotes.ts`, `apps/workers/src/queueHandlers/whatsNewHighlights.ts`, `packages/scripts/src/releaseNotes/releaseNotesEnqueue.ts`, `packages/scripts/src/releaseNotes/releaseNotesBackfill.ts`, `apps/client/pages/api/admin/generate-highlights.ts`, `apps/client/pages/api/admin/whats-new-backfill.ts`, `apps/workers/src/cron/whatsNewHighlights.ts`, and the two payload schemas above.
