@@ -1,5 +1,43 @@
 # @bike4mind/common
 
+## 21.0.0
+
+### Major Changes
+
+- [#5640](https://github.com/Bike4Mind/bike4mind/pull/5640) [`b8146f3`](https://github.com/Bike4Mind/bike4mind/commit/b8146f33b24b69ee9e3762ab454e9a1b65cad880) Thanks [@jjmarfa](https://github.com/jjmarfa)! - remove the legacy What's New generation pipeline
+
+### Minor Changes
+
+- [#5469](https://github.com/Bike4Mind/bike4mind/pull/5469) [`a0e4dec`](https://github.com/Bike4Mind/bike4mind/commit/a0e4dec9c2f5fe2cb38b5aa6e3e11462f3df3091) Thanks [@onoya](https://github.com/onoya)! - record admin audit entries for secrets and integration credentials handlers
+
+- [#5473](https://github.com/Bike4Mind/bike4mind/pull/5473) [`243ed22`](https://github.com/Bike4Mind/bike4mind/commit/243ed22733e81f22574fc66975e2376458fc1deb) Thanks [@onoya](https://github.com/onoya)! - record admin audit entries for email and messaging handlers
+
+- [#5617](https://github.com/Bike4Mind/bike4mind/pull/5617) [`22b2349`](https://github.com/Bike4Mind/bike4mind/commit/22b23498c5ea66602b8661a64fb05b8a78d6b1a1) Thanks [@vinchi777](https://github.com/vinchi777)! - show monthly credit allowance in footer
+
+- [#5622](https://github.com/Bike4Mind/bike4mind/pull/5622) [`1e8cfff`](https://github.com/Bike4Mind/bike4mind/commit/1e8cfff9d694719a2a411685590be881180b32a3) Thanks [@onoya](https://github.com/onoya)! - add an admin-editable blocked email domain list to the signup gate
+
+- [#5652](https://github.com/Bike4Mind/bike4mind/pull/5652) [`a898007`](https://github.com/Bike4Mind/bike4mind/commit/a8980077a897e584a0da483a212e505e749cc117) Thanks [@biletskiy6](https://github.com/biletskiy6)! - show a still image on release notes without a video
+
+- [#5674](https://github.com/Bike4Mind/bike4mind/pull/5674) [`3e21c08`](https://github.com/Bike4Mind/bike4mind/commit/3e21c085addeb1f7b442ef27fe6d944922db4e1e) Thanks [@jjmarfa](https://github.com/jjmarfa)! - rank daily most-active users by credits spent
+
+### Patch Changes
+
+- [#5444](https://github.com/Bike4Mind/bike4mind/pull/5444) [`c71b53e`](https://github.com/Bike4Mind/bike4mind/commit/c71b53e3229694935b4ddd6bb662479a1dce7631) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - let overlay packages contribute API-key scopes
+
+- [#5463](https://github.com/Bike4Mind/bike4mind/pull/5463) [`dd17bbe`](https://github.com/Bike4Mind/bike4mind/commit/dd17bbe1c5a148e550b00452944e6aef178ca809) Thanks [@vinchi777](https://github.com/vinchi777)! - reject unsupported assistant prefill
+
+- [#5491](https://github.com/Bike4Mind/bike4mind/pull/5491) [`c36a0b3`](https://github.com/Bike4Mind/bike4mind/commit/c36a0b3022f83a8724af413c28521d6d2b203dca) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - let extension packages contribute admin settings
+
+- [#5558](https://github.com/Bike4Mind/bike4mind/pull/5558) [`b057019`](https://github.com/Bike4Mind/bike4mind/commit/b0570190c06f5370569c182a92facd62f20de8a1) Thanks [@onoya](https://github.com/onoya)! - queue ElevenLabs calls behind shared concurrency slots
+
+- [#5566](https://github.com/Bike4Mind/bike4mind/pull/5566) [`aee3b68`](https://github.com/Bike4Mind/bike4mind/commit/aee3b683f830087b8ca9ef272a54cd8c432ce8e6) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - lower sound-effects prompt cap to 450 chars
+
+- [#5627](https://github.com/Bike4Mind/bike4mind/pull/5627) [`e0312a9`](https://github.com/Bike4Mind/bike4mind/commit/e0312a9165e76485b3df9ef092b0c05fcf2fece9) Thanks [@onoya](https://github.com/onoya)! - add an embedding model catalog in common
+
+- [#5657](https://github.com/Bike4Mind/bike4mind/pull/5657) [`856f111`](https://github.com/Bike4Mind/bike4mind/commit/856f111c2a689d3d55884d8c7c354c1d2e2ae0fb) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - ask before agent mode runs a Bob site read
+
+- [#5665](https://github.com/Bike4Mind/bike4mind/pull/5665) [`aa748ba`](https://github.com/Bike4Mind/bike4mind/commit/aa748ba08177c36d8b74064dc1e4ecfb712800d4) Thanks [@erikbethke](https://github.com/erikbethke)! - drop the per-user and per-org page-count cap
+
 ## 20.0.0
 
 ### Major Changes

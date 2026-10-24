@@ -1,5 +1,29 @@
 # @bike4mind/cli
 
+## 4.1.0
+
+### Minor Changes
+
+- [#5271](https://github.com/Bike4Mind/bike4mind/pull/5271) [`aa80549`](https://github.com/Bike4Mind/bike4mind/commit/aa8054946833fbe7b083f239c7d073d74d48d871) Thanks [@poysama](https://github.com/poysama)! - let the shared provider keys authenticate through workload identity federation on AWS
+
+### Patch Changes
+
+- [#5421](https://github.com/Bike4Mind/bike4mind/pull/5421) [`3beb481`](https://github.com/Bike4Mind/bike4mind/commit/3beb4812789587be08ce490f4293b01ead4cfe5b) Thanks [@onoya](https://github.com/onoya)! - sanitize untrusted text through one terminal escaping layer
+
+- [#5559](https://github.com/Bike4Mind/bike4mind/pull/5559) [`c668716`](https://github.com/Bike4Mind/bike4mind/commit/c668716920ee4cd0147bf9711cb3235844cc13b7) Thanks [@choyno](https://github.com/choyno)! - tighten sandbox path defaults and host git invocation
+
+- [#5562](https://github.com/Bike4Mind/bike4mind/pull/5562) [`60bb993`](https://github.com/Bike4Mind/bike4mind/commit/60bb9933603f8f61a15a85425dbf386c486e5dc3) Thanks [@choyno](https://github.com/choyno)! - scope session approval for shell commands to the approved command
+
+- [#5566](https://github.com/Bike4Mind/bike4mind/pull/5566) [`aee3b68`](https://github.com/Bike4Mind/bike4mind/commit/aee3b683f830087b8ca9ef272a54cd8c432ce8e6) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - lower sound-effects prompt cap to 450 chars
+
+- [#5571](https://github.com/Bike4Mind/bike4mind/pull/5571) [`25c233f`](https://github.com/Bike4Mind/bike4mind/commit/25c233f13123129551704ef1906810bb9a3266a3) Thanks [@onoya](https://github.com/onoya)! - remove the unused Keep command handler
+
+- [#5616](https://github.com/Bike4Mind/bike4mind/pull/5616) [`56ad0d4`](https://github.com/Bike4Mind/bike4mind/commit/56ad0d415fb07e69fb65105284014169e5463a5c) Thanks [@choyno](https://github.com/choyno)! - enforce the sandbox network allowlist at the sandbox boundary
+
+- [#5641](https://github.com/Bike4Mind/bike4mind/pull/5641) [`bd09831`](https://github.com/Bike4Mind/bike4mind/commit/bd09831db3775906aee7aca9ba9fe421fd36f15e) Thanks [@julsanchez](https://github.com/julsanchez)! - match --allowedTools mcp__<server>__* against MCP tools
+
+- [#5642](https://github.com/Bike4Mind/bike4mind/pull/5642) [`534bb10`](https://github.com/Bike4Mind/bike4mind/commit/534bb10a49564c827a6d6150045636de7f6c15c9) Thanks [@julsanchez](https://github.com/julsanchez)! - skip the folder-trust prompt on a host launch with a queued prompt
+
 ## 4.0.0
 
 ### Major Changes

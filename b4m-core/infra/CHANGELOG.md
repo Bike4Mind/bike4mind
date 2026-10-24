@@ -1,5 +1,11 @@
 # @bike4mind/infra
 
+## 6.0.0
+
+### Major Changes
+
+- [#5640](https://github.com/Bike4Mind/bike4mind/pull/5640) [`b8146f3`](https://github.com/Bike4Mind/bike4mind/commit/b8146f33b24b69ee9e3762ab454e9a1b65cad880) Thanks [@jjmarfa](https://github.com/jjmarfa)! - remove the legacy What's New generation pipeline
+
 ## 5.0.0
 
 ### Major Changes
