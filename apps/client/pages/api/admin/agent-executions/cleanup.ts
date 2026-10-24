@@ -1,5 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { agentExecutionRepository } from '@bike4mind/database';
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
@@ -116,6 +117,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       }
     });
   }
+
+  await recordAdminActionFromRequest(req, {
+    action: 'ops.agent_executions.cleaned_up',
+    target: { kind: 'system', id: 'agent-executions-cleanup', displayName: 'Agent executions cleanup' },
+    summary: `cleaned up ${swept.length} agent executions`,
+    details: {
+      requested: executionIds.length,
+      marked: swept.length,
+      questsSettled: quests.settled,
+      executionIds: swept.map(s => s.id),
+    },
+  });
 
   const body: CleanupResponse = {
     requested: executionIds.length,
