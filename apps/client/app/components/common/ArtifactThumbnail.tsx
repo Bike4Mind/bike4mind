@@ -57,6 +57,8 @@ export function ArtifactThumbnail({
         alt=""
         loading="lazy"
         decoding="async"
+        // The image host learns nothing about the page that embeds it.
+        referrerPolicy="no-referrer"
         onError={() => setFailedUrl(thumbnailUrl)}
         data-testid={testId ? `${testId}-image` : undefined}
         style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }}

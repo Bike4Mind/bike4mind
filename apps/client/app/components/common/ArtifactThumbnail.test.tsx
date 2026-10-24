@@ -29,6 +29,8 @@ describe('ArtifactThumbnail', () => {
     expect(img.getAttribute('alt')).toBe('');
     expect(img.style.objectFit).toBe('cover');
     expect(img.style.objectPosition).toBe('top');
+    // No Referer to the image host: it has no need to know which app page loaded the thumbnail.
+    expect(img.getAttribute('referrerpolicy')).toBe('no-referrer');
     // The frame keeps the slot's test id, so one selector finds it in either state.
     expect(screen.getByTestId('thumb')).toContainElement(img);
   });

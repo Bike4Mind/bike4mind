@@ -1467,3 +1467,99 @@ describe('PublishedArtifactsTabContent - grid dialog, facet labels and container
     expect(rowRules.some(r => /@media/.test(r))).toBe(false);
   });
 });
+
+describe('PublishedArtifactsTabContent - grid dialog focus, sharing state and narrow layout', () => {
+  const goGrid = () => fireEvent.click(screen.getByTestId('published-artifacts-view-grid'));
+
+  it('keeps the list row title as its link name; the tooltip only describes it', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expect(screen.getByRole('link', { name: 'My Artifact' }).getAttribute('href')).toBe(
+      `${window.location.origin}/p/u/erik/s`
+    );
+    expect(screen.queryByRole('link', { name: 'Opens in a new tab' })).toBeNull();
+  });
+
+  it('closes the dialog on Escape and hands focus back to the More button that opened it', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    const more = screen.getByTestId('published-artifact-card-more-pub-1');
+    more.focus();
+    fireEvent.click(more);
+    const dialog = screen.getByTestId('published-artifact-settings-modal');
+    expect(dialog.getAttribute('role')).toBe('dialog');
+    expect(dialog.getAttribute('aria-labelledby')).toBe('published-artifact-settings-title-pub-1');
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+    expect(document.activeElement).toBe(screen.getByTestId('published-artifact-card-more-pub-1'));
+  });
+
+  it('opens the dialog with the sharing panel shut even when the list row left it open', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    expect(screen.getByTestId('published-artifact-settings-modal')).not.toBeNull();
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+  });
+
+  it('shuts the sharing panel with a dialog that closed because its artifact left the list', async () => {
+    const qc = renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+
+    mockList.mockResolvedValue(page([replyRow]));
+    await qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+    await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+
+    // Back in the list, expanding the returned row must not mount a sharing panel nobody opened.
+    mockList.mockResolvedValue(page([bundleRow]));
+    await qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+    fireEvent.click(screen.getByTestId('published-artifacts-view-list'));
+    expandRow('pub-1');
+    expect(screen.getByTestId('published-artifact-settings-pub-1')).not.toBeNull();
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+  });
+
+  it('lets a grid column shrink below its 260px minimum instead of overflowing a narrow tab', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(s => s.textContent ?? '')
+      .join('\n');
+    expect(css).toMatch(/grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(260px,\s*100%\),\s*1fr\)\)/);
+    expect(css).not.toMatch(/minmax\(260px,\s*1fr\)/);
+  });
+
+  it('wraps a dialog title that has no spaces instead of widening the dialog', async () => {
+    const longTitle = 'https://example.com/a/very/long/pasted/address/with/no/spaces/at/all';
+    mockList.mockResolvedValue(page([{ ...bundleRow, title: longTitle }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    const title = document.getElementById('published-artifact-settings-title-pub-1') as HTMLElement;
+    expect(title.textContent).toBe(longTitle);
+    expect(getComputedStyle(title).overflowWrap).toBe('anywhere');
+  });
+
+  it('keeps list semantics on the unstyled card list, so screen readers announce the count', async () => {
+    mockList.mockResolvedValue(page([bundleRow, replyRow]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    const grid = screen.getByTestId('published-artifacts-grid');
+    expect(grid.getAttribute('role')).toBe('list');
+    expect(within(grid).getAllByRole('listitem')).toHaveLength(2);
+  });
+});

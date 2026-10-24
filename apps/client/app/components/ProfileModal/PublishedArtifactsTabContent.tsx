@@ -446,10 +446,20 @@ export default function PublishedArtifactsTabContent() {
     }
   };
 
+  /** Open a card's dialog with its sharing panel shut, like a freshly expanded row - even when that
+   *  artifact's panel was left open in the list view before switching to the grid. */
+  const openSettings = (publicId: string) => {
+    setManageOpen(open => (open === publicId ? null : open));
+    setSettingsId(publicId);
+  };
   const settingsArtifact = settingsId ? artifacts.find(a => a.publicId === settingsId) : undefined;
   // The artifact can leave the list while its dialog is open (a visibility change under an active
   // visibility filter). Forget the id then, or clearing the filter later would reopen the dialog.
-  if (settingsId && !settingsArtifact) setSettingsId(null);
+  // The sharing panel goes with it, as on any other close.
+  if (settingsId && !settingsArtifact) {
+    setManageOpen(open => (open === settingsId ? null : open));
+    setSettingsId(null);
+  }
   const closeSettings = () => {
     // Same rule as collapsing a row: a sharing panel never outlives the surface that hosts it.
     setManageOpen(open => (open === settingsId ? null : open));
@@ -698,10 +708,14 @@ export default function PublishedArtifactsTabContent() {
       ) : view === 'grid' ? (
         <Box
           component="ul"
+          // Explicit: Safari drops the implicit list role from a list with `list-style: none`.
+          role="list"
           data-testid="published-artifacts-grid"
           sx={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+            // min() lets one column shrink below 260px when the tab itself is narrower (a phone, after
+            // the page padding), instead of overflowing sideways.
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
             gap: 2,
             listStyle: 'none',
             m: 0,
@@ -716,7 +730,7 @@ export default function PublishedArtifactsTabContent() {
                 artifact={a}
                 url={url}
                 onCopyLink={() => void copyLink(url)}
-                onOpenSettings={() => setSettingsId(a.publicId)}
+                onOpenSettings={() => openSettings(a.publicId)}
               />
             );
           })}
@@ -1003,7 +1017,8 @@ export default function PublishedArtifactsTabContent() {
             <Typography
               id={`published-artifact-settings-title-${settingsArtifact.publicId}`}
               level="title-md"
-              sx={{ pr: 4 }}
+              // A title with no spaces (a pasted URL) wraps instead of pushing the dialog sideways.
+              sx={{ pr: 4, overflowWrap: 'anywhere' }}
             >
               {settingsArtifact.title}
             </Typography>
