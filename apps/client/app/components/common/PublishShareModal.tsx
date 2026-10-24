@@ -25,12 +25,14 @@ import LinkIcon from '@mui/icons-material/Link';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { isAxiosError } from 'axios';
+import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind/common';
 import { ELISION_PUBLISH_TITLE } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { ShareActions } from './ShareActions';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
+import { ClearGateConfirmModal, StoredGateNote, STORED_GATE_CLEARED_MESSAGE } from './StoredGateClear';
 import { getPublishAccess, LIGHT_WARNING_TEXT, PUBLISH_ACCESS_META, type PublishAccess } from './PublishAccessBadge';
 import {
   toShareUrl,
@@ -44,6 +46,7 @@ import {
   updatePublishedAccessGate,
   getPublishedManageState,
   getShareTokenState,
+  isRevokeOrphanGateRefusal,
   type PublishAccessGateInput,
   type PublishMode,
   type ArtifactPublishOpts,
@@ -319,6 +322,12 @@ export function PublishShareModal({
     gateRevision.current += 1;
     setStoredAccess({ status: 'known', gate });
   }, []);
+  const queryClient = useQueryClient();
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const revokeButtonRef = useRef<HTMLButtonElement>(null);
+  // Set by a successful clear: the Clear button is gone by then, so focus moves on to Revoke, the
+  // action the owner was after.
+  const focusRevokeAfterClear = useRef(false);
   // Explicit acknowledgement of `incompleteWarning`; gates the publish button.
   const [incompleteAck, setIncompleteAck] = useState(false);
   // `resolvePublished` is in flight: hold the create button so a click can't race the lookup.
@@ -344,6 +353,7 @@ export function PublishShareModal({
       setGateTouched(false);
       gateRevision.current += 1;
       setStoredAccess({ status: 'unknown' });
+      setConfirmingClear(false);
       setIncompleteAck(false);
       setReopened(false);
     }
@@ -641,6 +651,48 @@ export function PublishShareModal({
     else setVisibility(next);
   };
 
+  const readStoredGate = async () => {
+    if (!result) return;
+    try {
+      const state = await getPublishedManageState(result.publicId);
+      setStoredGate(state.accessGate?.kind ?? null);
+    } catch {
+      /* the refusal toast already said why; the seed read's own warning covers an unreadable record */
+    }
+  };
+
+  // Clear a gate stored on a non-public page (the same PATCH and confirmation AccessGateEditor uses).
+  // Its private links stop asking for it, so the last of them can be revoked.
+  const clearStoredGate = async () => {
+    if (!result || busy) return;
+    setBusy(true);
+    try {
+      await updatePublishedAccessGate(result.publicId, null);
+      setStoredGate(null);
+      // Drop the draft that was seeded from the stored gate, so a later switch to Public starts open.
+      setGateKind('none');
+      setGatePassphrase('');
+      setGateDomainsText('');
+      setGateTouched(false);
+      focusRevokeAfterClear.current = true;
+      toast.success(STORED_GATE_CLEARED_MESSAGE);
+      // Not opened from the Live Artifacts tab, so its row badge is refreshed by a refetch.
+      void queryClient.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+      setConfirmingClear(false);
+    }
+  };
+
+  // Waits for the confirmation to close as well: its focus restore runs on unmount and would undo this.
+  useEffect(() => {
+    if (!focusRevokeAfterClear.current || confirmingClear) return;
+    focusRevokeAfterClear.current = false;
+    revokeButtonRef.current?.focus();
+  }, [confirmingClear]);
+
   // No-sign-in link (`/a/<token>`): mint on demand, rotate (revokes old links), or revoke.
   const runShareToken = async (action: () => Promise<string | null>, successMsg: string): Promise<void> => {
     if (!result || shareBusy) return;
@@ -650,6 +702,9 @@ export function PublishShareModal({
       toast.success(successMsg);
     } catch (err) {
       toast.error(errorMessage(err));
+      // A refusal means a gate is stored whatever this dialog last read, so learn which kind and
+      // offer its Clear action instead of leaving the owner with only the message.
+      if (isRevokeOrphanGateRefusal(err)) void readStoredGate();
     } finally {
       setShareBusy(false);
     }
@@ -1115,6 +1170,7 @@ export function PublishShareModal({
                         Make a new link and stop the old ones
                       </Button>
                       <Button
+                        ref={revokeButtonRef}
                         size="sm"
                         variant="outlined"
                         color="danger"
@@ -1148,6 +1204,42 @@ export function PublishShareModal({
                   >
                     {storedGate === null ? 'Create private link anyone can open' : 'Create private link'}
                   </Button>
+                )}
+                {/* On a non-public page the stored gate lives only on its private links, and the server
+                    refuses to revoke the last one while it stands, so the way to clear it is offered here. */}
+                {!isPublic && storedGate && (
+                  <StoredGateNote
+                    kind={storedGate}
+                    visibility={visibility}
+                    sx={{ mt: 1.5 }}
+                    data-testid="publish-share-stored-gate"
+                  >
+                    {shareToken && (
+                      <Typography level="body-xs" sx={{ mt: 0.5 }} data-testid="publish-share-stored-gate-revoke-note">
+                        The private link can only be turned off once this gate is cleared.
+                      </Typography>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      color="danger"
+                      disabled={busy}
+                      onClick={() => setConfirmingClear(true)}
+                      sx={{ mt: 1 }}
+                      data-testid="publish-share-gate-clear"
+                    >
+                      Clear gate
+                    </Button>
+                  </StoredGateNote>
+                )}
+                {storedGate && (
+                  <ClearGateConfirmModal
+                    open={confirmingClear}
+                    onClose={() => setConfirmingClear(false)}
+                    onConfirm={clearStoredGate}
+                    loading={busy}
+                    kind={storedGate}
+                  />
                 )}
               </Box>
             )}

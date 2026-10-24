@@ -1,9 +1,11 @@
 import React from 'react';
-import { afterEach, describe, it, expect, vi } from 'vitest';
-import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import { PublishShareModal } from './PublishShareModal';
+import { AccessGateEditor } from './AccessGateEditor';
 import { PUBLISH_ACCESS_META, type PublishAccess } from './PublishAccessBadge';
 import type { PublishResult, PublishVisibility } from '@bike4mind/common';
 import { toast } from 'sonner';
@@ -27,8 +29,11 @@ const apiPost = api.post as unknown as ReturnType<typeof vi.fn>;
 const apiDelete = api.delete as unknown as ReturnType<typeof vi.fn>;
 
 const appTheme = extendTheme({ ...getThemeConfig() });
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
-  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  <QueryClientProvider client={queryClient}>
+    <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  </QueryClientProvider>
 );
 
 const noopPublish = vi.fn<[], Promise<PublishResult>>();
@@ -1224,17 +1229,19 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     mode: 'light' | 'dark' = 'light'
   ) =>
     render(
-      <CssVarsProvider theme={appTheme} defaultMode={mode} modeStorageKey={`share-modal-test-${mode}`}>
-        <PublishShareModal
-          open
-          onClose={() => {}}
-          publish={noopPublish}
-          title="My artifact"
-          defaultVisibility="public"
-          orgOption={{ label: 'Team', hint: 'Members of Acme' }}
-          {...props}
-        />
-      </CssVarsProvider>
+      <QueryClientProvider client={queryClient}>
+        <CssVarsProvider theme={appTheme} defaultMode={mode} modeStorageKey={`share-modal-test-${mode}`}>
+          <PublishShareModal
+            open
+            onClose={() => {}}
+            publish={noopPublish}
+            title="My artifact"
+            defaultVisibility="public"
+            orgOption={{ label: 'Team', hint: 'Members of Acme' }}
+            {...props}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
     );
 
   const expectAccessIcon = (testId: string, access: PublishAccess) => {
@@ -1401,5 +1408,296 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     await waitFor(() =>
       expect(screen.getByTestId('publish-share-token-create').textContent).toBe('Create private link')
     );
+  });
+});
+
+/**
+ * A gate stored on a private or team page is enforced only on its private links, and the server
+ * refuses to revoke the last link while it stands. The dialog shows that gate and offers the same
+ * confirmed Clear as the Live Artifacts sharing panel, so a refused Revoke has a way forward.
+ */
+describe('PublishShareModal - clearing a gate stored on a non-public page', () => {
+  const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
+  const REFUSAL = "This share link is the only thing enforcing the artifact's access gate - clear it first";
+  const orphanRefusal = () =>
+    Object.assign(new Error('Request failed with status code 400'), {
+      isAxiosError: true,
+      response: { status: 400, data: { error: REFUSAL, code: 'REVOKE_WOULD_ORPHAN_GATE' } },
+    });
+  const publication = (visibility: PublishVisibility): PublishResult => ({
+    publicId: 'pub-1',
+    url: '/p/u/u1/s',
+    tier: visibility === 'organization' ? 'organization' : 'user',
+    scopeId: 'u1',
+    slug: 's',
+    visibility,
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  });
+
+  /** A record that behaves like the server: Revoke is refused while a gate is stored, a null PATCH clears it. */
+  const fakeServer = (
+    visibility: PublishVisibility,
+    initialGate: unknown,
+    { seedFails = false }: { seedFails?: boolean } = {}
+  ) => {
+    const record = { gate: initialGate, link: 'TOK' as string | null };
+    let recordReads = 0;
+    apiGet.mockReset().mockImplementation((url: string) => {
+      if (url.endsWith('/share-token')) return Promise.resolve({ data: { shareToken: record.link, shareLinks: [] } });
+      recordReads += 1;
+      if (seedFails && recordReads === 1) return Promise.reject(new Error('Record unavailable'));
+      return Promise.resolve({ data: { artifact: { visibility, accessGate: record.gate } } });
+    });
+    apiPatch.mockReset().mockImplementation((_url: string, body: { accessGate?: unknown }) => {
+      if (body.accessGate === null) record.gate = null;
+      return Promise.resolve({ data: {} });
+    });
+    apiDelete.mockReset().mockImplementation(() => {
+      if (record.gate) return Promise.reject(orphanRefusal());
+      record.link = null;
+      return Promise.resolve({ data: {} });
+    });
+    apiPost.mockReset().mockResolvedValue({ data: {} });
+    return record;
+  };
+
+  const renderOpen = (
+    visibility: PublishVisibility,
+    props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}
+  ) =>
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={vi.fn().mockResolvedValue(publication(visibility))}
+          title="My artifact"
+          defaultVisibility={visibility}
+          orgOption={{ label: 'Team', hint: 'Members of Acme' }}
+          {...props}
+        />
+      </Wrapper>
+    );
+
+  /** Publish at `visibility`, then wait for the private link to be on screen. */
+  const renderShared = async (visibility: PublishVisibility = 'private') => {
+    renderOpen(visibility);
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-token-url');
+  };
+
+  const clickClear = () => fireEvent.click(screen.getByTestId('publish-share-gate-clear'));
+  const confirmClear = () => fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
+  const gateWrites = () => apiPatch.mock.calls.filter(([, body]) => 'accessGate' in (body ?? {}));
+
+  let invalidate: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.warning).mockClear();
+    invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+  });
+  afterEach(() => {
+    invalidate.mockRestore();
+  });
+
+  it.each([
+    ['private', 'The page itself, not a private link, still opens only for you.'],
+    ['organization', 'Team members who open the page itself, not a private link, are not asked for it.'],
+  ] as const)(
+    'shows the stored gate and a Clear action on a %s page, before any revoke',
+    async (visibility, sentence) => {
+      fakeServer(visibility, { kind: 'passphrase' });
+      await renderShared(visibility);
+
+      const note = await screen.findByTestId('publish-share-stored-gate');
+      expect(note.textContent).toContain('Passphrase gate');
+      expect(note.textContent).toContain('Private links to this page need the passphrase.');
+      expect(note.textContent).toContain(sentence);
+      expect(screen.getByTestId('publish-share-stored-gate-revoke-note').textContent).toContain('cleared');
+      expect(screen.getByTestId('publish-share-gate-clear')).toBeTruthy();
+      expect(apiDelete).not.toHaveBeenCalled();
+    }
+  );
+
+  it('shows a stored domain gate with the domain wording', async () => {
+    fakeServer('private', { kind: 'domain', allowedDomains: ['example.com'] });
+    await renderShared();
+
+    const note = await screen.findByTestId('publish-share-stored-gate');
+    expect(note.textContent).toContain('Email domain gate');
+    expect(note.textContent).toContain('Private links to this page need a verified email from an allowed domain.');
+  });
+
+  it('offers no Clear action when no gate is stored', async () => {
+    fakeServer('private', null);
+    await renderShared();
+
+    await waitFor(() => expect(screen.getByTestId('publish-share-token-label').textContent).toContain('no sign-in'));
+    expect(screen.queryByTestId('publish-share-stored-gate')).toBeNull();
+    expect(screen.queryByTestId('publish-share-gate-clear')).toBeNull();
+  });
+
+  it('offers no Clear action on a public page, where the gate editor is already on screen', async () => {
+    fakeServer('public', { kind: 'passphrase' });
+    await renderShared('public');
+
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('passphrase')
+    );
+    expect(screen.queryByTestId('publish-share-stored-gate')).toBeNull();
+    expect(screen.queryByTestId('publish-share-gate-clear')).toBeNull();
+  });
+
+  it('refused revoke -> clear offered -> clear -> the retried revoke succeeds', async () => {
+    fakeServer('private', { kind: 'passphrase' });
+    await renderShared();
+    await screen.findByTestId('publish-share-stored-gate');
+    expect(screen.getByTestId('publish-share-token-label').textContent).toBe('Private link');
+
+    fireEvent.click(screen.getByTestId('publish-share-token-revoke'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(REFUSAL));
+    expect(screen.getByTestId('publish-share-token-url')).toBeTruthy();
+    expect(screen.getByTestId('publish-share-gate-clear')).toBeTruthy();
+
+    screen.getByTestId('publish-share-gate-clear').focus();
+    clickClear();
+    // Asks first: nothing is written until the owner confirms.
+    expect(screen.getByTestId('confirmation-dialog')).toBeTruthy();
+    expect(gateWrites()).toHaveLength(0);
+    confirmClear();
+
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', { accessGate: null }));
+    await waitFor(() => expect(screen.queryByTestId('publish-share-stored-gate')).toBeNull());
+    expect(screen.queryByTestId('confirmation-dialog')).toBeNull();
+    expect(toast.success).toHaveBeenCalledWith('Gate cleared - private links no longer ask for it');
+
+    // The gated copy gives way to the ungated state.
+    expect(screen.getByTestId('publish-share-token-label').textContent).toBe(
+      'Private link anyone can open, no sign-in'
+    );
+    expect(screen.getByTestId('publish-share-token-hint').textContent).not.toContain('passphrase');
+    const warning = screen.getByTestId('publish-share-token-warning');
+    expect(warning.textContent).toBe('Anyone with this link can view without signing in.');
+    expect(warning.getAttribute('data-access')).toBe('public');
+    expect(screen.getByTestId('publish-share-visibility-private').textContent).not.toContain('passphrase');
+
+    // The Live Artifacts row badge is refreshed by a list refetch.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['published-artifacts', 'mine'] });
+    // The Clear button is gone, so focus lands on the action the owner was after.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('publish-share-token-revoke')));
+
+    fireEvent.click(screen.getByTestId('publish-share-token-revoke'));
+    await waitFor(() => expect(screen.queryByTestId('publish-share-token-url')).toBeNull());
+    expect(screen.getByTestId('publish-share-token-create')).toBeTruthy();
+    expect(apiDelete).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the gate and the refusal in place when the clear fails, and says why', async () => {
+    fakeServer('private', { kind: 'domain', allowedDomains: ['example.com'] });
+    await renderShared();
+    await screen.findByTestId('publish-share-stored-gate');
+    apiPatch.mockReset().mockRejectedValue(new Error('Network down'));
+
+    clickClear();
+    confirmClear();
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Network down'));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('confirmation-dialog')).toBeNull();
+    expect(screen.getByTestId('publish-share-stored-gate')).toBeTruthy();
+    expect(screen.getByTestId('publish-share-token-label').textContent).toBe('Private link');
+    expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('domain');
+    expect(invalidate).not.toHaveBeenCalled();
+
+    // Still refused, and still clearable.
+    fireEvent.click(screen.getByTestId('publish-share-token-revoke'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(REFUSAL));
+    expect(screen.getByTestId('publish-share-token-url')).toBeTruthy();
+    expect((screen.getByTestId('publish-share-gate-clear') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('sends nothing when the owner cancels the confirmation', async () => {
+    fakeServer('private', { kind: 'passphrase' });
+    await renderShared();
+    await screen.findByTestId('publish-share-stored-gate');
+
+    clickClear();
+    fireEvent.click(screen.getByTestId('confirmation-cancel-btn'));
+
+    expect(screen.queryByTestId('confirmation-dialog')).toBeNull();
+    expect(gateWrites()).toHaveLength(0);
+    expect(screen.getByTestId('publish-share-stored-gate')).toBeTruthy();
+  });
+
+  it('learns the stored gate from a refused revoke when the first record read failed', async () => {
+    fakeServer('private', { kind: 'passphrase' }, { seedFails: true });
+    await renderShared();
+    // The seed read failed, so the dialog cannot say what is stored and has nothing to clear yet.
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(screen.queryByTestId('publish-share-stored-gate')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('publish-share-token-revoke'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(REFUSAL));
+    const note = await screen.findByTestId('publish-share-stored-gate');
+    expect(note.textContent).toContain('Passphrase gate');
+    clickClear();
+    expect(screen.getByTestId('confirmation-dialog').textContent).toContain('cannot be recovered');
+  });
+
+  it('does not re-read the record after a failure that was not the gate refusal', async () => {
+    fakeServer('private', { kind: 'passphrase' });
+    await renderShared();
+    await screen.findByTestId('publish-share-stored-gate');
+    const recordReads = () => apiGet.mock.calls.filter(([url]) => String(url).endsWith('/pub-1')).length;
+    const before = recordReads();
+    apiDelete.mockReset().mockRejectedValue(new Error('Network down'));
+
+    fireEvent.click(screen.getByTestId('publish-share-token-revoke'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Network down'));
+    expect(recordReads()).toBe(before);
+  });
+
+  it('starts the Access choice open after a clear, not on the gate it was seeded from', async () => {
+    fakeServer('private', { kind: 'passphrase' });
+    renderOpen('private', { resolvePublished: () => Promise.resolve(publication('private')) });
+    await screen.findByTestId('publish-share-stored-gate');
+
+    clickClear();
+    confirmClear();
+    await waitFor(() => expect(screen.queryByTestId('publish-share-stored-gate')).toBeNull());
+    fireEvent.click(screen.getByTestId('publish-share-visibility-public'));
+
+    await screen.findByTestId('publish-share-gate');
+    expect(radio('none')?.checked).toBe(true);
+    expect(radio('passphrase')?.checked).toBe(false);
+    expect(screen.queryByTestId('publish-share-gate-apply')).toBeNull();
+  });
+
+  // The confirmation is the editor's own, so what the owner reads before clearing cannot drift apart.
+  it.each([
+    ['passphrase', { kind: 'passphrase' }],
+    ['domain', { kind: 'domain', allowedDomains: ['example.com'] }],
+  ] as const)('shows the same %s gate note and confirmation as the sharing panel editor', async (_kind, gate) => {
+    render(
+      <Wrapper>
+        <AccessGateEditor publicId="pub-1" visibility="private" initialGate={gate} />
+      </Wrapper>
+    );
+    const editorNote = screen.getByTestId('manage-gate-private-link-note').textContent;
+    fireEvent.click(screen.getByTestId('manage-gate-clear'));
+    const editorDialog = screen.getByTestId('confirmation-dialog').textContent;
+    expect(editorDialog).toContain('Clear access gate');
+    cleanup();
+
+    fakeServer('private', gate);
+    await renderShared();
+    const modalNote = await screen.findByTestId('publish-share-stored-gate');
+    expect(modalNote.textContent).toContain(editorNote);
+    clickClear();
+
+    expect(screen.getByTestId('confirmation-dialog').textContent).toBe(editorDialog);
   });
 });
