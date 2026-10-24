@@ -44,6 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@server/middlewares/logging', () => ({ logging: h.observe('logging') }));
+vi.mock('@server/middlewares/deployRevision', () => ({ deployRevision: h.observe('deployRevision') }));
 vi.mock('@server/auth/auth', () => ({ authMiddleware: [h.observe('authMiddleware')], auth: h.observe('auth') }));
 vi.mock('@server/middlewares/apiKeyAuth', () => ({ apiKeyAuth: () => h.observe('apiKeyAuth') }));
 vi.mock('@server/middlewares/apiKeyAnomalyDetection', () => ({ apiKeyAnomalyDetection: () => h.observe('anomaly') }));
@@ -100,6 +101,7 @@ describe('baseApi stamps req.receivedAt on arrival', () => {
     await runRecordedChain(req);
 
     const observed = [
+      'deployRevision',
       'logging',
       'authMiddleware',
       'apiKeyAuth',

@@ -46,6 +46,8 @@ vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
 }));
 
 import { ForbiddenError } from '@bike4mind/common';
+import { httpErrorToResponse } from '@server/middlewares/errorHandler';
+import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
 import handler from '../loginAs';
 
 const REASON = 'Reproducing a customer ticket';
@@ -95,6 +97,17 @@ describe('POST /api/users/:id/loginAs - respond() boundary', () => {
     expect(mockLoginAs).not.toHaveBeenCalled();
     expect(mockIssueSession).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('tells a stale tab to reload when the request carries no reason key', async () => {
+    const { req, res } = post({ mfaToken: '123456' });
+
+    const error = await (handler as any)(req, res).catch((e: unknown) => e);
+    const { status, body } = httpErrorToResponse(error, undefined);
+
+    expect(status).toBe(400);
+    expect(body.error).toBe(ADMIN_ACTION_REASON_MISSING_MESSAGE);
+    expect(mockLoginAs).not.toHaveBeenCalled();
   });
 
   it('denies impersonating yourself with a 403 and a user.impersonation.denied entry', async () => {
