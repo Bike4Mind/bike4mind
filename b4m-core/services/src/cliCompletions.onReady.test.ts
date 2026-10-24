@@ -45,7 +45,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTextModelCost: vi.fn(() => 0.001),
 }));
 
-import { BadRequestError, ChatModels, ModelBackend } from '@bike4mind/common';
+import { BadRequestError, ChatModels, ModelBackend, type IMessage } from '@bike4mind/common';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { getSettingsValue } from '@bike4mind/utils';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
@@ -199,6 +199,80 @@ describe('executeCompletion onReady', () => {
     expect(onReady).not.toHaveBeenCalled();
     expect(mockComplete).not.toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
+    expect(getLlmByModel).not.toHaveBeenCalled();
+  });
+
+  it.each<{ label: string; messages: IMessage[] }>([
+    {
+      label: 'normal multi-turn user-last conversation',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello' },
+        { role: 'user', content: 'continue' },
+      ],
+    },
+    {
+      label: 'blank assistant placeholder',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: ' ' },
+      ],
+    },
+    {
+      label: 'pause_turn server-tool continuation',
+      messages: [
+        { role: 'user', content: 'find a tool' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: { pattern: 'lookup' } },
+            { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: { tool_references: [] } },
+          ],
+        },
+      ],
+    },
+    ...(['tool_addition', 'tool_removal'] as const).map(type => ({
+      label: `trailing ${type}`,
+      messages: [
+        { role: 'user', content: 'find a tool' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: { pattern: 'lookup' } },
+            { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: { tool_references: [] } },
+          ],
+        },
+        { role: 'system', content: [{ type, tool: { type: 'tool_reference', name: 'lookup' } }] },
+      ] satisfies IMessage[],
+    })),
+  ])('dispatches $label on a model without prefill support', async ({ messages }) => {
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { ...CATALOGUED_MODEL, id: ChatModels.CLAUDE_5_5_HAIKU, backend: ModelBackend.Anthropic } as never,
+    ]);
+    const { db } = buildDb();
+    const onReady = vi.fn();
+
+    await executeCompletion({
+      ...baseParams,
+      model: ChatModels.CLAUDE_5_5_HAIKU,
+      messages,
+      options: {
+        tools: [
+          { toolSchema: { name: 'lookup', description: 'Look up a value', parameters: { type: 'object' } } },
+          { serverTool: { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_regex' } },
+        ],
+      },
+      db,
+      onReady,
+    });
+
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(mockComplete).toHaveBeenCalledWith(
+      ChatModels.CLAUDE_5_5_HAIKU,
+      messages,
+      expect.any(Object),
+      expect.any(Function)
+    );
   });
 
   it('preserves assistant prefill for a model that supports it', async () => {

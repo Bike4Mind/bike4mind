@@ -36,7 +36,9 @@ export const createCompletionContract = defineEndpoint({
     'A message `content` may be a string or an array of parts; image parts are accepted in ' +
     'OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a ' +
     '`source`) form and are translated to whatever the target model speaks. ' +
-    "A final non-system assistant message is an assistant prefill. Check the model's " +
+    'A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in ' +
+    '`server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. ' +
+    "Check the model's " +
     '`supports_assistant_prefill` field from `GET /api/v1/models` before sending one. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     'TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), ' +

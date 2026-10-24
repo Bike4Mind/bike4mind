@@ -183,7 +183,8 @@ export const CompletionMessageSchema = z.object({
         'ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose ' +
         '`supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with ' +
         '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). ' +
-        'If the last non-system message is an assistant turn, the request is an assistant prefill. It is accepted only ' +
+        'A final non-blank assistant turn is an assistant prefill, except a server-tool continuation ending in ' +
+        '`server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. It is accepted only ' +
         'when the selected model has `supports_assistant_prefill: true`; otherwise the request returns `400` with ' +
         '`errorCode: "assistant_prefill_unsupported"` without changing the message.'
     ),

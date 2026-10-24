@@ -130,7 +130,7 @@ export const PublicModelSchema = z.object({
     .boolean()
     .describe(
       'Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, ' +
-        'that request returns `400` with `errorCode: "assistant_prefill_unsupported"`. On Claude models that accept ' +
+        'a text prefill returns `400` with `errorCode: "assistant_prefill_unsupported"`; server-tool continuations are allowed. On Claude models that accept ' +
         'assistant prefill, it cannot be combined with `thinking`.'
     ),
   supports_vision: z.boolean(),

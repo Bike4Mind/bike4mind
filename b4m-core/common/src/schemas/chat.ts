@@ -363,7 +363,12 @@ export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
  */
 export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
   errorCode: z
-    .enum(['invalid_request', UNKNOWN_MODEL_ERROR_CODE, ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE, ...COMPLETION_TOOL_ERROR_CODES])
+    .enum([
+      'invalid_request',
+      UNKNOWN_MODEL_ERROR_CODE,
+      ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
+      ...COMPLETION_TOOL_ERROR_CODES,
+    ])
     .optional(),
 });
 
