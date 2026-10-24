@@ -72,8 +72,8 @@ export function usesDiscreteImageDimensions(model?: string | null): boolean {
 
 /**
  * Image models offering a prompt-enhancement toggle in the UI, where the provider is meant to
- * rewrite and expand the prompt before generating. BFL takes it as `prompt_upsampling` and honors
- * it. Gemini models are still included here for historical/UI-grouping reasons, but
+ * rewrite and expand the prompt before generating. BFL takes `prompt_upsampling` or its inverse
+ * `disable_pup`; Klein has neither. Gemini is included for historical/UI-grouping reasons, but
  * GeminiImageService.buildGenerationConfig() deliberately never forwards this to Google's API -
  * `generateImages` rejects the mere presence of `enhancePrompt`, so the toggle is a no-op for
  * Gemini today. Do not reintroduce a Gemini enhancePrompt mapping without confirming Google's API
@@ -83,7 +83,7 @@ export function usesDiscreteImageDimensions(model?: string | null): boolean {
  * have to agree about this field, and they previously did so through three separate BFL checks.
  */
 export function supportsPromptUpsampling(model?: string | null): boolean {
-  return isBflImageModel(model) || isGeminiImageModel(model);
+  return (isBflImageModel(model) && !model?.startsWith('flux-2-klein-')) || isGeminiImageModel(model);
 }
 
 /**
@@ -275,3 +275,10 @@ export const IMAGES_PER_EDIT_REQUEST = 1;
  * prices through OpenAIImageCostCalculator.getInputImageCost - keep the two together.
  */
 export const MAX_REFERENCE_IMAGES = 15;
+
+/** FLUX.2's limit includes the primary input; GPT reserves a separate primary slot. */
+export function getMaxReferenceImages(model: string): number {
+  if (isGPTImageModel(model)) return MAX_REFERENCE_IMAGES;
+  if (!isFlux2ImageModel(model)) return 0;
+  return model.startsWith('flux-2-klein-') ? 4 : 8;
+}

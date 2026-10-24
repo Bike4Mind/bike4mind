@@ -114,6 +114,60 @@ describe('BFLImageService - reference image field', () => {
     expect(submittedBody()).not.toHaveProperty('input_image');
   });
 
+  it('sends FLUX.2 references in order using numbered provider fields', async () => {
+    await service.generate('combine these', {
+      model: ImageModels.FLUX_2_PRO,
+      reference_images: ['first-image', 'second-image', 'third-image'],
+    });
+
+    expect(submittedBody()).toMatchObject({
+      input_image: 'first-image',
+      input_image_2: 'second-image',
+      input_image_3: 'third-image',
+    });
+    expect(submittedBody()).not.toHaveProperty('reference_images');
+    expect(submittedBody()).not.toHaveProperty('image_prompt');
+    const output = logged.join('\n');
+    for (const image of ['first-image', 'second-image', 'third-image']) {
+      expect(output).not.toContain(image);
+    }
+  });
+
+  it.each([
+    [ImageModels.FLUX_2_PRO, 8],
+    [ImageModels.FLUX_2_KLEIN_4B, 4],
+    [ImageModels.FLUX_2_KLEIN_9B, 4],
+    [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, 4],
+  ] as const)('enforces the reference limit for %s before submitting', async (model, limit) => {
+    const reference_images = Array.from({ length: limit }, (_, index) => `image-${index}`);
+    await service.generate('combine these', { model, reference_images });
+    expect(submittedBody()[`input_image_${limit}`]).toBe(`image-${limit - 1}`);
+    postSpy.mockClear();
+
+    await expect(
+      service.generate('too many', { model, reference_images: [...reference_images, 'one-too-many'] })
+    ).rejects.toThrow(`at most ${limit} reference images`);
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('counts a legacy primary image toward the FLUX.2 limit', async () => {
+    await expect(
+      service.generate('too many', {
+        model: ImageModels.FLUX_2_KLEIN_4B,
+        image_prompt: 'primary',
+        reference_images: ['reference-1', 'reference-2', 'reference-3', 'reference-4'],
+      })
+    ).rejects.toThrow('at most 4 reference images');
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects explicit references for FLUX.1 instead of silently discarding them', async () => {
+    await expect(
+      service.generate('combine these', { model: ImageModels.FLUX_PRO_1_1, reference_images: ['image'] })
+    ).rejects.toThrow('does not support multiple reference images');
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
   it('redacts the FLUX.2 reference image in the logged body', async () => {
     await service.generate('make it pop', { model: ImageModels.FLUX_2_PRO, image_prompt: 'base64-secret-image' });
 
@@ -193,4 +247,31 @@ describe('BFLImageService - request body', () => {
 
     expect(submittedBody().prompt_upsampling).toBe(false);
   });
+
+  it.each([ImageModels.FLUX_2_MAX, ImageModels.FLUX_2_PRO, ImageModels.FLUX_2_PRO_PREVIEW])(
+    'maps prompt upsampling to disable_pup for %s',
+    async model => {
+      await service.generate('a friendly cat', { model, prompt_upsampling: true });
+      expect(submittedBody().disable_pup).toBe(false);
+      expect(submittedBody()).not.toHaveProperty('prompt_upsampling');
+
+      await service.generate('a friendly cat', { model, prompt_upsampling: false });
+      expect(submittedBody(1).disable_pup).toBe(true);
+    }
+  );
+
+  it('keeps the prompt_upsampling field for FLUX.2 Flex', async () => {
+    await service.generate('a friendly cat', { model: ImageModels.FLUX_2_FLEX, prompt_upsampling: true });
+    expect(submittedBody().prompt_upsampling).toBe(true);
+    expect(submittedBody()).not.toHaveProperty('disable_pup');
+  });
+
+  it.each([ImageModels.FLUX_2_KLEIN_4B, ImageModels.FLUX_2_KLEIN_9B, ImageModels.FLUX_2_KLEIN_9B_PREVIEW])(
+    'omits unsupported prompt upsampling for %s',
+    async model => {
+      await service.generate('a friendly cat', { model, prompt_upsampling: true });
+      expect(submittedBody()).not.toHaveProperty('prompt_upsampling');
+      expect(submittedBody()).not.toHaveProperty('disable_pup');
+    }
+  );
 });

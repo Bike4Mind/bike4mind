@@ -392,12 +392,18 @@ function sourceDisabledReasonOf(contributed: ReadonlyMap<string, unknown>): stri
  */
 function providerDisableInForce(
   contributed: ReadonlyMap<string, unknown>,
-  base: Record<string, unknown>
+  base: Record<string, unknown>,
+  prior: readonly ICatalogContributor[] | undefined
 ): string | undefined {
   if (contributed.has('autoDisabled') || contributed.has('autoDisabledReason')) return undefined;
   if (base.autoDisabled !== true) return undefined;
   const reason = base.autoDisabledReason;
-  return typeof reason === 'string' && !isDiscoveryVerdict(reason) ? reason : undefined;
+  const supplier = prior?.find(entry => entry.group === 'availability')?.source;
+  // A legacy writer could restamp a provider disable with discovery's wording while keeping its
+  // supplier. The credit takes precedence; only uncredited rows rely on the wording.
+  if (supplier === DISCOVERY_CONTRIBUTOR) return undefined;
+  if (supplier) return typeof reason === 'string' && reason.length > 0 ? reason : 'disabled by its source';
+  return typeof reason === 'string' && reason.length > 0 && !isDiscoveryVerdict(reason) ? reason : undefined;
 }
 
 /**
@@ -628,6 +634,9 @@ function planOne(
   // uncorroborated docs kind first - so the status is a source's claim rather
   // than a parse artifact.
   if (decides && !LIFECYCLE_SUNSET_STATUSES.has(record.lifecycle?.status ?? '')) {
+    const sourceDisabledReason =
+      sourceDisabledReasonOf(contributed) ??
+      providerDisableInForce(contributed, base, input.priorContributors?.get(candidate.modelId));
     decision = evaluatePromotion({
       record,
       policy: input.policy,
@@ -638,7 +647,7 @@ function planOne(
         : candidate.pricesByKind.some(entry => entry.kind === 'aggregator')
           ? 'aggregator-quote'
           : 'none',
-      sourceDisabledReason: sourceDisabledReasonOf(contributed),
+      sourceDisabledReason,
     });
     // autoDisabledReason is omitted rather than set to undefined so a promotion
     // reads as a removed key in the diff instead of a key that is still there.
@@ -662,9 +671,7 @@ function planOne(
           ...withoutReason,
           lifecycle: { ...record.lifecycle, status: 'discovered' },
           autoDisabled: true,
-          autoDisabledReason: keepReasonInForce
-            ? reasonInForce
-            : (providerDisableInForce(contributed, base) ?? decision.autoDisabledReason),
+          autoDisabledReason: keepReasonInForce ? reasonInForce : decision.autoDisabledReason,
         };
     ownedGroups.add('lifecycle');
     ownedGroups.add('availability');

@@ -327,6 +327,45 @@ describe('planCatalogWrites', () => {
       });
     });
 
+    it.each(['priced', 'all'] as const)(
+      'keeps a discovered provider disable when availability is unknown under policy %s',
+      policy => {
+        const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+        const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false));
+
+        const second = plan({
+          ...bedrockRun(['ON_DEMAND'], undefined, first.rows[0]),
+          policy,
+        });
+
+        expect(second.diff.every(entry => !entry.promoted)).toBe(true);
+        const held = asBase([...first.rows, ...second.rows]).get(MODEL)?.record;
+        expect(held).toMatchObject({
+          lifecycle: { status: 'discovered' },
+          autoDisabled: true,
+          autoDisabledReason: 'not entitled in this AWS account',
+        });
+      }
+    );
+
+    it('keeps a provider-credited legacy verdict disable when a newly trusted price arrives', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false)).rows[0];
+      const restamped = {
+        ...first,
+        patch: { ...first.patch, autoDisabledReason: 'discovered, awaiting price' },
+      };
+
+      const second = plan(bedrockRun(['ON_DEMAND'], undefined, restamped));
+
+      expect(second.diff.every(entry => !entry.promoted)).toBe(true);
+      expect(asBase([restamped, ...second.rows]).get(MODEL)?.record).toMatchObject({
+        lifecycle: { status: 'discovered' },
+        autoDisabled: true,
+        autoDisabledReason: 'discovered, awaiting price',
+      });
+    });
+
     // The contributor is a supply credit, so the writer has to align it with the disable in force:
     // the read path reads a provider credit as proof the provider is what disabled the model.
     it('credits a run decision to discovery even when the same run cleared the provider disable', () => {

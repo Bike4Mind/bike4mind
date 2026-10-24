@@ -186,7 +186,7 @@ describe('evaluatePromotion', () => {
   });
 
   // mergeCatalog recognises discovery's own disable by this prefix; a reworded verdict keeps the
-  // disable in force over a curated record and the model is served enabled.
+  // disable in force over a curated record and the model stays disabled.
   it('words every denial off the prefix the catalog merge recognises as discovery-owned', () => {
     const constants = [
       AWAITING_PRICE_REASON,

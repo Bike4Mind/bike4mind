@@ -153,6 +153,15 @@ describe('getImageModelCapabilities', () => {
       expect(supports.transparentBackground).toBe(false);
     });
 
+    it.each([
+      [ImageModels.FLUX_2_PRO, 8],
+      [ImageModels.FLUX_2_FLEX, 8],
+      [ImageModels.FLUX_2_KLEIN_9B, 4],
+      [ImageModels.FLUX_2_KLEIN_4B, 4],
+    ])('%s advertises its total reference input limit', (model, limit) => {
+      expect(getImageModelCapabilities(model).supports.maxReferenceImages).toBe(limit);
+    });
+
     it('Kontext needs an input image', () => {
       expect(getImageModelCapabilities(ImageModels.FLUX_KONTEXT_PRO).supports.requiresInputImage).toBe(true);
     });

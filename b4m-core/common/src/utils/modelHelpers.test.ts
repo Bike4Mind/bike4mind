@@ -5,6 +5,8 @@ import type { LLMModelConfig } from '../types/entities/LLMTypes';
 import { VIDEO_MODEL_IDS } from '../video/catalog';
 import {
   filterRunnableModels,
+  getMaxReferenceImages,
+  supportsPromptUpsampling,
   isVideoModel,
   isGPTImageModel,
   isGPTImage2Model,
@@ -344,5 +346,35 @@ describe('filterRunnableModels', () => {
   it('drops a model whose admin row is switched off, even for an admin', () => {
     const configs = [makeModel({ id: 'paused', enabled: false })];
     expect(filterRunnableModels([info('paused')], configs, [], true, [])).toEqual([]);
+  });
+});
+
+describe('getMaxReferenceImages', () => {
+  it.each([
+    [ImageModels.GPT_IMAGE_2, 15],
+    [ImageModels.FLUX_2_PRO, 8],
+    [ImageModels.FLUX_2_MAX, 8],
+    [ImageModels.FLUX_2_KLEIN_9B, 4],
+    [ImageModels.FLUX_2_KLEIN_4B, 4],
+    [ImageModels.FLUX_PRO_1_1, 0],
+    [ImageModels.GEMINI_3_PRO_IMAGE, 0],
+  ])('%s accepts %s references', (model, limit) => {
+    expect(getMaxReferenceImages(model)).toBe(limit);
+  });
+});
+
+describe('supportsPromptUpsampling', () => {
+  it.each([
+    [ImageModels.FLUX_2_MAX, true],
+    [ImageModels.FLUX_2_PRO, true],
+    [ImageModels.FLUX_2_PRO_PREVIEW, true],
+    [ImageModels.FLUX_2_FLEX, true],
+    [ImageModels.FLUX_2_KLEIN_9B, false],
+    [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, false],
+    [ImageModels.FLUX_2_KLEIN_4B, false],
+    [ImageModels.FLUX_PRO_1_1, true],
+    [ImageModels.GPT_IMAGE_2, false],
+  ])('%s exposes a prompt enhancement control: %s', (model, supported) => {
+    expect(supportsPromptUpsampling(model)).toBe(supported);
   });
 });

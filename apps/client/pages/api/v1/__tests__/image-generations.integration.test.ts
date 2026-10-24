@@ -264,6 +264,32 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       );
     });
 
+    it('accepts reference images for FLUX.2 (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: { prompt: 'a red bicycle', model: 'flux-2-pro', referenceImageFabFileIds: REFS },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ referenceImageFabFileIds: REFS }) })
+      );
+    });
+
+    it('rejects too many FLUX.2 Klein references before enqueuing (400)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: {
+          prompt: 'a red bicycle',
+          model: 'flux-2-klein-4b',
+          referenceImageFabFileIds: ['a', 'b', 'c', 'd', 'e'],
+        },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
     it('rejects reference images for a non-gpt-image model (400) before creating a session or enqueuing', async () => {
       validateWithScopes([ApiKeyScope.AI_GENERATE]);
       const { req, res } = fire({

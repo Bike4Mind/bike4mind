@@ -55,8 +55,8 @@ export const generateImageContract = defineEndpoint({
     '`prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart ' +
     "from truncation to the model's prompt limit). " +
     '`referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input ' +
-    'image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is ' +
-    'rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours ' +
+    'image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images ' +
+    '(4 for Klein), including the primary image. Unsupported models are rejected with a 400. Which `size` values a model accepts, and whether it honours ' +
     '`background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block ' +
     'of `GET /api/v1/models`. Credits are checked when the render runs, so ' +
     'insufficient credits arrive on the polled quest rather than as a 422. ' +
@@ -79,7 +79,7 @@ export const generateImageContract = defineEndpoint({
     },
     400: {
       description:
-        `\`referenceImageFabFileIds\` is set for a non-gpt-image model, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ` +
+        `\`referenceImageFabFileIds\` is set for an unsupported model or exceeds its input limit, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ` +
         BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
       schema: ApiErrorSchema,
     },
