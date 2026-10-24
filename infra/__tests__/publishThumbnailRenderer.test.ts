@@ -38,7 +38,9 @@ const rendererKeys = () => [...RENDERER.matchAll(/^ {2}([A-Za-z]+):/gm)].map(mat
 describe('publish thumbnail renderer function', () => {
   it('declares only its code, runtime and sizing: no link, secrets, VPC, environment, permissions or role', () => {
     expect(rendererKeys().sort()).toEqual(['handler', 'memory', 'nodejs', 'runtime', 'timeout']);
-    for (const forbidden of ['link', 'allSecrets', 'vpc', 'environment', 'permissions', 'role', 'url']) {
+    // No layers either: an extension runs as its own process, which every render's clean-environment
+    // check (apps/workers/src/media/renderEnvironment.ts) would refuse.
+    for (const forbidden of ['link', 'allSecrets', 'vpc', 'environment', 'permissions', 'role', 'url', 'layers']) {
       expect(RENDERER).not.toMatch(new RegExp(`\\b${forbidden}\\b\\s*:`));
     }
     expect(RENDERER).not.toMatch(/allSecrets|DEFAULT_LAMBDA_ENVIRONMENT|Bucket\b/);
