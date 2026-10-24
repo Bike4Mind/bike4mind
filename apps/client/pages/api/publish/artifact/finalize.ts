@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact } from '@bike4mind/database';
 import {
   FinalizeRequestSchema,
@@ -402,6 +403,12 @@ const handler = baseApi().post(async (req, res) => {
   // an update that downgrades it must purge the cached public copy too. Best-effort.
   if (saved.visibility === 'public' || previous?.visibility === 'public') {
     await invalidatePublishCdn(toCacheTarget(saved), req.logger);
+  }
+
+  // 7c. Owner-only thumbnail of the version just promoted (a refresh-from-source lands here too).
+  // Best-effort and never throws: a failed enqueue leaves the card on its generated cover.
+  if (manifest.source.kind === 'bundle') {
+    await enqueuePublishThumbnail({ publicId: saved.publicId, versionId: indexEntry.sha256 }, req.logger);
   }
 
   // 8. Best-effort draft cleanup

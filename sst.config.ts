@@ -65,8 +65,12 @@ export default $config({
     //    `await import('@huggingface/transformers')` never runs. Without this,
     //    esbuild fails every voyageai-bundling Function with
     //    `Could not resolve "@huggingface/transformers"`.
+    //  - playwright-core: only the PublishThumbnailRenderer Function imports it,
+    //    and that Function `install`s it (infra/queues.ts). Listed here because its
+    //    core bundle requires chromium-bidi lazily, which does not resolve when
+    //    bundled, and scripts/check-lambda-bundle.mjs reads only this list.
     // (Registered before any Function is created so the transform applies to all.)
-    const ALWAYS_EXTERNAL = ['isolated-vm', '@huggingface/transformers', 'onnxruntime-node'];
+    const ALWAYS_EXTERNAL = ['isolated-vm', '@huggingface/transformers', 'onnxruntime-node', 'playwright-core'];
     // SST rejects top-level imports in sst.config.ts, so load the helper at run() time.
     const { resolveDefaultLogging } = await import('@bike4mind/infra');
     $transform(sst.aws.Function, args => {
@@ -117,7 +121,6 @@ export default $config({
       slackExportBucket,
       slackExportQueue,
       githubWebhookQueue,
-      whatsNewDistributionBucket,
       vpc,
       vpcId,
       mcpHandler,
@@ -255,7 +258,6 @@ export default $config({
       slackExportBucket: slackExportBucket.name,
       slackExportQueue: slackExportQueue.url,
       githubWebhookQueue: githubWebhookQueue.url,
-      whatsNewDistributionBucket: whatsNewDistributionBucket?.name,
       mcpHandler: mcpHandler.name,
       cliToolHandler: cliToolHandler.name,
       websocket: websocketApi.url,

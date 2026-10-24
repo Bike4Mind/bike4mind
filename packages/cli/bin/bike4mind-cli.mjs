@@ -314,6 +314,7 @@ if (argv['no-remote-skills']) {
 }
 
 // claude-compatible flags -> B4M_* env (read by src/index.tsx init).
+// Host-launch signal: keep in sync with HOST_FLAG_ENV_KEYS in src/bootstrap/startupTrustGates.ts.
 // Mirrors the established bin->env->init channel (cf. --add-dir -> B4M_ADDITIONAL_DIRS).
 if (argv['mcp-config']) {
   process.env.B4M_MCP_CONFIG_FILE = resolve(argv['mcp-config']);

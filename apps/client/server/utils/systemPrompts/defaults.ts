@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 import { IAdminSystemPrompt, AdminSystemPromptCategory } from '@bike4mind/common';
 
 import { premiumSystemPrompts } from '@server/premium-generated/premiumSystemPrompts.generated';

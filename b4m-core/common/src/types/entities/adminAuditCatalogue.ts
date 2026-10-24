@@ -132,6 +132,23 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'support.inbox.message_sent': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'support.pr_report.sent': { category: 'support', severity: 'info', write: 'bestEffort' },
 
+  // Handler coverage: users and credentials
+  'user.created': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.bulk_created': {
+    category: 'account',
+    severity: 'notice',
+    write: 'bestEffort',
+    escalatesAboveGrantThreshold: true,
+  },
+  'user.emergency_login.challenged': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.emergency_login.denied': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.api_key.generated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.subscription.removed': { category: 'credits', severity: 'critical', write: 'strict' },
+  'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
+  'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 

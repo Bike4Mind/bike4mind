@@ -6,6 +6,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { logEventSafe } from '@server/utils/analyticsLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 
 /**
@@ -67,6 +68,25 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         req.logger,
         `API key ${apiKey.id}`
       );
+
+      await recordAdminActionFromRequest(req, {
+        action: 'user.api_key.rate_limit_updated',
+        target: { kind: 'apiKey', id: apiKey.id, displayName: updated.name },
+        summary: `set API key rate limits to ${updated.rateLimit.requestsPerMinute}/min, ${updated.rateLimit.requestsPerDay}/day`,
+        changes: [
+          {
+            field: 'rateLimit.requestsPerMinute',
+            before: apiKey.rateLimit?.requestsPerMinute ?? null,
+            after: updated.rateLimit.requestsPerMinute,
+          },
+          {
+            field: 'rateLimit.requestsPerDay',
+            before: apiKey.rateLimit?.requestsPerDay ?? null,
+            after: updated.rateLimit.requestsPerDay,
+          },
+        ],
+        details: { ownerUserId: apiKey.userId },
+      });
 
       req.logger.info(
         `Admin ${req.user.username} (${req.user.id}) set rate limits ${updated.rateLimit.requestsPerMinute}/min, ` +

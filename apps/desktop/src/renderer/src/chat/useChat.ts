@@ -347,6 +347,7 @@ export interface ProjectBindingController {
 
 export interface ConversationController {
   session: ChatSession | null;
+  setHistory: (enabled: boolean) => Promise<void>;
   messages: ChatMessage[];
   /** Set while a reply for THIS session is streaming. */
   streaming: boolean;
@@ -455,6 +456,7 @@ export function useConversation(
   // An imported refresh must not replace a prompt, boundary or reply that arrived after its read began.
   const transcriptVersion = useRef(0);
   const workspaceVersion = useRef(0);
+  const historyVersion = useRef(0);
 
   useEffect(() => {
     setSendError(null);
@@ -476,9 +478,11 @@ export function useConversation(
     let current = true;
     const load = (): void => {
       const preparationBeforeRead = workspaceVersion.current;
+      const historyBeforeRead = historyVersion.current;
       void window.b4m.chat.getSession(sessionId).then(loaded => {
         if (!current) return;
         if (preparationBeforeRead !== workspaceVersion.current) return load();
+        if (historyBeforeRead !== historyVersion.current) return load();
         // A reply already running arrives as main's live copy, and the events from now on
         // extend it. One that settled while this read was in flight is stale: read again
         // rather than put back a turn the 'done' already closed.
@@ -549,9 +553,14 @@ export function useConversation(
   useEffect(() => {
     return window.b4m.chat.onSessionSummary(summary => {
       if (summary.id !== activeSessionId.current) return;
+      historyVersion.current++;
       // The project too: a worktree landing under an open session is pushed this way, and the
       // chips have to stop saying it is on its way.
-      setSession(current => (current ? { ...current, title: summary.title, project: summary.project } : current));
+      setSession(current =>
+        current
+          ? { ...current, title: summary.title, project: summary.project, historyEnabled: summary.historyEnabled }
+          : current
+      );
     });
   }, []);
 
@@ -986,6 +995,24 @@ export function useConversation(
     [sessionId, onSummaryChanged]
   );
 
+  const setHistory = useCallback(
+    async (enabled: boolean) => {
+      if (!sessionId || session?.id !== sessionId) return;
+      const version = historyVersion.current;
+      try {
+        const updated = await window.b4m.chat.setSessionHistory(sessionId, enabled);
+        if (!updated || version !== historyVersion.current) return;
+        setSession(current =>
+          current?.id === sessionId ? { ...current, historyEnabled: updated.historyEnabled } : current
+        );
+        onSummaryChanged(updated);
+      } catch (error) {
+        setNotice(`Could not update local history. ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+    [sessionId, session?.id, onSummaryChanged]
+  );
+
   const setReasoningEffort = useCallback(
     async (effort: ReasoningEffortSetting) => {
       if (!sessionId) return;
@@ -1145,6 +1172,7 @@ export function useConversation(
 
   return {
     session,
+    setHistory,
     messages,
     streaming,
     turn,

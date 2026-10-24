@@ -127,7 +127,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:*']
   ),
-  gap('event:infra/llm.ts:slack-completion-start', '566fa8cfa5d811a718882aa2a08f0f385eb0eab703c6ba946ade95aa9d43a5a4', [
+  gap('event:infra/llm.ts:slack-completion-start', '2a3527a1e7e3310c302073adefaace09bb7c06f0f34944138758fb596a90cdf3', [
     'bedrock:*',
     'cloudwatch:PutMetricData',
     'events:PutEvents',
@@ -155,6 +155,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '7fd2b40ddb22e4265c76224cd77f1cef0bf20dff5af7cae37d3b81a3994c315a'
   ),
   gap('function:infra/mcp.ts:mcpHandler', 'e3bfed090995364d360c725c2215d1295cff7f6e64722943495293d1899b6334'),
+  hostedOnly(
+    'function:infra/queues.ts:PublishThumbnailRenderer',
+    'e146492579f79a754d05fc7cc3c33d106832038ad0ee18126bcd1fec336f8314',
+    'Renders publish thumbnails for the hosted-only publishThumbnailQueue, invoked synchronously by its handler; it packages a Lambda-only headless Chromium the self-host worker image does not ship.'
+  ),
   gap(
     'logSubscription:infra/logMonitor.ts:createLogSubscriptions()',
     '235e9ebbdccd1202b354d558a713998832b152cf9093cb995f23e12e2c091997',
@@ -519,6 +524,16 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:overwatchAnalyticsQueueDLQ',
     '48d2eb528668fa78a4afbc6df9740bd92ac527dc969f20966da54ac373072e04'
   ),
+  hostedOnly(
+    'queue:infra/queues.ts:publishThumbnailQueue',
+    'b0d6fe4ecd4ae79b88939db259082881e4b0f40a07f1e71036efb9aa6260cc23',
+    'Owner-only publish thumbnails render in a Lambda-packaged headless Chromium; the self-host worker image ships no browser, so publish skips the enqueue and cards keep their generated cover.',
+    ['lambda:InvokeFunction']
+  ),
+  broker(
+    'queue:infra/queues.ts:publishThumbnailQueueDLQ',
+    'a1b84e4b8d1c2da1390507f0e1bdd7a567c77e5390ede903ca583acdfdbe87d2'
+  ),
   wired(
     'queue:infra/queues.ts:questExportQueue',
     'daebcc2d0b1021e4c650792ebae48c616d8705525dc24c24db6cf634c604c420',
@@ -677,7 +692,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:dailyUserActivityReport',
-    '25dad0aee60758280848e2628a46a060b37d86cfc642c5082b03c41684992fbc',
+    '6a0a3e3992199c27d914f962b3b29d0b0b7484f449c40d32a67178012a597433',
     'Hosted production analytics report; not applicable to a portable deployment.'
   ),
   wired(
@@ -871,14 +886,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:weeklyUserActivityReport',
-    '1b96e0c9771ef7c02e7791e814f07c88cf23e8c02f0408d10d3de9b583111f70',
+    '46192bc0ad1641d27b655120bc3bc9de6e1003d2cd276ff80e9c8064facb0408',
     'Hosted production analytics report; not applicable to a portable deployment.'
-  ),
-  hostedOnly(
-    'schedule:infra/cron.ts:whatsNewSyncCron',
-    'c22c6f1da3086a35aef715f6e018e820751605f3b9bd9015ec3066fb890198cd',
-    'Imports hosted announcements; not applicable to a portable deployment.',
-    ['cloudwatch:PutMetricData']
   ),
   gap(
     'schedule:infra/securityAlerts.ts:SecurityAlertsSchedule',
@@ -887,7 +896,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '65af60de937670b66a99962bfbc993c488f83eefa3689135e8252693eb326f17',
+    '9ccbdd11a7f8cd66f64870d2d4f6aaa71c19bac6ff179cdc50783b3aff9cdbe2',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),

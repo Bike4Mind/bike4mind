@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 import { registerToolbelts, type AgentExtensionContribution } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { premiumAgentExtensions } from '@server/premium-generated/premiumAgentExtensions.generated';

@@ -40,12 +40,16 @@ export function ownModalMediaKey(url: string, bucket: string): string | null {
 /** Points each own upload in `urls` at its media route; linked URLs pass through. */
 function withMediaRoutes<T extends object>(noteId: string, urls: T, assets: [string, string][], bucket: string): T {
   const origin = process.env.APP_URL?.trim().replace(/\/+$/, '') ?? '';
-  const served = { ...urls } as Record<string, string | null | undefined>;
+  // Read each field through the source's own accessors: `urls` is a Mongoose subdocument on the feed route,
+  // and a spread of one copies its internals, not its fields.
+  const source = urls as Record<string, string | null | undefined>;
+  const served: Record<string, string | null | undefined> = {};
   for (const [asset, field] of assets) {
-    const url = served[field];
-    if (url && ownModalMediaKey(url, bucket)) {
-      served[field] = `${origin}${RELEASE_NOTE_MEDIA_PATH}/${encodeURIComponent(noteId)}/${asset}`;
-    }
+    const url = source[field] ?? null;
+    served[field] =
+      url && ownModalMediaKey(url, bucket)
+        ? `${origin}${RELEASE_NOTE_MEDIA_PATH}/${encodeURIComponent(noteId)}/${asset}`
+        : url;
   }
   return served as unknown as T;
 }

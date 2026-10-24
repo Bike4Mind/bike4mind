@@ -32,6 +32,8 @@ import {
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   completionsSupportsToolSearch,
+  supportsAssistantPrefill,
+  ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
   isClaudeModelId,
   type CreditHoldRecord,
   type ICacheStrategy,
@@ -66,7 +68,7 @@ import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { createModelAdmission, loadModelConfigurations } from './llm/modelAdmission';
-import { prepareWireTools } from './cliCompletionsToolSearch';
+import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
 
 /** Persistence boundary: implementations commit each callback and its hold transition atomically. */
@@ -526,6 +528,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
   }).assert(model);
+
+  if (modelInfo && !supportsAssistantPrefill(modelInfo) && hasAssistantPrefill(messages)) {
+    throw new BadRequestError(
+      `Model '${params.model}' does not support assistant message prefill. End the conversation with a user message.`,
+      { errorCode: ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE }
+    );
+  }
 
   const llm = getLlmByModel(apiKeys, {
     modelInfo,

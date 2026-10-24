@@ -83,7 +83,11 @@ import { ModelCatalog } from './ModelCatalog';
 import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
-import { sessionScopeFor, sessionScopeKey } from './sessionScope';
+import { LocalHistory } from './LocalHistory';
+import { registerHistoryIpc } from './historyIpc';
+import { captureHistoryPage } from './captureHistoryPage';
+import { OllamaLocal } from './OllamaLocal';
+import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
   currentBranch,
@@ -365,7 +369,7 @@ export function registerChat(
     join(userData, 'sessions'),
     PREFERRED_MODEL,
     randomUUID(),
-    () => sessionScopeFor(auth.getState()),
+    () => sessionScopeForChat(auth.getState()),
     approvalModes,
     REASONING_EFFORT
   );
@@ -411,18 +415,42 @@ export function registerChat(
     writeClipboard: text => clipboard.writeText(text),
     logger,
   });
-  const models = new ModelCatalog({
-    logger,
-    getApiClient: () => auth.getApiClient(),
-    getEnvironmentUrl: () => auth.getState().environment.url,
-  });
-
+  const local = new OllamaLocal();
+  const models = new ModelCatalog(
+    {
+      logger,
+      getApiClient: () => auth.getApiClient(),
+      getEnvironmentUrl: () => auth.getState().environment.url,
+    },
+    local
+  );
   const send = (channel: string, payload: unknown) => {
     logDownstream(channel, payload);
     for (const window of appWindows()) {
       window.webContents.send(channel, payload);
     }
   };
+
+  // History is an opt-in, rebuildable index: an unopenable file must not take chat down with it.
+  let history: LocalHistory | undefined;
+  try {
+    history = new LocalHistory(
+      join(userData, 'local-history.sqlite'),
+      () => {
+        const scope = sessionScopeForChat(auth.getState());
+        return scope ? sessionScopeKey(scope) : null;
+      },
+      () => {
+        try {
+          send(IPC_CHANNELS.chatHistoryChanged, undefined);
+        } catch (error) {
+          logger.warn(`CHAT: could not notify local history change: ${String(error)}`);
+        }
+      }
+    );
+  } catch (err) {
+    logger.warn(`CHAT: local history is unavailable: ${err instanceof Error ? err.message : err}`);
+  }
 
   // Built before the service so the service's tool results can bind a PR. It reaches the
   // service only through `chat`, which is first called long after both exist.
@@ -501,7 +529,16 @@ export function registerChat(
 
   const browser = new BrowserManager(
     (sessionId, state) => send(IPC_CHANNELS.browserPageState, { sessionId, ...state }),
-    state => send(IPC_CHANNELS.browserCookiesChanged, state)
+    state => send(IPC_CHANNELS.browserCookiesChanged, state),
+    (sessionId, snapshot) =>
+      captureHistoryPage(sessionId, snapshot.model, {
+        history,
+        store,
+        scopeKey: () => {
+          const scope = sessionScopeForChat(auth.getState());
+          return scope ? sessionScopeKey(scope) : null;
+        },
+      })
   );
 
   const service = new ChatService({
@@ -529,6 +566,8 @@ export function registerChat(
     browser,
     screen: desktopScreenCapturer(app.getName()),
     prepareImage: prepareToolImage,
+    history,
+    local,
     artifacts,
     queue,
     skills,
@@ -600,6 +639,7 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );
+  registerHistoryIpc(ipcMain, service, history);
   // Validated here rather than trusted, like the approval mode below: an unrecognised value
   // must not reach the store, where it would be sent verbatim on the next turn.
   ipcMain.handle(IPC_CHANNELS.chatSetSessionReasoningEffort, (_event, sessionId: string, effort: unknown) => {

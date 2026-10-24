@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { ApiKeyScope } from '@bike4mind/common';
-import { persistedIsAdmin, requesterScopedUsers, withholdAdminRole } from './apiKeyAdminScope';
+import { ownerWithheldUsers, persistedIsAdmin, requesterScopedUsers, withholdAdminRole } from './apiKeyAdminScope';
 
 const TestUser = mongoose.model(
   'ApiKeyAdminScopeTestUser',
@@ -33,6 +33,28 @@ describe('withholdAdminRole', () => {
     expect(doc.isModified('isAdmin')).toBe(true);
   });
 
+  it('never puts isAdmin in the update a save would send', () => {
+    const doc = loaded();
+    withholdAdminRole(doc);
+    doc.name = 'renamed';
+
+    const delta = (
+      doc as unknown as { $__delta: () => [unknown, { $set?: Record<string, unknown> }] | undefined }
+    ).$__delta();
+
+    expect(delta?.[1].$set).toEqual({ name: 'renamed' });
+  });
+
+  it('is a no-op when applied twice', () => {
+    const doc = loaded();
+
+    withholdAdminRole(withholdAdminRole(doc));
+
+    expect(doc.isAdmin).toBe(false);
+    expect(doc.get('isAdmin')).toBe(true);
+    expect(persistedIsAdmin(doc)).toBe(true);
+  });
+
   it('leaves a regular user untouched', () => {
     const user = { id: 'u1', isAdmin: false };
     expect(withholdAdminRole(user)).toEqual({ id: 'u1', isAdmin: false });
@@ -57,5 +79,29 @@ describe('requesterScopedUsers', () => {
   it('returns the adapter unchanged for an admin-scoped key or a session', () => {
     expect(requesterScopedUsers({ user: { id: 'me' }, apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] } }, repo)).toBe(repo);
     expect(requesterScopedUsers({ user: { id: 'me' } }, repo)).toBe(repo);
+  });
+});
+
+describe('ownerWithheldUsers', () => {
+  it('keeps Model statics working, hydrate() included', () => {
+    const doc = ownerWithheldUsers('me', TestUser).hydrate({
+      _id: new mongoose.Types.ObjectId(),
+      name: 'a',
+      isAdmin: true,
+    });
+
+    expect(doc.name).toBe('a');
+    expect(doc.isAdmin).toBe(true);
+  });
+
+  it('passes an own function-valued field such as a repository model through untouched', () => {
+    class Repo {
+      constructor(public model: typeof TestUser) {}
+      async findById() {
+        return null;
+      }
+    }
+
+    expect(ownerWithheldUsers('me', new Repo(TestUser)).model).toBe(TestUser);
   });
 });

@@ -1028,6 +1028,9 @@ importers:
       '@aws-sdk/client-cloudwatch':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-lambda':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-s3':
         specifier: ^3.1150.0
         version: 3.1151.0
@@ -1091,6 +1094,9 @@ importers:
       '@slack/web-api':
         specifier: ^7.19.0
         version: 7.19.0
+      '@sparticuz/chromium':
+        specifier: 153.0.0
+        version: 153.0.0
       archiver:
         specifier: ^7.0.0
         version: 7.0.1
@@ -1121,6 +1127,12 @@ importers:
       p-limit:
         specifier: ^7.3.2
         version: 7.3.2
+      playwright-core:
+        specifier: 1.64.0
+        version: 1.64.0
+      sharp:
+        specifier: ^0.35.5
+        version: 0.35.5(@types/node@24.12.3)
       sst:
         specifier: 4.17.1
         version: 4.17.1
@@ -1476,6 +1488,9 @@ importers:
         specifier: ^3.1150.0
         version: 3.1151.0
       '@aws-sdk/client-cloudwatch':
+        specifier: ^3.1150.0
+        version: 3.1151.0
+      '@aws-sdk/client-sts':
         specifier: ^3.1150.0
         version: 3.1151.0
       '@bike4mind/common':
@@ -2026,6 +2041,9 @@ importers:
         specifier: ^3.1150.0
         version: 3.1151.0
       '@aws-sdk/client-sqs':
+        specifier: ^3.1150.0
+        version: 3.1151.0
+      '@aws-sdk/client-sts':
         specifier: ^3.1150.0
         version: 3.1151.0
       '@aws-sdk/client-transcribe':
@@ -2784,6 +2802,10 @@ packages:
 
   '@aws-sdk/client-ssm@3.1151.0':
     resolution: {integrity: sha512-2oWUPpTNF7/8v67uyzAA17RIQrJkX/8Xa6WsGwbla7UNg2n37Jp9X24lGyjbiIQhL/HlsIlI4b3Umt1dfrAgUQ==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-sts@3.1151.0':
+    resolution: {integrity: sha512-G47qlL9n1GxdprH/ymRuBEYAS7NSsmDEsN/VIlCxD9J9rMPj+Fx55VNtxfC72ZTV78SmtFw25pXRzFcZZ+OWOA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-transcribe@3.1151.0':
@@ -5763,6 +5785,10 @@ packages:
     resolution: {integrity: sha512-ISSB5QX1qP2ynrheIpYwc4oKR5Ny4siNuUyf1qZniy+Il+p/PtDB0QK1Dnle8noiHpwRD3gpPdubOC3qI/Zamg==}
     peerDependencies:
       solid-js: ^1.6.12
+
+  '@sparticuz/chromium@153.0.0':
+    resolution: {integrity: sha512-jiGWqSvPMdu4+P9TilYqAR7yEGPEHINx+lCvE/NqNO/EHYzF/x1hUiI5T6ioVIt7dEy7n88byyT0vk+dnsgQwA==}
+    engines: {node: ^22.17.0 || >=24.0.0}
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
@@ -12673,6 +12699,9 @@ packages:
   tar-fs@2.1.5:
     resolution: {integrity: sha512-OboTd8mmMhZDNPV+UjQcK9yKAatXu2aJ+r1w4im1Otd4M4fl2hwvdoXUxIYHFTHWK/3y3FarBP70v3vwmGlOxw==}
 
+  tar-fs@3.1.3:
+    resolution: {integrity: sha512-/hU4AXnIdZu+Gvl1pk0oI5f5HxWsCJRtY2aFaJdk9VvyL48DWU6iU5WAIPG+wIi1YvWA6eTJvIviP/tMAZZNwQ==}
+
   tar-stream@2.2.0:
     resolution: {integrity: sha512-ujeqbceABgwMZxEJnk2HDY2DlnUZ+9oEcb1KzTVfYHio0UE6dG71n60d8D2I4qNvleWrrXpmjpt7vZeF1LnMZQ==}
     engines: {node: '>=6'}
@@ -14092,6 +14121,18 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
+  '@aws-sdk/client-sts@3.1151.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.5
+      '@aws-sdk/credential-provider-node': 3.972.86
+      '@aws-sdk/signature-v4-multi-region': 3.996.48
+      '@aws-sdk/types': 3.974.6
+      '@smithy/core': 3.36.1
+      '@smithy/fetch-http-handler': 5.8.0
+      '@smithy/node-http-handler': 4.12.1
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
   '@aws-sdk/client-transcribe@3.1151.0':
     dependencies:
       '@aws-sdk/core': 3.978.3
@@ -14135,7 +14176,6 @@ snapshots:
       '@smithy/types': 4.19.0
       bowser: 2.14.1
       tslib: 2.8.1
-    optional: true
 
   '@aws-sdk/credential-provider-cognito-identity@3.972.75':
     dependencies:
@@ -14148,7 +14188,7 @@ snapshots:
 
   '@aws-sdk/credential-provider-env@3.972.74':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
@@ -14165,7 +14205,7 @@ snapshots:
 
   '@aws-sdk/credential-provider-http@3.972.76':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
@@ -14186,7 +14226,7 @@ snapshots:
 
   '@aws-sdk/credential-provider-ini@3.973.19':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/credential-provider-env': 3.972.74
       '@aws-sdk/credential-provider-http': 3.972.76
       '@aws-sdk/credential-provider-login': 3.972.81
@@ -14219,9 +14259,9 @@ snapshots:
 
   '@aws-sdk/credential-provider-login@3.972.81':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/nested-clients': 3.997.48
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
@@ -14252,7 +14292,7 @@ snapshots:
 
   '@aws-sdk/credential-provider-process@3.972.74':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
@@ -14269,7 +14309,7 @@ snapshots:
 
   '@aws-sdk/credential-provider-sso@3.973.18':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/nested-clients': 3.997.48
       '@aws-sdk/token-providers': 3.1150.0
       '@aws-sdk/types': 3.974.6
@@ -14290,7 +14330,7 @@ snapshots:
 
   '@aws-sdk/credential-provider-web-identity@3.972.80':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/nested-clients': 3.997.48
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.36.1
@@ -14379,9 +14419,9 @@ snapshots:
 
   '@aws-sdk/nested-clients@3.997.48':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/signature-v4-multi-region': 3.996.48
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
@@ -14436,9 +14476,9 @@ snapshots:
 
   '@aws-sdk/token-providers@3.1150.0':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/nested-clients': 3.997.48
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
@@ -14471,7 +14511,6 @@ snapshots:
     dependencies:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
-    optional: true
 
   '@aws-sdk/util-locate-window@3.965.10':
     dependencies:
@@ -17680,6 +17719,14 @@ snapshots:
     dependencies:
       solid-js: 1.9.17
 
+  '@sparticuz/chromium@153.0.0':
+    dependencies:
+      tar-fs: 3.1.3
+    transitivePeerDependencies:
+      - bare-abort-controller
+      - bare-buffer
+      - react-native-b4a
+
   '@stablelib/base64@1.0.1': {}
 
   '@standard-schema/spec@1.1.0': {}
@@ -19237,6 +19284,8 @@ snapshots:
       readdir-glob: 1.1.3
       tar-stream: 3.1.7
       zip-stream: 6.0.1
+    transitivePeerDependencies:
+      - react-native-b4a
 
   arg@4.1.3: {}
 
@@ -19437,6 +19486,7 @@ snapshots:
       fast-fifo: 1.3.2
     transitivePeerDependencies:
       - bare-abort-controller
+      - react-native-b4a
 
   bare-os@3.9.1: {}
 
@@ -19450,6 +19500,8 @@ snapshots:
       teex: 1.0.1
     optionalDependencies:
       bare-events: 2.8.3
+    transitivePeerDependencies:
+      - react-native-b4a
 
   bare-url@2.4.3:
     dependencies:
@@ -25564,6 +25616,8 @@ snapshots:
       text-decoder: 1.2.3
     optionalDependencies:
       bare-events: 2.6.0
+    transitivePeerDependencies:
+      - react-native-b4a
 
   streamx@2.28.1:
     dependencies:
@@ -25572,6 +25626,7 @@ snapshots:
       text-decoder: 1.2.3
     transitivePeerDependencies:
       - bare-abort-controller
+      - react-native-b4a
 
   strict-event-emitter@0.5.1: {}
 
@@ -25775,6 +25830,18 @@ snapshots:
       tar-stream: 2.2.0
     optional: true
 
+  tar-fs@3.1.3:
+    dependencies:
+      pump: 3.0.4
+      tar-stream: 3.2.2
+    optionalDependencies:
+      bare-fs: 4.8.4
+      bare-path: 3.0.0
+    transitivePeerDependencies:
+      - bare-abort-controller
+      - bare-buffer
+      - react-native-b4a
+
   tar-stream@2.2.0:
     dependencies:
       bl: 4.1.0
@@ -25789,6 +25856,8 @@ snapshots:
       b4a: 1.6.7
       fast-fifo: 1.3.2
       streamx: 2.22.1
+    transitivePeerDependencies:
+      - react-native-b4a
 
   tar-stream@3.2.2:
     dependencies:
@@ -25814,6 +25883,7 @@ snapshots:
       streamx: 2.28.1
     transitivePeerDependencies:
       - bare-abort-controller
+      - react-native-b4a
 
   temp-file@3.4.0:
     dependencies:
@@ -25839,7 +25909,9 @@ snapshots:
 
   text-decoder@1.2.3:
     dependencies:
-      b4a: 1.6.7
+      b4a: 1.9.0
+    transitivePeerDependencies:
+      - react-native-b4a
 
   text-segmentation@1.0.3:
     dependencies:

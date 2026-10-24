@@ -1,10 +1,14 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import { PublishShareModal } from './PublishShareModal';
+import { PUBLISH_ACCESS_META, type PublishAccess } from './PublishAccessBadge';
 import type { PublishResult, PublishVisibility } from '@bike4mind/common';
+import { toast } from 'sonner';
+
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 
 // Mock the axios instance so we can assert the exact comment-policy PATCH an update issues
 // (the restricted->open widening regression). Mocking at the transport level keeps the real
@@ -96,6 +100,263 @@ describe('PublishShareModal — update seeds controls from the prior publication
     expect(radio('private')?.checked).toBe(false);
     expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(true);
   });
+});
+
+describe('PublishShareModal - immediate stored gate updates before readback', () => {
+  const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
+  afterEach(() => {
+    apiGet.mockReset();
+    apiPatch.mockReset().mockResolvedValue({ data: {} });
+    apiPost.mockReset().mockResolvedValue({ data: {} });
+    vi.mocked(toast.warning).mockClear();
+  });
+  const publication: PublishResult = {
+    publicId: 'gate-state',
+    url: '/p/u/u1/gate-state',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 'gate-state',
+    visibility: 'public',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const gates = [
+    {
+      kind: 'passphrase',
+      stored: { kind: 'passphrase' },
+      input: { kind: 'passphrase', passphrase: 'correct horse' },
+      who: 'who also has the passphrase',
+      icon: 'KeyIcon',
+    },
+    {
+      kind: 'domain',
+      stored: { kind: 'domain', allowedDomains: ['example.com'] },
+      input: { kind: 'domain', allowedDomains: ['example.com'] },
+      who: 'who signs in with a verified email from an allowed domain',
+      icon: 'DomainIcon',
+    },
+  ] as const;
+
+  const mockPendingReadback = (reopenedGate?: (typeof gates)[number]['stored']) => {
+    // Only reopening's first record read resolves. Later seed reads cannot repair a missing local update.
+    const pendingReadback = new Promise<never>(() => {});
+    apiGet.mockReset().mockImplementation(() => pendingReadback);
+    if (reopenedGate) {
+      apiGet.mockResolvedValueOnce({
+        data: { artifact: { visibility: 'private', accessGate: reopenedGate, commentPolicy: 'none' } },
+      });
+    }
+    apiGet.mockImplementation((url: string) =>
+      url.endsWith('/share-token') ? Promise.resolve({ data: { shareToken: null, shareLinks: [] } }) : pendingReadback
+    );
+    apiPatch.mockReset().mockResolvedValue({ data: {} });
+    apiPost.mockReset().mockResolvedValue({ data: { shareToken: 'TOK', shareUrl: '/a/TOK' } });
+  };
+
+  const renderModal = (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) =>
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={vi.fn().mockResolvedValue(publication)}
+          title="My artifact"
+          {...props}
+        />
+      </Wrapper>
+    );
+
+  const stageGate = (kind: 'passphrase' | 'domain') => {
+    fireEvent.click(radio(kind)!);
+    if (kind === 'passphrase') {
+      const passphrase = screen
+        .getAllByTestId('publish-share-gate-passphrase')
+        .find(element => element instanceof HTMLInputElement && element.type === 'password');
+      expect(passphrase).toBeDefined();
+      fireEvent.change(passphrase!, { target: { value: 'correct horse' } });
+      return;
+    }
+    fireEvent.change(screen.getByTestId('publish-share-gate-domains'), { target: { value: 'example.com' } });
+  };
+
+  const expectGatedPrivateLink = async (gate: (typeof gates)[number], { visibilityHint = true } = {}) => {
+    const createLink = await screen.findByTestId('publish-share-token-create');
+    expect(createLink.textContent).toBe('Create private link');
+    expect(screen.getByTestId('publish-share-token-label').textContent).toBe('Private link');
+    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain(gate.who);
+    expect(screen.getByTestId('publish-share-token-hint').textContent).not.toContain('without signing in');
+    if (visibilityHint) expect(screen.getByTestId('publish-share-visibility-private').textContent).toContain(gate.who);
+    fireEvent.click(createLink);
+    const warning = await screen.findByTestId('publish-share-token-warning');
+    expect(warning.getAttribute('data-access')).toBe(gate.kind);
+    expect(warning.textContent).toBe(`Anyone with this link ${gate.who} can view.`);
+    expect(within(warning).getByTestId(gate.icon)).toBeTruthy();
+  };
+
+  it.each(gates)('uses the reopened $kind gate while the follow-up seed GET is pending', async gate => {
+    mockPendingReadback(gate.stored);
+    renderModal({ resolvePublished: () => Promise.resolve(publication) });
+    await screen.findByTestId('publish-share-url');
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/publish/artifacts/gate-state'));
+    await expectGatedPrivateLink(gate);
+  });
+
+  it.each([
+    { mode: 'new', gate: gates[0] },
+    { mode: 'update', gate: gates[1] },
+  ] as const)(
+    'uses a staged $gate.kind gate after $mode publish while the seed GET is pending',
+    async ({ mode, gate }) => {
+      mockPendingReadback();
+      const publish = vi.fn().mockResolvedValue(publication);
+      renderModal({
+        publish,
+        ...(mode === 'update'
+          ? {
+              resolveExisting: () =>
+                Promise.resolve({ title: 'My artifact', slug: 'gate-state', visibility: 'public' as const }),
+            }
+          : {}),
+      });
+      if (mode === 'update') await screen.findByTestId('publish-share-mode-update');
+      stageGate(gate.kind);
+      fireEvent.click(screen.getByTestId('publish-share-create'));
+      await screen.findByTestId('publish-share-url');
+      expect(publish).toHaveBeenCalledWith('public', {
+        mode,
+        existingSlug: mode === 'update' ? 'gate-state' : undefined,
+      });
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/gate-state', { accessGate: gate.input });
+      fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
+      await expectGatedPrivateLink(gate);
+    }
+  );
+
+  it.each(gates)('uses a $kind gate applied live while the seed GET is pending', async gate => {
+    mockPendingReadback();
+    renderModal();
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-url');
+    stageGate(gate.kind);
+    fireEvent.click(screen.getByTestId('publish-share-gate-apply'));
+    await waitFor(() => expect(screen.queryByTestId('publish-share-gate-apply')).toBeNull());
+    expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/gate-state', { accessGate: gate.input });
+    fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
+    await expectGatedPrivateLink(gate);
+  });
+
+  // The stored gate must come from the reopened record or the successful PATCH itself: a seed GET that
+  // never succeeds cannot be what makes the gated copy appear.
+  const mockFailingSeedRead = (reopenedGate?: (typeof gates)[number]['stored']) => {
+    mockPendingReadback();
+    if (reopenedGate) {
+      apiGet.mockResolvedValueOnce({
+        data: { artifact: { visibility: 'private', accessGate: reopenedGate, commentPolicy: 'none' } },
+      });
+    }
+    apiGet.mockImplementation((url: string) =>
+      url.endsWith('/share-token')
+        ? Promise.resolve({ data: { shareToken: null, shareLinks: [] } })
+        : Promise.reject(new Error('Record unavailable'))
+    );
+  };
+
+  it.each(gates)('uses the reopened $kind gate when the follow-up seed GET fails', async gate => {
+    mockFailingSeedRead(gate.stored);
+    renderModal({ resolvePublished: () => Promise.resolve(publication) });
+    await screen.findByTestId('publish-share-url');
+    await expectGatedPrivateLink(gate, { visibilityHint: false });
+  });
+
+  it.each(gates)('uses a staged $kind gate after publish when the seed GET fails', async gate => {
+    mockFailingSeedRead();
+    renderModal();
+    stageGate(gate.kind);
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-url');
+    expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/gate-state', { accessGate: gate.input });
+    fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
+    await expectGatedPrivateLink(gate, { visibilityHint: false });
+  });
+
+  it('keeps the live passphrase gate when an older ungated seed read arrives afterward', async () => {
+    mockPendingReadback();
+    const seedRead = Promise.withResolvers<{ data: { artifact: { accessGate: null } } }>();
+    apiGet.mockImplementation((url: string) =>
+      url.endsWith('/share-token') ? Promise.resolve({ data: { shareToken: 'TOK', shareLinks: [] } }) : seedRead.promise
+    );
+    renderModal();
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-url');
+    stageGate('passphrase');
+    fireEvent.click(screen.getByTestId('publish-share-gate-apply'));
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('passphrase')
+    );
+    await act(async () => seedRead.resolve({ data: { artifact: { accessGate: null } } }));
+    expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('passphrase');
+    expect(screen.getByTestId('publish-share-token-warning').textContent).toContain('who also has the passphrase');
+    expect(screen.queryByTestId('publish-share-embed-section')).toBeNull();
+  });
+
+  it('keeps a cleared live gate when an older gated seed read arrives afterward', async () => {
+    mockPendingReadback();
+    const seedRead = Promise.withResolvers<{ data: { artifact: { accessGate: { kind: 'passphrase' } } } }>();
+    apiGet.mockImplementation((url: string) =>
+      url.endsWith('/share-token') ? Promise.resolve({ data: { shareToken: 'TOK', shareLinks: [] } }) : seedRead.promise
+    );
+    renderModal();
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-url');
+    fireEvent.click(radio('passphrase')!);
+    fireEvent.click(radio('none')!);
+    fireEvent.click(screen.getByTestId('publish-share-gate-apply'));
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-warning').textContent).toBe(
+        'Anyone with this link can view without signing in.'
+      )
+    );
+    await act(async () => seedRead.resolve({ data: { artifact: { accessGate: { kind: 'passphrase' } } } }));
+    expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('public');
+    expect(screen.getByTestId('publish-share-token-warning').textContent).toBe(
+      'Anyone with this link can view without signing in.'
+    );
+    expect(screen.getByTestId('publish-share-embed-section')).toBeTruthy();
+  });
+
+  it.each([
+    { mode: 'published', visibility: 'private' },
+    { mode: 'reopened', visibility: 'private' },
+    { mode: 'published', visibility: 'public' },
+    { mode: 'reopened', visibility: 'public' },
+  ] as const)(
+    'does not promise ungated access when a $mode $visibility publication record cannot be read',
+    async ({ mode, visibility }) => {
+      mockPendingReadback();
+      apiGet.mockImplementation((url: string) =>
+        url.endsWith('/share-token')
+          ? Promise.resolve({ data: { shareToken: 'TOK', shareLinks: [] } })
+          : Promise.reject(new Error('Record unavailable'))
+      );
+      const unreadPublication = { ...publication, visibility };
+      renderModal({
+        defaultVisibility: visibility,
+        publish: vi.fn().mockResolvedValue(unreadPublication),
+        ...(mode === 'reopened' ? { resolvePublished: () => Promise.resolve(unreadPublication) } : {}),
+      });
+      if (mode === 'published') fireEvent.click(screen.getByTestId('publish-share-create'));
+      const warning = await screen.findByTestId('publish-share-token-warning');
+      expect(warning.textContent).toBe('Access settings are unavailable. Check access before sharing this link.');
+      expect(warning.textContent).not.toContain('without signing in');
+      expect(warning.getAttribute('data-access')).not.toBe('public');
+      expect(screen.getByTestId('publish-share-token-label').textContent).toBe('Private link');
+      expect(screen.getByTestId('publish-share-token-hint').textContent).not.toContain('without signing in');
+      expect(screen.queryByTestId('publish-share-embed-section')).toBeNull();
+      expect(screen.queryByTestId('publish-share-public-note')).toBeNull();
+      await waitFor(() =>
+        expect(toast.warning).toHaveBeenCalledWith('Could not refresh access settings. Check access before sharing.')
+      );
+    }
+  );
 });
 
 describe('PublishShareModal — update re-asserts the PRESERVED comment policy', () => {
@@ -379,7 +640,9 @@ describe('PublishShareModal - no-sign-in (/a) share link', () => {
 
   it('says the main link of a private page only opens for the owner', async () => {
     await renderShared();
-    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('only opens for you');
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('only opens for you')
+    );
   });
 
   it('mints the /a link on demand and shows it in a copyable field', async () => {
@@ -886,6 +1149,10 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     await waitFor(() => expect(radio('organization')?.checked).toBe(true));
     expect(radio('public')?.checked).toBe(false);
     expect(radio('private')?.checked).toBe(false);
+    // With no caller hint, the Team row says what the access badge says.
+    expect(screen.getByTestId('publish-share-visibility-organization').textContent).toContain(
+      PUBLISH_ACCESS_META.organization.description
+    );
   });
 
   it('a reopened Team page can be taken to Private on the same record', async () => {
@@ -938,5 +1205,201 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     );
     await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
     expect(screen.getByTestId('publish-share-intro').textContent).not.toContain('Checking');
+  });
+});
+
+describe('PublishShareModal - access options match the Live Artifacts badge', () => {
+  // MUI icons carry their component name as a test id, so this pins which icon each option draws.
+  const ICON_TEST_ID: Record<PublishAccess, string> = {
+    public: 'PublicIcon',
+    passphrase: 'KeyIcon',
+    domain: 'DomainIcon',
+    organization: 'GroupIcon',
+    project: 'FolderIcon',
+    private: 'LockIcon',
+  };
+
+  const renderModal = (
+    props: Partial<React.ComponentProps<typeof PublishShareModal>> = {},
+    mode: 'light' | 'dark' = 'light'
+  ) =>
+    render(
+      <CssVarsProvider theme={appTheme} defaultMode={mode} modeStorageKey={`share-modal-test-${mode}`}>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={noopPublish}
+          title="My artifact"
+          defaultVisibility="public"
+          orgOption={{ label: 'Team', hint: 'Members of Acme' }}
+          {...props}
+        />
+      </CssVarsProvider>
+    );
+
+  const expectAccessIcon = (testId: string, access: PublishAccess) => {
+    const icon = screen.getByTestId(testId);
+    expect(icon.getAttribute('data-access')).toBe(access);
+    expect(within(icon).getByTestId(ICON_TEST_ID[access])).toBeTruthy();
+    // Tones come from the shared meta, so a gated option stays amber and the rest do not.
+    const color = PUBLISH_ACCESS_META[access].color;
+    const style = getComputedStyle(icon);
+    const expected = color === 'warning' ? 'var(--joy-palette-warning-700)' : `var(--joy-palette-${color}-softColor)`;
+    expect(style.color).toBe(expected);
+    expect(style.backgroundColor).toBe(`var(--joy-palette-${color}-softBg)`);
+    // Joy icons ignore the inherited color unless --Icon-color points at it.
+    expect(style.getPropertyValue('--Icon-color')).toBe('currentColor');
+  };
+
+  it.each([
+    ['public', 'public'],
+    ['organization', 'organization'],
+    ['private', 'private'],
+  ] as const)('draws the %s visibility option with the badge icon and color', (value, access) => {
+    renderModal();
+    expectAccessIcon(`publish-share-visibility-${value}-icon`, access);
+  });
+
+  it.each([
+    ['none', 'public'],
+    ['passphrase', 'passphrase'],
+    ['domain', 'domain'],
+  ] as const)('draws the %s gate option with the badge icon and color', (value, access) => {
+    renderModal();
+    expectAccessIcon(`publish-share-gate-${value}-icon`, access);
+  });
+
+  it('uses the badge chip color for a gated option in dark mode, not the light-mode shade', () => {
+    renderModal({}, 'dark');
+    expect(getComputedStyle(screen.getByTestId('publish-share-gate-passphrase-icon')).color).toBe(
+      'var(--joy-palette-warning-softColor)'
+    );
+  });
+
+  it('keeps the plain-language titles and does not repeat the badge word beside them', () => {
+    renderModal();
+    expect(screen.getByTestId('publish-share-visibility-public').textContent).toContain('Anyone with the link');
+    expect(screen.getByTestId('publish-share-visibility-public').textContent).not.toContain('Public');
+    expect(screen.getByTestId('publish-share-visibility-organization').textContent).toBe(
+      'TeamMembers of Acme, and anyone you send a private link to'
+    );
+    expect(screen.getByTestId('publish-share-visibility-private').textContent).toBe(
+      `Private${PUBLISH_ACCESS_META.private.description}`
+    );
+    expect(radio('public')?.checked).toBe(true);
+    expect(radio('none')?.checked).toBe(true);
+  });
+
+  it('keeps the public exposure copy, in the Public treatment rather than amber', () => {
+    renderModal();
+    const note = screen.getByTestId('publish-share-public-note');
+    expect(note.textContent).toContain('Anyone with the link can view this.');
+    expect(within(note).getByTestId('PublicIcon')).toBeTruthy();
+  });
+
+  const liveResult = (visibility: PublishVisibility): PublishResult => ({
+    publicId: 'live-1',
+    url: '/p/u/u1/s',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 's',
+    visibility,
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  });
+
+  /** Publish at `visibility` onto a record holding `accessGate` and a live private link. */
+  const renderSharedWithLink = async (visibility: PublishVisibility, accessGate: unknown = null) => {
+    (api.get as unknown as ReturnType<typeof vi.fn>).mockReset().mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.endsWith('/share-token') ? { shareToken: 'TOK', shareLinks: [] } : { artifact: { accessGate } },
+      })
+    );
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    renderModal({ defaultVisibility: visibility, publish: vi.fn().mockResolvedValue(liveResult(visibility)) });
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    return screen.findByTestId('publish-share-token-warning');
+  };
+
+  it('draws the private-link exposure line in the Public treatment when no gate is stored', async () => {
+    const warning = await renderSharedWithLink('private');
+    expect(warning.textContent).toBe('Anyone with this link can view without signing in.');
+    expect(warning.getAttribute('data-access')).toBe('public');
+    expect(within(warning).getByTestId('PublicIcon')).toBeTruthy();
+    expect(screen.getByTestId('publish-share-token-label').textContent).toBe(
+      'Private link anyone can open, no sign-in'
+    );
+    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('without signing in');
+  });
+
+  // The server enforces a stored gate on /a/<token> links at every visibility (checkShareGrant).
+  it.each([
+    ['passphrase', { kind: 'passphrase' }, 'KeyIcon', 'who also has the passphrase'],
+    [
+      'domain',
+      { kind: 'domain', allowedDomains: ['example.com'] },
+      'DomainIcon',
+      'who signs in with a verified email from an allowed domain',
+    ],
+  ] as const)(
+    'says a private link also needs the stored %s gate, in the gated treatment',
+    async (kind, gate, icon, who) => {
+      await renderSharedWithLink('private', gate);
+      const warning = screen.getByTestId('publish-share-token-warning');
+      await waitFor(() => expect(warning.getAttribute('data-access')).toBe(kind));
+      expect(warning.textContent).toBe(`Anyone with this link ${who} can view.`);
+      expect(within(warning).getByTestId(icon)).toBeTruthy();
+      // The theme's light warning text is about 1.4:1 on its soft background; the badge's darker shade is used.
+      expect(getComputedStyle(warning).color).toBe('var(--joy-palette-warning-700)');
+      const hint = screen.getByTestId('publish-share-token-hint').textContent;
+      expect(hint).toContain(`This one opens for anyone you send it to ${who}.`);
+      expect(hint).not.toContain('without signing in');
+      expect(screen.getByTestId('publish-share-token-label').textContent).toBe('Private link');
+    }
+  );
+
+  it('switches the private-link note to the gate once one is applied live', async () => {
+    const warning = await renderSharedWithLink('public');
+    expect(warning.getAttribute('data-access')).toBe('public');
+    fireEvent.click(radio('passphrase')!);
+    fireEvent.change(document.querySelector('input[type="password"]')!, { target: { value: 'correct horse' } });
+    fireEvent.click(screen.getByTestId('publish-share-gate-apply'));
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('passphrase')
+    );
+    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain(
+      'already opens for anyone who also has the passphrase.'
+    );
+  });
+
+  it('returns the private-link note to the open treatment, and offers the embed editor again, once the gate is cleared live', async () => {
+    await renderSharedWithLink('public', { kind: 'passphrase' });
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('passphrase')
+    );
+    expect(screen.queryByTestId('publish-share-embed-section')).toBeNull();
+    fireEvent.click(radio('none')!);
+    fireEvent.click(screen.getByTestId('publish-share-gate-apply'));
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('public')
+    );
+    expect(screen.getByTestId('publish-share-token-warning').textContent).toBe(
+      'Anyone with this link can view without signing in.'
+    );
+    expect(screen.getByTestId('publish-share-embed-section')).toBeTruthy();
+  });
+
+  it('labels the create-link button for a gated page', async () => {
+    (api.get as unknown as ReturnType<typeof vi.fn>).mockReset().mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.endsWith('/share-token')
+          ? { shareToken: null, shareLinks: [] }
+          : { artifact: { accessGate: { kind: 'passphrase' } } },
+      })
+    );
+    renderModal({ defaultVisibility: 'private', publish: vi.fn().mockResolvedValue(liveResult('private')) });
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-create').textContent).toBe('Create private link')
+    );
   });
 });

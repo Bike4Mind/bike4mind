@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
