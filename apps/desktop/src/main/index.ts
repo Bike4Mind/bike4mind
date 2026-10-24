@@ -138,6 +138,7 @@ void app.whenReady().then(async () => {
     spareWorktrees,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
+    releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
   });
   fleet.setDirectoryResolver(async sessionId => {
