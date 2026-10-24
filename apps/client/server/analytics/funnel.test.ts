@@ -144,6 +144,19 @@ describe('recordSignupAcquisition', () => {
       recordSignupAcquisition({ req: reqWith(`${APP_DECISION_COOKIE}=granted; ${TOUCH_COOKIES}`), user, method: 'otc' })
     ).resolves.toEqual({ isSynthetic: false });
   });
+
+  it('keeps a persona synthetic when the write fails, so it is not sent as a real signup', async () => {
+    mockUserUpdate.mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(
+      recordSignupAcquisition({
+        req: reqWith(''),
+        user: { id: 'u3', username: 'persona-qa', email: 'qa@real.example' },
+        method: 'otc',
+      })
+    ).resolves.toEqual({ isSynthetic: true });
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'u3', isSynthetic: true });
+  });
 });
 
 describe('recordSyntheticIdentity', () => {

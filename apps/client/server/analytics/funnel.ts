@@ -87,9 +87,13 @@ export async function recordSignupAcquisition(opts: {
   user: { id: string; username?: string | null; email?: string | null };
   method: string;
 }): Promise<{ acquisition?: IUserAcquisition; isSynthetic: boolean }> {
+  // Decided first and kept through a failed write: callers gate the signup pixel, the
+  // cross-product credit and the synthetic lane on it, so a write error must not turn a persona
+  // into a real signup.
+  let isSynthetic = false;
   try {
+    isSynthetic = isSyntheticIdentity(opts.user, await syntheticTestDomains());
     const acquisition = toUserAcquisition(readConsentedAcquisitionTouches(opts.req), opts.method);
-    const isSynthetic = isSyntheticIdentity(opts.user, await syntheticTestDomains());
     if (acquisition || isSynthetic) {
       await userRepository.update({
         id: opts.user.id,
@@ -100,7 +104,7 @@ export async function recordSignupAcquisition(opts: {
     return { ...(acquisition && { acquisition }), isSynthetic };
   } catch (err) {
     console.warn('[b4m-analytics] signup acquisition not recorded', err instanceof Error ? err.message : err);
-    return { isSynthetic: false };
+    return { isSynthetic };
   }
 }
 
