@@ -25,8 +25,6 @@ import {
   redactSessionForClient,
   createSessionContract,
   listSessionsContract,
-  type ISessionDocument,
-  type SessionResponse,
   ApiKeyScope,
   BadRequestError,
   ForbiddenError,
@@ -40,6 +38,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { CreateSessionRequestBody } from '../../../../types/api';
+import { toPublicSession } from '@server/sessions/toPublicSession';
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 /**
@@ -285,30 +284,6 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
 });
 
 const LIST_CURSOR_SCOPE = 'v1.sessions';
-
-/**
- * Explicit allowlist onto the public SessionResponse shape. Redaction already strips the
- * server-owned fields; the allowlist additionally keeps every undocumented internal field off
- * the wire, so a new ISession field is private until someone adds it here and to the schema.
- */
-function toPublicSession(session: ISessionDocument): SessionResponse {
-  const redacted = redactSessionForClient(session);
-  return {
-    id: redacted.id,
-    _id: redacted.id,
-    name: redacted.name,
-    userId: redacted.userId,
-    knowledgeIds: redacted.knowledgeIds,
-    artifactIds: redacted.artifactIds,
-    tags: redacted.tags?.map(({ name, strength }) => ({ name, strength })),
-    forceKnowledgeRetrieval: redacted.forceKnowledgeRetrieval,
-    retrievalTags: redacted.retrievalTags,
-    lakeScopeExplicit: redacted.lakeScopeExplicit,
-    lastUsedModel: redacted.lastUsedModel,
-    firstCreated: redacted.firstCreated,
-    lastUpdated: redacted.lastUpdated,
-  };
-}
 
 // Lists only the caller's OWN sessions (userId match); shared sessions stay on the SPA's
 // GET /api/sessions/shared. Paged by _id rather than lastUpdated: lastUpdated moves on every edit,

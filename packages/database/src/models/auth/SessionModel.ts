@@ -548,6 +548,25 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return options?.includeDeleted ? query.setOptions({ includeDeleted: true }) : query;
   }
 
+  /**
+   * One ascending-by-`_id` page of the given ids. Same liveness as `findAllByIds` (the soft-delete
+   * plugin hides deleted rows); ids that cannot address a row are skipped.
+   */
+  async findPageByIds(ids: string[], { afterId, limit }: { afterId?: string; limit: number }) {
+    if (afterId !== undefined && !mongoose.isObjectIdOrHexString(afterId)) return { data: [], hasMore: false };
+    const idCondition: Record<string, unknown> = {
+      $in: usableObjectIds(ids, 'SessionModel.findPageByIds').map(id => new mongoose.Types.ObjectId(id)),
+    };
+    if (afterId !== undefined) idCondition.$gt = new mongoose.Types.ObjectId(afterId);
+
+    const result = await this.sessionModel
+      .find({ _id: idCondition })
+      .sort({ _id: 1 })
+      .limit(limit + 1);
+
+    return { data: result.slice(0, limit), hasMore: result.length > limit };
+  }
+
   async attachAgent(sessionId: string, agentId: string) {
     const session = await this.sessionModel.findByIdAndUpdate(
       sessionId,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { ForbiddenError, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 import { removeSessions } from './removeSessions';
 
 type Grant = { userId: string; permissions: Permission[]; projectId?: string };
@@ -78,5 +78,23 @@ describe('projectService - removeSessions (narrowed writes)', () => {
       sessionIds: [SESSION_KEPT],
       updatedAt: new Date('2026-01-01T00:00:00Z'),
     });
+  });
+
+  const callRemove = (userId: string, sessionIds: string[]) =>
+    removeSessions(userId, { projectId: PROJECT_ID, sessionIds }, { db } as unknown as Parameters<
+      typeof removeSessions
+    >[2]);
+
+  it('answers NotFoundError for an unknown user or an inaccessible project', async () => {
+    db.users.findById.mockResolvedValueOnce(null);
+    await expect(callRemove(OWNER_ID, [SESSION_A])).rejects.toBeInstanceOf(NotFoundError);
+
+    db.projects.shareable.findAccessibleById.mockResolvedValueOnce(null);
+    await expect(callRemove(OWNER_ID, [SESSION_A])).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('answers ForbiddenError when a non-owner removes a session they do not own', async () => {
+    await expect(callRemove('member-1', [SESSION_A])).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.projects.update).not.toHaveBeenCalled();
   });
 });

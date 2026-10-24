@@ -1,11 +1,4 @@
-import {
-  activityRepository,
-  fabFileRepository,
-  projectRepository,
-  sessionRepository,
-  userRepository,
-  withTransaction,
-} from '@bike4mind/database';
+import { projectRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -14,13 +7,10 @@ import {
   assertProjectsWriteScope,
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
-import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents, redactSessionsForClient } from '@bike4mind/common';
-import { ActivityType } from '@bike4mind/server-utils/config/activityType';
+import { attachSessionsToProject } from '@server/projects/attachSessionsToProject';
+import { removeSessionsFromProject } from '@server/projects/projectContentMutations';
+import { redactSessionsForClient } from '@bike4mind/common';
 import { z } from 'zod';
-import { SessionEvents } from '@server/utils/eventBus';
-import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
-import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 
 // Shape stays loose (no hex check) for the reason recorded above ProjectFilesRequestSchema in
 // types/api.ts: the queries behind addSessions/removeSessions guard ids themselves.
@@ -60,75 +50,10 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       const { id } = req.query as { id: string };
       const { sessionIds } = addSessionIdsBodySchema.parse(req.body);
 
-      const project = await projectService.get(
-        req.user.id,
-        { id },
-        {
-          db: {
-            projects: projectRepository,
-            users: userRepository,
-          },
-        }
-      );
-
-      const sessions = await withTransaction(async () => {
-        const user = await userRepository.findById(req.user.id);
-        if (!user) {
-          throw new Error('User not found');
-        }
-        return projectService.addSessions(
-          user,
-          {
-            projectId: id,
-            sessionIds: sessionIds as [string, ...string[]],
-          },
-          {
-            db: {
-              sessions: sessionRepository,
-              projects: projectRepository,
-              fabFiles: fabFileRepository,
-            },
-          }
-        );
-      });
-
-      // Iterates the RESOLVED sessions rather than the request's raw id list: `addSessions`
-      // returns one row per distinct notebook, so the same id sent twice no longer queues (and
-      // pays for) two identical summaries.
-      // Attaching a notebook to a project is free; only the summary it triggers costs credits, and
-      // this fan-out is already best-effort (Promise.allSettled). So a refusal skips the queueing
-      // rather than failing the attach - the client types this response as ISessionDocument[],
-      // leaving the warning log as where a skipped summary surfaces (#1852).
-      const summarizableSessionIds = await filterSessionIdsByOperationalCredits(sessions, {
-        payerId: req.user.id,
-        operationsPerSession: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
-        operation: 'session summarization',
-        logger: req.logger,
-      });
-
-      await Promise.allSettled(
-        sessions.map(async session => {
-          logEvent(
-            {
-              userId: req.user.id,
-              type: ProjectEvents.ADD_SESSION,
-              metadata: {
-                projectId: id,
-                projectName: project.name,
-                contentId: session.id,
-                contentType: 'session',
-              },
-            },
-            { ability: req.ability }
-          );
-          if (!summarizableSessionIds.has(session.id)) return;
-          await SessionEvents.Summarize.publish({
-            sessionId: session.id,
-            callTagging: true,
-            trigger: 'project',
-            payerId: req.user.id,
-          });
-        })
+      const sessions = await attachSessionsToProject(
+        { user: req.user, ability: req.ability, logger: req.logger },
+        id,
+        sessionIds as [string, ...string[]]
       );
 
       return res.json(redactSessionsForClient(sessions));
@@ -140,45 +65,10 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       const { id } = req.query as { id: string };
       const { sessionIds } = removeSessionIdsBodySchema.parse(req.body);
 
-      const project = await withTransaction(() =>
-        projectService.removeSessions(
-          req.user.id,
-          {
-            projectId: id,
-            sessionIds,
-          },
-          {
-            db: {
-              sessions: sessionRepository,
-              projects: projectRepository,
-              users: userRepository,
-            },
-          }
-        )
-      );
-
-      await activityRepository.createActivity(
-        ActivityType.NOTEBOOK_REMOVED_FROM_PROJECT,
-        { type: 'Project', id },
-        { type: 'User', id: req.user.id }
-      );
-
-      await Promise.all(
-        sessionIds.map((sessionId: string) =>
-          logEvent(
-            {
-              userId: req.user.id,
-              type: ProjectEvents.REMOVE_SESSION,
-              metadata: {
-                projectId: project.id,
-                projectName: project.name,
-                contentId: sessionId,
-                contentType: 'session',
-              },
-            },
-            { ability: req.ability }
-          )
-        )
+      const project = await removeSessionsFromProject(
+        { user: req.user, ability: req.ability, logger: req.logger },
+        id,
+        sessionIds
       );
 
       return res.json(project);

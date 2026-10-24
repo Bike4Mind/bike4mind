@@ -6,6 +6,8 @@ import {
   IUserRepository,
   secureParameters,
   BadRequestError,
+  ForbiddenError,
+  NotFoundError,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
@@ -36,10 +38,10 @@ export const removeFiles = async (
   const { projectId, fileIds } = secureParameters(params, removeProjectFilesSchema);
 
   const user = await db.users.findById(userId);
-  if (!user) throw new Error('User not found');
+  if (!user) throw new NotFoundError('User not found');
 
   const project = await db.projects.shareable.findAccessibleById(user, projectId);
-  if (!project) throw new Error('Project not found');
+  if (!project) throw new NotFoundError('Project not found');
 
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
 
@@ -60,7 +62,7 @@ export const removeFiles = async (
   }
 
   if (project.userId !== userId && files.some(f => f.userId !== userId)) {
-    throw new Error('You are not authorized to remove files from this project');
+    throw new ForbiddenError('You are not authorized to remove files from this project');
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
