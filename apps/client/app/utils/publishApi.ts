@@ -40,6 +40,9 @@ export interface ManagedArtifact {
   /** Number of entries in the published version history (drives the version switcher
    *  and the single-version hint). 0/1 means no switcher yet; 2+ shows the switcher. */
   versionsCount?: number;
+  /** Short-lived (15 min) link to the owner-only screenshot, present only on the caller's own rows
+   *  of `?mine=true` once a render has landed. Absent means show the generated cover. */
+  thumbnailUrl?: string;
 }
 
 /** How a re-publish of an already-published artifact should land. */
