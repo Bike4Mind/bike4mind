@@ -194,6 +194,12 @@ import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
 import { buildAgent } from './bootstrap/buildAgent.js';
 import { buildToolSearch } from './bootstrap/buildToolSearch.js';
 import { wireAgentEvents } from './bootstrap/wireAgentEvents.js';
+import {
+  decideFolderTrustGate,
+  hostInertNotice,
+  isHostLaunchWithQueuedPrompt,
+  shouldPromptMcpApproval,
+} from './bootstrap/startupTrustGates.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
 import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCommand.js';
@@ -548,14 +554,22 @@ function CliApp() {
       // Folder-trust gate: when an untrusted project ships repo-committed b4m
       // files, prompt ONCE (interactive TTY only) before anything repo-sourced
       // loads. Non-interactive stays untrusted (fail-safe). The ref guard keeps
-      // re-runs of init() (login/env-picker) from re-showing the prompt.
-      if (
-        !folderTrustResolvedRef.current &&
-        !state.configStore.isProjectTrusted() &&
-        state.configStore.projectHasB4mFiles() &&
-        Boolean(process.stdin.isTTY) &&
-        Boolean(process.stdout.isTTY)
-      ) {
+      // re-runs of init() (login/env-picker) from re-showing the prompt. A host
+      // launch with a queued prompt gets the "Not now" outcome without the
+      // prompt, so the queued turn is not left waiting on an unseen question.
+      const isTty = Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
+      const hostLaunch = isHostLaunchWithQueuedPrompt();
+      const folderTrustGate = decideFolderTrustGate({
+        alreadyResolved: folderTrustResolvedRef.current,
+        projectTrusted: state.configStore.isProjectTrusted(),
+        projectHasB4mFiles: state.configStore.projectHasB4mFiles(),
+        isTty,
+        hostLaunch,
+      });
+      if (folderTrustGate === 'inert') {
+        folderTrustResolvedRef.current = true;
+        console.log(`\n${hostInertNotice(state.configStore.getProjectRealPath() ?? process.cwd())}\n`);
+      } else if (folderTrustGate === 'prompt') {
         folderTrustResolvedRef.current = true;
         setState(prev => ({
           ...prev,
@@ -571,10 +585,12 @@ function CliApp() {
       // they stay off and we warn.
       const pendingMcp = state.configStore.getPendingMcpApprovals();
       if (
-        pendingMcp.length > 0 &&
-        !mcpApprovalResolvedRef.current &&
-        Boolean(process.stdin.isTTY) &&
-        Boolean(process.stdout.isTTY)
+        shouldPromptMcpApproval({
+          alreadyResolved: mcpApprovalResolvedRef.current,
+          pendingCount: pendingMcp.length,
+          isTty,
+          hostLaunch,
+        })
       ) {
         mcpApprovalResolvedRef.current = true;
         setState(prev => ({
