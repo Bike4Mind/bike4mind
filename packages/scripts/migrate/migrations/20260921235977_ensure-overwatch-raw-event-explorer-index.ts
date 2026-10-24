@@ -10,10 +10,12 @@ import { type MigrationFile } from './index';
  * planner walks every event the product sent in the window and filters `event` after fetching each
  * document, so the cost of one event's chart is the cost of the product's whole window.
  *
- * Migration rather than autoIndex, for the same reason as 20260921235993_ensure-artifact-owned-keyset-index:
- * the build should happen in the deploy's migration window, not on whichever Lambda's cold boot
- * touches raw events first. The collection is capped by its 90-day TTL, and this is one more key per
- * insert on the analytics ingest path.
+ * A migration as well as the schema declaration, as 20260921235993_ensure-artifact-owned-keyset-index:
+ * web `dependsOn` the migration, so the index is committed before web serves the deploy. autoIndex is
+ * on and the other Lambdas deploy alongside the migrator, so a cold boot may start this build first;
+ * createIndex then waits for that build. A build past the connection's 45s socket timeout fails this
+ * run, but the server finishes the build and the next deploy's run finds it. The collection is capped
+ * by its 90-day TTL, and this is one more key per insert on the analytics ingest path.
  *
  * Builds only this index, not OverwatchRawEvent.createIndexes(), so a stage missing another
  * declared index does not build it here too. Idempotent: createIndex is a no-op when an identical
