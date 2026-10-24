@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-24T01:20:52.366Z",
+  "generatedAt": "2026-10-24T12:32:55.506Z",
   "notice": "Fallback defaults last maintained on 2026-10-24. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
@@ -844,7 +844,7 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "FLUX.2 Flex - Configurable FLUX.2 generation and editing with guidance and step controls for fine-tuned results.",
+        "description": "FLUX.2 Flex - FLUX.2 generation and editing with strong detail preservation and up to eight reference images.",
         "rank": 9
       }
     },

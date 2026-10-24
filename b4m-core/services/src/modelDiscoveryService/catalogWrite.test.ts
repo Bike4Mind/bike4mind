@@ -392,6 +392,31 @@ describe('planCatalogWrites', () => {
       expect(models[0].disabled, "the credit is discovery's, so curation reclaims the disable").toBeFalsy();
     });
 
+    it('persists a cleared legacy provider credit even when promotion restates the same verdict', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan({ ...bedrockRun(['ON_DEMAND'], unentitled), policy: 'manual' }).rows[0];
+      const legacy = {
+        ...first,
+        patch: { ...first.patch, autoDisabledReason: 'discovered, awaiting admin approval' },
+      };
+
+      const next = plan({ ...bedrockRun(['ON_DEMAND'], available, legacy), policy: 'manual' });
+
+      expect(next.rows).toHaveLength(1);
+      expect(next.rows[0].patch).toEqual(legacy.patch);
+      expect(next.diff[0].changedKeys).toEqual(['contributors']);
+      expect(next.rows[0].contributors).toContainEqual({ group: 'availability', source: 'discovery' });
+      const { models } = mergeCatalogWithDrops([curated], next.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+      expect(models[0].disabled).toBeFalsy();
+
+      const repeated = plan({ ...bedrockRun(['ON_DEMAND'], available, next.rows[0]), policy: 'manual' });
+      expect(repeated.rows).toHaveLength(0);
+    });
+
     // No availability answer this run (a throttled call returns null by contract), so the disable
     // in force stands; the row is written because the listing moved another field.
     const relistedWithoutAnswer = (previous: IModelCatalogRowInput, policy?: CatalogWriteInput['policy']) =>

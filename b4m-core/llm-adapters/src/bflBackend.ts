@@ -192,7 +192,7 @@ export class BFLBackend implements ICompletionBackend {
           1: { input: 500, output: 500 }, // $0.05 per image
         },
         description:
-          'FLUX.2 Flex - Configurable FLUX.2 generation and editing with guidance and step controls for fine-tuned results.',
+          'FLUX.2 Flex - FLUX.2 generation and editing with strong detail preservation and up to eight reference images.',
         supportsSafetyTolerance: true,
         rank: 9,
       },

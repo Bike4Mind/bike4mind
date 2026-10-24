@@ -691,7 +691,22 @@ function planOne(
   const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId)).filter(
     group => !(presentationElsewhere && group === 'presentation')
   );
+  const priorContributors = input.priorContributors?.get(candidate.modelId);
+  const contributors = contributorsFor(candidate, contributed, owned, priorContributors, derivedGroups);
   const changedKeys = changedWithinGroups(base, record, owned);
+  // Availability provenance changes what the read path serves: a provider's disable stands,
+  // while discovery's own verdict yields to curation. A clearance followed by the same promotion
+  // refusal can leave every record field unchanged, so persist the changed credit as well.
+  const availabilitySource = (credits: readonly ICatalogContributor[] | undefined) =>
+    credits?.find(entry => entry.group === 'availability')?.source;
+  if (
+    existing &&
+    record.autoDisabled === true &&
+    availabilitySource(contributors) !== availabilitySource(priorContributors)
+  ) {
+    changedKeys.push('contributors');
+    changedKeys.sort();
+  }
   if (existing && changedKeys.length === 0) return { unchanged: true };
 
   const lifecycleStatus = record.lifecycle?.status ?? 'discovered';
@@ -712,13 +727,7 @@ function planOne(
     patch: record,
     ownedGroups: owned,
     effectiveFrom: input.runStartedAt,
-    contributors: contributorsFor(
-      candidate,
-      contributed,
-      owned,
-      input.priorContributors?.get(candidate.modelId),
-      derivedGroups
-    ),
+    contributors,
     note: `discovery:${candidate.sourceNames.join('+')}@${input.runStartedAt.toISOString()}`,
     runId: input.runId,
   };
