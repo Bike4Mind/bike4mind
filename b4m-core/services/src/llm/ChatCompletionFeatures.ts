@@ -179,6 +179,7 @@ import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } 
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
+import type { CustomMcpToolHost } from './tools/customMcpTools';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
 import { isObjectIdShaped } from './tools/base/objectId';
 import { scrubStaleProjectFiles } from '../sessionService/scrubStaleFileReferences';
@@ -479,6 +480,11 @@ export interface IChatCompletionServiceOptions {
     getTools: () => Promise<MCPClient['tools']>;
     callTool: (toolName: string, toolArgs: any) => Promise<any>;
   }>;
+  /**
+   * Custom remote connectors. Injected by the app tier (it owns policy, credentials and the call
+   * path) so b4m-core never imports it. Omitted -> no custom tools are offered.
+   */
+  customMcp?: CustomMcpToolHost;
   logEvent: (event: any, options?: { session?: mongoose.ClientSession; ability?: MongoAbility }) => Promise<any>;
   logger: Logger;
   getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) => Record<string, unknown>;
