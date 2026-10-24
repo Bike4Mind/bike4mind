@@ -45,6 +45,9 @@ vi.mock('@server/services/publish', () => ({
   toCacheTarget: (a: unknown) => a,
 }));
 
+const thumbnails = vi.hoisted(() => ({ deletePublishThumbnails: vi.fn(), enqueuePublishThumbnail: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/publishThumbnails', () => thumbnails);
+
 import handler from '../takedown';
 
 type RunOpts = { method: 'POST' | 'DELETE'; user?: unknown; id?: string; body?: unknown };
@@ -66,6 +69,46 @@ beforeEach(() => {
   mockFindOneAndUpdate.mockReset();
   mockReportUpdateMany.mockReset().mockResolvedValue({});
   invalidateMock.mockReset();
+  thumbnails.deletePublishThumbnails.mockReset().mockResolvedValue(0);
+  thumbnails.enqueuePublishThumbnail.mockReset().mockResolvedValue(true);
+});
+
+describe('takedown and restore - owner-only thumbnails', () => {
+  const SHA = 'e'.repeat(64);
+
+  it('clears the thumbnail record in the takedown write and deletes its objects', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc({ source: { kind: 'bundle' } }));
+    const { res, promise } = run({ method: 'POST', user: ADMIN });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockFindOneAndUpdate.mock.calls[0][1].$unset).toEqual({ thumbnail: 1 });
+    expect(thumbnails.deletePublishThumbnails).toHaveBeenCalledWith(['pub1'], expect.anything());
+  });
+
+  it('deletes nothing when there was no page to take down', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(null);
+    const { promise } = run({ method: 'POST', user: ADMIN });
+    await promise;
+    expect(thumbnails.deletePublishThumbnails).not.toHaveBeenCalled();
+  });
+
+  it('queues a fresh render of the restored version for a bundle', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc({ source: { kind: 'bundle' }, sha256Index: SHA }));
+    const { res, promise } = run({ method: 'DELETE', user: ADMIN });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(thumbnails.enqueuePublishThumbnail).toHaveBeenCalledWith(
+      { publicId: 'pub1', versionId: SHA },
+      expect.anything()
+    );
+  });
+
+  it('queues nothing on restoring a reply page, which is never rendered', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc({ sha256Index: SHA }));
+    const { promise } = run({ method: 'DELETE', user: ADMIN });
+    await promise;
+    expect(thumbnails.enqueuePublishThumbnail).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/admin/published-artifacts/:id/takedown', () => {

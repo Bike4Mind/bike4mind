@@ -320,6 +320,9 @@ PublishedArtifactSchema.virtual('isDeleted').get(function () {
 PublishedArtifactSchema.methods.softDelete = function (deletedBy?: string) {
   this.deletedAt = new Date();
   if (deletedBy) this.deletedBy = deletedBy;
+  // The caller deletes the thumbnail objects (deletePublishThumbnails in packages/server-utils);
+  // dropping the record too means a later restore shows the generated cover, not a missing image.
+  this.thumbnail = undefined;
   return this.save();
 };
 

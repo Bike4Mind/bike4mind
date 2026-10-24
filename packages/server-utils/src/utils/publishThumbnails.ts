@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getSourceQueueUrl } from './dlqRegistry';
 import { sendToQueue } from './sqs';
+import { getPublishedArtifactsStorage } from './storage/index';
 
 /**
  * Owner-only thumbnails of published bundles, shared by the producers (publish finalize, restore,
@@ -13,22 +14,77 @@ import { sendToQueue } from './sqs';
  */
 export const PUBLISH_THUMBNAIL_PREFIX = 'publish-thumbnails/';
 
+// Becomes a key segment, so no `/` or `..` can reach S3.
+const PUBLIC_ID_SEGMENT = /^[A-Za-z0-9_-]{1,64}$/;
+
 export const PublishThumbnailJobSchema = z.object({
-  // Becomes a key segment, so no `/` or `..` can reach S3.
-  publicId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+  publicId: z.string().regex(PUBLIC_ID_SEGMENT),
   /** sha256Index of the index.html to depict - the job is dropped once the artifact moves past it. */
   versionId: z.string().regex(/^[0-9a-f]{64}$/),
 });
 export type PublishThumbnailJob = z.infer<typeof PublishThumbnailJobSchema>;
 
+/** Folder holding every thumbnail object of one artifact, one per rendered version. */
+export function publishThumbnailPrefix(publicId: string): string {
+  return `${PUBLISH_THUMBNAIL_PREFIX}${publicId}/`;
+}
+
 export function publishThumbnailKey(publicId: string, versionId: string): string {
-  return `${PUBLISH_THUMBNAIL_PREFIX}${publicId}/${versionId}.webp`;
+  return `${publishThumbnailPrefix(publicId)}${versionId}.webp`;
 }
 
 /** True when `key` is a thumbnail object of `publicId` - checked before a stored key is presigned or deleted. */
 export function isPublishThumbnailKeyFor(publicId: string, key: string): boolean {
-  const prefix = `${PUBLISH_THUMBNAIL_PREFIX}${publicId}/`;
+  const prefix = publishThumbnailPrefix(publicId);
   return key.startsWith(prefix) && /^[0-9a-f]{64}\.webp$/.test(key.slice(prefix.length));
+}
+
+/** Concurrent prefix deletes while purging many artifacts at once (an account's whole library). */
+const DELETE_CONCURRENCY = 8;
+
+/**
+ * Delete every thumbnail object of the given artifacts, for when they are deleted, taken down or
+ * purged with their owner. Callers also clear the `thumbnail` record (PublishedArtifact softDelete,
+ * takedown, purgeOwnerPublishedArtifacts) so a later restore never signs a missing object.
+ *
+ * Best-effort and never throws: a failure is logged and must not block the delete that called it.
+ * Ids that could never have formed a thumbnail key are skipped. Resolves to the objects deleted.
+ */
+export async function deletePublishThumbnails(
+  publicIds: readonly string[],
+  logger: { warn: (message: string) => unknown },
+  getStorage: () => { deletePrefix(prefix: string): Promise<number> } = getPublishedArtifactsStorage
+): Promise<number> {
+  const ids = [...new Set(publicIds)].filter(id => PUBLIC_ID_SEGMENT.test(id));
+  if (ids.length === 0) return 0;
+  let storage: { deletePrefix(prefix: string): Promise<number> };
+  try {
+    storage = getStorage();
+  } catch (err) {
+    logger.warn(`[PUBLISH] thumbnails not deleted for ${ids.length} artifact(s): ${messageOf(err)}`);
+    return 0;
+  }
+
+  let deleted = 0;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < ids.length) {
+      const publicId = ids[cursor++];
+      try {
+        // Awaited first: `deleted += await ...` would read `deleted` before the other workers add to it.
+        const count = await storage.deletePrefix(publishThumbnailPrefix(publicId));
+        deleted += count;
+      } catch (err) {
+        logger.warn(`[PUBLISH] thumbnails not deleted for ${publicId}: ${messageOf(err)}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(DELETE_CONCURRENCY, ids.length) }, worker));
+  return deleted;
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   validateEmbedOrigins,
 } from '@server/services/publish';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+import { deletePublishThumbnails } from '@bike4mind/server-utils/utils/publishThumbnails';
 
 /**
  * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
@@ -320,6 +321,8 @@ const handler = baseApi()
     if (wasPublic) {
       void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
     }
+    // softDelete dropped the owner-only thumbnail record; drop its objects too. Never throws.
+    await deletePublishThumbnails([publicId], req.logger);
     return res.status(200).json({ ok: true });
   });
 

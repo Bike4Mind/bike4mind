@@ -1,16 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { getSourceQueueUrl, sendToQueue } = vi.hoisted(() => ({
+const { getSourceQueueUrl, sendToQueue, getPublishedArtifactsStorage } = vi.hoisted(() => ({
   getSourceQueueUrl: vi.fn(),
   sendToQueue: vi.fn(),
+  getPublishedArtifactsStorage: vi.fn(),
 }));
 vi.mock('./dlqRegistry', () => ({ getSourceQueueUrl }));
 vi.mock('./sqs', () => ({ sendToQueue }));
+vi.mock('./storage/index', () => ({ getPublishedArtifactsStorage }));
 
 import {
+  deletePublishThumbnails,
   enqueuePublishThumbnail,
   isPublishThumbnailKeyFor,
   publishThumbnailKey,
+  publishThumbnailPrefix,
   PublishThumbnailJobSchema,
 } from './publishThumbnails';
 
@@ -75,5 +79,54 @@ describe('enqueuePublishThumbnail', () => {
     await expect(enqueuePublishThumbnail({ publicId: 'pub1', versionId: 'nope' }, logger)).resolves.toBe(false);
     expect(sendToQueue).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('invalid job'));
+  });
+});
+
+describe('deletePublishThumbnails', () => {
+  const logger = { warn: vi.fn() };
+  const deletePrefix = vi.fn();
+
+  beforeEach(() => {
+    logger.warn.mockReset();
+    deletePrefix.mockReset().mockResolvedValue(2);
+    getPublishedArtifactsStorage.mockReset().mockReturnValue({ deletePrefix });
+  });
+
+  it("deletes every object under each artifact's own thumbnail folder", async () => {
+    await expect(deletePublishThumbnails(['pub1', 'pub2'], logger)).resolves.toBe(4);
+    expect(deletePrefix.mock.calls.map(([prefix]) => prefix).sort()).toEqual([
+      'publish-thumbnails/pub1/',
+      'publish-thumbnails/pub2/',
+    ]);
+    expect(publishThumbnailPrefix('pub1')).toBe('publish-thumbnails/pub1/');
+  });
+
+  it('skips ids that could not have formed a key, and de-duplicates the rest', async () => {
+    await deletePublishThumbnails(['pub1', 'pub1', '', '../x', 'a/b'], logger);
+    expect(deletePrefix).toHaveBeenCalledTimes(1);
+    expect(deletePrefix).toHaveBeenCalledWith('publish-thumbnails/pub1/');
+  });
+
+  it('does not touch storage when there is nothing to delete', async () => {
+    await expect(deletePublishThumbnails([], logger)).resolves.toBe(0);
+    expect(getPublishedArtifactsStorage).not.toHaveBeenCalled();
+  });
+
+  it('logs a failed artifact and still deletes the others, never throwing', async () => {
+    deletePrefix.mockImplementation(async (prefix: string) => {
+      if (prefix.includes('bad')) throw new Error('AccessDenied');
+      return 1;
+    });
+    await expect(deletePublishThumbnails(['bad', 'good'], logger)).resolves.toBe(1);
+    expect(deletePrefix).toHaveBeenCalledWith('publish-thumbnails/good/');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('bad'));
+  });
+
+  it('logs and resolves when the storage itself is unavailable', async () => {
+    getPublishedArtifactsStorage.mockImplementation(() => {
+      throw new Error('bucket not linked');
+    });
+    await expect(deletePublishThumbnails(['pub1'], logger)).resolves.toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('bucket not linked'));
   });
 });

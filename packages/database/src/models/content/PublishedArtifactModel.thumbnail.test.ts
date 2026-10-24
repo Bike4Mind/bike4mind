@@ -88,4 +88,20 @@ describe('PublishedArtifact thumbnail', () => {
     const doc = await make({ deletedAt: new Date() });
     expect(await recordPublishedArtifactThumbnail(doc.publicId, thumb(doc.publicId, SHA_A))).toBeNull();
   });
+
+  it('drops the thumbnail record on soft delete, so a restored artifact never points at deleted objects', async () => {
+    const doc = await make();
+    await recordPublishedArtifactThumbnail(doc.publicId, thumb(doc.publicId, SHA_A));
+    const loaded = await PublishedArtifact.findOne({ publicId: doc.publicId });
+    await loaded?.softDelete('owner1');
+
+    const lean = await PublishedArtifact.findOne({ publicId: doc.publicId }).lean();
+    expect(lean?.deletedAt).toBeInstanceOf(Date);
+    expect(lean?.thumbnail).toBeUndefined();
+
+    await loaded?.restore();
+    const restored = await PublishedArtifact.findOne({ publicId: doc.publicId }).lean();
+    expect(restored?.deletedAt).toBeNull();
+    expect(restored?.thumbnail).toBeUndefined();
+  });
 });
