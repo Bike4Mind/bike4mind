@@ -138,6 +138,22 @@ describe('checkPublishQuota', () => {
     expect(match.$nor).toEqual([{ tier: 'user', scopeId: 'u1', slug: 'my-page' }]);
   });
 
+  it('excludes the overwritten key from the org aggregation too', async () => {
+    aggregateMock.mockResolvedValue(usage(1024));
+    const replacing = { tier: 'org', scopeId: 'org1', slug: 'my-page' } as const;
+    await checkPublishQuota({
+      ownerId: 'u1',
+      orgScopeId: 'org1',
+      incoming: { bytes: 1, fileCount: 1 },
+      replacing,
+    });
+    expect(aggregateMock).toHaveBeenCalledTimes(2);
+    for (const [pipeline] of aggregateMock.mock.calls) {
+      const match = (pipeline as Array<{ $match?: Record<string, unknown> }>)[0].$match!;
+      expect(match.$nor).toEqual([replacing]);
+    }
+  });
+
   it('treats an empty aggregation result as zero usage', async () => {
     aggregateMock.mockResolvedValue([]);
     const result = await checkPublishQuota({
