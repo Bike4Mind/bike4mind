@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import axios, { AxiosError, type AxiosAdapter } from 'axios';
+import { AxiosError, type AxiosAdapter } from 'axios';
 import { api } from './apiClient';
 import { resetDeployedRevisionBaseline } from '../utils/deployRevision';
 import { useClientOutdatedStore } from '../stores/useClientOutdatedStore';
