@@ -110,6 +110,45 @@ describe('ManageSharingPanel', () => {
     expect(onGateChange).not.toHaveBeenCalled();
   });
 
+  it('private with a stored gate: shows it, and clearing it tells the parent so the row badge can follow', async () => {
+    const onGateChange = vi.fn();
+    const apiPatch = api.patch as unknown as ReturnType<typeof vi.fn>;
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    apiGet.mockClear().mockResolvedValue({
+      data: {
+        artifact: {
+          visibility: 'private',
+          accessGate: { kind: 'passphrase' },
+          embedOrigins: [],
+          commentPolicy: 'none',
+        },
+      },
+    });
+    render(
+      <Wrapper>
+        <ManageSharingPanel
+          publicId="pub-1"
+          title="My Artifact"
+          shareUrl="https://app.x/p/u/u1/s"
+          visibility="private"
+          onGateChange={onGateChange}
+        />
+      </Wrapper>
+    );
+    await screen.findByTestId('manage-sharing-panel');
+
+    expect(screen.getByTestId('manage-gate-private-link-note')).not.toBeNull();
+    expect(screen.queryByTestId('manage-gate-needs-public')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('manage-gate-clear'));
+    fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
+
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', { accessGate: null }));
+    await waitFor(() => expect(onGateChange).toHaveBeenCalledWith(null));
+    await waitFor(() => expect(screen.getByTestId('manage-gate-needs-public')).not.toBeNull());
+    expect(screen.queryByTestId('manage-gate-clear')).toBeNull();
+  });
+
   it('private: hides embed and shows the gate needs-public hint', async () => {
     await renderPanel({ visibility: 'private', accessGate: null, embedOrigins: [], commentPolicy: 'none' }, 'private');
     expect(screen.queryByTestId('manage-embed-section')).toBeNull();

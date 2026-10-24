@@ -1154,6 +1154,68 @@ describe('PublishedArtifactsTabContent - access badge and aligned columns', () =
     );
   });
 
+  it('drops the private-link gate from a private row once the sharing panel clears it', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, visibility: 'private', gateKind: 'passphrase' }]));
+    renderTab();
+    const before = await screen.findByTestId('published-artifact-access-pub-1');
+    expect(before.getAttribute('data-link-gate')).toBe('passphrase');
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    const listCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets !== true).length;
+    const facetCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets === true).length;
+    const listBefore = listCalls();
+    const facetsBefore = facetCalls();
+
+    fireEvent.click(screen.getByTestId('stub-panel-clear-gate-pub-1'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-link-gate')).toBeNull()
+    );
+    const after = screen.getByTestId('published-artifact-access-pub-1');
+    expect(after.textContent).toBe('Private');
+    expect(after.getAttribute('data-access')).toBe('private');
+    expect(after.querySelector('[data-testid="KeyIcon"]')).toBeNull();
+    expect(after.getAttribute('title')).toBe('Only you, and anyone you send a private link to');
+    await waitFor(() => expect(facetCalls()).toBeGreaterThan(facetsBefore));
+    expect(listCalls()).toBe(listBefore);
+  });
+
+  it('does not bring a cleared private-link gate back when a list response started before the clear arrives', async () => {
+    const oldPage = page([{ ...bundleRow, visibility: 'private', gateKind: 'passphrase' }]);
+    const pendingList = Promise.withResolvers<ReturnType<typeof page>>();
+    let listLoads = 0;
+    mockList.mockImplementation((query: { facets?: boolean }) => {
+      if (query.facets) return Promise.resolve(page([]));
+      listLoads += 1;
+      return listLoads === 1 ? Promise.resolve(oldPage) : pendingList.promise;
+    });
+    renderTab();
+    const before = await screen.findByTestId('published-artifact-access-pub-1');
+    expect(before.getAttribute('data-link-gate')).toBe('passphrase');
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+
+    // Another row setting starts a list refresh that still carries the stored gate.
+    fireEvent.click(screen.getByTestId('published-artifact-comments-pub-1').querySelector('input')!);
+    await waitFor(() => expect(listLoads).toBe(2));
+    fireEvent.click(screen.getByTestId('stub-panel-clear-gate-pub-1'));
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-link-gate')).toBeNull()
+    );
+
+    await act(async () => {
+      pendingList.resolve(oldPage);
+      await pendingList.promise;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    const after = screen.getByTestId('published-artifact-access-pub-1');
+    expect(after.getAttribute('data-link-gate')).toBeNull();
+    expect(after.getAttribute('data-access')).toBe('private');
+    expect(after.querySelector('[data-testid="KeyIcon"]')).toBeNull();
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+    expect(listLoads).toBe(2);
+  });
+
   it.each([
     [undefined, 'passphrase', 'set-passphrase'],
     ['passphrase', 'public', 'clear-gate'],
