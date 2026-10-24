@@ -13,7 +13,9 @@ import { type MigrationFile } from './index';
  * A migration as well as the schema declaration, as 20260921235977_ensure-overwatch-raw-event-explorer-index:
  * web `dependsOn` the migration, so the index is committed before web serves the deploy. autoIndex is on
  * and the other Lambdas deploy alongside the migrator, so a cold boot may start this build first;
- * createIndex then waits for that build. The collection is capped by its 180-day TTL.
+ * createIndex then waits for that build. A build past the connection's 45s socket timeout fails this
+ * run, but the server finishes the build and the next deploy's run finds it. The build reads every
+ * user-day, marked or not; the collection is capped by its 180-day TTL.
  *
  * Builds only this index, not OverwatchUserDay.createIndexes(), so a stage missing another declared index
  * does not build it here too. Named and optioned exactly as the schema declares it, so autoIndex after
