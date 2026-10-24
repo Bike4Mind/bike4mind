@@ -66,10 +66,15 @@ export function stripComments(source) {
   // Index just past the string/template literal that starts at $i.
   function stringEnd(i) {
     const quote = source[i];
+    const opener = i;
     i++;
     while (i < source.length) {
       if (source[i] === '\\') {
         i += 2;
+      } else if (quote !== '`' && source[i] === '\n') {
+        // Unterminated: a regex literal's stray quote, not a string. Treat the
+        // quote as an ordinary character so later comments are still blanked.
+        return opener + 1;
       } else if (source[i] === quote) {
         return i + 1;
       } else if (quote === '`' && source[i] === '$' && source[i + 1] === '{') {
@@ -119,10 +124,13 @@ export function stripComments(source) {
 /** Index just past the string/template literal that starts at $i. */
 function plainStringEnd(text, i) {
   const quote = text[i];
+  const opener = i;
   i++;
   while (i < text.length) {
     if (text[i] === '\\') {
       i += 2;
+    } else if (quote !== '`' && text[i] === '\n') {
+      return opener + 1; // mirrors stringEnd: an unterminated quote is an ordinary character
     } else if (text[i] === quote) {
       return i + 1;
     } else if (quote === '`' && text[i] === '$' && text[i + 1] === '{') {

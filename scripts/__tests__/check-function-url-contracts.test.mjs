@@ -64,6 +64,15 @@ describe('stripComments', () => {
     expect(stripComments('const a = `/* not a comment */`;')).toBe('const a = `/* not a comment */`;');
   });
 
+  it('blanks a comment after a regex literal holding a stray quote', () => {
+    const source =
+      'const re = /What\'s New/i;\n// TODO: defineLambdaRoute(c, f)\nconst r2 = /say "hi/;\n// defineLambdaRoute(c, f)';
+    const clean = stripComments(source);
+    expect(clean).toHaveLength(source.length);
+    expect(clean).not.toContain('defineLambdaRoute');
+    expect(clean).toContain("/What's New/i");
+  });
+
   it('handles a nested ${...} expression inside a template', () => {
     const source = 'const p = `${a / b} // kept`; // gone';
     const clean = stripComments(source);
@@ -323,6 +332,16 @@ describe('main', () => {
     const dir = writeTree({
       'infra/fn.ts': fnDeclaration([HANDLER, '  url: true,']),
       'apps/workers/src/thing.ts': RAW_HANDLER,
+    });
+    const r = run(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout.trim()).toBe('apps/workers/src/thing.ts');
+  });
+
+  it('exits 1 when the only defineLambdaRoute is in a comment after a regex with an apostrophe', () => {
+    const dir = writeTree({
+      'infra/fn.ts': fnDeclaration([HANDLER, '  url: true,']),
+      'apps/workers/src/thing.ts': `${RAW_HANDLER}\nconst datePattern = /What's New - [A-Za-z]+/i;\n// TODO: defineLambdaRoute(contract, handler)\n`,
     });
     const r = run(dir);
     expect(r.status).toBe(1);
