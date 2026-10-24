@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import {
+  AI_USAGE_TRANSACTION_TYPES,
   AiEvents,
   ICounterLog,
   ICounterLogDocument,
@@ -614,13 +615,12 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             { $limit: 3 },
           ]
         : [
-            // Daily report version - simpler, no rank comparisons
+            // Daily leaderboard: ranked by what the user spent, not raw event volume. Every
+            // exclusion and the ordering run before $limit, since the twenty candidates must be
+            // chosen by the same key the report ranks on.
             {
               $match: {
-                datetime: {
-                  $gte: dayjs(weekEndDate).subtract(24, 'hours').toDate(),
-                  $lte: weekEndDate,
-                },
+                datetime: { $gte: weekStartDate, $lte: weekEndDate },
                 userId: { $exists: true },
               },
             },
@@ -637,26 +637,56 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                 as: 'userDetails',
               },
             },
+            // No preserveNullAndEmptyArrays on purpose: an id with no user document ('SYSTEM', or a
+            // deleted account) is not a person and never belongs on the leaderboard.
+            { $unwind: '$userDetails' },
+            ...(internalStaffRegex
+              ? [{ $match: { $nor: [{ 'userDetails.email': { $regex: internalStaffRegex } }] } }]
+              : []),
             {
               $group: {
                 _id: '$userId',
                 interactions: { $sum: 1 },
-                email: {
-                  $first: {
-                    $cond: [{ $gt: [{ $size: '$userDetails' }, 0] }, { $arrayElemAt: ['$userDetails.email', 0] }, null],
-                  },
-                },
+                email: { $first: '$userDetails.email' },
+                userCreatedAt: { $first: '$userDetails.createdAt' },
               },
             },
-            { $sort: { interactions: -1 } },
-            { $limit: 20 },
+            {
+              // The user's own AI spend for the same window. usage rows are stored negative, so
+              // the magnitude is what "spent" means here; AI_USAGE_TRANSACTION_TYPES keeps admin
+              // adjustments and transfers out of the ranking.
+              $lookup: {
+                from: 'credittransactions',
+                let: { uid: '$_id' },
+                pipeline: [
+                  {
+                    $match: {
+                      ownerType: 'User',
+                      type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+                      createdAt: { $gte: weekStartDate, $lte: weekEndDate },
+                    },
+                  },
+                  { $match: { $expr: { $eq: ['$ownerId', '$$uid'] } } },
+                  { $group: { _id: null, creditsSpent: { $sum: { $abs: '$credits' } } } },
+                ],
+                as: 'spend',
+              },
+            },
             {
               $project: {
                 _id: 1,
                 email: 1,
                 interactions: 1,
+                creditsSpent: { $ifNull: [{ $arrayElemAt: ['$spend.creditsSpent', 0] }, 0] },
+                // Against the window's own end, so a re-rendered past date stays correct.
+                isNew: {
+                  $cond: [{ $gte: ['$userCreatedAt', dayjs(weekEndDate).subtract(7, 'days').toDate()] }, true, false],
+                },
               },
             },
+            // _id breaks exact ties so the same data always renders in the same order.
+            { $sort: { creditsSpent: -1, interactions: -1, _id: 1 } },
+            { $limit: 20 },
           ],
       topOrganizations: [
         {

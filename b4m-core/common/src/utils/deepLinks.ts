@@ -68,6 +68,14 @@ export function adminModerationIncidentPath(incidentId: string): string {
   return `/admin?${params.toString()}`;
 }
 
+/**
+ * Deep link to one user's admin profile. Ids here come from counter logs, so they are not trusted:
+ * encoding keeps a crafted id from grafting extra path or query onto the link.
+ */
+export function adminUserProfilePath(userId: string): string {
+  return `/admin/users/${encodeURIComponent(userId)}`;
+}
+
 /** Deep link to a chat session. */
 export function sessionPath(sessionId: string): string {
   return `/notebooks/${encodeURIComponent(sessionId)}`;

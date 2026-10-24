@@ -11,6 +11,7 @@ import {
   adminAuditLogPath,
   adminFeedbackRecordPath,
   adminModerationIncidentPath,
+  adminUserProfilePath,
   sessionPath,
   sessionTurnPath,
   toAbsoluteUrl,
@@ -53,6 +54,14 @@ describe('deepLinks', () => {
     const record = new URL(adminFeedbackRecordPath('fb-1&tab=users'), 'https://app.example');
     expect(record.searchParams.get(FEEDBACK_ID_PARAM)).toBe('fb-1&tab=users');
     expect(record.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_FEEDBACK_TAB_SLUG);
+  });
+
+  it('addresses one user profile under /admin/users', () => {
+    expect(adminUserProfilePath('abc123')).toBe('/admin/users/abc123');
+
+    const crafted = new URL(adminUserProfilePath('../../admin?tab=users'), 'https://app.example');
+    expect(crafted.pathname).toBe('/admin/users/..%2F..%2Fadmin%3Ftab%3Dusers');
+    expect(crafted.search).toBe('');
   });
 
   it('joins an origin whether or not it carries a trailing slash', () => {
