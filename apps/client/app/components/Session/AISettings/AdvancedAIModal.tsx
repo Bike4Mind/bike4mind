@@ -52,6 +52,7 @@ import {
   isKontextModel as isKontextImageModel,
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
 } from '@bike4mind/common';
+import { reasonsWithinOutputBudget } from '@bike4mind/llm-adapters/model-sizing';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
 import { ResearchModeConfiguration, ResearchModeState } from '@client/app/types/ResearchMode';
 import { useLLM, LLMContextProps } from '@client/app/contexts/LLMContext';
@@ -712,11 +713,11 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // the bounds would invert outright, which MUI leaves undefined. The read-out and the sentence below
   // still state the budget, so nothing is lost by omitting the track.
   const isOutputAdjustable = outputCeiling > MIN_OUTPUT_TOKENS;
-  // Adaptive models reason inside this budget, and the server lifts anything below the reasoning
-  // floor (resolveOutputMaxTokens), so a lower value here has no effect - say so rather than let a
-  // stale setting look like a cap that applies.
+  // A model that reasons inside this budget can spend all of it before writing a reply, and the
+  // server sends the value as set (resolveOutputMaxTokens), so warn below the floor it would give an
+  // unset budget. Same predicate as the server's belowReasoningFloor telemetry.
   const reasoningFloor = Math.min(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, outputCeiling);
-  const isBelowReasoningFloor = !readOnly && modelInfo.thinkingStyle === 'adaptive' && outputTokens < reasoningFloor;
+  const isBelowReasoningFloor = !readOnly && reasonsWithinOutputBudget(modelInfo) && outputTokens < reasoningFloor;
 
   // The session-wide switches, defined once and rendered two ways. Desktop keeps them inline beside
   // the section title; mobile has no room for four controls on that row, so there the title keeps
@@ -1121,8 +1122,8 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   data-testid="token-allocation-reasoning-floor-warning"
                   sx={{ fontSize: '12px', lineHeight: 1.4 }}
                 >
-                  This model reasons inside its output budget, so values below {formatTokenCount(reasoningFloor)} are
-                  raised to {formatTokenCount(reasoningFloor)} when sent.
+                  Values below {formatTokenCount(reasoningFloor)} can leave reasoning models with no room to answer,
+                  because the reasoning can use the whole budget.
                 </Typography>
               )}
             </Box>

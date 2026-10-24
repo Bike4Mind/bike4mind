@@ -72,11 +72,14 @@ describe('LLMProvider refit effect - the DEFAULTS max_tokens placeholder', () =>
 // Users the bug already reached carry the placeholder in localStorage on a model the refit effect
 // will not raise on its own. The v7 migration clears that exact value so it is re-derived.
 describe('llm-settings v6 -> v7 migration', () => {
-  const rehydrateFrom = async (persisted: Record<string, unknown>) => {
-    localStorage.setItem('llm-settings', JSON.stringify({ state: persisted, version: 6 }));
+  const rehydrateFrom = async (persisted: Record<string, unknown>, version = 6) => {
+    localStorage.setItem('llm-settings', JSON.stringify({ state: persisted, version }));
     await useLLM.persist.rehydrate();
   };
-  afterEach(() => localStorage.removeItem('llm-settings'));
+  afterEach(() => {
+    cleanup();
+    localStorage.removeItem('llm-settings');
+  });
 
   it('clears a persisted placeholder so it is re-derived for the model', async () => {
     await rehydrateFrom({ model: OPUS.id, max_tokens: 8192 });
@@ -84,9 +87,26 @@ describe('llm-settings v6 -> v7 migration', () => {
     expect(useLLM.getState().max_tokens).toBe(0);
   });
 
-  it('keeps any other persisted value', async () => {
-    await rehydrateFrom({ model: OPUS.id, max_tokens: 20_000 });
+  it('re-derives the cleared placeholder to the model default once the provider fits it', async () => {
+    await rehydrateFrom({ model: OPUS.id, max_tokens: 8192 });
 
+    render(<LLMProvider />);
+
+    await waitFor(() => expect(useLLM.getState().max_tokens).toBe(128_000));
+  });
+
+  it('keeps any other persisted value, higher or lower', async () => {
+    await rehydrateFrom({ model: OPUS.id, max_tokens: 20_000 });
     expect(useLLM.getState().max_tokens).toBe(20_000);
+
+    await rehydrateFrom({ model: OPUS.id, max_tokens: 4096 });
+    expect(useLLM.getState().max_tokens).toBe(4096);
+  });
+
+  // Runs once: an 8192 chosen after the migration is the user's own and must survive reloads.
+  it('keeps the placeholder value in a store that is already at v7', async () => {
+    await rehydrateFrom({ model: OPUS.id, max_tokens: 8192 }, 7);
+
+    expect(useLLM.getState().max_tokens).toBe(8192);
   });
 });

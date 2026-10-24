@@ -704,8 +704,8 @@ export const LLMProvider: React.FC = () => {
     // A switch the app resolved for the user is not a switch they asked for, so it must not raise a
     // ceiling they lowered (#1254). Consumed once: a later, genuine switch to this same model still
     // raises. Session pins without catalog info start with max_tokens=0 and are fitted here too.
-    // `previousModel` is null on the first run that fits anything, which is the fresh-session transition
-    // out of the empty model - the same '' the writer recorded as `from`.
+    // On the fresh-session transition out of the empty model `previousModel` is '' (recorded above) or
+    // null (no run before this one) - either way the same '' the writer recorded as `from`.
     const pendingAutoResolve = autoResolvedModelRef.current;
     const autoResolved = pendingAutoResolve?.to === activeModel && pendingAutoResolve.from === (previousModel ?? '');
     if (pendingAutoResolve?.to === activeModel) autoResolvedModelRef.current = null;

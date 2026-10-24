@@ -83,6 +83,8 @@ const modelInfoRows = vi.hoisted(() => [
     contextWindow: 1_000_000,
     max_tokens: 128_000,
     thinkingStyle: 'adaptive' as string | undefined,
+    can_think: undefined as boolean | undefined,
+    dispatchProfile: undefined as { maxTokensParam: string; toolTransport: string } | undefined,
   },
 ]);
 
@@ -122,15 +124,20 @@ const renderDetails = (maxTokens: number) => {
 
 describe('AdvancedAIModal - Max output tokens below the reasoning floor', () => {
   beforeEach(() => {
-    modelInfoRows[0].thinkingStyle = 'adaptive';
+    Object.assign(modelInfoRows[0], {
+      max_tokens: 128_000,
+      thinkingStyle: 'adaptive',
+      can_think: undefined,
+      dispatchProfile: undefined,
+    });
   });
 
-  // The server lifts this value to the floor, so the slider must not imply 8K is what applies.
+  // The server sends this value as set, so the slider has to say what a low one can cost.
   it('warns when an adaptive model is set below the floor', () => {
     renderDetails(8192);
 
     expect(screen.getByTestId('token-allocation-reasoning-floor-warning')).toHaveTextContent(
-      'values below 64 000 are raised to 64 000 when sent'
+      'Values below 64 000 can leave reasoning models with no room to answer'
     );
   });
 
@@ -140,7 +147,27 @@ describe('AdvancedAIModal - Max output tokens below the reasoning floor', () => 
     expect(screen.queryByTestId('token-allocation-reasoning-floor-warning')).toBeNull();
   });
 
-  // A non-adaptive model's budget is honored as set, so a low value there is a real cap.
+  // Not Anthropic-adaptive, but it reasons inside max_completion_tokens all the same.
+  it('warns on a reasoning-shaped catalog model too', () => {
+    Object.assign(modelInfoRows[0], {
+      thinkingStyle: undefined,
+      can_think: true,
+      dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' },
+    });
+    renderDetails(8192);
+
+    expect(screen.getByTestId('token-allocation-reasoning-floor-warning')).toBeInTheDocument();
+  });
+
+  // A model capped below the floor cannot be given more than its cap.
+  it('names the model cap when it is below the floor', () => {
+    modelInfoRows[0].max_tokens = 32_000;
+    renderDetails(8192);
+
+    expect(screen.getByTestId('token-allocation-reasoning-floor-warning')).toHaveTextContent('Values below 32 000');
+  });
+
+  // A model that does not reason inside its budget gets exactly that budget as its answer length.
   it('does not warn on a model that does not reason inside its budget', () => {
     modelInfoRows[0].thinkingStyle = undefined;
     renderDetails(8192);
