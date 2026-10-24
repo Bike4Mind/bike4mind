@@ -19,7 +19,7 @@ import {
 import { canRefreshFromSource, type ManagedArtifact, type PublishAccessGateRead } from '@client/app/utils/publishApi';
 import { supportsExport } from '@client/app/utils/publishExport';
 import { ManageSharingPanel } from '@client/app/components/common/ManageSharingPanel';
-import { PUBLISH_ACCESS_META } from '@client/app/components/common/PublishAccessBadge';
+import { PUBLISH_ACCESS_META, isPublishAccess } from '@client/app/components/common/PublishAccessBadge';
 import { sourceKindLabel } from './publishedArtifactFormat';
 
 /**
@@ -169,7 +169,7 @@ export function PublishedArtifactSettings({
           >
             {visibilityChoicesFor(a).map(v => (
               <Option key={v} value={v} data-testid={`published-artifact-visibility-option-${v}`}>
-                {PUBLISH_ACCESS_META[v].label}
+                {isPublishAccess(v) ? PUBLISH_ACCESS_META[v].label : v}
               </Option>
             ))}
           </Select>

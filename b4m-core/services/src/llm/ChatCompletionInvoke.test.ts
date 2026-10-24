@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+import { ChatCompletionInvokeParamsSchema } from '@bike4mind/common';
 import { ChatCompletionInvoke } from './ChatCompletionInvoke';
+import { QuestStartBodySchema } from './questStartBody';
 import { getAvailableModels, resetReplacedByOverlay, updateReplacedByOverlay } from '@bike4mind/llm-adapters';
 
 // getAvailableModels resolves to an empty array in every case below - never reached
@@ -166,6 +168,18 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key1' })
     );
   });
+  it('carries a withheld admin role onto questStartParams', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'apiKey', apiKeyId: 'key1', adminRoleWithheld: true });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ adminRoleWithheld: true }));
+  });
   // The positive signal a session-only tool checks; dropped here, the async worker would see none.
   it('carries the server-set authOrigin onto questStartParams', async () => {
     mockedGetAvailableModels.mockResolvedValue([
@@ -179,6 +193,78 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
 
     expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ authOrigin: 'internal' }));
     expect((invoke as any).questStartParams.apiKeyId).toBeUndefined();
+  });
+  // Same boundary: dropped here, the async worker dates the turn by the server's UTC day and never
+  // tells the model the user's timezone.
+  it('carries timezone onto questStartParams', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({
+      body: { ...body, timezone: 'Asia/Tokyo' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ timezone: 'Asia/Tokyo' }));
+  });
+  // The per-field tests above each landed after their field was found dropped. This one fails as soon
+  // as a field both schemas declare is added without being carried, or without a sample below.
+  it('carries every field the request and quest-start schemas share onto questStartParams', async () => {
+    // Shared by name but rebuilt by invoke() rather than copied from the request.
+    const derivedKeys = new Set(['questId', 'sessionId', 'embeddingModel']);
+    const sharedKeys = Object.keys(ChatCompletionInvokeParamsSchema.shape).filter(
+      key => key in QuestStartBodySchema.in.shape && !derivedKeys.has(key)
+    );
+    const sampleBody = {
+      ...body,
+      imageConfig: { model: 'gpt-image-1' as const, seed: 7 },
+      audioConfig: { voice: 'alloy' },
+      deepResearchConfig: { maxDepth: 1 },
+      extraContextMessages: [{ role: 'user' as const, content: 'context' }],
+      dashboardParams: { dashboardDataSources: [{ sourceName: 'source', data: 1 }] },
+      enableQuestMaster: true,
+      promptMode: 'grounded' as const,
+      skipAutoOffers: true,
+      disableUserIntegrations: true,
+      skipReplyChoices: true,
+      deniedTools: ['create_data_lake'],
+      systemPrompt: 'system',
+      enableMementos: true,
+      enableArtifacts: true,
+      enableAgents: true,
+      enableLattice: true,
+      tools: ['web_search'],
+      mcpServers: ['server-1'],
+      projectId: 'project-1',
+      organizationId: 'org-1',
+      toolPromptId: 'tool-prompt-1',
+      questMaster: { questMasterPlanId: 'plan-1', questId: 'quest-0', subQuestId: 'sub-1' },
+      researchMode: { enabled: false, configurations: [] },
+      fallbackModel: 'gpt-4',
+      timezone: 'Asia/Tokyo',
+      allowedAgents: ['agent-1'],
+      enableSlackTools: true,
+    };
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: sampleBody, userId: OWNER_ID, authOrigin: 'session' });
+
+    const parsedRequest: Record<string, unknown> = ChatCompletionInvokeParamsSchema.parse(sampleBody);
+    const questStartParams = (invoke as any).questStartParams;
+    for (const key of sharedKeys) {
+      expect(parsedRequest[key], `no sample value for ${key}`).not.toBeUndefined();
+      expect(questStartParams[key], `${key} dropped on the way to the worker`).toEqual(parsedRequest[key]);
+    }
   });
   it.each([
     ['a key turn without its key id', { authOrigin: 'apiKey' as const }],

@@ -5,7 +5,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { useConfirmationModal } from '@client/app/hooks/useConfirmation';
 import type { ReactNode } from 'react';
 
-vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
+vi.mock('@tanstack/react-router', async () => (await import('../../__tests__/fakeAdminRouter')).fakeRouterModule);
 
 const KNOWN_USER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const MISSING_USER_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -24,7 +24,7 @@ vi.mock('@client/app/hooks/data/user', () => ({
 const toastError = vi.hoisted(() => vi.fn());
 vi.mock('sonner', () => ({ toast: { error: toastError } }));
 
-import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
+import { fakeAdminRouter } from '../../__tests__/fakeAdminRouter';
 import FullUserViewModal from './FullUserViewModal';
 
 // The card under test here is the modal's close guard, not the card itself; the stub

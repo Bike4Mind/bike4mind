@@ -2,7 +2,7 @@ import { addMember } from './addMember';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { IUserDocument, Permission } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { cloneDeep } from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
 
 describe('addMember', () => {
   const mockOwnerUser = {

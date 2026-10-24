@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveFeedUrl } from './feed';
+import { releasePageUrl, resolveFeedUrl } from './feed';
 
 describe('resolveFeedUrl', () => {
   it('treats nothing configured as "this build does not update"', () => {
@@ -28,5 +28,22 @@ describe('resolveFeedUrl', () => {
     expect(resolveFeedUrl('/releases')).toBeNull();
     expect(resolveFeedUrl('file:///tmp/releases')).toBeNull();
     expect(resolveFeedUrl('javascript:alert(1)')).toBeNull();
+  });
+});
+
+describe('releasePageUrl', () => {
+  it("links a GitHub Releases feed to that version's tag page", () => {
+    expect(releasePageUrl('https://github.com/acme/desktop-dist/releases/latest/download/', '0.1.11')).toBe(
+      'https://github.com/acme/desktop-dist/releases/tag/desktop-v0.1.11'
+    );
+  });
+
+  it('has no link for a feed whose layout it does not know', () => {
+    expect(releasePageUrl(null, '0.1.11')).toBeNull();
+    expect(releasePageUrl('https://updates.example.com/desktop/', '0.1.11')).toBeNull();
+    expect(
+      releasePageUrl('https://github.com/acme/desktop-dist/releases/download/desktop-v0.1.0/', '0.1.11')
+    ).toBeNull();
+    expect(releasePageUrl('not a url', '0.1.11')).toBeNull();
   });
 });

@@ -23,6 +23,12 @@ describe('toConsentScopes', () => {
     ]);
   });
 
+  it('labels the federated admin-status scope', () => {
+    expect(toConsentScopes(['federated:admin-status'])).toEqual([
+      { id: 'federated:admin-status', label: 'See whether you are a Bike4Mind administrator' },
+    ]);
+  });
+
   it('keeps an unmapped scope with a null label rather than dropping it', () => {
     // A scope registered after this map was last touched. Dropping it would understate the grant.
     expect(toConsentScopes(['openid', 'billing:write'])).toEqual([

@@ -300,7 +300,12 @@ export default function PublishedArtifactsTabContent() {
   /** A gate edit in the sharing panel: patch the row in place so its access badge is right at once,
    *  and refresh only the facet counts. A full list refetch could drop the row from a filtered or
    *  re-sorted page, unmounting the panel and the show-once passphrase it is still displaying. */
-  const onGateChange = (publicId: string, gate: PublishAccessGateRead) => {
+  const onGateChange = async (publicId: string, gate: PublishAccessGateRead) => {
+    // A list response started before the gate save must not overwrite its new badge.
+    await qc.cancelQueries({
+      queryKey: ['published-artifacts', 'mine'],
+      predicate: query => query.queryKey[2] !== 'facets',
+    });
     patchRow(publicId, { gateKind: gate?.kind });
     void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine', 'facets'] });
   };
@@ -549,7 +554,7 @@ export default function PublishedArtifactsTabContent() {
       refreshing={refreshMut.isPending && refreshMut.variables?.publicId === a.publicId}
       sharingOpen={manageOpen === a.publicId}
       onToggleSharing={() => setManageOpen(cur => (cur === a.publicId ? null : a.publicId))}
-      onGateChange={gate => onGateChange(a.publicId, gate)}
+      onGateChange={gate => void onGateChange(a.publicId, gate)}
       onTagsChange={tags => tagsMut.mutate({ publicId: a.publicId, tags })}
       onVisibilityChange={visibility => visibilityMut.mutate({ publicId: a.publicId, visibility })}
       onCommentsChange={on => commentsMut.mutate({ publicId: a.publicId, on })}

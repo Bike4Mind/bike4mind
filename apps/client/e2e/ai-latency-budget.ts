@@ -147,13 +147,22 @@ function baseResult(scenario: PromptScenario) {
   };
 }
 
+/**
+ * `artifactRendered` is whether an artifact card (or its placeholder) was on the newest reply. On a
+ * prompt that does not declare generatesArtifact that is a silent mode switch: the model built an
+ * artifact instead of answering in chat (observed on an unflagged analysis prompt), so the stream
+ * window times artifact generation. The result leaves the gated average but is flagged
+ * unexpectedArtifact so the switch is reported instead of hidden.
+ */
 export function completedResult(
   scenario: PromptScenario,
-  args: { response: string; responseTimeMs: number; renderTimeMs: number }
+  args: { response: string; responseTimeMs: number; renderTimeMs: number; artifactRendered?: boolean }
 ): PromptResult {
   const responseTimeSec = msToSec(args.responseTimeMs);
+  const unexpectedArtifact = Boolean(args.artifactRendered) && !scenario.generatesArtifact && !scenario.expectsImage;
   return {
     ...baseResult(scenario),
+    ...(unexpectedArtifact && { measuresDeliverable: true, unexpectedArtifact: true }),
     response: args.response,
     responseTimeMs: args.responseTimeMs,
     responseTimeSec,
@@ -198,6 +207,11 @@ export function gatedAverageSec(results: PromptResult[]): number {
   const gated = results.filter(r => !r.measuresDeliverable);
   if (gated.length === 0) return 0;
   return Math.round((gated.reduce((sum, r) => sum + r.responseTimeSec, 0) / gated.length) * 1000) / 1000;
+}
+
+/** Ids of unflagged prompts whose reply turned out to be an artifact (excluded from the gate). */
+export function unexpectedArtifactIds(results: PromptResult[]): string[] {
+  return results.filter(r => r.unexpectedArtifact).map(r => r.id);
 }
 
 /**

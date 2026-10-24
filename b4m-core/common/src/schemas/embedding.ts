@@ -22,8 +22,8 @@ export enum BedrockEmbeddingModel {
 }
 
 // Local embedders served by Ollama for fully-offline self-host RAG. Values are the
-// Ollama model tags (must match what OLLAMA_PULL_MODELS pulls). Dimensions and
-// context windows live in OLLAMA_EMBEDDING_MODEL_MAP (fab-pipeline) and must stay in sync.
+// Ollama model tags (must match what OLLAMA_PULL_MODELS pulls). Widths and input
+// ceilings live in EMBEDDING_MODEL_CATALOG (embeddings/catalog.ts).
 export enum OllamaEmbeddingModel {
   // Qwen3-Embedding: the recommended self-host default. 0.6b fits any GPU or CPU; 4b/8b need a
   // bigger card. Hardware table in .env.selfhost.example.
@@ -44,7 +44,7 @@ export enum OllamaEmbeddingModel {
  *
  * Deliberately answers from the ENVIRONMENT only, and deliberately does NOT try to answer "can this
  * deployment actually reach that model". It cannot: on a hosted stage an SST secret arrives as a
- * linked Resource, never as process.env (see apps/client/server/modelDiscovery/adapters.ts), so an
+ * linked Resource, never as process.env (see packages/server-utils/src/modelDiscovery/adapters.ts), so an
  * absent OPENAI_API_KEY here means "unknown", not "no key" - it is absent on production too. This
  * function is also bundled into the browser via settingsMap, where every env read is undefined, so
  * any answer it gives must be one that is safe as a stage-neutral constant.
@@ -272,53 +272,3 @@ export const MEMENTO_DEDUP_SIMILARITY = 0.89;
  */
 export const mementoEmbeddingIsCurrent = (memento: { embeddingModel?: string | null }): boolean =>
   memento.embeddingModel === MEMENTO_EMBEDDING_ID;
-
-/**
- * Public list price in USD per input token, by embedding model. Embeddings bill on
- * input tokens only (no output). These are list prices for COGS estimation, not a
- * contract; update alongside provider price changes. Models absent here settle at
- * $0 with an alarm (see getEmbeddingModelCost) so a missing rate never blocks the
- * usage-event write nor silently over-bills.
- */
-const EMBEDDING_MODEL_PRICE_PER_TOKEN: Partial<Record<SupportedEmbeddingModel, number>> = {
-  [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL]: 0.02 / 1_000_000,
-  [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE]: 0.13 / 1_000_000,
-  [OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002]: 0.1 / 1_000_000,
-  [VoyageAIEmbeddingModel.VOYAGE_3_LARGE]: 0.18 / 1_000_000,
-  [VoyageAIEmbeddingModel.VOYAGE_3]: 0.06 / 1_000_000,
-  [VoyageAIEmbeddingModel.VOYAGE_3_LITE]: 0.02 / 1_000_000,
-  [VoyageAIEmbeddingModel.VOYAGE_CODE_3]: 0.18 / 1_000_000,
-  [BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2]: 0.02 / 1_000_000,
-  // Ollama embedders run on the operator's own hardware: no per-token cost.
-  // Explicit 0 (not absent) so getEmbeddingModelCost stays quiet instead of alarming.
-  [OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B]: 0,
-  [OllamaEmbeddingModel.QWEN3_EMBEDDING_4B]: 0,
-  [OllamaEmbeddingModel.QWEN3_EMBEDDING_8B]: 0,
-  [OllamaEmbeddingModel.NOMIC_EMBED_TEXT]: 0,
-  [OllamaEmbeddingModel.MXBAI_EMBED_LARGE]: 0,
-  [OllamaEmbeddingModel.BGE_M3]: 0,
-  [OllamaEmbeddingModel.SNOWFLAKE_ARCTIC_EMBED]: 0,
-};
-
-/**
- * Does the price table hold a rate for this model, as opposed to settling $0 because it has no entry?
- *
- * `getEmbeddingModelCost` cannot tell those apart from the outside: a locally-hosted embedder priced
- * at an explicit 0 and a model with no rate at all both return 0. A usage-event write does not care -
- * a SPEND PREFLIGHT does, because quoting $0 as truth is the one lie a spend gate must not tell.
- * Lives beside the table so the answer cannot drift from the data.
- */
-export const hasPublishedEmbeddingRate = (model: string): boolean =>
-  EMBEDDING_MODEL_PRICE_PER_TOKEN[model as SupportedEmbeddingModel] !== undefined;
-
-/** Compute USD cost for an embedding call. Unpriced models settle $0 with an alarm. */
-export const getEmbeddingModelCost = (model: string, inputTokens: number): number => {
-  const rate = EMBEDDING_MODEL_PRICE_PER_TOKEN[model as SupportedEmbeddingModel];
-  if (rate === undefined) {
-    if (inputTokens > 0) {
-      console.error(`[UNPRICED_EMBEDDING_MODEL] ${model} computed $0 for ${inputTokens} tokens; add its rate`);
-    }
-    return 0;
-  }
-  return rate * inputTokens;
-};

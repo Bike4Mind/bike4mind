@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client",
-  "version": "0.1.96",
+  "version": "0.1.98",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
@@ -87,7 +87,6 @@
     "@casl/ability": "^6.8.1",
     "@casl/mongoose": "^8.0.5",
     "@elevenlabs/client": "^1.14.1",
-    "@googleapis/calendar": "^16.0.0",
     "@googleapis/drive": "^22.0.0",
     "@hookform/resolvers": "^5.9.1",
     "@icons-pack/react-simple-icons": "^10.0.0",
@@ -170,7 +169,7 @@
     "mermaid": "^11.16.1",
     "mime-types": "^3.0.2",
     "mongoose": "^8.24.1",
-    "next": "16.4.0",
+    "next": "16.4.1",
     "next-connect": "^0.13.0",
     "nodemailer": "^10.1.0",
     "nuqs": "^2.10.1",
@@ -211,7 +210,7 @@
     "remark-math": "^6.0.0",
     "remark-parse": "^11.0.0",
     "remark-stringify": "^11.0.0",
-    "sanitize-html": "^2.17.7",
+    "sanitize-html": "^2.18.1",
     "sharp": "^0.35.4",
     "sonner": "^2.0.8",
     "sst": "4.17.1",

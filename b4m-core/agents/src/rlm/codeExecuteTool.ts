@@ -180,6 +180,15 @@ export function makeCodeExecuteTool(deps: CodeExecuteToolDeps): ICompletionOptio
   };
 }
 
+// Matches the ~7K-char stdout cap; stdout and error share it so one observation stays bounded
+// (apps/client/pages/api/data-lakes/rlm-answer.ts sizes its cost ceiling on it).
+const OBSERVATION_MAX_CHARS = 7000;
+
+function capText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}\n[...${text.length - max} chars truncated...]`;
+}
+
 interface ObservationFields {
   ok: boolean;
   stdout: string;
@@ -196,7 +205,14 @@ interface ObservationFields {
  * context, but include enough metadata that the agent knows what
  * happened (truncation, error, duration).
  */
-function formatObservation(o: ObservationFields): string {
+function formatObservation(raw: ObservationFields): string {
+  // The error keeps up to half the budget so it survives a full stdout; stdout gets the rest.
+  const max = OBSERVATION_MAX_CHARS;
+  const errorLen = raw.error?.length ?? 0;
+  const stdoutCap = max - Math.min(errorLen, max / 2);
+  const stdout = capText(raw.stdout, stdoutCap);
+  const errorCap = max - Math.min(raw.stdout.length, stdoutCap);
+  const o = { ...raw, stdout, error: raw.error === null ? null : capText(raw.error, errorCap) };
   const lines: string[] = [];
   if (o.budgetExceeded) {
     lines.push(`[code_execute] BUDGET EXCEEDED: ${o.error}`);

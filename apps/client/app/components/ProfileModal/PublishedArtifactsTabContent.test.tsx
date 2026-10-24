@@ -852,6 +852,20 @@ describe('PublishedArtifactsTabContent - tag review fixes', () => {
 });
 
 describe('PublishedArtifactsTabContent - visibility choices follow the scope tier', () => {
+  it('keeps an unexpected stored visibility selectable when the row is expanded', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, visibility: 'unlisted' }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    const select = screen.getByTestId('published-artifact-visibility-pub-1').querySelector('button');
+    expect(select?.textContent).toBe('unlisted');
+    if (!select) throw new Error('Visibility select did not render');
+    fireEvent.click(select);
+    expect(await screen.findByTestId('published-artifact-visibility-option-unlisted')).not.toBeNull();
+    expect(screen.getByTestId('published-artifact-visibility-option-private')).not.toBeNull();
+  });
+
   const teamRow = { ...replyRow, publicId: 'pub-t', tier: 'organization', scopeId: 'org1', visibility: 'organization' };
   const visibilitySelect = (publicId: string) =>
     screen.getByTestId(`published-artifact-visibility-${publicId}`).querySelector('button') as HTMLButtonElement;
@@ -1139,6 +1153,44 @@ describe('PublishedArtifactsTabContent - access badge and aligned columns', () =
       expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe('public')
     );
   });
+
+  it.each([
+    [undefined, 'passphrase', 'set-passphrase'],
+    ['passphrase', 'public', 'clear-gate'],
+  ] as const)(
+    'keeps a gate edit from %s to %s when an older list response arrives',
+    async (gateKind, access, action) => {
+      const oldPage = page([{ ...bundleRow, gateKind }]);
+      const pendingList = Promise.withResolvers<ReturnType<typeof page>>();
+      let listLoads = 0;
+      mockList.mockImplementation((query: { facets?: boolean }) => {
+        if (query.facets) return Promise.resolve(page([]));
+        listLoads += 1;
+        return listLoads === 1 ? Promise.resolve(oldPage) : pendingList.promise;
+      });
+      renderTab();
+      await screen.findByTestId('published-artifact-access-pub-1');
+      expandRow('pub-1');
+      fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+
+      // Another row setting can start a list refresh while the gate editor remains usable.
+      fireEvent.click(screen.getByTestId('published-artifact-comments-pub-1').querySelector('input')!);
+      await waitFor(() => expect(listLoads).toBe(2));
+      fireEvent.click(screen.getByTestId(`stub-panel-${action}-pub-1`));
+      await waitFor(() =>
+        expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe(access)
+      );
+
+      await act(async () => {
+        pendingList.resolve(oldPage);
+        await pendingList.promise;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe(access);
+      expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+      expect(listLoads).toBe(2);
+    }
+  );
 });
 
 describe('PublishedArtifactsTabContent - list / grid view', () => {
@@ -1417,6 +1469,44 @@ describe('PublishedArtifactsTabContent - grid dialog, facet labels and container
     expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
     expect(listCalls()).toBe(listBefore);
   });
+
+  it.each([
+    [undefined, 'passphrase', 'set-passphrase'],
+    ['passphrase', 'public', 'clear-gate'],
+  ] as const)(
+    'keeps the card badge for a gate edit from %s to %s when an older list response arrives',
+    async (gateKind, access, action) => {
+      const oldPage = page([{ ...bundleRow, gateKind }]);
+      const pendingList = Promise.withResolvers<ReturnType<typeof page>>();
+      let listLoads = 0;
+      mockList.mockImplementation((query: { facets?: boolean }) => {
+        if (query.facets) return Promise.resolve(page([]));
+        listLoads += 1;
+        return listLoads === 1 ? Promise.resolve(oldPage) : pendingList.promise;
+      });
+      renderTab();
+      await screen.findByTestId('published-artifact-pub-1');
+      fireEvent.click(screen.getByTestId('published-artifacts-view-grid'));
+      fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+      fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+
+      fireEvent.click(screen.getByTestId('published-artifact-comments-pub-1').querySelector('input')!);
+      await waitFor(() => expect(listLoads).toBe(2));
+      fireEvent.click(screen.getByTestId(`stub-panel-${action}-pub-1`));
+      await waitFor(() =>
+        expect(screen.getByTestId('published-artifact-card-access-pub-1').getAttribute('data-access')).toBe(access)
+      );
+
+      await act(async () => {
+        pendingList.resolve(oldPage);
+        await pendingList.promise;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+      expect(screen.getByTestId('published-artifact-card-access-pub-1').getAttribute('data-access')).toBe(access);
+      expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+      expect(listLoads).toBe(2);
+    }
+  );
 
   it('labels the Type facet chips with names for people, and still filters on the raw kind', async () => {
     mockList.mockResolvedValue(

@@ -53,6 +53,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/sessions',
   },
+  createTextRefinement: {
+    method: 'POST',
+    path: '/api/v1/text-refinements',
+  },
   createTranscription: {
     method: 'POST',
     path: '/api/v1/transcriptions',
@@ -129,6 +133,14 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions/{version}',
   },
+  getClaudeMarketplace: {
+    method: 'GET',
+    path: '/api/v1/skills/market/claude-marketplace.json',
+  },
+  getClaudePluginZip: {
+    method: 'GET',
+    path: '/api/v1/skills/market/{id}/claude-plugin.zip',
+  },
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',
@@ -168,6 +180,10 @@ export const operations = {
   getVideoGeneration: {
     method: 'GET',
     path: '/api/v1/video-generations/{id}',
+  },
+  getWhatsNewMedia: {
+    method: 'GET',
+    path: '/api/v1/whats-new/media/{id}/{asset}',
   },
   listAgents: {
     method: 'GET',

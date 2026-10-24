@@ -14,10 +14,72 @@
  * the caller across iterations (mirrors the in-place-mutation contract the call
  * site relies on).
  */
-import { getTurnsCost, type ModelInfo, type TurnUsage } from '@bike4mind/common';
+import { buildUsagePriceStamp, getTurnsCost, reservationOutputTokens, usdToCredits, type ModelInfo, type TurnUsage } from '@bike4mind/common';
 import type { IIterationBilling } from '@bike4mind/database';
-import type { UsageEventStatus } from '@bike4mind/common';
+import type { UsageEventStatus, UsagePriceStamp } from '@bike4mind/common';
 import { buildEarlyStopStamp } from '@bike4mind/services/llm';
+
+type BalanceRepository = {
+  findById(id: string): Promise<{ currentCredits?: number | null } | null | undefined>;
+};
+
+export async function readPayerBalance(
+  payer: { organizationId?: string | null; userId: string },
+  repositories: { organizations: BalanceRepository; users: BalanceRepository }
+): Promise<number> {
+  const holder = payer.organizationId
+    ? await repositories.organizations.findById(payer.organizationId)
+    : await repositories.users.findById(payer.userId);
+  return holder?.currentCredits ?? 0;
+}
+
+/** Input tokens (cached or not) the last provider request of a run sent; 0 before the first. */
+export function lastRequestInputTokens(turns: readonly TurnUsage[] | undefined): number {
+  const last = turns?.at(-1);
+  return last ? last.inputTokens + (last.cacheReadInputTokens ?? 0) + (last.cacheCreationInputTokens ?? 0) : 0;
+}
+
+/**
+ * Credits the next iteration can cost: a request as large as the last one the run sent, priced
+ * uncached, plus a reservation-sized reply. The executor checks the payer's live balance against
+ * it before every iteration (and at admission), so a run stops before an iteration it cannot pay
+ * for instead of settling the balance below zero.
+ */
+export function nextIterationCredits(modelInfo: ModelInfo, inputTokens: number): number {
+  const outputTokens = reservationOutputTokens(modelInfo.max_tokens);
+  return usdToCredits(getTurnsCost(modelInfo, [{ inputTokens, outputTokens }]));
+}
+
+/**
+ * The credits the next iteration needs when `balance` cannot cover them, else undefined. The one
+ * rule behind the per-iteration gate and in-process subagent admission.
+ */
+export function uncoveredIterationCredits(
+  balance: number,
+  modelInfo: ModelInfo,
+  inputTokens: number
+): number | undefined {
+  const required = nextIterationCredits(modelInfo, inputTokens);
+  return balance < required ? required : undefined;
+}
+
+/**
+ * The `checkInsufficientCredits` hook for in-process delegations: true when the payer's live
+ * balance (read per call, like the per-iteration gate) cannot cover a first iteration on the
+ * subagent's model. Undefined when credits are not enforced. A model absent from `models` cannot
+ * be priced and is admitted; the orchestrator only resolves catalog models.
+ */
+export function buildInProcessBalanceCheck(
+  enforceCredits: boolean,
+  models: ModelInfo[],
+  loadBalance: () => Promise<number>
+): ((model: string) => Promise<boolean>) | undefined {
+  if (!enforceCredits) return undefined;
+  return async model => {
+    const modelInfo = models.find(m => m.id === model);
+    return modelInfo ? uncoveredIterationCredits(await loadBalance(), modelInfo, 0) !== undefined : false;
+  };
+}
 
 /** Last-billed cumulative totals; mutated in place as iterations settle. */
 export type BillingCounters = {
@@ -163,16 +225,18 @@ export function takeToolUsage(pending: PendingToolUsage): ToolUsageTotals {
  */
 export type IterationBillingEffects = {
   deductCredits: (deltas: IterationTokenDeltas & { credits: number }) => Promise<void>;
-  recordUsageEvent: (event: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedInputTokens: number;
-    cacheWriteTokens: number;
-    costUsd: number;
-    creditsCharged: number;
-    status: UsageEventStatus;
-    latencyMs: number;
-  }) => void;
+  recordUsageEvent: (
+    event: UsagePriceStamp & {
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens: number;
+      cacheWriteTokens: number;
+      costUsd: number;
+      creditsCharged: number;
+      status: UsageEventStatus;
+      latencyMs: number;
+    }
+  ) => void;
   addIterationBilling: (billing: IIterationBilling) => Promise<void>;
   sendProgress: (creditsUsed: number, iterationIndex: number) => Promise<void>;
   logGuardTrip: (details: { requestInputTokens: number; contextWindow: number }) => void;
@@ -324,7 +388,8 @@ export function reseedCounters(
 /**
  * Bill one completed iteration against the model's cumulative cost, advancing
  * `counters` in place. No-op unless the cost has grown since the last billed
- * iteration; a shrinking agent cost is surfaced with a warn (`logNegativeDelta`).
+ * iteration or new tokens were spent at zero cost (recorded with zero credits);
+ * a shrinking agent cost is surfaced with a warn (`logNegativeDelta`).
  */
 export async function billIteration(params: BillIterationParams): Promise<void> {
   const { iterationIndex, checkpoint, counters, modelInfo, model, startTime, effects } = params;
@@ -361,7 +426,16 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
       previousCumulativeCost: counters.cumulativeCost,
     });
   }
-  if (costDelta <= 0) return;
+  // A zero-priced model still made real provider calls: settle it as a zero-credit iteration so
+  // the usage event (one row per settled iteration) and the billing record are
+  // written, rather than skipping it and carrying its tokens into the next iteration's delta.
+  const agentDeltas = [deltas.inputTokens, deltas.outputTokens, deltas.cacheReadTokens, deltas.cacheWriteTokens];
+  const zeroCostWork =
+    costDelta === 0 &&
+    agentCostDelta === 0 &&
+    agentDeltas.every(tokens => tokens >= 0) &&
+    [...agentDeltas, toolUsage.inputTokens, toolUsage.outputTokens].some(tokens => tokens > 0);
+  if (costDelta <= 0 && !zeroCostWork) return;
 
   // Sanity backstop (#657): one provider request's input tokens can never exceed the
   // model's context window (totalInputTokens excludes cache-read/write, so this compares
@@ -456,6 +530,9 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
     cacheWriteTokens: chargedCacheWriteTokens,
     costUsd: costDelta,
     creditsCharged: credits,
+    // The agent model's rates for the requests priced above; tool spend in costUsd is priced
+    // at the tools' own models and is not part of this stamp.
+    ...buildUsagePriceStamp(modelInfo, { turns }),
     status: buildEarlyStopStamp(checkpoint.finishReason)?.usageEventStatus ?? 'ok',
     latencyMs: effects.now() - startTime,
   });
@@ -494,7 +571,7 @@ export type SubagentMediaSettlementEffects = {
 
 /**
  * Charges the generated-media USD a dispatched subagent accrued via `foldGeneratedMediaUsd`.
- * That path has no per-iteration loop (and no token deduction yet), so media settles once,
+ * That path has no per-iteration loop, so media settles once,
  * after the run, on every exit: the provider cost was paid whether the run completed, was
  * aborted or threw. Drains `pending` so a second call cannot double-charge. Returns the
  * credits charged.

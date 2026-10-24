@@ -128,7 +128,9 @@ export function describeChipRow(
    */
   inUse = false,
   /** The user's home folder, for `~` in path lines; empty until it has been read. */
-  home = ''
+  home = '',
+  /** The worktree is being cut right now: fixed as if in use, and the worktree chip says so. */
+  preparing = false
 ): ChipRowState {
   if (!project) {
     return {
@@ -153,31 +155,35 @@ export function describeChipRow(
   }
 
   const relocated = project.workingDirectory !== project.directory;
+  const worktree = preparing
+    ? { label: PREPARING_WORKTREE, tooltip: preparingTooltip(project), enabled: false }
+    : {
+        label: 'worktree',
+        tooltip: worktreeTooltip(project, branches, relocated, inUse, home),
+        enabled: branches.isRepository && !inUse,
+      };
+  const fixed = inUse || preparing;
 
   return {
     unset: false,
-    locked: inUse,
+    locked: fixed,
     folder: {
       label: project.name,
       tooltip: withPath(
-        inUse ? `Folder ${FIXED} Start a new session to switch.` : 'Folder this session works in. Click to change.',
+        fixed ? `Folder ${FIXED} Start a new session to switch.` : 'Folder this session works in. Click to change.',
         project.directory,
         home
       ),
-      enabled: !inUse,
+      enabled: !fixed,
     },
     branch: {
       label: branchLabel(project, branches),
       // Locked like the folder: a menu whose every entry is disabled is a dead end to click into.
       // What it used to say - the branch, and why it cannot change - moves into the tooltip.
-      tooltip: inUse ? lockedBranchTooltip(project, branches) : branchTooltip(project, branches),
-      enabled: !inUse,
+      tooltip: fixed ? lockedBranchTooltip(project, branches) : branchTooltip(project, branches),
+      enabled: !fixed,
     },
-    worktree: {
-      label: 'worktree',
-      tooltip: worktreeTooltip(project, branches, relocated, inUse, home),
-      enabled: branches.isRepository && !inUse,
-    },
+    worktree,
     // Never locked: a context folder is one more root, not where commands run, so adding one
     // leaves nothing in the transcript describing a place the session no longer names.
     addContext: {
@@ -185,7 +191,7 @@ export function describeChipRow(
       tooltip: 'Share another folder this session may read and edit (or type /add-dir).',
       enabled: true,
     },
-    branchNotice: inUse ? `Branch ${FIXED}` : branchNotice(project, branches),
+    branchNotice: fixed ? `Branch ${FIXED}` : branchNotice(project, branches),
   };
 }
 
@@ -214,9 +220,19 @@ function worktreeTooltip(
   return 'Run this session on its own branch, in its own git worktree.';
 }
 
+export const PREPARING_WORKTREE = 'Preparing worktree...';
+
+function preparingTooltip(project: ChatProject): string {
+  const cut = project.workspaceBranch
+    ? `${project.workspaceBranch} from ${project.branch}`
+    : `a branch from ${project.branch}`;
+  return `Cutting ${cut} and its worktree. The first turn starts as soon as it is ready.`;
+}
+
 /** The branch the session is on, or will be cut from, or an admission that there is neither. */
 function branchLabel(project: ChatProject, { checkedOut }: BranchLookup): string {
-  if (awaitsWorktree(project) && project.branch) return project.branch;
+  // A started session's own branch is named before it exists; a toggle session's is not.
+  if (awaitsWorktree(project) && project.branch) return project.workspaceBranch || project.branch;
   if (checkedOut === undefined) return READING_BRANCH;
   return checkedOut ?? 'no branch';
 }

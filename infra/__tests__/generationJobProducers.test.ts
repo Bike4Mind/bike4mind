@@ -38,6 +38,10 @@ const PRODUCERS = [
     name: 'agent executor',
     block: cut(readInfra('agentExecutor.ts'), 'const SHARED_AGENT_EXECUTOR_CONFIG = {', '\n};'),
   },
+  {
+    name: 'slack quest processor',
+    block: cut(readInfra('functions.ts'), "new sst.aws.Function('SlackQuestProcessor'", '\n});'),
+  },
 ];
 
 describe.each(PRODUCERS)('$name as a generation job producer', ({ block }) => {

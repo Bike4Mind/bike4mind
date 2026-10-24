@@ -53,6 +53,7 @@ function renderComplete(overrides: Partial<UploadProgress>) {
 describe('UploadStep — completion summary', () => {
   afterEach(() => {
     useDataLakeWizardStore.getState().resetWizard();
+    vi.restoreAllMocks();
   });
 
   it('claims chunked and vectorized only when both counts reach the total', () => {

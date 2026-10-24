@@ -53,7 +53,14 @@ const BillingDeepLinkModals = () => {
   const { view, focusSection, closeView } = useBillingView();
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
 
-  return <BillingModal open={isCreditsEnabled && !!view} focus={focusSection ? view : undefined} onClose={closeView} />;
+  return (
+    <BillingModal
+      open={isCreditsEnabled && !!view}
+      focus={focusSection ? view : undefined}
+      entry={focusSection ? 'deep_link' : 'profile_menu'}
+      onClose={closeView}
+    />
+  );
 };
 
 export default BillingDeepLinkModals;

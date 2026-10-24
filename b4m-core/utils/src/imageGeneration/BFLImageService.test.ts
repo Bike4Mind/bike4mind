@@ -63,7 +63,7 @@ describe('BFLImageService — does not leak the API key to logs (#9230)', () => 
   });
 });
 
-describe('BFLImageService — safety_tolerance hard cap', () => {
+describe('BFLImageService - request body', () => {
   let postSpy: ReturnType<typeof vi.spyOn>;
   let service: BFLImageService;
 
@@ -113,5 +113,23 @@ describe('BFLImageService — safety_tolerance hard cap', () => {
     await service.transform('base64-image', 'make it a watercolor', { safety_tolerance: 6 });
 
     expect(submittedBody().safety_tolerance).toBe(BFL_SAFETY_TOLERANCE.MAX);
+  });
+
+  it('generate() forwards prompt_upsampling: true to the BFL API', async () => {
+    await service.generate('a friendly cat', { prompt_upsampling: true });
+
+    expect(submittedBody().prompt_upsampling).toBe(true);
+  });
+
+  it('generate() forwards prompt_upsampling: false to the BFL API', async () => {
+    await service.generate('a friendly cat', { prompt_upsampling: false });
+
+    expect(submittedBody().prompt_upsampling).toBe(false);
+  });
+
+  it('generate() defaults prompt_upsampling to false when it is omitted', async () => {
+    await service.generate('a friendly cat', {});
+
+    expect(submittedBody().prompt_upsampling).toBe(false);
   });
 });

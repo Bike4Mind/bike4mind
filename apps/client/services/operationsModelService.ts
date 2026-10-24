@@ -45,6 +45,18 @@ export const getEffectiveApiKeyByBackend = async (userId: string, backend: Model
   return (await apiKeyService.getEffectiveApiKey(userId, { type: apiKeyType }, dbAdapters)) || null;
 };
 
+/**
+ * This deployment has no operations text model it can actually call (no model in the
+ * catalog, or no usable backend key). A typed signal rather than a message, so callers
+ * that advertise `provider_not_configured` can map it without matching strings.
+ */
+export class OperationsModelUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OperationsModelUnavailableError';
+  }
+}
+
 export class OperationsModelService {
   private static logger = new Logger({ metadata: { service: 'OperationsModelService' } });
 
@@ -116,7 +128,7 @@ export class OperationsModelService {
       modelInfo = OperationsModelService.pickAnyTextModel(models);
     }
     if (!modelInfo) {
-      throw new Error('No text models available for operations');
+      throw new OperationsModelUnavailableError('No text models available for operations');
     }
     return modelInfo;
   }
@@ -210,7 +222,7 @@ export class OperationsModelService {
 
     const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger });
     if (!llm) {
-      throw new Error(`Failed to initialize operations text model ${modelInfo.id}`);
+      throw new OperationsModelUnavailableError(`Failed to initialize operations text model ${modelInfo.id}`);
     }
 
     this.logger.info(`Using operations text model: ${modelInfo.id} (${modelInfo.backend})`);
@@ -267,7 +279,7 @@ export class OperationsModelService {
 
       if (!llm) {
         this.logger.error(`Failed to initialize LLM for operations model ${modelInfo.id}`);
-        throw new Error(`Failed to initialize operations model ${modelInfo.id}`);
+        throw new OperationsModelUnavailableError(`Failed to initialize operations model ${modelInfo.id}`);
       }
 
       let imageModelInfo = models.find(m => m.id === config.imageModelId);
@@ -350,7 +362,9 @@ export class OperationsModelService {
     });
 
     if (!llm) {
-      throw new Error(`Failed to initialize hardcoded default operations model ${modelInfo.id}`);
+      throw new OperationsModelUnavailableError(
+        `Failed to initialize hardcoded default operations model ${modelInfo.id}`
+      );
     }
 
     this.logger.info(`Using hardcoded default operations model: ${modelInfo.id} (${modelInfo.backend})`);
@@ -461,7 +475,7 @@ export class OperationsModelService {
     });
 
     if (!llm) {
-      throw new Error(`Failed to initialize default operations model ${modelInfo.id}`);
+      throw new OperationsModelUnavailableError(`Failed to initialize default operations model ${modelInfo.id}`);
     }
 
     this.logger.info(`Using default operations model: ${modelInfo.id} (${modelInfo.backend})`);

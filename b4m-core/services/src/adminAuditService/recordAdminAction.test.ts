@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AuditActor, AuditContext, AuditEntry, AuditTarget, NewAdminAuditEntry } from '@bike4mind/common';
+import type { AuditActor, StoredAuditContext, AuditEntry, AuditTarget, NewAdminAuditEntry } from '@bike4mind/common';
 import { recordAdminAction, type RecordAdminActionInput } from './recordAdminAction';
 
 const actor: AuditActor = { kind: 'user', scope: 'platform', userId: 'u1', name: 'Admin', wasAdmin: true };
-const context: AuditContext = { source: 'admin_ui' };
+const context: StoredAuditContext = { source: 'admin_ui' };
 const userTarget: AuditTarget = { kind: 'user', id: 'u2', displayName: 'User' };
 const orgTarget: AuditTarget = { kind: 'organization', id: 'org1', displayName: 'Org' };
 
@@ -94,5 +94,64 @@ describe('recordAdminAction', () => {
       expect.objectContaining({ action: 'org.seats.changed' })
     );
     spy.mockRestore();
+  });
+
+  describe('credit grant thresholds', () => {
+    const policy = (grantedToday = 0) => ({
+      singleGrantCredits: 50_000,
+      dailyTotalCredits: 200_000,
+      sumCreditsGranted: vi.fn(async () => grantedToday),
+    });
+    const grantInput = (credits: number, overrides: Partial<RecordAdminActionInput> = {}) =>
+      baseInput({ action: 'user.credits.adjusted', target: userTarget, details: { credits }, ...overrides });
+
+    it('escalates a single grant above the threshold to critical and says why', async () => {
+      const { append, adapters } = setup();
+      await recordAdminAction(grantInput(50_001), { ...adapters, creditGrantPolicy: policy() });
+      expect(append.mock.calls[0][0]).toMatchObject({
+        severity: 'critical',
+        details: { credits: 50_001, grantThresholdExceeded: { kind: 'singleGrant', limitCredits: 50_000 } },
+      });
+    });
+
+    it('escalates a grant that takes the actor past the daily total', async () => {
+      const { append, adapters } = setup();
+      const creditGrantPolicy = policy(199_000);
+      const occurredAt = new Date('2026-10-21T12:00:00.000Z');
+      await recordAdminAction(grantInput(1_001, { occurredAt }), { ...adapters, creditGrantPolicy });
+      expect(creditGrantPolicy.sumCreditsGranted).toHaveBeenCalledWith('u1', new Date('2026-10-20T12:00:00.000Z'));
+      expect(append.mock.calls[0][0]).toMatchObject({
+        severity: 'critical',
+        details: { grantThresholdExceeded: { kind: 'dailyTotal', limitCredits: 200_000 } },
+      });
+    });
+
+    it('keeps the catalogue severity at or under both thresholds', async () => {
+      const { append, adapters } = setup();
+      await recordAdminAction(grantInput(50_000), { ...adapters, creditGrantPolicy: policy(150_000) });
+      expect(append.mock.calls[0][0]).toMatchObject({ severity: 'notice', details: { credits: 50_000 } });
+      expect(append.mock.calls[0][0].details).not.toHaveProperty('grantThresholdExceeded');
+    });
+
+    it('never escalates a deduction and needs no policy for one', async () => {
+      const { append, adapters } = setup();
+      await recordAdminAction(grantInput(-90_000), adapters);
+      expect(append.mock.calls[0][0]).toMatchObject({ severity: 'notice' });
+    });
+
+    it('applies only the single-grant line to an actor with no user id', async () => {
+      const { append, adapters } = setup();
+      const creditGrantPolicy = policy(1_000_000);
+      const scriptActor = { kind: 'script' as const, scope: 'platform' as const, name: 'backfill', wasAdmin: false };
+      await recordAdminAction(grantInput(10, { actor: scriptActor }), { ...adapters, creditGrantPolicy });
+      expect(creditGrantPolicy.sumCreditsGranted).not.toHaveBeenCalled();
+      expect(append.mock.calls[0][0]).toMatchObject({ severity: 'notice' });
+    });
+
+    it('fails a grant loudly when the caller passed no policy', async () => {
+      const { append, adapters } = setup();
+      await expect(recordAdminAction(grantInput(10), adapters)).rejects.toThrow(/creditGrantPolicy/);
+      expect(append).not.toHaveBeenCalled();
+    });
   });
 });

@@ -16,15 +16,28 @@ import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { StripeEvents } from '@server/utils/eventBus';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { customerExists, CustomerType, isStripeConfigured, stripe } from '@server/integrations/stripe/stripe';
+import {
+  customerExists,
+  CustomerType,
+  isStripeConfigured,
+  stripe,
+} from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
+import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
-import { emitPurchaseForSourceProducts } from '@server/analytics/signupEvents';
+import { emitBillingEvent, emitPurchaseEvents } from '@server/analytics/signupEvents';
+import {
+  creditBuyerForEvents,
+  planDetails,
+  rowTimestamps,
+  subscriptionEventUser,
+  wholeDaysBetween,
+} from '@server/analytics/billingEventDetails';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
 
@@ -143,11 +156,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         req.logger
       );
 
-      // Credit the pack to the product the buyer came through, from the touches stored at
-      // signup. Sent on a redelivery too: the eventId is keyed on the payment intent, so the
-      // receiver keeps one event, and a first attempt that timed out gets another chance.
-      // Never throws, so it cannot fail a delivery whose credits already landed.
-      await emitPurchaseForSourceProducts({
+      // Tell the host, and the product the buyer came through (from the touches stored at
+      // signup), about the pack. Sent on a redelivery too: the eventId is keyed on the payment
+      // intent, so the receiver keeps one event, and a first attempt that timed out gets another
+      // chance. Never throws, so it cannot fail a delivery whose credits already landed.
+      await emitPurchaseEvents({
         user,
         paymentId: intent.id,
         kind: 'credits',
@@ -283,6 +296,28 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       if (subscription.cancellation_details?.reason === 'payment_failed') {
         await notifyCanceledForNonPayment(updated, req.logger);
       }
+
+      // Churn, whoever ended it: an in-app cancel, the Billing Portal, a period-end cancel taking
+      // effect, or Stripe giving up on payment. This is the one place every path reaches. Keyed
+      // on the subscription, which ends once, so a redelivery sends the same event. Never throws.
+      // How long it ran is Stripe's start_date to ended_at, not canceled_at: on a period-end
+      // cancel, canceled_at is when the cancel was requested, which can be weeks before the end.
+      // The row's createdAt and the delivery time stand in for a payload missing either.
+      const startedAt = subscription.start_date
+        ? dayjs.unix(subscription.start_date).toDate()
+        : rowTimestamps(updated).createdAt;
+      const endedAt = subscription.ended_at ? dayjs.unix(subscription.ended_at).toDate() : new Date();
+      const daysSubscribed = wholeDaysBetween(startedAt, endedAt);
+      await emitBillingEvent({
+        user: await subscriptionEventUser(updated),
+        event: 'subscription_ended',
+        occurrence: subscription.id,
+        metadata: {
+          reason: subscription.cancellation_details?.reason ?? 'unknown',
+          ...planDetails(updated.priceId),
+          ...(daysSubscribed !== undefined && { daysSubscribed }),
+        },
+      });
 
       break;
     }
@@ -603,6 +638,24 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       await notifyPaymentFailed(updated, invoice, req.logger);
 
+      // Each failed attempt is its own event: the row comes back on every retry, so the attempt
+      // number goes into the occurrence, and a redelivery of the same attempt sends the same id.
+      // Nothing for an invoice with nothing due. Never throws.
+      if (invoice.amount_due > 0 && invoice.currency) {
+        await emitBillingEvent({
+          user: await subscriptionEventUser(updated),
+          event: 'payment_failed',
+          occurrence: `${invoice.id}:${invoice.attempt_count ?? 0}`,
+          metadata: {
+            kind: 'subscription',
+            value: invoice.amount_due / minorUnitsPerMajor(invoice.currency),
+            currency: invoice.currency.toUpperCase(),
+            attempt: invoice.attempt_count ?? 0,
+            ...(invoice.billing_reason && { billingReason: invoice.billing_reason }),
+          },
+        });
+      }
+
       break;
     }
 
@@ -611,15 +664,39 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       // Only act if credits were pre-allocated for this payment intent
       const failedTx = await creditTransactionRepository.findByPaymentIntentId(intent.id);
-      if (!failedTx) {
+      if (failedTx) {
+        // Mark transaction as failed (idempotent - no unique constraint needed here)
+        await creditTransactionRepository.updateTransactionStatus(intent.id, CreditPurchaseStatus.Failed);
+
+        req.logger.info(`Marked credit transaction ${failedTx.id} as failed for payment_intent ${intent.id}`);
+      } else {
         req.logger.debug(`No pre-allocated credits found for failed payment_intent ${intent.id}, skipping`);
-        break;
       }
 
-      // Mark transaction as failed (idempotent - no unique constraint needed here)
-      await creditTransactionRepository.updateTransactionStatus(intent.id, CreditPurchaseStatus.Failed);
-
-      req.logger.info(`Marked credit transaction ${failedTx.id} as failed for payment_intent ${intent.id}`);
+      // A failed credit-pack payment, reported whether or not the ledger above had a row: it only
+      // ever holds completed purchases (grantCreditPurchase writes on success, and start-payment
+      // writes nothing), so a real failure finds none. After the ledger work, so a slow or broken
+      // emit cannot hold it up. The same filters as payment_intent.succeeded keep subscription
+      // intents (invoice.payment_failed reports those) and other stages' intents out. One event
+      // per failed confirmation, keyed on the Stripe event, which a redelivery repeats. Never throws.
+      if (
+        intent.metadata?.environment === Resource.App.stage &&
+        Number(intent.metadata?.credits) >= 1 &&
+        intent.amount > 0 &&
+        intent.currency
+      ) {
+        const customerId = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
+        await emitBillingEvent({
+          user: await creditBuyerForEvents(customerId, intent.metadata?.userId),
+          event: 'payment_failed',
+          occurrence: event.id,
+          metadata: {
+            kind: 'credits',
+            value: intent.amount / minorUnitsPerMajor(intent.currency),
+            currency: intent.currency.toUpperCase(),
+          },
+        });
+      }
 
       break;
     }

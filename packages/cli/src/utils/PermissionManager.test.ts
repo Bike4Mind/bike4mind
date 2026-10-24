@@ -347,6 +347,60 @@ describe('PermissionManager', () => {
     });
   });
 
+  describe('trustCommandForSession', () => {
+    it('scopes shell tools by command and leaves other tools whole-tool', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      expect(manager.isCommandScoped('bash_execute')).toBe(true);
+      expect(manager.isCommandScoped('write_shell_stdin')).toBe(true);
+      expect(manager.isCommandScoped('edit_file')).toBe(false);
+    });
+
+    it('covers only commands made of approved scopes', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      expect(manager.trustCommandForSession('bash_execute', 'git status')).toEqual(['git status']);
+      expect(manager.needsPermission('bash_execute', { command: 'git status -s' })).toBe(false);
+      expect(manager.needsPermission('bash_execute', { command: 'git log' })).toBe(true);
+      expect(manager.needsPermission('bash_execute', { command: 'curl example.com' })).toBe(true);
+      expect(manager.needsPermission('bash_execute')).toBe(true);
+      expect(manager.isSessionTrusted('bash_execute')).toBe(false);
+    });
+
+    it.each([
+      ['rg pattern', 'rg --hostname-bin=/tmp/runner --heading pattern'],
+      ['rg pattern', 'rg $OPTIONS pattern'],
+      ['rg pattern', 'rg --* pattern'],
+      ['git log', 'git log --output=/tmp/out'],
+      ['sort names.txt', 'sort $OPTIONS names.txt'],
+      ['date', 'date -s 2026-10-22'],
+      ['file README.md', 'file -C -m rules'],
+      ['npm test', 'npm test --script-shell=/tmp/runner'],
+      ['pnpm test', 'pnpm test --dir=../other'],
+    ])('requires approval for %s escalating to %s', (approved, attempted) => {
+      const manager = new PermissionManager(new ToolCatalog());
+      expect(manager.trustCommandForSession('bash_execute', approved)).not.toBeNull();
+      expect(manager.needsPermission('bash_execute', { command: approved })).toBe(false);
+      expect(manager.needsPermission('bash_execute', { command: attempted })).toBe(true);
+    });
+
+    it('remembers nothing for a command it cannot scope, or for a denied tool', () => {
+      const manager = new PermissionManager(new ToolCatalog(), [], ['bash_execute']);
+      expect(manager.trustCommandForSession('bash_execute', 'git status')).toBeNull();
+      expect(manager.needsPermission('bash_execute', { command: 'git status' })).toBe(true);
+
+      const open = new PermissionManager(new ToolCatalog());
+      expect(open.trustCommandForSession('bash_execute', 'curl example.com')).toBeNull();
+      expect(open.needsPermission('bash_execute', { command: 'curl example.com' })).toBe(true);
+      expect(open.trustCommandForSession('write_shell_stdin', 'ls')).toBeNull();
+    });
+
+    it('is cleared with the rest of session trust', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      manager.trustCommandForSession('bash_execute', 'git status');
+      manager.clearSessionTrust();
+      expect(manager.needsPermission('bash_execute', { command: 'git status' })).toBe(true);
+    });
+  });
+
   describe('clearSessionTrust', () => {
     it('should clear all session-trusted tools', () => {
       const manager = new PermissionManager(new ToolCatalog());

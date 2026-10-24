@@ -43,7 +43,7 @@ vi.mock('@bike4mind/server-utils/utils/modelResolvers', () => ({
   getApiKeyTypeFromBackend: vi.fn(),
 }));
 
-const { OperationsModelService } = await import('./operationsModelService');
+const { OperationsModelService, OperationsModelUnavailableError } = await import('./operationsModelService');
 
 const model = (id: string, type: string, backend: ModelBackend): ModelInfo => ({ id, type, backend }) as ModelInfo;
 
@@ -114,9 +114,11 @@ describe('OperationsModelService.getOperationsTextModel', () => {
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noCloudKeys, ollama: null });
     mockGetAvailableModels.mockResolvedValue([]);
 
-    await expect(OperationsModelService.getOperationsTextModel()).rejects.toThrow(
-      'No text models available for operations'
-    );
+    const pending = OperationsModelService.getOperationsTextModel();
+
+    await expect(pending).rejects.toThrow('No text models available for operations');
+    // Callers map this class to provider_not_configured, so the type is part of the contract.
+    await expect(pending).rejects.toBeInstanceOf(OperationsModelUnavailableError);
   });
 
   it('fails with a named error when the picked model has no usable backend', async () => {
@@ -125,9 +127,10 @@ describe('OperationsModelService.getOperationsTextModel', () => {
     mockGetAvailableModels.mockResolvedValue([GPT_MINI]);
     mockGetLlmByModel.mockReturnValue(null);
 
-    await expect(OperationsModelService.getOperationsTextModel()).rejects.toThrow(
-      'Failed to initialize operations text model gpt-4o-mini'
-    );
+    const pending = OperationsModelService.getOperationsTextModel();
+
+    await expect(pending).rejects.toThrow('Failed to initialize operations text model gpt-4o-mini');
+    await expect(pending).rejects.toBeInstanceOf(OperationsModelUnavailableError);
   });
 });
 
@@ -183,5 +186,30 @@ describe('OperationsModelService.getOperationsModel without the configured backe
       },
     });
     expect(options).toEqual({ upsert: true });
+  });
+
+  // The outer catch swallows the first two typed throws and retries the hardcoded
+  // default; this is the throw that reaches the caller, so it must stay typed too.
+  it('surfaces a typed error when even the hardcoded fallback has no usable backend', async () => {
+    mockGetAvailableModels.mockResolvedValue([LEGACY_HAIKU]);
+    mockGetLlmByModel.mockReturnValue(null);
+
+    const pending = OperationsModelService.getOperationsModel();
+
+    await expect(pending).rejects.toThrow('Failed to initialize hardcoded default operations model');
+    await expect(pending).rejects.toBeInstanceOf(OperationsModelUnavailableError);
+  });
+
+  // Only the no-model states are typed. A DB/network failure is not "unconfigured", and the
+  // route maps the type to provider_not_configured - so it must stay the original error.
+  it('rethrows a dependency failure as itself, not as the typed unavailable error', async () => {
+    const dbDown = new Error('MongoNetworkError');
+    mockGetEffectiveLLMApiKeys.mockRejectedValue(dbDown);
+    mockGetAvailableModels.mockResolvedValue([LEGACY_HAIKU]);
+
+    const pending = OperationsModelService.getOperationsModel();
+
+    await expect(pending).rejects.toBe(dbDown);
+    await expect(pending).rejects.not.toBeInstanceOf(OperationsModelUnavailableError);
   });
 });

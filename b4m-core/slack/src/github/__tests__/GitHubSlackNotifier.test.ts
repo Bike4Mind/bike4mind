@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Use vi.hoisted to define mocks before vi.mock hoisting
 const {
+  mockAccounts,
+  mockDestination,
   mockLogger,
   mockUserFind,
   mockUserFindById,
@@ -12,6 +14,8 @@ const {
   mockSendMessage,
   mockFindActiveSubscriberUserIds,
 } = vi.hoisted(() => ({
+  mockAccounts: vi.fn(),
+  mockDestination: vi.fn(),
   mockLogger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -32,6 +36,7 @@ const {
 
 vi.mock('../../di/registry', () => ({
   getSlackDb: () => ({
+    McpServer: { find: (...args: unknown[]) => ({ select: () => mockAccounts(...args) }) },
     User: {
       find: (...args: unknown[]) => ({ select: () => mockUserFind(...args) }),
       findById: (...args: unknown[]) => ({ select: () => mockUserFindById(...args) }),
@@ -53,6 +58,8 @@ vi.mock('../../di/registry', () => ({
     },
   }),
 }));
+
+vi.mock('../../notificationDestination', () => ({ resolveNotificationDestination: mockDestination }));
 
 vi.mock('../../SlackClient', () => ({
   SlackClient: vi.fn().mockImplementation(function () {
@@ -100,8 +107,14 @@ describe('GitHubSlackNotifier', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    notifier = new GitHubSlackNotifier(mockLogger as unknown as Logger);
+    notifier = new GitHubSlackNotifier(mockLogger as unknown as Logger, 'user-1');
 
+    mockAccounts.mockResolvedValue([{ userId: 'user-1' }]);
+    mockDestination.mockImplementation(async (_userId: string, channelId?: string) => ({
+      botToken: 'xoxb-test-token',
+      channel: channelId ?? 'U123SLACK',
+      slackTeamId: 'T123',
+    }));
     // Default: workspace with bot token
     mockFindAllActiveWithCredentials.mockResolvedValue([{ id: 'ws-1', slackBotToken: 'xoxb-test-token' }]);
 
@@ -121,13 +134,15 @@ describe('GitHubSlackNotifier', () => {
 
       await notifier.notify('prOpened', ['OctoCat', 'ALICE'], buildTestMessage);
 
-      expect(mockUserFind).toHaveBeenCalledWith(
+      expect(mockAccounts).toHaveBeenCalledWith(
         expect.objectContaining({
-          'slackSettings.githubNotifications.githubUsername': {
-            $in: ['octocat', 'alice'],
-          },
+          userId: { $in: ['user-1'] },
+          name: 'github',
+          enabled: true,
+          'metadata.githubLogin': { $in: [/^octocat$/i, /^alice$/i] },
         })
       );
+      expect(mockUserFind).toHaveBeenCalledWith(expect.objectContaining({ _id: { $in: ['user-1'] } }));
     });
 
     it('should log debug and return when no matching users found', async () => {
@@ -144,13 +159,33 @@ describe('GitHubSlackNotifier', () => {
 
     it('should return when no bot token available', async () => {
       mockUserFind.mockResolvedValue([createMockUser()]);
-      mockFindAllActiveWithCredentials.mockResolvedValue([]);
+      mockUserFindById.mockResolvedValue(createMockUser());
+      mockDestination.mockRejectedValue(new Error('The linked Slack workspace is unavailable'));
 
       await notifier.notify('prOpened', ['octocat'], buildTestMessage);
 
-      expect(mockLogger.warn).toHaveBeenCalledWith('[GITHUB-NOTIFY] No active Slack workspace with bot token');
+      expect(mockLogger.error).toHaveBeenCalledWith('[GITHUB-NOTIFY] Failed to notify user', expect.any(Object));
       expect(mockSendMessage).not.toHaveBeenCalled();
     });
+  });
+
+  it('refuses an unscoped webhook', async () => {
+    const unscoped = new GitHubSlackNotifier(mockLogger as unknown as Logger);
+    const result = await unscoped.notify('prOpened', ['octocat'], buildTestMessage);
+    expect(result.dispatchError).toMatch(/owner or organization scope/);
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('reauthorizes the selected channel for its recipient before sending', async () => {
+    const user = createMockUser();
+    user.slackSettings.githubNotifications.channels = { default: 'C123' };
+    mockUserFind.mockResolvedValue([user]);
+    mockUserFindById.mockResolvedValue(user);
+    mockDestination.mockRejectedValue(new Error('Membership denied'));
+    const result = await notifier.notify('prOpened', ['octocat'], buildTestMessage);
+    expect(mockDestination).toHaveBeenCalledWith('user-1', 'C123');
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(result.failedNotifications).toEqual([{ userId: 'user-1', error: 'Membership denied' }]);
   });
 
   describe('notifyUser — event filtering', () => {
@@ -491,15 +526,18 @@ describe('GitHubSlackNotifier', () => {
       expect(mockSendMessage).not.toHaveBeenCalled();
     });
 
-    it('returns dispatchError when no Slack workspace is configured', async () => {
+    it('reports a per-user failure when their Slack workspace is unavailable', async () => {
       const user = createMockUser();
       mockUserFind.mockResolvedValue([user]);
-      mockFindAllActiveWithCredentials.mockResolvedValue([]);
+      mockUserFindById.mockResolvedValue(createMockUser());
+      mockDestination.mockRejectedValue(new Error('The linked Slack workspace is unavailable'));
 
       const result = await notifier.notify('prOpened', ['octocat'], buildTestMessage);
 
       expect(result.notifiedUserIds).toEqual([]);
-      expect(result.dispatchError).toBe('No active Slack workspace with bot token');
+      expect(result.failedNotifications).toEqual([
+        { userId: 'user-1', error: 'The linked Slack workspace is unavailable' },
+      ]);
     });
 
     it('does NOT populate failedNotifications for intentionally skipped users', async () => {

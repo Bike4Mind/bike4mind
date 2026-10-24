@@ -124,6 +124,7 @@ def check_config(model):
     if not public_url(env.get('APP_URL'), 'https', origin=True) or not public_url(env.get('WEBSOCKET_URL'), 'wss'):
         failures.add('app.public-urls')
     if (any(placeholder(env.get(key)) for key in ('JWT_SECRET', 'SESSION_SECRET'))
+            or placeholder(env.get('MEMORY_KEY_SECRET'))
             or not re.fullmatch(r'[0-9a-fA-F]{64}', env.get('SECRET_ENCRYPTION_KEY') or '')
             or (env.get('SECRET_ENCRYPTION_KEY_PREVIOUS')
                 and not re.fullmatch(r'[0-9a-fA-F]{64}', env['SECRET_ENCRYPTION_KEY_PREVIOUS']))):
@@ -204,7 +205,7 @@ def check_config(model):
     for name in ('worker', 'chatcompletion', 'agentexecutor'):
         if name in services:
             worker_env = services[name].get('environment') or {}
-            if any(worker_env.get(key) != env.get(key) for key in ('JWT_SECRET', 'SESSION_SECRET', 'SECRET_ENCRYPTION_KEY')):
+            if any(worker_env.get(key) != env.get(key) for key in ('JWT_SECRET', 'SESSION_SECRET', 'SECRET_ENCRYPTION_KEY', 'MEMORY_KEY_SECRET')):
                 failures.add('internal.shared-secrets')
     minio_env = (services.get('minio', {}).get('environment') or {})
     if minio_env.get('MINIO_NOTIFY_WEBHOOK_ENABLE_primary') == 'on':

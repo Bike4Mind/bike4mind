@@ -48,9 +48,11 @@ export async function logAuthAudit(
   } catch (err) {
     console.debug(`Failed to write UserAuthAuditLog (${params.event}):`, err);
   }
-  // Fire-and-forget: metric emission must never block or fail the auth hot path.
-  if (params.event === 'session_reuse_revoked') void recordSessionReuseRevoked();
-  else if (params.event === 'session_recovered') void recordSessionRecovered();
+  // Awaited: both counts feed alarms (infra/alarms.ts), and a frozen Lambda loses a pending emit.
+  // Neither is on the common refresh path - a revoke rejects the request and a recovery is a rare
+  // retry after a lost rotation response - so the extra round trip is affordable. Never rejects.
+  if (params.event === 'session_reuse_revoked') await recordSessionReuseRevoked();
+  else if (params.event === 'session_recovered') await recordSessionRecovered();
 }
 
 /**

@@ -25,6 +25,9 @@ export {
 export { restrictDuplicatePublications, type DuplicateKeeper } from './restrictDuplicatePublications';
 export {
   renderSandboxedBundle,
+  encodeBundlePath,
+  isBundlePagePath,
+  resolveBundlePath,
   type RenderSandboxedBundleInput,
   type RenderSandboxedBundleResult,
   type SandboxAsset,

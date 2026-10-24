@@ -76,7 +76,9 @@ export async function enforceCheckpointDepth(depth: number, deps: CheckpointDept
       checkpointDepth: depth,
       executionId,
     });
-    void emitMetric('Lumina5/AgentExecutor', 'CheckpointDepthWarning', 1, { executionId });
+    // Awaited: Lambda freezes once the handler returns, so a pending PutMetricData is lost or
+    // sent on a later thaw with an expired signature. emitMetric never throws.
+    await emitMetric('Lumina5/AgentExecutor', 'CheckpointDepthWarning', 1, { executionId });
   }
 
   if (verdict === 'terminate') {
@@ -84,7 +86,7 @@ export async function enforceCheckpointDepth(depth: number, deps: CheckpointDept
       checkpointDepth: depth,
       executionId,
     });
-    void emitMetric('Lumina5/AgentExecutor', 'CheckpointDepthExceeded', 1, { executionId });
+    await emitMetric('Lumina5/AgentExecutor', 'CheckpointDepthExceeded', 1, { executionId });
     await markFailed(executionId, {
       message: `Execution exceeded maximum self-dispatch depth (${MAX_CHECKPOINT_DEPTH}) - possible runaway agent loop`,
     });

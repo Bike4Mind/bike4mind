@@ -34,6 +34,12 @@ describe('isPolicyConsentRequired — P0-B consent gate', () => {
     expect(isPolicyConsentRequired(notConsented, '/api/user/accept-policies', 'POST')).toBe(false);
   });
 
+  it('permits the fixed policy-shown POST before consent while keeping generic analytics blocked', () => {
+    expect(isPolicyConsentRequired(notConsented, '/api/user/accept-policies/shown', 'POST')).toBe(false);
+    expect(isPolicyConsentRequired(notConsented, '/api/user/accept-policies/shown', 'GET')).toBe(true);
+    expect(isPolicyConsentRequired(notConsented, '/api/analytics/log-event', 'POST')).toBe(true);
+  });
+
   it('allows a user who has already recorded acceptance (real or grandfathered)', () => {
     expect(isPolicyConsentRequired({ aupAcceptedVersion: 'v1' }, '/api/sessions', 'POST')).toBe(false);
     expect(isPolicyConsentRequired({ aupAcceptedVersion: 'grandfathered' }, '/api/sessions', 'POST')).toBe(false);

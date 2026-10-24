@@ -84,11 +84,12 @@ export const getImageGeneration = (): ImageGenerationService => {
           userId,
         });
       },
-      invokeSummarizeSession: async (sessionId, trigger) => {
+      invokeSummarizeSession: async (sessionId, trigger, payerId) => {
         await SessionEvents.Summarize.publish({
           sessionId,
           callTagging: true,
           trigger,
+          payerId,
         });
       },
     });

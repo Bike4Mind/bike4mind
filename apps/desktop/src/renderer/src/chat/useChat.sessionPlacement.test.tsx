@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { ChatSessionMode, ChatSessionSummary, CreateCodeSessionResult } from '@shared/chat';
+import type { ChatSessionMode, ChatSessionSummary, ChatStreamEvent, CreateCodeSessionResult } from '@shared/chat';
 import type { CreatedSession } from '@shared/ipc';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -31,11 +31,15 @@ let host: HTMLElement | null = null;
 /** Where the new row sat on every render, so a single frame in the default list is caught. */
 type Placement = 'absent' | 'loose' | 'work';
 
-async function mount(chat: { createSession?: unknown; createCodeSession?: unknown }, mode: ChatSessionMode = 'chat') {
+async function mount(
+  chat: { createSession?: unknown; createCodeSession?: unknown; listSessions?: unknown; onStreamEvent?: unknown },
+  mode: ChatSessionMode = 'chat'
+) {
   (window as unknown as { b4m: unknown }).b4m = {
     chat: {
       listSessions: vi.fn(() => Promise.resolve([summary('old')])),
       onSessionSummary: vi.fn(() => () => {}),
+      onStreamEvent: vi.fn(() => () => {}),
       ...chat,
     },
     sidebar: { getSections: vi.fn(() => Promise.resolve(work)) },
@@ -64,11 +68,7 @@ async function mount(chat: { createSession?: unknown; createCodeSession?: unknow
   /** The failure channel every placement in these tests gets, so a silent one is caught. */
   const failed = vi.fn();
   const start = async (
-    create: (
-      sessions: SessionsController,
-      placed: (state: SidebarSectionsState) => void,
-      failed: () => void
-    ) => unknown
+    create: (sessions: SessionsController, placed: (state: SidebarSectionsState) => void, failed: () => void) => unknown
   ) => {
     if (!controller || !adopt) throw new Error('not mounted');
     const target = controller;
@@ -90,6 +90,27 @@ afterEach(() => {
 });
 
 describe('starting a session in a sidebar section', () => {
+  it('drops a failed spawned session after its final status listing still contained it', async () => {
+    let listener: ((event: ChatStreamEvent) => void) | undefined;
+    const listSessions = vi
+      .fn()
+      .mockResolvedValueOnce([summary('old'), summary('failed')])
+      .mockResolvedValue([summary('old')]);
+    const { controller } = await mount({
+      listSessions,
+      onStreamEvent: (callback: (event: ChatStreamEvent) => void) => {
+        listener = callback;
+        return () => {};
+      },
+    });
+    expect(controller()?.sessions.map(session => session.id)).toContain('failed');
+
+    await act(async () => {
+      listener?.({ type: 'spawn-failed', sessionId: 'old', title: 'failed', message: 'Could not cut worktree' });
+    });
+
+    expect(controller()?.sessions.map(session => session.id)).toEqual(['old']);
+  });
   it('draws a new Chat session inside its section from its first render', async () => {
     const createSession = vi.fn((): Promise<CreatedSession> =>
       Promise.resolve({ session: summary('fresh'), sidebarSections: placed })

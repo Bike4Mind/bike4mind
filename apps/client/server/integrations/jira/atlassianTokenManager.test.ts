@@ -71,6 +71,17 @@ describe('AtlassianTokenManager.getValidTokens refresh', () => {
     expect(Number.isNaN(saved.expiresAt.getTime())).toBe(false);
   });
 
+  it('preserves an encrypted existing refresh token when the provider omits a replacement', async () => {
+    mockTokenResponse({ access_token: 'new-access', expires_in: 3600 });
+    const result = await AtlassianTokenManager.getValidTokens('user-1');
+    expect(result?.refreshToken).toBe('old-refresh');
+    expect(userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        atlassianConnect: expect.objectContaining({ refreshToken: 'enc:old-refresh' }),
+      })
+    );
+  });
+
   it.each([
     ['access_token', { refresh_token: 'new-refresh', expires_in: 3600 }],
     ['expires_in', { access_token: 'new-access', refresh_token: 'new-refresh' }],

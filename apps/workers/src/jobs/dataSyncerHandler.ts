@@ -16,6 +16,7 @@ import { settingsMap } from '@bike4mind/common';
 interface DataSyncerEvent {
   // Whether to sync preview settings from staging on preview deploys; the syncmarker makes repeat runs skip
   syncPreviewSettings?: boolean;
+  resultVersion?: 1;
 }
 
 interface DataSyncerResponse {
@@ -23,6 +24,14 @@ interface DataSyncerResponse {
   message: string;
   previewSettingsSyncedCount?: number;
   error?: string;
+}
+
+interface StrictSeedResponse {
+  schemaVersion: 1;
+  status: 'seeded' | 'already_seeded' | 'failed' | 'misconfigured';
+  stage: string;
+  copiedCount: number;
+  marker?: { key: string; stage: string };
 }
 
 // Collections to sync from staging to preview environments
@@ -64,8 +73,10 @@ const SYNC_MARKER_KEY = 'staging-config-sync';
 
 // `skipped` names why nothing was copied, so the deploy log (which only sees the response) can tell
 // an already-synced preview from a misconfigured one.
-async function syncPreviewSettingsFromStaging(): Promise<{
+async function syncPreviewSettingsFromStaging(strict = false): Promise<{
   synced: number;
+  alreadySeeded?: boolean;
+  markerStage?: string;
   skipped?: string;
   emptyCollections?: string[];
 }> {
@@ -112,10 +123,16 @@ async function syncPreviewSettingsFromStaging(): Promise<{
     // Skip if already synced for this preview environment
     const existingMarker = await targetDb.collection(SYNC_MARKER_COLLECTION).findOne({ key: SYNC_MARKER_KEY });
     if (existingMarker) {
-      const markerDoc = existingMarker as { syncedAt?: Date };
+      const markerDoc = existingMarker as { syncedAt?: Date; stage?: string };
+      if (strict && markerDoc.stage !== stage) throw new Error('Sync marker stage does not match');
       console.log(`✓ Staging configs already synced at ${markerDoc.syncedAt?.toISOString()}, skipping`);
       console.log('  (To force re-sync, delete the marker from the syncmarkers collection)');
-      return { synced: 0, skipped: `already synced at ${markerDoc.syncedAt?.toISOString()}` };
+      return {
+        synced: 0,
+        alreadySeeded: true,
+        markerStage: markerDoc.stage,
+        skipped: `already synced at ${markerDoc.syncedAt?.toISOString()}`,
+      };
     }
 
     await sourceClient.connect();
@@ -205,6 +222,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{
           insertedCount += batchResult.insertedCount;
         }
 
+        if (strict && insertedCount !== totalDocs) throw new Error('Source copy was incomplete');
         console.log(`  ✓ Sync complete: ${insertedCount} documents.`);
         totalSynced += insertedCount;
 
@@ -280,7 +298,15 @@ async function syncPreviewSettingsFromStaging(): Promise<{
     // Mark sync as complete so subsequent deploys skip this step
     await targetDb
       .collection(SYNC_MARKER_COLLECTION)
-      .updateOne({ key: SYNC_MARKER_KEY }, { $set: { key: SYNC_MARKER_KEY, syncedAt: new Date() } }, { upsert: true });
+      .updateOne(
+        { key: SYNC_MARKER_KEY },
+        { $set: { key: SYNC_MARKER_KEY, stage, syncedAt: new Date() } },
+        { upsert: true }
+      );
+    if (strict) {
+      const marker = await targetDb.collection(SYNC_MARKER_COLLECTION).findOne({ key: SYNC_MARKER_KEY, stage });
+      if (marker?.stage !== stage) throw new Error('Sync marker was not persisted');
+    }
     console.log('  ✓ Sync marker set');
 
     console.log(`\n✓ Preview settings sync complete: ${totalSynced} total documents synced`);
@@ -290,10 +316,57 @@ async function syncPreviewSettingsFromStaging(): Promise<{
     console.log('✓ MongoDB connections closed');
   }
 
-  return { synced: totalSynced, emptyCollections: skippedCollections };
+  return { synced: totalSynced, markerStage: stage, emptyCollections: skippedCollections };
 }
 
-export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event => {
+async function strictSeed(event: DataSyncerEvent): Promise<StrictSeedResponse> {
+  const rawStage = process.env.SEED_STAGE_NAME ?? '';
+  const stage = /^pr[1-9][0-9]*$/.test(rawStage) ? rawStage : '';
+  const result = (status: StrictSeedResponse['status']): StrictSeedResponse => ({
+    schemaVersion: 1,
+    status,
+    stage,
+    copiedCount: 0,
+  });
+  try {
+    const uri = Resource.MONGODB_URI?.value;
+    const stagingUri = process.env.STAGING_MONGODB_URI;
+    if (
+      !stage ||
+      !uri ||
+      !stagingUri ||
+      event.syncPreviewSettings !== true ||
+      uri.replace('%STAGE%', stage) === stagingUri
+    ) {
+      return result('misconfigured');
+    }
+    const synced = await syncPreviewSettingsFromStaging(true);
+    if (synced.markerStage !== stage || (!synced.alreadySeeded && synced.synced <= 0)) return result('failed');
+    return {
+      schemaVersion: 1,
+      status: synced.alreadySeeded ? 'already_seeded' : 'seeded',
+      stage,
+      copiedCount: synced.synced,
+      marker: { key: SYNC_MARKER_KEY, stage },
+    };
+  } catch (error) {
+    // Driver messages can contain connection strings; log only safe diagnostic fields.
+    const errorType = error instanceof Error && /^Mongo[A-Za-z]+Error$/.test(error.name) ? error.name : 'Error';
+    const errorCode =
+      error instanceof Error && 'code' in error && typeof error.code === 'number' ? error.code : undefined;
+    const invariantFailures = [
+      'Sync marker stage does not match',
+      'Source copy was incomplete',
+      'Sync marker was not persisted',
+    ];
+    const reason = error instanceof Error && invariantFailures.includes(error.message) ? error.message : undefined;
+    console.error('Preview seed failed', { stage, errorType, errorCode, reason });
+    return result('failed');
+  }
+}
+
+export const handler: Handler<DataSyncerEvent, DataSyncerResponse | StrictSeedResponse> = async event => {
+  if (event.resultVersion === 1) return strictSeed(event);
   console.log('DataSyncer invoked with event:', event);
 
   const isPreviewEnvironment = PREVIEW_STAGE_PATTERN.test(process.env.SEED_STAGE_NAME ?? '');

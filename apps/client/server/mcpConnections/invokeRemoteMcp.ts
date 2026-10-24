@@ -31,9 +31,14 @@ import {
 import { cleanMcpToolText } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { Resource } from 'sst';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { CircuitBreakerError, getBreaker, type OperationType } from '@server/services/mcpCircuitBreakers';
+import {
+  CircuitBreakerError,
+  flushBreakerMetrics,
+  getBreaker,
+  type OperationType,
+} from '@bike4mind/server-utils/services/mcpCircuitBreakers';
 import { recordCircuitBreakerRejection } from '@bike4mind/server-utils/utils/cloudwatch';
 import { resolveMcpTenantKey } from '@bike4mind/server-utils/utils/mcpTenantKey';
 import {
@@ -510,9 +515,8 @@ export async function invokeRemoteMcp(
   } catch (error) {
     if (error instanceof CircuitBreakerError) {
       audit.failure('circuit_open');
-      recordCircuitBreakerRejection('custom_mcp').catch(metricError => {
-        console.error('[invokeRemoteMcp] Failed to record the breaker rejection metric:', metricError);
-      });
+      // Awaited: the throw ends the invocation, and a frozen Lambda loses a pending emit.
+      await recordCircuitBreakerRejection('custom_mcp');
       throw new CustomMcpUnavailableError(connection.displayName);
     }
     if (error instanceof RemoteMcpError) {
@@ -523,5 +527,7 @@ export async function invokeRemoteMcp(
     }
     audit.failure('internal_error');
     throw error;
+  } finally {
+    await flushBreakerMetrics();
   }
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Mock baseApi to unwrap the handler function (idiom from rotate-token.test.ts).
@@ -34,19 +34,21 @@ vi.mock('@bike4mind/services', () => ({
     rotateSession: (...args: any[]) => mockRotateSession(...args),
     issueSession: (...args: any[]) => mockIssueSession(...args),
     revokeSession: vi.fn(),
+    parseRefreshToken: (t: string) => ({ sid: t.split('.')[0], secret: t.split('.')[1] }),
   },
   // Stand-in for accountState.accountBlockReasons, which assertAccountStateUsable reads.
   userService: { accountBlockReasons: () => [] },
 }));
 
 const mockFindById = vi.fn();
+const mockFindBySid = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: {
     findById: (...args: any[]) => mockFindById(...args),
   },
   userRepository: {},
-  authSessionRepository: {},
+  authSessionRepository: { findBySid: (...args: unknown[]) => mockFindBySid(...args) },
 }));
 
 vi.mock('@bike4mind/database/infra', () => ({
@@ -262,6 +264,72 @@ describe('POST /api/auth/refreshToken - opaque token rotation', () => {
 
     expect(String(res.getHeader('Set-Cookie'))).toContain('b4m_rt=sid.rotated-secret');
     expect(res._getJSONData().accessToken).toBe('access-1');
+  });
+
+  describe('bare-name cookie over https', () => {
+    beforeEach(() => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.useFakeTimers({ now: new Date('2026-10-25T00:00:00Z') });
+      mockRotateSession.mockResolvedValue(rotated);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    });
+
+    const refresh = async () => {
+      const { req, res } = createMocks({ method: 'POST', body: {}, headers: { cookie: 'b4m_rt=sid.old-secret' } });
+      const outcome = await handler(req as never, res as never).then(
+        () => null,
+        (err: unknown) => err
+      );
+      return { res, outcome, cookies: [res.getHeader('Set-Cookie') ?? []].flat().map(String) };
+    };
+
+    it('moves a session created before the cutoff onto the prefixed cookie and expires the bare one', async () => {
+      mockFindBySid.mockResolvedValue({ sid: 'sid', createdAt: new Date('2026-10-01T00:00:00Z') });
+
+      const { res, outcome, cookies } = await refresh();
+
+      expect(outcome).toBeNull();
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockFindBySid).toHaveBeenCalledWith('sid');
+      expect(cookies.some(c => c.startsWith('__Host-b4m_rt=sid.rotated-secret; Path=/;') && c.includes('Secure'))).toBe(
+        true
+      );
+      expect(cookies.some(c => c.startsWith('b4m_rt=; Path=/api;') && c.includes('Max-Age=0'))).toBe(true);
+    });
+
+    it('rejects a bare-name cookie whose session was created after the cutoff', async () => {
+      mockFindBySid.mockResolvedValue({ sid: 'sid', createdAt: new Date('2026-10-31T00:00:00Z') });
+
+      const { outcome, cookies } = await refresh();
+
+      expect(outcome).toMatchObject({ name: 'UnauthorizedError' });
+      expect(mockRotateSession).not.toHaveBeenCalled();
+      expect(cookies.some(c => c.startsWith('__Host-b4m_rt='))).toBe(false);
+    });
+
+    it('rejects a bare-name cookie whose session no longer exists', async () => {
+      mockFindBySid.mockResolvedValue(null);
+
+      const { outcome, cookies } = await refresh();
+
+      expect(outcome).toMatchObject({ name: 'UnauthorizedError' });
+      expect(mockRotateSession).not.toHaveBeenCalled();
+      expect(cookies.some(c => c.startsWith('__Host-b4m_rt='))).toBe(false);
+    });
+
+    it('rejects a bare-name cookie once the acceptance window has closed', async () => {
+      vi.setSystemTime(new Date('2026-11-30T00:00:00Z'));
+      mockFindBySid.mockResolvedValue({ sid: 'sid', createdAt: new Date('2026-10-01T00:00:00Z') });
+
+      const { outcome, cookies } = await refresh();
+
+      expect(outcome).toMatchObject({ name: 'UnauthorizedError' });
+      expect(mockRotateSession).not.toHaveBeenCalled();
+      expect(cookies).toHaveLength(0);
+    });
   });
 
   it('sets NO cookie when a concurrent sibling already advanced the chain', async () => {

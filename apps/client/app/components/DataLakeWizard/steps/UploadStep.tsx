@@ -273,6 +273,8 @@ export default function UploadStep() {
   const driveFolderLabel = pendingDriveFolder?.folderName || 'your Drive folder';
   // AI tagging is never offered in append mode (the source step hides the toggle there too).
   const wantsTaxonomy = useDataLakeWizardStore(s => s.optionalSteps.taxonomy) && !isAppendMode;
+  const { uploadedFiles, chunkedFiles, vectorizedFiles } = progress;
+  const fullyProcessed = uploadedFiles > 0 && chunkedFiles >= uploadedFiles && vectorizedFiles >= uploadedFiles;
 
   // Subscribe to real-time chunk/vectorize progress from WebSocket
   useBatchProgressListener();
@@ -304,9 +306,7 @@ export default function UploadStep() {
   // from the real counts so we never claim work that hasn't happened. The
   // WebSocket listener keeps these counts flowing after status flips to
   // 'complete', so this line updates live as processing catches up.
-  const { uploadedFiles, chunkedFiles, vectorizedFiles } = progress;
   const fileWord = uploadedFiles === 1 ? 'file' : 'files';
-  const fullyProcessed = uploadedFiles > 0 && chunkedFiles >= uploadedFiles && vectorizedFiles >= uploadedFiles;
   const processingStarted = chunkedFiles > 0 || vectorizedFiles > 0;
   let completionSummary: string;
   if (fullyProcessed) {

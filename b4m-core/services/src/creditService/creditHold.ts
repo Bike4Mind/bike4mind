@@ -9,7 +9,7 @@ import {
   type IUserDocument,
   type IUserRepository,
 } from '@bike4mind/common';
-import type { Logger } from '@bike4mind/observability';
+import type { ILogger } from '@bike4mind/observability';
 import {
   deductCreditsWithOrgSupport,
   type DeductCreditsAdapters,
@@ -54,7 +54,7 @@ export async function holdCredits(
     organizationId: string | null;
     requiredCredits: number;
     featureLabel: string;
-    logger: Logger;
+    logger: ILogger;
     /** Runs after the user/org are loaded and before any balance moves; throw to refuse. */
     assertBillable?: (user: IUserDocument, organization: IOrganizationDocument | null) => void;
   },
@@ -149,7 +149,7 @@ export async function settleCreditHold(
   hold: CreditHold,
   chargedCredits: number,
   entry: CreditLedgerEntry,
-  context: { featureLabel: string; logger: Logger; throwOnWriteFailure?: boolean },
+  context: { featureLabel: string; logger: ILogger; throwOnWriteFailure?: boolean },
   adapters: CreditHoldAdapters
 ): Promise<number> {
   const { featureLabel, logger } = context;

@@ -18,7 +18,7 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 
 const mockSessionsRetrieve = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     checkout: { sessions: { retrieve: (...args: unknown[]) => mockSessionsRetrieve(...args) } },
   },

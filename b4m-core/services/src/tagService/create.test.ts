@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, Mock, vi } from 'vitest';
 import { create } from './create';
-import { IFileTagRepository, TagType } from '@bike4mind/common';
+import { IFileTagRepository, MAX_LAKE_FILE_TAG_NAME_LENGTH, TagType } from '@bike4mind/common';
 
 type Repo = Pick<IFileTagRepository, 'create' | 'findByFoldedNameAndUserId'>;
 
@@ -189,6 +189,24 @@ describe('tagService - create', () => {
     it('rejects a name that is only whitespace', async () => {
       await expect(create(userId, { name: '   ', type: TagType.FILE }, adapters)).rejects.toThrow();
       expect(mockFileTagRepo.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a name over the length cap', async () => {
+      const name = 'x'.repeat(MAX_LAKE_FILE_TAG_NAME_LENGTH + 1);
+
+      await expect(create(userId, { name, type: TagType.FILE }, adapters)).rejects.toThrow(
+        `cannot be longer than ${MAX_LAKE_FILE_TAG_NAME_LENGTH} characters`
+      );
+      expect(mockFileTagRepo.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts a name exactly at the cap once padding is trimmed', async () => {
+      const atCap = 'x'.repeat(MAX_LAKE_FILE_TAG_NAME_LENGTH);
+      (mockFileTagRepo.create as Mock).mockResolvedValueOnce({ id: 'new-1' });
+
+      await create(userId, { name: `  ${atCap}  `, type: TagType.FILE }, adapters);
+
+      expect(mockFileTagRepo.create).toHaveBeenCalledWith(expect.objectContaining({ name: atCap }));
     });
   });
 

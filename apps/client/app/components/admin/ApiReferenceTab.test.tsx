@@ -11,6 +11,7 @@ vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAc
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
+  useApiKeyScopeEntitlements: () => ({ bypass: false, entitlements: new Set<string>() }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });

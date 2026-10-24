@@ -131,6 +131,8 @@ Image generation uses credits based on:
 - **Size**: Larger images use more credits
 - **Quantity**: Each image in a batch counts separately
 
+The Image Generation row in Tools and the image model picker show the selected model and an estimated credits-per-image at your saved settings before you send. Free self-hosted models show as Free.
+
 Check your credit balance in Profile > Credit Analytics.
 
 ---

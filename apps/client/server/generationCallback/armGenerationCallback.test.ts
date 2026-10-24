@@ -22,7 +22,7 @@ vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async orig => {
   return { ...actual, assertUrlAllowed: h.assertUrlAllowed };
 });
 
-vi.mock('./dispatchQuestCallback', () => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({
   dispatchQuestCallback: h.dispatchQuestCallback,
   getGenerationCallbackQueueUrl: h.getGenerationCallbackQueueUrl,
 }));

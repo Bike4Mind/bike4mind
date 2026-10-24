@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { app, ipcMain, safeStorage, shell } from 'electron';
-import type { AccountPage, EnvironmentSelection } from '@shared/auth';
+import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { MediaStore } from '../chat/media/MediaStore';
 import { createMainLogger } from '../logger';
@@ -64,6 +64,14 @@ function photoRecordFile(path: string): PhotoRecordFile {
  * returns an access token, refresh token or device code - anything needing a credential is a
  * main-process job, and a "just for convenience" getter would undo the whole arrangement.
  */
+const mainListeners = new Set<(state: AuthState) => void>();
+
+/** Main-process work that follows the signed-in account; returns the unsubscribe. */
+export function onAuthStateChanged(listener: (state: AuthState) => void): () => void {
+  mainListeners.add(listener);
+  return () => mainListeners.delete(listener);
+}
+
 export function registerAuth(): AuthService {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
@@ -88,6 +96,7 @@ export function registerAuth(): AuthService {
       for (const window of appWindows()) {
         window.webContents.send(IPC_CHANNELS.authStateChanged, state);
       }
+      for (const listener of mainListeners) listener(state);
     },
   });
 
@@ -104,6 +113,8 @@ export function registerAuth(): AuthService {
   ipcMain.handle(IPC_CHANNELS.authSetEnvironment, (_event, selection: EnvironmentSelection) =>
     service.setEnvironment(selection)
   );
+  // A sign-in in another instance sharing the vault is picked up when the user comes back here.
+  app.on('browser-window-focus', () => void service.adoptStoredSession());
   ipcMain.handle(IPC_CHANNELS.authOpenAccountPage, (_event, page: AccountPage) => service.openAccountPage(page));
 
   return service;

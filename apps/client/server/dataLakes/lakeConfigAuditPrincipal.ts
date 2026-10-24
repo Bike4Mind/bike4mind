@@ -1,5 +1,5 @@
 import type { LakeAuditPrincipal } from '@bike4mind/common';
-import { resolveAuditPrincipal } from './resolveAuditPrincipal';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 
 /**
  * The `auditPrincipal` to attach to a config-write actor, or `undefined` to leave the existing

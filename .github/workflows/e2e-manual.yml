@@ -35,6 +35,7 @@ on:
           - Data Lake
           - Skills
           - Credits
+          - Teams
           - WebSocket Auth
           - Static Asset
         default: All tests
@@ -92,6 +93,7 @@ jobs:
             "Data Lake")        ARGS="--project=data-lake" ;;
             "Skills")           ARGS="--project=skills" ;;
             "Credits")          ARGS="--project=credits" ;;
+            "Teams")            ARGS="--project=teams" ;;
             "WebSocket Auth")   ARGS="--project=websocket-auth" ;;
             "Static Asset")     ARGS="--project=static-asset" ;;
             *)                  ARGS="" ; echo "Unknown selection '$TEST_PROJECT' — running full suite" ;;

@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockNotify, mockFindByOrgAndRepo, mockUserFind } = vi.hoisted(() => ({
+const { mockNotify, mockFindByOrgAndRepo, mockAccounts } = vi.hoisted(() => ({
   mockNotify: vi.fn(),
   mockFindByOrgAndRepo: vi.fn(),
-  mockUserFind: vi.fn(),
+  mockAccounts: vi.fn(),
 }));
 
 vi.mock('@bike4mind/slack', () => ({
+  findVerifiedGitHubAccounts: mockAccounts,
   GitHubSlackNotifier: vi.fn().mockImplementation(function () {
     return { notify: mockNotify };
   }),
@@ -18,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
     findByOrgAndRepo: mockFindByOrgAndRepo,
   },
   User: {
-    find: mockUserFind,
+    find: mockAccounts,
   },
 }));
 
@@ -62,11 +63,7 @@ describe('PushHandler', () => {
     vi.clearAllMocks();
     mockNotify.mockResolvedValue({ notifiedUserIds: [], failedNotifications: [] });
     mockFindByOrgAndRepo.mockResolvedValue([]);
-    mockUserFind.mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        lean: vi.fn().mockResolvedValue([]),
-      }),
-    });
+    mockAccounts.mockResolvedValue([]);
     const notifier = new GitHubSlackNotifier({} as never);
     handler = new PushHandler(notifier);
   });
@@ -82,13 +79,9 @@ describe('PushHandler', () => {
       expect(mockNotify).not.toHaveBeenCalled();
     });
 
-    it('surfaces notificationDispatchError when User.find rejects', async () => {
+    it('surfaces notificationDispatchError when OAuth account lookup rejects', async () => {
       mockFindByOrgAndRepo.mockResolvedValue([{ userId: 'user-1', events: [], enabled: true }]);
-      mockUserFind.mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          lean: vi.fn().mockRejectedValue(new Error('Replica failover')),
-        }),
-      });
+      mockAccounts.mockRejectedValue(new Error('Replica failover'));
 
       const result = await handler.handle(createPushPayload(), undefined, { orgId: 'org-123' });
 
@@ -98,17 +91,12 @@ describe('PushHandler', () => {
 
     it('does not set notificationDispatchError on the happy path', async () => {
       mockFindByOrgAndRepo.mockResolvedValue([{ userId: 'user-1', events: [], enabled: true }]);
-      mockUserFind.mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          lean: vi
-            .fn()
-            .mockResolvedValue([{ slackSettings: { githubNotifications: { githubUsername: 'subscriber1' } } }]),
-        }),
-      });
+      mockAccounts.mockResolvedValue([{ metadata: { githubLogin: 'subscriber1' } }]);
 
       const result = await handler.handle(createPushPayload(), undefined, { orgId: 'org-123' });
 
       expect(result.notificationDispatchError).toBeUndefined();
+      expect(mockAccounts).toHaveBeenCalledWith({ userIds: ['user-1'] });
       expect(mockNotify).toHaveBeenCalledWith('pushCommits', ['subscriber1'], expect.any(Function), {
         orgId: 'org-123',
       });

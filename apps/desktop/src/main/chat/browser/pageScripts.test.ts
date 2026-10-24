@@ -44,6 +44,23 @@ describe('page scripts', () => {
     expect(snap.text).toContain('[5] link "Forgot password?" -> /forgot');
     expect(snap.text).not.toContain('Invisible');
     expect(snap.text).toMatch(/<dialog>\n\s+Cookies\?\n\s+\[6\] button "Accept"/);
+    expect(snap.model).toMatchObject({
+      url: 'http://localhost:3000/',
+      title: 'Sign in',
+      actions: [
+        { ref: '1', kind: 'type', element: 'input', inputType: 'email', label: 'Email' },
+        { ref: '2', kind: 'type', element: 'input', inputType: 'password', label: 'Password' },
+        { ref: '3', kind: 'select', element: 'select', label: 'Currency' },
+        { ref: '4', kind: 'click', element: 'button', label: 'Sign in' },
+        { ref: '5', kind: 'click', element: 'a', label: 'Forgot password?', href: '/forgot' },
+        { ref: '6', kind: 'click', element: 'button', label: 'Accept' },
+      ],
+      truncated: false,
+    });
+    expect(snap.model.blocks).toEqual(
+      expect.arrayContaining([{ id: expect.any(String), kind: 'landmark', role: 'dialog' }])
+    );
+    expect(JSON.stringify(snap.model)).not.toContain('hunter2');
   });
 
   it('keeps refs stable across snapshots and numbers new elements after them', () => {
@@ -52,12 +69,83 @@ describe('page scripts', () => {
     const again = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
     expect(again.text).toContain('[7] button "New"');
     expect(again.text).toContain('[4] button "Sign in"');
+    expect(again.model.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ref: '7', label: 'New' }),
+        expect.objectContaining({ ref: '4', label: 'Sign in' }),
+      ])
+    );
+  });
+
+  it('replaces page-authored malformed and duplicate refs without disturbing valid refs', () => {
+    inPage(`
+      document.querySelector('button').setAttribute('data-b4m-ref', '9');
+      document.querySelector('a').setAttribute('data-b4m-ref', '9');
+      document.querySelector('input').setAttribute('data-b4m-ref', 'not-a-ref');
+    `);
+    const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
+    const refs = snap.model.actions.map(action => action.ref);
+    expect(new Set(refs).size).toBe(refs.length);
+    expect(snap.model.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ref: '9', label: 'Sign in' }),
+        expect.objectContaining({ ref: '10', label: 'Email' }),
+        expect.objectContaining({ ref: '13', label: 'Forgot password?' }),
+      ])
+    );
+    const again = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
+    expect(again.model.actions.map(action => action.ref)).toEqual(refs);
+  });
+
+  it.each(['9007199254740992', '9007199254740990'])('handles page-authored ref %s without overflow', ref => {
+    inPage(`document.querySelector('input').setAttribute('data-b4m-ref', '${ref}');`);
+    const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
+    const refs = snap.model.actions.map(action => action.ref);
+    expect(new Set(refs).size).toBe(refs.length);
+    expect(refs.every(ref => Number.isSafeInteger(Number(ref)))).toBe(true);
+  });
+
+  it.each([
+    ['text', 'type'], ['email', 'type'], ['password', 'type'],
+    ['checkbox', 'toggle'], ['radio', 'toggle'],
+    ['button', 'click'], ['submit', 'click'], ['reset', 'click'], ['image', 'click'], ['file', 'click'],
+  ])('models input[%s] as a %s action', (inputType, kind) => {
+    inPage(`document.body.innerHTML = '<input type="${inputType}" aria-label="Control">';`);
+    const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
+    expect(snap.model.actions).toEqual([expect.objectContaining({ kind, label: 'Control' })]);
   });
 
   it('stops at the size limit and says so', () => {
     const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 40);
     expect(snap.truncated).toBe(true);
+    expect(snap.model.truncated).toBe(true);
     expect(snap.text.length).toBeLessThanOrEqual(40);
+  });
+
+  it('bounds the typed model independently of the outline', () => {
+    inPage(
+      `document.body.innerHTML = Array.from({ length: 100 }, (_, i) => '<p>Paragraph ' + i + ' ' + 'x'.repeat(80) + '</p>').join('')`
+    );
+    const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
+    expect(snap.model.truncated).toBe(true);
+    expect(JSON.stringify(snap.model).length).toBeLessThanOrEqual(4_100);
+    expect(snap.text).toContain('Paragraph 99');
+  });
+
+  it('extracts article claims with exact source spans', () => {
+    inPage(
+      `document.body.innerHTML = '<article><h1>Release notes</h1><p>The launch date is Friday.</p><p>Seats are limited.</p></article>'`
+    );
+    const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
+    expect(snap.model.blocks).toEqual([
+      { id: 'b1', kind: 'heading', level: 1, text: 'Release notes' },
+      { id: 'b2', kind: 'text', text: 'The launch date is Friday.' },
+      { id: 'b3', kind: 'text', text: 'Seats are limited.' },
+    ]);
+    expect(snap.model.claims).toEqual([
+      { id: 'c1', text: 'The launch date is Friday.', source: { blockId: 'b2', start: 0, end: 26 } },
+      { id: 'c2', text: 'Seats are limited.', source: { blockId: 'b3', start: 0, end: 18 } },
+    ]);
   });
 
   it('clicks by ref and reports a stale ref', () => {
@@ -83,6 +171,20 @@ describe('page scripts', () => {
     });
     expect(inPage<string[]>('window.__seen')).toEqual(['input:test@test.com', 'change']);
     expect(run<ElementOutcome>(FILL_REF, '2', 'secret')).toEqual({ ok: true, description: 'filled a password field' });
+    const after = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
+    expect(JSON.stringify(after.model)).not.toContain('test@test.com');
+    expect(JSON.stringify(after.model)).not.toContain('secret');
+  });
+
+  it('resolves every modeled form and dialog action through click or type', () => {
+    const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
+    for (const action of snap.model.actions) {
+      const outcome =
+        action.kind === 'type' || action.kind === 'select'
+          ? run<ElementOutcome>(FILL_REF, action.ref, action.kind === 'select' ? 'USD' : 'value')
+          : run<ElementOutcome>(CLICK_REF, action.ref);
+      expect(outcome.ok, `${action.kind} ref ${action.ref}`).toBe(true);
+    }
   });
 
   it('picks a select option by its text or value, and refuses one that is missing', () => {

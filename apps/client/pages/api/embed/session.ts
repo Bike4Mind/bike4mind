@@ -25,6 +25,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { verifyEmbedApiKey } from '@server/cli/auth';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
 import { randomUUID } from 'crypto';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
 import { signEmbedSessionToken, EMBED_SESSION_TTL_SECONDS } from '@server/embed/embedSessionToken';
@@ -49,6 +50,11 @@ const handler = baseApi({ auth: false })
     try {
       info = await verifyEmbedApiKey(headers);
     } catch (err) {
+      // The key check itself failed (database unreachable): retryable, not a bad key.
+      if (isAuthInfraFailure(err)) {
+        setAuthInfraFailureHeaders(res, err);
+        return res.status(err.statusCode).json({ error: 'server_error', error_description: err.message });
+      }
       const message = err instanceof Error ? err.message : 'Invalid embed key';
       return res.status(401).json({ error: 'unauthorized', error_description: message });
     }

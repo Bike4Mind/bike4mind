@@ -8,6 +8,16 @@ const ModalImageSchema = new Schema({
   height: { type: Number, default: null },
 });
 
+const ModalVideoSchema = new Schema(
+  {
+    landscapeUrl: { type: String, default: null },
+    landscapePosterUrl: { type: String, default: null },
+    portraitUrl: { type: String, default: null },
+    portraitPosterUrl: { type: String, default: null },
+  },
+  { _id: false }
+);
+
 /**
  * Embedded schema for generation metadata.
  * Only populated for auto-generated modals (e.g., What's New).
@@ -48,6 +58,7 @@ const ModalSchema = new Schema<IModalDocument>(
     description: { type: String, default: null },
     imageUrl: { type: String, default: null },
     images: [ModalImageSchema],
+    video: { type: ModalVideoSchema, default: null },
     textMessage: { type: String, default: null },
     isBanner: { type: Boolean, default: false },
     tags: { type: [String], default: null },

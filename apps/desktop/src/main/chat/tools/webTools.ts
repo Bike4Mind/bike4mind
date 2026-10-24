@@ -23,8 +23,9 @@ const MAX_QUERY_CHARS = 400;
 /** What the frame around a result may take, so frame plus body stays under the tool cap. */
 const FRAME_ROOM = 1_000;
 
-/** The route's own sentence; see WEB_SEARCH_NOT_CONFIGURED_MSG in the shared websearch tool. */
-const NOT_CONFIGURED = /^Web search is not configured\b/;
+/** The route's own sentences; see WEB_SEARCH_NOT_CONFIGURED_MSG and WEB_SEARCH_UNAVAILABLE_MSG in
+ * the shared websearch tool. */
+const SERVER_NOTICE = /^Web search is (?:not configured|temporarily unavailable)\b/;
 
 const SIGNED_OUT = 'Web search and fetch need a signed-in Bike4Mind session. Ask the user to sign in again.';
 
@@ -177,8 +178,8 @@ export const webSearch: ToolDefinition = {
 
     // Passed through as the server said it, unframed: it is the server's own sentence, and the
     // model has to tell the user rather than read it as an empty web.
-    if (NOT_CONFIGURED.test(text.trim())) {
-      context.report?.label('Web search is not configured');
+    if (SERVER_NOTICE.test(text.trim())) {
+      context.report?.label('Web search unavailable');
       return text;
     }
 
@@ -303,14 +304,14 @@ export const webFetch: ToolDefinition = {
       required: ['url'],
     },
   },
-  // The same policy as browser_navigate to a real site: asked per origin in 'ask', run in 'auto'
-  // unless the reply has read untrusted content (see ChatService's DirectoryTurn.untrusted).
-  // The URL is the model's choice, and a query string is how an injected page would ask for
+  // Asked in 'ask', run in 'auto' unless the reply has read untrusted content (see ChatService's
+  // DirectoryTurn.untrusted). The URL is the model's choice, and a query string is how an injected page would ask for
   // something to be sent out; web_search has no such destination, so it is not gated.
   needsApproval: () => true,
   approval(input) {
     const url = parseFetchUrl(requireString(input, 'url'));
-    return { detail: `Read ${url.toString()}`, key: `web-fetch:${url.origin}` };
+    // One key for every site, so "always" covers the tool rather than one host; see ALWAYS_OVERRIDES_TAINT.
+    return { detail: `Read ${url.toString()}`, key: 'web-fetch', alwaysCovers: 'every site' };
   },
   async run(input, context) {
     const web = requireWeb(context);

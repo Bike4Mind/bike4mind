@@ -64,6 +64,16 @@ describe('desktopAppGuidance', () => {
     }
   });
 
+  it('says where permissions are controlled, and that the model cannot change them', () => {
+    for (const mode of ['manage', 'read', null] as const) {
+      const text = desktopAppGuidance(mode).join('\n');
+      expect(text).toContain('you cannot change them');
+      expect(text).toContain('Settings -> Permissions');
+      expect(text).toContain('Allow in this chat');
+      expect(text).toContain('~/.claude/settings.json');
+    }
+  });
+
   it('promises the add tools only where a user can approve them', () => {
     expect(desktopAppGuidance('manage').join('\n')).toContain('mcp_add_server');
     expect(desktopAppGuidance('read').join('\n')).not.toContain('mcp_add_server');
