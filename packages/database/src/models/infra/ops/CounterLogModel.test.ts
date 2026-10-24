@@ -317,8 +317,9 @@ describe('CounterLogRepository.metricsByDate - daily topUsers leaderboard', () =
   });
 
   it('breaks a spend tie by event count', async () => {
-    const busier = await seedUser('busier@example.com');
+    // quieter is seeded first so its lower user id wins any id-based fallback; only the event tie-break puts busier ahead
     const quieter = await seedUser('quieter@example.com');
+    const busier = await seedUser('busier@example.com');
     await CounterLog.insertMany([logFor(quieter, inWindow), logFor(busier, inWindow), logFor(busier, inWindow)]);
     await spendFor(quieter, 100);
     await spendFor(busier, 100);
