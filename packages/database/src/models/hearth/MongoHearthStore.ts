@@ -173,8 +173,10 @@ async function createChannelWithinCap(userId: Types.ObjectId, name: string): Pro
   const created = await HearthChannel.create({ userId, name });
 
   if ((await HearthChannel.countDocuments({ userId })) > MAX_HEARTH_CHANNELS_PER_USER) {
-    await HearthChannel.deleteOne({ _id: created._id });
-    throw new HearthChannelCapError(MAX_HEARTH_CHANNELS_PER_USER);
+    // Only an unused row is rolled back. One that already took an event stays:
+    // a bounded overshoot is better than destroying a channel someone holds.
+    const { deletedCount } = await HearthChannel.deleteOne({ _id: created._id, nextSeq: 0 });
+    if (deletedCount) throw new HearthChannelCapError(MAX_HEARTH_CHANNELS_PER_USER);
   }
   return created;
 }
@@ -254,21 +256,19 @@ export const hearthRepository = {
    */
   async ensureChannelByName(userId: string, name: string): Promise<IHearthChannelDoc> {
     const filter = { userId: new Types.ObjectId(userId), name };
-    const existing = await HearthChannel.findOne(filter);
-    if (existing) return existing;
-
-    try {
-      return await createChannelWithinCap(filter.userId, name);
-    } catch (err) {
-      // Two first-writes for the same name race: the loser takes E11000 from the
-      // unique index. The winner already paid for the row, so re-reading it is
-      // the correct answer rather than propagating the collision.
-      if (isDuplicateKeyError(err)) {
-        const winner = await HearthChannel.findOne(filter);
-        if (winner) return winner;
+    // A same-name racer takes E11000 from the unique index and loops back to the
+    // find. If the winner rolled back over the cap in the meantime the find
+    // misses, so the retry meets the cap itself instead of a raw driver error.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const existing = await HearthChannel.findOne(filter);
+      if (existing) return existing;
+      try {
+        return await createChannelWithinCap(filter.userId, name);
+      } catch (err) {
+        if (!isDuplicateKeyError(err)) throw err;
       }
-      throw err;
     }
+    throw new HearthChannelCapError(MAX_HEARTH_CHANNELS_PER_USER);
   },
 
   /** Returns the channel only if it belongs to the user; null otherwise. */

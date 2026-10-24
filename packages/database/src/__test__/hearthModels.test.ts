@@ -242,14 +242,16 @@ describe('Hearth models + MongoHearthStore', () => {
     const owned = () => ({ userId: new Types.ObjectId(USER) });
 
     /** Seed exactly the ceiling; `agents` is one of them so the existing-name case is real. */
-    async function seedAtCap() {
-      await HearthChannel.insertMany(
-        Array.from({ length: MAX_HEARTH_CHANNELS_PER_USER }, (_, i) => ({
-          userId: new Types.ObjectId(USER),
+    async function seedChannels(userId: string, count: number) {
+      const rows = await HearthChannel.insertMany(
+        Array.from({ length: count }, (_, i) => ({
+          userId: new Types.ObjectId(userId),
           name: i === 0 ? 'agents' : `seeded-${i}`,
         }))
       );
+      return rows.map(r => r._id.toString());
     }
+    const seedAtCap = () => seedChannels(USER, MAX_HEARTH_CHANNELS_PER_USER);
 
     /** Resolve a refusal, failing the test if the promise fulfils instead. */
     async function capRefusal(promise: Promise<unknown>): Promise<HearthChannelCapError> {
@@ -262,22 +264,25 @@ describe('Hearth models + MongoHearthStore', () => {
       throw new Error('expected the channel cap to refuse');
     }
 
-    it('ensureChannelByName refuses a new channel at the cap', async () => {
+    it('ensureChannelByName refuses a new channel at the cap without inserting', async () => {
       await seedAtCap();
+      const create = vi.spyOn(HearthChannel, 'create');
 
       const err = await capRefusal(hearthRepository.ensureChannelByName(USER, 'one-too-many'));
 
+      expect(create).not.toHaveBeenCalled();
+      create.mockRestore();
       expect(err.statusCode).toBe(409);
       expect(err.additionalInfo).toEqual({ code: 'channel_limit', limit: MAX_HEARTH_CHANNELS_PER_USER });
       expect(await HearthChannel.countDocuments(owned())).toBe(MAX_HEARTH_CHANNELS_PER_USER);
     });
 
     it('ensureChannelByName still resolves an existing name at the cap', async () => {
-      await seedAtCap();
+      const [agentsId] = await seedAtCap();
 
       const channel = await hearthRepository.ensureChannelByName(USER, 'agents');
 
-      expect(channel.name).toBe('agents');
+      expect(channel._id.toString()).toBe(agentsId);
       expect(await HearthChannel.countDocuments(owned())).toBe(MAX_HEARTH_CHANNELS_PER_USER);
     });
 
@@ -290,13 +295,27 @@ describe('Hearth models + MongoHearthStore', () => {
       expect(await HearthChannel.countDocuments(owned())).toBe(MAX_HEARTH_CHANNELS_PER_USER);
     });
 
-    it('concurrent new names at the boundary never exceed the cap', async () => {
-      await HearthChannel.insertMany(
-        Array.from({ length: MAX_HEARTH_CHANNELS_PER_USER - 1 }, (_, i) => ({
-          userId: new Types.ObjectId(USER),
-          name: `seeded-${i}`,
-        }))
-      );
+    it('allows the last channel under the cap, then refuses the next', async () => {
+      await seedChannels(USER, MAX_HEARTH_CHANNELS_PER_USER - 1);
+
+      await hearthRepository.createChannel(USER, 'the-last-one');
+      expect(await HearthChannel.countDocuments(owned())).toBe(MAX_HEARTH_CHANNELS_PER_USER);
+
+      await capRefusal(hearthRepository.createChannel(USER, 'one-too-many'));
+    });
+
+    it('counts per owner: another user at the ceiling does not refuse this one', async () => {
+      const OTHER = '6540b58d1f703ade3ea1e82c';
+      await seedChannels(OTHER, MAX_HEARTH_CHANNELS_PER_USER);
+      await seedChannels(USER, MAX_HEARTH_CHANNELS_PER_USER - 1);
+
+      const channel = await hearthRepository.createChannel(USER, 'mine');
+
+      expect(channel.name).toBe('mine');
+    });
+
+    it('concurrent new names at the boundary never exceed the cap or delete existing rows', async () => {
+      const seededIds = await seedChannels(USER, MAX_HEARTH_CHANNELS_PER_USER - 1);
 
       // Racers may all be refused; the invariant is the total, not who won.
       await Promise.allSettled(
@@ -304,6 +323,32 @@ describe('Hearth models + MongoHearthStore', () => {
       );
 
       expect(await HearthChannel.countDocuments(owned())).toBeLessThanOrEqual(MAX_HEARTH_CHANNELS_PER_USER);
+      expect(await HearthChannel.countDocuments({ _id: { $in: seededIds } })).toBe(seededIds.length);
+    });
+
+    it('a same-name loser whose winner vanished retries into a live channel', async () => {
+      const create = vi
+        .spyOn(HearthChannel, 'create')
+        .mockRejectedValueOnce(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }) as never);
+
+      const channel = await hearthRepository.ensureChannelByName(USER, 'agents');
+      create.mockRestore();
+
+      expect(await HearthChannel.exists({ _id: channel._id })).not.toBeNull();
+    });
+
+    it('a same-name loser whose winner vanished at the cap gets the 409, never the raw E11000', async () => {
+      await seedChannels(USER, MAX_HEARTH_CHANNELS_PER_USER - 1);
+      const create = vi.spyOn(HearthChannel, 'create').mockImplementationOnce((async () => {
+        // The winner inserted, a third create filled the last slot, the winner rolled back.
+        await HearthChannel.insertMany([{ userId: new Types.ObjectId(USER), name: 'filler' }]);
+        throw Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+      }) as never);
+
+      const err = await capRefusal(hearthRepository.ensureChannelByName(USER, 'contested'));
+      create.mockRestore();
+
+      expect(err.statusCode).toBe(409);
     });
   });
 
