@@ -12,8 +12,10 @@ const mocks = vi.hoisted(() => ({
   checkPublishQuota: vi.fn(),
   findOneAndUpdate: vi.fn(),
   download: vi.fn(),
+  refund: vi.fn(() => Promise.resolve()),
   consumePublishAction: vi.fn(),
 }));
+mocks.consumePublishAction.mockImplementation(() => Promise.resolve({ refund: mocks.refund }));
 
 // baseApi().post(fn) returns fn, so `export default handler` IS the handler function.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -265,6 +267,8 @@ describe('POST /api/publish/fabfile - re-publish updates the owner record in pla
     const res = await run(makeReq());
     expect(res.statusCode).toBe(409);
     expect(mocks.invalidatePublishCdn).not.toHaveBeenCalled();
+    // Nothing was published, so the counted action is handed back.
+    expect(mocks.refund).toHaveBeenCalledTimes(1);
   });
 
   it('narrows any older duplicate of the same file to the saved record', async () => {

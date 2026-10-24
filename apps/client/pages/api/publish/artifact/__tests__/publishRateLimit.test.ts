@@ -8,14 +8,17 @@ import { TooManyRequestsError } from '@bike4mind/common';
  * upload-url issued), so a full upload-url -> finalize publish is charged exactly once.
  */
 
-const { mockFindOne, mockFindOneAndUpdate, mockDownload, mockUpload, mockConsume, mockQuota } = vi.hoisted(() => ({
-  mockFindOne: vi.fn(),
-  mockFindOneAndUpdate: vi.fn(),
-  mockDownload: vi.fn(),
-  mockUpload: vi.fn(),
-  mockConsume: vi.fn(),
-  mockQuota: vi.fn(),
-}));
+const { mockFindOne, mockFindOneAndUpdate, mockDownload, mockUpload, mockConsume, mockRefund, mockQuota } = vi.hoisted(
+  () => ({
+    mockFindOne: vi.fn(),
+    mockFindOneAndUpdate: vi.fn(),
+    mockDownload: vi.fn(),
+    mockUpload: vi.fn(),
+    mockConsume: vi.fn(),
+    mockRefund: vi.fn(),
+    mockQuota: vi.fn(),
+  })
+);
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -98,7 +101,8 @@ beforeEach(() => {
   mockFindOne.mockReset().mockResolvedValue(null);
   mockFindOneAndUpdate.mockReset().mockResolvedValue({ visibility: 'private', publicId: 'pub1' });
   mockUpload.mockReset().mockResolvedValue(undefined);
-  mockConsume.mockReset().mockResolvedValue(undefined);
+  mockRefund.mockReset().mockResolvedValue(undefined);
+  mockConsume.mockReset().mockResolvedValue({ refund: mockRefund });
   mockQuota.mockReset().mockResolvedValue({ ok: true });
   // finalize reads back the draft manifest upload-url wrote, then the uploaded index.html.
   mockDownload.mockReset().mockImplementation((key: string) => {
@@ -116,6 +120,18 @@ describe('upload-url - daily publish allowance', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockConsume).toHaveBeenCalledTimes(1);
     expect(mockConsume).toHaveBeenCalledWith(expect.objectContaining({ id: 'owner1', createdAt: CREATED_AT }));
+    expect(mockRefund).not.toHaveBeenCalled();
+  });
+
+  it('hands the action back when the draft cannot be issued', async () => {
+    const storageDown = new Error('storage unavailable');
+    mockUpload.mockRejectedValue(storageDown);
+
+    const { promise } = post(uploadUrlHandler, uploadBody);
+
+    await expect(promise).rejects.toBe(storageDown);
+    expect(mockConsume).toHaveBeenCalledTimes(1);
+    expect(mockRefund).toHaveBeenCalledTimes(1);
   });
 
   it("counts an API-key caller against the key owner's allowance", async () => {
@@ -137,6 +153,7 @@ describe('upload-url - daily publish allowance', () => {
 
     await expect(promise).rejects.toBe(limited);
     expect(mockUpload).not.toHaveBeenCalled();
+    expect(mockRefund).not.toHaveBeenCalled();
   });
 
   it('does not count a publish the storage quota refused', async () => {

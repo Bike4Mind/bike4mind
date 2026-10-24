@@ -72,7 +72,7 @@ vi.mock('@server/services/publish', async importOriginal => {
     invalidatePublishCdn: () => undefined,
     toCacheTarget: () => ({}),
     mintDraftUploadUrl: () => Promise.resolve('https://example.invalid/put'),
-    consumePublishAction: () => Promise.resolve(),
+    consumePublishAction: () => Promise.resolve({ refund: () => Promise.resolve() }),
   };
 });
 

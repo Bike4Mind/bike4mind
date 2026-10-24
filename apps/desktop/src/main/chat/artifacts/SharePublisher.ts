@@ -6,6 +6,7 @@ import {
   ArtifactTypeSchema,
   PUBLISH_LIMITS,
   PUBLISH_RATE_LIMITED,
+  publishRateLimitMessage,
   SCOPE_URL_PREFIX,
   type ArtifactType,
   ValidationViolationSchema,
@@ -313,7 +314,10 @@ function toQuotaRejection(err: unknown): ChatArtifactPublish | null {
   const body = asRecord(err.response?.data);
   const code = typeof body?.code === 'string' ? body.code : undefined;
   if (code === PUBLISH_RATE_LIMITED) {
-    return { status: 'quota', reason: serverMessage(err) ?? "You've published a lot today. Try again later." };
+    const retryAfter = typeof body?.retryAfter === 'number' ? body.retryAfter : undefined;
+    const fallback =
+      retryAfter === undefined ? "You've published a lot today. Try again later." : publishRateLimitMessage(retryAfter);
+    return { status: 'quota', reason: serverMessage(err) ?? fallback };
   }
   if (!code?.toLowerCase().includes('quota')) return null;
   return {

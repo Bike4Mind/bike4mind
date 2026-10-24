@@ -102,6 +102,6 @@ export {
   consumePublishAction,
   publishActionLimit,
   publishActionsKey,
-  publishRateLimitMessage,
+  type PublishActionReceipt,
   type PublishActor,
 } from './publishRateLimit';

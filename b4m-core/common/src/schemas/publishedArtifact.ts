@@ -190,7 +190,8 @@ export type PublishQuotaScope = keyof typeof PUBLISH_QUOTAS;
  * Per-user daily publish allowance: how many publish actions one user may take in any rolling
  * `windowMs`, counted across the publish write routes (upload-url, reply, fabfile, revise,
  * restore). finalize is not counted, since every draft it promotes came from a counted upload-url.
- * Accounts younger than `newAccount.maxAgeMs` (by the user's `createdAt`) get the lower
+ * An action that fails or is refused after it was counted, before anything is published, is
+ * handed back. Accounts younger than `newAccount.maxAgeMs` (by the user's `createdAt`) get the lower
  * `newAccount.maxActions`. API-key callers count toward the key owner's allowance. Admins are
  * exempt. Enforced by apps/client/server/services/publish/publishRateLimit.ts.
  */
@@ -205,6 +206,25 @@ export const PUBLISH_RATE_LIMITS = {
 
 /** Error `code` on the 429 a publish write route answers once `PUBLISH_RATE_LIMITS` is used up. */
 export const PUBLISH_RATE_LIMITED = 'publish_rate_limited';
+
+/**
+ * A wait in words: whole minutes (rounded up, never zero) up to an hour, then "about N hours"
+ * (rounded to the nearest hour). The exact wait travels separately as `Retry-After` seconds.
+ */
+export function formatPublishWait(retryAfterSeconds: number): string {
+  const seconds = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : 0;
+  if (seconds > 60 * 60) {
+    const hours = Math.round(seconds / (60 * 60));
+    return `about ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  }
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+}
+
+/** The user-facing `PUBLISH_RATE_LIMITED` refusal: the server's 429 `error`, and any client fallback. */
+export function publishRateLimitMessage(retryAfterSeconds: number): string {
+  return `You've published a lot today. Try again in ${formatPublishWait(retryAfterSeconds)}.`;
+}
 
 export const ALLOWED_MIME_PREFIXES: readonly string[] = ['image/', 'font/', 'audio/', 'video/'];
 export const ALLOWED_MIME_EXACT: readonly string[] = [

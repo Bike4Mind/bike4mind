@@ -12,8 +12,10 @@ const dbMocks = vi.hoisted(() => ({
   restrictDuplicatePublications: vi.fn(),
   checkPublishQuota: vi.fn(),
   findOneAndUpdate: vi.fn(),
+  refund: vi.fn(() => Promise.resolve()),
   consumePublishAction: vi.fn(),
 }));
+dbMocks.consumePublishAction.mockImplementation(() => Promise.resolve({ refund: dbMocks.refund }));
 
 // baseApi().post(fn) returns fn, so `export default handler` IS the handler function.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -299,6 +301,8 @@ describe('POST /api/publish/reply - re-publish updates the owner record in place
     const res = await run({ id: OWNER }, { visibility: 'private' });
     expect(res.statusCode).toBe(409);
     expect(dbMocks.restrictDuplicatePublications).not.toHaveBeenCalled();
+    // Nothing was published, so the counted action is handed back.
+    expect(dbMocks.refund).toHaveBeenCalledTimes(1);
   });
 
   it('does not purge when nothing public was or is being served', async () => {

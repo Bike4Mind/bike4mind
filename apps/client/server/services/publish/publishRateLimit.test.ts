@@ -1,16 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PUBLISH_RATE_LIMITED, PUBLISH_RATE_LIMITS, TooManyRequestsError } from '@bike4mind/common';
 
-const cache = vi.hoisted(() => ({ tryAcquireLease: vi.fn(), findByKey: vi.fn() }));
+const cache = vi.hoisted(() => ({ tryAcquireLease: vi.fn(), findByKey: vi.fn(), releaseLease: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ cacheRepository: cache }));
 
 import errorHandler from '@server/middlewares/errorHandler';
-import {
-  consumePublishAction,
-  publishActionLimit,
-  publishActionsKey,
-  publishRateLimitMessage,
-} from './publishRateLimit';
+import { consumePublishAction, publishActionLimit, publishActionsKey } from './publishRateLimit';
+
+/** A 24-hex ObjectId string minted at `ms`, as Mongo stamps a new user's _id. */
+const objectIdAt = (ms: number) =>
+  `${Math.floor(ms / 1000)
+    .toString(16)
+    .padStart(8, '0')}0000000000000000`;
 
 const NOW = Date.UTC(2026, 9, 24, 12, 0, 0);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -33,6 +34,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   cache.tryAcquireLease.mockReset().mockResolvedValue(true);
   cache.findByKey.mockReset().mockResolvedValue(null);
+  cache.releaseLease.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -66,20 +68,54 @@ describe('publishActionLimit', () => {
     expect(publishActionLimit({ id: 'u', createdAt: 'not a date' }, NOW)).toBe(20);
   });
 
+  it("falls back to the creation time in the user's ObjectId when createdAt is missing", () => {
+    expect(publishActionLimit({ id: objectIdAt(NOW - 30 * DAY_MS) }, NOW)).toBe(200);
+    expect(publishActionLimit({ id: objectIdAt(NOW - 30 * DAY_MS), createdAt: null }, NOW)).toBe(200);
+    expect(publishActionLimit({ id: objectIdAt(NOW - DAY_MS) }, NOW)).toBe(20);
+  });
+
+  it('prefers createdAt over the ObjectId time when both are readable', () => {
+    expect(publishActionLimit({ id: objectIdAt(NOW - 30 * DAY_MS), createdAt: new Date(NOW - DAY_MS) }, NOW)).toBe(20);
+  });
+
   it('exempts admins', () => {
     expect(publishActionLimit({ ...brandNew, isAdmin: true }, NOW)).toBe(Infinity);
   });
 });
 
-describe('publishRateLimitMessage', () => {
-  it('rounds the wait up to whole minutes', () => {
-    expect(publishRateLimitMessage(61)).toBe("You've published a lot today. Try again in 2 minutes.");
-    expect(publishRateLimitMessage(3600)).toBe("You've published a lot today. Try again in 60 minutes.");
+describe('PublishActionReceipt.refund', () => {
+  it('removes exactly the entry the action added, from the same log', async () => {
+    const receipt = await consumePublishAction(established);
+    const [key, actionId] = cache.tryAcquireLease.mock.calls[0];
+
+    await receipt.refund();
+
+    expect(cache.releaseLease).toHaveBeenCalledTimes(1);
+    expect(cache.releaseLease).toHaveBeenCalledWith(key, actionId);
   });
 
-  it('never says zero minutes, and reads one minute in the singular', () => {
-    expect(publishRateLimitMessage(1)).toBe("You've published a lot today. Try again in 1 minute.");
-    expect(publishRateLimitMessage(0)).toBe("You've published a lot today. Try again in 1 minute.");
+  it("refunds each action by its own id, never another action's", async () => {
+    const first = await consumePublishAction(brandNew);
+    await consumePublishAction(brandNew);
+    const [firstId, secondId] = cache.tryAcquireLease.mock.calls.map(call => call[1]);
+
+    await first.refund();
+
+    expect(cache.releaseLease.mock.calls.map(call => call[1])).toEqual([firstId]);
+    expect(firstId).not.toBe(secondId);
+  });
+
+  it('never throws: a failed refund only leaves the action counted', async () => {
+    const receipt = await consumePublishAction(established);
+    cache.releaseLease.mockRejectedValue(new Error('cache down'));
+
+    await expect(receipt.refund()).resolves.toBeUndefined();
+  });
+
+  it("is a no-op for an admin's uncounted action", async () => {
+    const receipt = await consumePublishAction({ ...established, isAdmin: true });
+    await receipt.refund();
+    expect(cache.releaseLease).not.toHaveBeenCalled();
   });
 });
 
@@ -172,7 +208,7 @@ describe('consumePublishAction', () => {
     expect(setHeader).toHaveBeenCalledWith('Retry-After', String(90 * 60));
     expect(json).toHaveBeenCalledWith(
       expect.objectContaining({
-        error: "You've published a lot today. Try again in 90 minutes.",
+        error: "You've published a lot today. Try again in about 2 hours.",
         code: 'publish_rate_limited',
         retryAfter: 90 * 60,
         details: { limit: 200, windowMs: PUBLISH_RATE_LIMITS.windowMs },

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   invalidatePublishCdn: vi.fn(),
   restrictDuplicatePublications: vi.fn(),
   consumePublishAction: vi.fn(),
+  refund: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -78,7 +79,8 @@ beforeEach(() => {
   }));
   mocks.invalidatePublishCdn.mockResolvedValue(undefined);
   mocks.restrictDuplicatePublications.mockResolvedValue(0);
-  mocks.consumePublishAction.mockResolvedValue(undefined);
+  mocks.refund.mockResolvedValue(undefined);
+  mocks.consumePublishAction.mockResolvedValue({ refund: mocks.refund });
 });
 
 describe('settlePublication - lookup', () => {
@@ -257,6 +259,30 @@ describe('settlePublication - daily publish allowance', () => {
     await expect(settlePublication(input())).rejects.toBe(limited);
     expect(mocks.findOneAndUpdate).not.toHaveBeenCalled();
     expect(mocks.invalidatePublishCdn).not.toHaveBeenCalled();
+  });
+
+  it('keeps the action once the page is written', async () => {
+    const result = await settlePublication(input());
+    expect(result.ok).toBe(true);
+    expect(mocks.refund).not.toHaveBeenCalled();
+  });
+
+  it('hands the action back when the page was removed while it was being updated', async () => {
+    mocks.findOneLean.mockResolvedValue(existingRow());
+    mocks.findOneAndUpdate.mockResolvedValue(null);
+
+    const result = await settlePublication(input());
+
+    expect(result).toMatchObject({ ok: false, status: 409 });
+    expect(mocks.refund).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the action back when the write fails, and still surfaces the failure', async () => {
+    const writeFailed = new Error('write failed');
+    mocks.findOneAndUpdate.mockRejectedValue(writeFailed);
+
+    await expect(settlePublication(input())).rejects.toBe(writeFailed);
+    expect(mocks.refund).toHaveBeenCalledTimes(1);
   });
 });
 

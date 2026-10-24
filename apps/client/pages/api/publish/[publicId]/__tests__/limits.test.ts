@@ -17,6 +17,8 @@ const m = vi.hoisted(() => ({
   download: vi.fn(),
   upload: vi.fn(),
   consume: vi.fn(),
+  refund: vi.fn(),
+  validate: vi.fn(),
   complete: vi.fn(),
 }));
 
@@ -50,7 +52,7 @@ vi.mock('@server/services/publish', async () => {
     '@server/services/publish/checkPublishQuota'
   );
   return {
-    validateBundle: () => ({ valid: true, violations: [] }),
+    validateBundle: m.validate,
     buildPublishUrlPath: () => '/p/u/owner1/page',
     invalidatePublishCdn: () => Promise.resolve(),
     toCacheTarget: () => ({}),
@@ -138,7 +140,9 @@ beforeEach(() => {
   m.aggregate.mockResolvedValue([{ totalBytes: 0 }]);
   m.annotationsLean.mockResolvedValue([{ body: 'Make it longer', authorDisplayName: 'Reviewer' }]);
   m.upload.mockResolvedValue(undefined);
-  m.consume.mockResolvedValue(undefined);
+  m.refund.mockResolvedValue(undefined);
+  m.consume.mockResolvedValue({ refund: m.refund });
+  m.validate.mockReturnValue({ valid: true, violations: [] });
   previousVersionIs(BIGGER);
   modelReturns(BIGGER);
 });
@@ -192,8 +196,10 @@ describe.each([
     });
     expect(indexWrites()).toHaveLength(0);
     expect(recordWrites()).toHaveLength(0);
-    // revise counts before the model call, so its quota refusal comes after; restore checks first.
+    // revise counts before the model call, so its quota refusal comes after and hands the action
+    // back; restore checks the quota first and never counts.
     expect(m.consume).toHaveBeenCalledTimes(countsBeforeQuota ? 1 : 0);
+    expect(m.refund).toHaveBeenCalledTimes(countsBeforeQuota ? 1 : 0);
     expect(lockReleased()).toBe(true);
   });
 
@@ -235,6 +241,76 @@ describe('revise - daily publish allowance', () => {
     expect(res.statusCode).toBe(400);
     expect(m.consume).not.toHaveBeenCalled();
   });
+
+  it('keeps the action once the revised page is written', async () => {
+    const res = await run(reviseHandler);
+
+    expect(res.statusCode).toBe(200);
+    expect(m.refund).not.toHaveBeenCalled();
+  });
+
+  it('hands the action back when the model call fails', async () => {
+    const modelDown = new Error('model unavailable');
+    m.complete.mockRejectedValue(modelDown);
+
+    await expect(run(reviseHandler)).rejects.toBe(modelDown);
+    expect(m.consume).toHaveBeenCalledTimes(1);
+    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(indexWrites()).toHaveLength(0);
+    expect(lockReleased()).toBe(true);
+  });
+
+  it.each([
+    { kind: 'not a complete document', output: 'not html at all' },
+    { kind: 'truncated', output: '<html></html>' },
+  ])('hands the action back when the model output is $kind', async ({ output }) => {
+    modelReturns(output);
+
+    const res = await run(reviseHandler);
+
+    expect(res.statusCode).toBe(502);
+    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(indexWrites()).toHaveLength(0);
+  });
+
+  it('hands the action back when the revised page fails validation', async () => {
+    m.validate.mockReturnValue({ valid: false, violations: [{ rule: 'external-script' }] });
+
+    const res = await run(reviseHandler);
+
+    expect(res.statusCode).toBe(422);
+    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(indexWrites()).toHaveLength(0);
+  });
+
+  it('hands the action back when the revised page cannot be stored', async () => {
+    const storageDown = new Error('storage unavailable');
+    m.upload.mockImplementation((_buf: unknown, key: string) =>
+      key === `${PREFIX}index.html` ? Promise.reject(storageDown) : Promise.resolve()
+    );
+
+    await expect(run(reviseHandler)).rejects.toBe(storageDown);
+    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(recordWrites()).toHaveLength(0);
+  });
+
+  it('keeps the action when the page was written but its record update fails', async () => {
+    const dbDown = new Error('database unavailable');
+    m.updateOne.mockImplementation((filter: object) =>
+      'revisingAt' in filter ? Promise.resolve({}) : Promise.reject(dbDown)
+    );
+
+    await expect(run(reviseHandler)).rejects.toBe(dbDown);
+    expect(indexWrites()).toHaveLength(1);
+    expect(m.refund).not.toHaveBeenCalled();
+  });
+
+  it('refunds nothing when the allowance itself refused the revise', async () => {
+    m.consume.mockRejectedValue(new TooManyRequestsError('limited', { code: 'publish_rate_limited' }));
+
+    await expect(run(reviseHandler)).rejects.toBeInstanceOf(TooManyRequestsError);
+    expect(m.refund).not.toHaveBeenCalled();
+  });
 });
 
 describe('restore - daily publish allowance', () => {
@@ -262,5 +338,25 @@ describe('restore - daily publish allowance', () => {
 
     expect(res.statusCode).toBe(400);
     expect(m.consume).not.toHaveBeenCalled();
+  });
+
+  it('keeps the action once the restored page is written', async () => {
+    const res = await run(restoreHandler);
+
+    expect(res.statusCode).toBe(200);
+    expect(m.refund).not.toHaveBeenCalled();
+  });
+
+  it('hands the action back when the restored page cannot be stored', async () => {
+    const storageDown = new Error('storage unavailable');
+    m.upload.mockImplementation((_buf: unknown, key: string) =>
+      key === `${PREFIX}index.html` ? Promise.reject(storageDown) : Promise.resolve()
+    );
+
+    await expect(run(restoreHandler)).rejects.toBe(storageDown);
+    expect(m.consume).toHaveBeenCalledTimes(1);
+    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(recordWrites()).toHaveLength(0);
+    expect(lockReleased()).toBe(true);
   });
 });

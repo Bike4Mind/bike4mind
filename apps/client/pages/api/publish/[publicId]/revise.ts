@@ -12,6 +12,7 @@ import {
   toCacheTarget,
   checkInPlaceRewriteQuota,
   consumePublishAction,
+  type PublishActionReceipt,
 } from '@server/services/publish';
 import { OperationsModelService } from '@client/services/operationsModelService';
 
@@ -139,6 +140,9 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(409).json({ error: 'A revision is already in progress for this artifact' });
   }
 
+  // The counted publish action, handed back in `finally` unless the revised page was written.
+  let action: PublishActionReceipt | undefined;
+  let written = false;
   try {
     // Gather the open feedback pinned to the CURRENT version.
     const open = await Annotation.find({ publicId, deletedAt: null, resolvedAt: null, artifactVersionSha: currentSha })
@@ -167,7 +171,8 @@ const handler = baseApi().post(async (req, res) => {
     // Counted before the model call rather than after the storage-quota check below, because the
     // model call is the costly part and the quota can only be checked once its output is known.
     // Throws a 429 when the daily publish allowance is used up; `finally` still frees the lock.
-    await consumePublishAction(req.user);
+    // A revise that then fails or is refused before the page is written is refunded in `finally`.
+    action = await consumePublishAction(req.user);
 
     // ── Run the LLM (in-monorepo path; accumulate the non-streamed completion). ──
     const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
@@ -244,6 +249,7 @@ const handler = baseApi().post(async (req, res) => {
 
     // ── Write the new index.html in place + recompute version metadata. ──
     await storage.upload(revisedBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
+    written = true;
     const now = new Date();
 
     // Record the version, deduped by content sha and backfilling the version being
@@ -320,6 +326,7 @@ const handler = baseApi().post(async (req, res) => {
       model: modelInfo.name,
     });
   } finally {
+    if (action && !written) await action.refund();
     // Compare-and-set release: only clear the lock if we still hold it. A request
     // whose lock was stolen after the TTL must NOT clear the newer holder's lock.
     await PublishedArtifact.updateOne({ publicId, revisingAt: lockNow }, { $set: { revisingAt: null } }).catch(

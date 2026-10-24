@@ -7,7 +7,12 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 import { PUBLISH_RATE_LIMITED, PUBLISH_RATE_LIMITS, TooManyRequestsError } from '@bike4mind/common';
-import { consumePublishAction, type PublishActor } from './publishRateLimit';
+import {
+  consumePublishAction,
+  publishActionsKey,
+  type PublishActionReceipt,
+  type PublishActor,
+} from './publishRateLimit';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -55,6 +60,21 @@ async function consumeSequentially(actor: PublishActor, n: number): Promise<numb
     admitted += 1;
   }
   return admitted;
+}
+
+/** Run `n` actions one after another; resolves to their receipts. */
+async function receiptsFor(actor: PublishActor, n: number): Promise<PublishActionReceipt[]> {
+  const receipts: PublishActionReceipt[] = [];
+  for (let i = 0; i < n; i++) receipts.push(await consumePublishAction(actor));
+  return receipts;
+}
+
+/** How many entries the actor's log holds right now, lapsed or not. */
+async function logSize(actor: PublishActor): Promise<number> {
+  const doc = await mongoose.connection
+    .collection<{ key: string; result?: { holders?: unknown[] } }>('caches')
+    .findOne({ key: publishActionsKey(actor.id) });
+  return doc?.result?.holders?.length ?? 0;
 }
 
 async function refusal(actor: PublishActor): Promise<TooManyRequestsError> {
@@ -147,5 +167,72 @@ describe('consumePublishAction (real database)', () => {
     const admin = { ...newAccount('admin-user'), isAdmin: true };
     expect(await consumeSequentially(admin, NEW_LIMIT + 5)).toBe(NEW_LIMIT + 5);
     expect(await mongoose.connection.collection('caches').countDocuments()).toBe(0);
+  });
+});
+
+describe('PublishActionReceipt.refund (real database)', () => {
+  it('hands back exactly one slot per refunded action, however often it is refunded', async () => {
+    const actor = newAccount('refund-once');
+    const receipts = await receiptsFor(actor, NEW_LIMIT);
+    await refusal(actor);
+
+    await receipts[0].refund();
+    await receipts[0].refund();
+    await Promise.all([receipts[0].refund(), receipts[0].refund()]);
+
+    expect(await logSize(actor)).toBe(NEW_LIMIT - 1);
+    expect(await consumeSequentially(actor, 1)).toBe(1);
+    await refusal(actor);
+  });
+
+  it('under concurrent refunds and new actions, never admits more than were refunded', async () => {
+    const actor = establishedAccount('refund-burst');
+    const receipts = await receiptsFor(actor, LIMIT);
+    const refunded = receipts.slice(0, 25);
+
+    // Each refunded receipt is refunded twice, interleaved with far more new actions than there is room for.
+    const [, attempts] = await Promise.all([
+      Promise.all([...refunded, ...refunded].map(receipt => receipt.refund())),
+      Promise.allSettled(Array.from({ length: LIMIT }, () => consumePublishAction(actor))),
+    ]);
+
+    const admitted = attempts.filter(r => r.status === 'fulfilled').length;
+    const refused = attempts.filter(r => r.status === 'rejected' && r.reason instanceof TooManyRequestsError).length;
+    // A new action that ran before a refund landed is refused, so up to 25 can be admitted; never more.
+    expect(admitted).toBeLessThanOrEqual(refunded.length);
+    expect(admitted + refused).toBe(LIMIT);
+    expect(await logSize(actor)).toBe(LIMIT - refunded.length + admitted);
+
+    // Once every refund has landed, the log has room for exactly the refunds not yet taken back up.
+    expect(await consumeSequentially(actor, refunded.length - admitted)).toBe(refunded.length - admitted);
+    await refusal(actor);
+    expect(await logSize(actor)).toBe(LIMIT);
+  });
+
+  it("a refund cannot remove another action's entry, even after its own entry has lapsed", async () => {
+    const t0 = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    const actor = { ...newAccount('refund-lapsed'), createdAt: new Date(t0 - DAY_MS) };
+    const [stale] = await receiptsFor(actor, 1);
+
+    vi.setSystemTime(t0 + DAY_MS + 1000);
+    await receiptsFor(actor, NEW_LIMIT);
+    await refusal(actor);
+
+    await stale.refund();
+    await refusal(actor);
+  });
+
+  it("keeps one user's refunds out of another user's log", async () => {
+    const a = newAccount('refund-a');
+    const b = newAccount('refund-b');
+    const [aReceipt] = await receiptsFor(a, 1);
+    await receiptsFor(b, NEW_LIMIT);
+
+    await aReceipt.refund();
+
+    expect(await logSize(b)).toBe(NEW_LIMIT);
+    await refusal(b);
   });
 });

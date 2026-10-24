@@ -85,8 +85,9 @@ export async function settlePublication(input: SettlePublicationInput) {
     };
   }
 
-  // Counted after every refusal above, so a rejected publish does not use up the allowance.
-  await consumePublishAction({ id: ownerId, isAdmin: input.isAdmin, createdAt: input.ownerCreatedAt });
+  // Counted after every refusal above, so a rejected publish does not use up the allowance. The
+  // write below failing or finding the row gone hands the action back, since nothing was published.
+  const action = await consumePublishAction({ id: ownerId, isAdmin: input.isAdmin, createdAt: input.ownerCreatedAt });
 
   const publishedAt = new Date();
   const saved = await PublishedArtifact.findOneAndUpdate(
@@ -115,8 +116,12 @@ export async function settlePublication(input: SettlePublicationInput) {
     // Upsert only for a first publish. If `existing` was deleted after the lookup, an upsert would
     // try to re-insert its _id over the soft-deleted row and fail with a duplicate key.
     { upsert: !existing, new: true }
-  );
+  ).catch(async (err: unknown) => {
+    await action.refund();
+    throw err;
+  });
   if (!saved) {
+    await action.refund();
     return {
       ok: false as const,
       status: 409,

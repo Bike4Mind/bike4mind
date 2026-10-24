@@ -134,7 +134,12 @@ const handler = baseApi().post(async (req, res) => {
 
   // The daily publish allowance is counted here, once per bundle publish: finalize only promotes
   // the draft this issues, so it is not counted again. Throws a 429 when the allowance is used up.
-  await consumePublishAction(req.user);
+  // If the draft then cannot be issued, no draft id reaches the caller, so the action is handed back.
+  const action = await consumePublishAction(req.user);
+  const refundAndRethrow = async (err: unknown): Promise<never> => {
+    await action.refund();
+    throw err;
+  };
 
   // ── Issue draft + presigned PUT URLs ──
   const draftId = uuidv4();
@@ -167,9 +172,11 @@ const handler = baseApi().post(async (req, res) => {
   };
 
   const storage = getPublishedArtifactsStorage();
-  await storage.upload(Buffer.from(JSON.stringify(draftManifest)), `${draftPrefix}_manifest.json`, {
-    ContentType: 'application/json',
-  });
+  await storage
+    .upload(Buffer.from(JSON.stringify(draftManifest)), `${draftPrefix}_manifest.json`, {
+      ContentType: 'application/json',
+    })
+    .catch(refundAndRethrow);
 
   // Hosted -> presigned S3 PUT; self-host -> same-origin proxy URL (draftUploadUrl.ts).
   const uploadUrls: UploadUrlResponse['uploadUrls'] = await Promise.all(
@@ -185,7 +192,7 @@ const handler = baseApi().post(async (req, res) => {
       });
       return { path: file.path, url, expiresAt };
     })
-  );
+  ).catch(refundAndRethrow);
 
   req.logger.info(
     `[PUBLISH] upload-url draft=${draftId} ${body.tier}/${body.scopeId}/${body.slug} files=${body.files.length} user=${req.user.id}`
