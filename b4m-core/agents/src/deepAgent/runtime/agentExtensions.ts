@@ -150,6 +150,20 @@ interface Stored<T> {
   source: AgentExtensionSource;
 }
 
+const surfaceProfileEntrySchema = z.object({
+  id: z.string().min(1),
+  surface: z.string().min(1),
+  build: z.custom<SurfaceProfileEntry['build']>(value => typeof value === 'function'),
+});
+
+const toolMapGuardEntrySchema = z.object({
+  id: z.string().min(1),
+  priority: z.number().int(),
+  apply: z.custom<(tools: unknown, context: unknown) => unknown>(value => typeof value === 'function'),
+});
+
+const toolMapSchema = z.record(z.string(), z.unknown());
+
 const THOROUGHNESS_LEVELS = ['quick', 'medium', 'very_thorough'] as const;
 
 const orchestrationProfileSchema = z.object({
@@ -195,7 +209,11 @@ function observeDiscardedResult(value: unknown, logger: AgentExtensionLogger, id
 }
 
 export function createAgentExtensionRegistry<TTools, TState>(
-  options: { logger?: Pick<AgentExtensionLogger, 'warn'> } = {}
+  options: {
+    logger?: Pick<AgentExtensionLogger, 'warn'>;
+    /** Host-specific validation of contributed tool entries; built-ins remain fail-fast. */
+    validateToolMap?: (tools: unknown) => boolean;
+  } = {}
 ): AgentExtensionRegistry<TTools, TState> {
   const warn = (message: string, meta: Record<string, unknown>) => options.logger?.warn(message, meta);
   const profilesBySurface = new Map<string, Stored<SurfaceProfileEntry>>();
@@ -215,8 +233,8 @@ export function createAgentExtensionRegistry<TTools, TState>(
 
   const registerSurfaceProfile = (entry: SurfaceProfileEntry, source: AgentExtensionSource = 'contribution') => {
     assertOpen(entry?.id);
-    if (!entry || !entry.id || !entry.surface || typeof entry.build !== 'function') {
-      return reject(source, `surface profile "${entry?.id}" is malformed`, { id: entry?.id });
+    if (!surfaceProfileEntrySchema.safeParse(entry).success) {
+      return reject(source, `surface profile "${String(entry?.id)}" is malformed`, { id: entry?.id });
     }
     const bySurface = profilesBySurface.get(entry.surface);
     const byId = [...profilesBySurface.values()].find(p => p.entry.id === entry.id);
@@ -237,8 +255,8 @@ export function createAgentExtensionRegistry<TTools, TState>(
     source: AgentExtensionSource = 'contribution'
   ) => {
     assertOpen(entry?.id);
-    if (!entry || !entry.id || typeof entry.apply !== 'function' || !Number.isInteger(entry.priority)) {
-      return reject(source, `tool-map guard "${entry?.id}" is malformed`, { id: entry?.id });
+    if (!toolMapGuardEntrySchema.safeParse(entry).success) {
+      return reject(source, `tool-map guard "${String(entry?.id)}" is malformed`, { id: entry?.id });
     }
     if (
       source === 'contribution' &&
@@ -284,10 +302,19 @@ export function createAgentExtensionRegistry<TTools, TState>(
       const stored = profilesBySurface.get(surface);
       if (!stored) return undefined;
       if (stored.source === 'builtin') return stored.entry.build(ctx);
-      let built: ResolvedOrchestrationProfile | undefined;
       try {
-        built = stored.entry.build(ctx);
-        observeDiscardedResult(built, ctx.logger, stored.entry.id);
+        const built = stored.entry.build(ctx);
+        const asynchronous = observeDiscardedResult(built, ctx.logger, stored.entry.id);
+        if (asynchronous || !isProfileShaped(built)) {
+          ctx.logger.warn(
+            `[agent-extensions] skipped surface profile "${stored.entry.id}": build returned no profile`,
+            {
+              id: stored.entry.id,
+            }
+          );
+          return undefined;
+        }
+        return built;
       } catch (err) {
         ctx.logger.warn(`[agent-extensions] skipped surface profile "${stored.entry.id}": build threw`, {
           id: stored.entry.id,
@@ -295,22 +322,16 @@ export function createAgentExtensionRegistry<TTools, TState>(
         });
         return undefined;
       }
-      if (!isProfileShaped(built)) {
-        ctx.logger.warn(`[agent-extensions] skipped surface profile "${stored.entry.id}": build returned no profile`, {
-          id: stored.entry.id,
-        });
-        return undefined;
-      }
-      return built;
     },
     applyToolMapGuards(tools, ctx) {
       return sortedGuards().reduce((acc, { entry, source }) => {
         if (source === 'builtin') return entry.apply(acc, ctx);
         let next: TTools;
-        let asynchronous: boolean;
+        let valid: boolean;
         try {
           next = entry.apply({ ...acc }, ctx);
-          asynchronous = observeDiscardedResult(next, ctx.logger, entry.id);
+          const asynchronous = observeDiscardedResult(next, ctx.logger, entry.id);
+          valid = !asynchronous && toolMapSchema.safeParse(next).success && (options.validateToolMap?.(next) ?? true);
         } catch (err) {
           ctx.logger.warn(`[agent-extensions] skipped tool-map guard "${entry.id}": apply threw`, {
             id: entry.id,
@@ -318,7 +339,7 @@ export function createAgentExtensionRegistry<TTools, TState>(
           });
           return acc;
         }
-        if (next === null || typeof next !== 'object' || asynchronous) {
+        if (!valid) {
           ctx.logger.warn(`[agent-extensions] skipped tool-map guard "${entry.id}": apply returned no tool map`, {
             id: entry.id,
           });

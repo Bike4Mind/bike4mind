@@ -10,7 +10,7 @@ const { order, tag } = vi.hoisted(() => {
       order.push(id);
       const state = rest.find(r => typeof r === 'object') as { seen?: string[] } | undefined;
       state?.seen?.push(id);
-      return { ...tools, [id]: true };
+      return { ...tools, [id]: { name: id, implementation: () => ({}) } };
     };
   return { order, tag };
 });
@@ -96,6 +96,48 @@ describe('executor agent extensions', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     registry.applyToolMapGuards({} as ExecutorToolMap, { executionId: 'e', logger, runState: {} as IOptiPlanState });
     expect(order).toEqual(['fixture-guard', 'decompose-once', 'plan-completion', 'brief-context']);
+  });
+
+  it.each([
+    null,
+    false,
+    { name: 'fixture', implementation: 'not-callable' },
+    { name: 42, implementation: () => ({}) },
+    { name: 'fixture', implementation: () => ({}), artifactType: false },
+  ])('skips malformed contributed tool definitions (%s)', malformed => {
+    const original = { fixture: { name: 'fixture', implementation: vi.fn() } };
+    const registry = createExecutorAgentExtensions([
+      { toolMapGuards: [{ id: 'invalid-tool', priority: 1, apply: () => ({ fixture: malformed }) as never }] },
+    ]);
+
+    const result = registry.applyToolMapGuards(original, {
+      executionId: 'e',
+      logger,
+      runState: {} as IOptiPlanState,
+    });
+
+    expect(result.fixture).toBe(original.fixture);
+    expect(order).toEqual(['decompose-once', 'plan-completion', 'brief-context']);
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('returned no tool map'), {
+      id: 'invalid-tool',
+    });
+  });
+
+  it('accepts a valid contributed tool wrapper', () => {
+    const original = { fixture: { name: 'fixture', implementation: vi.fn() } };
+    const wrapped = { ...original.fixture, implementation: vi.fn() };
+    const registry = createExecutorAgentExtensions([
+      { toolMapGuards: [{ id: 'wrapper', priority: 1, apply: tools => ({ ...tools, fixture: wrapped }) }] },
+    ]);
+
+    const result = registry.applyToolMapGuards(original, {
+      executionId: 'e',
+      logger,
+      runState: {} as IOptiPlanState,
+    });
+
+    expect(result.fixture).toBe(wrapped);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('builds the shared registry from the generated contributions', () => {

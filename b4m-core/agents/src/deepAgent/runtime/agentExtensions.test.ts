@@ -134,6 +134,52 @@ describe('createAgentExtensionRegistry', () => {
     expect(runLogger.warn).toHaveBeenCalledTimes(2);
   });
 
+  it.each([[], new Date(), new Map(), new Set()])(
+    'skips a contributed non-record tool map (%s) and preserves built-in guards',
+    malformed => {
+      const { registry } = newRegistry();
+      const runLogger = { info: vi.fn(), warn: vi.fn() };
+      registry.registerToolMapGuard({ id: 'bad-map', priority: 1, apply: () => malformed as never });
+      registry.registerToolMapGuard(tagGuard('builtin', 100), 'builtin');
+
+      expect(
+        registry.applyToolMapGuards({ t: 'x' }, { executionId: 'e', logger: runLogger, runState: { calls: [] } })
+      ).toEqual({ t: 'builtin(x)' });
+      expect(runLogger.warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('returned no tool map'), {
+        id: 'bad-map',
+      });
+    }
+  );
+
+  it.each([42, {}, Symbol('invalid'), ''])('drops non-string or empty registration keys (%s)', invalidKey => {
+    const { registry, warn } = newRegistry();
+    registry.registerSurfaceProfile({ ...profile('valid', 's'), id: invalidKey as never });
+    registry.registerSurfaceProfile({ ...profile('valid', 's'), surface: invalidKey as never });
+    registry.registerToolMapGuard({ ...tagGuard('valid', 1), id: invalidKey as never });
+
+    expect(registry.list()).toEqual({ surfaceProfiles: [], toolMapGuards: [] });
+    expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it('contains failures in host validation and continues to the built-ins', () => {
+    const runLogger = { info: vi.fn(), warn: vi.fn() };
+    const registry = createAgentExtensionRegistry<Tools, State>({
+      validateToolMap: () => {
+        throw new Error('invalid tool entry');
+      },
+    });
+    registry.registerToolMapGuard(tagGuard('contributed', 1));
+    registry.registerToolMapGuard(tagGuard('builtin', 100), 'builtin');
+
+    expect(
+      registry.applyToolMapGuards({ t: 'x' }, { executionId: 'e', logger: runLogger, runState: { calls: [] } })
+    ).toEqual({ t: 'builtin(x)' });
+    expect(runLogger.warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('apply threw'), {
+      id: 'contributed',
+      error: 'invalid tool entry',
+    });
+  });
+
   it('lets a throwing built-in guard propagate', () => {
     const { registry } = newRegistry();
     registry.registerToolMapGuard(
@@ -167,6 +213,27 @@ describe('createAgentExtensionRegistry', () => {
     });
     expect(registry.resolveSurfaceProfile('s', { ...profileCtx, logger: runLogger })).toBeUndefined();
     expect(runLogger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('contains errors while inspecting a contributed profile', () => {
+    const { registry } = newRegistry();
+    const runLogger = { info: vi.fn(), warn: vi.fn() };
+    registry.registerSurfaceProfile({
+      id: 'bad-profile',
+      surface: 's',
+      build: () => ({
+        ...profile('p', 's').build(profileCtx),
+        get allowedTools(): string[] {
+          throw new Error('tool list unavailable');
+        },
+      }),
+    });
+
+    expect(registry.resolveSurfaceProfile('s', { ...profileCtx, logger: runLogger })).toBeUndefined();
+    expect(runLogger.warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('build threw'), {
+      id: 'bad-profile',
+      error: 'tool list unavailable',
+    });
   });
 
   it('resolves no profile when a contributed build returns something that is not a profile', () => {

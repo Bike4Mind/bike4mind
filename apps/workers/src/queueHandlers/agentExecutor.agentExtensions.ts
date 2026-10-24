@@ -7,6 +7,7 @@
  * 1-99 and therefore always wrap inside the built-ins.
  */
 
+import { z } from 'zod';
 import {
   createAgentExtensionRegistry,
   type AgentExtensionContribution,
@@ -26,6 +27,15 @@ import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 export type ExecutorToolMap = Record<string, ToolDefinition>;
 export type ExecutorAgentExtensions = AgentExtensionRegistry<ExecutorToolMap, IOptiPlanState>;
 export type ExecutorAgentExtensionContribution = AgentExtensionContribution<ExecutorToolMap, IOptiPlanState>;
+
+const executorToolMapSchema = z.record(
+  z.string(),
+  z.object({
+    name: z.string(),
+    implementation: z.custom<ToolDefinition['implementation']>(value => typeof value === 'function'),
+    artifactType: z.string().optional(),
+  })
+);
 
 function registerBuiltIns(registry: ExecutorAgentExtensions): void {
   registry.registerSurfaceProfile(
@@ -81,7 +91,10 @@ export function createExecutorAgentExtensions(
   contributions: readonly ExecutorAgentExtensionContribution[],
   logger?: Pick<AgentExtensionLogger, 'warn'>
 ): ExecutorAgentExtensions {
-  const registry = createAgentExtensionRegistry<ExecutorToolMap, IOptiPlanState>({ logger });
+  const registry = createAgentExtensionRegistry<ExecutorToolMap, IOptiPlanState>({
+    logger,
+    validateToolMap: tools => executorToolMapSchema.safeParse(tools).success,
+  });
   registerBuiltIns(registry);
   for (const contribution of contributions) registry.registerContribution(contribution);
   registry.freeze();
