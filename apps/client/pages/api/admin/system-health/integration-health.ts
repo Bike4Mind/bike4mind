@@ -12,7 +12,13 @@ import {
 import type { IntegrationName, CircuitBreakerMode } from '@bike4mind/database';
 import { getHealthSummary, runAllProbes, runProbe } from '@bike4mind/server-utils/services/integrationHealthService';
 import { getStatus, clearCache } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
-import { flushBreakerMetrics, getAllBreakerStates, resetBreaker } from '@bike4mind/server-utils/services/mcpCircuitBreakers';
+import {
+  flushBreakerMetrics,
+  getAllBreakerStates,
+  resetBreaker,
+} from '@bike4mind/server-utils/services/mcpCircuitBreakers';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordIntegrationProbe } from '@server/utils/integrationProbeAudit';
 
 const ensureAdmin = (isAdmin?: boolean | null) => {
   if (!isAdmin) {
@@ -86,6 +92,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       const result = await runProbe(integration as IntegrationName);
 
+      await recordIntegrationProbe(req, result);
+
       return res.json({
         status: result.status,
         integration: result.integration,
@@ -98,6 +106,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     // Probe all integrations
     const results = await runAllProbes(logger);
+
+    await recordIntegrationProbe(req, results);
 
     return res.json({
       results: results.map(r => ({
@@ -124,6 +134,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError(`Invalid mode: ${mode}. Must be one of: ${validModes.join(', ')}`);
     }
 
+    const previous = await integrationCircuitOverrideRepository.getOverride(integration as IntegrationName);
     const override = await integrationCircuitOverrideRepository.setOverride({
       integration: integration as IntegrationName,
       mode: mode as CircuitBreakerMode,
@@ -139,6 +150,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       resetBreaker(integration as string);
       await flushBreakerMetrics();
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'system_health.integration_override_set',
+      target: {
+        kind: 'settings',
+        id: override.integration,
+        displayName: `Circuit breaker override for ${override.integration}`,
+      },
+      summary: `set circuit breaker mode for ${override.integration} to ${override.mode}`,
+      reason: override.reason,
+      changes: [{ field: 'mode', before: previous?.mode ?? 'auto', after: override.mode }],
+      details: { integration: override.integration, mode: override.mode },
+    });
 
     return res.json({
       integration: override.integration,

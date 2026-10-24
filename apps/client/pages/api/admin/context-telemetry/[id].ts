@@ -7,6 +7,7 @@ import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/err
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const paramsSchema = z.object({
   id: z.string().min(1),
@@ -126,6 +127,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
         throw error;
       }
+
+      // Outside the try: the deletion already succeeded, so an audit error must not log a GDPR failure.
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.context_telemetry.deleted',
+        target: { kind: 'system', id, displayName: `Context telemetry for quest ${id}` },
+        summary: `deleted context telemetry for quest ${id}`,
+        details: { questId: id },
+      });
     })
   );
 
