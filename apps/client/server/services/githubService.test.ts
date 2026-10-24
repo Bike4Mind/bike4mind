@@ -88,7 +88,7 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
 }));
 
 // Mock token encryption (rotation-aware decrypt: current key, then previous)
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: mockDecryptToken,
 }));
 

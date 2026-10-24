@@ -4,7 +4,7 @@ import { adminSettingsRepository, User, userRepository } from '@bike4mind/databa
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { readConsentedAcquisitionTouches } from './acquisition';
 import { emitProductEvent, HOST_PRODUCT_ID } from './emitActiveEvent';
-import { pseudonymizeUserId } from './pseudonymize';
+import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { stableEventId } from './signupEvents';
 import { logEventSafe } from '@server/utils/analyticsLog';
 

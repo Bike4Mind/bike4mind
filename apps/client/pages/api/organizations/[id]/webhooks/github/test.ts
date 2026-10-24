@@ -17,7 +17,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
 import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { fetchPinned, SsrfError, validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { cacheRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError, TooManyRequestsError } from '@bike4mind/utils';

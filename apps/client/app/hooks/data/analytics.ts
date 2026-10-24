@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { AnalyticsEventPayloads } from '@server/types/analytics';
+import { AnalyticsEventPayloads } from '@bike4mind/server-utils/types/analytics/index';
 
 export function useLogEvent() {
   return useMutation({

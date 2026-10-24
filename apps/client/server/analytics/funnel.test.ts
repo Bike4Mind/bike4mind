@@ -18,7 +18,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import { APP_DECISION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
-import { pseudonymize } from './pseudonymize';
+import { pseudonymize } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { stableEventId } from './signupEvents';
 import {
   emitEmailVerifiedFunnelEvents,

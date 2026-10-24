@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { agentRepository, sessionAgentConfigRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { assertSessionAccess } from '@server/utils/sessionAccess';
+import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
 
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {

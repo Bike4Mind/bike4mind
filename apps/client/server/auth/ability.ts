@@ -20,7 +20,7 @@ import {
 import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
 import { SecretRotation } from '@bike4mind/database/infra';
 import { Subscription } from '@server/models/Subscription';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 export type Ability = MongoAbility;
 function defineAbilitiesFor(user: IUserDocument | undefined) {

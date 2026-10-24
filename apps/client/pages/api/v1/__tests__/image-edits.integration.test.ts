@@ -116,7 +116,7 @@ vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async orig => ({
 vi.mock('@server/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
-vi.mock('@server/utils/orgAccess', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   resolveBillingOrgId: (...a: unknown[]) => mockResolveBillingOrgId(...a),
 }));
@@ -334,8 +334,9 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
       // gate stubbed, so this pins the status the route actually returns, not a mocked rejection.
       // Unlike llm.integration.test.ts, orgAccess stays mocked file-wide because the forwarding
       // case below needs mockResolveBillingOrgId to return a fixed org.
-      const { resolveBillingOrgId: realResolveBillingOrgId } =
-        await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+      const { resolveBillingOrgId: realResolveBillingOrgId } = await vi.importActual<
+        typeof import('@bike4mind/server-utils/utils/orgAccess')
+      >('@bike4mind/server-utils/utils/orgAccess');
       mockResolveBillingOrgId.mockImplementation(realResolveBillingOrgId);
       mockOrgFindAccessibleById.mockResolvedValueOnce(null);
       const { req, res } = fire({ apiKey: null, body: { organizationId: 'foreign-org' } });

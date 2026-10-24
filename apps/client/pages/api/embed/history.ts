@@ -12,7 +12,7 @@
  */
 
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
 import type { EmbedSessionContext } from '@server/embed/embedSessionToken';

@@ -51,7 +51,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: unknown, _res: unknown) => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: unknown, _res: unknown) => undefined,
+}));
 vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({ resolveRetrievalLakeScope: mockResolveScope }));
 // getProviderFromModel is stubbed so a test can choose the provider, but resolveEmbeddingConfig
 // is the real one: which credential a provider needs is the behaviour under test here.

@@ -14,7 +14,7 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { filterReadableQuests } from '@server/utils/sessionAccess';
+import { filterReadableQuests } from '@bike4mind/server-utils/utils/sessionAccess';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { resolveProxyTarget } from '@bike4mind/server-utils/utils/appFileProxy';
 import { apiKeyService } from '@bike4mind/services';

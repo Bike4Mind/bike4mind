@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -13,7 +13,7 @@ import { StatusManager } from '@bike4mind/services/llm/StatusManager';
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
-import { assertSessionAccess } from '@server/utils/sessionAccess';
+import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
 import { ChatModels, NotFoundError } from '@bike4mind/common';
 import { Resource } from 'sst';
 

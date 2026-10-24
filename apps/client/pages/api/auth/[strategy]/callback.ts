@@ -5,7 +5,7 @@ import { AuthStrategy } from '@bike4mind/common';
 import { authFailLogRepository } from '@bike4mind/database';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { issueBrowserSession } from '@server/auth/issueSession';
-import { verifyStateToken, BaseStatePayload } from '@server/auth/jwtStateStore';
+import { verifyStateToken, BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { baseApi } from '@server/middlewares/baseApi';

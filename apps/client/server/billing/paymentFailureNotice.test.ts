@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
-import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const mocks = vi.hoisted(() => ({
   findOrg: vi.fn(),

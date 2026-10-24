@@ -2,7 +2,7 @@ import { cacheRepository, deviceAuthorizationRepository, userRepository } from '
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS } from '@server/utils/oauth/deviceAuthHelpers';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';

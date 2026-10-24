@@ -88,7 +88,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 // Records the options each route asks for, so a limit can be asserted by value
 // rather than by "some middleware is present".
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => Object.assign(vi.fn(), { _rateLimit: options }),
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => vi.fn() }));

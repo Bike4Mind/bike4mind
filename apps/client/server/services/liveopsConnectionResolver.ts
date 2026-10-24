@@ -21,7 +21,7 @@ import {
   orgSlackWorkspaceRepository,
   slackDevWorkspaceRepository,
 } from '@bike4mind/database';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { decryptSecret, isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 

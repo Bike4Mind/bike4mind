@@ -47,7 +47,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
 // common.ts reads Config at import, so importOriginal crashes here: take the real predicate from its own module.
 vi.mock('@server/integrations/google/drive/common', async () => ({
   getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
@@ -62,7 +62,7 @@ vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async i
   const actual = await importOriginal<typeof import('@bike4mind/server-utils/integrations/google/drive/driveClient')>();
   return { ...actual, createDriveClient: h.createDriveClient, getFolderAccess: h.getFolderAccess };
 });
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: () => 'plaintext-refresh-token' }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: () => 'plaintext-refresh-token' }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ isEncrypted: () => true }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({

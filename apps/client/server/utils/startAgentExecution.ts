@@ -36,7 +36,7 @@ import {
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
-import { pinnableMessageFileIds } from '@server/managers/pinnableMessageFileIds';
+import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an

@@ -16,7 +16,7 @@ import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
 import type { z } from 'zod';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 

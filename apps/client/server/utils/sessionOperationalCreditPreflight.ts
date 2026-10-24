@@ -107,7 +107,7 @@ function settlesFreeForAnyVolume(modelInfo: ModelInfo): boolean {
  */
 async function operationalSpendSettlesFree(logger?: Logger): Promise<boolean> {
   try {
-    const { OperationsModelService } = await import('@client/services/operationsModelService');
+    const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
     const { modelInfo } = await OperationsModelService.getOperationsModel();
     return settlesFreeForAnyVolume(modelInfo);
   } catch (err) {

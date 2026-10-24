@@ -18,7 +18,7 @@ import {
   InsufficientCreditsPreflightError,
   type PreflightCreditHold,
 } from '@server/utils/creditPreflight';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 
 /**

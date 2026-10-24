@@ -4,7 +4,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { z } from 'zod';
-import { decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptToken, encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 /**

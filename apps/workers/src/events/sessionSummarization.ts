@@ -13,7 +13,7 @@ import {
   organizationRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import {
   AiEvents,
   ChatModelName,

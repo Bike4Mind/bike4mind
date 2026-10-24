@@ -54,7 +54,7 @@ vi.mock('@aws-sdk/s3-presigned-post', () => ({
   createPresignedPost: (...a: unknown[]) => mockPresign(...a),
 }));
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'test-bucket' } } }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
   getEffectiveApiKeyByBackend: mockGetApiKey,
 }));

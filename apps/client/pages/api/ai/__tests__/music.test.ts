@@ -158,7 +158,7 @@ vi.mock('@bike4mind/utils', async importActual => ({
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
   getSettingsMap: (...a: unknown[]) => getSettingsMap(...a),
 }));
-vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => saveGeneratedAssetToFiles(...a),
 }));
 
