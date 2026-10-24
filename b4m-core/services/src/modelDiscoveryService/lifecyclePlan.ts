@@ -332,7 +332,7 @@ export interface LifecyclePlanInput {
   /**
    * Contributors on that same superseded row, per model, kept by the graduation row it replaces.
    * Blanket-crediting `discovery` would tell the read path discovery invented a disable a provider
-   * declared - and that a provider supplied a window discovery measured.
+   * declared; the `availability` credit is the one the read path interprets.
    */
   priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
   autoRemap: DiscoveryAutoRemapPolicy;
