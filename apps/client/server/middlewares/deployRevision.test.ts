@@ -44,6 +44,15 @@ describe('deployRevision', () => {
     expect(setHeader).toHaveBeenCalledWith(DEPLOY_REVISION_HEADER, REVISION);
   });
 
+  it('uses the fingerprint when the revision is malformed', () => {
+    vi.stubEnv('B4M_DEPLOYED_REVISION', 'main');
+    vi.stubEnv('B4M_BUILD_FINGERPRINT', FINGERPRINT);
+
+    const { setHeader } = run();
+
+    expect(setHeader).toHaveBeenCalledWith(DEPLOY_REVISION_HEADER, FINGERPRINT);
+  });
+
   it.each([
     ['both unset', '', ''],
     ['malformed revision and no fingerprint', 'main', ''],

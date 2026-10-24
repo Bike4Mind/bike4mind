@@ -1,6 +1,9 @@
 import type { NextFunction, Request, Response } from 'express';
 
-/** Stamped on every API response so a long-lived tab can notice a deploy happened under it. */
+/**
+ * Stamped on every baseApi response so a long-lived tab can notice a deploy happened under it.
+ * Must stay in sync with the lowercase literal in app/contexts/apiClient.ts.
+ */
 export const DEPLOY_REVISION_HEADER = 'X-Deployed-Revision';
 
 // Same shapes /api/health accepts; a stage that sets neither gets no header (and no banner).

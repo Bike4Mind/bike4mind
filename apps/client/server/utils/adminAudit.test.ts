@@ -202,8 +202,13 @@ describe('recordAdminActionFromRequest', () => {
 });
 
 describe('parseAdminActionReason', () => {
-  it.each([undefined, null])('points at a reload when no reason key was sent (%s)', value => {
-    expect(() => parseAdminActionReason(value)).toThrow(ADMIN_ACTION_REASON_MISSING_MESSAGE);
+  it('points at a reload when no reason key was sent', () => {
+    expect(() => parseAdminActionReason(undefined)).toThrow(ADMIN_ACTION_REASON_MISSING_MESSAGE);
+    expect(ADMIN_ACTION_REASON_MISSING_MESSAGE).toMatch(/reload/i);
+  });
+
+  it('keeps the field-level message for an explicitly sent null', () => {
+    expect(() => parseAdminActionReason(null)).toThrow('A reason is required');
   });
 
   it.each(['', '   ', 'abc'])('keeps the field-level message when a reason was sent but is unusable (%j)', value => {

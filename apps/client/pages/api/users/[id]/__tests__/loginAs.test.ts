@@ -106,6 +106,7 @@ describe('POST /api/users/:id/loginAs - respond() boundary', () => {
     const { status, body } = httpErrorToResponse(error, undefined);
 
     expect(status).toBe(400);
+    expect(body.error).toMatch(/reload/i);
     expect(body.error).toBe(ADMIN_ACTION_REASON_MISSING_MESSAGE);
     expect(mockLoginAs).not.toHaveBeenCalled();
   });

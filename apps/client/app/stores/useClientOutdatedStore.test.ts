@@ -5,7 +5,7 @@ describe('useClientOutdatedStore', () => {
   beforeEach(() => useClientOutdatedStore.setState({ outdated: false }));
 
   it('does not start out outdated', () => {
-    expect(useClientOutdatedStore.getState().outdated).toBe(false);
+    expect(useClientOutdatedStore.getInitialState().outdated).toBe(false);
   });
 
   it('markOutdated flips the flag', () => {

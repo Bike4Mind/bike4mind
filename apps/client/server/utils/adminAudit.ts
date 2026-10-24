@@ -137,7 +137,7 @@ export const ADMIN_ACTION_REASON_MISSING_MESSAGE =
 
 /** Validates a reason-required admin action's reason; a missing or short reason is a 400. */
 export const parseAdminActionReason = (value: unknown): string => {
-  if (value === undefined || value === null) throw new BadRequestError(ADMIN_ACTION_REASON_MISSING_MESSAGE);
+  if (value === undefined) throw new BadRequestError(ADMIN_ACTION_REASON_MISSING_MESSAGE);
   const parsed = AdminActionReasonSchema.safeParse(value);
   if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'A reason is required');
   return parsed.data;

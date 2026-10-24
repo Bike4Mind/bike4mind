@@ -135,8 +135,8 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     next();
   });
 
-  // Immediately after the stamp, ahead of everything that can reject (logging, body-size, auth):
-  // even a 413/401 must tell a stale tab that a deploy happened.
+  // Immediately after the stamp, ahead of connectDB, the body-size 413 and every auth middleware
+  // (the things that can reject): even a 413/401 must tell a stale tab that a deploy happened.
   router.use(deployRevision);
 
   // Add req.logger early in the middleware chain, so subsequent

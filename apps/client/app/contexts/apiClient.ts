@@ -72,13 +72,20 @@ api.interceptors.request.use(config => {
   return config;
 });
 
-// The server stamps every response with the revision it is serving. A revision other than the one
-// this page load started on means a deploy happened under this tab; an errored response counts too,
+// Every baseApi response carries the revision it was served by. A revision other than the one this
+// page load started on means a deploy happened under this tab; an errored response counts too,
 // since a stale tab's first hint is often a 4xx/5xx it cannot explain.
+// Lowercase spelling of DEPLOY_REVISION_HEADER in server/middlewares/deployRevision.ts - must stay
+// in sync (apiClient.test.ts pins the pair).
 const DEPLOY_REVISION_HEADER = 'x-deployed-revision';
 
 const noteDeployedRevision = (headers: unknown): void => {
-  const revision = (headers as Record<string, unknown> | undefined)?.[DEPLOY_REVISION_HEADER];
+  const record = headers as Record<string, unknown> | undefined;
+  // A shared-cache response (s-maxage) can legitimately carry the previous deploy's revision, so
+  // it must neither set nor be compared against the baseline.
+  const cacheControl = record?.['cache-control'];
+  if (typeof cacheControl === 'string' && /\bs-maxage\b/i.test(cacheControl)) return;
+  const revision = record?.[DEPLOY_REVISION_HEADER];
   if (typeof revision === 'string' && observeDeployedRevision(revision)) {
     useClientOutdatedStore.getState().markOutdated();
   }

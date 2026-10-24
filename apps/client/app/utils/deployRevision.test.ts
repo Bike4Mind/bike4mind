@@ -1,4 +1,4 @@
-import { describe, beforeEach, expect, it } from 'vitest';
+import { describe, beforeEach, expect, it, vi } from 'vitest';
 import { observeDeployedRevision, resetDeployedRevisionBaseline } from './deployRevision';
 
 describe('observeDeployedRevision', () => {
@@ -29,5 +29,12 @@ describe('observeDeployedRevision', () => {
   it('does not make a missing-revision response the baseline', () => {
     expect(observeDeployedRevision(undefined)).toBe(false);
     expect(observeDeployedRevision('rev-a')).toBe(false);
+  });
+
+  it('starts a fresh module instance (a reload) with no baseline', async () => {
+    observeDeployedRevision('rev-a');
+    vi.resetModules();
+    const fresh = await import('./deployRevision');
+    expect(fresh.observeDeployedRevision('rev-b')).toBe(false);
   });
 });

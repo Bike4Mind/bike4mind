@@ -124,4 +124,29 @@ describe('baseApi stamps req.receivedAt on arrival', () => {
 
     expect(req.receivedAt).toEqual(ARRIVAL);
   });
+
+  it('has already stamped the deploy revision when the body-size guard answers 413', async () => {
+    baseApi({ auth: true });
+    const json = vi.fn();
+    const res = { status: vi.fn(() => ({ json })) };
+    const req = { headers: { 'content-length': String(Number.MAX_SAFE_INTEGER) } };
+
+    let rejectedBy = -1;
+    for (const [index, middleware] of h.useCalls.entries()) {
+      let advanced = false;
+      await middleware(req, res, () => {
+        advanced = true;
+      });
+      if (!advanced) {
+        rejectedBy = index;
+        break;
+      }
+    }
+
+    expect(res.status).toHaveBeenCalledWith(413);
+    expect(rejectedBy).toBeGreaterThan(-1);
+    // deployRevision (a recorder here) ran before the chain was cut short by the 413.
+    expect(h.seenAt).toHaveProperty('deployRevision');
+    expect(h.seenAt).toHaveProperty('logging');
+  });
 });
