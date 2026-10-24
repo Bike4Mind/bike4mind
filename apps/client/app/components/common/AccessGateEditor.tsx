@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Button, FormLabel, IconButton, Input, Radio, Sheet, Textarea, Tooltip, Typography } from '@mui/joy';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
 import KeyIcon from '@mui/icons-material/Key';
@@ -39,6 +39,15 @@ const GATE_OPTIONS: Array<{ value: GateKind; label: string; icon: React.ReactNod
   { value: 'passphrase', label: 'Passphrase', icon: <KeyIcon sx={{ fontSize: 16 }} /> },
   { value: 'domain', label: 'Email domain', icon: <DomainIcon sx={{ fontSize: 16 }} /> },
 ];
+/** Who opens a non-public page at its own address (/p/...), which checks visibility and membership
+ *  only, never a stored gate (checkVisibility). An unknown level is owner-only there, like private. */
+function pageAddressNote(visibility: string): string {
+  if (visibility === 'organization')
+    return 'Team members who open the page itself, not a private link, are not asked for it.';
+  if (visibility === 'project')
+    return 'Project members who open the page itself, not a private link, are not asked for it.';
+  return 'The page itself, not a private link, still opens only for you.';
+}
 /** Syntactic domain pre-filter (mirrors the server DOMAIN_RE); entries are then
  *  validated as real registrable domains and sent/stored AS ENTERED (never reduced). */
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
@@ -85,6 +94,10 @@ export function AccessGateEditor({
    *  it will "Replace" a live passphrase. */
   const [liveGateKind, setLiveGateKind] = useState<GateKind>(initialGate?.kind ?? 'none');
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const hintRef = useRef<HTMLParagraphElement>(null);
+  /** Set by a successful Clear. The button that opened the confirmation is gone by then, so the
+   *  modal's focus restore has nowhere to go; focus lands on the hint that replaces the editor. */
+  const focusHintAfterClear = useRef(false);
 
   const isPublic = visibility === 'public';
   /** Stored on a non-public item: still enforced on private links, so the owner can see and clear it. */
@@ -94,6 +107,13 @@ export function AccessGateEditor({
   const gateOptions = isPublic ? GATE_OPTIONS : GATE_OPTIONS.filter(o => o.value !== 'none');
   /** A passphrase is already in force, so generating another REVOKES it for existing holders. */
   const hasLiveGate = liveGateKind === 'passphrase';
+
+  // Waits for the modal to close as well: its focus restore runs on unmount and would undo this.
+  useEffect(() => {
+    if (!focusHintAfterClear.current || confirmingClear || showEditor) return;
+    focusHintAfterClear.current = false;
+    hintRef.current?.focus();
+  }, [confirmingClear, showEditor]);
 
   const copyJustSet = async () => {
     if (!justSet) return;
@@ -199,6 +219,7 @@ export function AccessGateEditor({
 
   const clearGate = async () => {
     const cleared = await commit(null);
+    if (cleared) focusHintAfterClear.current = true;
     setConfirmingClear(false);
     if (!cleared) return;
     // The stored gate is gone, so drop the draft that was seeded from it as well.
@@ -213,8 +234,16 @@ export function AccessGateEditor({
         <FormLabel sx={{ mb: 0 }}>Who can view</FormLabel>
       </Box>
       {!showEditor ? (
-        <Typography level="body-xs" sx={{ opacity: 0.75 }} data-testid={`${testIdPrefix}-needs-public`}>
-          Access gates apply to public artifacts. Set visibility to Public to add a passphrase or domain restriction.
+        // Says what this editor can do, not where gates apply: a stored gate also guards private
+        // links (the note below), and an owner reads this right after clearing one.
+        <Typography
+          ref={hintRef}
+          tabIndex={-1}
+          level="body-xs"
+          sx={{ opacity: 0.75 }}
+          data-testid={`${testIdPrefix}-needs-public`}
+        >
+          To add a passphrase or domain restriction here, set visibility to Public.
         </Typography>
       ) : (
         <>
@@ -239,9 +268,9 @@ export function AccessGateEditor({
                   checkShareGrant and checkVisibility. */}
               <Typography level="body-xs">
                 {liveGateKind === 'passphrase'
-                  ? 'Private links to this page also need the passphrase.'
-                  : 'Private links to this page also need a verified email from an allowed domain.'}{' '}
-                People the visibility already admits are not asked for it when they open the page directly.
+                  ? 'Private links to this page need the passphrase.'
+                  : 'Private links to this page need a verified email from an allowed domain.'}{' '}
+                {pageAddressNote(visibility)}
               </Typography>
             </Sheet>
           )}
@@ -419,16 +448,20 @@ export function AccessGateEditor({
             />
           )}
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-            <Button
-              size="sm"
-              variant="outlined"
-              color="neutral"
-              loading={busy}
-              onClick={() => void apply()}
-              data-testid={`${testIdPrefix}-apply`}
-            >
-              {kind === 'none' ? 'Remove gate' : 'Apply'}
-            </Button>
+            {/* A draft of 'none' survives a public -> non-public switch with no card left to show
+                it; there Apply would be an unconfirmed Remove gate, so only Clear gate removes. */}
+            {(isPublic || kind !== 'none') && (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                loading={busy}
+                onClick={() => void apply()}
+                data-testid={`${testIdPrefix}-apply`}
+              >
+                {kind === 'none' ? 'Remove gate' : 'Apply'}
+              </Button>
+            )}
             {hasPrivateLinkGate && (
               <Button
                 size="sm"
@@ -452,8 +485,8 @@ export function AccessGateEditor({
         title="Clear access gate"
         description={
           liveGateKind === 'passphrase'
-            ? 'Private links to this page will open without a passphrase. The current passphrase cannot be recovered.'
-            : 'Private links to this page will open without an email domain check.'
+            ? 'Anyone with a private link to this page will open it without a passphrase. The current passphrase cannot be recovered.'
+            : 'Anyone with a private link to this page will open it without signing in.'
         }
         confirmText="Clear gate"
         confirmColor="danger"
