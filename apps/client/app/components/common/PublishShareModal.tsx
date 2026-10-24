@@ -25,6 +25,7 @@ import LinkIcon from '@mui/icons-material/Link';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { isAxiosError } from 'axios';
+import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind/common';
 import { ELISION_PUBLISH_TITLE } from '@bike4mind/common';
@@ -32,6 +33,7 @@ import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { getValidationViolationsMessage } from '@client/app/utils/error';
 import { ShareActions } from './ShareActions';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
+import { ClearGateConfirmModal, StoredGateNote, STORED_GATE_CLEARED_MESSAGE } from './StoredGateClear';
 import { getPublishAccess, LIGHT_WARNING_TEXT, PUBLISH_ACCESS_META, type PublishAccess } from './PublishAccessBadge';
 import {
   toShareUrl,
@@ -45,6 +47,7 @@ import {
   updatePublishedAccessGate,
   getPublishedManageState,
   getShareTokenState,
+  isRevokeOrphanGateRefusal,
   type PublishAccessGateInput,
   type PublishMode,
   type ArtifactPublishOpts,
@@ -172,6 +175,19 @@ const GATED_LINK_WHO: Record<StoredGate, string> = {
   passphrase: 'who also has the passphrase',
   domain: 'who signs in with a verified email from an allowed domain',
 };
+/** GATED_LINK_WHO for a plural subject ("viewers who ..."). */
+const GATED_VIEWERS_WHO: Record<StoredGate, string> = {
+  passphrase: 'who also have the passphrase',
+  domain: 'who sign in with a verified email from an allowed domain',
+};
+
+/** The sentence a shared non-public option's hint adds about its private links, or null when there is
+ *  nothing to add. The hints carry no closing period, so the caller ends that sentence first. */
+function privateLinkHintNote(storedGate: StoredGate | null | undefined): string | null {
+  if (storedGate === null) return null;
+  if (storedGate === undefined) return 'Private-link access depends on its access settings.';
+  return `Private links open only for viewers ${GATED_VIEWERS_WHO[storedGate]}.`;
+}
 
 /** The PublishAccessBadge chip's text color, including its light-mode warning shade. */
 const softTextColor = (color: ColorPaletteProp, mode: 'light' | 'dark') =>
@@ -322,6 +338,12 @@ export function PublishShareModal({
     gateRevision.current += 1;
     setStoredAccess({ status: 'known', gate });
   }, []);
+  const queryClient = useQueryClient();
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const revokeButtonRef = useRef<HTMLButtonElement>(null);
+  // Set by a successful clear: the Clear button is gone by then, so focus moves on to Revoke, the
+  // action the owner was after.
+  const focusRevokeAfterClear = useRef(false);
   // Explicit acknowledgement of `incompleteWarning`; gates the publish button.
   const [incompleteAck, setIncompleteAck] = useState(false);
   // `resolvePublished` is in flight: hold the create button so a click can't race the lookup.
@@ -347,6 +369,7 @@ export function PublishShareModal({
       setGateTouched(false);
       gateRevision.current += 1;
       setStoredAccess({ status: 'unknown' });
+      setConfirmingClear(false);
       setIncompleteAck(false);
       setReopened(false);
     }
@@ -644,6 +667,51 @@ export function PublishShareModal({
     else setVisibility(next);
   };
 
+  const readStoredGate = async () => {
+    if (!result) return;
+    const revision = gateRevision.current;
+    try {
+      const state = await getPublishedManageState(result.publicId);
+      // A clear (or a reopen) that landed while this read was out is newer than what it returned.
+      if (revision !== gateRevision.current) return;
+      setStoredGate(state.accessGate?.kind ?? null);
+    } catch {
+      /* the refusal toast already said why; the seed read's own warning covers an unreadable record */
+    }
+  };
+
+  // Clear a gate stored on a non-public page (the same PATCH and confirmation AccessGateEditor uses).
+  // Its private links stop asking for it, so the last of them can be revoked.
+  const clearStoredGate = async () => {
+    if (!result || busy) return;
+    setBusy(true);
+    try {
+      await updatePublishedAccessGate(result.publicId, null);
+      setStoredGate(null);
+      // Drop the draft that was seeded from the stored gate, so a later switch to Public starts open.
+      setGateKind('none');
+      setGatePassphrase('');
+      setGateDomainsText('');
+      setGateTouched(false);
+      focusRevokeAfterClear.current = true;
+      toast.success(STORED_GATE_CLEARED_MESSAGE);
+      // Not opened from the Live Artifacts tab, so its row badge is refreshed by a refetch.
+      void queryClient.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+      setConfirmingClear(false);
+    }
+  };
+
+  // Waits for the confirmation to close as well: its focus restore runs on unmount and would undo this.
+  useEffect(() => {
+    if (!focusRevokeAfterClear.current || confirmingClear) return;
+    focusRevokeAfterClear.current = false;
+    revokeButtonRef.current?.focus();
+  }, [confirmingClear]);
+
   // No-sign-in link (`/a/<token>`): mint on demand, rotate (revokes old links), or revoke.
   const runShareToken = async (action: () => Promise<string | null>, successMsg: string): Promise<void> => {
     if (!result || shareBusy) return;
@@ -653,6 +721,9 @@ export function PublishShareModal({
       toast.success(successMsg);
     } catch (err) {
       toast.error(errorMessage(err));
+      // A refusal means a gate is stored whatever this dialog last read, so learn which kind and
+      // offer its Clear action instead of leaving the owner with only the message.
+      if (isRevokeOrphanGateRefusal(err)) void readStoredGate();
     } finally {
       setShareBusy(false);
     }
@@ -733,7 +804,7 @@ export function PublishShareModal({
         <Typography level="title-lg" sx={{ mb: 0.5 }}>
           {phase === 'shared' ? (reopened ? 'Already shared' : 'Shared & ready') : 'Share'}
         </Typography>
-        <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }} data-testid="publish-share-intro">
+        <Typography level="body-sm" textColor="text.secondary" sx={{ mb: 2 }} data-testid="publish-share-intro">
           {phase === 'shared'
             ? reopened
               ? 'This is already published. Change who can see it below - choosing Private stops this link from working for anyone else.'
@@ -766,7 +837,7 @@ export function PublishShareModal({
               />
             </RadioGroup>
             {mode === 'update' && (
-              <Typography level="body-xs" sx={{ mt: 0.75, opacity: 0.75 }}>
+              <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.75 }}>
                 {existing.versionsCount >= 2
                   ? `Currently ${existing.versionsCount} versions - your update becomes the newest, switchable on the published page.`
                   : 'Re-publishing adds a 2nd version and turns on the version switcher on the published page.'}
@@ -785,6 +856,7 @@ export function PublishShareModal({
           >
             {visibilityOptions.map(o => {
               const selected = visibility === o.value;
+              const linkNote = phase === 'shared' && o.value !== 'public' ? privateLinkHintNote(storedGate) : null;
               return (
                 <Box
                   key={o.value}
@@ -813,14 +885,12 @@ export function PublishShareModal({
                       <Typography level="title-sm" sx={{ lineHeight: 1.2 }}>
                         {o.label}
                       </Typography>
-                      <Typography level="body-xs" sx={{ opacity: 0.75 }}>
-                        {o.hint}
-                        {phase === 'shared' &&
-                          o.value !== 'public' &&
-                          storedGate !== null &&
-                          (storedGate === undefined
-                            ? ' Private-link access depends on its access settings.'
-                            : ` Private links open only for viewers ${GATED_LINK_WHO[storedGate]}.`)}
+                      <Typography
+                        level="body-xs"
+                        textColor="text.tertiary"
+                        data-testid={`publish-share-visibility-${o.value}-hint`}
+                      >
+                        {linkNote ? `${o.hint}. ${linkNote}` : o.hint}
                       </Typography>
                     </Box>
                   </Box>
@@ -852,7 +922,12 @@ export function PublishShareModal({
               // Update flow: the modal doesn't hydrate the existing gate, so this
               // control starts neutral. Reassure the owner their current setting
               // is untouched - handleCreate only sends a gate when gateTouched.
-              <Typography level="body-xs" sx={{ mb: 0.75, opacity: 0.75 }} data-testid="publish-share-gate-preserved">
+              <Typography
+                level="body-xs"
+                textColor="text.tertiary"
+                sx={{ mb: 0.75 }}
+                data-testid="publish-share-gate-preserved"
+              >
                 Any existing access setting is kept unless you change it here.
               </Typography>
             )}
@@ -893,7 +968,7 @@ export function PublishShareModal({
                         <Typography level="title-sm" sx={{ lineHeight: 1.2 }}>
                           {o.label}
                         </Typography>
-                        <Typography level="body-xs" sx={{ opacity: 0.75 }}>
+                        <Typography level="body-xs" textColor="text.tertiary">
                           {o.hint}
                         </Typography>
                       </Box>
@@ -915,7 +990,7 @@ export function PublishShareModal({
                   }}
                   slotProps={{ input: { 'data-testid': 'publish-share-gate-passphrase', autoComplete: 'off' } }}
                 />
-                <Typography level="body-xs" sx={{ mt: 0.5, opacity: 0.75 }}>
+                <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
                   Share it however you like - anyone with the link and passphrase can view. It&apos;s stored only as a
                   hash; to change it later, set a new one.
                 </Typography>
@@ -933,7 +1008,7 @@ export function PublishShareModal({
                   }}
                   slotProps={{ input: { 'data-testid': 'publish-share-gate-domains' } }}
                 />
-                <Typography level="body-xs" sx={{ mt: 0.5, opacity: 0.75 }}>
+                <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
                   Viewers sign in (or sign up free) with a verified email on one of these domains.
                 </Typography>
               </Box>
@@ -973,7 +1048,7 @@ export function PublishShareModal({
                 {/* FormHelperText, not Typography: only a FormHelperText child registers itself into
                     Joy's FormControl context and lands in the switch's aria-describedby, so a screen-
                     reader user actually hears this caveat instead of just the label. */}
-                <FormHelperText sx={{ opacity: 0.75 }}>
+                <FormHelperText sx={{ color: 'text.tertiary' }}>
                   Off by default. When off, the link still works for anyone you send it to - it just won&apos;t show up
                   in Google. Link previews in chat apps work either way.
                 </FormHelperText>
@@ -1000,7 +1075,7 @@ export function PublishShareModal({
             <ChatBubbleOutlineIcon fontSize="small" />
             <Box>
               <FormLabel sx={{ mb: 0 }}>Allow comments</FormLabel>
-              <Typography level="body-xs" sx={{ opacity: 0.75 }}>
+              <Typography level="body-xs" textColor="text.tertiary">
                 Viewers can leave feedback; you can AI-revise from it.
               </Typography>
             </Box>
@@ -1077,7 +1152,12 @@ export function PublishShareModal({
                     {storedGate === null ? 'Private link anyone can open, no sign-in' : 'Private link'}
                   </FormLabel>
                 </Box>
-                <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }} data-testid="publish-share-token-hint">
+                <Typography
+                  level="body-xs"
+                  textColor="text.tertiary"
+                  sx={{ mb: 1 }}
+                  data-testid="publish-share-token-hint"
+                >
                   {storedGate === undefined
                     ? 'Check the access settings before sharing this private link.'
                     : isPublic
@@ -1118,6 +1198,7 @@ export function PublishShareModal({
                         Make a new link and stop the old ones
                       </Button>
                       <Button
+                        ref={revokeButtonRef}
                         size="sm"
                         variant="outlined"
                         color="danger"
@@ -1151,6 +1232,42 @@ export function PublishShareModal({
                   >
                     {storedGate === null ? 'Create private link anyone can open' : 'Create private link'}
                   </Button>
+                )}
+                {/* On a non-public page the stored gate lives only on its private links, and the server
+                    refuses to revoke the last one while it stands, so the way to clear it is offered here. */}
+                {!isPublic && storedGate && (
+                  <StoredGateNote
+                    kind={storedGate}
+                    visibility={visibility}
+                    sx={{ mt: 1.5 }}
+                    data-testid="publish-share-stored-gate"
+                  >
+                    {shareToken && (
+                      <Typography level="body-xs" sx={{ mt: 0.5 }} data-testid="publish-share-stored-gate-revoke-note">
+                        The private link can only be turned off once this gate is cleared.
+                      </Typography>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      color="danger"
+                      disabled={busy}
+                      onClick={() => setConfirmingClear(true)}
+                      sx={{ mt: 1 }}
+                      data-testid="publish-share-gate-clear"
+                    >
+                      Clear gate
+                    </Button>
+                  </StoredGateNote>
+                )}
+                {storedGate && (
+                  <ClearGateConfirmModal
+                    open={confirmingClear}
+                    onClose={() => setConfirmingClear(false)}
+                    onConfirm={clearStoredGate}
+                    loading={busy}
+                    kind={storedGate}
+                  />
                 )}
               </Box>
             )}

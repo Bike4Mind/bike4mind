@@ -611,7 +611,7 @@ export default function PublishedArtifactsTabContent() {
       >
         Live Artifacts
       </Typography>
-      <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
+      <Typography level="body-sm" textColor="text.secondary" sx={{ mb: 2 }}>
         Everything you&apos;ve published as a live link. Change who can view, turn comments on or off, export the
         content, refresh a link from its source artifact, restore a previous version, or delete.
       </Typography>
@@ -788,13 +788,13 @@ export default function PublishedArtifactsTabContent() {
 
       {artifacts.length === 0 ? (
         filtering || total > 0 ? (
-          <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-no-matches">
+          <Typography level="body-sm" textColor="text.secondary" data-testid="published-artifacts-no-matches">
             {filtering
               ? 'Nothing matches those filters. Clear them to see your whole library.'
               : 'This page is empty - returning you to the last page that has results.'}
           </Typography>
         ) : (
-          <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-empty">
+          <Typography level="body-sm" textColor="text.secondary" data-testid="published-artifacts-empty">
             You haven&apos;t published anything yet. Share an artifact or run the publish-to-bike4mind skill to get
             started.
           </Typography>
@@ -1070,7 +1070,7 @@ export default function PublishedArtifactsTabContent() {
           sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mt: 1.5 }}
           data-testid="published-artifacts-pager"
         >
-          <Typography level="body-xs" sx={{ opacity: 0.7 }}>
+          <Typography level="body-xs" textColor="text.tertiary">
             {skip + 1}-{Math.min(skip + PAGE_SIZE, total)} of {total}
             {filtering ? ' matching' : ''}
           </Typography>

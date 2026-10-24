@@ -1,6 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  adminSettingsRepository,
   Organization,
   User,
   userRepository,
@@ -380,6 +381,7 @@ const handler = baseApi().put(
         userService.updateUser(userId, body, {
           db: {
             users: userRepository,
+            adminSettings: adminSettingsRepository,
           },
         });
       // Only a password change needs the transaction; ordinary profile and preference saves skip it.

@@ -117,3 +117,38 @@ export async function checkPublishQuota(input: PublishQuotaInput): Promise<Publi
 
   return { ok: true };
 }
+
+export interface InPlaceRewriteQuotaInput {
+  isAdmin?: boolean;
+  /** The live page being rewritten: its owner is charged, and its current size is the baseline. */
+  artifact: {
+    ownerId: string;
+    tier: PublishScopeTier;
+    scopeId: string;
+    slug: string;
+    size: { totalBytes: number };
+  };
+  /** The page's footprint once rewritten. */
+  next: { bytes: number; fileCount: number };
+}
+
+/**
+ * Quota for rewriting a live page's bundle in place (revise, restore), counting the net change:
+ * the page's current bytes leave usage and its new total comes in, exactly as a same-slug
+ * re-publish is counted. A rewrite that does not grow the page adds nothing, so it is allowed
+ * even for an owner already over a cap (a restore to a smaller version only frees space).
+ *
+ * Only live pages' current bundles are counted, here as on every publish path: the prior
+ * index.html each revise/restore/re-publish archives under `versions/` is not part of usage.
+ */
+export async function checkInPlaceRewriteQuota(input: InPlaceRewriteQuotaInput): Promise<PublishQuotaResult> {
+  const { artifact, next } = input;
+  if (next.bytes <= artifact.size.totalBytes) return { ok: true };
+  return checkPublishQuota({
+    ownerId: artifact.ownerId,
+    orgScopeId: artifact.tier === 'organization' ? artifact.scopeId : null,
+    isAdmin: input.isAdmin,
+    incoming: next,
+    replacing: { tier: artifact.tier, scopeId: artifact.scopeId, slug: artifact.slug },
+  });
+}

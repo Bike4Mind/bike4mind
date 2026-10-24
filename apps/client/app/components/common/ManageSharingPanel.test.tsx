@@ -193,3 +193,26 @@ describe('ManageSharingPanel — search-listing toggle', () => {
     expect(screen.queryByTestId('manage-discoverable-toggle')).toBeNull();
   });
 });
+
+/** Helper text is dimmed by a theme text token, never `opacity`, which stacks on the token and drops it below AA. */
+const expectTokenDimmed = (el: HTMLElement, token: 'secondary' | 'tertiary') => {
+  const style = getComputedStyle(el);
+  expect(['', '1']).toContain(style.opacity);
+  expect(style.color).toContain(`--joy-palette-text-${token}`);
+};
+
+describe('ManageSharingPanel - helper text contrast', () => {
+  it('dims the search-listing, embed and passphrase helper text with a text token, not opacity', async () => {
+    await renderPanel({ visibility: 'public', accessGate: null, embedOrigins: ['example.com'], commentPolicy: 'none' });
+    expectTokenDimmed(screen.getByText(/Off by default\. When off/), 'tertiary');
+    expectTokenDimmed(screen.getByText(/Let specific websites show this artifact/), 'tertiary');
+    expectTokenDimmed(screen.getByText(/Paste this where you want the artifact to appear/), 'tertiary');
+    fireEvent.click(screen.getByTestId('manage-gate-passphrase'));
+    expectTokenDimmed(screen.getByText(/Stored hashed - it cannot be shown again/), 'tertiary');
+  });
+
+  it('dims the needs-public hint with a text token, not opacity', async () => {
+    await renderPanel({ visibility: 'private', accessGate: null, embedOrigins: [], commentPolicy: 'none' }, 'private');
+    expectTokenDimmed(screen.getByTestId('manage-gate-needs-public'), 'tertiary');
+  });
+});

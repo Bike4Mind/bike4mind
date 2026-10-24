@@ -224,6 +224,17 @@ describe('admin/create-user', () => {
     );
   });
 
+  it('opts in to the reserved test-persona username prefix, which only admins may assign', async () => {
+    mockCreateUser.mockResolvedValue({ id: 'u-synthetic', email: 'seed@test.example', username: 'persona-seed' });
+
+    await runHandler(makeReq({ username: 'persona-seed', email: 'seed@test.example', name: 'Seed' }), makeRes());
+
+    expect(mockCreateUser).toHaveBeenCalledWith(
+      expect.objectContaining({ username: 'persona-seed', allowReservedUsername: true }),
+      expect.any(Object)
+    );
+  });
+
   it('stores the supplied password + hasUsablePassword: true when an admin provides one', async () => {
     mockCreateUser.mockResolvedValue({ id: 'u2', email: 'real@example.com', username: 'real' });
 
