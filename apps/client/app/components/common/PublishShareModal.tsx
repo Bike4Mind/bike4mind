@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   ModalDialog,
@@ -163,6 +163,7 @@ const GATE_OPTIONS: GateOption[] = [
 ];
 
 type StoredGate = Exclude<GateKind, 'none'>;
+type StoredAccess = { status: 'unknown' } | { status: 'known'; gate: StoredGate | null };
 
 /** Who a private link (/a/<token>) opens for when a gate is stored. The server enforces the gate on
  *  those links at every visibility (checkShareGrant), so "without signing in" would be false. */
@@ -310,7 +311,14 @@ export function PublishShareModal({
   const [gateTouched, setGateTouched] = useState(false);
   // The gate live on the published item, seeded from the record. Drives whether the embed editor is
   // offered (embedding is open-public only) and what the private-link note promises.
-  const [storedGate, setStoredGate] = useState<StoredGate | null>(null);
+  const [storedAccess, setStoredAccess] = useState<StoredAccess>({ status: 'unknown' });
+  const storedGate = storedAccess.status === 'known' ? storedAccess.gate : undefined;
+  // A read started before a successful local gate write must not replace that newer state.
+  const gateRevision = useRef(0);
+  const setStoredGate = useCallback((gate: StoredGate | null) => {
+    gateRevision.current += 1;
+    setStoredAccess({ status: 'known', gate });
+  }, []);
   // Explicit acknowledgement of `incompleteWarning`; gates the publish button.
   const [incompleteAck, setIncompleteAck] = useState(false);
   // `resolvePublished` is in flight: hold the create button so a click can't race the lookup.
@@ -334,7 +342,8 @@ export function PublishShareModal({
       setGatePassphrase('');
       setGateDomainsText('');
       setGateTouched(false);
-      setStoredGate(null);
+      gateRevision.current += 1;
+      setStoredAccess({ status: 'unknown' });
       setIncompleteAck(false);
       setReopened(false);
     }
@@ -345,13 +354,15 @@ export function PublishShareModal({
   useEffect(() => {
     if (!open || !result?.publicId) return;
     let active = true;
+    const revision = gateRevision.current;
     void getPublishedManageState(result.publicId)
       .then(state => {
-        if (!active) return;
-        setStoredGate(state.accessGate?.kind ?? null);
+        if (!active || revision !== gateRevision.current) return;
+        setStoredAccess({ status: 'known', gate: state.accessGate?.kind ?? null });
       })
       .catch(() => {
-        /* best-effort seed; the editor still works, the server re-validates */
+        if (!active || revision !== gateRevision.current) return;
+        toast.warning('Could not refresh access settings. Check access before sharing.');
       });
     return () => {
       active = false;
@@ -452,7 +463,7 @@ export function PublishShareModal({
       // come from a surface with no lookup at all (one hook instance serves many surfaces).
       setResolving(false);
     };
-  }, [open, resolvePublished]);
+  }, [open, resolvePublished, setStoredGate]);
 
   const phase: 'choose' | 'shared' = result ? 'shared' : 'choose';
   const url = result ? toShareUrl(result) : '';
@@ -801,6 +812,12 @@ export function PublishShareModal({
                       </Typography>
                       <Typography level="body-xs" sx={{ opacity: 0.75 }}>
                         {o.hint}
+                        {phase === 'shared' &&
+                          o.value !== 'public' &&
+                          storedGate !== null &&
+                          (storedGate === undefined
+                            ? ' Private-link access depends on its access settings.'
+                            : ` Private links open only for viewers ${GATED_LINK_WHO[storedGate]}.`)}
                       </Typography>
                     </Box>
                   </Box>
@@ -813,12 +830,16 @@ export function PublishShareModal({
               (update flow) the modal doesn't load the existing gate, so claiming
               "anyone with the link" would be a falsehood when a gate is set; the
               Access note below tells the truth instead. */}
-          {isPublic && gateKind === 'none' && !existing && !gateTouched && (
-            <AccessNote access="public" data-testid="publish-share-public-note">
-              Anyone with the link can view this. It stays out of search engines unless you turn on &quot;Show in search
-              results&quot; below.
-            </AccessNote>
-          )}
+          {isPublic &&
+            gateKind === 'none' &&
+            !existing &&
+            !gateTouched &&
+            (phase === 'choose' || storedGate === null) && (
+              <AccessNote access="public" data-testid="publish-share-public-note">
+                Anyone with the link can view this. It stays out of search engines unless you turn on &quot;Show in
+                search results&quot; below.
+              </AccessNote>
+            )}
         </FormControl>
 
         {isPublic && (
@@ -1050,13 +1071,15 @@ export function PublishShareModal({
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
                   <LinkIcon fontSize="small" />
                   <FormLabel sx={{ mb: 0 }} data-testid="publish-share-token-label">
-                    {storedGate ? 'Private link' : 'Private link anyone can open, no sign-in'}
+                    {storedGate === null ? 'Private link anyone can open, no sign-in' : 'Private link'}
                   </FormLabel>
                 </Box>
                 <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }} data-testid="publish-share-token-hint">
-                  {isPublic
-                    ? `This page is public, so the link above already opens for anyone${storedGate ? ` ${GATED_LINK_WHO[storedGate]}` : ''}. Revoke this one if you no longer need it.`
-                    : `The link above only opens for ${visibility === 'organization' ? 'your team' : 'you'}. This one opens for anyone you send it to${storedGate ? ` ${GATED_LINK_WHO[storedGate]}` : ', without signing in'}.`}
+                  {storedGate === undefined
+                    ? 'Check the access settings before sharing this private link.'
+                    : isPublic
+                      ? `This page is public, so the link above already opens for anyone${storedGate ? ` ${GATED_LINK_WHO[storedGate]}` : ''}. Revoke this one if you no longer need it.`
+                      : `The link above only opens for ${visibility === 'organization' ? 'your team' : 'you'}. This one opens for anyone you send it to${storedGate ? ` ${GATED_LINK_WHO[storedGate]}` : ', without signing in'}.`}
                 </Typography>
                 {shareToken ? (
                   <>
@@ -1102,10 +1125,15 @@ export function PublishShareModal({
                         Revoke
                       </Button>
                     </Box>
-                    <AccessNote access={storedGate ?? 'public'} data-testid="publish-share-token-warning">
-                      {storedGate
-                        ? `Anyone with this link ${GATED_LINK_WHO[storedGate]} can view.`
-                        : 'Anyone with this link can view without signing in.'}
+                    <AccessNote
+                      access={storedGate === undefined ? 'private' : (storedGate ?? 'public')}
+                      data-testid="publish-share-token-warning"
+                    >
+                      {storedGate === undefined
+                        ? 'Access settings are unavailable. Check access before sharing this link.'
+                        : storedGate
+                          ? `Anyone with this link ${GATED_LINK_WHO[storedGate]} can view.`
+                          : 'Anyone with this link can view without signing in.'}
                     </AccessNote>
                   </>
                 ) : (
@@ -1118,13 +1146,13 @@ export function PublishShareModal({
                     onClick={() => void onCreateShareToken()}
                     data-testid="publish-share-token-create"
                   >
-                    {storedGate ? 'Create private link' : 'Create private link anyone can open'}
+                    {storedGate === null ? 'Create private link anyone can open' : 'Create private link'}
                   </Button>
                 )}
               </Box>
             )}
 
-            {result && isPublic && !storedGate && (
+            {result && isPublic && storedGate === null && (
               <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
                 <EmbedAllowlistEditor publicId={result.publicId} shareUrl={url} title={title} isOpenPublic />
               </Box>
