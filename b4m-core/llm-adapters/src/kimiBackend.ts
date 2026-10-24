@@ -35,6 +35,7 @@ import {
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { kimiReasoningParams, kimiSamplingParams, kimiToolChoice } from './kimiParams';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
+import { appendIdentityReminderToMessages, buildIdentityReminder } from './identityReminder';
 import { normalizeOpenAIFinishReason } from './stopReason';
 
 /**
@@ -242,7 +243,7 @@ export class KimiBackend implements ICompletionBackend {
 
     const parameters: ChatCompletionCreateParams = {
       model,
-      messages: this.formatMessages(messages),
+      messages: this.formatMessages(messages, model, options),
     };
 
     Object.assign(parameters, {
@@ -882,8 +883,16 @@ export class KimiBackend implements ICompletionBackend {
     }
   }
 
-  private formatMessages(messages: IMessage[]): OpenAI.ChatCompletionMessageParam[] {
-    return convertMessagesToOpenAIFormat(messages) as OpenAI.ChatCompletionMessageParam[];
+  private formatMessages(
+    messages: IMessage[],
+    model: string,
+    options: Partial<ICompletionOptions>
+  ): OpenAI.ChatCompletionMessageParam[] {
+    return convertMessagesToOpenAIFormat(
+      options.omitIdentityReminder
+        ? messages
+        : appendIdentityReminderToMessages(messages, buildIdentityReminder(model, options.modelDisplayName))
+    ) as OpenAI.ChatCompletionMessageParam[];
   }
 
   formatTools(tools: ICompletionOptionTools[] = []) {

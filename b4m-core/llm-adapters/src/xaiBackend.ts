@@ -36,6 +36,7 @@ import {
 } from './backend';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
+import { appendIdentityReminderToMessages, buildIdentityReminder } from './identityReminder';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { normalizeOpenAIFinishReason } from './stopReason';
 import { DispatchModel } from './dispatchModel';
@@ -363,7 +364,7 @@ export class XAIBackend implements ICompletionBackend {
     // Base parameters that work for all models
     const parameters: ChatCompletionCreateParams = {
       model,
-      messages: this.formatMessages(messagesWithFormat),
+      messages: this.formatMessages(messagesWithFormat, model, options),
       temperature: options.temperature ?? 0.9,
     };
 
@@ -953,9 +954,17 @@ export class XAIBackend implements ICompletionBackend {
     }
   }
 
-  private formatMessages(messages: IMessage[]): OpenAI.ChatCompletionMessageParam[] {
+  private formatMessages(
+    messages: IMessage[],
+    model: string,
+    options: Partial<ICompletionOptions>
+  ): OpenAI.ChatCompletionMessageParam[] {
     // Convert B4M standard format (tool_use/tool_result) to OpenAI format (tool_calls/role:tool)
-    return convertMessagesToOpenAIFormat(messages) as OpenAI.ChatCompletionMessageParam[];
+    return convertMessagesToOpenAIFormat(
+      options.omitIdentityReminder
+        ? messages
+        : appendIdentityReminderToMessages(messages, buildIdentityReminder(model, options.modelDisplayName))
+    ) as OpenAI.ChatCompletionMessageParam[];
   }
 
   formatTools(tools: ICompletionOptionTools[] = []) {

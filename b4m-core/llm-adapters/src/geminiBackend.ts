@@ -45,6 +45,7 @@ import { geminiThinkingOutputCap } from './thinkingParams';
 import { withAbortListener } from './withAbortListener';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
+import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
 
 // Matches gemini-3-pro-preview, gemini-3.1-pro-preview, gemini-3.5-flash, but not a future gemini-30 family.
 const isGemini3 = (modelId: string) => /^gemini-3(\D|$)/.test(modelId);
@@ -664,7 +665,12 @@ export class GeminiBackend implements ICompletionBackend {
     const bestEffortFormat = isBestEffortJsonSchema(options.responseFormat);
 
     const systemMessages = messagesWithFormat.filter(message => message.role === 'system');
-    const systemInstruction = systemMessages.map(message => message.content).join('\n');
+    const callerSystemText = systemMessages.map(message => message.content).join('\n');
+    // Opt-out only: without the line a tool-less model has no way to know which model it is.
+    // Empty text plus no reminder still leaves `systemInstruction: undefined` below.
+    const systemInstruction = options.omitIdentityReminder
+      ? callerSystemText
+      : appendIdentityReminder(callerSystemText, buildIdentityReminder(modelName, options.modelDisplayName));
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
     const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
