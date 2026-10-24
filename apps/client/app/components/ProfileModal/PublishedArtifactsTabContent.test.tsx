@@ -1958,4 +1958,12 @@ describe('PublishedArtifactsTabContent - helper text contrast', () => {
     renderTab();
     expectTokenDimmed(await screen.findByTestId('published-artifacts-empty'), 'secondary');
   });
+
+  it('dims the no-matches message with a text token, not opacity', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    mockList.mockResolvedValue(page([]));
+    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'nothing matches' } });
+    expectTokenDimmed(await screen.findByTestId('published-artifacts-no-matches'), 'secondary');
+  });
 });
