@@ -16,7 +16,7 @@ import type { ManagedArtifact } from '@client/app/utils/publishApi';
  */
 export type PublishAccess = 'public' | 'passphrase' | 'domain' | 'organization' | 'project' | 'private';
 
-type PublishGate = 'passphrase' | 'domain';
+type PublishGate = NonNullable<ManagedArtifact['gateKind']>;
 type AccessSource = Pick<ManagedArtifact, 'visibility' | 'gateKind'>;
 
 const isGate = (value: unknown): value is PublishGate => value === 'passphrase' || value === 'domain';
@@ -44,7 +44,7 @@ interface AccessMeta {
   Icon: typeof PublicIcon;
 }
 
-/** Labels and icons follow PublishShareModal and AccessGateEditor. The non-public descriptions
+/** Icons follow PublishShareModal and AccessGateEditor; the labels are deliberately shorter. The non-public descriptions
  *  name private links because the list cannot tell whether one exists, and when it does it opens
  *  for anyone it is sent to (see the share-token section of PublishShareModal). */
 export const PUBLISH_ACCESS_META: Record<PublishAccess, AccessMeta> = {
