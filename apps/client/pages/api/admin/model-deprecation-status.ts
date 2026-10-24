@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { modelCatalogRepository, modelDiscoveryStateRepository, modelPriceRepository } from '@bike4mind/database';
 import { FALLBACK_PREFERENCES, DEFAULT_FALLBACK_CHAIN } from '@bike4mind/utils';
 import {
@@ -115,8 +116,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError(`${modelId}'s suggestion was already ${suggestion.resolution}`);
     }
 
+    const recordResolution = (details: Record<string, unknown>) =>
+      recordAdminActionFromRequest(req, {
+        action: 'settings.model_lifecycle.suggestion_resolved',
+        target: { kind: 'settings', id: modelId, displayName: `${modelId} lifecycle suggestion` },
+        summary: `${action === 'accept' ? 'accepted' : 'dismissed'} lifecycle suggestion for ${modelId}`,
+        details: { modelId, resolution: action, ...details },
+      });
+
     if (action === 'dismiss') {
-      return res.json({ state: await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'dismissed') });
+      const dismissed = await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'dismissed');
+      await recordResolution({});
+      return res.json({ state: dismissed });
     }
 
     const note = parsed.data.note?.trim() ?? '';
@@ -214,7 +225,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       note: auditNote,
     });
 
-    return res.json({ row, state: await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'accepted') });
+    const resolved = await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'accepted');
+    await recordResolution({
+      status,
+      deprecationDate,
+      retirementDate,
+      replacedBy,
+      note,
+      acknowledgedBlockers: blockers,
+    });
+    return res.json({ row, state: resolved });
   });
 
 export default handler;
