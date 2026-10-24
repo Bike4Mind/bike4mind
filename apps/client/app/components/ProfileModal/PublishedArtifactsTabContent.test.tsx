@@ -1131,4 +1131,30 @@ describe('PublishedArtifactsTabContent - access badge and aligned columns', () =
       expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe('public')
     );
   });
+
+  it('drops the private-link gate from a private row once the sharing panel clears it', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, visibility: 'private', gateKind: 'passphrase' }]));
+    renderTab();
+    const before = await screen.findByTestId('published-artifact-access-pub-1');
+    expect(before.getAttribute('data-link-gate')).toBe('passphrase');
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    const listCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets !== true).length;
+    const facetCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets === true).length;
+    const listBefore = listCalls();
+    const facetsBefore = facetCalls();
+
+    fireEvent.click(screen.getByTestId('stub-panel-clear-gate-pub-1'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-link-gate')).toBeNull()
+    );
+    const after = screen.getByTestId('published-artifact-access-pub-1');
+    expect(after.textContent).toBe('Private');
+    expect(after.getAttribute('data-access')).toBe('private');
+    expect(after.querySelector('[data-testid="KeyIcon"]')).toBeNull();
+    expect(after.getAttribute('title')).toBe('Only you, and anyone you send a private link to');
+    await waitFor(() => expect(facetCalls()).toBeGreaterThan(facetsBefore));
+    expect(listCalls()).toBe(listBefore);
+  });
 });
