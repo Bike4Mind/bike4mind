@@ -1,9 +1,10 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import { PublishShareModal } from './PublishShareModal';
+import { PUBLISH_ACCESS_META, type PublishAccess } from './PublishAccessBadge';
 import type { PublishResult, PublishVisibility } from '@bike4mind/common';
 
 // Mock the axios instance so we can assert the exact comment-policy PATCH an update issues
@@ -938,5 +939,108 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     );
     await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
     expect(screen.getByTestId('publish-share-intro').textContent).not.toContain('Checking');
+  });
+});
+
+describe('PublishShareModal - access options match the Live Artifacts badge', () => {
+  // MUI icons carry their component name as a test id, so this pins which icon each option draws.
+  const ICON_TEST_ID: Record<PublishAccess, string> = {
+    public: 'PublicIcon',
+    passphrase: 'KeyIcon',
+    domain: 'DomainIcon',
+    organization: 'GroupIcon',
+    project: 'FolderIcon',
+    private: 'LockIcon',
+  };
+
+  const renderModal = (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) =>
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={noopPublish}
+          title="My artifact"
+          defaultVisibility="public"
+          orgOption={{ label: 'Team', hint: 'Members of Acme' }}
+          {...props}
+        />
+      </Wrapper>
+    );
+
+  const expectBadge = (testId: string, access: PublishAccess) => {
+    const badge = screen.getByTestId(testId);
+    expect(badge.getAttribute('data-access')).toBe(access);
+    expect(badge.textContent).toBe(PUBLISH_ACCESS_META[access].label);
+    expect(within(badge).getByTestId(ICON_TEST_ID[access])).toBeTruthy();
+    // Chip color comes from the shared meta, so a gated option stays amber and the rest do not.
+    const color = PUBLISH_ACCESS_META[access].color;
+    expect(badge.className).toContain(`MuiChip-color${color[0].toUpperCase()}${color.slice(1)}`);
+  };
+
+  it.each([
+    ['public', 'public'],
+    ['organization', 'organization'],
+    ['private', 'private'],
+  ] as const)('shows the %s visibility option with its badge icon, word and color', (value, access) => {
+    renderModal();
+    expectBadge(`publish-share-visibility-${value}-badge`, access);
+  });
+
+  it.each([
+    ['none', 'public'],
+    ['passphrase', 'passphrase'],
+    ['domain', 'domain'],
+  ] as const)('shows the %s gate option with its badge icon, word and color', (value, access) => {
+    renderModal();
+    expectBadge(`publish-share-gate-${value}-badge`, access);
+  });
+
+  it('uses green for Public and amber only for the gated options', () => {
+    renderModal();
+    expect(screen.getByTestId('publish-share-visibility-public-badge').className).toContain('MuiChip-colorSuccess');
+    expect(screen.getByTestId('publish-share-gate-passphrase-badge').className).toContain('MuiChip-colorWarning');
+    expect(screen.getByTestId('publish-share-gate-domain-badge').className).toContain('MuiChip-colorWarning');
+    expect(screen.getByTestId('publish-share-visibility-private-badge').className).toContain('MuiChip-colorNeutral');
+  });
+
+  it('keeps the plain-language option titles and ids beside the badges', () => {
+    renderModal();
+    expect(screen.getByTestId('publish-share-visibility-public').textContent).toContain('Anyone with the link');
+    expect(screen.getByTestId('publish-share-gate-passphrase')).toBeTruthy();
+    expect(radio('public')?.checked).toBe(true);
+    expect(radio('none')?.checked).toBe(true);
+  });
+
+  it('keeps the public exposure copy, in the Public treatment rather than amber', () => {
+    renderModal();
+    const note = screen.getByTestId('publish-share-public-note');
+    expect(note.textContent).toContain('Anyone with the link can view this.');
+    expect(within(note).getByTestId('PublicIcon')).toBeTruthy();
+    expect(note.className).toContain('MuiTypography-colorSuccess');
+    expect(note.className).not.toContain('MuiTypography-colorWarning');
+  });
+
+  it('draws the private-link exposure line in the Public treatment too', async () => {
+    const live: PublishResult = {
+      publicId: 'live-1',
+      url: '/p/u/u1/s',
+      tier: 'user',
+      scopeId: 'u1',
+      slug: 's',
+      visibility: 'private',
+      publishedAt: '2026-01-01T00:00:00.000Z',
+    };
+    (api.get as unknown as ReturnType<typeof vi.fn>).mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.endsWith('/share-token') ? { shareToken: 'TOK', shareLinks: [] } : { artifact: {} },
+      })
+    );
+    renderModal({ defaultVisibility: 'private', publish: vi.fn().mockResolvedValue(live) });
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    const warning = await screen.findByTestId('publish-share-token-warning');
+    expect(warning.textContent).toContain('Anyone with this link can view without signing in.');
+    expect(within(warning).getByTestId('PublicIcon')).toBeTruthy();
+    expect(warning.className).toContain('MuiTypography-colorSuccess');
   });
 });

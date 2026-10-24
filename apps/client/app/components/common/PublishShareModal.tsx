@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, type ComponentProps } from 'react';
 import {
   Modal,
   ModalDialog,
@@ -19,11 +19,7 @@ import {
   Checkbox,
 } from '@mui/joy';
 import PublicIcon from '@mui/icons-material/Public';
-import LockIcon from '@mui/icons-material/Lock';
-import GroupIcon from '@mui/icons-material/Group';
 import LinkIcon from '@mui/icons-material/Link';
-import KeyIcon from '@mui/icons-material/Key';
-import DomainIcon from '@mui/icons-material/Domain';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { isAxiosError } from 'axios';
@@ -33,6 +29,7 @@ import { ELISION_PUBLISH_TITLE } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { ShareActions } from './ShareActions';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
+import { PublishAccessBadge, PUBLISH_ACCESS_META } from './PublishAccessBadge';
 import {
   toShareUrl,
   toShareTokenUrl,
@@ -107,51 +104,71 @@ export interface PublishShareModalProps {
   incompleteWarning?: string;
 }
 
-type VisibilityOption = { value: PublishVisibility; label: string; hint: string; icon: React.ReactNode };
+type VisibilityOption = { value: PublishVisibility; label: string; hint: string };
 
 const PUBLIC_OPTION: VisibilityOption = {
   value: 'public',
   label: 'Anyone with the link',
   hint: 'Anyone you send the link to can view it',
-  icon: <PublicIcon />,
 };
-const PRIVATE_OPTION: VisibilityOption = { value: 'private', label: 'Private', hint: 'Only you', icon: <LockIcon /> };
+const PRIVATE_OPTION: VisibilityOption = { value: 'private', label: 'Private', hint: 'Only you' };
 const TEAM_FALLBACK_OPTION: VisibilityOption = {
   value: 'organization',
   label: 'Team',
   hint: 'Members of your team',
-  icon: <GroupIcon />,
 };
-
-/** Amber accent for the currently-selected visibility - draws the eye to the
- *  active choice (and signals exposure when Public is selected). */
-const AMBER = '#f59e0b';
 
 /** Client-side mirror of the server's registrable-domain check (server is authoritative). */
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
 type GateKind = 'none' | 'passphrase' | 'domain';
 
-const GATE_OPTIONS: Array<{ value: GateKind; label: string; hint: string; icon: React.ReactNode }> = [
+type GateOption = {
+  value: GateKind;
+  label: string;
+  hint: string;
+  /** The access state this choice produces on a public page, as the access badge names it. */
+  badge: ComponentProps<typeof PublishAccessBadge>;
+};
+
+const GATE_OPTIONS: GateOption[] = [
   {
     value: 'none',
     label: 'No passphrase needed',
     hint: 'Viewers just open the link',
-    icon: <PublicIcon fontSize="small" />,
+    badge: { visibility: 'public' },
   },
   {
     value: 'passphrase',
     label: 'Passphrase required',
     hint: 'Viewers enter a passphrase you share with them',
-    icon: <KeyIcon fontSize="small" />,
+    badge: { visibility: 'public', gateKind: 'passphrase' },
   },
   {
     value: 'domain',
     label: 'Specific email domains',
     hint: 'Viewers sign in with a verified work email you allow',
-    icon: <DomainIcon fontSize="small" />,
+    badge: { visibility: 'public', gateKind: 'domain' },
   },
 ];
+
+/** Exposure note in the Public badge's treatment (public icon, success soft tones), so a line that
+ *  says "anyone with the link" reads the same here as the Public badge in Live Artifacts. */
+function PublicExposureNote({ children, 'data-testid': testId }: { children: React.ReactNode; 'data-testid': string }) {
+  const { color, Icon } = PUBLISH_ACCESS_META.public;
+  return (
+    <Typography
+      level="body-xs"
+      variant="soft"
+      color={color}
+      startDecorator={<Icon sx={{ fontSize: 14, mt: '1px' }} />}
+      sx={{ mt: 0.75, mx: 0, p: 0.75, borderRadius: 'sm', alignItems: 'flex-start' }}
+      data-testid={testId}
+    >
+      {children}
+    </Typography>
+  );
+}
 
 /** Parse the domains textarea; null when any entry is invalid. Mirrors the server:
  *  entries are validated as real registrable domains (rejecting bare suffixes like
@@ -386,9 +403,7 @@ export function PublishShareModal({
   // In the CHOOSE phase the publish callback maps a Team pick to a real org-tier page, so the
   // full set is safe.
   const visibilityOptions = useMemo<VisibilityOption[]>(() => {
-    const orgEntry: VisibilityOption | null = orgOption
-      ? { value: 'organization', ...orgOption, icon: <GroupIcon /> }
-      : null;
+    const orgEntry: VisibilityOption | null = orgOption ? { value: 'organization', ...orgOption } : null;
     if (result) {
       // A reopened Team page keeps its Team choice even when the dialog was opened outside a team
       // context (no `orgOption`), so its current visibility is shown rather than leaving only Public.
@@ -703,14 +718,19 @@ export function PublishShareModal({
                 >
                   <Radio value={o.value} disabled={busy} />
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
-                    {o.icon}
-                    <Box>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
                       <Typography level="title-sm" sx={{ lineHeight: 1.2 }}>
                         {o.label}
                       </Typography>
                       <Typography level="body-xs" sx={{ opacity: 0.75 }}>
                         {o.hint}
                       </Typography>
+                    </Box>
+                    <Box sx={{ flexShrink: 0 }}>
+                      <PublishAccessBadge
+                        visibility={o.value}
+                        data-testid={`publish-share-visibility-${o.value}-badge`}
+                      />
                     </Box>
                   </Box>
                 </Box>
@@ -723,10 +743,10 @@ export function PublishShareModal({
               "anyone with the link" would be a falsehood when a gate is set; the
               Access note below tells the truth instead. */}
           {isPublic && gateKind === 'none' && !existing && !gateTouched && (
-            <Typography level="body-xs" sx={{ mt: 0.75, opacity: 0.75 }}>
+            <PublicExposureNote data-testid="publish-share-public-note">
               Anyone with the link can view this. It stays out of search engines unless you turn on &quot;Show in search
               results&quot; below.
-            </Typography>
+            </PublicExposureNote>
           )}
         </FormControl>
 
@@ -773,14 +793,16 @@ export function PublishShareModal({
                       data-testid={`publish-share-gate-${o.value}`}
                     />
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
-                      {o.icon}
-                      <Box>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Typography level="title-sm" sx={{ lineHeight: 1.2 }}>
                           {o.label}
                         </Typography>
                         <Typography level="body-xs" sx={{ opacity: 0.75 }}>
                           {o.hint}
                         </Typography>
+                      </Box>
+                      <Box sx={{ flexShrink: 0 }}>
+                        <PublishAccessBadge {...o.badge} data-testid={`publish-share-gate-${o.value}-badge`} />
                       </Box>
                     </Box>
                   </Box>
@@ -1009,9 +1031,9 @@ export function PublishShareModal({
                         Revoke
                       </Button>
                     </Box>
-                    <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
+                    <PublicExposureNote data-testid="publish-share-token-warning">
                       Anyone with this link can view without signing in.
-                    </Typography>
+                    </PublicExposureNote>
                   </>
                 ) : (
                   <Button
