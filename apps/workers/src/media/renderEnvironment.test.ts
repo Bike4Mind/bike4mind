@@ -128,7 +128,7 @@ describe('createRenderEnvironment', () => {
     expect(table.kill).not.toHaveBeenCalled();
   });
 
-  it('withholds the result when a process escapes the tree during the render, and stays poisoned', async () => {
+  it('withholds the result when a process leaves the tree during the render, and stays poisoned', async () => {
     const processes = fakeProcesses(platform());
     const environment = environmentWith(processes.table);
 
