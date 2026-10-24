@@ -135,6 +135,23 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
     expect(await build(false)).not.toContain(CUSTOM_MCP_DATA_NOTICE);
   });
 
+  it.each(['constructor', 'constructor_prod', 'acme_prod'])(
+    'builds integration guidance for the valid custom slug %s',
+    async slug => {
+      const prompt = await builderWith(undefined).buildToolPrompt({
+        mcpTools: [{ name: `${slug}__search` }],
+        hasCustomMcpTools: true,
+        sessionId: 's1',
+        message: 'hi',
+        logger,
+        processStartTime: Date.now(),
+      } as never);
+      expect(prompt?.context?.content).toContain(`${slug}__search`);
+      expect(prompt?.context?.content).toContain(`**${slug}**`);
+      expect(prompt?.context?.content).toContain(CUSTOM_MCP_DATA_NOTICE);
+    }
+  );
+
   it('offers nothing custom without a host', async () => {
     const { mcpToolsByServer } = await run(builderWith(undefined));
     expect(mcpToolsByServer).toEqual({});

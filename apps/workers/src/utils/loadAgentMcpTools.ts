@@ -1,4 +1,4 @@
-import type { IMcpServerDocument } from '@bike4mind/common';
+import { requiresMcpConnectionToolApproval, type IMcpServerDocument } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import {
@@ -7,7 +7,6 @@ import {
   buildMcpToolCacheUpdate,
   customMcpToolId,
   generateCustomMcpTools,
-  isReadOnlyCustomTool,
   loadCustomMcpConnections,
   type CustomMcpToolHost,
   type McpToolSchema,
@@ -35,20 +34,25 @@ export interface LoadAgentMcpToolsDeps {
 export interface AgentMcpTools {
   mcpToolsByServer: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
   serverAgentConfig: { selectedRepositories?: string; githubUsername?: string };
-  /** Custom tools safe to run without a prompt; the executor seeds them into `approvedTools`. */
-  readOnlyCustomToolNames: string[];
+  /** Custom tools allowed to run without a prompt; the executor seeds them into `approvedTools`. */
+  autoApprovedCustomToolNames: string[];
+  /** These tools must ignore remembered approvals (org policy or an explicit always-ask choice). */
+  approvalRequiredCustomToolNames: string[];
 }
 
 /**
- * A run's `approvedTools` plus the read-only custom tools it may call without a card. Both the
- * top-level run and a dispatched child seed their lists through here; anything not listed (every
- * custom write) stays `needs_approval` under `classifyToolPermission`.
+ * Adds current automatic approvals and removes remembered choices overridden by policy.
+ * Used by both the top-level execution and dispatched children.
  */
-export function withReadOnlyCustomTools(
+export function withAutoApprovedCustomTools(
   approvedTools: readonly string[] | undefined,
-  readOnlyCustomToolNames: readonly string[]
+  autoApprovedCustomToolNames: readonly string[],
+  approvalRequiredCustomToolNames: readonly string[] = []
 ): string[] {
-  return [...new Set([...(approvedTools ?? []), ...readOnlyCustomToolNames])];
+  const requiresApproval = new Set(approvalRequiredCustomToolNames);
+  return [...new Set([...(approvedTools ?? []), ...autoApprovedCustomToolNames])].filter(
+    name => !requiresApproval.has(name)
+  );
 }
 
 /**
@@ -64,11 +68,12 @@ export async function loadAgentMcpTools(
 ): Promise<AgentMcpTools> {
   const { logger } = deps;
   const mcpToolsByServer: AgentMcpTools['mcpToolsByServer'] = {};
-  const readOnlyCustomToolNames: string[] = [];
+  const autoApprovedCustomToolNames: string[] = [];
+  const approvalRequiredCustomToolNames: string[] = [];
 
   if (!opts.enableMCPServer) {
     logger.info('[AgentExecutor][MCP] EnableMCPServer is off - 0 MCP tools loaded');
-    return { mcpToolsByServer, serverAgentConfig: {}, readOnlyCustomToolNames };
+    return { mcpToolsByServer, serverAgentConfig: {}, autoApprovedCustomToolNames, approvalRequiredCustomToolNames };
   }
 
   const servers = await deps.mcpServers.find({ enabled: true, userId: opts.userId });
@@ -126,10 +131,13 @@ export async function loadAgentMcpTools(
       for (const connection of await loadCustomMcpConnections(deps.customMcp, opts.userId, logger)) {
         const tools = generateCustomMcpTools(connection, { userId: opts.userId, host: deps.customMcp });
         mcpToolsByServer[connection.slug] = tools;
-        // An org that wants approval before every call must still see the card for reads.
-        if (!connection.requireApprovalForAll) {
-          for (const tool of connection.tools) {
-            if (isReadOnlyCustomTool(tool)) readOnlyCustomToolNames.push(customMcpToolId(connection.slug, tool.name));
+        for (const tool of connection.tools) {
+          const name = customMcpToolId(connection.slug, tool.name);
+          if (!requiresMcpConnectionToolApproval(tool, connection.requireApprovalForAll)) {
+            autoApprovedCustomToolNames.push(name);
+          }
+          if (connection.requireApprovalForAll || tool.approval === 'always_ask') {
+            approvalRequiredCustomToolNames.push(name);
           }
         }
       }
@@ -151,5 +159,10 @@ export async function loadAgentMcpTools(
     perServer: Object.fromEntries(Object.entries(mcpToolsByServer).map(([k, v]) => [k, v.length])),
   });
 
-  return { mcpToolsByServer, serverAgentConfig: { selectedRepositories, githubUsername }, readOnlyCustomToolNames };
+  return {
+    mcpToolsByServer,
+    serverAgentConfig: { selectedRepositories, githubUsername },
+    autoApprovedCustomToolNames,
+    approvalRequiredCustomToolNames,
+  };
 }

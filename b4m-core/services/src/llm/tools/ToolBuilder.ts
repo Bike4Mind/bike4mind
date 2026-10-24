@@ -1413,18 +1413,16 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
       // Tool/server names come from user-configured MCP servers, so strip control
       // characters and cap length before interpolating into the system prompt.
       const sanitizeToolName = (name: string) => name.replace(/[\r\n\t]+/g, ' ').slice(0, 80);
-      const mcpIntegrations: Record<string, string[]> = {};
+      const mcpIntegrations = new Map<string, string[]>();
       mcpTools.forEach(tool => {
         const safeName = sanitizeToolName(tool.name);
-        const parts = safeName.split('_');
-        const prefix = parts[0];
-        if (!mcpIntegrations[prefix]) {
-          mcpIntegrations[prefix] = [];
-        }
-        mcpIntegrations[prefix].push(safeName);
+        const prefix = safeName.split(safeName.includes('__') ? '__' : '_')[0];
+        const integrationTools = mcpIntegrations.get(prefix) ?? [];
+        integrationTools.push(safeName);
+        mcpIntegrations.set(prefix, integrationTools);
       });
 
-      const integrationList = Object.entries(mcpIntegrations)
+      const integrationList = [...mcpIntegrations.entries()]
         .map(([integration, tools]) => {
           const displayName = integration;
           return `- **${displayName}**: ${tools.length} tools available (${tools.slice(0, 3).join(', ')}${tools.length > 3 ? '...' : ''})`;
@@ -1444,8 +1442,8 @@ ${integrationList}
 4. When making multiple tool calls, skip the preamble and just execute them efficiently${hasCustomMcpTools ? `\n5. ${CUSTOM_MCP_DATA_NOTICE}` : ''}`);
 
       logger.info('🛠️ [MCP] Added integration guidance to tool prompt:', {
-        integrationCount: Object.keys(mcpIntegrations).length,
-        integrations: Object.keys(mcpIntegrations),
+        integrationCount: mcpIntegrations.size,
+        integrations: [...mcpIntegrations.keys()],
       });
     }
 

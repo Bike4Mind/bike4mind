@@ -725,6 +725,39 @@ describe('invokeRemoteMcp - checks before any network', () => {
     ).resolves.toBeDefined();
   });
 
+  it.each([
+    { annotations: undefined, approval: 'default' as const },
+    { annotations: { readOnlyHint: true }, approval: 'always_ask' as const },
+    { annotations: { readOnlyHint: true, destructiveHint: true }, approval: 'default' as const },
+  ])('requires approval at the call boundary for $approval / $annotations', async overrides => {
+    const id = seed('/mcp');
+    const connection = state.connections.get(id)!;
+    const tools = connection.tools as IMcpConnectionDocument['tools'];
+    Object.assign(tools[0], overrides);
+    const request = { action: 'callTool' as const, connectionId: id, userId: 'user-1', toolName: 'echo' };
+    await expect(invokeRemoteMcp(request, { runner, context: context() })).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { code: 'approval_required' },
+    });
+    expect(fixture.requests).toHaveLength(0);
+    await expect(
+      invokeRemoteMcp({ ...request, approved: true }, { runner, context: context() })
+    ).resolves.toBeDefined();
+  });
+
+  it('accepts a saved always-allow choice but still enforces org approval', async () => {
+    const id = seed('/mcp');
+    const tools = state.connections.get(id)!.tools as IMcpConnectionDocument['tools'];
+    Object.assign(tools[0], { annotations: undefined, approval: 'always_allow' });
+    const request = { action: 'callTool' as const, connectionId: id, userId: 'user-1', toolName: 'echo' };
+    await expect(invokeRemoteMcp(request, { runner, context: context() })).resolves.toBeDefined();
+    const strict = context({ policies: [CustomMcpPolicySchema.parse({ mode: 'any', requireApprovalForAll: true })] });
+    await expect(invokeRemoteMcp(request, { runner, context: strict })).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { code: 'approval_required' },
+    });
+  });
+
   it('with requireApprovalForAll on, refuses a call unless it carries an explicit approval', async () => {
     const approvals = context({
       policies: [CustomMcpPolicySchema.parse({ mode: 'any', requireApprovalForAll: true })],

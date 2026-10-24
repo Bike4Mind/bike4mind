@@ -16,7 +16,7 @@ const tool = (name: string, extra: Partial<IMcpConnectionTool> = {}): IMcpConnec
     descriptionRawHash: 'h',
     inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
     enabled: true,
-    approval: 'always_ask',
+    approval: 'default',
     state: 'active',
     firstSeenAt: new Date(),
     ...extra,
@@ -95,6 +95,32 @@ describe('generateCustomMcpTools', () => {
     await search.toolFn({});
     expect(requestApproval).toHaveBeenCalled();
     expect(host.callTool).not.toHaveBeenCalled();
+  });
+
+  it('honors always-ask on a read-only tool', async () => {
+    const host = makeHost();
+    const requestApproval = vi.fn();
+    const [search] = generateCustomMcpTools(
+      offer([tool('search', { annotations: readOnly, approval: 'always_ask' })]),
+      { userId: 'u1', host, requestApproval }
+    );
+    await search.toolFn({ q: 'private' });
+    expect(requestApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: 'search', args: { q: 'private' } })
+    );
+    expect(host.callTool).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('always-allow on a write respects requireApprovalForAll=%s', async requireApprovalForAll => {
+    const host = makeHost();
+    const requestApproval = vi.fn();
+    const [write] = generateCustomMcpTools(
+      offer([tool('create', { approval: 'always_allow' })], { requireApprovalForAll }),
+      { userId: 'u1', host, requestApproval }
+    );
+    await write.toolFn({});
+    expect(requestApproval).toHaveBeenCalledTimes(requireApprovalForAll ? 1 : 0);
+    expect(host.callTool).toHaveBeenCalledTimes(requireApprovalForAll ? 0 : 1);
   });
 
   it('calls with approved:true when no approval hook exists (agent gate already decided)', async () => {
