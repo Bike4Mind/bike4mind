@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { Alert, Button, Typography } from '@mui/joy';
 import { useShallow } from 'zustand/react/shallow';
+import { isImageModel } from '@bike4mind/common';
 import { reasonsWithinOutputBudget } from '@bike4mind/llm-adapters/model-sizing';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
-import { computeDefaultMaxTokens } from '@client/app/utils/aiSettingsUtils';
+import { computeDefaultMaxTokens, formatTokenBudget } from '@client/app/utils/aiSettingsUtils';
 
 export interface LowOutputBudget {
   /** The max_tokens the turn was sent with. */
@@ -40,18 +41,18 @@ export function useLowOutputBudget(modelId: string | undefined, requested: numbe
   return getLowOutputBudget(requested, computeDefaultMaxTokens(info));
 }
 
-const fmt = (n: number) => n.toLocaleString('en-US');
-
 /**
  * Replaces the generic empty-reply notice when the turn's budget was below the model's default,
  * with a one-click raise of the saved setting. Raised to the default of the model now selected,
- * not the one that ran the turn, since that is what the next send uses.
+ * not the one that ran the turn, since that is what the next send uses. No raise while an image
+ * model is selected: its max_tokens is not an output budget (see the refit effect in LLMContext).
  */
 export function LowOutputBudgetBanner({ requested, modelDefault }: LowOutputBudget) {
   const [model, maxTokens, setLLM] = useLLM(useShallow(s => [s.model, s.max_tokens, s.setLLM]));
   const { data: models } = useModelInfo();
   const activeInfo = models?.find(m => m.id === model);
   const target = activeInfo ? computeDefaultMaxTokens(activeInfo) : modelDefault;
+  const canRaise = !isImageModel(model) && maxTokens < target;
   const [raised, setRaised] = useState(false);
 
   return (
@@ -64,14 +65,15 @@ export function LowOutputBudgetBanner({ requested, modelDefault }: LowOutputBudg
       <Typography level="title-sm">{'\u26A0\uFE0F Response was cut off'}</Typography>
       <Typography level="body-sm">
         This reply ran out of output budget while the model was still reasoning, so no answer was written. It was sent
-        with Max output tokens set to {fmt(requested)}, below this model&apos;s default of {fmt(modelDefault)}.
+        with Max output tokens set to {formatTokenBudget(requested)}, below this model&apos;s default of{' '}
+        {formatTokenBudget(modelDefault)}.
       </Typography>
       {raised ? (
         <Typography level="body-sm" data-testid="reply-low-output-budget-raised">
-          Max output tokens is now {fmt(target)}. Send the request again.
+          Max output tokens is now {formatTokenBudget(target)}. Send the request again.
         </Typography>
       ) : (
-        maxTokens < target && (
+        canRaise && (
           <Button
             data-testid="reply-low-output-budget-raise-button"
             size="sm"
@@ -82,7 +84,7 @@ export function LowOutputBudgetBanner({ requested, modelDefault }: LowOutputBudg
               setRaised(true);
             }}
           >
-            Raise to {fmt(target)}
+            Raise to {formatTokenBudget(target)}
           </Button>
         )
       )}

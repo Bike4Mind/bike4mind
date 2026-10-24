@@ -12,12 +12,22 @@ const OPUS = {
   thinkingStyle: 'adaptive',
 };
 const PLAIN = { id: 'plain-model', type: 'text', contextWindow: 200_000, max_tokens: 64_000 };
+// Capped below the 64K reasoning floor: the raise must stop at what the model can emit.
+const SMALL_CAP = {
+  id: 'small-cap-model',
+  type: 'text',
+  contextWindow: 200_000,
+  max_tokens: 32_000,
+  thinkingStyle: 'adaptive',
+};
+const IMAGE = { id: 'gpt-image-1', type: 'image', contextWindow: 0, max_tokens: 4096 };
 
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
-  useModelInfo: () => ({ data: [OPUS, PLAIN] }),
+  useModelInfo: () => ({ data: [OPUS, PLAIN, SMALL_CAP, IMAGE] }),
 }));
 
 import { useLLM } from '@client/app/contexts/LLMContext';
+import { formatTokenBudget } from '@client/app/utils/aiSettingsUtils';
 import { getLowOutputBudget, LowOutputBudgetBanner, useLowOutputBudget } from './LowOutputBudgetBanner';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -79,18 +89,49 @@ describe('LowOutputBudgetBanner', () => {
 
     const banner = screen.getByTestId('reply-low-output-budget-warning');
     expect(banner).toHaveTextContent('ran out of output budget while the model was still reasoning');
-    expect(banner).toHaveTextContent("sent with Max output tokens set to 8,192, below this model's default of 128,000");
+    expect(banner).toHaveTextContent("sent with Max output tokens set to 8 192, below this model's default of 128 000");
+  });
+
+  // The Max output tokens read-out formats with spaces; the notice about that setting must match it.
+  it('formats every figure with the shared token formatter the settings slider uses', () => {
+    renderBanner();
+
+    expect(screen.getByTestId('reply-low-output-budget-warning')).toHaveTextContent(
+      `set to ${formatTokenBudget(8192)}, below this model's default of ${formatTokenBudget(128_000)}`
+    );
+    expect(screen.getByTestId('reply-low-output-budget-raise-button')).toHaveTextContent(
+      `Raise to ${formatTokenBudget(128_000)}`
+    );
+    expect(screen.getByTestId('reply-low-output-budget-warning')).not.toHaveTextContent('128,000');
   });
 
   it('raises the saved setting to the selected model default in one click', () => {
     renderBanner();
 
     const button = screen.getByTestId('reply-low-output-budget-raise-button');
-    expect(button).toHaveTextContent('Raise to 128,000');
+    expect(button).toHaveTextContent('Raise to 128 000');
     fireEvent.click(button);
 
     expect(useLLM.getState().max_tokens).toBe(128_000);
-    expect(screen.getByTestId('reply-low-output-budget-raised')).toHaveTextContent('Max output tokens is now 128,000');
+    expect(screen.getByTestId('reply-low-output-budget-raised')).toHaveTextContent('Max output tokens is now 128 000');
+  });
+
+  it('raises no higher than the cap of a selected model capped below the reasoning floor', () => {
+    useLLM.getState().setLLM({ model: SMALL_CAP.id, max_tokens: 8192 });
+    renderBanner();
+
+    fireEvent.click(screen.getByTestId('reply-low-output-budget-raise-button'));
+
+    expect(useLLM.getState().max_tokens).toBe(SMALL_CAP.max_tokens);
+  });
+
+  // An image model's max_tokens is not an output budget, so there is nothing to raise while one is selected.
+  it('offers no button while an image model is selected', () => {
+    useLLM.getState().setLLM({ model: IMAGE.id, max_tokens: 1024 });
+    renderBanner();
+
+    expect(screen.getByTestId('reply-low-output-budget-warning')).toBeInTheDocument();
+    expect(screen.queryByTestId('reply-low-output-budget-raise-button')).toBeNull();
   });
 
   // Fixed already (here or in the settings dialog): nothing left to click.

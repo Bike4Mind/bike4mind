@@ -82,6 +82,7 @@ import {
   buildModelSelectionPatch,
   ChipVariant,
   computeDefaultMaxTokens,
+  formatTokenBudget,
   getModelPriceTier,
   getModelSpeedFromStats,
   getModelSpeedTooltip,
@@ -567,9 +568,6 @@ const formatTrainingCutoff = (cutoff: string): string => {
 // indicators on it rather than competing with a card's own controls.
 const INDICATOR_SIZE = 32;
 
-// Space thousands separators, matching the Context total these two numbers split.
-const formatTokenCount = (tokens: number): string => tokens.toLocaleString().replace(/,/g, ' ');
-
 /**
  * Floor for the output-token slider. Replaces `max(1024, min(2048, ctx / 4))`, whose other two
  * branches were dead for any window of 8192 or more - i.e. every current model - so the floor was
@@ -1050,11 +1048,11 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   data-testid="token-allocation-output"
                 >
                   <Box component="span" sx={{ color: readOnly ? 'text.tertiary' : brand[800], fontWeight: 'bold' }}>
-                    {formatTokenCount(outputTokens)}
+                    {formatTokenBudget(outputTokens)}
                   </Box>
                   <Box component="span" sx={{ color: 'text.tertiary', fontWeight: 400 }}>
                     {' / '}
-                    {formatTokenCount(outputCeiling)}
+                    {formatTokenBudget(outputCeiling)}
                   </Box>
                 </Typography>
               </Box>
@@ -1112,8 +1110,8 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   mt: isOutputAdjustable ? '-12px' : 0,
                 }}
               >
-                Reserved from the {formatTokenCount(contextWindow)} token context window, leaving{' '}
-                {formatTokenCount(inputTokens)} for input.
+                Reserved from the {formatTokenBudget(contextWindow)} token context window, leaving{' '}
+                {formatTokenBudget(inputTokens)} for input.
               </Typography>
               {isBelowReasoningFloor && (
                 <Typography
@@ -1122,7 +1120,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   data-testid="token-allocation-reasoning-floor-warning"
                   sx={{ fontSize: '12px', lineHeight: 1.4 }}
                 >
-                  Values below {formatTokenCount(reasoningFloor)} can leave reasoning models with no room to answer,
+                  Values below {formatTokenBudget(reasoningFloor)} can leave reasoning models with no room to answer,
                   because the reasoning can use the whole budget.
                 </Typography>
               )}
