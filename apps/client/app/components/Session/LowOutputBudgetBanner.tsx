@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Alert, Button, Typography } from '@mui/joy';
 import { useShallow } from 'zustand/react/shallow';
+import { reasonsWithinOutputBudget } from '@bike4mind/llm-adapters/model-sizing';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { computeDefaultMaxTokens } from '@client/app/utils/aiSettingsUtils';
@@ -14,9 +15,9 @@ export interface LowOutputBudget {
 
 /**
  * The low-budget explanation for a reply that hit the output limit before producing any text,
- * or null when the request's budget was not below the model's default. Below it, the likely
- * cause is the user's saved "Max output tokens" setting rather than the request, and "ask for
- * less" (the generic advice) cannot fix that.
+ * or null when the request's budget was not below the model's default. The server sends the
+ * budget as set, so below the default the likely cause is the user's saved "Max output tokens"
+ * setting rather than the request, and "ask for less" (the generic advice) cannot fix that.
  */
 export function getLowOutputBudget(
   requested: number | undefined,
@@ -27,11 +28,16 @@ export function getLowOutputBudget(
   return { requested, modelDefault };
 }
 
-/** getLowOutputBudget for a stored turn, reading the model's default from the live catalog. */
+/**
+ * getLowOutputBudget for a stored turn, reading the model's default from the live catalog. Only
+ * a model that reasons inside its output budget can spend all of it before writing anything, so
+ * any other model keeps the generic notice.
+ */
 export function useLowOutputBudget(modelId: string | undefined, requested: number | undefined): LowOutputBudget | null {
   const { data: models } = useModelInfo();
   const info = modelId ? models?.find(m => m.id === modelId) : undefined;
-  return getLowOutputBudget(requested, info ? computeDefaultMaxTokens(info) : undefined);
+  if (!info || !reasonsWithinOutputBudget(info)) return null;
+  return getLowOutputBudget(requested, computeDefaultMaxTokens(info));
 }
 
 const fmt = (n: number) => n.toLocaleString('en-US');
@@ -55,10 +61,10 @@ export function LowOutputBudgetBanner({ requested, modelDefault }: LowOutputBudg
       variant="soft"
       sx={{ my: 1, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}
     >
-      <Typography level="title-sm">⚠️ Response was cut off</Typography>
+      <Typography level="title-sm">{'\u26A0\uFE0F Response was cut off'}</Typography>
       <Typography level="body-sm">
-        Your Max output tokens setting ({fmt(requested)}) is too low for this model&apos;s reasoning, which can use the
-        whole budget before any reply is written. This model&apos;s default is {fmt(modelDefault)}.
+        This reply ran out of output budget while the model was still reasoning, so no answer was written. It was sent
+        with Max output tokens set to {fmt(requested)}, below this model&apos;s default of {fmt(modelDefault)}.
       </Typography>
       {raised ? (
         <Typography level="body-sm" data-testid="reply-low-output-budget-raised">
@@ -76,7 +82,7 @@ export function LowOutputBudgetBanner({ requested, modelDefault }: LowOutputBudg
               setRaised(true);
             }}
           >
-            Raise to default
+            Raise to {fmt(target)}
           </Button>
         )
       )}

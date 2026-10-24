@@ -1,17 +1,24 @@
 import React from 'react';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, renderHook, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
+import { getThemeConfig } from '@client/app/utils/themes';
 
-const OPUS = { id: 'claude-opus-x', type: 'text', contextWindow: 1_000_000, max_tokens: 128_000 };
+const OPUS = {
+  id: 'claude-opus-x',
+  type: 'text',
+  contextWindow: 1_000_000,
+  max_tokens: 128_000,
+  thinkingStyle: 'adaptive',
+};
+const PLAIN = { id: 'plain-model', type: 'text', contextWindow: 200_000, max_tokens: 64_000 };
 
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
-  useModelInfo: () => ({ data: [OPUS] }),
+  useModelInfo: () => ({ data: [OPUS, PLAIN] }),
 }));
 
 import { useLLM } from '@client/app/contexts/LLMContext';
-import { getLowOutputBudget, LowOutputBudgetBanner } from './LowOutputBudgetBanner';
+import { getLowOutputBudget, LowOutputBudgetBanner, useLowOutputBudget } from './LowOutputBudgetBanner';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -34,6 +41,27 @@ describe('getLowOutputBudget', () => {
   });
 });
 
+describe('useLowOutputBudget', () => {
+  it('flags a low budget on a model that reasons inside its output budget', () => {
+    const { result } = renderHook(() => useLowOutputBudget(OPUS.id, 8192));
+
+    expect(result.current).toEqual({ requested: 8192, modelDefault: 128_000 });
+  });
+
+  // An empty reply there was not reasoning running out of room, so the reasoning copy would be untrue.
+  it('leaves any other model on the generic notice', () => {
+    const { result } = renderHook(() => useLowOutputBudget(PLAIN.id, 1024));
+
+    expect(result.current).toBeNull();
+  });
+
+  it('leaves a model missing from the catalog on the generic notice', () => {
+    const { result } = renderHook(() => useLowOutputBudget('retired-model', 8192));
+
+    expect(result.current).toBeNull();
+  });
+});
+
 describe('LowOutputBudgetBanner', () => {
   beforeEach(() => {
     useLLM.getState().setLLM({ model: OPUS.id, max_tokens: 8192 });
@@ -46,18 +74,20 @@ describe('LowOutputBudgetBanner', () => {
       </CssVarsProvider>
     );
 
-  it('names the setting and the model default', () => {
+  it('says the reply ran out of budget while reasoning and names the setting and the default', () => {
     renderBanner();
 
     const banner = screen.getByTestId('reply-low-output-budget-warning');
-    expect(banner).toHaveTextContent('Your Max output tokens setting (8,192) is too low');
-    expect(banner).toHaveTextContent("This model's default is 128,000");
+    expect(banner).toHaveTextContent('ran out of output budget while the model was still reasoning');
+    expect(banner).toHaveTextContent("sent with Max output tokens set to 8,192, below this model's default of 128,000");
   });
 
   it('raises the saved setting to the selected model default in one click', () => {
     renderBanner();
 
-    fireEvent.click(screen.getByTestId('reply-low-output-budget-raise-button'));
+    const button = screen.getByTestId('reply-low-output-budget-raise-button');
+    expect(button).toHaveTextContent('Raise to 128,000');
+    fireEvent.click(button);
 
     expect(useLLM.getState().max_tokens).toBe(128_000);
     expect(screen.getByTestId('reply-low-output-budget-raised')).toHaveTextContent('Max output tokens is now 128,000');
