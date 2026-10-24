@@ -4117,15 +4117,14 @@ export class ChatService {
           ...(standing.value === undefined ? {} : { value: standing.value }),
         };
       }
-      if (currentlyTainted) return null;
-
       // A shell command whose every sub-command was allowed before, by prefix, runs - but not
-      // past a directory outside the project that the user has not allowed too.
+      // past a directory outside the project that the user has not allowed too. Over a tainted
+      // reply, only prefixes the user allowed on a card that already named the taint count.
       const always = prompt.always;
       if (
         always &&
         !prompt.askInAuto &&
-        gate.coversCommands(sessionId, always) &&
+        gate.coversCommands(sessionId, always, currentlyTainted) &&
         gate.uncoveredDirectories(sessionId, always.directories).length === 0
       ) {
         return { decision: 'once' };
