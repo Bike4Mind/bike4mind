@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getSourceQueueUrl } from './dlqRegistry';
 import { sendToQueue } from './sqs';
@@ -24,28 +25,55 @@ export const PublishThumbnailJobSchema = z.object({
 });
 export type PublishThumbnailJob = z.infer<typeof PublishThumbnailJobSchema>;
 
-/** Folder holding every thumbnail object of one artifact, one per rendered version. */
+/** Folder holding every thumbnail render of one artifact. */
 export function publishThumbnailPrefix(publicId: string): string {
   return `${PUBLISH_THUMBNAIL_PREFIX}${publicId}/`;
 }
 
-export function publishThumbnailKey(publicId: string, versionId: string): string {
-  return `${publishThumbnailPrefix(publicId)}${versionId}.webp`;
+/** Each render owns its object, even when duplicate jobs render the same version concurrently. */
+export function publishThumbnailKey(publicId: string, versionId: string, renderId: string = randomUUID()): string {
+  return `${publishThumbnailPrefix(publicId)}${versionId}-${renderId}.webp`;
 }
 
 /** True when `key` is a thumbnail object of `publicId` - checked before a stored key is presigned or deleted. */
 export function isPublishThumbnailKeyFor(publicId: string, key: string): boolean {
   const prefix = publishThumbnailPrefix(publicId);
-  return key.startsWith(prefix) && /^[0-9a-f]{64}\.webp$/.test(key.slice(prefix.length));
+  // Legacy version-only keys remain valid while existing records and signed links expire.
+  return (
+    key.startsWith(prefix) &&
+    /^[0-9a-f]{64}(?:-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\.webp$/.test(
+      key.slice(prefix.length)
+    )
+  );
+}
+
+/**
+ * Delete one detached thumbnail after a reversible takedown. Never sweep its prefix here: a
+ * concurrent restore can already have recorded a fresh render under the same artifact folder.
+ * Invalid keys are ignored; storage failures are logged without blocking the takedown.
+ */
+export async function deletePublishThumbnail(
+  publicId: string,
+  key: string,
+  logger: { warn: (message: string) => unknown },
+  getStorage: () => { delete(key: string): Promise<void> } = getPublishedArtifactsStorage
+): Promise<void> {
+  if (!PUBLIC_ID_SEGMENT.test(publicId) || !isPublishThumbnailKeyFor(publicId, key)) return;
+  try {
+    await getStorage().delete(key);
+  } catch (err) {
+    logger.warn(`[PUBLISH] thumbnail not deleted for ${publicId}: ${messageOf(err)}`);
+  }
 }
 
 /** Concurrent prefix deletes while purging many artifacts at once (an account's whole library). */
 const DELETE_CONCURRENCY = 8;
 
 /**
- * Delete every thumbnail object of the given artifacts, for when they are deleted, taken down or
- * purged with their owner. Callers also clear the `thumbnail` record (PublishedArtifact softDelete,
- * takedown, purgeOwnerPublishedArtifacts) so a later restore never signs a missing object.
+ * Delete every thumbnail object of the given artifacts, for owner deletes or account purges.
+ * Reversible admin takedowns use deletePublishThumbnail to avoid racing a restore. Callers also
+ * clear the `thumbnail` record (PublishedArtifact softDelete, purgeOwnerPublishedArtifacts), so a
+ * later restore never signs a missing object.
  *
  * Best-effort and never throws: a failure is logged and must not block the delete that called it.
  * Ids that could never have formed a thumbnail key are skipped. Resolves to the objects deleted.

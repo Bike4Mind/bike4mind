@@ -6,6 +6,7 @@ import type { Logger } from '@bike4mind/observability';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import {
   PublishThumbnailJobSchema,
+  deletePublishThumbnail,
   isPublishThumbnailKeyFor,
   publishThumbnailKey,
   type PublishThumbnailJob,
@@ -117,8 +118,8 @@ export async function processPublishThumbnailJob(
   }
 
   const key = publishThumbnailKey(job.publicId, job.versionId);
-  // Immutable: the key names the version, so its bytes never change. Pairs with the windowed signing
-  // in apps/client/server/services/publish/thumbnailUrl.ts, which keeps the URL stable to cache on.
+  // Each render owns its immutable key, including retries and restores of the same version.
+  // Windowed signing in apps/client/server/services/publish/thumbnailUrl.ts keeps its URL cacheable.
   await storage.upload(image, key, { ContentType: 'image/webp', CacheControl: THUMBNAIL_CACHE_CONTROL });
 
   const recorded = await recordPublishedArtifactThumbnail(job.publicId, {
@@ -127,19 +128,12 @@ export async function processPublishThumbnailJob(
     renderedAt: new Date(),
   });
   if (!recorded) {
-    // Published over or deleted mid-render. A late re-render of a version the artifact has since
-    // left writes the same key the record may still show until the newer render lands, so only
-    // delete the upload when nothing points at it.
-    const stillShown = await PublishedArtifact.exists({
-      publicId: job.publicId,
-      deletedAt: null,
-      'thumbnail.key': key,
-    });
-    if (!stillShown) await storage.delete(key).catch(() => undefined);
+    // This render's unique key cannot be referenced by another render of the same version.
+    await deletePublishThumbnail(job.publicId, key, logger, () => storage);
     return 'discarded';
   }
   if (recorded.replacedKey && isPublishThumbnailKeyFor(job.publicId, recorded.replacedKey)) {
-    await storage.delete(recorded.replacedKey).catch(() => undefined);
+    await deletePublishThumbnail(job.publicId, recorded.replacedKey, logger, () => storage);
   }
   return 'rendered';
 }

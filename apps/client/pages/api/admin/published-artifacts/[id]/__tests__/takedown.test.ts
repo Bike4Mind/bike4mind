@@ -45,7 +45,11 @@ vi.mock('@server/services/publish', () => ({
   toCacheTarget: (a: unknown) => a,
 }));
 
-const thumbnails = vi.hoisted(() => ({ deletePublishThumbnails: vi.fn(), enqueuePublishThumbnail: vi.fn() }));
+const thumbnails = vi.hoisted(() => ({
+  deletePublishThumbnail: vi.fn(),
+  deletePublishThumbnails: vi.fn(),
+  enqueuePublishThumbnail: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/utils/publishThumbnails', () => thumbnails);
 
 import handler from '../takedown';
@@ -58,7 +62,7 @@ const run = ({ method, user, id = 'pub1', body = {} }: RunOpts) => {
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
-/** The lean-ish doc findOneAndUpdate resolves to (new:true). */
+/** The artifact snapshot returned by either atomic lifecycle write. */
 function updatedDoc(over: Record<string, unknown> = {}) {
   return { publicId: 'pub1', tier: 'user', scopeId: 'u1', slug: 'r-pub1', source: { kind: 'reply' }, ...over };
 }
@@ -69,6 +73,7 @@ beforeEach(() => {
   mockFindOneAndUpdate.mockReset();
   mockReportUpdateMany.mockReset().mockResolvedValue({});
   invalidateMock.mockReset();
+  thumbnails.deletePublishThumbnail.mockReset().mockResolvedValue(undefined);
   thumbnails.deletePublishThumbnails.mockReset().mockResolvedValue(0);
   thumbnails.enqueuePublishThumbnail.mockReset().mockResolvedValue(true);
 });
@@ -76,19 +81,54 @@ beforeEach(() => {
 describe('takedown and restore - owner-only thumbnails', () => {
   const SHA = 'e'.repeat(64);
 
-  it('clears the thumbnail record in the takedown write and deletes its objects', async () => {
-    mockFindOneAndUpdate.mockResolvedValue(updatedDoc({ source: { kind: 'bundle' } }));
+  it('atomically detaches and deletes only the old thumbnail, preserving a concurrent restore render', async () => {
+    const key = `publish-thumbnails/pub1/${SHA}.webp`;
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc({ source: { kind: 'bundle' }, thumbnail: { key } }));
     const { res, promise } = run({ method: 'POST', user: ADMIN });
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(mockFindOneAndUpdate.mock.calls[0][1].$unset).toEqual({ thumbnail: 1 });
-    expect(thumbnails.deletePublishThumbnails).toHaveBeenCalledWith(['pub1'], expect.anything());
+    expect(mockFindOneAndUpdate.mock.calls[0][2]).toEqual({ new: false });
+    expect(thumbnails.deletePublishThumbnail).toHaveBeenCalledWith('pub1', key, expect.anything());
+    expect(thumbnails.deletePublishThumbnails).not.toHaveBeenCalled();
+  });
+
+  it('leaves a restored render intact when restore finishes before takedown cleanup', async () => {
+    const oldKey = `publish-thumbnails/pub1/${SHA}.webp`;
+    const restoredKey = `publish-thumbnails/pub1/${SHA}-00000000-0000-4000-8000-000000000001.webp`;
+    const objects = new Set([oldKey]);
+    let finishReports: (() => void) | undefined;
+    const reportsPending = new Promise<void>(resolve => {
+      finishReports = resolve;
+    });
+    mockReportUpdateMany.mockReturnValue(reportsPending);
+    mockFindOneAndUpdate
+      .mockResolvedValueOnce(updatedDoc({ source: { kind: 'bundle' }, thumbnail: { key: oldKey } }))
+      .mockResolvedValueOnce(updatedDoc({ source: { kind: 'bundle' }, sha256Index: SHA }));
+    thumbnails.deletePublishThumbnail.mockImplementation(async (_publicId: string, key: string) => {
+      objects.delete(key);
+    });
+    thumbnails.enqueuePublishThumbnail.mockImplementation(async () => {
+      objects.add(restoredKey);
+      return true;
+    });
+
+    const takedown = run({ method: 'POST', user: ADMIN });
+    await vi.waitFor(() => expect(mockReportUpdateMany).toHaveBeenCalled());
+    const restore = run({ method: 'DELETE', user: ADMIN });
+    await restore.promise;
+    finishReports?.();
+    await takedown.promise;
+
+    expect(objects).toEqual(new Set([restoredKey]));
+    expect(thumbnails.deletePublishThumbnails).not.toHaveBeenCalled();
   });
 
   it('deletes nothing when there was no page to take down', async () => {
     mockFindOneAndUpdate.mockResolvedValue(null);
     const { promise } = run({ method: 'POST', user: ADMIN });
     await promise;
+    expect(thumbnails.deletePublishThumbnail).not.toHaveBeenCalled();
     expect(thumbnails.deletePublishThumbnails).not.toHaveBeenCalled();
   });
 

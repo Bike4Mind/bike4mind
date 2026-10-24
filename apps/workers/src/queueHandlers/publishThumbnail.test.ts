@@ -7,7 +7,6 @@ vi.mock('@server/queueHandlers/utils', () => ({
 
 const h = vi.hoisted(() => ({
   findOne: vi.fn(),
-  exists: vi.fn(),
   recordPublishedArtifactThumbnail: vi.fn(),
   storage: { download: vi.fn(), upload: vi.fn(), delete: vi.fn(), getSignedUrl: vi.fn() },
   buildThumbnailDocument: vi.fn(),
@@ -15,7 +14,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  PublishedArtifact: { findOne: h.findOne, exists: h.exists },
+  PublishedArtifact: { findOne: h.findOne },
   recordPublishedArtifactThumbnail: h.recordPublishedArtifactThumbnail,
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
@@ -40,7 +39,7 @@ import { MAX_THUMBNAIL_DOCUMENT_BYTES, MAX_THUMBNAIL_IMAGE_BYTES } from '@worker
 
 const VERSION = 'b'.repeat(64);
 const OLD_VERSION = 'c'.repeat(64);
-const KEY = `publish-thumbnails/pub1/${VERSION}.webp`;
+const KEY = expect.stringMatching(new RegExp(`^publish-thumbnails/pub1/${VERSION}-[0-9a-f-]{36}[.]webp$`));
 const OLD_KEY = `publish-thumbnails/pub1/${OLD_VERSION}.webp`;
 const SIGNED_DOCUMENT_URL = 'https://bucket.example.test/drafts/thumbnail-renders/doc.html?X-Amz-Signature=abc';
 const SCRIPT_URL = 'https://app.example.test/static/lib/chart.js';
@@ -61,7 +60,7 @@ const bundleArtifact = (over: Record<string, unknown> = {}) => ({
 });
 const rendered = (image: Buffer) => ({ status: 'rendered' as const, imageBase64: image.toString('base64') });
 const stagingKey = () => h.storage.upload.mock.calls.find(([, key]) => key.startsWith(THUMBNAIL_STAGING_PREFIX))?.[1];
-const thumbnailUploads = () => h.storage.upload.mock.calls.filter(([, key]) => key === KEY);
+const thumbnailUploads = () => h.storage.upload.mock.calls.filter(([, key]) => key.startsWith('publish-thumbnails/'));
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -69,7 +68,6 @@ beforeEach(async () => {
     .webp()
     .toBuffer();
   h.findOne.mockReturnValue(lean(bundleArtifact()));
-  h.exists.mockResolvedValue(null);
   h.buildThumbnailDocument.mockResolvedValue({
     srcdoc: '<h1>x</h1>',
     allowedScriptUrls: [SCRIPT_URL],
@@ -169,6 +167,18 @@ describe('processPublishThumbnailJob', () => {
     expect(h.storage.delete).toHaveBeenCalledWith(OLD_KEY);
   });
 
+  it.each([
+    ['rendered', { replacedKey: OLD_KEY }],
+    ['discarded', null],
+  ])('logs failed thumbnail cleanup without retrying a %s render', async (outcome, recorded) => {
+    h.recordPublishedArtifactThumbnail.mockResolvedValue(recorded);
+    h.storage.delete.mockImplementation(async (key: string) => {
+      if (key.startsWith('publish-thumbnails/')) throw new Error('AccessDenied');
+    });
+    await expect(processPublishThumbnailJob(job, logger, render)).resolves.toBe(outcome);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('AccessDenied'));
+  });
+
   it("never deletes a replaced key that is not this artifact's thumbnail", async () => {
     h.recordPublishedArtifactThumbnail.mockResolvedValue({ replacedKey: 'user/owner1/my-slug/index.html' });
     await expect(processPublishThumbnailJob(job, logger, render)).resolves.toBe('rendered');
@@ -178,15 +188,47 @@ describe('processPublishThumbnailJob', () => {
   it('discards the upload when the artifact moved on mid-render', async () => {
     h.recordPublishedArtifactThumbnail.mockResolvedValue(null);
     await expect(processPublishThumbnailJob(job, logger, render)).resolves.toBe('discarded');
-    expect(h.exists).toHaveBeenCalledWith({ publicId: 'pub1', deletedAt: null, 'thumbnail.key': KEY });
     expect(h.storage.delete).toHaveBeenCalledWith(KEY);
   });
 
-  it('keeps a discarded upload whose key the record still shows (a late re-render of the shown version)', async () => {
-    h.recordPublishedArtifactThumbnail.mockResolvedValue(null);
-    h.exists.mockResolvedValue({ _id: 'x' });
+  it('never deletes a newer render when a same-version job is discarded', async () => {
+    h.recordPublishedArtifactThumbnail.mockResolvedValueOnce(null).mockResolvedValueOnce({ replacedKey: null });
     await expect(processPublishThumbnailJob(job, logger, render)).resolves.toBe('discarded');
-    expect(h.storage.delete).not.toHaveBeenCalledWith(KEY);
+    await expect(processPublishThumbnailJob(job, logger, render)).resolves.toBe('rendered');
+
+    const [discardedUpload, currentUpload] = thumbnailUploads();
+    expect(discardedUpload[1]).not.toBe(currentUpload[1]);
+    expect(h.storage.delete).toHaveBeenCalledWith(discardedUpload[1]);
+    expect(h.storage.delete).not.toHaveBeenCalledWith(currentUpload[1]);
+  });
+
+  it('never deletes a restored version when delayed replacement cleanup finishes', async () => {
+    let finishReplacement: (() => void) | undefined;
+    let cleanupStarted: (() => void) | undefined;
+    const started = new Promise<void>(resolve => {
+      cleanupStarted = resolve;
+    });
+    h.storage.delete.mockImplementation(async (key: string) => {
+      if (key === OLD_KEY) {
+        cleanupStarted?.();
+        await new Promise<void>(resolve => {
+          finishReplacement = resolve;
+        });
+      }
+    });
+    h.recordPublishedArtifactThumbnail.mockResolvedValueOnce({ replacedKey: OLD_KEY });
+    const replacing = processPublishThumbnailJob(job, logger, render);
+    await started;
+
+    h.findOne.mockReturnValue(lean(bundleArtifact({ sha256Index: OLD_VERSION })));
+    await expect(processPublishThumbnailJob({ ...job, versionId: OLD_VERSION }, logger, render)).resolves.toBe(
+      'rendered'
+    );
+    const restoredKey = h.recordPublishedArtifactThumbnail.mock.calls[1][1].key;
+    finishReplacement?.();
+    await replacing;
+    expect(restoredKey).not.toBe(OLD_KEY);
+    expect(h.storage.delete).not.toHaveBeenCalledWith(restoredKey);
   });
 
   it.each([

@@ -10,6 +10,7 @@ vi.mock('./sqs', () => ({ sendToQueue }));
 vi.mock('./storage/index', () => ({ getPublishedArtifactsStorage }));
 
 import {
+  deletePublishThumbnail,
   deletePublishThumbnails,
   enqueuePublishThumbnail,
   isPublishThumbnailKeyFor,
@@ -22,9 +23,25 @@ const VERSION = 'a'.repeat(64);
 const QUEUE_URL = 'https://sqs.example.test/queue/publish-thumbnail';
 
 describe('publishThumbnailKey / isPublishThumbnailKeyFor', () => {
-  it('builds the per-version key under the dedicated prefix', () => {
-    expect(publishThumbnailKey('pub1', VERSION)).toBe(`publish-thumbnails/pub1/${VERSION}.webp`);
+  it('gives every render its own key under the artifact prefix', () => {
+    const first = publishThumbnailKey('pub1', VERSION);
+    const second = publishThumbnailKey('pub1', VERSION);
+    expect(first).not.toBe(second);
+    expect(first).toMatch(new RegExp(`^publish-thumbnails/pub1/${VERSION}-[0-9a-f-]{36}\\.webp$`));
+    expect(isPublishThumbnailKeyFor('pub1', first)).toBe(true);
+    expect(isPublishThumbnailKeyFor('pub1', second)).toBe(true);
   });
+
+  it('preserves legacy version-only keys for existing records', () => {
+    expect(isPublishThumbnailKeyFor('pub1', `publish-thumbnails/pub1/${VERSION}.webp`)).toBe(true);
+  });
+
+  it.each(['../other', 'not-a-uuid', '00000000-0000-0000-0000-00000000000z'])(
+    'rejects invalid render ids %s',
+    renderId => {
+      expect(isPublishThumbnailKeyFor('pub1', publishThumbnailKey('pub1', VERSION, renderId))).toBe(false);
+    }
+  );
 
   it("accepts only the artifact's own thumbnail keys", () => {
     expect(isPublishThumbnailKeyFor('pub1', publishThumbnailKey('pub1', VERSION))).toBe(true);
@@ -128,5 +145,34 @@ describe('deletePublishThumbnails', () => {
     });
     await expect(deletePublishThumbnails(['pub1'], logger)).resolves.toBe(0);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('bucket not linked'));
+  });
+});
+
+describe('deletePublishThumbnail', () => {
+  const logger = { warn: vi.fn() };
+  const deleteObject = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    deleteObject.mockResolvedValue(undefined);
+    getPublishedArtifactsStorage.mockReturnValue({ delete: deleteObject });
+  });
+
+  it('deletes only the detached object, never the folder containing a restored render', async () => {
+    const key = publishThumbnailKey('pub1', VERSION);
+    await deletePublishThumbnail('pub1', key, logger);
+    expect(deleteObject).toHaveBeenCalledExactlyOnceWith(key);
+  });
+
+  it('refuses another artifact or non-thumbnail key without touching storage', async () => {
+    await deletePublishThumbnail('pub1', publishThumbnailKey('pub2', VERSION), logger);
+    await deletePublishThumbnail('pub1', 'user/scope/slug/index.html', logger);
+    expect(getPublishedArtifactsStorage).not.toHaveBeenCalled();
+  });
+
+  it('logs and swallows a storage error', async () => {
+    deleteObject.mockRejectedValue(new Error('AccessDenied'));
+    await expect(deletePublishThumbnail('pub1', publishThumbnailKey('pub1', VERSION), logger)).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('AccessDenied'));
   });
 });

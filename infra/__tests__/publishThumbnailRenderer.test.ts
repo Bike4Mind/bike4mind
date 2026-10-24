@@ -74,7 +74,7 @@ describe('publish thumbnail orchestrator (queue handler)', () => {
   it('keeps the data access and the capped fan-out, and no longer packages a browser', () => {
     expect(ORCHESTRATOR).toMatch(/handler:\s*'apps\/workers\/src\/queueHandlers\/publishThumbnail\.dispatch'/);
     expect(ORCHESTRATOR).toMatch(/link:\s*\[\.\.\.allSecrets,\s*publishedArtifactsBucket\]/);
-    expect(ORCHESTRATOR).toMatch(/maximumConcurrency:\s*5/);
+    expect(ORCHESTRATOR).toMatch(/maximumConcurrency:\s*5\b/);
     expect(ORCHESTRATOR).toMatch(/SINGLE_RECORD_BATCH/);
     expect(ORCHESTRATOR).not.toMatch(/@sparticuz\/chromium|playwright-core/);
   });

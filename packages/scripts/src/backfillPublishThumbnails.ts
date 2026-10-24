@@ -34,8 +34,9 @@ export interface BackfillPublishThumbnailsResult {
 }
 
 /**
- * Enqueue a thumbnail render for every artifact staleThumbnailFilter selects. Idempotent: a re-run
- * after the worker has caught up selects nothing, and a duplicate job just re-renders the same key.
+ * Enqueue a thumbnail render for every artifact staleThumbnailFilter selects. Successfully rendered
+ * versions are skipped on re-run. Timed-out and oversized versions remain eligible, so a limited
+ * run can select them again. Duplicate jobs replace the thumbnail safely.
  */
 export async function backfillPublishThumbnails(
   options: BackfillPublishThumbnailsOptions

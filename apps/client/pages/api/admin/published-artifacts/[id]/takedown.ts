@@ -1,7 +1,7 @@
 import { Request } from 'express';
 import { z } from 'zod';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { deletePublishThumbnails, enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
+import { deletePublishThumbnail, enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, PublishedArtifactReport } from '@bike4mind/database';
@@ -50,7 +50,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         },
         $unset: { thumbnail: 1 },
       },
-      { new: true }
+      { new: false }
     );
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found or already taken down' });
@@ -67,8 +67,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     // service swallows its own errors, so awaiting would only add AWS latency.
     void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
 
-    // The record was cleared above; no rendered copy of a taken-down page is kept. Never throws.
-    await deletePublishThumbnails([publicId], req.logger);
+    // Delete only the record detached by this atomic write. A concurrent restore may already
+    // have a new thumbnail, so a prefix sweep would delete that fresh render too.
+    if (artifact.thumbnail?.key) {
+      await deletePublishThumbnail(publicId, artifact.thumbnail.key, req.logger);
+    }
 
     req.logger.info(
       `[PUBLISH] takedown ${publicId} by admin=${req.user.id} reason="${oneLine(parsed.data.reason ?? '')}"`
