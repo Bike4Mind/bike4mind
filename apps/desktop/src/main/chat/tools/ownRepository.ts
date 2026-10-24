@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { hostGitArgs } from '../../git/hostGitArgs';
 import { parseRemoteLocation, type RemoteLocation, type RepositoryName } from '../../fleet/repository';
 
 /**
@@ -206,7 +207,7 @@ export function ghReadFiles(tokens: readonly string[]): string[] {
 
 const runGit: GitReader = (cwd, args) =>
   new Promise(resolve => {
-    execFile('git', ['-C', cwd, ...args], { timeout: 2000 }, (error, stdout) => {
+    execFile('git', hostGitArgs(['-C', cwd, ...args]), { timeout: 2000 }, (error, stdout) => {
       resolve(error ? null : stdout.trim() || null);
     });
   });
