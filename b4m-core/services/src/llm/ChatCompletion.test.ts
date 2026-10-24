@@ -4563,6 +4563,30 @@ describe('ChatCompletionProcess', () => {
       });
     });
 
+    // Thinking on an Anthropic adapter sends at least the floor (buildThinkingParams), so no shortfall.
+    it('does not log the reasoning floor for a thinking turn the adapter raises to it', async () => {
+      reservationOrgSetup({ thinkingStyle: 'adaptive', can_think: true, backend: ModelBackend.Anthropic });
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+      const body = {
+        ...reservationBody(),
+        params: { ...startQuestParams.params, max_tokens: 8192, thinking: { enabled: true, budget_tokens: 16_000 } },
+      };
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        '[ChatCompletion] max_tokens below reasoning floor',
+        expect.anything()
+      );
+    });
+
     it('does not log the reasoning floor for a budget above it', async () => {
       reservationOrgSetup({ thinkingStyle: 'adaptive' });
       mockDb.organizations.findById.mockResolvedValue({

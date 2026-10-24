@@ -279,7 +279,8 @@ export function resolveOutputMaxTokens({
 
 /**
  * The reasoning floor an explicit budget falls below, or undefined when it does not. Telemetry
- * only: resolveOutputMaxTokens still honors the budget, so callers log this to trace a reply that
+ * only: resolveOutputMaxTokens still honors the budget, so callers log it (through
+ * sentBelowReasoningFloor in modelSizing.ts, which also accounts for thinking) to trace a reply that
  * ends empty at max_tokens back to a low setting. The floor is what an unstated budget resolves to
  * on this model, so a budget at a model cap below ADAPTIVE_THINKING_MAX_TOKENS_FLOOR is not reported.
  */

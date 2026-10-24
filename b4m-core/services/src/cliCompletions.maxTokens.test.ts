@@ -219,6 +219,24 @@ describe('executeCompletion - output budget', () => {
     });
   });
 
+  // With thinking on, the Anthropic adapter sends at least the floor, so the turn never runs below it.
+  it('does not log the reasoning floor for a thinking turn the adapter raises to it', async () => {
+    availableModels = [ADAPTIVE_MODEL];
+    const { db } = buildDb();
+    const logger = new Logger({ minLevel: 'error' });
+    const info = vi.spyOn(logger, 'info');
+
+    await executeCompletion({
+      ...baseParams,
+      model: 'adaptive-model',
+      db,
+      logger,
+      options: { maxTokens: 1000, thinking: { enabled: true } },
+    });
+
+    expect(info).not.toHaveBeenCalledWith('[cliCompletions] max_tokens below reasoning floor', expect.anything());
+  });
+
   it('does not log the reasoning floor for an absent budget or a non-reasoning model', async () => {
     const { db } = buildDb();
     const logger = new Logger({ minLevel: 'error' });

@@ -118,10 +118,9 @@ import {
   toRetrievalFilter,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
-import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
+import { sentBelowReasoningFloor, sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import {
   resolveOutputMaxTokens,
-  belowReasoningFloor,
   reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
@@ -2841,11 +2840,12 @@ export class ChatCompletionProcess {
         modelInfo,
         modelMaxOutputTokens: modelMaxOutput,
       });
-      const reasoningShortfall = belowReasoningFloor({
+      const reasoningShortfall = sentBelowReasoningFloor({
         requested: params.max_tokens,
         fallback: DEFAULT_OUTPUT_MAX_TOKENS,
         modelInfo,
         modelMaxOutputTokens: modelMaxOutput,
+        thinking: params.thinking,
       });
       if (reasoningShortfall) {
         // Honored as set; logged so an empty reply at max_tokens can be traced to the setting.
