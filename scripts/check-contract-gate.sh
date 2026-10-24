@@ -18,8 +18,8 @@
 #   scripts/contract-gate-api-key-allowlist.txt (scan 2)
 #     Frozen baseline of handlers that predate the ratchet. It only shrinks.
 #   scripts/contract-gate-function-url-allowlist.txt (scan 3)
-#     Frozen baseline of Function URL handlers that predate the ratchet. It only shrinks,
-#     and every entry must carry a trailing `# reason` (the gate rejects one without).
+#     Frozen baseline of Function URL handlers that predate the ratchet. Entries are only ever
+#     removed, and every entry must carry a trailing `# reason` (the gate rejects one without).
 
 set -euo pipefail
 
@@ -184,7 +184,8 @@ fi
 
 url_status=0
 url_violators=$(node "$SCRIPT_DIR/check-function-url-contracts.mjs" "$PWD") || url_status=$?
-if [ "$url_status" -gt 1 ]; then
+# A real exit 1 always printed a path; node also exits 1 for a throw or a load error, with no stdout.
+if [ "$url_status" -gt 1 ] || { [ "$url_status" -eq 1 ] && [ -z "$url_violators" ]; }; then
   echo "::error::Function URL contract scan failed (exit ${url_status})"
   echo "ERROR: Could not scan $INFRA_DIR for Function URLs; refusing to report a clean result."
   exit 1
@@ -193,7 +194,7 @@ fi
 report "$ALLOWLIST_FUNCTION_URL" "$url_violators" \
   "have an infra/ Function URL handler that is not built on defineLambdaRoute" \
   "Fix: build the handler on defineLambdaRoute(contract, handler) so it validates the request,
-authenticates, and is registered in the OpenAPI spec (see
+authenticates; then add the contract to contracts/index.ts and regenerate the spec (see
 b4m-core/common/src/api-contract/README.md).
 Do NOT add to $ALLOWLIST_FUNCTION_URL for new code: entries there are frozen debt, and each
 needs a trailing '# reason'." || failed=1

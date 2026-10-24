@@ -558,6 +558,63 @@ describe('check-contract-gate.sh', () => {
       expect(r.stdout).toContain(handler);
     });
 
+    it('lists every violating handler, one per file', () => {
+      const { dir } = makeTree();
+      const a = writeWorker(dir, 'a.ts', RAW_WORKER_HANDLER);
+      const b = writeWorker(dir, 'b.ts', RAW_WORKER_HANDLER);
+      writeInfra(dir, 'a.ts', fnDeclaration('apps/workers/src/a.handler', 'true'));
+      writeInfra(dir, 'b.ts', fnDeclaration('apps/workers/src/b.handler', 'true'));
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(a);
+      expect(r.stdout).toContain(b);
+    });
+
+    it('checks every Function in one infra file, not only the first', () => {
+      const { dir } = makeTree();
+      const handler = writeWorker(dir, 'raw.ts', RAW_WORKER_HANDLER);
+      writeWorker(dir, 'direct.ts', ROUTED_WORKER);
+      writeInfra(
+        dir,
+        'two.ts',
+        fnDeclaration('apps/workers/src/direct.handler', 'true') +
+          fnDeclaration('apps/workers/src/raw.handler', 'true').replace('lambda', 'second')
+      );
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(handler);
+    });
+
+    it('refuses to report clean when a url Function has a computed handler', () => {
+      const { dir } = makeTree();
+      writeInfra(
+        dir,
+        'computed.ts',
+        `export const lambda = new sst.aws.Function('Lambda', {\n  handler: pickHandler(),\n  url: true,\n});\n`
+      );
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('Could not scan infra');
+      expect(r.stdout + r.stderr).toContain('::error::');
+      expect(r.stdout).not.toContain('OK: No contract-gate violations.');
+    });
+
+    // Node exits 1 for a throw or a load error, which must not read as "violations: none".
+    it.each([
+      ['throws at load', `throw new Error('boom');\n`],
+      ['has a syntax error', `const = ;\n`],
+    ])('refuses to report clean when the helper %s', (_label, helper) => {
+      const { dir } = makeTree();
+      fs.copyFileSync(GUARD, path.join(dir, 'scripts', 'check-contract-gate.sh'));
+      fs.writeFileSync(path.join(dir, 'scripts', 'check-function-url-contracts.mjs'), helper, 'utf8');
+      writeWorker(dir, 'raw.ts', RAW_WORKER_HANDLER);
+      writeInfra(dir, 'raw.ts', fnDeclaration('apps/workers/src/raw.handler', 'true'));
+      const r = spawnSync(BASH, [path.join(dir, 'scripts', 'check-contract-gate.sh')], { cwd: dir, encoding: 'utf8' });
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('Function URL contract scan failed');
+      expect(r.stdout).not.toContain('OK: No contract-gate violations.');
+    });
+
     it('exits 1 when infra/ is missing', () => {
       const { dir } = makeTree();
       fs.rmSync(path.join(dir, 'infra'), { recursive: true });

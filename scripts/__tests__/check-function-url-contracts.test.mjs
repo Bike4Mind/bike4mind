@@ -82,6 +82,17 @@ describe('stripComments', () => {
   });
 });
 
+describe('stripComments: astral characters', () => {
+  it('keeps offsets aligned after an emoji', () => {
+    const source = "const s = '\u{1F600}'; // note\nconst x = defineLambdaRoute(c, f);";
+    const out = stripComments(source);
+    expect(out).toHaveLength(source.length);
+    expect(out).not.toContain('/');
+    expect(out).not.toContain('note');
+    expect(out).toContain('const x = defineLambdaRoute(c, f);');
+  });
+});
+
 describe('findUrlFunctions', () => {
   it('detects url: true', () => {
     expect(scan(fnDeclaration([HANDLER, '  url: true,']))).toEqual({
@@ -136,6 +147,34 @@ describe('findUrlFunctions', () => {
   });
 });
 
+describe('findUrlFunctions: shapes that hide a url', () => {
+  it('reads a quoted key', () => {
+    expect(scan(fnDeclaration([HANDLER, "  'url': true,"])).exposed).toHaveLength(1);
+  });
+
+  it('finds a second Function in the same file', () => {
+    const text = `${fnDeclaration([HANDLER])}\n${fnDeclaration(["  handler: 'apps/workers/src/two.handler',", '  url: true,'])}`;
+    expect(scan(text).exposed).toEqual([{ file: 'infra/fn.ts', handler: 'apps/workers/src/two.handler' }]);
+  });
+
+  it('merges a spread of a same-file const, later keys winning', () => {
+    const shared = "const shared = { handler: 'apps/workers/src/thing.handler', url: true };\n";
+    expect(scan(shared + fnDeclaration(['  ...shared,'])).exposed).toHaveLength(1);
+    expect(scan(shared + fnDeclaration(['  ...shared,', '  url: false,'])).exposed).toEqual([]);
+  });
+
+  it('fails closed on a spread it cannot resolve', () => {
+    const { exposed, problems } = scan(fnDeclaration(['  ...imported,', HANDLER]));
+    expect(exposed).toEqual([]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("'...imported'");
+  });
+
+  it('fails closed on a computed key', () => {
+    expect(scan(fnDeclaration([HANDLER, "  ['url']: true,"])).problems).toHaveLength(1);
+  });
+});
+
 describe('resolveHandlerFile', () => {
   it('strips the export name and finds each supported extension', () => {
     const existing = new Set(['apps/workers/src/a.ts']);
@@ -164,14 +203,17 @@ describe('usesDefineLambdaRoute', () => {
   const ENTRY = 'apps/workers/src/entry.ts';
 
   it('passes when the entry calls defineLambdaRoute directly', () => {
-    const io = virtualFs({ [ENTRY]: "import { defineLambdaRoute } from './defineLambdaRoute';\nexport const h = defineLambdaRoute(c, f);" });
+    const io = virtualFs({
+      [ENTRY]: "import { defineLambdaRoute } from './defineLambdaRoute';\nexport const h = defineLambdaRoute(c, f);",
+    });
     expect(usesDefineLambdaRoute('/repo', ENTRY, io)).toBe(true);
   });
 
   it('passes through a relative import, like tools.handler.ts -> tools.ts', () => {
     const io = virtualFs({
       [ENTRY]: "import { run } from './route';\nexport const handler = run;",
-      'apps/workers/src/route.ts': "import { defineLambdaRoute } from './defineLambdaRoute';\nexport const run = defineLambdaRoute(c, f);",
+      'apps/workers/src/route.ts':
+        "import { defineLambdaRoute } from './defineLambdaRoute';\nexport const run = defineLambdaRoute(c, f);",
     });
     expect(usesDefineLambdaRoute('/repo', ENTRY, io)).toBe(true);
   });
@@ -208,6 +250,35 @@ describe('usesDefineLambdaRoute', () => {
     expect(usesDefineLambdaRoute('/repo', ENTRY, io)).toBe(false);
   });
 
+  it('passes a call through an aliased import', () => {
+    const io = virtualFs({
+      [ENTRY]: "import { defineLambdaRoute as route } from './defineLambdaRoute';\nexport const h = route(c, f);",
+    });
+    expect(usesDefineLambdaRoute('/repo', ENTRY, io)).toBe(true);
+  });
+
+  it('does not follow a type-only import', () => {
+    const io = virtualFs({
+      [ENTRY]: "import type { Foo } from './routed';\nexport const handler = raw;",
+      'apps/workers/src/routed.ts': 'export const h = defineLambdaRoute(c, f);',
+    });
+    expect(usesDefineLambdaRoute('/repo', ENTRY, io)).toBe(false);
+  });
+
+  it('follows a three-hop chain (the documented bound)', () => {
+    const io = virtualFs({
+      [ENTRY]: "export { x } from './a';",
+      'apps/workers/src/a.ts': "export { x } from '@workers/b';",
+      'apps/workers/src/b.ts': "export { x } from './c';",
+      'apps/workers/src/c.ts': 'const h = defineLambdaRoute(c, f);',
+    });
+    expect(usesDefineLambdaRoute('/repo', ENTRY, io)).toBe(true);
+  });
+
+  it('routes the real CliToolHandler chain', () => {
+    expect(usesDefineLambdaRoute(REPO_ROOT, 'apps/workers/src/cli/tools.handler.ts')).toBe(true);
+  });
+
   it('fails closed on an unresolvable alias', () => {
     const io = virtualFs({
       [ENTRY]: "export { defineLambdaRoute } from '@server/cli/defineLambdaRoute';",
@@ -239,7 +310,8 @@ function run(root) {
 }
 
 const RAW_HANDLER = "export const handler = async () => ({ statusCode: 200, body: '' });";
-const ROUTED_HANDLER = "import { defineLambdaRoute } from './defineLambdaRoute';\nexport const handler = defineLambdaRoute(c, f);";
+const ROUTED_HANDLER =
+  "import { defineLambdaRoute } from './defineLambdaRoute';\nexport const handler = defineLambdaRoute(c, f);";
 
 describe('main', () => {
   it('exits 0 on a clean tree', () => {
@@ -279,6 +351,23 @@ describe('main', () => {
       'infra/fn.ts': fnDeclaration(["  handler: 'premium-generated/x.handler',", '  url: true,']),
     });
     expect(run(dir).status).toBe(0);
+  });
+
+  it('reports a symlinked invocation the same as a physical one', () => {
+    const dir = writeTree({
+      'infra/fn.ts': fnDeclaration([HANDLER, '  url: true,']),
+      'apps/workers/src/thing.ts': RAW_HANDLER,
+    });
+    const linkedScript = path.join(dir, 'link.mjs');
+    fs.symlinkSync(SCRIPT, linkedScript);
+    const r = spawnSync(process.execPath, [linkedScript, dir], { encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stdout.trim()).toBe('apps/workers/src/thing.ts');
+  });
+
+  it('exits 2 on a spread it cannot resolve', () => {
+    const dir = writeTree({ 'infra/fn.ts': fnDeclaration(['  ...imported,', HANDLER]) });
+    expect(run(dir).status).toBe(2);
   });
 
   it('exits 2 when infra/ is missing', () => {

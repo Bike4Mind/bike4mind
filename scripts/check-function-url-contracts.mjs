@@ -37,7 +37,9 @@ const IMPORT_ALIASES = [['@workers/', 'apps/workers/src/']];
 const MAX_IMPORT_DEPTH = 3;
 
 const FUNCTION_PATTERN = /new\s+sst\.aws\.Function\s*\(/g;
-const DEFINE_LAMBDA_ROUTE_PATTERN = /\bdefineLambdaRoute\s*\(/;
+const ROUTE_ALIAS_PATTERN = /\bdefineLambdaRoute\s+as\s+([A-Za-z_$][\w$]*)/g;
+// Type-only imports erase at build time, so they never pull a module into the bundle.
+const TYPE_ONLY_IMPORT_PATTERN = /\b(?:import|export)\s+type\s[^;'"]*?\bfrom\s*(['"])[^'"\n]+\1/g;
 
 const SPECIFIER_PATTERNS = [
   /\bfrom\s*(['"])([^'"\n]+)\1/g,
@@ -54,7 +56,8 @@ const CLOSERS = { '(': ')', '[': ']', '{': '}' };
  * literal has to be read back out; comment markers inside them are not comments.
  */
 export function stripComments(source) {
-  const out = [...source];
+  // Code units, not code points: every offset below is a UTF-16 index.
+  const out = source.split('');
   const blank = (from, to) => {
     for (let k = from; k < to; k++) if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' ';
   };
@@ -189,16 +192,36 @@ function splitTopLevel(text) {
   return parts;
 }
 
-/** Depth-1 `key: value` pairs of an object literal, or null when it is not one. */
-function topLevelProps(literal) {
+/**
+ * Depth-1 `key: value` pairs of an object literal (bare or quoted keys), or null
+ * when it is not one. A `...name` spread of a same-file `const name = {...}` is
+ * merged in order; any other spread or a computed key is pushed to $problems,
+ * because the `url` could hide in it.
+ */
+function topLevelProps(literal, fileText, problems, file) {
   const text = literal.trim();
   if (text[0] !== '{') return null;
   const end = balancedEnd(text, 0);
   if (end === -1) return null;
   const props = {};
   for (const part of splitTopLevel(text.slice(1, end - 1))) {
-    const match = part.match(/^\s*([A-Za-z_$][\w$]*)\s*:/);
-    if (match) props[match[1]] = part.slice(match[0].length).trim();
+    const body = part.trim();
+    const spread = body.match(/^\.\.\.\s*([A-Za-z_$][\w$]*)$/);
+    if (spread) {
+      const decl = fileText.match(
+        new RegExp(`\\bconst\\s+${spread[1].replace(/\$/g, '\\$')}\\s*(?::[^=]+)?=\\s*(?=\\{)`)
+      );
+      const inner = decl && topLevelProps(fileText.slice(decl.index + decl[0].length), fileText, problems, file);
+      if (inner) Object.assign(props, inner);
+      else problems.push(`${file}: cannot resolve spread '...${spread[1]}' in 'new sst.aws.Function' options`);
+      continue;
+    }
+    if (body.startsWith('...') || body.startsWith('[')) {
+      problems.push(`${file}: cannot inspect a spread or computed key in 'new sst.aws.Function' options`);
+      continue;
+    }
+    const match = part.match(/^\s*(?:([A-Za-z_$][\w$]*)|'([^'\n]*)'|"([^"\n]*)")\s*:/);
+    if (match) props[match[1] ?? match[2] ?? match[3]] = part.slice(match[0].length).trim();
   }
   return props;
 }
@@ -235,7 +258,7 @@ export function findUrlFunctions(sources) {
       const options = args[1];
       if (options === undefined || options.trim() === '') continue;
 
-      const props = topLevelProps(options);
+      const props = topLevelProps(options, clean, problems, file);
       if (!props) {
         problems.push(`${file}: cannot inspect 'new sst.aws.Function' options (expected an object literal)`);
         continue;
@@ -335,8 +358,9 @@ export function usesDefineLambdaRoute(root, entryFile, io = {}) {
         continue;
       }
 
-      if (DEFINE_LAMBDA_ROUTE_PATTERN.test(clean)) return true;
-      for (const spec of importSpecifiers(clean)) {
+      const names = ['defineLambdaRoute', ...[...clean.matchAll(ROUTE_ALIAS_PATTERN)].map(m => m[1])];
+      if (new RegExp(`\\b(?:${names.map(n => n.replace(/\$/g, '\\$')).join('|')})\\s*\\(`).test(clean)) return true;
+      for (const spec of importSpecifiers(clean.replace(TYPE_ONLY_IMPORT_PATTERN, ''))) {
         const target = resolveImport(file, spec, exists);
         if (target && !seen.has(target)) next.push(target);
       }
@@ -408,6 +432,13 @@ function main() {
   process.exit(sorted.length > 0 ? 1 : 0);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main();
+const invoked = process.argv[1];
+if (invoked && fs.realpathSync(invoked) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`::error::Function URL contract scan crashed: ${error.message}`);
+    console.error('ERROR: The Function URL contract scan could not run; refusing to report a clean result.');
+    process.exit(2);
+  }
 }

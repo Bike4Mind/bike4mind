@@ -335,11 +335,14 @@ for the whole window. Removing an alias is a major-version change.
   `scripts/contract-gate-api-key-allowlist.txt`.
 - **A Lambda exposed through a Function URL needs a contract too.** An `sst.aws.Function` in
   `infra/` with `url:` serves requests with none of the Next.js middleware chain, so the
-  handler itself must be built on `defineLambdaRoute(contract, ...)` (the transport is
+  handler must be built on `defineLambdaRoute(contract, ...)`: the gate accepts a call in the
+  handler file or in a local module up to three imports away (the transport is
   `apps/workers/src/cli/defineLambdaRoute.ts`; a thin entry that imports the routed module is
-  fine, see `CliToolHandler`). `scripts/check-contract-gate.sh` fails otherwise. The only
-  escape is `scripts/contract-gate-function-url-allowlist.txt`, which is frozen debt: it only
-  shrinks, and every entry needs a trailing `# reason`.
+  fine, see `CliToolHandler`). `scripts/check-contract-gate.sh` fails otherwise. Handlers
+  under `premium-generated/` are skipped, since they are re-exported from an overlay. The
+  other escape is `scripts/contract-gate-function-url-allowlist.txt`, which is frozen debt:
+  entries are only ever removed (the gate prints an already-ported entry as INFO but does not
+  fail), and every entry needs a trailing `# reason`.
 - `LEGACY_PUBLIC_PATHS` in `assertContractConventions.ts` is the baseline: the seven paths
   already shipped in `apps/client/public/openapi.json` when this rule landed. **The list is
   frozen - entries are only ever removed.** Adding to it is the thing this convention
