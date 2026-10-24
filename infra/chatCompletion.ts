@@ -1,5 +1,11 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
+import { chatCompletionCapacity } from './chatCompletionCapacity';
+import {
+  DEFAULT_LAMBDA_ENVIRONMENT,
+  isPreviewStage,
+  PRODUCTION_STAGES,
+  TEST_GENERATION_PROVIDER_ENVIRONMENT,
+} from './constants';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
@@ -86,6 +92,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   cpu: isProd ? '1 vCPU' : '0.5 vCPU',
   memory: isProd ? '2 GB' : '1 GB',
   scaling: isProd ? { min: 2, max: 6, cpuUtilization: 70 } : { min: 1, max: 2 },
+  capacity: chatCompletionCapacity(isPreviewStage),
   link: [
     ...allSecrets,
     fabFileBucket,
