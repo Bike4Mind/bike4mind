@@ -10,8 +10,9 @@ import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
 /**
  * The B4M_* variables bin/bike4mind-cli.mjs sets from the claude-compatible host flags
  * (--mcp-config, --append-system-prompt, --allowedTools, --settings, --session-id, --resume).
- * A person at a terminal has no reason to pass these; a host app that launches b4m as a
- * drop-in for `claude` passes them on every launch.
+ * A host app that launches b4m as a drop-in for `claude` passes these on every launch; a
+ * person who passes one alongside a prompt gets the safe inert default.
+ * Keep in sync with the claude-compatible flags block in bin/bike4mind-cli.mjs.
  */
 const HOST_FLAG_ENV_KEYS = [
   'B4M_MCP_CONFIG_FILE',
@@ -80,8 +81,10 @@ export function shouldPromptMcpApproval(input: McpApprovalGateInput): boolean {
  * is escaped like the trust prompt it replaces, since a directory name can carry control bytes.
  */
 export function hostInertNotice(projectRoot: string): string {
+  // escapeTerminalControlChars leaves \n and \r alone; fold them so the notice stays on one line.
+  const root = escapeTerminalControlChars(projectRoot).replace(/\r/g, '\\r').replace(/\n/g, '\\n');
   return (
-    `Project config in ${escapeTerminalControlChars(projectRoot)} left inert (host launch with a queued prompt; no trust prompt shown). ` +
-    'Run /trust folder to trust it.'
+    `Project config in ${root} stays inert this session (host launch with a queued prompt; no trust prompt shown). ` +
+    'Use /trust folder to trust it later.'
   );
 }

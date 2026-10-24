@@ -569,8 +569,7 @@ function CliApp() {
       if (folderTrustGate === 'inert') {
         folderTrustResolvedRef.current = true;
         console.log(`\n${hostInertNotice(state.configStore.getProjectRealPath() ?? process.cwd())}\n`);
-      }
-      if (folderTrustGate === 'prompt') {
+      } else if (folderTrustGate === 'prompt') {
         folderTrustResolvedRef.current = true;
         setState(prev => ({
           ...prev,

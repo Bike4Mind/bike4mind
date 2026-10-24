@@ -95,5 +95,10 @@ describe('hostInertNotice', () => {
   it('escapes control bytes in the root, like the trust prompt it replaces', () => {
     const notice = hostInertNotice('/work/\x1b[2Jrepo');
     expect(notice).not.toContain('\x1b');
+    expect(hostInertNotice('/a/\x1b')).toContain('\\x1b');
+  });
+
+  it('keeps a root containing a newline on one line', () => {
+    expect(hostInertNotice('/a/\nb\r')).not.toMatch(/[\r\n]/);
   });
 });
