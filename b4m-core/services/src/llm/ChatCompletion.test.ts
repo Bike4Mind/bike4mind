@@ -35,7 +35,7 @@ import {
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
-import { getEffectiveLLMApiKeys } from '../apiKeyService';
+import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import type { FabFileNotice } from '@bike4mind/utils';
 import {
   getLlmByModel,
@@ -47,6 +47,7 @@ import {
   ResponsesStreamTruncatedError,
   createAnthropicStreamTimeoutError,
   type ICompletionBackend,
+  federatedSharedKeyProviders,
 } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
@@ -177,6 +178,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('../apiKeyService', () => ({
   getEffectiveApiKey: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
+  sharedAdminKeyProviders: vi.fn(),
   // Consumed by resolveToolAvailability (toolAvailability.ts), threaded through
   // ChatCompletionProcess into ToolBuilder.buildTools - default to "not configured" so
   // resolveToolAvailability computes real (all-false) values instead of hitting its
@@ -12067,6 +12069,10 @@ describe('prompt moderation', () => {
   afterEach(() => {
     mockedGetSettingsValue.mockReset();
     mockedGetEffectiveLLMApiKeys.mockReset();
+    vi.mocked(sharedAdminKeyProviders).mockReset();
+    mockedShouldTriggerFallback.mockReturnValue(false);
+    mockedGetLlmWithFallback.mockReset().mockResolvedValue(null);
+    vi.unstubAllEnvs();
   });
 
   const startParams = {
@@ -12092,6 +12098,49 @@ describe('prompt moderation', () => {
     const instance = vi.mocked(OpenaiModerationsService).mock.instances[0] as any;
     expect(instance.checkPrompt).toHaveBeenCalledWith('Hello');
     expect(BedrockGuardrailsService).not.toHaveBeenCalled();
+  });
+
+  it('federates only chat backends: moderation keeps the static admin key', async () => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    const effectiveKeys = { openai: 'demo-key' };
+    mockedGetEffectiveLLMApiKeys.mockResolvedValue(effectiveKeys);
+    vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: false });
+    vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    enableAdminFlags('ModerationEnabled');
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(vi.mocked(sharedAdminKeyProviders).mock.calls.at(-1)?.[0]).toBe(effectiveKeys);
+    expect(OpenaiModerationsService).toHaveBeenCalledWith('demo-key', expect.anything());
+    const chatKeys = mockedGetLlmByModel.mock.calls.at(-1)?.[0];
+    expect(chatKeys).toEqual(effectiveKeys);
+    expect(chatKeys).not.toBe(effectiveKeys);
+    expect(federatedSharedKeyProviders(chatKeys!)).toEqual({ openai: true, anthropic: false });
+  });
+
+  it('retains the primary chat federation provenance when attempting a fallback', async () => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    const effectiveKeys = { openai: 'demo-key' };
+    mockedGetEffectiveLLMApiKeys.mockResolvedValue(effectiveKeys);
+    vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: false });
+    vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    mockedShouldTriggerFallback.mockReturnValue(true);
+    mockedIsOverloadedError.mockReturnValue(false);
+    const backend = mockedGetLlmByModel.getMockImplementation()?.(effectiveKeys, { logger: mockLogger });
+    expect(backend).toBeDefined();
+    if (!backend) throw new Error('Expected the chat backend mock');
+    vi.mocked(backend.complete).mockRejectedValue(new Error('ServiceUnavailableException: provider outage'));
+    mockedGetLlmByModel.mockReturnValue(backend);
+
+    await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toThrow();
+
+    const chatKeys = mockedGetLlmByModel.mock.calls.at(-1)?.[0];
+    expect(mockedGetLlmWithFallback).toHaveBeenCalled();
+    for (const call of mockedGetLlmWithFallback.mock.calls) {
+      expect(call[3]).toBe(chatKeys);
+      expect(federatedSharedKeyProviders(call[3])).toEqual({ openai: true, anthropic: false });
+    }
+    expect(effectiveKeys.openai).toBe('demo-key');
   });
 
   it('calls BedrockGuardrailsService when no OpenAI key but guardrail is configured', async () => {
