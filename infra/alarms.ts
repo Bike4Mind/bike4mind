@@ -903,6 +903,41 @@ if (isMonitoredStage) {
       },
     });
 
+    new aws.cloudwatch.MetricAlarm('unavailableModelReferences', {
+      name: `${$app.name}-${$app.stage}-unavailable-model-references`,
+      alarmDescription:
+        'Model pins are unavailable; model-reference-audit logs name the model, configuration path and cause. See admin model-deprecation-status for the report.',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'UnavailableModelReferences',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 1800,
+      statistic: 'Maximum',
+      threshold: 0,
+      treatMissingData: 'breaching',
+      dimensions: modelDiscoveryDimensions,
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'ModelDiscovery', Severity: 'High' },
+    });
+
+    for (const metricName of ['ModelsDeprecated', 'LifecycleDateChanges', 'LifecycleSuggestions'] as const) {
+      new aws.cloudwatch.MetricAlarm(`modelDiscovery-${metricName}`, {
+        name: `${$app.name}-${$app.stage}-model-discovery-${metricName}`,
+        alarmDescription: `Model discovery reports ${metricName}; review the model lifecycle operator queue and discovery logs`,
+        comparisonOperator: 'GreaterThanThreshold',
+        evaluationPeriods: 1,
+        metricName,
+        namespace: 'Lumina5/ModelDiscovery',
+        period: 21600,
+        statistic: 'Maximum',
+        threshold: 0,
+        treatMissingData: 'notBreaching',
+        dimensions: modelDiscoveryDimensions,
+        alarmActions: [dlqAlarmTopic.arn],
+        tags: { Application: 'ModelDiscovery', Severity: 'Medium' },
+      });
+    }
+
     new aws.cloudwatch.MetricAlarm('modelDiscoveryStalenessCheckErrors', {
       name: `${$app.name}-${$app.stage}-model-discovery-staleness-check-errors`,
       alarmDescription: 'Model discovery staleness check failed; watchdog data may be unavailable',

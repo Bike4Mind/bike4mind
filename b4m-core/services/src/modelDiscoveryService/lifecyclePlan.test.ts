@@ -79,6 +79,64 @@ const aggregator = (name: string, records: DiscoveredModel[]): SourceContributio
 });
 
 describe('planLifecycleSignals', () => {
+  it.each([undefined, 'active'] as const)(
+    'queues aggregator dates with status %s without scheduling a hide',
+    status => {
+      const base = new Map([active('gpt-5')]);
+      const signals = planLifecycleSignals({
+        contributions: [
+          aggregator('litellm', [
+            {
+              modelId: 'gpt-5',
+              patch: { lifecycle: { status, deprecationDate: '2026-08-10' }, contextWindow: 200_000 },
+              lifecycleEvidence: 'typed',
+            },
+          ]),
+        ],
+        catalogModelIds: new Set(base.keys()),
+      });
+      expect(signals.contributions[0].records[0].patch).toEqual({ contextWindow: 200_000 });
+      const result = plan({
+        catalogPlan: catalogPlan(signals.contributions, base),
+        base,
+        aggregatorSunsets: signals.aggregatorSunsets,
+      });
+      expect(result.transitions).toEqual([]);
+      expect(result.rows.every(row => row.patch.lifecycle?.deprecationDate === undefined)).toBe(true);
+      expect(result.suggestions).toContainEqual(
+        expect.objectContaining({
+          modelId: 'gpt-5',
+          status: 'active',
+          deprecationDate: '2026-08-10',
+          source: 'litellm',
+        })
+      );
+    }
+  );
+
+  it('keeps a provider date-only announcement authoritative', () => {
+    const lifecycle = { deprecationDate: '2026-08-10' };
+    const signals = planLifecycleSignals({
+      contributions: [provider('openai', [{ modelId: 'gpt-5', patch: { lifecycle }, lifecycleEvidence: 'typed' }])],
+    });
+    expect(signals.contributions[0].records[0].patch.lifecycle).toEqual(lifecycle);
+  });
+
+  it('does not requeue aggregator dates the catalog already confirms', () => {
+    const base = new Map([
+      active('gpt-5', {
+        lifecycle: { status: 'active', deprecationDate: '2027-01-01', retirementDate: '2027-02-01' },
+      }),
+    ]);
+    const result = plan({
+      base,
+      aggregatorSunsets: new Map([
+        ['gpt-5', { modelId: 'gpt-5', source: 'litellm', lifecycle: { deprecationDate: '2027-01-01' } }],
+      ]),
+    });
+    expect(result.suggestions).toEqual([]);
+  });
+
   const deprecated = (evidence?: 'typed' | 'docs'): DiscoveredModel => ({
     modelId: 'gpt-5',
     patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-08-10', replacedBy: 'gpt-6' } },

@@ -27,6 +27,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' } } }));
+vi.mock('./modelReferenceAudit', () => ({ auditModelReferences: vi.fn() }));
 
 const { handler, isModelDiscoveryStale, MODEL_DISCOVERY_STALE_AFTER_MS } = await import('./modelDiscoveryStaleness');
 const now = new Date('2026-10-08T12:00:00.000Z');

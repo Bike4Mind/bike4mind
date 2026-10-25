@@ -31,6 +31,12 @@ const mockPendingSuggestions = vi.fn();
 const mockResolveSuggestion = vi.fn();
 const mockPriceRowsInForce = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  whenCatalogSeeded: async () => true,
+  apiKeyRepository: {},
+  adminSettingsRepository: {
+    getSettingsValue: async (key: string) =>
+      key === 'orchestrationDefaults' ? { fallbackModels: [], intentClassifier: { enabled: false } } : '',
+  },
   modelCatalogRepository: {
     rowsInForce: (...a: unknown[]) => mockRowsInForce(...a),
     append: (...a: unknown[]) => mockAppend(...a),
@@ -56,6 +62,12 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
 vi.mock('@bike4mind/utils', () => ({
   FALLBACK_PREFERENCES: { 'gpt-live': ['gpt-sunset', 'gpt-live'] },
   DEFAULT_FALLBACK_CHAIN: ['gpt-live'],
+  getSettingsByNames: vi.fn(),
+}));
+
+vi.mock('@bike4mind/services', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
+  apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
 }));
 
 import handler from '../model-deprecation-status';
@@ -140,6 +152,21 @@ describe('GET /api/admin/model-deprecation-status', () => {
     // pre-catalog version of this endpoint could not report it.
     expect(res._getJSONData().expired).toEqual([
       expect.objectContaining({ modelId: 'gpt-sunset', status: 'deprecated', deprecationDate: '2026-01-01' }),
+    ]);
+  });
+
+  it('exposes legacy active dates for review even when the model list omits the model', async () => {
+    mockRowsInForce.mockResolvedValue([
+      catalogRow('future-active', { status: 'active', deprecationDate: '2099-01-01' }),
+      catalogRow('past-active', { status: 'active', deprecationDate: '2020-01-01' }),
+      catalogRow('retired', { status: 'retired', deprecationDate: '2019-01-01' }),
+      catalogRow('undated', { status: 'active' }),
+    ]);
+    const { res, run } = call({ method: 'GET' });
+    await run();
+    expect(res._getJSONData().activeModelDates).toEqual([
+      { modelId: 'past-active', deprecationDate: '2020-01-01' },
+      { modelId: 'future-active', deprecationDate: '2099-01-01' },
     ]);
   });
 

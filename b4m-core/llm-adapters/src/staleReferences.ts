@@ -2,7 +2,7 @@ import type { CatalogLifecycle } from './deprecationHorizon';
 import { DEPRECATED_MODEL_MAP, replacedByOverlayEntries } from './resolveDeprecatedModel';
 
 /**
- * The nightly fallback-chain hygiene check (sec 5.10): every hardcoded id that
+ * The fallback-chain and configured-pin hygiene check: every model id that
  * names a model which is deprecated, retired, unreachable, or gone entirely.
  * Report only - these surfaces are code and an operator edits them, so nothing
  * here rewrites anything.
@@ -32,7 +32,8 @@ export type StaleReferenceSurface =
   // is unreachable degrades on every single delegation, while a dead fallback
   // only costs the rung.
   | 'agent-model'
-  | 'agent-fallback';
+  | 'agent-fallback'
+  | 'configured-model';
 
 export interface StaleModelReference {
   surface: StaleReferenceSurface;
@@ -79,6 +80,8 @@ export interface StaleReferenceInput {
    * the user's face.
    */
   agentModels?: Readonly<Record<string, { model?: string; fallbackModels?: readonly string[] }>>;
+  /** Admin settings or application-owned pins, keyed by their configuration path. */
+  configuredModels?: Readonly<Record<string, string>>;
   now?: Date;
 }
 
@@ -142,6 +145,10 @@ export function checkStaleModelReferences(input: StaleReferenceInput): StaleMode
   for (const [agentName, decl] of Object.entries(input.agentModels ?? {})) {
     if (decl.model) check('agent-model', agentName, decl.model);
     for (const referencedId of decl.fallbackModels ?? []) check('agent-fallback', agentName, referencedId);
+  }
+
+  for (const [key, referencedId] of Object.entries(input.configuredModels ?? {})) {
+    if (referencedId) check('configured-model', key, referencedId);
   }
 
   // Only the targets: the keys of a redirect table are dead ids by definition.

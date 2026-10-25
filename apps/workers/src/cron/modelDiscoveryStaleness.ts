@@ -3,6 +3,7 @@ import { connectDB, modelDiscoveryRunRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
+import { auditModelReferences } from './modelReferenceAudit';
 
 const logger = new Logger({ metadata: { service: 'modelDiscoveryStaleness' } });
 
@@ -45,6 +46,7 @@ export async function handler(): Promise<void> {
         ],
       })
     );
+    await auditModelReferences(stage);
   } catch (error) {
     logger.error('[model-discovery] staleness check failed', {
       error: error instanceof Error ? error.message : String(error),

@@ -23,6 +23,18 @@ const forSurface = (found: StaleModelReference[], surface: string) => found.filt
 afterEach(() => resetReplacedByOverlay());
 
 describe('checkStaleModelReferences', () => {
+  it('names configured pins missing from the live list, including hidden models without successors', () => {
+    expect(
+      forSurface(
+        run({ configuredModels: { primaryModel: 'sunset-1', missing: 'not-known', live: 'live-1', unset: '' } }),
+        'configured-model'
+      )
+    ).toEqual([
+      { surface: 'configured-model', key: 'missing', referencedId: 'not-known', problem: 'unknown' },
+      { surface: 'configured-model', key: 'primaryModel', referencedId: 'sunset-1', problem: 'deprecated' },
+    ]);
+  });
+
   it('reports nothing when every referenced id is live', () => {
     const found = run({ fallbackChains: { 'live-1': ['live-2'] }, defaultChain: ['live-2'] });
     expect(forSurface(found, 'fallback-chain')).toEqual([]);

@@ -84,11 +84,11 @@ export interface LifecycleSignalsInput {
   catalogModelIds?: ReadonlySet<string>;
 }
 
-/** An aggregator's typed sunset of a held model that nothing corroborated this run. */
+/** An aggregator sunset or date-only announcement withheld for operator review. */
 export interface AggregatorSunsetSignal {
   modelId: string;
   source: string;
-  lifecycle: NonNullable<ModelRecord['lifecycle']>;
+  lifecycle: Partial<NonNullable<ModelRecord['lifecycle']>>;
 }
 
 export interface LifecycleSignals {
@@ -110,10 +110,11 @@ export interface LifecycleSignals {
    */
   providerUndated: Map<string, string[]>;
   /**
-   * Aggregator sunsets withheld from the overlay: one aggregator alone may not
+   * Aggregator dates and sunsets withheld from the overlay: one aggregator alone may not
    * deprecate a model the catalog already holds, because the field overlay lets
    * it win whenever the provider lists the model without a lifecycle. Only a
-   * provider sunset or both aggregators agreeing writes it; the rest are queue items.
+   * provider sunset or both aggregators agreeing writes a sunset status. Date-only
+   * announcements remain queue items, even when more than one aggregator repeats them.
    */
   aggregatorSunsets: Map<string, AggregatorSunsetSignal>;
 }
@@ -181,15 +182,17 @@ export function planLifecycleSignals({
       if (
         typed &&
         contribution.kind === 'aggregator' &&
-        lifecycle.status !== undefined &&
-        LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status) &&
-        !aggregatorSunsetCorroborated(record.modelId)
+        (((lifecycle.status === undefined || !LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status)) &&
+          (lifecycle.deprecationDate !== undefined || lifecycle.retirementDate !== undefined)) ||
+          (lifecycle.status !== undefined &&
+            LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status) &&
+            !aggregatorSunsetCorroborated(record.modelId)))
       ) {
         if (!aggregatorSunsets.has(record.modelId)) {
           aggregatorSunsets.set(record.modelId, {
             modelId: record.modelId,
             source: contribution.name,
-            lifecycle: { ...lifecycle, status: lifecycle.status },
+            lifecycle: { ...lifecycle },
           });
         }
         return withoutLifecycle(record);
@@ -735,27 +738,39 @@ function docsSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): L
   return suggestions;
 }
 
-/** Lone-aggregator sunsets planLifecycleSignals withheld; same queue rules as docsSuggestions. */
+/** Aggregator claims withheld by planLifecycleSignals, including delayed picker hides. */
 function aggregatorSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): LifecycleSuggestion[] {
   const suggestions: LifecycleSuggestion[] = [];
   for (const signal of input.aggregatorSunsets?.values() ?? []) {
     if (sunsetting.has(signal.modelId)) continue;
     const existing = input.resolvedInForce.get(signal.modelId);
-    if (!existing || agreesWith(existing, signal.lifecycle)) continue;
+    if (!existing || matchesLifecycleClaim(existing, signal.lifecycle)) continue;
 
     suggestions.push({
       modelId: signal.modelId,
-      status: signal.lifecycle.status,
+      status: signal.lifecycle.status ?? lifecycleOf(existing)?.status,
       deprecationDate: signal.lifecycle.deprecationDate,
       retirementDate: signal.lifecycle.retirementDate,
       replacedBy: signal.lifecycle.replacedBy,
       source: signal.source,
       detail:
-        `${signal.source} reports this model as ${signal.lifecycle.status}; ` +
-        'no provider and no second aggregator corroborates it, so one aggregator alone may not hide the model',
+        signal.lifecycle.status === undefined || !LIFECYCLE_SUNSET_STATUSES.has(signal.lifecycle.status)
+          ? `${signal.source} announces lifecycle dates without a sunset status; an aggregator date alone may not hide the model`
+          : `${signal.source} reports this model as ${signal.lifecycle.status}; ` +
+            'no provider and no second aggregator corroborates it, so one aggregator alone may not hide the model',
     });
   }
   return suggestions;
+}
+
+function matchesLifecycleClaim(
+  resolved: ResolvedCatalogRecord,
+  lifecycle: AggregatorSunsetSignal['lifecycle']
+): boolean {
+  const held = lifecycleOf(resolved);
+  return (['status', 'deprecationDate', 'retirementDate'] as const).every(
+    field => lifecycle[field] === undefined || held?.[field] === lifecycle[field]
+  );
 }
 
 function describeRemap(remap: RemapDecision, modelId: string, autoRemap: DiscoveryAutoRemapPolicy): string {

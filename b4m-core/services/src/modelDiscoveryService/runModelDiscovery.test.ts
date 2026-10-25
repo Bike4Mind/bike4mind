@@ -994,17 +994,25 @@ describe('runModelDiscovery', () => {
             expected: [] as string[],
           },
           {
-            name: 'is written once the provider is not configured, so it cannot be reporting',
+            name: 'stays refused when the provider is not configured',
             openai: () => stubSource({ name: 'openai', kind: 'provider', configured: false }),
-            expected: [FUTURE],
+            expected: [] as string[],
           },
         ])('$name', async ({ openai, expected }) => {
           await firstPass(bench);
           bench.adapters.sources = [openai(), azure(), aggregator()];
 
-          await runModelDiscovery(bench.adapters, bench.options);
+          const result = await runModelDiscovery(bench.adapters, bench.options);
 
           expect(writtenDates(bench)).toEqual(expected);
+          expect(result.lifecycle.suggestions).toContainEqual(
+            expect.objectContaining({
+              modelId: 'gpt-6',
+              status: 'active',
+              deprecationDate: FUTURE,
+              source: 'models.dev',
+            })
+          );
         });
       });
 
