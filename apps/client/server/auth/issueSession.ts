@@ -15,9 +15,9 @@ interface RequestLike {
   logger?: Logger;
 }
 
-// Sessions that are not the user signing in: an admin acting as them, or a legacy token swapped
-// for a session on refresh. They mint a session but log no login AuthEvent.
-const NOT_A_LOGIN: ReadonlySet<AuthSessionCreatedVia> = new Set(['impersonation', 'legacy-migration']);
+// Sessions that are not the user signing in: an admin acting as them, a legacy token swapped
+// on refresh, or enrolling MFA from an existing session. They mint a session but log no login AuthEvent.
+const NOT_A_LOGIN: ReadonlySet<AuthSessionCreatedVia> = new Set(['impersonation', 'legacy-migration', 'mfa-setup']);
 
 /**
  * Server-side convenience wrapper over authSessionService.issueSession: binds the AuthSession

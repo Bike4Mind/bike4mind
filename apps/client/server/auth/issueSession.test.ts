@@ -38,8 +38,11 @@ describe('issueSessionForRequest', () => {
     expect(recordLoginEvent).toHaveBeenCalledWith({ req, userId: 'u1', method: 'oauth' });
   });
 
-  it.each(['impersonation', 'legacy-migration'] as const)('logs no login for a %s session', async createdVia => {
-    await issueSessionForRequest(req, 'u1', { createdVia, tokenVersion: 0 });
-    expect(recordLoginEvent).not.toHaveBeenCalled();
-  });
+  it.each(['impersonation', 'legacy-migration', 'mfa-setup'] as const)(
+    'logs no login for a %s session',
+    async createdVia => {
+      await issueSessionForRequest(req, 'u1', { createdVia, tokenVersion: 0 });
+      expect(recordLoginEvent).not.toHaveBeenCalled();
+    }
+  );
 });
