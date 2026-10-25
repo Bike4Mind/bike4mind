@@ -26,8 +26,9 @@ const AI_MARKERS = [
   /\btranscribeUpload\(/,
   /\brefineTextRequest\(/,
   /\.complete\(/,
+  /\bSessionEvents\.(?:Summarize|Tag)\.publish\(/,
 ];
-const GATE = /\b(?:assertAiAccessAllowed|createModelAdmission|reserveRequestCredits)\(/;
+const GATE = /\b(?:assertAiAccessAllowed|createModelAdmission|reserveRequestCredits|isAiAccessRevoked)\(/;
 
 const EXEMPT = new Set([
   'admin/modal-tool.ts', // admin
