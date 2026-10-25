@@ -1,6 +1,7 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { AxiosError, AxiosHeaders } from 'axios';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
@@ -9,7 +10,6 @@ import { AccessGateEditor } from './AccessGateEditor';
 import { PUBLISH_ACCESS_META, type PublishAccess } from './PublishAccessBadge';
 import type { PublishResult, PublishVisibility } from '@bike4mind/common';
 import { toast } from 'sonner';
-import { AxiosError } from 'axios';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 
@@ -1010,6 +1010,59 @@ describe('PublishShareModal - plain-language copy', () => {
     expect(document.body.textContent).not.toContain('List in search engines');
     // The gate options name the same secret the passphrase option asks for.
     expect(document.body.textContent).not.toContain('passcode');
+  });
+});
+
+describe('PublishShareModal - publish failure toast', () => {
+  const rejectWith = (status: number, data: unknown) =>
+    vi.fn().mockRejectedValue(
+      new AxiosError(
+        'Request failed',
+        'ERR_BAD_REQUEST',
+        undefined,
+        {},
+        {
+          status,
+          statusText: '',
+          data,
+          headers: {},
+          config: { headers: new AxiosHeaders() },
+        }
+      )
+    );
+
+  const publishAndFail = async (publish: ReturnType<typeof vi.fn>) => {
+    const toastError = vi.spyOn(toast, 'error').mockImplementation(() => 1);
+    toastError.mockClear();
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="private" />
+      </Wrapper>
+    );
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    const [message] = toastError.mock.calls[0];
+    toastError.mockRestore();
+    return message;
+  };
+
+  it("shows the validator's reason rather than the bare 'Validation failed'", async () => {
+    const message = await publishAndFail(
+      rejectWith(422, {
+        error: 'Validation failed',
+        violations: [
+          { type: 'forbidden_pattern', message: 'Provide a single self-contained component.', file: 'index.html' },
+        ],
+      })
+    );
+
+    expect(message).toBe('Provide a single self-contained component.');
+  });
+
+  it('keeps the server error for a failure without violations', async () => {
+    expect(await publishAndFail(rejectWith(403, { error: 'Not allowed to publish here' }))).toBe(
+      'Not allowed to publish here'
+    );
   });
 });
 

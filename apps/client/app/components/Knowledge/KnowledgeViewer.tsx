@@ -61,6 +61,7 @@ import {
   setSessionLayout,
   clearRecentArtifacts,
   clearSessionScopedViewerState,
+  saveOpenArtifactContent,
 } from '@client/app/hooks/useSessionLayout';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
@@ -98,6 +99,7 @@ import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
 import { brand } from '@client/app/utils/themes/colors';
 import JSONViewer from './JSONViewer';
 import { api } from '@client/app/contexts/ApiContext';
+import { findArtifactSaveTarget } from '@client/app/utils/artifactPersistence';
 import { useQueryClient } from '@tanstack/react-query';
 import { useArtifact } from '@client/app/hooks/data/artifacts';
 import { useArtifactPersistence } from '@client/app/hooks/useArtifactPersistence';
@@ -110,6 +112,7 @@ import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
 import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
 import { getInsufficientCreditsMessage } from '@client/app/utils/error';
+import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
 
 // Dynamic imports for artifact viewers
 const ReactArtifactViewer = dynamic(() => import('./ReactArtifactViewer'), {
@@ -237,6 +240,7 @@ interface IChessKnowledgeItem extends IBaseKnowledgeItem {
 interface IReactKnowledgeItem extends IBaseKnowledgeItem {
   type: 'react';
   content: ReactArtifact;
+  reactGroup?: ReactArtifactGroupRole;
 }
 
 interface IHtmlKnowledgeItem extends IBaseKnowledgeItem {
@@ -403,6 +407,12 @@ const buttonTooltipTitle = (item: KnowledgeItem) => {
   return 'Edit with AI';
 };
 
+/** The version a PUT /api/artifacts/[id] landed on (`{ artifact: { version } }`), else the fallback's. */
+const savedVersionOf = (response: { data?: { artifact?: { version?: unknown } } }, fallback: { version: number }) => {
+  const version = response.data?.artifact?.version;
+  return typeof version === 'number' ? version : fallback.version;
+};
+
 interface KnowledgeViewerProps {
   /** When true (default), auto-hides the layout when no knowledge items or artifacts exist. Set to false for pages like /opti that manage their own layout. */
   autoHideOnEmpty?: boolean;
@@ -566,6 +576,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             content: updatedContent,
             mimeType: artifactData.mimeType,
             id: latestArtifact.artifact.id, // Use the actual persisted ID
+            ...(artifactData.reactGroup && { reactGroup: artifactData.reactGroup }),
           },
           selectedArtifactId: artifactData.id,
         });
@@ -761,6 +772,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             timestamp: reactArtifact.createdAt
               ? new Date(reactArtifact.createdAt).getTime()
               : getStableTimestamp(artifactId),
+            reactGroup: artifact.reactGroup,
           });
           break;
         }
@@ -1473,7 +1485,9 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             // On phones the toolbar has too many icon buttons to fit beside the file
             // selector, so stack them (selector on top, controls below) and let the
             // controls row wrap - otherwise download/close overflow off-screen (#457).
-            gridTemplateColumns: isMobile ? '1fr' : '1fr auto',
+            // The selector's floor: globals.css `min-width: 0` lets the controls take every pixel of a
+            // narrow panel and squeeze it to a sliver; with it they wrap instead.
+            gridTemplateColumns: isMobile ? '1fr' : 'minmax(160px, 1fr) auto',
             gap: '1rem',
             width: '100%',
           }}
@@ -1486,7 +1500,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
               indicator={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px', pointerEvents: 'none' }}>
                   {knowledgeItems.length > 1 && (
-                    <Box component="span" fontSize={'80%'} sx={(theme: Theme) => ({ opacity: '0.5' })}>
+                    <Box component="span" fontSize={'80%'} sx={{ opacity: '0.5', whiteSpace: 'nowrap' }}>
                       {knowledgeItems.length} files
                     </Box>
                   )}
@@ -1889,13 +1903,7 @@ const KnowledgeContent: React.FC<{
         version: currentArtifact.version || 1,
       };
 
-      setSessionLayout({
-        layout: useSessionLayout.getState().layout,
-        artifactData: {
-          ...useSessionLayout.getState().artifactData!,
-          content: updatedArtifact,
-        },
-      });
+      saveOpenArtifactContent(item.id, updatedArtifact);
 
       try {
         const updatePayload = {
@@ -1907,6 +1915,8 @@ const KnowledgeContent: React.FC<{
         };
 
         const response = await api.put(`/api/artifacts/${currentArtifact.id}`, updatePayload);
+        // Into the open tab too, so a viewer that remounts after the save opens on that version.
+        saveOpenArtifactContent(item.id, { ...updatedArtifact, version: savedVersionOf(response, updatedArtifact) });
 
         toast.success('React component saved successfully!');
 
@@ -1925,6 +1935,26 @@ const KnowledgeContent: React.FC<{
 
         // If artifact doesn't exist (404), create it first
         if (updateError?.response?.status === 404 || updateError?.name === 'NotFoundError') {
+          const savedId = await findArtifactSaveTarget(currentArtifact.id, 'react', currentSession?.id);
+          if (savedId) {
+            // Always a new version: the row may have moved on from what this panel loaded.
+            const response = await api.put(`/api/artifacts/${savedId}`, {
+              title: currentArtifact.title,
+              content: updatedContent,
+              metadata: currentArtifact.metadata,
+              createNewVersion: true,
+            });
+            saveOpenArtifactContent(
+              item.id,
+              { ...updatedArtifact, id: savedId, version: savedVersionOf(response, updatedArtifact) },
+              savedId
+            );
+            toast.success('React component saved successfully!');
+            queryClient.invalidateQueries({ queryKey: ['artifactVersions', savedId] });
+            queryClient.invalidateQueries({ queryKey: ['artifact', savedId] });
+            return response.data;
+          }
+
           // Create the artifact in Quest 4 system with the original ID
           const createPayload = {
             id: currentArtifact.id, // Use the AI-generated ID directly
@@ -1956,15 +1986,7 @@ const KnowledgeContent: React.FC<{
             version: 1,
           };
 
-          setSessionLayout({
-            layout: useSessionLayout.getState().layout,
-            artifactData: {
-              ...useSessionLayout.getState().artifactData!,
-              content: updatedArtifactWithNewId,
-              id: newArtifactId,
-            },
-            selectedArtifactId: newArtifactId,
-          });
+          saveOpenArtifactContent(item.id, updatedArtifactWithNewId, newArtifactId);
 
           if (currentSession) {
             try {
@@ -2012,13 +2034,7 @@ const KnowledgeContent: React.FC<{
         version: currentArtifact.version || 1,
       };
 
-      setSessionLayout({
-        layout: useSessionLayout.getState().layout,
-        artifactData: {
-          ...useSessionLayout.getState().artifactData!,
-          content: updatedArtifact,
-        },
-      });
+      saveOpenArtifactContent(item.id, updatedArtifact);
 
       try {
         const updatePayload = {
@@ -2069,15 +2085,7 @@ const KnowledgeContent: React.FC<{
             version: 1,
           };
 
-          setSessionLayout({
-            layout: useSessionLayout.getState().layout,
-            artifactData: {
-              ...useSessionLayout.getState().artifactData!,
-              content: updatedArtifactWithNewId,
-              id: newArtifactId,
-            },
-            selectedArtifactId: newArtifactId,
-          });
+          saveOpenArtifactContent(item.id, updatedArtifactWithNewId, newArtifactId);
 
           if (currentSession) {
             try {
@@ -2254,7 +2262,7 @@ const KnowledgeContent: React.FC<{
       const reactData = item.content;
       return (
         <Box sx={{ width: '100%', height: '100%' }}>
-          <ReactArtifactViewer artifact={reactData} onSave={handleSaveReactArtifact} />
+          <ReactArtifactViewer artifact={reactData} group={item.reactGroup} onSave={handleSaveReactArtifact} />
         </Box>
       );
     }
