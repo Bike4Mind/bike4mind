@@ -849,7 +849,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     hasUsablePassword: { type: Boolean, default: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
-    storageLimit: { type: Number, default: 1000 }, // MBs
+    storageLimit: { type: Number, default: 1000 }, // Decimal MB
+    storageLimitOverride: { type: Number },
+    planStorageLimit: { type: Number },
     currentStorageSize: { type: Number, default: 0 }, // Bytes
     currentCredits: { type: Number, default: 0 },
     // Invite-resolved credits awaiting proof of email ownership; paired with

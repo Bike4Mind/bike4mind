@@ -1,6 +1,6 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
-import { IUserDocument, storageLimitToBytes } from '@bike4mind/common';
+import { IUserDocument, resolveUserStorageLimit, storageLimitToBytes, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { computeStoragePercent } from '@client/app/components/admin/Users/Views/storageUtils';
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import { CreditIcon } from '@client/app/components/svgs/icons/CreditIcon';
@@ -26,7 +26,8 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
   ({ user, editedFields, onFieldChange, userKey, creditReason = '', onCreditReasonChange }) => {
     const [isRecalculating, setIsRecalculating] = useState(false);
     const queryClient = useQueryClient();
-    const storagePercent = computeStoragePercent(user.currentStorageSize, user.storageLimit);
+    const storage = resolveUserStorageLimit(user);
+    const storagePercent = computeStoragePercent(user.currentStorageSize, storage.limitMb);
 
     const handleSubscribedDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const newDate = e.target.value;
@@ -57,8 +58,10 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
     };
 
     const handleStorageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const newValue = parseInt(e.target.value, 10) || 0;
-      onFieldChange('storageLimit', newValue);
+      const newValue = Number(e.target.value);
+      if (Number.isFinite(newValue) && newValue >= 0 && newValue <= MAX_STORAGE_LIMIT_MB) {
+        onFieldChange('storageLimitOverride', newValue);
+      }
     };
 
     const handleCreditsKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -176,7 +179,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
                       zIndex: 2,
                     }}
                   >
-                    {prettyBytes(user.currentStorageSize || 0)} / {prettyBytes(storageLimitToBytes(user.storageLimit))}
+                    {prettyBytes(user.currentStorageSize || 0)} / {prettyBytes(storageLimitToBytes(storage.limitMb))}
                   </Typography>
                 </LinearProgress>
               </Box>
@@ -186,12 +189,13 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
               <Input
                 key={`storage-limit-${userKey}`}
                 sx={{
-                  borderColor: editedFields?.storageLimit ? 'danger.500' : 'default',
+                  borderColor: editedFields?.storageLimitOverride ? 'danger.500' : 'default',
                   flex: 1,
                 }}
                 size="sm"
                 type="number"
-                value={user.storageLimit}
+                data-testid="admin-user-storage-override-input"
+                value={storage.limitMb}
                 onChange={handleStorageChange}
                 endDecorator={
                   <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
@@ -199,6 +203,21 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
                   </Typography>
                 }
               />
+            </Stack>
+            <Stack direction="row" spacing={1} sx={{ px: 2, alignItems: 'center' }}>
+              <Typography data-testid="admin-user-storage-source" level="body-xs">
+                Source: {storage.source}
+              </Typography>
+              {storage.source === 'override' && (
+                <Button
+                  data-testid="admin-user-storage-override-reset"
+                  size="sm"
+                  variant="plain"
+                  onClick={() => onFieldChange('storageLimitOverride', null)}
+                >
+                  Clear override
+                </Button>
+              )}
             </Stack>
             <Box sx={{ padding: '0px 16px 0px 8px' }}>
               <Button

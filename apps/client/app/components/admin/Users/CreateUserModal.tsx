@@ -365,7 +365,7 @@ const CreateUserModal: React.FC = () => {
                 data-testid="create-user-storage-input"
                 type="number"
                 value={formData.storageLimit}
-                onChange={e => setFormData({ ...formData, storageLimit: parseInt(e.target.value) || 1000 })}
+                onChange={e => setFormData({ ...formData, storageLimit: Number(e.target.value) })}
                 disabled={createUserMutation.isPending}
                 slotProps={{
                   input: {

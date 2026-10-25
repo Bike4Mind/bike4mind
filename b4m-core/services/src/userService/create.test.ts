@@ -167,3 +167,18 @@ describe('createUser - reserved username prefix', () => {
     expect(user.username).toBe('persona-seed');
   });
 });
+
+describe('createUser storage allocation', () => {
+  it.each([
+    [{}, 1000, null],
+    [{ storageLimit: 2500 }, 2500, 2500],
+    [{ storageLimit: 0 }, 0, 0],
+    [{ storageLimitOverride: 2000, planStorageLimit: 5000 }, 2000, 2000],
+    [{ storageLimitOverride: null, planStorageLimit: 5000 }, 5000, null],
+  ])('persists the effective limit and explicit override for %j', async (record, limit, override) => {
+    const db = makeDb();
+    const created = await createUser({ username: 'quotauser', record }, { db });
+    expect(created.storageLimit).toBe(limit);
+    expect(created.storageLimitOverride).toBe(override);
+  });
+});

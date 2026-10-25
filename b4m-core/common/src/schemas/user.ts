@@ -160,6 +160,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   groups: true,
   isAdmin: true,
   storageLimit: true,
+  storageLimitOverride: true,
+  planStorageLimit: true,
   currentStorageSize: true,
   tags: true,
   pendingCreditGrant: true,
