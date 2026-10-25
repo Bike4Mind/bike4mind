@@ -1851,7 +1851,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           // and nothing else: the banners, media grids and artifact
                           // chrome are siblings above, and must not inherit the
                           // reading typography or land in the `> *` measure rules.
-                          <div className="b4m-md">
+                          <div className="b4m-md" data-testid="ai-response-markdown">
                             <ReplyCompleteContext.Provider value={!!completed}>
                               <ReplyPlacesContext.Provider value={placesById}>
                                 <ReplyCitablesContext.Provider value={promptMeta?.citables ?? NO_CITABLES}>
