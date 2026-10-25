@@ -295,6 +295,24 @@ describe('Hearth models + MongoHearthStore', () => {
       expect(await HearthChannel.countDocuments(owned())).toBe(MAX_HEARTH_CHANNELS_PER_USER);
     });
 
+    it('createChannel reports an owned name at the cap as a duplicate, not the cap', async () => {
+      await seedAtCap();
+
+      await expect(hearthRepository.createChannel(USER, 'agents')).rejects.toMatchObject({ code: 11000 });
+
+      expect(await HearthChannel.countDocuments(owned())).toBe(MAX_HEARTH_CHANNELS_PER_USER);
+    });
+
+    it('ensureChannelByName returns a same-name channel created after its lookup missed', async () => {
+      const [agentsId] = await seedAtCap();
+      const findOne = vi.spyOn(HearthChannel, 'findOne').mockResolvedValueOnce(null as never);
+
+      const channel = await hearthRepository.ensureChannelByName(USER, 'agents');
+      findOne.mockRestore();
+
+      expect(channel._id.toString()).toBe(agentsId);
+    });
+
     it('allows the last channel under the cap, then refuses the next', async () => {
       await seedChannels(USER, MAX_HEARTH_CHANNELS_PER_USER - 1);
 
@@ -318,9 +336,10 @@ describe('Hearth models + MongoHearthStore', () => {
       const seededIds = await seedChannels(USER, MAX_HEARTH_CHANNELS_PER_USER - 1);
 
       // Racers may all be refused; the invariant is the total, not who won.
-      await Promise.allSettled(
+      const results = await Promise.allSettled(
         Array.from({ length: 8 }, (_, i) => hearthRepository.ensureChannelByName(USER, `racer-${i}`))
       );
+      for (const r of results) if (r.status === 'rejected') expect(r.reason).toBeInstanceOf(HearthChannelCapError);
 
       expect(await HearthChannel.countDocuments(owned())).toBeLessThanOrEqual(MAX_HEARTH_CHANNELS_PER_USER);
       expect(await HearthChannel.countDocuments({ _id: { $in: seededIds } })).toBe(seededIds.length);

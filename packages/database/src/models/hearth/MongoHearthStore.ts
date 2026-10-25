@@ -170,7 +170,10 @@ export class HearthChannelCapError extends ConflictError {
  */
 async function createChannelWithinCap(userId: Types.ObjectId, name: string): Promise<IHearthChannelDoc> {
   const atCap = (await HearthChannel.countDocuments({ userId })) >= MAX_HEARTH_CHANNELS_PER_USER;
-  if (atCap) throw new HearthChannelCapError(MAX_HEARTH_CHANNELS_PER_USER);
+  // A name the owner already holds falls through so create raises the duplicate, not the cap.
+  if (atCap && !(await HearthChannel.exists({ userId, name }))) {
+    throw new HearthChannelCapError(MAX_HEARTH_CHANNELS_PER_USER);
+  }
 
   const created = await HearthChannel.create({ userId, name });
 
