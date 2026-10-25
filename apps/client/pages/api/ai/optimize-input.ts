@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { OperationsModelService } from '@client/services/operationsModelService';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 export interface RephraseRequest {
   text: string;
@@ -22,6 +23,7 @@ const handler = baseApi()
     })
   )
   .post(async (req: any, res) => {
+    assertAiAccessAllowed(req.user);
     const { text, style = 'optimized', maxLength }: RephraseRequest = req.body;
 
     if (!text || !text.trim()) {

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact } from '@bike4mind/database';
-import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+import type { ArtifactVersionMeta, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import {
   validateBundle,
   buildPublishUrlPath,
@@ -47,7 +47,7 @@ interface RestoreArtifactLean {
   publishedAt: Date;
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
   previousVersionMeta?: { sha256Index: string };
-  versions?: Array<{ sha256Index: string }>;
+  versions?: Array<{ sha256Index: string; indexBytes?: number }>;
 }
 
 const handler = baseApi().post(async (req, res) => {
@@ -124,34 +124,9 @@ const handler = baseApi().post(async (req, res) => {
     );
     const totalBytes = newManifest.reduce((sum, f) => sum + f.size, 0);
 
-    // Storage quota on the net change. The restored bytes become a fresh copy at index.html while
-    // the archive stays put, but usage counts only each live page's current bundle, so the page
-    // grows by the restored index.html's size minus the current one's (see checkInPlaceRewriteQuota).
-    const quota = await checkInPlaceRewriteQuota({
-      isAdmin: req.user.isAdmin,
-      artifact,
-      next: { bytes: totalBytes, fileCount: newManifest.length },
-    });
-    if (!quota.ok) {
-      return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
-    }
-
-    // Throws a 429 when the daily publish allowance is used up; `finally` still frees the lock.
-    action = await consumePublishAction(req.user);
-
-    // Archive the CURRENT index.html before overwriting, so restore is reversible.
-    try {
-      const currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`);
-      await storage.upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
-        ContentType: 'text/html',
-      });
-    } catch {
-      req.logger.warn(`[RESTORE] ${publicId} could not archive current version ${currentSha.slice(0, 12)}`);
-    }
-
-    // Write the restored version as the new current.
-    await storage.upload(restoredBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
-    written = true;
+    // The CURRENT index.html, archived below before overwriting so restore is reversible. Read
+    // before the quota check, which counts what it archives. Null if it cannot be read.
+    const currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`).catch(() => null);
     const now = new Date();
 
     // versions[] is keyed by content sha (distinct snapshots). Restoring old bytes
@@ -159,19 +134,16 @@ const handler = baseApi().post(async (req, res) => {
     // the switcher's ordinal math + the ?v/restore "not current" guards). Also
     // backfill the version being replaced if history doesn't yet record it
     // (pre-version-history artifacts, or the first revise/restore).
+    // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
     const haveShas = new Set((artifact.versions ?? []).map(v => v.sha256Index));
-    const versionsToPush: Array<{
-      publishedAt: Date;
-      publishedBy: string;
-      size: typeof artifact.size;
-      sha256Index: string;
-    }> = [];
+    const versionsToPush: ArtifactVersionMeta[] = [];
     if (!haveShas.has(currentSha)) {
       versionsToPush.push({
         publishedAt: artifact.publishedAt,
         publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
         size: artifact.size,
         sha256Index: currentSha,
+        ...(currentBuf ? { indexBytes: currentBuf.length } : {}),
       });
       haveShas.add(currentSha);
     }
@@ -181,8 +153,42 @@ const handler = baseApi().post(async (req, res) => {
         publishedBy: String(req.user.id),
         size: { totalBytes, fileCount: newManifest.length },
         sha256Index: newSha,
+        indexBytes: restoredBuf.length,
       });
     }
+
+    // Storage quota on the net change (see checkInPlaceRewriteQuota). The current index.html is
+    // archived and the restored version becomes current, so its archived copy leaves the count.
+    const quota = await checkInPlaceRewriteQuota({
+      isAdmin: req.user.isAdmin,
+      artifact,
+      next: {
+        bytes: totalBytes,
+        fileCount: newManifest.length,
+        sha256Index: newSha,
+        versions: [...(artifact.versions ?? []), ...versionsToPush],
+      },
+    });
+    if (!quota.ok) {
+      return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
+    }
+
+    // Throws a 429 when the daily publish allowance is used up; `finally` still frees the lock.
+    action = await consumePublishAction(req.user);
+
+    const warnNotArchived = () =>
+      req.logger.warn(`[RESTORE] ${publicId} could not archive current version ${currentSha.slice(0, 12)}`);
+    if (!currentBuf) {
+      warnNotArchived();
+    } else {
+      await storage
+        .upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, { ContentType: 'text/html' })
+        .catch(warnNotArchived);
+    }
+
+    // Write the restored version as the new current.
+    await storage.upload(restoredBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
+    written = true;
 
     await PublishedArtifact.updateOne(
       { publicId, deletedAt: null },

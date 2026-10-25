@@ -13,6 +13,7 @@ import {
 import {
   checkScopePermission,
   resolveVisibility,
+  archivedVersionBytes,
   checkPublishQuota,
   consumePublishAction,
   mintDraftUploadUrl,
@@ -108,8 +109,12 @@ const handler = baseApi().post(async (req, res) => {
     slug: body.slug,
     deletedAt: null,
   })
-    .select('ownerId')
-    .lean<{ ownerId: string } | null>();
+    .select('ownerId sha256Index versions')
+    .lean<{
+      ownerId: string;
+      sha256Index?: string;
+      versions?: Array<{ sha256Index: string; indexBytes?: number }>;
+    } | null>();
   if (existing && !mayRepublishSlug(existing.ownerId, publishUser)) {
     return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
   }
@@ -120,12 +125,18 @@ const handler = baseApi().post(async (req, res) => {
   // there it's an in-place overwrite (exclude it from usage so it isn't double
   // counted); if not, excluding a non-existent key is a harmless no-op. So we can
   // pass `replacing` unconditionally here (unlike reply/fabfile, whose slug is
-  // only known to be an overwrite after the source-reuse lookup).
+  // only known to be an overwrite after the source-reuse lookup). The page's earlier
+  // versions stay archived through the overwrite, so they are added back; whether the
+  // current version gets archived too depends on the new bytes, which finalize checks.
   const quota = await checkPublishQuota({
     ownerId: String(req.user.id),
     orgScopeId: body.tier === 'organization' ? body.scopeId : null,
     isAdmin: req.user.isAdmin,
-    incoming: { bytes: totalBytes, fileCount: body.files.length },
+    incoming: {
+      bytes: totalBytes,
+      fileCount: body.files.length,
+      archivedBytes: archivedVersionBytes(existing?.versions, existing?.sha256Index),
+    },
     replacing: { tier: body.tier, scopeId: body.scopeId, slug: body.slug },
   });
   if (!quota.ok) {

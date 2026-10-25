@@ -48,8 +48,8 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   numReferralsAvailable: z.number().optional(),
   disputePending: z.boolean().optional(),
   // Admin control over the per-user moderation escalation state. Routed through
-  // `setModerationStatus` (not the generic field spread) so the `isModerated` mirror and
-  // `throttledUntil` stay consistent - this is how an admin confirms a `suspend_pending`
+  // `setModerationStatus` (not the generic field spread) so `throttledUntil` stays consistent -
+  // this is how an admin confirms a `suspend_pending`
   // account, lifts a throttle/suspension back to `active`, or manually throttles.
   moderationStatus: z.enum(['active', 'throttled', 'suspend_pending', 'suspended']).optional(),
   // Human-readable reason for a manual credit adjustment. Not a user-doc field:
@@ -287,7 +287,7 @@ export async function adminUpdateUser(
   await writeUserUpdate(db.users, writeData);
 
   // Apply the moderation escalation transition last so it authoritatively sets
-  // `moderation.status`, `throttledUntil`, and the `isModerated` mirror.
+  // `moderation.status` and `throttledUntil`. It leaves `isModerated` as written above.
   if (moderationStatus) {
     await db.users.setModerationStatus(params.id, moderationStatus, {
       throttledUntil:

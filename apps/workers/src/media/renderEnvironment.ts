@@ -6,10 +6,10 @@ import path from 'node:path';
  * starts with no process and no file left over from an earlier one, gets a browser profile and
  * temp directory of its own, and is torn down and checked before its result is released.
  *
- *  - before: refuse unless the process table holds nothing but this runtime and its ancestors,
- *    then empty the scratch root. On Lambda that is /tmp, which outlives even an environment
- *    reset, and where @sparticuz/chromium reuses an already-extracted browser rather than
- *    extracting it again from the deployment package;
+ *  - before: refuse unless the process table holds nothing but this runtime, its ancestors and
+ *    the sandbox's init (PID 1), then empty the scratch root. On Lambda that is /tmp, which
+ *    outlives even an environment reset, and where @sparticuz/chromium reuses an
+ *    already-extracted browser rather than extracting it again from the deployment package;
  *  - during: the render gets a fresh workspace (profile + temp dir) under the scratch root;
  *  - after: SIGKILL every remaining descendant of this runtime by PID, check the table again,
  *    and empty the scratch root.
@@ -95,6 +95,7 @@ const KILL_TIMEOUT_MS = 5_000;
 const TEARDOWN_MARGIN_MS = 3_000;
 const KILL_POLL_MS = 50;
 const EXITED_STATES = new Set(['Z', 'X', 'x']);
+const INIT_PID = 1;
 const WORKSPACE_PREFIX = 'thumbnail-render-';
 
 export function createRenderEnvironment({
@@ -113,9 +114,13 @@ export function createRenderEnvironment({
   };
 
   const strayProcessProblem = async (): Promise<string | undefined> => {
-    const stray = strayProcesses(await processes.list(), selfPid);
+    const entries = await processes.list();
+    const stray = strayProcesses(entries, selfPid);
+    if (stray?.length === 0) return undefined;
+    // The whole table, so a refusal on real Lambda can be diagnosed from the logs alone.
+    console.error(`publish thumbnail render process table (self ${selfPid}): ${describeTable(entries)}`);
     if (stray === undefined) return 'the process table does not list this runtime';
-    return stray.length ? `unexpected processes ${describe(stray)}` : undefined;
+    return `unexpected processes ${describe(stray)}`;
   };
 
   const scratchProblem = async (): Promise<string | undefined> => {
@@ -169,11 +174,14 @@ export function createRenderEnvironment({
   };
 }
 
-/** Live processes other than `selfPid` and its ancestors; undefined when `selfPid` is not listed. */
+/** Live processes other than PID 1, `selfPid` and its ancestors; undefined when `selfPid` is not listed. */
 export function strayProcesses(entries: readonly ProcessEntry[], selfPid: number): ProcessEntry[] | undefined {
   const byPid = new Map(entries.map(entry => [entry.pid, entry]));
   if (!byPid.has(selfPid)) return undefined;
-  const allowed = new Set<number>();
+  // PID 1 is the sandbox's init, which a render can never leave behind. On Lambda it need not be an
+  // ancestor: the runtime's parent can sit outside the sandbox's PID namespace, so its PPID reads 0.
+  // A process merely reparented to init (PPID 1) is still stray.
+  const allowed = new Set<number>([INIT_PID]);
   for (let entry = byPid.get(selfPid); entry && !allowed.has(entry.pid); entry = byPid.get(entry.ppid)) {
     allowed.add(entry.pid);
   }
@@ -297,13 +305,26 @@ async function collect(checks: Array<() => Promise<string | undefined>>): Promis
   return problems;
 }
 
-/** `pid name` pairs for a log line; names are process-controlled, so keep them short and plain. */
+/** `pid name` pairs for a log line. */
 function describe(entries: readonly ProcessEntry[]): string {
   const shown = entries
     .slice(0, 10)
-    .map(entry => `${entry.pid} ${entry.name.replace(/[^\w.-]/g, '?').slice(0, 16)}`)
+    .map(entry => `${entry.pid} ${plain(entry.name, 16)}`)
     .join(', ');
   return `[${shown}${entries.length > 10 ? `, +${entries.length - 10} more` : ''}]`;
+}
+
+/**
+ * `pid ppid state name` for every entry, kernel threads and exited processes included. Uncapped:
+ * Lambda allows an execution environment 1,024 processes, far below the log event size limit.
+ */
+function describeTable(entries: readonly ProcessEntry[]): string {
+  return `[${entries.map(entry => `${entry.pid} ${entry.ppid} ${plain(entry.state, 1)} ${plain(entry.name, 16)}`).join(', ')}]`;
+}
+
+/** Process-controlled text kept short and plain for a one-line log. */
+function plain(text: string, maxLength: number): string {
+  return text.replace(/[^\w.-]/g, '?').slice(0, maxLength);
 }
 
 function sleep(ms: number): Promise<void> {

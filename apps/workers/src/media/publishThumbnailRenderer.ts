@@ -90,9 +90,9 @@ export async function fetchThumbnailDocument(url: string, fetchImpl: typeof fetc
 /** The only writable path on Lambda, and so the directory emptied around every render. */
 export const LAMBDA_SCRATCH_ROOT = '/tmp';
 
-// /tmp is emptied only after the process check finds this runtime alone with its ancestors
-// (renderEnvironment.ts). That check, not exitAfterEachInvocation's Runtime API requirement, is what
-// protects a shared host: `sst dev` runs this handler locally with AWS_LAMBDA_RUNTIME_API set.
+// /tmp is emptied only after the process check finds this runtime alone with its ancestors and
+// PID 1 (renderEnvironment.ts). That check, not exitAfterEachInvocation's Runtime API requirement,
+// is what protects a shared host: `sst dev` runs this handler locally with AWS_LAMBDA_RUNTIME_API set.
 export const handler = exitAfterEachInvocation(
   createThumbnailRendererHandler({
     openContext: openLambdaChromiumContext,

@@ -260,6 +260,16 @@
         "default": "./dist/llm/intentClassifier.cjs"
       }
     },
+    "./userService/accountState": {
+      "import": {
+        "types": "./dist/userService/accountState.d.mts",
+        "default": "./dist/userService/accountState.mjs"
+      },
+      "require": {
+        "types": "./dist/userService/accountState.d.cts",
+        "default": "./dist/userService/accountState.cjs"
+      }
+    },
     "./llm/modelAdmission": {
       "import": {
         "types": "./dist/llm/modelAdmission.d.mts",

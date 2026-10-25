@@ -10,6 +10,7 @@ import {
   PUBLISH_LIMITS,
   ArtifactTypeSchema,
   type ArtifactFile,
+  type ArtifactVersionMeta,
   type PublishResult,
   type ValidationViolation,
   normalizePublishTags,
@@ -18,6 +19,7 @@ import {
   validateBundle,
   checkScopePermission,
   resolveVisibility,
+  archivedVersionBytes,
   checkPublishQuota,
   buildPublishS3KeyPrefix,
   buildPublishUrlPath,
@@ -236,20 +238,6 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(422).json({ error: 'Validation failed', violations: validation.violations });
   }
 
-  // 4d. Cumulative per-owner quota re-check (defense in depth - the draft may
-  // have been issued before other publishes consumed the allowance). Excludes
-  // the {tier,scopeId,slug} being overwritten so a re-publish isn't double-counted.
-  const quota = await checkPublishQuota({
-    ownerId: String(req.user.id),
-    orgScopeId: manifest.tier === 'organization' ? manifest.scopeId : null,
-    isAdmin: req.user.isAdmin,
-    incoming: { bytes: totalBytes, fileCount: filesWithMeta.length },
-    replacing: { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug },
-  });
-  if (!quota.ok) {
-    return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
-  }
-
   // 5. Previous version (overwrite-in-place forensics)
   const previous = await PublishedArtifact.findOne({
     tier: manifest.tier,
@@ -265,13 +253,68 @@ const handler = baseApi().post(async (req, res) => {
       lastPublishedBy?: string;
       size: { totalBytes: number; fileCount: number };
       sha256Index?: string;
-      versions?: Array<{ sha256Index: string }>;
+      versions?: Array<{ sha256Index: string; indexBytes?: number }>;
       accessGate?: unknown;
       visibility?: string;
     } | null>();
 
   if (previous && !mayRepublishSlug(previous.ownerId, publishUser)) {
     return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
+  }
+
+  // 5a. The prior canonical index.html, archived at step 6 before this overwrite so its bytes
+  // survive in version history (served later via ?v={sha}). Read here because what it archives
+  // counts toward the quota below. Best-effort: nothing to archive on a first promote / missing prior.
+  const canonicalPrefix = buildPublishS3KeyPrefix(manifest.tier, manifest.scopeId, manifest.slug);
+  const priorIndex = previous?.sha256Index
+    ? await storage.download(`${canonicalPrefix}index.html`).catch(() => null)
+    : null;
+
+  // 5b. Version history (deduped by content sha): backfill the replaced version if
+  // history doesn't record it, then add the new one unless it's an identical
+  // re-publish (same sha). On first publish, `previous` is null -> [new] only.
+  // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
+  const now = new Date();
+  const haveShas = new Set((previous?.versions ?? []).map(v => v.sha256Index));
+  const versionsToPush: ArtifactVersionMeta[] = [];
+  if (previous?.sha256Index && !haveShas.has(previous.sha256Index)) {
+    versionsToPush.push({
+      publishedAt: previous.publishedAt,
+      publishedBy: previous.lastPublishedBy ?? previous.ownerId,
+      size: previous.size,
+      sha256Index: previous.sha256Index,
+      ...(priorIndex ? { indexBytes: priorIndex.length } : {}),
+    });
+    haveShas.add(previous.sha256Index);
+  }
+  if (!haveShas.has(indexEntry.sha256)) {
+    versionsToPush.push({
+      publishedAt: now,
+      publishedBy: String(req.user.id),
+      size: { totalBytes, fileCount: filesWithMeta.length },
+      sha256Index: indexEntry.sha256,
+      indexBytes: indexEntry.size,
+    });
+  }
+
+  // 5c. Cumulative per-owner quota re-check (defense in depth - the draft may
+  // have been issued before other publishes consumed the allowance). Excludes
+  // the {tier,scopeId,slug} being overwritten so a re-publish isn't double-counted,
+  // then adds back that page's archived versions as they stand after this publish:
+  // replacing the current version with new content archives it, which is growth.
+  const quota = await checkPublishQuota({
+    ownerId: String(req.user.id),
+    orgScopeId: manifest.tier === 'organization' ? manifest.scopeId : null,
+    isAdmin: req.user.isAdmin,
+    incoming: {
+      bytes: totalBytes,
+      fileCount: filesWithMeta.length,
+      archivedBytes: archivedVersionBytes([...(previous?.versions ?? []), ...versionsToPush], indexEntry.sha256),
+    },
+    replacing: { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug },
+  });
+  if (!quota.ok) {
+    return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
   }
 
   // Validate the embed allowlist against the artifact's FINAL open-public state. A
@@ -286,19 +329,11 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: embed.error, code: embed.code });
   }
 
-  // 6. Promote draft -> canonical prefix
-  const canonicalPrefix = buildPublishS3KeyPrefix(manifest.tier, manifest.scopeId, manifest.slug);
-  // Archive the prior canonical index.html before this overwrite so its bytes
-  // survive in version history (served later via ?v={sha}). Best-effort.
-  if (previous?.sha256Index) {
-    try {
-      const old = await storage.download(`${canonicalPrefix}index.html`);
-      await storage.upload(old, `${canonicalPrefix}versions/${previous.sha256Index}.html`, {
-        ContentType: 'text/html',
-      });
-    } catch {
-      /* nothing to archive (first promote / missing prior) */
-    }
+  // 6. Promote draft -> canonical prefix, archiving the prior index.html read at 5a first. Best-effort.
+  if (previous?.sha256Index && priorIndex) {
+    await storage
+      .upload(priorIndex, `${canonicalPrefix}versions/${previous.sha256Index}.html`, { ContentType: 'text/html' })
+      .catch(() => undefined);
   }
   for (const file of filesWithMeta) {
     await storage.upload(bufferCache.get(file.path)!, `${canonicalPrefix}${file.path}`, {
@@ -307,36 +342,8 @@ const handler = baseApi().post(async (req, res) => {
   }
   bufferCache.clear();
 
-  // 7. Upsert record
-  const now = new Date();
+  // 7. Upsert record (versionsToPush from 5b)
   const publicId = previous?.publicId ?? uuidPublicId();
-  // Version history (deduped by content sha): backfill the replaced version if
-  // history doesn't record it, then add the new one unless it's an identical
-  // re-publish (same sha). On first publish, `previous` is null -> [new] only.
-  const haveShas = new Set((previous?.versions ?? []).map(v => v.sha256Index));
-  const versionsToPush: Array<{
-    publishedAt: Date;
-    publishedBy: string;
-    size: { totalBytes: number; fileCount: number };
-    sha256Index: string;
-  }> = [];
-  if (previous?.sha256Index && !haveShas.has(previous.sha256Index)) {
-    versionsToPush.push({
-      publishedAt: previous.publishedAt,
-      publishedBy: previous.lastPublishedBy ?? previous.ownerId,
-      size: previous.size,
-      sha256Index: previous.sha256Index,
-    });
-    haveShas.add(previous.sha256Index);
-  }
-  if (!haveShas.has(indexEntry.sha256)) {
-    versionsToPush.push({
-      publishedAt: now,
-      publishedBy: String(req.user.id),
-      size: { totalBytes, fileCount: filesWithMeta.length },
-      sha256Index: indexEntry.sha256,
-    });
-  }
   const publishTags = normalizePublishTags(manifest.tags ?? []);
   const ownerId = previous ? previous.ownerId : String(req.user.id);
   const saved = await PublishedArtifact.findOneAndUpdate(

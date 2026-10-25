@@ -9,7 +9,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import { checkPublishQuota } from './checkPublishQuota';
+import { archivedVersionBytes, checkPublishQuota } from './checkPublishQuota';
 import { PUBLISH_QUOTAS } from '@bike4mind/common';
 
 /** Aggregate returns a single grouped row (or [] when no docs match). */
@@ -154,6 +154,22 @@ describe('checkPublishQuota', () => {
     }
   });
 
+  it("counts the incoming page's archived versions with its bundle and names them in the error", async () => {
+    const cap = PUBLISH_QUOTAS.user.maxTotalBytes;
+    aggregateMock.mockResolvedValue(usage(cap - 1024));
+
+    const exact = await checkPublishQuota({
+      ownerId: 'u1',
+      incoming: { bytes: 1000, fileCount: 1, archivedBytes: 24 },
+    });
+    expect(exact.ok).toBe(true);
+
+    const over = await checkPublishQuota({ ownerId: 'u1', incoming: { bytes: 1000, fileCount: 1, archivedBytes: 25 } });
+    if (over.ok) throw new Error('expected the archived bytes to tip the publish over the cap');
+    expect(over.details).toEqual({ scope: 'user', limit: cap, current: cap - 1024, attempted: cap + 1 });
+    expect(over.error).toContain('including its earlier versions');
+  });
+
   it('treats an empty aggregation result as zero usage', async () => {
     aggregateMock.mockResolvedValue([]);
     const result = await checkPublishQuota({
@@ -161,5 +177,46 @@ describe('checkPublishQuota', () => {
       incoming: { bytes: 1024, fileCount: 1 },
     });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('archivedVersionBytes', () => {
+  it('sums every version except the current one', () => {
+    const versions = [
+      { sha256Index: 'a', indexBytes: 300 },
+      { sha256Index: 'b', indexBytes: 200 },
+      { sha256Index: 'c', indexBytes: 500 },
+    ];
+    expect(archivedVersionBytes(versions, 'c')).toBe(500);
+    expect(archivedVersionBytes(versions, 'a')).toBe(700);
+  });
+
+  it('counts entries recorded before indexBytes was tracked as 0', () => {
+    const versions = [{ sha256Index: 'a' }, { sha256Index: 'b', indexBytes: 200 }, { sha256Index: 'c' }];
+    expect(archivedVersionBytes(versions, 'c')).toBe(200);
+  });
+
+  it('reads a missing or empty history as 0', () => {
+    expect(archivedVersionBytes(undefined, 'c')).toBe(0);
+    expect(archivedVersionBytes([], undefined)).toBe(0);
+  });
+
+  it('counts a sha recorded twice once, at its larger indexBytes, and excludes every copy of the current one', () => {
+    const versions = [
+      { sha256Index: 'a', indexBytes: 300 },
+      { sha256Index: 'a', indexBytes: 350 },
+      { sha256Index: 'a' },
+      { sha256Index: 'c', indexBytes: 500 },
+      { sha256Index: 'c', indexBytes: 500 },
+    ];
+    expect(archivedVersionBytes(versions, 'c')).toBe(350);
+  });
+
+  it('treats the latest entry as current when the page has no sha256Index, as the serve route does', () => {
+    const versions = [
+      { sha256Index: 'a', indexBytes: 300 },
+      { sha256Index: 'b', indexBytes: 200 },
+    ];
+    expect(archivedVersionBytes(versions, undefined)).toBe(300);
   });
 });

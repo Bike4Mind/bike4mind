@@ -182,7 +182,7 @@ export type ModerationHitSource = 'openai' | 'bedrock';
  * - `active`: no action; normal usage.
  * - `throttled`: auto-applied on repeat hits; a tighter rate limit is enforced until `throttledUntil`.
  * - `suspend_pending`: threshold for suspension reached - flagged for a human to confirm. NOT auto-blocking.
- * - `suspended`: human-confirmed suspension; chat/generation is blocked (mirrored to `isModerated`).
+ * - `suspended`: human-confirmed suspension; the account is blocked at sign-in.
  */
 export type UserModerationStatus = 'active' | 'throttled' | 'suspend_pending' | 'suspended';
 
@@ -257,8 +257,8 @@ export interface IUser extends ICreditHolder {
   isModerated: boolean;
   /**
    * Per-user moderation tracking + auto-throttle/suspend state.
-   * Absent until the user's first moderation hit. `moderation.status === 'suspended'`
-   * is mirrored to `isModerated` for legacy admin surfaces.
+   * Absent until the user's first moderation hit. Independent of `isModerated`, the admin's
+   * AI-only block.
    */
   moderation?: IUserModeration;
   /**
@@ -798,8 +798,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    */
   recordModerationHit: (userId: string, hit: IModerationHit) => Promise<IUserDocument | null>;
   /**
-   * Transition a user's moderation escalation state. Mirrors `isModerated` when
-   * moving to/from `suspended`. Returns the updated user.
+   * Transition a user's moderation escalation state. Leaves `isModerated` alone. Returns the
+   * updated user.
    */
   setModerationStatus: (
     userId: string,

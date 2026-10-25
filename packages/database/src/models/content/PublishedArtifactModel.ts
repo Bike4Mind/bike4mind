@@ -79,6 +79,8 @@ const VersionMetaSubSchema = new Schema(
     publishedBy: { type: String, required: true },
     size: { type: SizeSubSchema, required: true },
     sha256Index: { type: String, required: true },
+    /** See ArtifactVersionMetaSchema in @bike4mind/common: archived index.html bytes, quota-counted. */
+    indexBytes: { type: Number, min: 0 },
   },
   { _id: false }
 );

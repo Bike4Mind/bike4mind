@@ -30,6 +30,7 @@ import { toast } from 'sonner';
 import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind/common';
 import { ELISION_PUBLISH_TITLE } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+import { getValidationViolationsMessage } from '@client/app/utils/error';
 import { ShareActions } from './ShareActions';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
 import { ClearGateConfirmModal, StoredGateNote, STORED_GATE_CLEARED_MESSAGE } from './StoredGateClear';
@@ -274,6 +275,8 @@ function parseDomains(text: string): string[] | null {
 }
 
 function errorMessage(err: unknown): string {
+  const violations = getValidationViolationsMessage(err);
+  if (violations) return violations;
   if (isAxiosError(err)) return (err.response?.data as { error?: string })?.error || err.message || 'Failed to publish';
   return err instanceof Error ? err.message : 'Failed to publish';
 }
