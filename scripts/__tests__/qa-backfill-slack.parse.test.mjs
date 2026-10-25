@@ -126,6 +126,7 @@ describe('parseSlackPost: AI Latency', () => {
       latencyRow('latency-spec-a', 'model-x', 'Pass', '3.20s (TTFT 0.85s) / &lt;=5s'),
       latencyRow('latency-spec-b', 'model-x', 'Fail', '9.10s (TTFT 2.40s) / &lt;=5s FAIL (2 retried attempt(s) kept)'),
     ];
+    rows.push(latencyRow('latency-spec-c', 'model-x', '---', 'No Data (1 artifact-mode excluded)'));
     const run = parseSlackPost(latencyPost({ rows, latencyColumn: 'Median Latency (TTFT)' }), ctx);
     expect(run.metrics).toEqual([
       { kind: 'latency', model: 'model-x', label: 'latency-spec-a', value: 3.2, unit: 's', threshold: 5 },

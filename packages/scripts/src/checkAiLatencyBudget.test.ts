@@ -405,17 +405,26 @@ describe('gatedMedianSec', () => {
     expect(kept).toBe(52.241);
   });
 
-  it('counts a retried attempt as a data point', () => {
-    const results = mergeResults(
-      [
-        text('a', 4),
-        text('b', 5),
-        completedResult(scenario({ id: 'c' }), { response: 'x', responseTimeMs: 60_000, renderTimeMs: 0 }),
-      ],
+  it('judges a retried prompt on its slowest attempt, as one data point', () => {
+    // The slow attempt that caused the retry still reaches the gate (last-write-wins dropped it)...
+    const retried = mergeResults(
+      [text('a', 4), text('b', 5), text('c', 60)],
       [completedResult(scenario({ id: 'c' }), { response: 'x', responseTimeMs: 6000, renderTimeMs: 0, attempt: 1 })]
     );
-    expect(results).toHaveLength(4);
-    expect(gatedMedianSec(results)).toBe(5.5);
+    expect(retried).toHaveLength(4);
+    expect(gatedMedianSec([text('a', 30), text('b', 40), ...retried.filter(r => r.id === 'c')])).toBe(40);
+
+    // ...but its attempts are one prompt, so a flaky prompt cannot outvote the others. Counted per
+    // attempt, [10, 12, 50, 120, 120] would put the median at 50.
+    const flaky = mergeResults(
+      [text('a', 10), text('b', 12), incompleteResult(scenario({ id: 'c' }), 120_000)],
+      [
+        incompleteResult(scenario({ id: 'c' }), 120_000, { attempt: 1 }),
+        completedResult(scenario({ id: 'c' }), { response: 'x', responseTimeMs: 50_000, renderTimeMs: 0, attempt: 2 }),
+      ]
+    );
+    expect(flaky).toHaveLength(5);
+    expect(gatedMedianSec(flaky)).toBe(12);
   });
 
   it('excludes deliverable prompts whether they finished or were abandoned', () => {
@@ -450,6 +459,27 @@ describe('gatedMedianFirstTokenSec', () => {
     expect(
       gatedMedianFirstTokenSec([withFirstToken('a', 1000), withFirstToken('b', 3000), withFirstToken('c', 2000)])
     ).toBe(2);
+  });
+
+  it('takes one value per prompt, its slowest attempt', () => {
+    const results = mergeResults(
+      [withFirstToken('a', 1000), withFirstToken('b', 2000), withFirstToken('c', 9000)],
+      [
+        { ...withFirstToken('c', 500), attempt: 1 },
+        { ...withFirstToken('c', 400), attempt: 2 },
+      ]
+    );
+    expect(gatedMedianFirstTokenSec(results)).toBe(2);
+  });
+
+  it('counts an attempt abandoned before its first token at its elapsed time', () => {
+    const results = [
+      withFirstToken('a', 1000),
+      withFirstToken('b', 2000),
+      incompleteResult(scenario({ id: 'c' }), 120_000),
+      incompleteResult(scenario({ id: 'd' }), 120_000),
+    ];
+    expect(gatedMedianFirstTokenSec(results)).toBe(61);
   });
 
   it('skips prompts with no first token and deliverable prompts', () => {
@@ -500,13 +530,13 @@ describe('latencyBreach', () => {
 
   it('does not fail on an abandoned attempt that a retry completed, but keeps it in the median', () => {
     const results = mergeResults(
-      [text('a', 1), incompleteResult(scenario({ id: 'c' }), 50_000)],
-      [completedResult(scenario({ id: 'c' }), { response: 'x', responseTimeMs: 2000, renderTimeMs: 0, attempt: 1 })]
+      [text('a', 1), text('b', 2), incompleteResult(scenario({ id: 'c' }), 50_000)],
+      [completedResult(scenario({ id: 'c' }), { response: 'x', responseTimeMs: 3000, renderTimeMs: 0, attempt: 1 })]
     );
     expect(latencyBreach(results, 10)).toBeNull();
-    // Median of 1, 50 and 2 is 2: the retried attempt is a data point, and the breach lists it.
+    // Per prompt [1, 2, 50]: c is judged on its abandoned attempt, and the breach lists every attempt.
     expect(latencyBreach(results, 1.5)).toBe(
-      'Latency breach - median AI latency 2s exceeds the 1.5s threshold [a=1s, c=50s (incomplete, retried), c=2s]'
+      'Latency breach - median AI latency 2s exceeds the 1.5s threshold [a=1s, b=2s, c=50s (incomplete, retried), c=3s]'
     );
   });
 

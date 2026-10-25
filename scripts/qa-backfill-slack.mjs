@@ -174,7 +174,8 @@ function latencyRows(body) {
     const q = tokens.findIndex((t, i) => i >= 2 && QUALITY.has(t));
     if (q === -1) fail(`bad latency row "${clip(line)}"`);
     const cell = tokens.slice(q + 1).join(' ');
-    const m = cell === 'No Data' ? null : (LATENCY_CELL.exec(cell) ?? fail(`bad latency cell "${clip(cell)}"`));
+    // 'No Data' can carry an annotation, e.g. 'No Data (2 artifact-mode excluded)'.
+    const m = cell.startsWith('No Data') ? null : (LATENCY_CELL.exec(cell) ?? fail(`bad latency cell "${clip(cell)}"`));
     return {
       spec: tokens[0],
       model: tokens.slice(1, q).join(' '),

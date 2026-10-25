@@ -696,7 +696,7 @@ jobs:
               # Latency column
               if [ -n "$LATENCY_JSON" ]; then
                 THRESHOLD="$(jq -r '.thresholdSec // empty' "$LATENCY_JSON")"
-                # Median over every gated attempt, retried ones included (gatedMedianSec in
+                # Median over gated prompts, each on its slowest attempt (gatedMedianSec in
                 # ai-latency-budget.ts); TTFT is the median time to first answer token beside it.
                 MEDIAN="$(jq -r '.medianResponseTimeSec // 0' "$LATENCY_JSON")"
                 TTFT="$(jq -r '.medianFirstTokenSec // 0' "$LATENCY_JSON")"
@@ -707,8 +707,9 @@ jobs:
                 # An unflagged prompt that answered with an artifact is excluded from the median; show it
                 # so the mode switch is noticed rather than hidden. Counted per prompt, not per attempt.
                 SWITCHED="$(jq -r '[.results[]? | select(.unexpectedArtifact == true) | .id] | unique | length' "$LATENCY_JSON")"
-                # Earlier attempts of a retried prompt are kept in the results and the median; say how many.
-                RETRIED="$(jq -r '[.results[]? | select(.retried == true)] | length' "$LATENCY_JSON")"
+                # Earlier attempts of a retried gated prompt are kept and can set its value in the median;
+                # say how many.
+                RETRIED="$(jq -r '[.results[]? | select(.retried == true) | select(.measuresDeliverable != true)] | length' "$LATENCY_JSON")"
                 LATENCY_VALUE="$(printf '%.2fs' "$MEDIAN")"
                 IS_TTFT="$(echo "$TTFT > 0" | bc -l 2>/dev/null || echo 0)"
                 [ "$IS_TTFT" = "1" ] && LATENCY_VALUE="${LATENCY_VALUE} (TTFT $(printf '%.2fs' "$TTFT"))"
@@ -738,7 +739,7 @@ jobs:
                     LATENCY_WITHIN=$((LATENCY_WITHIN + 1))
                     [ "${SWITCHED:-0}" -gt 0 ] && LATENCY_STR="${LATENCY_STR} (${SWITCHED} artifact-mode excluded)"
                   fi
-                  [ "${RETRIED:-0}" -gt 0 ] && LATENCY_STR="${LATENCY_STR} (${RETRIED} retried attempt(s) kept)"
+                  [ "$IS_ZERO" != "1" ] && [ "${RETRIED:-0}" -gt 0 ] && LATENCY_STR="${LATENCY_STR} (${RETRIED} retried attempt(s) kept)"
                 fi
               else
                 LATENCY_STR="No Data"

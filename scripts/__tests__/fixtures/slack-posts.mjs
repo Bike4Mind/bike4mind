@@ -90,7 +90,12 @@ export function latencyPost({
 } = {}) {
   const table = [
     latencyRow('Suite', 'Model', 'Quality', latencyColumn),
-    latencyRow('--------------------------------', '--------------------', '--------', '---------------'),
+    latencyRow(
+      '--------------------------------',
+      '--------------------',
+      '--------',
+      '-'.repeat(latencyColumn.length)
+    ),
     ...rows,
   ];
   return {

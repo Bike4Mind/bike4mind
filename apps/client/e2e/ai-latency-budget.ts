@@ -99,7 +99,8 @@ export function msToSec(ms: number): number {
  * recorder rather than a return value because the suite also needs the send time when the send
  * helper throws a StreamingTimeoutError. The send helper's own "request timed out" resend keeps
  * the first send time - the user waited through the failed attempt - but drops that attempt's
- * first text, which was the error, not an answer.
+ * first text, which was the error, not an answer. That rare resend re-types the prompt inside the
+ * timed window; the harness does not subtract it.
  */
 export class TurnTimer {
   private sentAtMs?: number;
@@ -269,6 +270,20 @@ function gatedResults(results: PromptResult[]): PromptResult[] {
   return results.filter(r => !r.measuresDeliverable);
 }
 
+/**
+ * One value per gated prompt: the largest `value` over its attempts, skipping attempts where it is
+ * undefined. Per prompt, so a flaky prompt's retries cannot outvote the other prompts in the median;
+ * its slowest attempt, so the attempt that caused a retry still reaches the gate.
+ */
+function slowestPerPrompt(results: PromptResult[], value: (r: PromptResult) => number | undefined): number[] {
+  const slowest = new Map<string, number>();
+  for (const r of gatedResults(results)) {
+    const v = value(r);
+    if (v !== undefined) slowest.set(r.id, Math.max(slowest.get(r.id) ?? v, v));
+  }
+  return [...slowest.values()];
+}
+
 function medianSec(values: number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -278,21 +293,26 @@ function medianSec(values: number[]): number {
 }
 
 /**
- * The cell's gated latency: the MEDIAN responseTimeSec over every gated attempt, 0 when none.
+ * The cell's gated latency: the MEDIAN over gated prompts of each prompt's slowest attempt's
+ * responseTimeSec, 0 when none.
  *
  * A median rather than a mean so one slow prompt cannot swing the cell against a tight threshold.
- * Retried attempts count as data points: they are real observations, and a median keeps one
- * outlier from deciding the verdict either way. Image/artifact prompts stay out - they measure
- * deliverable generation, which would turn the gate red on generation time and mask real
- * streaming regressions.
+ * A retried prompt is judged on its slowest attempt (see slowestPerPrompt). Image/artifact prompts
+ * stay out - they measure deliverable generation, which would turn the gate red on generation time
+ * and mask real streaming regressions.
  */
 export function gatedMedianSec(results: PromptResult[]): number {
-  return medianSec(gatedResults(results).map(r => r.responseTimeSec));
+  return medianSec(slowestPerPrompt(results, r => r.responseTimeSec));
 }
 
-/** Median time to first token over the gated attempts that saw reply text; 0 when none did. */
+/**
+ * Median time to first token, per prompt like gatedMedianSec; 0 when no prompt has one. An attempt
+ * abandoned before its first token counts at its elapsed time, a floor like its responseTimeSec -
+ * dropping it would bias the median low on exactly the slow nights. A completed reply that never
+ * showed markdown answer text (code view) has no first token and is skipped.
+ */
 export function gatedMedianFirstTokenSec(results: PromptResult[]): number {
-  return medianSec(gatedResults(results).flatMap(r => (r.firstTokenSec === undefined ? [] : [r.firstTokenSec])));
+  return medianSec(slowestPerPrompt(results, r => r.firstTokenSec ?? (r.incomplete ? r.responseTimeSec : undefined)));
 }
 
 /** Ids of unflagged prompts whose reply turned out to be an artifact (excluded from the gate). */
@@ -306,7 +326,7 @@ export function unexpectedArtifactIds(results: PromptResult[]): string[] {
  * Must stay in sync with the aggregate step's Latency column in .github/workflows/e2e-ai-latency.yml:
  * a breach is a median over thresholdSec OR a gated prompt whose LATEST attempt was abandoned (an
  * abandoned prompt has no upper bound, so faster prompts could otherwise outvote it). An abandoned
- * attempt that a later retry completed only counts toward the median. No gated result is "No Data"
+ * attempt that a later retry completed only feeds its prompt's slowest attempt in the median. No gated result is "No Data"
  * there, not a breach, so it returns null here too.
  */
 export function latencyBreach(results: PromptResult[], thresholdSec: number): string | null {

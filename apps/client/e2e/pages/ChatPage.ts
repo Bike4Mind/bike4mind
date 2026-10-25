@@ -161,8 +161,12 @@ export class ChatPage extends BasePage {
               text: await this.newestResponseText(),
             };
             sawStopButton ||= snapshot.stopVisible;
-            if (firstText?.timer && hasFirstAnswerText(await this.newestAnswerText(), firstText.previousAnswerText)) {
-              firstText.timer.markFirstText();
+            // Skip the extra read once it has fired: on a long reply it is a full innerText per poll,
+            // which would delay seeing the stop button hide and inflate the timed stream.
+            if (firstText?.timer && firstText.timer.firstTokenMs() === undefined) {
+              if (hasFirstAnswerText(await this.newestAnswerText(), firstText.previousAnswerText)) {
+                firstText.timer.markFirstText();
+              }
             }
             return isStreamComplete(snapshot, previousResponse, sawStopButton);
           },
