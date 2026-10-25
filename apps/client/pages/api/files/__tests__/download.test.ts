@@ -234,6 +234,66 @@ describe('GET /api/files/download', () => {
     );
   });
 
+  it('exports a file with a 255-character name by capping the temp entry name', async () => {
+    const fileName = `${'a'.repeat(251)}.pdf`;
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { fileUrl: 'u1', mimeType: 'application/pdf', fileName, moderationStatus: 'clean' },
+    ]);
+
+    const { res, getSent } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    const name = path.basename(tempFiles[0]);
+    expect(Buffer.byteLength(name)).toBeLessThanOrEqual(200);
+    expect(name.startsWith('0_')).toBe(true);
+    expect(name.endsWith('.txt')).toBe(true);
+    expect(getSent()).toEqual(ZIP_BYTES);
+  });
+
+  it('leaves out files once the export size budget is reached and names them in the README', async () => {
+    const rows = Array.from({ length: 81 }, (_, i) => ({
+      fileUrl: `u${i}`,
+      mimeType: 'text/plain',
+      fileName: `f${i}.txt`,
+      moderationStatus: 'clean',
+    }));
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
+    for (let i = 0; i < 81; i++) {
+      (getContentFromFabfile as ReturnType<typeof vi.fn>).mockResolvedValueOnce('x'.repeat(50000));
+    }
+
+    const { res } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    const names = tempFiles.map(f => path.basename(f));
+    expect(names).toContain('79_f79.txt');
+    expect(names.some(n => n.endsWith('_f80.txt'))).toBe(false);
+    expect(createTempFile).toHaveBeenLastCalledWith(
+      '80_README.txt',
+      expect.stringContaining('f80.txt: left out, the export reached its size limit.'),
+      expect.any(String)
+    );
+  });
+
+  it('exports more files than one batch, passing each extracted content through', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue(
+      Array.from({ length: 7 }, (_, i) => ({
+        fileUrl: `u${i}`,
+        mimeType: 'text/plain',
+        fileName: `f${i}.txt`,
+        moderationStatus: 'clean',
+      }))
+    );
+
+    const { res } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    expect(tempFiles.map(f => path.basename(f))).toEqual(Array.from({ length: 7 }, (_, i) => `${i}_f${i}.txt`));
+    for (let i = 0; i < 7; i++) {
+      expect(createTempFile).toHaveBeenCalledWith(`${i}_f${i}.txt`, 'file-content', expect.any(String));
+    }
+  });
+
   it('cleans up temp files even when zipping fails', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
       { fileUrl: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },

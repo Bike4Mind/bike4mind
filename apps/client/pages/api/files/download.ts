@@ -21,6 +21,22 @@ const CONVERTED_TO_TEXT = new Set<string>([
   SupportedFabFileMimeTypes.XLSX,
 ]);
 
+// Uncompressed UTF-8 text, so the zip stays under the ~6 MB buffered Lambda response even before
+// compression and after base64.
+const MAX_EXPORT_BYTES = 4_000_000;
+
+// Uploads allow 255-character names; the index prefix and a .txt suffix would push one past the
+// filesystem's per-component limit. Trims the stem by code point so a multi-byte character is
+// never split, and keeps a short extension.
+const capEntryName = (name: string, maxBytes = 200): string => {
+  if (Buffer.byteLength(name) <= maxBytes) return name;
+  const rawExt = path.extname(name);
+  const ext = Buffer.byteLength(rawExt) <= 16 ? rawExt : '';
+  const stem = Array.from(name.slice(0, name.length - ext.length));
+  while (stem.length && Buffer.byteLength(stem.join('') + ext) > maxBytes) stem.pop();
+  return stem.join('') + ext;
+};
+
 const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
   asyncHandler(async (req, res) => {
     if (!req.ability) throw new ForbiddenError('Unauthorized');
@@ -37,6 +53,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       // Anything shortened or left out is recorded so the archive can say so instead of looking
       // complete.
       const omitted: string[] = [];
+      let exportedBytes = 0;
       const maxContentLength = await getMaxContentLength();
 
       type ReadResult = { fileName: string; mimeType?: string; content?: string; note?: string };
@@ -89,6 +106,12 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
             omitted.push(`${entry.fileName}: ${entry.note}`);
             continue;
           }
+          const bytes = Buffer.byteLength(entry.content, 'utf8');
+          if (exportedBytes + bytes > MAX_EXPORT_BYTES) {
+            omitted.push(`${entry.fileName}: left out, the export reached its size limit.`);
+            continue;
+          }
+          exportedBytes += bytes;
           // truncateContent leaves off its ellipsis when the cut ends in } or ], so a shortened entry
           // can be exactly the cap. An untouched file of exactly that length is listed too (harmless).
           if (entry.content.length >= maxContentLength) {
@@ -96,7 +119,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
           }
 
           const entryName = CONVERTED_TO_TEXT.has(entry.mimeType ?? '') ? `${entry.fileName}.txt` : entry.fileName;
-          files.push(await createTempFile(`${index++}_${entryName}`, entry.content, tempDir));
+          files.push(await createTempFile(capEntryName(`${index++}_${entryName}`), entry.content, tempDir));
         }
       }
 
@@ -116,8 +139,8 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       await zipFiles(files, outputZipPath);
 
       // Read the zip into memory so the temp files can be removed immediately after the response.
-      // Entries are capped extracted text, which keeps this inside the Lambda buffered-response
-      // payload limit; archiving the original bytes would have to stream into S3 instead.
+      // The export is capped at MAX_EXPORT_BYTES of extracted text to fit the buffered-response
+      // limit; archiving the original bytes would have to stream into S3 instead.
       const zipBuffer = await fs.promises.readFile(outputZipPath);
 
       res.setHeader('Content-Type', 'application/zip');
