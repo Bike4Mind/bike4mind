@@ -1,5 +1,5 @@
 import isEqual from 'lodash/isEqual';
-import type { IUserDocument } from '@bike4mind/common';
+import { resolveUserStorageLimit, type IUserDocument } from '@bike4mind/common';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import type { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 
@@ -25,9 +25,18 @@ export const stageFieldEdit = (
   key: keyof IUserDocument,
   value: unknown,
   savedUser: AdminUserListItem
-): EditedFieldsState => ({
-  ...editedFields,
-  // savedUser is the list projection, which is narrower than the fields admins edit
-  // (e.g. emailVerifiedAt), so index it structurally.
-  [key]: !matchesSavedValue(value, (savedUser as Record<string, unknown>)[key]),
-});
+): EditedFieldsState => {
+  const savedStorage = resolveUserStorageLimit(savedUser);
+  const savedValue =
+    key === 'storageLimitOverride' && savedUser.storageLimitOverride === undefined
+      ? savedStorage.source === 'override'
+        ? savedStorage.limitMb
+        : null
+      : (savedUser as Record<string, unknown>)[key];
+  return {
+    ...editedFields,
+    // savedUser is the list projection, which is narrower than the fields admins edit
+    // (e.g. emailVerifiedAt), so index it structurally.
+    [key]: !matchesSavedValue(value, savedValue),
+  };
+};

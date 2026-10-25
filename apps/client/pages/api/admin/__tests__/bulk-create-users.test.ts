@@ -174,14 +174,18 @@ describe('POST /api/admin/bulk-create-users', () => {
     });
   });
 
-  it('writes exactly the storage limit and tags when both are given', async () => {
+  it('resolves storage during creation and writes tags separately', async () => {
     const json = vi.fn();
     const res = { status: vi.fn().mockReturnThis(), json };
 
     await h.handler!(makeReq([{ email: 'a@b.test', startingStorage: 5000, tags: ['x', 'y'] }]), res);
 
     expect(h.update).toHaveBeenCalledTimes(1);
-    expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'new-1', storageLimit: 5000, tags: ['x', 'y'] });
+    expect(h.createUser).toHaveBeenCalledWith(
+      expect.objectContaining({ record: expect.objectContaining({ storageLimit: 5000 }) }),
+      expect.anything()
+    );
+    expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'new-1', tags: ['x', 'y'] });
     expect(h.emitSignupFunnelEvents).toHaveBeenCalledWith({
       user: expect.objectContaining({ id: 'new-1', isSynthetic: false }),
       method: 'admin',
@@ -213,7 +217,7 @@ describe('POST /api/admin/bulk-create-users', () => {
     await h.handler!(makeReq([{ email: 'a@b.test' }]), res);
 
     expect(h.update).toHaveBeenCalledTimes(1);
-    expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'new-1', storageLimit: 1000, tags: undefined });
+    expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'new-1', tags: undefined });
   });
 
   it('reports an invalid row as a per-row failure without failing the batch', async () => {
