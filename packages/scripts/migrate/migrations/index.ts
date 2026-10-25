@@ -209,6 +209,8 @@ import EnsureArtifactSessionIdentifierIndex from './20260921235979_ensure-artifa
 import EnsureOverwatchRawEventExplorerIndex from './20260921235977_ensure-overwatch-raw-event-explorer-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureOverwatchUserDaySyntheticLaneIndex from './20260921235978_ensure-overwatch-user-day-synthetic-lane-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureAuthEventIndexes from './20260921235972_ensure-authevent-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureAdminAuditLogIndexes from './20260921235940_ensure-adminauditlog-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
@@ -387,6 +389,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureOverwatchRawEventExplorerIndex,
   EnsureOverwatchUserDaySyntheticLaneIndex,
   EnsureArtifactSessionIdentifierIndex,
+  EnsureAuthEventIndexes,
   BackfillStorageLimitOverrides,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,

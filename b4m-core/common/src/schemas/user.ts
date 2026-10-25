@@ -276,7 +276,7 @@ export type SelfUser = z.infer<typeof selfUserResponseSchema>;
 /**
  * The self-view plus the opt-in fields of the profile endpoints (users/[id] and its
  * update), which return question text with blank answers and, for an admin viewer,
- * `keepAdminOnly: ['userNotes']`. The redactor still owns the viewer gate; this only
+ * `keepAdminOnly: ['userNotes', 'signupMeta']`. The redactor still owns the viewer gate; this only
  * stops every OTHER self-view endpoint from being able to emit these at all.
  */
 export const selfUserProfileResponseSchema = selfUserResponseSchema.extend({
@@ -285,4 +285,5 @@ export const selfUserProfileResponseSchema = selfUserResponseSchema.extend({
     .nullable()
     .optional(),
   userNotes: passthroughField,
+  signupMeta: passthroughField,
 });
