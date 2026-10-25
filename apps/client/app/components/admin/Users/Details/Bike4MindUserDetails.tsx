@@ -58,6 +58,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
     };
 
     const handleStorageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.value === '') return;
       const newValue = Number(e.target.value);
       if (Number.isFinite(newValue) && newValue >= 0 && newValue <= MAX_STORAGE_LIMIT_MB) {
         onFieldChange('storageLimitOverride', newValue);
