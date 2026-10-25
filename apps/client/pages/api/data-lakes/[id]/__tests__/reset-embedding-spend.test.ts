@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   resetEmbeddingSpend: vi.fn(),
+  findById: vi.fn(),
   deleteForLake: vi.fn(async () => 0),
+  recordAdminAction: vi.fn(),
+  inTransaction: false,
+  insideTransactionAtAudit: undefined as boolean | undefined,
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the lifecycle tests).
@@ -18,8 +22,22 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: { resetEmbeddingSpend: h.resetEmbeddingSpend },
+  dataLakeRepository: { resetEmbeddingSpend: h.resetEmbeddingSpend, findById: h.findById },
   dataLakeSpendNotificationRepository: { deleteForLake: h.deleteForLake },
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    h.inTransaction = true;
+    try {
+      return await fn();
+    } finally {
+      h.inTransaction = false;
+    }
+  },
+}));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => {
+    h.insideTransactionAtAudit = h.inTransaction;
+    return h.recordAdminAction(...args);
+  },
 }));
 
 import handler from '../reset-embedding-spend';
@@ -37,7 +55,20 @@ const makeReq = (isAdmin: boolean) =>
     logger: { log: vi.fn(), warn: vi.fn() },
   }) as never;
 
-beforeEach(() => vi.clearAllMocks());
+const LAKE = {
+  id: 'lake-1',
+  name: 'Research',
+  organizationId: 'org-1',
+  createdByUserId: 'owner-1',
+  embeddingSpendMicroUsd: 4200,
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.findById.mockResolvedValue(LAKE);
+  h.recordAdminAction.mockResolvedValue(null);
+  h.insideTransactionAtAudit = undefined;
+});
 
 describe('POST /api/data-lakes/[id]/reset-embedding-spend', () => {
   it('resets the meter for an admin', async () => {
@@ -59,7 +90,7 @@ describe('POST /api/data-lakes/[id]/reset-embedding-spend', () => {
   });
 
   it('404s on an unknown lake', async () => {
-    h.resetEmbeddingSpend.mockResolvedValue(false);
+    h.findById.mockResolvedValue(null);
     await expect(
       (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(true), makeRes())
     ).rejects.toThrow(/not found/);
@@ -84,5 +115,34 @@ describe('POST /api/data-lakes/[id]/reset-embedding-spend', () => {
       (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(true), res)
     ).resolves.toBeUndefined();
     expect(res.json).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it('records org.data_lake.embedding_spend_reset with the zeroed meter inside the transaction', async () => {
+    h.resetEmbeddingSpend.mockResolvedValue(true);
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(true), makeRes());
+
+    expect(h.insideTransactionAtAudit).toBe(true);
+    expect(h.recordAdminAction).toHaveBeenCalledTimes(1);
+    expect(h.recordAdminAction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.data_lake.embedding_spend_reset',
+        target: expect.objectContaining({ kind: 'settings', id: 'lake-1' }),
+        organizationId: 'org-1',
+        changes: [{ field: 'embeddingSpendMicroUsd', before: 4200, after: 0 }],
+      })
+    );
+  });
+
+  it('fails the request and skips the re-arm when the audit write fails', async () => {
+    h.resetEmbeddingSpend.mockResolvedValue(true);
+    h.recordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+    const res = makeRes();
+
+    await expect(
+      (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(true), res)
+    ).rejects.toThrow('audit down');
+    expect(res.status).not.toHaveBeenCalled();
+    expect(h.deleteForLake).not.toHaveBeenCalled();
   });
 });

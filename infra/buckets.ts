@@ -39,23 +39,6 @@ const publishedArtifactsBucketName =
       ? `dev-${$app.name}-buckets-publishedartifactsbucket`
       : undefined);
 
-// Only create What's New distribution bucket if this is the publisher (main production)
-// Fork environments should NOT create this bucket - they consume via WHATS_NEW_DISTRIBUTION_URL
-const isWhatsNewDistributionEnabled = process.env.ENABLE_WHATS_NEW_DISTRIBUTION === 'true';
-
-if (!isWhatsNewDistributionEnabled) {
-  console.log('INFO: ENABLE_WHATS_NEW_DISTRIBUTION not set, skipping distribution bucket (fork mode)');
-}
-
-const whatsNewDistributionBucketName = isWhatsNewDistributionEnabled
-  ? process.env.WHATS_NEW_DISTRIBUTION_BUCKET_NAME ||
-    ($app.stage === 'production'
-      ? `production-${$app.name}-buckets-whatsnewdistributionbucket`
-      : $app.stage === 'dev'
-        ? `dev-${$app.name}-buckets-whatsnewdistributionbucket`
-        : undefined)
-  : undefined;
-
 /**
  * ===============================
  * FabFileBucket
@@ -471,76 +454,6 @@ const slackExportBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('sl
 
 /**
  * ===============================
- * WhatsNewDistributionBucket
- * ===============================
- * Public bucket for distributing What's New modals to fork environments.
- * Production uploads modals here; fork environments fetch via CloudFront.
- * Versioning enabled for rollback capability.
- *
- * Only created when ENABLE_WHATS_NEW_DISTRIBUTION=true (main production only).
- * Fork environments should NOT create this bucket.
- */
-const whatsNewDistributionBucket = isWhatsNewDistributionEnabled
-  ? new sst.aws.Bucket(
-      'whatsNewDistributionBucket',
-      {
-        versioning: true, // Keep version history for rollback
-        cors: {
-          allowOrigins: getAllowedOrigins(domain),
-          allowHeaders: ['*'],
-          allowMethods: ['GET', 'HEAD'],
-        },
-        access: 'cloudfront', // Secure via CloudFront OAC (Origin Access Control)
-        transform: {
-          bucket: whatsNewDistributionBucketName
-            ? (args, opts) => {
-                args.bucket = whatsNewDistributionBucketName;
-                args.forceDestroy = undefined;
-              }
-            : undefined,
-        },
-      },
-      {
-        retainOnDelete: whatsNewDistributionBucketName ? true : false,
-      }
-    )
-  : undefined;
-
-// CloudFront routing for public access (only if bucket exists)
-if (router && whatsNewDistributionBucket) {
-  router.routeBucket(`${routePrefix}/whats-new`, whatsNewDistributionBucket, {
-    rewrite: {
-      regex: `^${routePrefix}/whats-new/(.*)$`,
-      to: '/$1',
-    },
-  });
-}
-
-// Lifecycle policy to clean up old versions after 90 days (only if bucket exists)
-const whatsNewDistributionBucketLifecycle = whatsNewDistributionBucket
-  ? new aws.s3.BucketLifecycleConfigurationV2('whatsNewDistributionBucketLifecycle', {
-      bucket: whatsNewDistributionBucket.name,
-      rules: [
-        {
-          id: 'expire-old-versions',
-          status: 'Enabled',
-          noncurrentVersionExpiration: {
-            noncurrentDays: 90, // Keep 90 days of version history, then expire
-          },
-        },
-        {
-          id: 'cleanup-incomplete-uploads',
-          status: 'Enabled',
-          abortIncompleteMultipartUpload: {
-            daysAfterInitiation: 1,
-          },
-        },
-      ],
-    })
-  : undefined;
-
-/**
- * ===============================
  * PublishedArtifactsBucket
  * ===============================
  * Hosts published artifact bundles (HTML/CSS/JS/images). Deliberately NOT routed
@@ -633,6 +546,4 @@ export {
   notebookImportFunction,
   slackExportBucket,
   slackExportBucketLifecycle,
-  whatsNewDistributionBucket,
-  whatsNewDistributionBucketLifecycle,
 };

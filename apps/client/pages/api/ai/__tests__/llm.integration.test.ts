@@ -401,6 +401,16 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(invoked().authOrigin).toBe('session');
       expect(invoked().apiKeyId).toBeUndefined();
     });
+
+    it.each([
+      ['withholds', [ApiKeyScope.AI_CHAT], true],
+      ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], false],
+    ] as const)('%s the admin role on the queued quest for a key with scopes %j', async (_, scopes, withheld) => {
+      validateWithScopes([...scopes]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
+    });
   });
 
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {

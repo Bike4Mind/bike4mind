@@ -90,6 +90,12 @@ export interface AuthState {
   pending?: PendingApproval;
   user?: DesktopUser;
   error?: AuthError;
+  /**
+   * The session ended on its own while the user was working (expired, refused after a refresh,
+   * signed out by another instance). The window stays on the conversation with one notice to
+   * sign in again, so drafts and the failed turn survive; cleared once a session is back.
+   */
+  reauthRequired?: boolean;
 }
 
 /** External pages the renderer may ask main to open; main owns the base URL. */

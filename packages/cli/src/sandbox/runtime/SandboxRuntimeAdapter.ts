@@ -16,6 +16,8 @@ export interface WrapCommandOptions {
   /** Grant network egress inside the sandbox. Required so every call site makes the
    *  fail-closed vs. open decision explicitly; false denies IP egress. */
   networkEnabled: boolean;
+  /** Filtering proxy port; Seatbelt grants loopback-only network when set with networkEnabled. */
+  proxyPort?: number;
 }
 
 /** Abstract interface for platform-specific sandbox runtimes */

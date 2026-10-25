@@ -6,6 +6,7 @@ import { createMocks } from 'node-mocks-http';
 const mockRefs = vi.hoisted(() => ({
   deleteHandler: null as null | ((req: any, res: any) => unknown),
   modal: null as any,
+  findOneAndDelete: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -21,48 +22,40 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 vi.mock('@bike4mind/database/social', () => ({
   ModalModel: {
-    findById: () => Promise.resolve(mockRefs.modal),
-    findOneAndDelete: () => Promise.resolve(mockRefs.modal),
+    findOneAndDelete: (...args: unknown[]) => {
+      mockRefs.findOneAndDelete(...args);
+      return Promise.resolve(mockRefs.modal);
+    },
   },
 }));
 
-vi.mock('@bike4mind/server-utils/services/whatsNewDistribution', () => ({
-  WhatsNewDistributionService: {
-    deleteModal: vi.fn(async () => {
-      throw new Error('s3 down');
-    }),
-  },
-}));
-
-vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
-  emitModalGenerationMetrics: vi.fn(async () => undefined),
-}));
-
-import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import '@pages/api/modals/[id]/delete';
 
 const MODAL_ID = '507f1f77bcf86cd799439011';
 
-describe('DELETE /api/modals/[id] - S3 distribution sync failure', () => {
-  // The response ends the Lambda invocation, so the failure metric emit must finish before it is sent.
-  it('waits for the S3SyncFailure metric before responding when the S3 delete fails', async () => {
-    mockRefs.modal = { _id: MODAL_ID, tags: ['whats-new'], generationMetadata: { generatedDate: '2026-09-20' } };
-    let release!: () => void;
-    vi.mocked(emitModalGenerationMetrics).mockReturnValueOnce(
-      new Promise<void>(resolve => {
-        release = resolve;
-      })
-    );
-    const { req, res } = createMocks({ method: 'DELETE', query: { id: MODAL_ID } });
-    (req as any).ability = { can: () => true };
-    const pending = mockRefs.deleteHandler!(req, res);
+function mocks(id = MODAL_ID) {
+  const { req, res } = createMocks({ method: 'DELETE', query: { id } });
+  (req as any).ability = { can: () => true };
+  return { req, res };
+}
 
-    await vi.waitFor(() => expect(emitModalGenerationMetrics).toHaveBeenCalled());
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(res._isEndCalled()).toBe(false);
+describe('DELETE /api/modals/[id]', () => {
+  it('deletes the modal and returns it', async () => {
+    mockRefs.modal = { _id: MODAL_ID, tags: ['whats-new'] };
+    const { req, res } = mocks();
 
-    release();
-    await pending;
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(mockRefs.findOneAndDelete).toHaveBeenCalledWith({ _id: MODAL_ID });
     expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual(mockRefs.modal);
+  });
+
+  it('404s a malformed id instead of letting the cast throw', async () => {
+    mockRefs.findOneAndDelete.mockClear();
+    const { req, res } = mocks('not-an-object-id');
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('Modal not found');
+    expect(mockRefs.findOneAndDelete).not.toHaveBeenCalled();
   });
 });

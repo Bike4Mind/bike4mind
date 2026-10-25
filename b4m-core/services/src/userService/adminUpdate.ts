@@ -145,7 +145,7 @@ export async function adminUpdateUser(
   if (!user) {
     throw new Error('User not found');
   }
-  await validateUsernameChange(user, params, db.users);
+  await validateUsernameChange(user, params, db.users, { allowReservedUsername: true });
   if (params.email !== undefined && params.email !== user.email) {
     if (await db.users.existsOtherUserWithEmail(params.email, user.id)) {
       throw new ConflictError(EMAIL_IN_USE_MESSAGE);

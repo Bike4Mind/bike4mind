@@ -252,6 +252,12 @@ const DLQ_REGISTRY = [
     application: 'DataLakeManagement',
     sourceQueue: 'githubLakeRevokeQueue',
   },
+  {
+    label: 'publish-thumbnail',
+    displayName: 'Published Artifact Thumbnail',
+    application: 'PublishedArtifacts',
+    sourceQueue: 'publishThumbnailQueue',
+  },
 ] as const satisfies readonly DlqDescriptor[];
 
 /** Valid source queue names - derived from DLQ_REGISTRY so they stay in sync automatically. */

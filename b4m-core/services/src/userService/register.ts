@@ -21,6 +21,7 @@ import {
 import { releasePendingFreeCredits } from './freeCredits';
 import { shouldBlockDisposableEmail } from './disposableEmail';
 import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
+import { assertUsernameNotReserved } from './reservedUsername';
 
 // NOT parsed at runtime - derives the param type via z.infer only. The policy/age fields are
 // enforced by the manual `!== true` / version checks in registerUser below, not by this schema.
@@ -119,6 +120,9 @@ export const registerUser = async (
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
     throw new BadRequestError('Invalid email address');
   }
+
+  // The only caller, registerViaOTC, runs after the code proved the email.
+  await assertUsernameNotReserved(username, normalizedEmail, db.adminSettings);
 
   const existingUser = await db.users.findByUsernameOrEmail(username, email);
   if (existingUser) {

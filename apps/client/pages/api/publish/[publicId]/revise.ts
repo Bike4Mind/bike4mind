@@ -2,9 +2,18 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { createHash } from 'node:crypto';
 import * as cheerio from 'cheerio';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact, Annotation } from '@bike4mind/database';
-import type { IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
-import { validateBundle, buildPublishUrlPath, invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
+import type { ArtifactVersionMeta, IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+import {
+  validateBundle,
+  buildPublishUrlPath,
+  invalidatePublishCdn,
+  toCacheTarget,
+  checkInPlaceRewriteQuota,
+  consumePublishAction,
+  type PublishActionReceipt,
+} from '@server/services/publish';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
@@ -48,7 +57,7 @@ interface ReviseArtifactLean {
   manifest: Array<{ path: string; size: number; mimeType: string; sha256: string }>;
   publishedAt: Date;
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
-  versions?: Array<{ sha256Index: string }>;
+  versions?: Array<{ sha256Index: string; indexBytes?: number }>;
 }
 
 interface OpenAnnotationLean {
@@ -133,6 +142,9 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(409).json({ error: 'A revision is already in progress for this artifact' });
   }
 
+  // The counted publish action, handed back in `finally` only if the revise ends before the model runs.
+  let action: PublishActionReceipt | undefined;
+  let modelCalled = false;
   try {
     // Gather the open feedback pinned to the CURRENT version.
     const open = await Annotation.find({ publicId, deletedAt: null, resolvedAt: null, artifactVersionSha: currentSha })
@@ -145,18 +157,26 @@ const handler = baseApi().post(async (req, res) => {
     }
 
     const storage = getPublishedArtifactsStorage();
-    let currentHtml: string;
+    // The stored bytes are what gets archived (and counted), not a re-encoding of the decoded text.
+    let currentBuf: Buffer;
     try {
-      const buf = await storage.download(`${artifact.storageKeyPrefix}index.html`);
-      if (buf.length > MAX_REVISE_INDEX_BYTES) {
-        return res.status(422).json({
-          error: `index.html (${buf.length}B) is too large to AI-revise in this version (max ${MAX_REVISE_INDEX_BYTES}B)`,
-        });
-      }
-      currentHtml = buf.toString('utf-8');
+      currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`);
     } catch {
       return res.status(500).json({ error: 'Artifact index.html missing from storage' });
     }
+    if (currentBuf.length > MAX_REVISE_INDEX_BYTES) {
+      return res.status(422).json({
+        error: `index.html (${currentBuf.length}B) is too large to AI-revise in this version (max ${MAX_REVISE_INDEX_BYTES}B)`,
+      });
+    }
+    const currentHtml = currentBuf.toString('utf-8');
+
+    // Counted before the model call rather than after the storage-quota check below, because the
+    // model call is the costly part and the quota can only be checked once its output is known.
+    // Throws a 429 when the daily publish allowance is used up; `finally` still frees the lock.
+    // An attempt that reaches the model keeps its count whatever the outcome; one that ends
+    // before the model is called is refunded in `finally`.
+    action = await consumePublishAction(req.user);
 
     // ── Run the LLM (in-monorepo path; accumulate the non-streamed completion). ──
     const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
@@ -164,6 +184,7 @@ const handler = baseApi().post(async (req, res) => {
 
     const messages = buildPrompt(currentHtml, open);
     const buffers: string[] = [];
+    modelCalled = true;
     await llm.complete(
       modelId,
       messages,
@@ -203,21 +224,8 @@ const handler = baseApi().post(async (req, res) => {
       return res.status(422).json({ error: 'Revised HTML failed validation', violations: validation.violations });
     }
 
-    // Preserve the current version's CONTENT before overwriting so a bad
-    // revision can be rolled back (previousVersionMeta only stores metadata).
-    await storage
-      .upload(Buffer.from(currentHtml, 'utf-8'), `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
-        ContentType: 'text/html',
-      })
-      .catch(() =>
-        req.logger.warn(`[REVISE] ${publicId} failed to archive previous version ${currentSha.slice(0, 12)}`)
-      );
-
-    // ── Write the new index.html in place + recompute version metadata. ──
     const revisedBuf = Buffer.from(revisedHtml, 'utf-8');
-    await storage.upload(revisedBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
     const newIndexSha = createHash('sha256').update(revisedBuf).digest('hex');
-
     const newManifest = artifact.manifest.map(f =>
       f.path === 'index.html' ? { ...f, size: revisedBuf.length, sha256: newIndexSha } : f
     );
@@ -226,19 +234,16 @@ const handler = baseApi().post(async (req, res) => {
 
     // Record the version, deduped by content sha and backfilling the version being
     // replaced if history doesn't yet contain it (see restore.ts for rationale).
+    // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
     const haveShas = new Set((artifact.versions ?? []).map(v => v.sha256Index));
-    const versionsToPush: Array<{
-      publishedAt: Date;
-      publishedBy: string;
-      size: typeof artifact.size;
-      sha256Index: string;
-    }> = [];
+    const versionsToPush: ArtifactVersionMeta[] = [];
     if (!haveShas.has(currentSha)) {
       versionsToPush.push({
         publishedAt: artifact.publishedAt,
         publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
         size: artifact.size,
         sha256Index: currentSha,
+        indexBytes: currentBuf.length,
       });
       haveShas.add(currentSha);
     }
@@ -248,8 +253,38 @@ const handler = baseApi().post(async (req, res) => {
         publishedBy: String(req.user.id),
         size: { totalBytes, fileCount: newManifest.length },
         sha256Index: newIndexSha,
+        indexBytes: revisedBuf.length,
       });
     }
+
+    // Storage quota on the net change (see checkInPlaceRewriteQuota): index.html is rewritten and
+    // the current one is archived, so a revision that changes the page grows it even if no larger.
+    const quota = await checkInPlaceRewriteQuota({
+      isAdmin: req.user.isAdmin,
+      artifact,
+      next: {
+        bytes: totalBytes,
+        fileCount: newManifest.length,
+        sha256Index: newIndexSha,
+        versions: [...(artifact.versions ?? []), ...versionsToPush],
+      },
+    });
+    if (!quota.ok) {
+      return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
+    }
+
+    // Archive the current version's stored bytes before overwriting, so a bad revision can be
+    // rolled back (previousVersionMeta only stores metadata).
+    await storage
+      .upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
+        ContentType: 'text/html',
+      })
+      .catch(() =>
+        req.logger.warn(`[REVISE] ${publicId} failed to archive previous version ${currentSha.slice(0, 12)}`)
+      );
+
+    // Write the new index.html in place, then the version metadata.
+    await storage.upload(revisedBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
 
     await PublishedArtifact.updateOne(
       { publicId, deletedAt: null },
@@ -282,6 +317,9 @@ const handler = baseApi().post(async (req, res) => {
     // CDN-cached (gated are no-store). Best-effort, never throws.
     if (artifact.visibility === 'public') void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
 
+    // Best-effort, never throws: the revised version gets its own owner-only thumbnail.
+    await enqueuePublishThumbnail({ publicId, versionId: newIndexSha }, req.logger);
+
     const url = buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug);
     req.logger.info(`[REVISE] ${publicId} → new version sha=${newIndexSha.slice(0, 12)} applied=${open.length}`);
 
@@ -295,6 +333,7 @@ const handler = baseApi().post(async (req, res) => {
       model: modelInfo.name,
     });
   } finally {
+    if (action && !modelCalled) await action.refund();
     // Compare-and-set release: only clear the lock if we still hold it. A request
     // whose lock was stolen after the TTL must NOT clear the newer holder's lock.
     await PublishedArtifact.updateOne({ publicId, revisingAt: lockNow }, { $set: { revisingAt: null } }).catch(

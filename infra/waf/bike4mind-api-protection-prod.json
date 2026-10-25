@@ -180,7 +180,7 @@
       "Priority": 4,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 300,
+          "Limit": 100,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -222,7 +222,7 @@
       "Priority": 5,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 2000,
+          "Limit": 1000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -730,7 +730,7 @@
       "Priority": 11,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 100,
+          "Limit": 50,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -772,7 +772,7 @@
       "Priority": 12,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 50000,
+          "Limit": 20000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -958,7 +958,7 @@
       "Priority": 13,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 1000,
+          "Limit": 500,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -1000,7 +1000,7 @@
       "Priority": 14,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 5000,
+          "Limit": 2000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {

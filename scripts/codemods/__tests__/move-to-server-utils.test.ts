@@ -228,7 +228,7 @@ describe('move-to-server-utils', () => {
       toMove('apps/client/lib/agentOrchestration.ts'),
       toMove('apps/client/shared/replyUtils.ts'),
       toMove('apps/client/config/activityType.ts'),
-      toMove('apps/client/services/whatsNewConfigService.ts'),
+      toMove('apps/client/services/teamPlanSettings.ts'),
       toMove('apps/client/app/utils/chartSchemas.ts'),
       toMove('apps/client/server/utils/errors.ts'),
     ];
@@ -239,7 +239,7 @@ describe('move-to-server-utils', () => {
         'packages/server-utils/src/lib/agentOrchestration',
         'packages/server-utils/src/shared/replyUtils',
         'packages/server-utils/src/config/activityType',
-        'packages/server-utils/src/services/whatsNewConfigService',
+        'packages/server-utils/src/services/teamPlanSettings',
         'packages/server-utils/src/app/utils/chartSchemas',
         'packages/server-utils/src/utils/errors',
       ]);
@@ -268,8 +268,8 @@ describe('move-to-server-utils', () => {
       ],
       [
         'apps/client/server/services/whatsNew.ts',
-        "import { w } from '../../services/whatsNewConfigService';",
-        "import { w } from '@bike4mind/server-utils/services/whatsNewConfigService';",
+        "import { w } from '../../services/teamPlanSettings';",
+        "import { w } from '@bike4mind/server-utils/services/teamPlanSettings';",
       ],
     ])('rewrites an importer in %s', (file, input, expected) => {
       expect(rewriteOutside(input, file)).toBe(expected);

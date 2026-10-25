@@ -76,6 +76,15 @@ const specProjects = [
     testMatch: /(?:^|\/)skills\.spec\.ts$/,
     auth: './e2e/.auth/skills-user.json',
   },
+  // Makes no model call; seeds its teams through the admin grant endpoint, so no Stripe either.
+  // teams-checkout.spec.ts is the Stripe half and self-skips off staging.
+  {
+    name: 'teams',
+    setupMatch: /(?:^|\/)teams\.setup\.ts$/,
+    testMatch: /(?:^|\/)teams(?:-checkout)?\.spec\.ts$/,
+    auth: './e2e/.auth/teams-user.json',
+    skipWarmup: true,
+  },
   {
     name: 'credits',
     setupMatch: /(?:^|\/)credits\.setup\.ts$/,

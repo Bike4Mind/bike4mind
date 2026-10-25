@@ -5,12 +5,13 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
+import Switch from '@mui/joy/Switch';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { LOCAL_MODEL_PREFIX, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { effectiveContextLimit } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
@@ -262,12 +263,16 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     });
   }, []);
 
-  const selectSession = useCallback((sessionId: string) => {
-    // A screen takes over the same pane the transcript lives in, so picking a conversation has
-    // to put it back or the click reads as doing nothing.
-    setScreen('conversation');
-    setActiveId(sessionId);
-  }, []);
+  const selectSession = useCallback(
+    (sessionId: string) => {
+      // History search spans both modes, so the owning mode follows the selected result.
+      const selected = sessions.find(session => session.id === sessionId);
+      if (selected) setMode(selected.mode);
+      setScreen('conversation');
+      setActiveId(sessionId);
+    },
+    [sessions]
+  );
 
   const terminalOpen = !!activeId && terminalSessions.includes(activeId);
   const setTerminalOpen = useCallback((sessionId: string, open: boolean) => {
@@ -698,6 +703,16 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   </IconButton>
                 </Tooltip>
               )}
+              {!opening && conversation.session && (
+                <Tooltip title="Keep this conversation and its visited pages in the local search index.">
+                  <Switch
+                    size="sm"
+                    checked={conversation.session.historyEnabled === true}
+                    onChange={event => void conversation.setHistory(event.target.checked)}
+                    slotProps={{ input: { 'aria-label': 'Local history', 'data-testid': 'chat-history-switch' } }}
+                  />
+                </Tooltip>
+              )}
               {/* Inside the reading column, not out at the window edge: a tooltip opening from
                   here cannot reach the pane, and a tooltip over the pane would be drawn behind
                   the web page - see agentBrowser.ts. */}
@@ -999,7 +1014,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             streaming={turnOpen}
             attachments={draft}
             blockedReason={blockedReason}
-            notReady={unbound ? 'No folder' : null}
+            // Blocked rather than refused: a refused send has already cleared the box.
+            notReady={
+              auth?.reauthRequired && !conversation.session?.model.startsWith(LOCAL_MODEL_PREFIX)
+                ? 'Sign in'
+                : unbound
+                  ? 'No folder'
+                  : null
+            }
             usage={composerUsage}
             placeholder={
               conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'

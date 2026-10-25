@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { PENDING_FREE_CREDITS_TAG, usernameSchema, USERNAME_MAX_LENGTH } from '@bike4mind/common';
+import { isReservedUsername, PENDING_FREE_CREDITS_TAG, usernameSchema, USERNAME_MAX_LENGTH } from '@bike4mind/common';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 
 const mockCreate = vi.fn();
@@ -75,6 +75,23 @@ describe('deriveOAuthUsername', () => {
 
   it('falls back to a generated handle when every source is empty after sanitizing', () => {
     expect(deriveOAuthUsername(null, '***', null)).toMatch(/^user-[0-9a-f]{8}$/);
+  });
+
+  it('never yields the reserved test-persona prefix, from any source', () => {
+    expect(deriveOAuthUsername('persona-bot', 'Pat Doe', null)).toBe('bot');
+    expect(deriveOAuthUsername(null, 'Persona-Pat', null)).toBe('Pat');
+    expect(deriveOAuthUsername(null, '', 'persona-pat@example.com')).toBe('pat');
+    expect(deriveOAuthUsername('persona-', 'PERSONA-', 'persona-@example.com')).toMatch(/^user-[0-9a-f]{8}$/);
+    for (const name of ['persona-x', '  persona-y', 'PERSONA-persona-z']) {
+      expect(isReservedUsername(deriveOAuthUsername(null, name, null))).toBe(false);
+    }
+  });
+
+  it('keeps the retry suffixes off a stripped base unreserved', () => {
+    const base = deriveOAuthUsername(null, 'persona-pat', null);
+    for (const candidate of [base, `${base} 2`, `${base}-abcdef`]) {
+      expect(isReservedUsername(candidate)).toBe(false);
+    }
   });
 
   it('leaves room for the longest retry suffix within the length cap', () => {

@@ -223,8 +223,6 @@ const ALLOWLIST: Record<string, string> = {
     'githubService.getFileContent — GitHub repo content fetch for SRE code review, unrelated to FabFile storage',
   'apps/workers/src/queueHandlers/sreAnalysis.ts':
     'githubService.getFileContent — GitHub repo content fetch for SRE code review, unrelated to FabFile storage',
-  'apps/client/server/services/whatsNewDataCollector.ts':
-    'githubService.getFileContent — GitHub repo content fetch (CHANGELOG.md), unrelated to FabFile storage',
   'b4m-core/services/src/sreAgentService/tools.ts':
     'toolContext.getFileContent is wired to githubService.getFileContent — GitHub repo content fetch, unrelated to FabFile storage',
   'b4m-core/services/src/sreAgentService/index.ts':

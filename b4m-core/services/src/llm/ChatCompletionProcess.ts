@@ -118,12 +118,13 @@ import {
   toRetrievalFilter,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
-import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
+import { sentBelowReasoningFloor, sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import {
   resolveOutputMaxTokens,
   reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
+  withFederatedSharedKeys,
   type ICompletionOptions,
   PipelineTimer,
   resolveDeprecatedModelId,
@@ -177,7 +178,7 @@ import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
-import { getEffectiveLLMApiKeys } from '../apiKeyService';
+import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
@@ -2433,7 +2434,10 @@ export class ChatCompletionProcess {
       // without this the find returns undefined and the run dies with "Invalid LLM backend".
       const resolvedModelId = resolveDeprecatedModelId(model, 'ChatCompletionProcess');
       const modelInfo = models.find(m => m.id === resolvedModelId);
-      const llm = getLlmByModel(apiKeyTable, {
+      // Reuse trusted federation provenance across primary and fallback chat backends.
+      // Direct-SDK consumers below keep the original static key table.
+      const chatApiKeyTable = withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable));
+      const llm = getLlmByModel(chatApiKeyTable, {
         modelInfo,
         logger,
         endUserId: this.user.id,
@@ -2836,6 +2840,20 @@ export class ChatCompletionProcess {
         modelInfo,
         modelMaxOutputTokens: modelMaxOutput,
       });
+      const reasoningShortfall = sentBelowReasoningFloor({
+        requested: params.max_tokens,
+        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+        modelInfo,
+        modelMaxOutputTokens: modelMaxOutput,
+        thinking: params.thinking,
+      });
+      if (reasoningShortfall) {
+        // Honored as set; logged so an empty reply at max_tokens can be traced to the setting.
+        logger.info('[ChatCompletion] max_tokens below reasoning floor', {
+          model: modelInfo.id,
+          ...reasoningShortfall,
+        });
+      }
       // Reserve the non-history overhead that shares this budget before applying the
       // fraction, so heavier-payload turns (more tools, a longer running summary, a
       // large prompt) compact SOONER rather than overflowing first - this is the
@@ -5404,7 +5422,7 @@ export class ChatCompletionProcess {
                 currentModel,
                 fallbackModelId,
                 models,
-                apiKeyTable,
+                chatApiKeyTable,
                 logger,
                 {
                   // A timeout that reaches here has spent its one same-model retry. triedModelIds

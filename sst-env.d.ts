@@ -385,10 +385,6 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Function"
     }
-    "WHATS_NEW_DISTRIBUTION_URL": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
     "YOUTUBE_API_KEY": {
       "type": "sst.sst.Secret"
       "value": string
@@ -772,10 +768,6 @@ declare module "sst" {
       "managementEndpoint": string
       "type": "sst.aws.ApiGatewayWebSocket"
       "url": string
-    }
-    "whatsNewDistributionId": {
-      "type": "sst.sst.Linkable"
-      "value": string
     }
     "whatsNewGenerationQueue": {
       "type": "sst.aws.Queue"

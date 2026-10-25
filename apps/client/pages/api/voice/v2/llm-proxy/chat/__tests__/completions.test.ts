@@ -22,6 +22,7 @@ const {
   mockInvoke,
   mockProcess,
   mockWriteStaticCompletion,
+  mockInvokeOptions,
 } = vi.hoisted(() => ({
   mockVerifyVoiceSessionToken: vi.fn(),
   mockFindDuplicateQuests: vi.fn(),
@@ -30,6 +31,7 @@ const {
   mockInvoke: vi.fn(),
   mockProcess: vi.fn(),
   mockWriteStaticCompletion: vi.fn(),
+  mockInvokeOptions: vi.fn(),
 }));
 
 // Bypass baseApi's whole middleware chain (connectDB, passport, api-key auth) - this
@@ -95,6 +97,9 @@ vi.mock('@bike4mind/services/llm', () => ({
   ChatCompletionFeature: {},
   featureNames: {},
   ChatCompletionInvoke: class {
+    constructor(options: unknown) {
+      mockInvokeOptions(options);
+    }
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
     invoke = (...args: unknown[]) => mockInvoke(...args);
@@ -228,6 +233,34 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     expect((mockInvoke.mock.calls[0][0] as InvokeArg).apiKeyId).toBeUndefined();
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body.authOrigin).toBe('session');
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body.apiKeyId).toBeUndefined();
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - owner admin role', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  const turnWith = async (adminRoleWithheld: boolean | undefined) => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
+      ...(adminRoleWithheld === undefined ? {} : { adminRoleWithheld }),
+    });
+    mockUserFindById.mockResolvedValue({ id: 'user-1', isAdmin: true });
+    await handler(makeReq() as never, makeRes() as never);
+    return (mockInvokeOptions.mock.calls[0][0] as { user: { isAdmin: boolean } }).user;
+  };
+
+  it('withholds the admin role when the token says the minting key lacked the admin scope', async () => {
+    expect((await turnWith(true)).isAdmin).toBe(false);
+  });
+
+  it('keeps the admin role when the token carries no such claim', async () => {
+    expect((await turnWith(undefined)).isAdmin).toBe(true);
   });
 });
 

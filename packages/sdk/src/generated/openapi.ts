@@ -140,7 +140,7 @@ export interface paths {
     put?: never;
     /**
      * Create a chat completion
-     * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
@@ -859,7 +859,7 @@ export interface paths {
     };
     /**
      * Get release note media
-     * @description Redirects to one file of a published release note video: `landscape` and `portrait` are the 16:9 and 9:16 MP4s, the `-poster` assets their still images. The `video` URLs that listWhatsNew returns for uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable for up to 10 minutes and its target is signed for 1 hour, longer than that, so follow it rather than storing the target. Rate limited per client IP.
+     * @description Redirects to one file of a published release note video or still image: `landscape` and `portrait` are the 16:9 and 9:16 MP4s, the `-poster` assets their still images, and `image-landscape` and `image-portrait` the 16:9 and 9:16 still images of the note's `image`. The `video` and `image` URLs that listWhatsNew returns for uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable for up to 10 minutes and its target is signed for 1 hour, longer than that, so follow it rather than storing the target. Rate limited per client IP.
      */
     get: operations['getWhatsNewMedia'];
     put?: never;
@@ -1728,6 +1728,7 @@ export interface components {
       errorCode?:
         | 'invalid_request'
         | 'unknown_model'
+        | 'assistant_prefill_unsupported'
         | 'tool_search_unsupported'
         | 'all_tools_deferred'
         | 'deferred_tool_cache_control'
@@ -1774,7 +1775,7 @@ export interface components {
       messages: {
         /** @enum {string} */
         role: 'user' | 'assistant' | 'system';
-        /** @description A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / `tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in `tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose `supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with `errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). */
+        /** @description A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / `tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in `tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose `supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with `errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). A final non-blank assistant turn is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. It is accepted only when the selected model has `supports_assistant_prefill: true`; otherwise the request returns `400` with `errorCode: "assistant_prefill_unsupported"` without changing the message. */
         content: string | unknown[];
         cache?: boolean;
       }[];
@@ -2324,6 +2325,7 @@ export interface components {
      *           "supports_tools": true,
      *           "supports_tool_search": true,
      *           "supports_tool_changes": false,
+     *           "supports_assistant_prefill": false,
      *           "supports_vision": true,
      *           "deprecation_date": null,
      *           "replaced_by": null,
@@ -2349,6 +2351,7 @@ export interface components {
      *           "supports_tools": false,
      *           "supports_tool_search": false,
      *           "supports_tool_changes": false,
+     *           "supports_assistant_prefill": true,
      *           "supports_vision": false,
      *           "deprecation_date": null,
      *           "replaced_by": null,
@@ -2422,6 +2425,8 @@ export interface components {
         supports_tool_search: boolean;
         /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: "tool_changes_unsupported"`. */
         supports_tool_changes: boolean;
+        /** @description Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, a text prefill returns `400` with `errorCode: "assistant_prefill_unsupported"`; server-tool continuations are allowed. On Claude models that accept assistant prefill, it cannot be combined with `thinking`. */
+        supports_assistant_prefill: boolean;
         supports_vision: boolean;
         /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
         deprecation_date: string | null;
@@ -4779,6 +4784,10 @@ export interface components {
           portrait_url?: string | null;
           portrait_poster_url?: string | null;
         } | null;
+        image?: {
+          landscape_url?: string | null;
+          portrait_url?: string | null;
+        } | null;
       }[];
       next_cursor: string | null;
     };
@@ -6735,7 +6744,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed or otherwise invalid request (no `errorCode`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message (`errorCode: "assistant_prefill_unsupported"`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -7341,6 +7350,37 @@ export interface operations {
           'application/json': components['schemas']['generateMusicResponse422'];
         };
       };
+      /** @description The API key exceeded its rate limit, or the provider stayed at its concurrency limit for longer than the request could wait. `Retry-After` says when to try again; reserved credits are refunded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description The provider failed to generate the track; reserved credits are refunded. */
       502: {
         headers: {
@@ -7617,6 +7657,31 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['generateSoundEffectResponse422'];
+        };
+      };
+      /** @description The API key exceeded its rate limit, or the provider stayed at its concurrency limit for longer than the request could wait. `Retry-After` says when to try again; reserved credits are refunded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description The provider failed to generate the effect; reserved credits are refunded. */
@@ -13313,7 +13378,7 @@ export interface operations {
       header?: never;
       path: {
         id: string;
-        asset: 'landscape' | 'landscape-poster' | 'portrait' | 'portrait-poster';
+        asset: 'landscape' | 'landscape-poster' | 'portrait' | 'portrait-poster' | 'image-landscape' | 'image-portrait';
       };
       cookie?: never;
     };

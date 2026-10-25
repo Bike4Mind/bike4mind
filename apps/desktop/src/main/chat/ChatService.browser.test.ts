@@ -208,7 +208,7 @@ describe('ChatService agent browser', () => {
     expect(messages[resultTurn + 1]).toEqual({
       role: 'user',
       content: [
-        { type: 'text', text: 'Screenshot from the browser_screenshot call above.' },
+        { type: 'text', text: 'Image from the browser_screenshot call above.' },
         {
           type: 'image',
           source: { type: 'base64', media_type: 'image/png', data: Buffer.from([137, 80, 78, 71]).toString('base64') },
