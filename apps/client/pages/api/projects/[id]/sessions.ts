@@ -7,6 +7,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
+import { isAiAccessRevoked } from '@bike4mind/services/userService/accountState';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -121,7 +122,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
             },
             { ability: req.ability }
           );
-          if (!summarizableSessionIds.has(session.id)) return;
+          if (!summarizableSessionIds.has(session.id) || isAiAccessRevoked(req.user)) return;
           await SessionEvents.Summarize.publish({
             sessionId: session.id,
             callTagging: true,

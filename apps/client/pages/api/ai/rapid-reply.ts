@@ -16,6 +16,7 @@ import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
 import { assertSessionAccess } from '@server/utils/sessionAccess';
 import { ChatModels, NotFoundError } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 // OptiHashi sessions get the instant ack even when RapidReply is globally off. When no DB
 // mapping is configured for the main model, fall back to a fast Haiku + this prompt so the
@@ -44,6 +45,7 @@ const handler = baseApi()
     })
   )
   .post(async (req, res) => {
+    assertAiAccessAllowed(req.user);
     const startTime = Date.now();
     const { questId, sessionId, message, model: mainModel, processStartTime, isOpti: isOptiHint } = req.body;
     // Security: never trust a body-supplied userId - it drives API-key resolution, websocket

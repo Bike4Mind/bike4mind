@@ -217,6 +217,8 @@ import BackfillAdminAuditCredits from './20260921235943_backfill-admin-audit-cre
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureUserApiKeyAuditLogActorIndex from './20260921235944_ensure-userapikeyauditlog-actor-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import ClearSuspensionMirroredIsModerated from './20260921235945_clear-suspension-mirrored-ismoderated';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organization-manager-into-admin-user-ids';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -378,8 +380,9 @@ const coreMigrations: MigrationFile[] = [
   EnsureUserApiKeyAuditLogActorIndex,
   EnsureFabFileOwnerOrganizationIndex,
   ReconcileOrgStampedFileStorageOwners,
-  EnsureArtifactSessionIdentifierIndex,
+  ClearSuspensionMirroredIsModerated,
   EnsureOverwatchRawEventExplorerIndex,
+  EnsureArtifactSessionIdentifierIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

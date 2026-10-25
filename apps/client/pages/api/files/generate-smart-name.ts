@@ -6,6 +6,7 @@ import { OperationsModelService } from '@client/services/operationsModelService'
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const generateSmartNameSchema = z.object({
   prompt: z.string(),
@@ -15,6 +16,7 @@ const generateSmartNameSchema = z.object({
 type GenerateSmartNameInput = z.infer<typeof generateSmartNameSchema>;
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   try {
     const { prompt, fileType } = secureParameters(req.body, generateSmartNameSchema) as GenerateSmartNameInput;
     const fallbackName = fileType === 'image' ? `pasted-image-${Date.now()}` : `pasted-text-${Date.now()}`;
