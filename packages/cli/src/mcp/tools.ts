@@ -14,6 +14,7 @@ import {
   PublishVisibilitySchema,
   questReplyText,
   SLUG_OWNED_BY_OTHER,
+  SOUND_EFFECTS_MAX_INPUT_CHARS,
   ttsRequestSchema,
   type GeneratedAudioResponse,
   type TTSRequest,
@@ -26,6 +27,11 @@ import {
   apiErrorStatus,
   B4mApiClient,
   mapApiError,
+  mapBobApiError,
+  type BobAgentComparison,
+  type BobAgentRun,
+  type BobOrganizationId,
+  type BobRecentRow,
   type CreateArtifactArgs,
   type QuestResponse,
   type RawDataLake,
@@ -165,6 +171,55 @@ export const TOOL_META: ToolMeta[] = [
     // The publish routes declare no required scope; this is only the hint a 403 names.
     scope: 'files:write',
   },
+  {
+    name: 'bob_read_site',
+    title: 'Read a site with Bob',
+    description:
+      "Have Bob read a website: a panel of synthetic personas reads it and reports where visitors get lost. Spends the key owner's credits and publishes the report as them, as a run started in the app does. Waits for the report, reporting progress, and returns it as Markdown with links to the in-app and published reports; fails with Bob's reason when the read fails. If Bob is still reading when waitSeconds runs out, returns the runId to pass to get_bob_report later.",
+    scope: 'bob:run',
+  },
+  {
+    name: 'bob_compare_sites',
+    title: 'Compare two sites with Bob',
+    description:
+      "Have Bob read your site and another one side by side. Spends the key owner's credits for both reads and publishes each report as them. Waits for both, reporting progress, and returns the comparison summary as Markdown with each side's status and links, plus each side's full report when includeReports is true. If Bob is still reading when waitSeconds runs out, returns the comparisonId to pass to get_bob_comparison later.",
+    scope: 'bob:run',
+  },
+  {
+    name: 'bob_recheck',
+    title: 'Re-check a Bob finding',
+    description:
+      'Re-scan one check from a Bob report against the live site, e.g. after a fix, and return the new reading. Costs no credits and adds the reading to the existing report beside the original; no new report is published. checkId is the id the report shows in backticks beside the check. Re-checks are rate-limited, and a refusal says how long to wait.',
+    scope: 'bob:run',
+  },
+  {
+    name: 'get_bob_report',
+    title: 'Get a Bob report',
+    description:
+      'Fetch one Bob run by runId: its status (reading, ok or failed), its progress while reading, and once it is ok the report as Markdown with links to the in-app and published reports.',
+    scope: 'bob:read',
+  },
+  {
+    name: 'get_bob_comparison',
+    title: 'Get a Bob comparison',
+    description:
+      "Fetch one Bob comparison by comparisonId: its status, the summary as Markdown once both sides are read, and each side's status and links. Pass a side's runId to get_bob_report for its full report.",
+    scope: 'bob:read',
+  },
+  {
+    name: 'list_bob_reports',
+    title: 'List Bob reports',
+    description:
+      "List the key owner's recent finished Bob reports, newest first: single-site runs (kind 'run') and two-site comparisons (kind 'comparison'), each with its in-app link. Read a run with get_bob_report and its runId, and a comparison with get_bob_comparison and its comparisonId.",
+    scope: 'bob:read',
+  },
+  {
+    name: 'bob_runs_left',
+    title: 'Bob runs left',
+    description:
+      "How many Bob runs the key owner can start now under the daily limit, when the next one frees up, and whether the account's credits cover a full read. A comparison uses two runs.",
+    scope: 'bob:read',
+  },
 ];
 
 export const TOOL_NAMES = TOOL_META.map(t => t.name);
@@ -262,7 +317,11 @@ const getFileShape = {
 // Bounds mirror `soundEffectsRequestSchema` (@bike4mind/common) and the ElevenLabs
 // sound-generation limits; keep in sync with the route's parse.
 const generateSoundEffectShape = {
-  text: z.string().min(1).max(1000).describe('Text description of the sound effect to generate'),
+  text: z
+    .string()
+    .min(1)
+    .max(SOUND_EFFECTS_MAX_INPUT_CHARS)
+    .describe('Text description of the sound effect to generate'),
   provider: z.enum(['elevenlabs']).default('elevenlabs').describe('Sound-generation provider'),
   durationSeconds: z
     .number()
@@ -327,6 +386,65 @@ const textToSpeechShape = {
   text: ttsRequestSchema.shape.text.describe('Text to speak'),
   provider: ttsRequestSchema.shape.provider.describe(`Speech provider; defaults to ${DEFAULT_TTS_PROVIDER}`),
   preview: ttsRequestSchema.shape.preview.describe('Skip saving a copy to the file browser'),
+};
+
+// The shape Bob's routes accept for a run or comparison id, so a malformed one fails here.
+const BOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BOB_WAIT_DEFAULT_SECONDS = 600;
+const BOB_WAIT_MAX_SECONDS = 900;
+
+const bobId = (description: string) => z.string().regex(BOB_ID_PATTERN, 'must be a UUID').describe(description);
+
+const bobOrganizationId = z
+  .string()
+  .min(1)
+  .nullable()
+  .optional()
+  .describe(
+    "Organization whose credits pay for the run: an organization id, or null for the key owner's personal account; omit for their home organization"
+  );
+
+const bobWaitSeconds = z
+  .number()
+  .int()
+  .min(0)
+  .max(BOB_WAIT_MAX_SECONDS)
+  .default(BOB_WAIT_DEFAULT_SECONDS)
+  .describe(
+    `How long to wait for the result, in seconds (0-${BOB_WAIT_MAX_SECONDS}, default ${BOB_WAIT_DEFAULT_SECONDS}); a read takes about 1 to 5 minutes and Bob keeps reading after the wait ends`
+  );
+
+const bobReadSiteShape = {
+  url: z.string().min(1).describe('The site to read, e.g. acme.io or acme.io/pricing'),
+  organizationId: bobOrganizationId,
+  waitSeconds: bobWaitSeconds,
+};
+
+const bobCompareSitesShape = {
+  yourUrl: z.string().min(1).describe('Your site, e.g. acme.io'),
+  theirUrl: z.string().min(1).describe('The site to compare yours with'),
+  organizationId: bobOrganizationId,
+  waitSeconds: bobWaitSeconds,
+  includeReports: z.boolean().default(false).describe("Also return each side's full report as Markdown"),
+};
+
+const bobRecheckShape = {
+  runId: bobId('The run the check belongs to'),
+  checkId: z.string().min(1).describe('The check id, as the report shows it in backticks beside the check'),
+};
+
+const getBobReportShape = { runId: bobId('The run id') };
+
+const getBobComparisonShape = { comparisonId: bobId('The comparison id') };
+
+const listBobReportsShape = {
+  limit: z.number().int().min(1).max(100).optional().describe('Maximum reports to return; the server caps the list'),
+};
+
+const bobRunsLeftShape = {
+  organizationId: bobOrganizationId.describe(
+    "Account whose credits to check: an organization id, or null for the key owner's personal account; omit for their home organization"
+  ),
 };
 
 function notebookSummary(n: RawNotebook) {
@@ -492,17 +610,17 @@ export async function generateSoundEffect(
   return generatedAudioResult(response, { provider: args.provider });
 }
 
-export interface PollOptions {
+export interface PollOptions<T = QuestResponse> {
   intervalMs?: number;
   timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
   /** Aborts the poll when the MCP client cancels the call. */
   signal?: AbortSignal;
   /**
-   * Called after each non-terminal poll with the quest it read (absent when that poll failed), so
-   * the tool can keep the client's request alive and report how far the quest has got.
+   * Called after each non-terminal poll with what it read (absent when that poll failed), so the
+   * tool can keep the client's request alive and report how far the work has got.
    */
-  onProgress?: (elapsedMs: number, quest?: QuestResponse) => Promise<void> | void;
+  onProgress?: (elapsedMs: number, latest?: T) => Promise<void> | void;
   /** Named in poll-failure messages, e.g. an unreachable server. */
   baseURL?: string;
 }
@@ -562,56 +680,89 @@ interface QuestPoll {
   isFinished: (q: QuestResponse) => boolean;
 }
 
-/** Poll a queued quest until `isFinished`, the timeout, a permanent poll failure, or an abort. */
-async function pollQuest(
-  client: B4mApiClient,
-  { questId, ref, task, scope, isFinished }: QuestPoll,
-  {
-    interval,
-    timeoutMs,
-    sleep = defaultSleep,
-    signal,
-    onProgress,
-    baseURL = '',
-  }: Omit<PollOptions, 'intervalMs'> & { interval: (elapsedMs: number) => number; timeoutMs: number }
-): Promise<QuestResponse> {
+type PollTiming<T> = Omit<PollOptions<T>, 'intervalMs'> & {
+  interval: (elapsedMs: number) => number;
+  timeoutMs: number;
+};
+
+interface PollTarget<T> {
+  read: () => Promise<T>;
+  /** Identifies the work in error messages, so the caller can find it afterwards. */
+  ref: string;
+  /** What the work is, e.g. "image generation"; names it in a poll-failure message. */
+  task: string;
+  isFinished: (value: T) => boolean;
+  /** The message a poll failure reports, before the ref is appended. */
+  describeError: (err: unknown) => string;
+}
+
+/** `finished: false` is a timeout, carrying the last value read when any poll succeeded. */
+type PollOutcome<T> = { finished: true; value: T } | { finished: false; latest?: T };
+
+/** Poll `read` until `isFinished`, the timeout, a permanent poll failure, or an abort. */
+async function pollUntil<T>(
+  { read, ref, task, isFinished, describeError }: PollTarget<T>,
+  { interval, timeoutMs, sleep = defaultSleep, signal, onProgress }: PollTiming<T>
+): Promise<PollOutcome<T>> {
   const started = Date.now();
   let failures = 0;
   let retryAfterMs = 0;
+  let latest: T | undefined;
   for (;;) {
     signal?.throwIfAborted();
-    let quest: QuestResponse | undefined;
+    let value: T | undefined;
     try {
-      quest = await client.getQuest(questId);
+      value = await read();
+      latest = value;
       failures = 0;
-      if (isFinished(quest)) return quest;
+      if (isFinished(value)) return { finished: true, value };
     } catch (err) {
-      // The per-minute key limit is shared with other calls, so a 429 says nothing about the quest.
+      // The per-minute key limit is shared with other calls, so a 429 says nothing about the work.
       if (isRateLimited(err)) {
         retryAfterMs = (apiErrorRetryAfterSeconds(err) ?? 0) * 1000;
       } else {
         failures += 1;
         if (isPermanentApiError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) {
-          throw new Error(`${mapApiError(err, baseURL, scope)} (${ref}; the ${task} may still complete)`);
+          throw new Error(`${describeError(err)} (${ref}; the ${task} may still complete)`);
         }
       }
     }
     const elapsed = Date.now() - started;
-    if (elapsed >= timeoutMs) {
-      throw new Error(`${task} did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
-    }
-    // A cancel can land while getQuest is in flight; report nothing for a request the client dropped.
+    if (elapsed >= timeoutMs) return { finished: false, latest };
+    // A cancel can land while the read is in flight; report nothing for a request the client dropped.
     signal?.throwIfAborted();
     try {
-      await onProgress?.(elapsed, quest);
+      await onProgress?.(elapsed, value);
     } catch (err) {
-      // Progress is advisory: a lost notification must not fail a quest that is still running.
+      // Progress is advisory: a lost notification must not fail work that is still running.
       logger.warn(`mcp: progress notification failed (${ref}): ${err instanceof Error ? err.message : String(err)}`);
     }
     const intervalMs = interval(elapsed);
     await sleep(Math.min(Math.max(intervalMs, retryAfterMs), Math.max(timeoutMs - elapsed, intervalMs)));
     retryAfterMs = 0;
   }
+}
+
+/** Poll a queued quest until `isFinished`, the timeout, a permanent poll failure, or an abort. */
+async function pollQuest(
+  client: B4mApiClient,
+  { questId, ref, task, scope, isFinished }: QuestPoll,
+  { baseURL = '', ...timing }: PollTiming<QuestResponse>
+): Promise<QuestResponse> {
+  const outcome = await pollUntil(
+    {
+      read: () => client.getQuest(questId),
+      ref,
+      task,
+      isFinished,
+      describeError: err => mapApiError(err, baseURL, scope),
+    },
+    timing
+  );
+  if (!outcome.finished) {
+    throw new Error(`${task} did not finish within ${Math.round(timing.timeoutMs / 1000)}s (${ref})`);
+  }
+  return outcome.value;
 }
 
 /**
@@ -761,7 +912,7 @@ export async function publishArtifact(
   };
 }
 
-function toResult(value: unknown): CallToolResult {
+export function toResult(value: unknown): CallToolResult {
   const structuredContent =
     value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, unknown>)
@@ -772,7 +923,7 @@ function toResult(value: unknown): CallToolResult {
   };
 }
 
-function errorResult(message: string): CallToolResult {
+export function errorResult(message: string): CallToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
@@ -866,20 +1017,20 @@ interface ProgressContext {
 }
 
 /**
- * Turn a quest poll's progress callback into MCP `notifications/progress`, or nothing when the
- * client sent no progressToken. Progress also lets a client that resets its request timeout on
- * progress wait out a slow quest.
+ * Turn a poll's progress callback into MCP `notifications/progress`, or nothing when the client
+ * sent no progressToken. Progress counts elapsed seconds, so it rises on every poll, and that lets a
+ * client that resets its request timeout on progress wait out slow work.
  */
-function progressReporter(
+function progressReporter<T>(
   { _meta, sendNotification }: ProgressContext,
-  describe: (quest?: QuestResponse) => string
-): PollOptions['onProgress'] {
+  describe: (latest?: T) => string
+): PollOptions<T>['onProgress'] {
   const progressToken = _meta?.progressToken;
   if (progressToken === undefined) return undefined;
-  return (elapsedMs, quest) =>
+  return (elapsedMs, latest) =>
     sendNotification({
       method: 'notifications/progress',
-      params: { progressToken, progress: Math.floor(elapsedMs / 1000), message: describe(quest) },
+      params: { progressToken, progress: Math.floor(elapsedMs / 1000), message: describe(latest) },
     });
 }
 
@@ -889,6 +1040,203 @@ function chatProgress(quest?: QuestResponse): string {
   if (quest?.status !== 'running') return 'waiting for the reply to start';
   const characters = replyText(quest).length;
   return characters > 0 ? `generating reply (${characters} characters so far)` : 'generating reply';
+}
+
+interface BobCount {
+  done: number;
+  total: number;
+}
+
+/**
+ * Bob's own done/total count goes in the progress message, not in `progress`: a count can stay flat
+ * for a while, and MCP needs `progress` to rise on every notification (see {@link progressReporter}).
+ */
+function bobProgressMessage(what: string, count: BobCount | null | undefined): string {
+  return count && count.total > 0 ? `${what} (${count.done} of ${count.total})` : what;
+}
+
+function bobComparisonCount(comparison: BobAgentComparison): BobCount | null {
+  const counts = [comparison.you?.progress, comparison.them?.progress].filter((c): c is BobCount => !!c);
+  if (counts.length === 0) return null;
+  return counts.reduce((sum, c) => ({ done: sum.done + c.done, total: sum.total + c.total }));
+}
+
+type BobPollOptions<T> = Omit<PollOptions<T>, 'timeoutMs' | 'baseURL'>;
+
+/** send_message's cadence (fast for the first 30s, then slower), bounded by the caller's wait. */
+function bobPollTiming<T>(
+  { intervalMs = CHAT_POLL_INTERVAL_MS, ...poll }: BobPollOptions<T>,
+  waitSeconds: number
+): PollTiming<T> {
+  return { ...poll, timeoutMs: waitSeconds * 1000, interval: elapsedMs => chatPollInterval(elapsedMs, intervalMs) };
+}
+
+/** Bob's views carry app paths; a link is the API base URL plus one. */
+const bobLink = (baseURL: string, path: string | null | undefined) =>
+  path ? `${baseURL.replace(/\/+$/, '')}${path}` : null;
+
+function bobRunSummary(run: BobAgentRun, baseURL: string) {
+  return {
+    runId: run.runId,
+    url: run.url,
+    status: run.status,
+    progress: run.progress ?? null,
+    createdAt: run.createdAt,
+    settledAt: run.settledAt ?? null,
+    error: run.error ?? null,
+    scanOnly: run.scanOnly ?? null,
+    appUrl: bobLink(baseURL, run.appPath),
+    publishedUrl: bobLink(baseURL, run.publishedPath),
+    visibility: run.visibility ?? null,
+  };
+}
+
+function bobComparisonSummary(comparison: BobAgentComparison, baseURL: string) {
+  return {
+    comparisonId: comparison.comparisonId,
+    status: comparison.status,
+    you: comparison.you && bobRunSummary(comparison.you, baseURL),
+    them: comparison.them && bobRunSummary(comparison.them, baseURL),
+    appUrl: bobLink(baseURL, comparison.appPath),
+  };
+}
+
+/**
+ * The summary as JSON (and as structuredContent), then each Markdown document as a text block of its
+ * own. The documents stay out of structuredContent so a long report is not sent twice, as the audio
+ * tools keep their bytes out.
+ */
+function bobResult(summary: Record<string, unknown>, documents: (string | null | undefined)[]): CallToolResult {
+  const result = toResult(summary);
+  for (const text of documents) if (text) result.content.push({ type: 'text', text });
+  return result;
+}
+
+function bobComparisonResult(comparison: BobAgentComparison, baseURL: string, includeReports: boolean): CallToolResult {
+  const reports = includeReports
+    ? [comparison.you, comparison.them].map(
+        side => side?.reportMarkdown && `Report for ${side.url}:\n\n${side.reportMarkdown}`
+      )
+    : [];
+  return bobResult(bobComparisonSummary(comparison, baseURL), [comparison.summaryMarkdown, ...reports]);
+}
+
+const bobStillReading = (waitSeconds: number, readBack: string) =>
+  `Bob is still reading after ${waitSeconds}s and carries on without this call; use ${readBack} later.`;
+
+/**
+ * Start a Bob read of one site and poll it until it settles or `waitSeconds` passes. A refusal or a
+ * failed read throws, so the tool reports isError in Bob's words. A read still going at the deadline
+ * is not an error: the result carries the runId to read it back with.
+ */
+export async function bobReadSite(
+  client: B4mApiClient,
+  args: { url: string; organizationId?: BobOrganizationId; waitSeconds: number },
+  poll: BobPollOptions<BobAgentRun> = {}
+): Promise<CallToolResult> {
+  const runId = randomUUID();
+  await client.startBobRun({ url: args.url, runId, organizationId: args.organizationId });
+  const ref = `run ${runId}`;
+  const outcome = await pollUntil(
+    {
+      read: () => client.getBobRun(runId),
+      ref,
+      task: 'site read',
+      isFinished: run => run.status !== 'reading',
+      describeError: err => mapBobApiError(err, client.baseURL, 'bob:run'),
+    },
+    bobPollTiming(poll, args.waitSeconds)
+  );
+  if (!outcome.finished) {
+    const summary = outcome.latest
+      ? bobRunSummary(outcome.latest, client.baseURL)
+      : { runId, url: args.url, status: 'reading' };
+    return toResult({ ...summary, note: bobStillReading(args.waitSeconds, 'get_bob_report with this runId') });
+  }
+  const run = outcome.value;
+  if (run.status === 'failed') {
+    throw new Error(`Bob could not read ${run.url}: ${run.error || 'the read failed'} (${ref})`);
+  }
+  return bobResult(bobRunSummary(run, client.baseURL), [run.reportMarkdown]);
+}
+
+/** {@link bobReadSite} for two sites started as one comparison; fails only when neither side could be read. */
+export async function bobCompareSites(
+  client: B4mApiClient,
+  args: {
+    yourUrl: string;
+    theirUrl: string;
+    organizationId?: BobOrganizationId;
+    waitSeconds: number;
+    includeReports?: boolean;
+  },
+  poll: BobPollOptions<BobAgentComparison> = {}
+): Promise<CallToolResult> {
+  const comparisonId = randomUUID();
+  const you = { url: args.yourUrl, runId: randomUUID() };
+  const them = { url: args.theirUrl, runId: randomUUID() };
+  await client.startBobComparison({ comparisonId, you, them, organizationId: args.organizationId });
+  const ref = `comparison ${comparisonId}`;
+  const outcome = await pollUntil(
+    {
+      read: () => client.getBobComparison(comparisonId),
+      ref,
+      task: 'comparison',
+      isFinished: comparison => comparison.status !== 'reading',
+      describeError: err => mapBobApiError(err, client.baseURL, 'bob:run'),
+    },
+    bobPollTiming(poll, args.waitSeconds)
+  );
+  if (!outcome.finished) {
+    const summary = outcome.latest
+      ? bobComparisonSummary(outcome.latest, client.baseURL)
+      : { comparisonId, status: 'reading', you, them };
+    return toResult({
+      ...summary,
+      note: bobStillReading(args.waitSeconds, 'get_bob_comparison with this comparisonId'),
+    });
+  }
+  const comparison = outcome.value;
+  if (comparison.status === 'failed') {
+    const reasons = [comparison.you, comparison.them]
+      .map(side => (side ? `${side.url}: ${side.error || 'the read failed'}` : 'one side has no run'))
+      .join('; ');
+    throw new Error(`Bob could not read either site: ${reasons} (${ref})`);
+  }
+  return bobComparisonResult(comparison, client.baseURL, args.includeReports === true);
+}
+
+export async function bobRecheck(client: B4mApiClient, args: { runId: string; checkId: string }) {
+  return toResult({ runId: args.runId, recheck: await client.recheckBob(args) });
+}
+
+export async function getBobReport(client: B4mApiClient, args: { runId: string }) {
+  const run = await client.getBobRun(args.runId);
+  return bobResult(bobRunSummary(run, client.baseURL), [run.reportMarkdown]);
+}
+
+export async function getBobComparison(client: B4mApiClient, args: { comparisonId: string }) {
+  return bobComparisonResult(await client.getBobComparison(args.comparisonId), client.baseURL, false);
+}
+
+/** A recent-list row in compact form, with the in-app link its kind opens at. */
+function bobReportRow(row: BobRecentRow, baseURL: string) {
+  if (row.kind === 'comparison') {
+    const { comparisonId, you, them } = row;
+    const appUrl = bobLink(baseURL, `/bob?compare=${encodeURIComponent(comparisonId)}`);
+    return { kind: 'comparison' as const, comparisonId, you, them, createdAt: row.createdAt ?? null, appUrl };
+  }
+  const appUrl = bobLink(baseURL, `/bob?run=${encodeURIComponent(row.runId)}`);
+  return { kind: 'run' as const, runId: row.runId, url: row.url, createdAt: row.createdAt ?? null, appUrl };
+}
+
+export async function listBobReports(client: B4mApiClient, args: { limit?: number }) {
+  const rows = await client.listBobReports(args.limit);
+  return toResult({ reports: rows.map(row => bobReportRow(row, client.baseURL)) });
+}
+
+export async function bobRunsLeft(client: B4mApiClient, args: { organizationId?: BobOrganizationId }) {
+  return toResult(await client.getBobQuota(args.organizationId));
 }
 
 /**
@@ -1094,5 +1442,96 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       inputSchema: publishArtifactShape,
     },
     args => run('files:write', () => publishArtifact(client, args))
+  );
+
+  // Bob's routes enforce their scopes, so these map errors with mapBobApiError.
+  const runBob = async (scope: string, fn: () => Promise<CallToolResult>): Promise<CallToolResult> => {
+    try {
+      return await fn();
+    } catch (err) {
+      return errorResult(mapBobApiError(err, baseURL, scope));
+    }
+  };
+
+  server.registerTool(
+    'bob_read_site',
+    {
+      title: meta('bob_read_site').title,
+      description: meta('bob_read_site').description,
+      inputSchema: bobReadSiteShape,
+    },
+    (args, extra) =>
+      runBob('bob:run', () =>
+        bobReadSite(client, args, {
+          signal: extra.signal,
+          onProgress: progressReporter(extra, (run?: BobAgentRun) =>
+            bobProgressMessage(`reading ${args.url}`, run?.progress)
+          ),
+        })
+      )
+  );
+
+  server.registerTool(
+    'bob_compare_sites',
+    {
+      title: meta('bob_compare_sites').title,
+      description: meta('bob_compare_sites').description,
+      inputSchema: bobCompareSitesShape,
+    },
+    (args, extra) =>
+      runBob('bob:run', () =>
+        bobCompareSites(client, args, {
+          signal: extra.signal,
+          onProgress: progressReporter(extra, (comparison?: BobAgentComparison) =>
+            bobProgressMessage('reading both sites', comparison && bobComparisonCount(comparison))
+          ),
+        })
+      )
+  );
+
+  server.registerTool(
+    'bob_recheck',
+    { title: meta('bob_recheck').title, description: meta('bob_recheck').description, inputSchema: bobRecheckShape },
+    args => runBob('bob:run', () => bobRecheck(client, args))
+  );
+
+  server.registerTool(
+    'get_bob_report',
+    {
+      title: meta('get_bob_report').title,
+      description: meta('get_bob_report').description,
+      inputSchema: getBobReportShape,
+    },
+    args => runBob('bob:read', () => getBobReport(client, args))
+  );
+
+  server.registerTool(
+    'get_bob_comparison',
+    {
+      title: meta('get_bob_comparison').title,
+      description: meta('get_bob_comparison').description,
+      inputSchema: getBobComparisonShape,
+    },
+    args => runBob('bob:read', () => getBobComparison(client, args))
+  );
+
+  server.registerTool(
+    'list_bob_reports',
+    {
+      title: meta('list_bob_reports').title,
+      description: meta('list_bob_reports').description,
+      inputSchema: listBobReportsShape,
+    },
+    args => runBob('bob:read', () => listBobReports(client, args))
+  );
+
+  server.registerTool(
+    'bob_runs_left',
+    {
+      title: meta('bob_runs_left').title,
+      description: meta('bob_runs_left').description,
+      inputSchema: bobRunsLeftShape,
+    },
+    args => runBob('bob:read', () => bobRunsLeft(client, args))
   );
 }

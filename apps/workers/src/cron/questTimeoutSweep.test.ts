@@ -21,7 +21,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({
   dispatchQuestCallback: (...args: unknown[]) => mockDispatchQuestCallback(...args),
   redispatchStaleQuestCallback: (...args: unknown[]) => mockRedispatchStaleQuestCallback(...args),
   GENERATION_CALLBACK_STALE_DISPATCH_MS: 6 * 60 * 60 * 1000,

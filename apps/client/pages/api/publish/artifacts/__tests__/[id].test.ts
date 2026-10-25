@@ -9,7 +9,12 @@ import bcrypt from 'bcryptjs';
  * No real database; the artifact doc is a plain mutable object with save()/toJSON().
  */
 
-const { findOne } = vi.hoisted(() => ({ findOne: vi.fn() }));
+const { findOne, deletePublishThumbnails } = vi.hoisted(() => ({
+  findOne: vi.fn(),
+  deletePublishThumbnails: vi.fn(async (_publicIds: string[], _logger: unknown) => 0),
+}));
+
+vi.mock('@bike4mind/server-utils/utils/publishThumbnails', () => ({ deletePublishThumbnails }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -133,7 +138,69 @@ describe('GET public artifact - share-token capability', () => {
     const select = vi.fn();
     await getArtifact({ id: 'someone-else', isAdmin: false }, makePublicArtifactRow(), select);
     expect(select).toHaveBeenCalledOnce();
-    expect(select).toHaveBeenCalledWith('-shareTokens.token');
+    expect(select).toHaveBeenCalledWith('-shareTokens.token -thumbnail');
+  });
+});
+
+describe('owner-only thumbnails on the single-artifact route', () => {
+  const thumbnail = { key: `publish-thumbnails/pub-1/${'a'.repeat(64)}.webp`, versionId: 'a'.repeat(64) };
+
+  beforeEach(() => {
+    deletePublishThumbnails.mockClear();
+  });
+
+  it('projects the stored thumbnail record out of the GET, so not even an admin read carries the key', async () => {
+    const select = vi.fn();
+    await getArtifact({ id: 'admin-1', isAdmin: true }, makePublicArtifactRow(), select);
+    expect(String(select.mock.calls[0][0]).split(' ')).toContain('-thumbnail');
+  });
+
+  it('never echoes the thumbnail record in a PATCH response', async () => {
+    const artifact = makeArtifact();
+    const toJSON = artifact.toJSON.bind(artifact);
+    artifact.toJSON = () => ({ ...toJSON(), thumbnail });
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = { title: 'Renamed' };
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.stringify(res._getJSONData())).not.toContain('publish-thumbnails');
+    expect('thumbnail' in res._getJSONData().artifact).toBe(false);
+  });
+
+  async function remove(user: { id: string; isAdmin?: boolean }, artifact: Record<string, unknown> | null) {
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'DELETE' });
+    const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = user;
+    (req as unknown as { logger: unknown }).logger = logger;
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return { res, logger };
+  }
+
+  it('deletes the thumbnail objects after the soft delete', async () => {
+    const order: string[] = [];
+    const softDelete = vi.fn(async () => void order.push('softDelete'));
+    deletePublishThumbnails.mockImplementationOnce(async () => (order.push('thumbnails'), 1));
+    const { res, logger } = await remove({ id: OWNER }, { ...makeArtifact(), softDelete });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(softDelete).toHaveBeenCalledWith(OWNER);
+    expect(deletePublishThumbnails).toHaveBeenCalledWith(['pub-1'], logger);
+    expect(order).toEqual(['softDelete', 'thumbnails']);
+  });
+
+  it('deletes nothing when the caller may not delete the artifact', async () => {
+    const softDelete = vi.fn();
+    const { res } = await remove({ id: 'someone-else' }, { ...makeArtifact(), softDelete });
+    expect(res._getStatusCode()).toBe(403);
+    expect(softDelete).not.toHaveBeenCalled();
+    expect(deletePublishThumbnails).not.toHaveBeenCalled();
   });
 });
 

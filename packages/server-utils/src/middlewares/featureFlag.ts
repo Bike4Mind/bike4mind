@@ -1,7 +1,7 @@
-import { SettingKey, settingsMap } from '@bike4mind/common';
+import { resolveSettingDefinition, SettingKey } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
-import type { RequestHandler } from 'express';
+import type { Request, RequestHandler } from 'express';
 
 /**
  * Single source of truth for coercing an admin-setting value into a boolean.
@@ -25,23 +25,21 @@ export async function isFeatureEnabled(featureName: SettingKey): Promise<boolean
   // Cached read (short TTL) rather than a per-request findOne. Every gated route
   // pays this on each call, so the uncached round-trip added up once flags went wide.
   const settingValue = await getSettingByName(featureName, { adminSettings: adminSettingsRepository });
-  return isSettingEnabled(settingValue ?? settingsMap[featureName]?.defaultValue);
+  return isSettingEnabled(settingValue ?? resolveSettingDefinition(featureName)?.defaultValue);
 }
 
 /**
- * Middleware to enforce server-side feature flag checks.
- * Prevents users from bypassing client-side feature checks via direct API calls.
- *
- * @param featureName - The admin setting key to check (e.g., 'EnableQuestMaster')
- * @returns Express middleware that returns 403 if feature is disabled
+ * Shared body for flag middleware: 403 FEATURE_DISABLED when the check denies the request, 500 (fail
+ * closed) when it throws. Keeping both responses here is what makes every flag gate answer the same
+ * way, whichever check it was built from.
  */
-export const requireFeatureEnabled =
-  (featureName: SettingKey): RequestHandler =>
+export const requireFeature =
+  (check: (req: Request) => Promise<boolean>, label: string): RequestHandler =>
   async (req, res, next) => {
     // The Request augmentation that declares requestId lives in apps/client/global.d.ts, outside
     // this package.
     try {
-      if (!(await isFeatureEnabled(featureName))) {
+      if (!(await check(req))) {
         return res.status(403).json({
           error: 'Feature not available',
           code: 'FEATURE_DISABLED',
@@ -51,7 +49,7 @@ export const requireFeatureEnabled =
 
       next();
     } catch (error) {
-      console.error(`Error checking feature flag ${featureName}:`, error);
+      console.error(`Error checking ${label}:`, error);
       // Fail closed - deny access on error to be safe
       return res.status(500).json({
         error: 'Unable to verify feature access',
@@ -59,3 +57,13 @@ export const requireFeatureEnabled =
       });
     }
   };
+
+/**
+ * Middleware to enforce server-side feature flag checks.
+ * Prevents users from bypassing client-side feature checks via direct API calls.
+ *
+ * @param featureName - The admin setting key to check (e.g., 'EnableQuestMaster')
+ * @returns Express middleware that returns 403 if feature is disabled
+ */
+export const requireFeatureEnabled = (featureName: SettingKey): RequestHandler =>
+  requireFeature(() => isFeatureEnabled(featureName), `feature flag ${featureName}`);

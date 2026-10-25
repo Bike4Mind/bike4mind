@@ -4,6 +4,7 @@ import Spinner from 'ink-spinner';
 import { useShallow } from 'zustand/react/shallow';
 import { useCliStore, selectActiveBackgroundShells, selectCompletedBackgroundShells } from '../store';
 import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/tools/cliTools';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 /** How long a finished session lingers in the indicator before it auto-clears. */
 const COMPLETED_DISPLAY_MS = 4000;
@@ -22,7 +23,8 @@ function elapsedSeconds(session: ShellSession): number {
   return Math.round(((session.endTime ?? Date.now()) - session.startTime) / 1000);
 }
 
-function commandPreview(command: string): string {
+function commandPreview(rawCommand: string): string {
+  const command = sanitizeTerminalText(rawCommand);
   return command.length > MAX_COMMAND_LENGTH ? command.slice(0, MAX_COMMAND_LENGTH - 3) + '...' : command;
 }
 

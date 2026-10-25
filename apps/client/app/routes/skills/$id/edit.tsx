@@ -6,6 +6,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetSkill, useUpdateSkill } from '@client/app/hooks/data/skills';
 import { SkillForm } from '@client/app/components/SkillsManagement/SkillForm';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import { getErrorMessage } from '@client/app/utils/error';
 
 const EditSkillPage: FC = () => {
   const { id } = useParams({ strict: false }) as { id: string };
@@ -56,6 +57,12 @@ const EditSkillPage: FC = () => {
           </Alert>
         )}
 
+        {updateSkill.error && (
+          <Alert color="danger" variant="soft" data-testid="skill-edit-error-alert">
+            {getErrorMessage(updateSkill.error)}
+          </Alert>
+        )}
+
         <SkillForm
           initialValue={{
             name: skill.name,
@@ -68,7 +75,12 @@ const EditSkillPage: FC = () => {
           submitting={updateSkill.isPending}
           onCancel={() => navigate({ to: '/skills/$id', params: { id } })}
           onSubmit={async input => {
-            await updateSkill.mutateAsync({ id, ...input });
+            // A failed save is shown by the alert above from `updateSkill.error`; SkillForm doesn't await this.
+            try {
+              await updateSkill.mutateAsync({ id, ...input });
+            } catch {
+              return;
+            }
             await navigate({ to: '/skills/$id', params: { id } });
           }}
         />

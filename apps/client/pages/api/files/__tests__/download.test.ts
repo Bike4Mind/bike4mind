@@ -7,6 +7,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 // Track the real temp input files createTempFile produces so the cleanup
 // assertions can verify they are removed after the response.
 const tempFiles: string[] = [];
+const outputPaths: string[] = [];
 const ZIP_BYTES = Buffer.from('PK\x03\x04ZIPDATA');
 
 // Evaluated once at import - not reset in beforeEach - so it captures the options this module's
@@ -35,14 +36,15 @@ vi.mock('@client/app/utils/fabFileUtils', () => ({
 }));
 
 vi.mock('@server/utils/files', () => ({
-  createTempFile: vi.fn(async (name: string) => {
-    const p = path.join(os.tmpdir(), `test_${name}`);
+  createTempFile: vi.fn(async (name: string, _content: string, dir: string) => {
+    const p = path.join(dir, name);
     fs.writeFileSync(p, 'file-content');
     tempFiles.push(p);
     return p;
   }),
   // Write real bytes to the output path so the handler reads them back.
   zipFiles: vi.fn(async (_files: string[], out: string) => {
+    outputPaths.push(out);
     fs.writeFileSync(out, ZIP_BYTES);
   }),
 }));
@@ -73,13 +75,13 @@ function makeRes() {
   return { res, headers, getSent: () => sent };
 }
 
-const outputZipPath = path.join(os.tmpdir(), 'knowledges.zip');
+const oneFile = [{ fileUrl: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' }];
 
 describe('GET /api/files/download', () => {
   beforeEach(() => {
     tempFiles.length = 0;
+    outputPaths.length = 0;
     vi.clearAllMocks();
-    fs.rmSync(outputZipPath, { force: true });
   });
 
   it('responds with the zip bytes (not the path string) and cleans up temp files', async () => {
@@ -99,13 +101,50 @@ describe('GET /api/files/download', () => {
     // Regression guard: body must be the zip BYTES, never the path string.
     expect(Buffer.isBuffer(body)).toBe(true);
     expect(body).toEqual(ZIP_BYTES);
-    expect(body).not.toBe(outputZipPath);
+    expect(body).not.toBe(outputPaths[0]);
     expect(headers['Content-Type']).toBe('application/zip');
 
     // Cleanup must run after the response: inputs + output zip gone.
     expect(tempFiles.length).toBe(2);
     for (const f of tempFiles) expect(fs.existsSync(f)).toBe(false);
-    expect(fs.existsSync(outputZipPath)).toBe(false);
+    expect(fs.existsSync(outputPaths[0])).toBe(false);
+    expect(fs.existsSync(path.dirname(outputPaths[0]))).toBe(false);
+  });
+
+  it('uses a separate temp directory per request', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue(oneFile);
+
+    for (let i = 0; i < 2; i++) {
+      const { res } = makeRes();
+      await handler({ method: 'GET', ability: {} } as unknown as NextApiRequest, res);
+    }
+
+    expect(outputPaths).toHaveLength(2);
+    expect(outputPaths[0]).not.toBe(outputPaths[1]);
+    expect(path.dirname(outputPaths[0])).not.toBe(path.dirname(outputPaths[1]));
+    expect(path.dirname(outputPaths[0]).startsWith(path.join(os.tmpdir(), 'knowledges-'))).toBe(true);
+  });
+
+  it('keeps entries with the same file name separate within a request', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([...oneFile, ...oneFile]);
+
+    const { res } = makeRes();
+    await handler({ method: 'GET', ability: {} } as unknown as NextApiRequest, res);
+
+    expect(tempFiles).toHaveLength(2);
+    expect(new Set(tempFiles).size).toBe(2);
+  });
+
+  it('keeps entries whose names share a basename separate', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...oneFile[0], fileName: 'x/a.txt' },
+      { ...oneFile[0], fileName: 'y/a.txt' },
+    ]);
+
+    const { res } = makeRes();
+    await handler({ method: 'GET', ability: {} } as unknown as NextApiRequest, res);
+
+    expect(tempFiles.map(f => path.basename(f))).toEqual(['0_a.txt', '1_a.txt']);
   });
 
   it('skips held/blocked uploaded images and a not-yet-cleared non-image, keeps clean files', async () => {
@@ -139,6 +178,16 @@ describe('GET /api/files/download', () => {
 
     expect(tempFiles.length).toBe(1);
     for (const f of tempFiles) expect(fs.existsSync(f)).toBe(false);
+  });
+
+  it('removes the temp directory after a failure', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue(oneFile);
+    (zipFiles as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('boom'));
+
+    const { res } = makeRes();
+    await expect(handler({ method: 'GET', ability: {} } as unknown as NextApiRequest, res)).rejects.toThrow('boom');
+
+    expect(fs.existsSync(path.dirname(tempFiles[0]))).toBe(false);
   });
 
   it('requires files:read at the baseApi route gate', () => {

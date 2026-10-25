@@ -8,25 +8,45 @@
  * This approach ensures results are both topically relevant AND semantically similar,
  * avoiding the "everything matches at 70%" problem with pure semantic search.
  *
- * TODO: Consider charging 1-10 credits for semantic search
- * This operation is expensive due to:
- * - Query embedding generation
- * - Fetching matching messages
- * - Cosine similarity computation
+ * Billing: the query expansion, the embeddings and the re-rank run on platform keys. A credit
+ * pre-flight refuses a caller who cannot pay before any of them. Text calls reserve and settle
+ * through the completion meter; embeddings reserve their input ceiling before the provider call.
  */
 
 import { Request, Response } from 'express';
+import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import {
+  createRequestCompletionMeter,
+  isCreditsEnforced,
+  reserveCompletionCredits,
+  settleCompletion,
+} from '@server/billing/meterPlatformCompletion';
+import { resolveRequestBillingOrgId } from '@server/billing/reserveRequestCredits';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { apiKeyRepository, adminSettingsRepository, sessionRepository } from '@bike4mind/database';
+import {
+  apiKeyRepository,
+  adminSettingsRepository,
+  organizationRepository,
+  sessionRepository,
+} from '@bike4mind/database';
 import { Quest } from '@bike4mind/database/content';
 import { computeCosineSimilarity, getSettingsByNames } from '@bike4mind/utils';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
-import { isSupportedEmbeddingModel, SupportedEmbeddingModel } from '@bike4mind/common';
-import { apiKeyService } from '@bike4mind/services';
+import {
+  getEmbeddingModelCost,
+  ForbiddenError,
+  UnprocessableEntityError,
+  insufficientCreditsError,
+  isSupportedEmbeddingModel,
+  SupportedEmbeddingModel,
+  type ModelInfo,
+} from '@bike4mind/common';
+import { apiKeyService, assertOwnerHasCredits, creditService, meterCompletionBackend } from '@bike4mind/services';
 import { ReRankService } from '@bike4mind/services/llm/reranker';
 import { SmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 import { OperationsModelService } from '@client/services/operationsModelService';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 interface SemanticSearchRequest {
   query: string;
@@ -49,8 +69,41 @@ interface SessionScore {
   bestMatch?: MessageMatch; // Best matching message details for debugging
 }
 
+/** Local usage estimate for embedding providers that do not report token counts. */
+const estimateTokens = (text: string) => Math.ceil(text.length / 4);
+
+/** Best-effort text services may swallow failures; billing refusals must still reach the route. */
+function meterSearchBackend(
+  req: Parameters<typeof createRequestCompletionMeter>[0],
+  backend: Parameters<typeof meterCompletionBackend>[0],
+  modelInfo: ModelInfo,
+  featureLabel: string
+) {
+  let refusal: { error: unknown } | undefined;
+  const meter = createRequestCompletionMeter(req, featureLabel, { systemModel: true });
+  const llm = meterCompletionBackend(
+    backend,
+    async (...args) => {
+      try {
+        return await meter(...args);
+      } catch (error) {
+        refusal = { error };
+        throw error;
+      }
+    },
+    modelInfo
+  );
+  return {
+    llm,
+    throwIfRefused: () => {
+      if (refusal) throw refusal.error;
+    },
+  };
+}
+
 const handler = baseApi().post(
   asyncHandler(async (req: Request, res: Response) => {
+    assertAiAccessAllowed(req.user);
     const userId = req.user?.id;
 
     if (!userId) {
@@ -69,6 +122,17 @@ const handler = baseApi().post(
       return res.status(400).json({ error: 'Query is required' });
     }
 
+    // The holder reserveRequestCredits would bill: an API key's billing owner, else the user's org seat.
+    const billingOrgId = resolveRequestBillingOrgId(req);
+    const billingOrg = billingOrgId ? await organizationRepository.findById(billingOrgId) : null;
+    assertApiKeyOrgMembership({ billingOrg, billingUser: req.user, isApiKeyCaller: Boolean(req.apiKeyInfo) });
+    // assertOwnerCanAfford's gate, inlined so the org read above is the only one.
+    if (await isCreditsEnforced()) {
+      if (billingOrg && creditService.isMemberAtOrOverCap(billingOrg, userId)) {
+        throw insufficientCreditsError(creditService.MEMBER_CREDIT_CAP_MESSAGE);
+      }
+      assertOwnerHasCredits(billingOrg ?? req.user);
+    }
     req.logger?.updateMetadata({
       endpoint: 'sessions/semantic-search',
       queryLength: query.length,
@@ -83,12 +147,17 @@ const handler = baseApi().post(
     let queryExpansionTimeMs = 0;
 
     if (hybridMode) {
+      let throwIfExpansionRefused = () => {};
       try {
         const expansionStart = Date.now();
-        const { modelId, llm } = await OperationsModelService.getOperationsModel();
-        const smallLLM = new SmallLLMService({ llm, modelId }, req.logger);
+        const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+        // The provider promise owns settlement even when SmallLLM's timeout returns a fallback first.
+        const metered = meterSearchBackend(req, llm, modelInfo, 'semantic search expansion');
+        throwIfExpansionRefused = metered.throwIfRefused;
+        const smallLLM = new SmallLLMService({ llm: metered.llm, modelId }, req.logger);
 
         const { data: expansion } = await smallLLM.expandQuery(query, { timeoutMs: 3000 });
+        metered.throwIfRefused();
         correctedQuery = expansion.corrected;
         keywords = expansion.keywords
           .map(k =>
@@ -104,6 +173,10 @@ const handler = baseApi().post(
           `Query expansion: "${query}" → "${correctedQuery}" with ${keywords.length} keywords in ${queryExpansionTimeMs}ms`
         );
       } catch (expansionError) {
+        throwIfExpansionRefused();
+        if (expansionError instanceof ForbiddenError || expansionError instanceof UnprocessableEntityError) {
+          throw expansionError;
+        }
         // Fallback to simple keyword extraction if LLM fails
         req.logger?.warn?.('Query expansion failed, using simple extraction:', expansionError);
         keywords = query
@@ -201,9 +274,35 @@ const handler = baseApi().post(
       const embeddingFactory = new EmbeddingFactory(embeddingConfig);
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
 
+      const generateEmbedding = async (text: string) => {
+        // A UTF-8 byte bounds the tokenizer input; settle the same local estimate as before.
+        const reservation = await reserveCompletionCredits(
+          req,
+          getEmbeddingModelCost(embeddingModel, Buffer.byteLength(text, 'utf8')),
+          'semantic search embedding'
+        );
+        let vector: number[];
+        try {
+          vector = await embeddingService.generateEmbedding(text);
+        } catch (error) {
+          await reservation.refund();
+          throw error;
+        }
+        const inputTokens = estimateTokens(text);
+        await settleCompletion(reservation, req, {
+          feature: 'embedding',
+          provider: requiredProvider,
+          model: embeddingModel,
+          inputTokens,
+          outputTokens: 0,
+          usd: getEmbeddingModelCost(embeddingModel, inputTokens),
+        });
+        return vector;
+      };
+
       // STEP 4: Generate embedding for user's query
       req.logger?.debug?.('Generating embedding for query:', query.substring(0, 50) + '...');
-      const queryEmbedding = await embeddingService.generateEmbedding(query);
+      const queryEmbedding = await generateEmbedding(query);
       req.logger?.debug?.('Query embedding generated, dimensions:', queryEmbedding.length);
 
       // STEP 5: Get all session IDs for the user
@@ -310,7 +409,7 @@ const handler = baseApi().post(
                 content = content.substring(0, MAX_CHARS) + '...';
               }
 
-              messageEmbedding = await embeddingService.generateEmbedding(content);
+              messageEmbedding = await generateEmbedding(content);
               messagesGenerated++;
             }
 
@@ -342,6 +441,9 @@ const handler = baseApi().post(
               }
             }
           } catch (embeddingError) {
+            if (embeddingError instanceof ForbiddenError || embeddingError instanceof UnprocessableEntityError) {
+              throw embeddingError;
+            }
             // Skip messages that fail embedding generation
             req.logger?.warn?.('Failed to generate embedding for message:', embeddingError);
           }
@@ -368,10 +470,13 @@ const handler = baseApi().post(
       if (reRankingRequested) {
         const reRankStart = Date.now();
         const MAX_RERANK_CANDIDATES = 30;
+        let throwIfReRankRefused = () => {};
 
         try {
-          const { modelId, llm } = await OperationsModelService.getOperationsModel();
-          const reRankService = new ReRankService({ llm, modelId }, req.logger);
+          const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+          const metered = meterSearchBackend(req, llm, modelInfo, 'semantic search reranking');
+          throwIfReRankRefused = metered.throwIfRefused;
+          const reRankService = new ReRankService({ llm: metered.llm, modelId }, req.logger);
 
           // Send top candidates by cosine to the LLM for relevance verification
           const candidates = Array.from(sessionScores.values())
@@ -387,6 +492,8 @@ const handler = baseApi().post(
             maxCandidates: MAX_RERANK_CANDIDATES,
             minRelevanceScore: 3,
           });
+
+          metered.throwIfRefused();
 
           // Detect whether the re-ranker fell back to cosine-only scoring.
           // The fallback returns results with relevanceScore: -1
@@ -429,6 +536,10 @@ const handler = baseApi().post(
             );
           }
         } catch (reRankError) {
+          throwIfReRankRefused();
+          if (reRankError instanceof ForbiddenError || reRankError instanceof UnprocessableEntityError) {
+            throw reRankError;
+          }
           req.logger?.warn?.('Re-ranking failed, continuing with cosine-only results:', reRankError);
           // Continue with cosine-only results on failure
         }
@@ -491,6 +602,7 @@ const handler = baseApi().post(
         },
       });
     } catch (error) {
+      if (error instanceof ForbiddenError || error instanceof UnprocessableEntityError) throw error;
       req.logger?.error?.('Semantic search failed:', error);
       return res.status(500).json({
         error: 'Semantic search failed. Please try again.',

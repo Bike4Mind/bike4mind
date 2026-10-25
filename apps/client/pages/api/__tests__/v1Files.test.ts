@@ -91,6 +91,7 @@ vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPr
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({ assertDataLakeWriteScope: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ fabFilesService: { updateFabFile: mockUpdateFabFile } }));
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   scopedSettingsRepository: {},

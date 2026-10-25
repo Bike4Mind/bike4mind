@@ -1,11 +1,20 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { ApiKeyScope, CreditHolderType, SettingKeySchema, SettingScopeLevel, settingsMap } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  SettingKeySchema,
+  SettingScopeLevel,
+  settingsMap,
+  type SettingKey,
+} from '@bike4mind/common';
+import { withTransaction } from '@bike4mind/database';
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
+import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 
 /**
  * Admin write surface for the scoped-settings overlay - the org/owner/lake OVERRIDES read by
@@ -78,6 +87,19 @@ const runWrite = async (write: () => Promise<void>): Promise<void> => {
   }
 };
 
+type ScopeLevel = z.infer<typeof ScopeLevelSchema>;
+
+const readOverrideValue = async (settingName: SettingKey, scopeLevel: ScopeLevel, scopeId: string) => {
+  const [existing] = await scopedSettingsRepository.findOverrides([{ scopeLevel, scopeId }], [settingName]);
+  return existing?.settingValue ?? null;
+};
+
+// One target per override address, so the Audit Log groups an override's history apart from the platform value.
+const scopedTarget = (settingName: SettingKey, scopeLevel: ScopeLevel, scopeId: string) => ({
+  id: `${settingName}@${scopeLevel}:${scopeId}`,
+  displayName: `${settingName} (${scopeLevel} ${scopeId})`,
+});
+
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req: Request, res: Response) => {
     ensureAdmin(req.user?.isAdmin);
@@ -112,13 +134,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     await runWrite(() =>
-      scopedSettingsService.writeScopedOverride(
-        settingName,
-        { scopeLevel, scopeId, ownerType },
-        settingValue,
-        { scopedSettings: scopedSettingsRepository },
-        { logger: req.logger }
-      )
+      withTransaction(async () => {
+        const before = await readOverrideValue(settingName, scopeLevel, scopeId);
+        await scopedSettingsService.writeScopedOverride(
+          settingName,
+          { scopeLevel, scopeId, ownerType },
+          settingValue,
+          { scopedSettings: scopedSettingsRepository },
+          { logger: req.logger }
+        );
+        await recordAdminSettingChange(req, {
+          settingName,
+          before,
+          after: settingValue,
+          summary: `set the ${settingName} override at ${scopeLevel} ${scopeId}`,
+          target: scopedTarget(settingName, scopeLevel, scopeId),
+          details: { scopeLevel, scopeId, ownerType },
+        });
+      })
     );
 
     return res.json({ settingName, scopeLevel, scopeId, ownerType, settingValue });
@@ -130,12 +163,25 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const { settingName, scopeLevel, scopeId } = parseOrBadRequest(ScopeAddressSchema, req.query);
 
     await runWrite(() =>
-      scopedSettingsService.clearScopedOverride(
-        settingName,
-        { scopeLevel, scopeId },
-        { scopedSettings: scopedSettingsRepository },
-        { logger: req.logger }
-      )
+      withTransaction(async () => {
+        const before = await readOverrideValue(settingName, scopeLevel, scopeId);
+        await scopedSettingsService.clearScopedOverride(
+          settingName,
+          { scopeLevel, scopeId },
+          { scopedSettings: scopedSettingsRepository },
+          { logger: req.logger }
+        );
+        // Clearing an address that holds no override changes nothing, so it is not an admin change.
+        if (before === null) return;
+        await recordAdminSettingChange(req, {
+          settingName,
+          before,
+          after: null,
+          summary: `cleared the ${settingName} override at ${scopeLevel} ${scopeId}`,
+          target: scopedTarget(settingName, scopeLevel, scopeId),
+          details: { scopeLevel, scopeId },
+        });
+      })
     );
 
     return res.json({ cleared: true });

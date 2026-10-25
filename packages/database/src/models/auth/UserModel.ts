@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import {
   AuthStrategy,
   CollectionType,
@@ -15,7 +16,7 @@ import {
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
 import { NotFoundError } from '@bike4mind/utils';
-import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
+import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
 import BaseRepository from '@bike4mind/db-core';
@@ -148,6 +149,7 @@ const UserPreferencesSchema = new Schema(
     agentModeDefault: { type: String, enum: ['off', 'auto', 'on'] },
     showFunTools: { type: Boolean },
     showSplashCards: { type: Boolean },
+    desktopPromoDismissed: { type: Boolean },
   },
   { _id: false }
 );
@@ -688,6 +690,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    * concurrent change to either field is not reverted. Two writes: a pipeline update can't use
    * `$addToSet`, and pipeline values skip Mongoose's ObjectId casting. The invites are recorded
    * first so a failure between the writes under-charges rather than spending quota with no invite.
+   * @deprecated Use reserveReferrals before side effects and settleReferrals afterward.
    */
   async recordReferrals(userId: string, count: number, newInviteIds: string[]): Promise<void> {
     if (newInviteIds.length > 0) {
@@ -700,6 +703,32 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
         },
       },
     ]);
+  }
+
+  async reserveReferrals(userId: string, count: number): Promise<boolean> {
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error('Invalid referral reservation count');
+    const result = await this.model.updateOne(
+      { _id: userId, numReferralsAvailable: { $gte: count } },
+      { $inc: { numReferralsAvailable: -count } }
+    );
+    return result.matchedCount === 1;
+  }
+
+  /**
+   * Refund only failures before a usable invite exists; delivery failures retain their charge.
+   * The refund is a relative $inc not bounded by the current allowance, and it is not idempotent:
+   * callers must not retry it.
+   */
+  async settleReferrals(userId: string, refundCount: number, newInviteIds: string[]): Promise<void> {
+    if (!Number.isSafeInteger(refundCount) || refundCount < 0) throw new Error('Invalid referral refund count');
+    const result = await this.model.updateOne(
+      { _id: userId },
+      {
+        $inc: { numReferralsAvailable: refundCount },
+        $addToSet: { regInvites: { $each: newInviteIds } },
+      }
+    );
+    if (result.matchedCount !== 1) throw new NotFoundError(`User ${userId} not found`);
   }
 
   async incrementTokenVersion(userId: string): Promise<number> {
@@ -735,9 +764,9 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
-   * Transition a user's moderation escalation state. When moving to `suspended`,
-   * also mirrors `isModerated: true` so legacy admin surfaces reflect the suspension; any
-   * non-suspended status clears that mirror. `throttledUntil` is set only for `throttled`.
+   * Transition a user's moderation escalation state. `throttledUntil` is set only for `throttled`.
+   * Never touches `isModerated`: that is the admin's independent AI-only block, and a status change
+   * (a throttle, a lifted suspension) must not silently undo it.
    */
   async setModerationStatus(
     userId: string,
@@ -751,7 +780,6 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'moderation.status': status,
           'moderation.statusChangedAt': new Date(),
           'moderation.throttledUntil': status === 'throttled' ? (options?.throttledUntil ?? null) : null,
-          isModerated: status === 'suspended',
         },
       },
       { new: true }
@@ -778,6 +806,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async findBySlackUserId(slackUserId: string): Promise<IUserDocument | null> {
     const result = await this.model.findOne({
       'slackSettings.slackUserId': slackUserId,
+      ...VERIFIED_SLACK_IDENTITY_FILTER,
       deletedAt: { $exists: false },
     });
     return result?.toJSON() ?? null;
@@ -998,6 +1027,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Slack integration settings
     slackSettings: {
       slackUserId: { type: String, required: false },
+      slackTeamId: { type: String, required: false },
       slackUserToken: { type: String, required: false, select: false }, // User token for reminders API (protected by select: false)
       slackUserScopes: { type: [String], required: false, default: [] }, // OAuth scopes granted by user
       defaultNotebookId: { type: String, required: false },
@@ -1284,11 +1314,14 @@ function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
     if (!container) return;
     const mfa = container.mfa as { totpSecret?: unknown } | null | undefined;
     if (mfa && typeof mfa === 'object' && typeof mfa.totpSecret === 'string') {
-      container.mfa = { ...mfa, totpSecret: encryptAtRest(mfa.totpSecret) };
+      container.mfa = {
+        ...mfa,
+        totpSecret: isEncrypted(mfa.totpSecret) ? mfa.totpSecret : encryptAtRest(mfa.totpSecret),
+      };
     }
     const dotted = container['mfa.totpSecret'];
     if (typeof dotted === 'string') {
-      container['mfa.totpSecret'] = encryptAtRest(dotted);
+      container['mfa.totpSecret'] = isEncrypted(dotted) ? dotted : encryptAtRest(dotted);
     }
   };
 
@@ -1298,11 +1331,40 @@ function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
 }
 
 UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], stripSecretlessMfaFromUpdate);
+
+const isHashedAnswer = (answer: string): boolean => /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(answer);
+async function hashSecurityQuestions(questions: unknown): Promise<void> {
+  if (!Array.isArray(questions)) return;
+  if (questions.length > 10) throw new Error('At most 10 security questions are allowed');
+  for (const question of questions) {
+    if (typeof question !== 'object' || question === null || typeof question.answer !== 'string') continue;
+    if (question.answer.length > 1024) throw new Error('Security answer is too long');
+    if (!isHashedAnswer(question.answer)) question.answer = await bcrypt.hash(question.answer, 12);
+  }
+}
+
+UserSchema.pre('validate', async function () {
+  if (this.isModified('securityQuestions')) await hashSecurityQuestions(this.securityQuestions);
+});
+UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], async function () {
+  const update = this.getUpdate();
+  if (!update || Array.isArray(update)) return;
+  for (const container of [update, update.$set, update.$setOnInsert]) {
+    if (!container || typeof container !== 'object') continue;
+    await hashSecurityQuestions(container.securityQuestions);
+    for (const [path, value] of Object.entries(container)) {
+      if (!/^securityQuestions\.[^.]+\.answer$/.test(path) || typeof value !== 'string') continue;
+      if (value.length > 1024) throw new Error('Security answer is too long');
+      container[path] = isHashedAnswer(value) ? value : await bcrypt.hash(value, 12);
+    }
+  }
+});
+
 UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], encryptTotpSecretInUpdate);
 
 // The document-save counterpart of encryptTotpSecretInUpdate (User.create / doc.save()).
 UserSchema.pre('save', function (next) {
-  if (this.mfa?.totpSecret && this.isModified('mfa.totpSecret')) {
+  if (this.mfa?.totpSecret && !isEncrypted(this.mfa.totpSecret) && this.isModified('mfa.totpSecret')) {
     this.mfa.totpSecret = encryptAtRest(this.mfa.totpSecret);
   }
   next();

@@ -113,6 +113,7 @@ function mutateTools(toolListAccessor: ToolListAccessor, matched: ICompletionOpt
   for (const tool of matched) {
     if (!liveNames.has(tool.toolSchema.name)) {
       liveTools.push(tool);
+      liveNames.add(tool.toolSchema.name);
       added++;
     }
   }

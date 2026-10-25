@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
+import { Resource } from 'sst';
 import type { Principal } from '@bike4mind/memory';
 
 /**
@@ -125,6 +126,14 @@ function wrapDek(masterKey: Buffer, dek: Buffer): string {
   return ENC + Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64');
 }
 
+/** Wrap an existing raw data key without changing the key that encrypts its facts. */
+export function rewrapLegacyDek(stored: string, masterKey: Buffer): string {
+  if (stored.startsWith(ENC)) return stored;
+  const dek = Buffer.from(stored.startsWith(RAW) ? stored.slice(RAW.length) : stored, 'base64');
+  if (dek.length !== 32) throw new Error('Invalid memory data key');
+  return wrapDek(masterKey, dek);
+}
+
 function unwrapDek(masterKey: Buffer | undefined, stored: string): Buffer {
   if (stored.startsWith(RAW)) return Buffer.from(stored.slice(RAW.length), 'base64');
   if (stored.startsWith(ENC)) {
@@ -142,39 +151,47 @@ function unwrapDek(masterKey: Buffer | undefined, stored: string): Buffer {
 }
 
 /** Resolve the optional master key (envelope encryption) from the environment, or undefined. */
-export function resolveMasterKey(secret = process.env.MEMORY_KEY_SECRET): Buffer | undefined {
-  return secret ? createHash('sha256').update(secret).digest() : undefined;
+export function resolveMasterKey(secret?: string): Buffer | undefined {
+  if (secret === undefined) {
+    secret = process.env.MEMORY_KEY_SECRET;
+    if (!secret) {
+      try {
+        secret = Resource.MEMORY_KEY_SECRET.value;
+      } catch {
+        /* Unlinked in local development. */
+      }
+    }
+  }
+  if (!secret || secret === 'not-configured') return undefined;
+  return createHash('sha256').update(secret).digest();
 }
 
-/** True outside local dev - a raw DEK here is a real backup-confidentiality hole, not a dev convenience. */
+/**
+ * True outside local dev - a raw DEK here is a real backup-confidentiality hole, not a dev
+ * convenience. A preview/test stage is still a deployed stage: its database backups are real.
+ */
 const isDeployedEnv = (): boolean => {
   const stage = process.env.SST_STAGE ?? process.env.STAGE ?? '';
-  return process.env.NODE_ENV === 'production' && stage !== '' && !/^(dev|local|test)/i.test(stage);
+  return process.env.NODE_ENV === 'production' || (stage !== '' && !['dev', 'local', 'test'].includes(stage));
 };
-let warnedNoMasterKey = false;
 
 /**
  * A KeyProvider backed by a keyring. If `masterKey` is set (MEMORY_KEY_SECRET), DEKs are
  * envelope-wrapped at rest so a DB dump alone cannot read facts; without it (dev), DEKs are stored raw
  * - still SHRED-safe (deletion destroys the key), but NOT confidential against a full DB/backup read.
  *
- * Running a deployed stage without the secret silently voids the "unreadable even in backups" promise -
- * the raw DEK sits next to the ciphertext, so a pre-shred backup is fully recoverable. We do not hard
- * throw (that would take memory down on a misconfig), but we surface it LOUDLY via console.error once,
- * so it lands in error monitoring instead of degrading in silence.
+ * Running a deployed stage without the secret voids the "unreadable even in backups" promise -
+ * the raw DEK would sit next to the ciphertext - so MINTING a key refuses there. Reads refuse on
+ * their own (`unwrapDek` cannot open a wrapped DEK without the key), and shredding never needs the
+ * key at all: "delete my memory" must work even on a stage whose key is missing.
  */
 export function createKeyProvider(keyring: Keyring, masterKey = resolveMasterKey()): KeyProvider {
-  if (!masterKey && !warnedNoMasterKey && isDeployedEnv()) {
-    warnedNoMasterKey = true;
-    console.error(
-      '[memory] MEMORY_KEY_SECRET is not set in a deployed stage: principal keys are stored RAW next to ' +
-        'the ciphertext, so a backup taken before a crypto-shred is fully recoverable. Set the secret to ' +
-        'restore envelope-wrapping and the backup-unreadability guarantee.'
-    );
-  }
   const store = (dek: Buffer): string => (masterKey ? wrapDek(masterKey, dek) : RAW + dek.toString('base64'));
   return {
     async getOrCreateDek(principal, ownerUserId, startedAt) {
+      if (!masterKey && isDeployedEnv()) {
+        throw new Error('MEMORY_KEY_SECRET is required to mint memory principal keys in deployed stages');
+      }
       const stored = await keyring.getOrCreate(
         principal.kind,
         principal.id,

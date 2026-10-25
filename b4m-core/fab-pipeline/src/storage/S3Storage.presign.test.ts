@@ -67,6 +67,35 @@ describe('S3Storage browser-facing signing endpoint', () => {
     expect(url.searchParams.get('X-Amz-Signature')).not.toBe(expectedGetSignature(url, 'wrong-secret'));
   });
 
+  it('signs a pinned response Content-Type into a GET capability', async () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid:9443');
+    const url = new URL(
+      await new S3Storage('exports-bucket', 'us-east-2').getSignedUrl('bundle/report.pdf', 'get', {
+        audience: 'browser',
+        ResponseContentType: 'application/pdf',
+        ResponseContentDisposition: 'inline',
+      })
+    );
+    expect(url.searchParams.get('response-content-type')).toBe('application/pdf');
+    expect(url.searchParams.get('response-content-disposition')).toBe('inline');
+    expect(url.searchParams.get('X-Amz-Signature')).toBe(expectedGetSignature(url));
+  });
+
+  it('returns the identical URL for a fixed signingDate, dated from it', async () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid:9443');
+    const storage = new S3Storage('exports-bucket', 'us-east-2');
+    const signingDate = new Date('2026-03-04T05:00:00.000Z');
+    const sign = () =>
+      storage.getSignedUrl('thumbs/a.webp', 'get', { audience: 'browser', expiresIn: 1800, signingDate });
+
+    const first = await sign();
+    expect(await sign()).toBe(first);
+    const url = new URL(first);
+    expect(url.searchParams.get('X-Amz-Date')).toBe('20260304T050000Z');
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('1800');
+    expect(url.searchParams.get('X-Amz-Signature')).toBe(expectedGetSignature(url));
+  });
+
   it('uses the configured signing origin for PUT capabilities too', async () => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', 'http://localhost:19000');
     const url = new URL(
@@ -153,5 +182,39 @@ describe('S3Storage browser-facing signing endpoint', () => {
       'https://objects.example.invalid'
     );
     expect(requests).toHaveLength(4);
+  });
+});
+
+describe('S3Storage.browserSigningOrigin', () => {
+  it('is empty on a custom server endpoint with no browser-facing signing endpoint', async () => {
+    // beforeEach: AWS_ENDPOINT_URL_S3=http://minio.internal:9000, S3_PRESIGN_ENDPOINT unset.
+    expect(await new S3Storage('exports-bucket', 'us-east-2').browserSigningOrigin()).toBe('');
+  });
+
+  it('is the browser-facing signing endpoint when one is configured', async () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid:9443');
+    expect(await new S3Storage('exports-bucket', 'us-east-2').browserSigningOrigin()).toBe(
+      'https://objects.example.invalid:9443'
+    );
+  });
+
+  it("is the bucket's own virtual host on AWS", async () => {
+    vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+    expect(await new S3Storage('exports-bucket', 'us-east-2').browserSigningOrigin()).toBe(
+      'https://exports-bucket.s3.us-east-2.amazonaws.com'
+    );
+  });
+
+  it('refuses a browser signing endpoint that is a bare regional AWS endpoint', async () => {
+    vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://s3.us-east-2.amazonaws.com');
+    expect(await new S3Storage('exports-bucket', 'us-east-2').browserSigningOrigin()).toBe('');
+  });
+
+  it('refuses a path-style AWS link, whose origin is the shared regional endpoint', async () => {
+    vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+    // A dotted bucket name cannot use a virtual host over TLS, so the SDK signs path-style.
+    const origin = await new S3Storage('exports.bucket', 'us-east-2').browserSigningOrigin();
+    expect(origin).toBe('');
   });
 });

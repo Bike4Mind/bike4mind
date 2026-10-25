@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Chip, CircularProgress, Sheet, Stack, Typography, useTheme } from '@mui/joy';
-import { Lock } from '@mui/icons-material';
+import Lock from '@mui/icons-material/Lock';
 import type { IAuthFailLogDocument } from '@bike4mind/database';
 import { useGetFailedLoginCount, useGetRecentFailedLogins } from '@client/app/hooks/data/admin';
 

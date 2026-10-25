@@ -7,7 +7,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
-import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { z } from 'zod';
 

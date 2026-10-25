@@ -637,11 +637,10 @@ export function computeTier(
 }
 
 /**
- * clean -> live at any visibility; review -> live for org/unlisted (with an "auto-checked" note),
- * held for Public; high -> held at every visibility.
+ * Only `clean` goes live without a human, at every visibility; `review` and `high` are held as
+ * `pending`. `_visibility` is deliberately unused: the tier x visibility test pins the mapping, and
+ * a future per-visibility split stays a one-function edit.
  */
-export function reviewStatusFor(tier: SkillRiskTier, visibility: SkillListingVisibility): SkillReviewStatus {
-  if (tier === 'clean') return 'auto_approved';
-  if (tier === 'review') return visibility === 'public' ? 'pending' : 'auto_approved';
-  return 'pending';
+export function reviewStatusFor(tier: SkillRiskTier, _visibility: SkillListingVisibility): SkillReviewStatus {
+  return tier === 'clean' ? 'auto_approved' : 'pending';
 }

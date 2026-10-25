@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { InternalServerError } from '@bike4mind/common';
 import { MfaAttemptRejectedError } from '@bike4mind/auth/mfaService';
+import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
 const { mockFindWithSecrets, mockRecordFailed, mockVerifyMFASetup, mockIssueSession } = vi.hoisted(() => ({
   mockFindWithSecrets: vi.fn(),
@@ -46,6 +47,11 @@ vi.mock('@server/auth/issueSession', () => ({
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  redactUserSecretsForSelf: (user: unknown) => user,
+}));
+
 import handler from '../verify-setup';
 
 const run = () => {
@@ -69,6 +75,16 @@ describe('POST /api/auth/mfa/verify-setup - response boundary', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true, accessToken: 'tok' });
     expect(mockRecordFailed).not.toHaveBeenCalled();
+  });
+
+  it('strips secrets and undeclared fields from the user in the response', async () => {
+    mockVerifyMFASetup.mockResolvedValue({ success: true, user: { id: 'u1', ...secretUserFields() } });
+    mockIssueSession.mockResolvedValue({ accessToken: 'tok' });
+    const { res, promise } = run();
+    await promise;
+    const body = res._getJSONData();
+    expect(body.accessToken).toBe('tok');
+    expectSelfUserStripped(body.user, body, 'u1');
   });
 
   it('surfaces a schema failure after the session is issued as a 500 without booking a failed MFA attempt', async () => {

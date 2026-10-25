@@ -1,5 +1,5 @@
 import { Box, Chip, Modal, ModalClose, ModalDialog, Typography } from '@mui/joy';
-import { startCase } from 'lodash';
+import startCase from 'lodash/startCase';
 import React from 'react';
 import { gray } from '@client/app/utils/themes/colors';
 

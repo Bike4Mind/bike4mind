@@ -25,6 +25,7 @@ vi.mock('@bike4mind/services/llm', async importOriginal => {
   };
 });
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   userRepository: {
     findById: vi.fn().mockResolvedValue({ _id: 'owner-1', id: 'owner-1' }),
     incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
@@ -32,6 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   // Lakes disabled, so the save tool answers right after its adapter gate without writing.
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
   apiKeyRepository: {},
+  cacheRepository: {},
   dataLakeRepository: {
     findByDatalakeTags: vi.fn().mockResolvedValue([]),
     findBySlug: vi.fn(),

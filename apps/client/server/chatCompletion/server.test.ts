@@ -8,6 +8,7 @@ import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { questReplyText, spendCapExceededError } from '@bike4mind/common';
 import { InsufficientCreditsError } from '@bike4mind/services/llm';
 import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
+import { setModelCatalogProvider } from '@bike4mind/llm-adapters';
 
 // SST Resource - the internal shared-secret bearer /process checks, plus the WebSocket
 // management endpoint the ws-completions route streams through.
@@ -16,6 +17,8 @@ const mockResource = vi.hoisted(() => ({
   websocket: { managementEndpoint: 'https://ws.test', url: 'wss://ws.test' },
   App: { stage: 'test' },
 }));
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 
 // The quest-processing-failure metric's emit seam.
@@ -122,7 +125,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
 }));
 
-import { createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
+import { checkModelCatalogWired, createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
@@ -373,6 +376,25 @@ describe('ChatCompletion Dockerfile PID 1', () => {
   });
 });
 
+describe('checkModelCatalogWired', () => {
+  const logger = { error: vi.fn() };
+  afterEach(() => {
+    setModelCatalogProvider(null);
+    logger.error.mockClear();
+  });
+
+  it('logs an error when the llm-adapters instance completions read has no catalog provider', () => {
+    expect(checkModelCatalogWired(logger)).toBe(false);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes once the catalog provider is wired on that instance', () => {
+    setModelCatalogProvider(async () => []);
+    expect(checkModelCatalogWired(logger)).toBe(true);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+});
+
 describe('ChatCompletion /api/ai/v1/completions', () => {
   const VALID_COMPLETION = { model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] };
 
@@ -397,8 +419,19 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('returns 422 JSON on an invalid request body (no execution)', async () => {
-    const res = await postCompletion({ messages: [] }); // missing required `model`
+  it('returns 400 JSON for an empty conversation (no execution)', async () => {
+    const res = await postCompletion({ model: 'claude-test', messages: [] });
+    expect(res.status).toBe(400);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    const body = (await res.json()) as { error: string; request_id: string };
+    expect(body.error).toMatch(/^Validation error/);
+    expect(body.error).toContain('messages');
+    expect(body.request_id).toBe(res.headers.get('x-request-id'));
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 JSON on another invalid request body (no execution)', async () => {
+    const res = await postCompletion({ messages: [{ role: 'user', content: 'hi' }] }); // missing required `model`
     expect(res.status).toBe(422);
     expect(res.headers.get('content-type')).toContain('application/json');
     const body = (await res.json()) as { error: string; request_id: string };

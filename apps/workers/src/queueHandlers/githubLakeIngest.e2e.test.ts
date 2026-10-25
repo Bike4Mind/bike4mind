@@ -50,8 +50,8 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingByName: async (key: string) =>
     key === 'EnableDataLakes' || key === 'EnableDataLakeGitHub' ? true : undefined,
 }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/integrations/github/dataLake/lakeAppClient')>()),
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient')>()),
   getGitHubLakeAppConfig: () => ({ appId: 'a', slug: 's', privateKey: 'k', clientId: 'c', clientSecret: 'x' }),
   getInstallationOctokit: async () => ({}),
   deleteInstallation: h.deleteInstallation,

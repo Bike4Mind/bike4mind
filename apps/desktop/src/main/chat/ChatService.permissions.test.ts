@@ -12,6 +12,7 @@ import { PermissionRuleSet, compileRule, parseRule, type CompiledRule } from './
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { toolsForRequest } from './tools/registry';
+import { bashExecute } from './tools/shellTools';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -48,6 +49,7 @@ describe('ChatService permission rules', () => {
   let root: string;
   let rules: PermissionRuleSet;
   let rulesFailure: Error | undefined;
+  let warn: ReturnType<typeof vi.fn<(message: string) => void>>;
   let rememberAllows: ReturnType<typeof vi.fn<(rules: readonly string[]) => Promise<void>>>;
 
   const calls = (name: string, status: ChatToolCall['status']): ChatToolCall[] =>
@@ -64,6 +66,7 @@ describe('ChatService permission rules', () => {
     approvals = new ApprovalGate();
     rules = ruleSet({});
     rulesFailure = undefined;
+    warn = vi.fn<(message: string) => void>();
     rememberAllows = vi.fn<(rules: readonly string[]) => Promise<void>>().mockResolvedValue(undefined);
     const testEvents: ChatStreamEvent[] = [];
     const testStreams: PassThrough[] = [];
@@ -86,7 +89,7 @@ describe('ChatService permission rules', () => {
         rememberAllows,
         invalidate: vi.fn(),
       },
-      logger: { debug: vi.fn(), warn: vi.fn() },
+      logger: { debug: vi.fn(), warn },
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
@@ -101,6 +104,7 @@ describe('ChatService permission rules', () => {
   afterEach(() => {
     service.dispose();
     for (const stream of streams) stream.end();
+    vi.restoreAllMocks();
   });
 
   async function run(mode: ChatApprovalMode, name: string, input: Record<string, unknown>): Promise<string> {
@@ -261,6 +265,8 @@ describe('ChatService permission rules', () => {
 
   it('shows a failed every-session save instead of silently claiming persistence', async () => {
     rememberAllows.mockRejectedValueOnce(new Error('disk full'));
+    // The notice lands on the settled call, which must not wait on the host's own git.
+    vi.spyOn(bashExecute, 'run').mockResolvedValue('git status completed');
     await run('ask', 'bash_execute', { command: 'git status', cwd: root });
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     approvals.resolve(asked.approvalId!, { decision: 'always', everywhere: true });
@@ -282,10 +288,49 @@ describe('ChatService permission rules', () => {
     expect(rememberAllows).not.toHaveBeenCalled();
   });
 
-  it('derives a domain rule for a fetch', async () => {
+  it('keeps the card pending and logs when its rules cannot be rechecked', async () => {
+    await run('ask', 'web_fetch', { url: 'https://example.com/' });
+    const asked = await awaitCall('web_fetch', 'awaiting-approval');
+    rulesFailure = new Error('permission file unreadable');
+    await approvals.settleCovered();
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not recheck web_fetch'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('permission file unreadable'));
+    expect(calls('web_fetch', 'running')).toHaveLength(0);
+    approvals.resolve(asked.approvalId!, { decision: 'deny' });
+    await awaitCall('web_fetch', 'denied');
+  });
+
+  it('rechecks symlink targets when the first rules arrive while a card waits', async () => {
+    const alias = join(root, 'alias.txt');
+    await symlink(join(root, 'notes.txt'), alias);
+    await run('ask', 'file_write', { path: alias, content: 'changed\n' });
+    await awaitCall('file_write', 'awaiting-approval');
+
+    rules = ruleSet({ allow: [`Edit(/${alias})`], deny: [`Edit(/${root}/notes.txt)`] });
+    await approvals.settleCovered();
+
+    await awaitCall('file_write', 'denied');
+    expect(await readFile(join(root, 'notes.txt'), 'utf8')).toBe('hello\n');
+    expect(calls('file_write', 'done')).toHaveLength(0);
+  });
+
+  it('applies a new deny even when an ask rule originally raised the card', async () => {
+    rules = ruleSet({ ask: ['WebFetch'] });
+    await run('full', 'web_fetch', { url: 'https://example.com/' });
+    await awaitCall('web_fetch', 'awaiting-approval');
+
+    rules = ruleSet({ deny: ['WebFetch'] });
+    await approvals.settleCovered();
+
+    await awaitCall('web_fetch', 'denied');
+    expect(calls('web_fetch', 'done')).toHaveLength(0);
+  });
+
+  it('derives the every-site WebFetch rule for a fetch', async () => {
     await run('ask', 'web_fetch', { url: 'https://docs.example.com/a' });
     const asked = await awaitCall('web_fetch', 'awaiting-approval');
-    expect(asked.approvalRules).toEqual(['WebFetch(domain:docs.example.com)']);
+    expect(asked.approvalRules).toEqual(['WebFetch']);
   });
 });
 

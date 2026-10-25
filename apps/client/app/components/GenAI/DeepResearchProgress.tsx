@@ -2,19 +2,17 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Box, Card, Chip, LinearProgress, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import StyledTab from '@client/app/components/common/StyledTab';
 import { profileTabListSx } from '@client/app/components/common/profileTabListSx';
-import {
-  Search as SearchIcon,
-  FilterList as ExtractIcon,
-  Analytics as AnalyzeIcon,
-  Psychology as ReasoningIcon,
-  AutoAwesome as SynthesisIcon,
-  Lightbulb as ThoughtIcon,
-  Link as LinkIcon,
-  CheckCircle as CompleteIcon,
-  Error as ErrorIcon,
-  PendingActions as PendingIcon,
-  Language as WebIcon,
-} from '@mui/icons-material';
+import SearchIcon from '@mui/icons-material/Search';
+import ExtractIcon from '@mui/icons-material/FilterList';
+import AnalyzeIcon from '@mui/icons-material/Analytics';
+import ReasoningIcon from '@mui/icons-material/Psychology';
+import SynthesisIcon from '@mui/icons-material/AutoAwesome';
+import ThoughtIcon from '@mui/icons-material/Lightbulb';
+import LinkIcon from '@mui/icons-material/Link';
+import CompleteIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import PendingIcon from '@mui/icons-material/PendingActions';
+import WebIcon from '@mui/icons-material/Language';
 
 interface DeepResearchActivity {
   type: 'search' | 'extract' | 'analyze' | 'reasoning' | 'synthesis' | 'thought';

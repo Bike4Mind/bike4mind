@@ -1,18 +1,16 @@
 import mammoth from 'mammoth';
 import axios from 'axios';
-import {
-  Description,
-  Article as ArticleIcon,
-  Code as CodeIcon,
-  Dashboard as DashboardIcon,
-  DataObject as DataObjectIcon,
-  InsertDriveFile as InsertDriveFileIcon,
-  PictureAsPdf as PictureAsPdfIcon,
-  TableChart as TableChartIcon,
-  Slideshow as SlideshowIcon,
-  TextSnippet as TextSnippetIcon,
-  Tag as TagIcon,
-} from '@mui/icons-material';
+import Description from '@mui/icons-material/Description';
+import ArticleIcon from '@mui/icons-material/Article';
+import CodeIcon from '@mui/icons-material/Code';
+import DashboardIcon from '@mui/icons-material/Dashboard';
+import DataObjectIcon from '@mui/icons-material/DataObject';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import TableChartIcon from '@mui/icons-material/TableChart';
+import SlideshowIcon from '@mui/icons-material/Slideshow';
+import TextSnippetIcon from '@mui/icons-material/TextSnippet';
+import TagIcon from '@mui/icons-material/Tag';
 import { Box } from '@mui/joy';
 import {
   IFabFileDocument,

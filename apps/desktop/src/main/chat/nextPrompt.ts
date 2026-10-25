@@ -45,7 +45,7 @@ export function suggestionModelChoices(available: readonly ChatModelOption[]): C
 }
 
 export function isLocalModel(model: Pick<ChatModelOption, 'backend'>): boolean {
-  return model.backend === 'ollama';
+  return model.backend === 'ollama' || model.backend === 'local-ollama';
 }
 
 /**

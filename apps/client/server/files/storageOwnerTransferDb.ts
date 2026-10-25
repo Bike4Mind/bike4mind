@@ -1,4 +1,10 @@
-import { dataLakeRepository, fabFileRepository, organizationRepository, userRepository } from '@bike4mind/database';
+import {
+  memoryLedgerRepository,
+  dataLakeRepository,
+  fabFileRepository,
+  organizationRepository,
+  userRepository,
+} from '@bike4mind/database';
 
 /**
  * The repositories reassignStorageOwner (b4m-core/services/src/fabFileService/reassignStorageOwner.ts)
@@ -9,6 +15,7 @@ import { dataLakeRepository, fabFileRepository, organizationRepository, userRepo
  * every write path.
  */
 export const storageOwnerTransferDb = Object.freeze({
+  memoryLedger: memoryLedgerRepository,
   fabFiles: fabFileRepository,
   dataLakes: dataLakeRepository,
   users: userRepository,

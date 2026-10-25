@@ -23,7 +23,7 @@ const MAX_NAME_CHARS = 80;
 export const PERMISSIONS_GUIDANCE: readonly string[] = [
   'Tool permissions belong to the user, and you cannot change them: no tool of yours writes them.',
   'They are set by the approval mode pill under the message box (Ask, Approve for me, Full access),',
-  'by the "Always allow" and "Always, in every session" buttons on an approval card, in',
+  'by the "Allow in this chat" and "Always allow" buttons on an approval card, in',
   'Settings -> Permissions (allow, ask and deny rules, for every project or one), and in Claude',
   "Code's own settings files (~/.claude/settings.json, and a trusted project's",
   '.claude/settings.json), whose permission rules this app reads. When the user wants something',

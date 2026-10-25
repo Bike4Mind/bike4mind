@@ -217,6 +217,10 @@ const argv = await yargs(hideBin(process.argv))
             type: 'string',
             description: 'Bike4Mind API URL (overrides B4M_API_URL and the configured backend)',
           })
+          .option('token', {
+            type: 'string',
+            description: 'Bearer token required by --http mode (overrides B4M_MCP_TOKEN; generated and printed when unset). Visible in process listings; prefer B4M_MCP_TOKEN',
+          })
           .example('b4m mcp serve', 'Serve over stdio for Claude Desktop and other local clients')
           .example('b4m mcp serve --http --port 7000', 'Serve over streamable HTTP on port 7000');
       }, async () => {
@@ -249,6 +253,31 @@ const argv = await yargs(hideBin(process.argv))
         // Handled by external command handler
       })
       .demandCommand(1, 'You must provide a subcommand (list, add, remove)');
+  })
+  .command('skills', 'Manage your Bike4Mind skills', (yargs) => {
+    return yargs
+      .command('push <path>', 'Create or update a skill from a Claude Code SKILL.md', (yargs) => {
+        return yargs
+          .positional('path', {
+            type: 'string',
+            describe: 'Skill folder, its SKILL.md, or a commands/*.md file',
+          })
+          .option('update', {
+            type: 'boolean',
+            description: 'Overwrite your existing skill with the same name without asking',
+            default: false,
+          })
+          .option('yes', {
+            type: 'boolean',
+            description: "Push another author's Skill Market skill as your own without asking",
+            default: false,
+          })
+          .example('b4m skills push ~/.claude/skills/my-skill', 'Create a skill from a Claude Code skill folder')
+          .example('b4m skills push ./SKILL.md --update', 'Update the existing skill of the same name');
+      }, async () => {
+        // Handled by external command handler
+      })
+      .demandCommand(1, 'You must provide a subcommand (push)');
   })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')
@@ -285,6 +314,7 @@ if (argv['no-remote-skills']) {
 }
 
 // claude-compatible flags -> B4M_* env (read by src/index.tsx init).
+// Host-launch signal: keep in sync with HOST_FLAG_ENV_KEYS in src/bootstrap/startupTrustGates.ts.
 // Mirrors the established bin->env->init channel (cf. --add-dir -> B4M_ADDITIONAL_DIRS).
 if (argv['mcp-config']) {
   process.env.B4M_MCP_CONFIG_FILE = resolve(argv['mcp-config']);
@@ -312,7 +342,7 @@ if (argv.resume) {
 }
 // Positional task (claude `<prompt>` form): seeds AND submits turn 1, stays interactive.
 // Only when it's not a known subcommand and headless -p wasn't used.
-const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'update', 'doctor', 'acp']);
+const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'update', 'doctor', 'acp']);
 if (argv.prompt === undefined && argv._.length > 0 && !KNOWN_SUBCOMMANDS.has(String(argv._[0]))) {
   process.env.B4M_INITIAL_PROMPT = String(argv._[0]);
 }
@@ -473,6 +503,31 @@ if (argv._[0] === 'plugin') {
     }
 
     await handlePluginCommand(pluginSubcommand, argv);
+    process.exit(0);
+  } catch (error) {
+    console.error('Error:', error.message);
+    process.exit(1);
+  }
+}
+
+// Handle skills subcommands (external commands)
+if (argv._[0] === 'skills') {
+  const skillsSubcommand = argv._[1];
+
+  try {
+    let handleSkillsCommand;
+
+    if (isDev) {
+      const { register } = require('tsx/esm/api');
+      register();
+      const module = await import('../src/commands/skillsCommand.ts');
+      handleSkillsCommand = module.handleSkillsCommand;
+    } else {
+      const module = await import('../dist/commands/skillsCommand.mjs');
+      handleSkillsCommand = module.handleSkillsCommand;
+    }
+
+    await handleSkillsCommand(skillsSubcommand, argv);
     process.exit(0);
   } catch (error) {
     console.error('Error:', error.message);

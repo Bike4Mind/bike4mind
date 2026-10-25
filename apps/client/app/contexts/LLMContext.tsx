@@ -13,6 +13,7 @@ import {
   isImageModel,
   isModelDeprecated,
   requiresImageInput,
+  FIXED_TEMPERATURE_MODELS,
 } from '@bike4mind/common';
 import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { toast } from 'sonner';
@@ -29,6 +30,10 @@ import { useAdminSettings } from './AdminSettingsContext';
 
 export interface LLMContextProps {
   model: string;
+  /** Preferred settings underneath a chat pin; excluded from localStorage. */
+  sessionModelOverride: Pick<LLMContextProps, 'model' | 'max_tokens' | 'temperature' | 'lastUsedTextModel'> | null;
+  hasExplicitSessionModelSelection: boolean;
+  selectSessionModel: (model: string | null, modelInfo?: ModelInfo) => void;
   imageModel: string;
   imageEditModel: string; // Model used for image editing operations
   defaultTextModel: string;
@@ -141,6 +146,8 @@ export interface LLMContextProps {
 
 const DEFAULTS = {
   model: '',
+  sessionModelOverride: null,
+  hasExplicitSessionModelSelection: false,
   imageModel: ImageModels.FLUX_PRO_ULTRA as string,
   imageEditModel: ImageModels.GPT_IMAGE_1_5 as string, // Default to GPT-Image-1.5 for editing (no mask required)
   defaultTextModel: '',
@@ -230,11 +237,43 @@ export const useLLM = create(
           ...DEFAULTS,
         });
       },
+      selectSessionModel: (model, modelInfo) => {
+        set(state => {
+          // Resuming the preferred model does not override it. Keep later edits to its
+          // output budget and temperature durable, just as they are in a new chat.
+          if (model && model === state.model && !modelInfo && !state.sessionModelOverride) return state;
+          const preferred = state.sessionModelOverride ?? {
+            model: state.model,
+            max_tokens: state.max_tokens,
+            temperature: state.temperature,
+            lastUsedTextModel: state.lastUsedTextModel,
+          };
+          if (!model) {
+            return {
+              ...(state.sessionModelOverride ? preferred : {}),
+              sessionModelOverride: null,
+              hasExplicitSessionModelSelection: false,
+            };
+          }
+          return {
+            model,
+            max_tokens: modelInfo
+              ? computeDefaultMaxTokens(modelInfo)
+              : model === preferred.model
+                ? preferred.max_tokens
+                : 0,
+            temperature: FIXED_TEMPERATURE_MODELS.has(model) ? 1 : preferred.temperature,
+            sessionModelOverride: preferred,
+            hasExplicitSessionModelSelection: modelInfo !== undefined,
+          };
+        });
+      },
       setLLM: (params: Partial<LLMContextProps>) => {
         set(prev => {
           const newState = {
             ...prev,
             ...params,
+            ...(params.model !== undefined && { sessionModelOverride: null, hasExplicitSessionModelSelection: true }),
           };
 
           // Track model changes for remembering
@@ -263,6 +302,8 @@ export const useLLM = create(
           // blob, so a template with a partial `settings` reproduces its snapshot
           // rather than inheriting the user's prior (unrelated) values.
           ...IMAGE_SETTINGS_DEFAULTS,
+          sessionModelOverride: null,
+          hasExplicitSessionModelSelection: true,
           model: template.model,
           imageModel: template.model,
           lastUsedImageModel: template.model,
@@ -301,8 +342,10 @@ export const useLLM = create(
     }),
     {
       name: 'llm-settings',
-      version: 6,
+      version: 7,
       migrate: (persistedState: any, version: number) => {
+        // Nothing to migrate in a missing or corrupt entry; the store keeps its defaults.
+        if (!persistedState || typeof persistedState !== 'object' || Array.isArray(persistedState)) return {};
         // Remap any persisted image-model ids that are now legacy/removed (e.g. dall-e-3, flux-dev).
         const remapLegacyImageModels = (state: Record<string, unknown>) => {
           for (const key of ['imageModel', 'lastUsedImageModel'] as const) {
@@ -348,6 +391,17 @@ export const useLLM = create(
         if (version < 6) {
           if (persistedState.output_format === 'jpeg') persistedState.output_format = 'png';
         }
+        // Migration v6->v7: a store whose first model was set without a budget (session hydration did,
+        // before it moved to selectSessionModel) kept the DEFAULTS placeholder as its ceiling (see the
+        // refit effect below). Clear that exact value once so it is re-derived. Only with no
+        // defaultTextModel: its one writer, the default-model effect, always replaces the placeholder,
+        // so an 8192 beside it was chosen later and is kept. Residue both ways: a deliberate 8192 on a
+        // store that effect never resolved resets; a pin whose model its fallback branch swapped stays.
+        if (version < 7) {
+          if (persistedState.max_tokens === DEFAULTS.max_tokens && !persistedState.defaultTextModel) {
+            persistedState.max_tokens = 0;
+          }
+        }
         return persistedState;
       },
       partialize: state => {
@@ -361,6 +415,8 @@ export const useLLM = create(
           getAccessibleModels,
           isModelAccessible,
           setLLM,
+          selectSessionModel,
+          sessionModelOverride,
           resetSettings,
           updateLLMParams,
           setResearchMode,
@@ -372,6 +428,10 @@ export const useLLM = create(
         } = state;
         return {
           ...rest,
+          // Chat pins drive requests, while storage always retains the preferred default.
+          ...sessionModelOverride,
+          sessionModelOverride: null,
+          hasExplicitSessionModelSelection: false,
           isQuestMasterEnabled: false,
           disableAutoRouteForThisSession: false,
           agentMode: { enabled: rest.agentMode?.enabled ?? false, source: 'toggle' as const },
@@ -393,6 +453,7 @@ export const LLMProvider: React.FC = () => {
   const { accessibleModels, isModelAccessible, getFallbackModel, isEntitlementsLoading } = useAccessibleModels();
   const { data: modelInfoRepo } = useModelInfo();
   const activeModel = useLLM(s => s.model);
+  const sessionModelOverride = useLLM(s => s.sessionModelOverride);
   const {
     getSetting,
     isLoading: isAdminSettingsLoading,
@@ -615,13 +676,23 @@ export const LLMProvider: React.FC = () => {
   // value belongs to the model the user is already on - i.e. it is their own deliberate setting,
   // not a stale carry-over. Raising unconditionally discarded a lowered budget on every reload.
   const refitModelRef = useRef<string | null>(null);
+  const previousSessionOverrideRef = useRef(sessionModelOverride);
   useEffect(() => {
     // The early returns below deliberately do NOT clear autoResolvedModelRef. The flag must survive until
     // the run that actually refits the model it names, and these returns are exactly the runs that have
     // not happened yet: the catalog is still loading, or the active model is an image model this effect
     // does not fit. Clearing here would drop the flag before its run, and the next run would see a model
     // change with allowRaise on - the reset this fix exists to prevent.
-    if (!activeModel || !modelInfoRepo) return;
+    // An empty model is the fresh store (DEFAULTS, or after resetSettings), whose max_tokens is the
+    // placeholder rather than a choice. Recorded so a first model that lands without a budget, before
+    // the default-model effect above can run, counts as a switch and raises the placeholder (session
+    // hydration landed one that way until it moved to selectSessionModel). Without it that first fit
+    // saw no previous model, kept allowRaise off, and pinned 8192 for good.
+    if (!activeModel) {
+      refitModelRef.current = '';
+      return;
+    }
+    if (!modelInfoRepo) return;
     if (isImageModel(activeModel)) return;
     const info = modelInfoRepo.find(m => m.id === activeModel);
     if (!info) {
@@ -638,14 +709,15 @@ export const LLMProvider: React.FC = () => {
     refitModelRef.current = activeModel;
     // A switch the app resolved for the user is not a switch they asked for, so it must not raise a
     // ceiling they lowered (#1254). Consumed once: a later, genuine switch to this same model still
-    // raises, which is what session hydration relies on (applyModelFromSession sets the model with no
-    // max_tokens and depends on this effect fitting it to the new model).
-    // `previousModel` is null on the first run that fits anything, which is the fresh-session transition
-    // out of the empty model - the same '' the writer recorded as `from`.
+    // raises. Session pins without catalog info start with max_tokens=0 and are fitted here too.
+    // On the fresh-session transition out of the empty model `previousModel` is '' (recorded above) or
+    // null (no run before this one) - either way the same '' the writer recorded as `from`.
     const pendingAutoResolve = autoResolvedModelRef.current;
     const autoResolved = pendingAutoResolve?.to === activeModel && pendingAutoResolve.from === (previousModel ?? '');
     if (pendingAutoResolve?.to === activeModel) autoResolvedModelRef.current = null;
-    const allowRaise = modelChanged && !autoResolved;
+    const restoredPreferredModel = !sessionModelOverride && previousSessionOverrideRef.current?.model === activeModel;
+    previousSessionOverrideRef.current = sessionModelOverride;
+    const allowRaise = modelChanged && !autoResolved && !restoredPreferredModel;
     setState(state => {
       const refitted = refitMaxTokensForModel(state.max_tokens, info, { allowRaise });
       return refitted === state.max_tokens ? state : { ...state, max_tokens: refitted };
@@ -653,7 +725,7 @@ export const LLMProvider: React.FC = () => {
     // setState from Zustand is stable by reference - matches the convention used by the
     // other effects in this file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeModel, modelInfoRepo]);
+  }, [activeModel, modelInfoRepo, sessionModelOverride]);
 
   // Set a default available image model if not set or inaccessible
   useEffect(() => {

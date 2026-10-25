@@ -20,8 +20,8 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
-import { addCredits } from '../creditService/addCredits';
-import { subtractCredits } from '../creditService/subtractCredits';
+import { addCreditsWithLedgerRow } from '../creditService/addCredits';
+import { subtractCreditsWithLedgerRow } from '../creditService/subtractCredits';
 import { MODERATION_POLICY } from './moderationPolicy';
 import { entersBlockedState } from './accountState';
 import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
@@ -48,8 +48,8 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   numReferralsAvailable: z.number().optional(),
   disputePending: z.boolean().optional(),
   // Admin control over the per-user moderation escalation state. Routed through
-  // `setModerationStatus` (not the generic field spread) so the `isModerated` mirror and
-  // `throttledUntil` stay consistent - this is how an admin confirms a `suspend_pending`
+  // `setModerationStatus` (not the generic field spread) so `throttledUntil` stays consistent -
+  // this is how an admin confirms a `suspend_pending`
   // account, lifts a throttle/suspension back to `active`, or manually throttles.
   moderationStatus: z.enum(['active', 'throttled', 'suspend_pending', 'suspended']).optional(),
   // Human-readable reason for a manual credit adjustment. Not a user-doc field:
@@ -94,6 +94,8 @@ export type AdminCreditAdjustment = {
   previousBalance: number;
   resultingBalance: number;
   note?: string;
+  /** The CreditTransaction row the adjustment wrote; the audit entry links to it. */
+  creditTransactionId?: string;
 };
 
 export type AdminUpdateUserResult = {
@@ -143,7 +145,7 @@ export async function adminUpdateUser(
   if (!user) {
     throw new Error('User not found');
   }
-  await validateUsernameChange(user, params, db.users);
+  await validateUsernameChange(user, params, db.users, { allowReservedUsername: true });
   if (params.email !== undefined && params.email !== user.email) {
     if (await db.users.existsOtherUserWithEmail(params.email, user.id)) {
       throw new ConflictError(EMAIL_IN_USE_MESSAGE);
@@ -232,34 +234,33 @@ export async function adminUpdateUser(
       db: { creditTransactions: db.creditTransactions },
       creditHolderMethods: db.users,
     };
-    if (creditDelta > 0) {
-      await addCredits(
-        {
-          ownerId: params.id,
-          ownerType: CreditHolderType.User,
-          credits: creditDelta,
-          type: 'generic_add',
-          reason: 'admin_adjustment',
-          description: note || 'Admin credit adjustment',
-          metadata,
-        },
-        creditAdapters
-      );
-    } else {
-      await subtractCredits(
-        {
-          ownerId: params.id,
-          ownerType: CreditHolderType.User,
-          credits: Math.abs(creditDelta),
-          type: 'generic_deduct',
-          reason: 'admin_adjustment',
-          description: note || 'Admin credit adjustment',
-          metadata,
-        },
-        creditAdapters
-      );
-    }
-    creditAdjustment = { credits: creditDelta, previousBalance, resultingBalance, note };
+    const { creditTransactionId } =
+      creditDelta > 0
+        ? await addCreditsWithLedgerRow(
+            {
+              ownerId: params.id,
+              ownerType: CreditHolderType.User,
+              credits: creditDelta,
+              type: 'generic_add',
+              reason: 'admin_adjustment',
+              description: note || 'Admin credit adjustment',
+              metadata,
+            },
+            creditAdapters
+          )
+        : await subtractCreditsWithLedgerRow(
+            {
+              ownerId: params.id,
+              ownerType: CreditHolderType.User,
+              credits: Math.abs(creditDelta),
+              type: 'generic_deduct',
+              reason: 'admin_adjustment',
+              description: note || 'Admin credit adjustment',
+              metadata,
+            },
+            creditAdapters
+          );
+    creditAdjustment = { credits: creditDelta, previousBalance, resultingBalance, note, creditTransactionId };
   }
 
   if (currentOrg) {
@@ -286,7 +287,7 @@ export async function adminUpdateUser(
   await writeUserUpdate(db.users, writeData);
 
   // Apply the moderation escalation transition last so it authoritatively sets
-  // `moderation.status`, `throttledUntil`, and the `isModerated` mirror.
+  // `moderation.status` and `throttledUntil`. It leaves `isModerated` as written above.
   if (moderationStatus) {
     await db.users.setModerationStatus(params.id, moderationStatus, {
       throttledUntil:

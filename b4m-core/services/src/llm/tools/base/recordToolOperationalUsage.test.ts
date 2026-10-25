@@ -244,4 +244,60 @@ describe('recordToolOperationalUsage', () => {
     expect(recordOperationalUsageMock).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
+
+  describe('price stamp', () => {
+    const tiered = {
+      id: 'tiered-model',
+      backend: 'bedrock',
+      priceSource: 'catalog',
+      priceRowId: 'price-row-5',
+      pricing: {
+        200_000: { input: 0.000003, output: 0.000015 },
+        1_000_000: { input: 0.000006, output: 0.0000225 },
+      },
+    } as unknown as ModelInfo;
+
+    it('stamps the catalog source, row id and the tier of the whole prompt', async () => {
+      await recordToolOperationalUsage(makeContext({ availableModels: [tiered] }), {
+        model: 'tiered-model',
+        completionInfo: { inputTokens: 20_000, cacheReadInputTokens: 190_000, outputTokens: 100 } as never,
+        startTime: Date.now(),
+      });
+
+      const { priceStamp } = recordOperationalUsageMock.mock.calls[0][0];
+      expect(priceStamp).toMatchObject({ priceSource: 'catalog', priceRowId: 'price-row-5' });
+      expect(priceStamp.rates).toMatchObject({ tierKey: 1_000_000, input: 0.000006, output: 0.0000225 });
+      expect(priceStamp).not.toHaveProperty('turnUsage');
+    });
+
+    it('writes per-request usage only for a multi-request run', async () => {
+      const turnUsage = [
+        { inputTokens: 150_000, outputTokens: 500 },
+        { inputTokens: 151_000, outputTokens: 700 },
+      ];
+      await recordToolOperationalUsage(makeContext({ availableModels: [tiered] }), {
+        model: 'tiered-model',
+        completionInfo: { inputTokens: 301_000, outputTokens: 1_200, turnUsage } as never,
+        startTime: Date.now(),
+      });
+      expect(recordOperationalUsageMock.mock.calls[0][0].priceStamp.turnUsage).toHaveLength(2);
+
+      recordOperationalUsageMock.mockClear();
+      await recordToolOperationalUsage(makeContext({ availableModels: [tiered] }), {
+        model: 'tiered-model',
+        completionInfo: { inputTokens: 150_000, outputTokens: 500, turnUsage: turnUsage.slice(0, 1) } as never,
+        startTime: Date.now(),
+      });
+      expect(recordOperationalUsageMock.mock.calls[0][0].priceStamp).not.toHaveProperty('turnUsage');
+    });
+
+    it('leaves the stamp unset when the model is not in the request catalog', async () => {
+      await recordToolOperationalUsage(makeContext({ availableModels: [] }), {
+        model: 'mystery-model',
+        completionInfo,
+        startTime: Date.now(),
+      });
+      expect(recordOperationalUsageMock.mock.calls[0][0].priceStamp).toBeUndefined();
+    });
+  });
 });

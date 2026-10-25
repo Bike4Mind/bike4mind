@@ -220,6 +220,7 @@ export function redactUserSecretsForSelf(
     const s = user.slackSettings;
     u.slackSettings = {
       slackUserId: s.slackUserId,
+      slackTeamId: s.slackTeamId,
       defaultNotebookId: s.defaultNotebookId,
       autoCreateNotebook: s.autoCreateNotebook,
       notebookNamePrefix: s.notebookNamePrefix,
@@ -255,7 +256,9 @@ export function redactUserSecretsForSelf(
   // disclosure boundary, and a `as` cast at a call site must not be able to widen it.
   for (const f of options?.keep ?? []) {
     if (!SELF_KEEPABLE_SECRET_FIELDS.includes(f)) continue;
-    if (user[f] !== undefined) u[f] = user[f];
+    if (f === 'securityQuestions' && Array.isArray(user.securityQuestions)) {
+      u.securityQuestions = user.securityQuestions.map(({ question }) => ({ question, answer: '' }));
+    }
   }
 
   // Separate door for the admin-only fields, so a viewer check is required to open it.

@@ -53,7 +53,8 @@ export interface ParsedRule {
 export type ParseResult = { ok: true; rule: ParsedRule } | { ok: false; reason: string };
 
 const SHAPE = /^([A-Za-z_][A-Za-z0-9_*-]*)(?:\((.*)\))?$/s;
-const NATIVE_NAME = /^[a-z][a-z0-9_]*$/;
+/** A desktop tool's own name, which only the desktop's own rules may use. */
+export const NATIVE_NAME = /^[a-z][a-z0-9_]*$/;
 
 function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
@@ -81,7 +82,7 @@ function shellMatcher(spec: string): RuleMatcher | string {
 }
 
 function domainMatcher(spec: string): RuleMatcher | string {
-  if (!spec.startsWith('domain:')) return 'WebFetch rules take domain:<host>';
+  if (!spec.startsWith('domain:')) return 'WebFetch rules take domain:<host>, or no specifier for every site';
   const host = spec.slice('domain:'.length).trim().toLowerCase();
   if (!host || /[/\s]/.test(host)) return 'not a host name';
   return host.startsWith('*.')

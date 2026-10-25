@@ -113,7 +113,9 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
     }
 
     if (httpResponse) {
-      if (Object.keys(httpResponse.headers).length > 0) res.set(httpResponse.headers);
+      // setHeader, not Express's res.set: Next.js API routes hand us a bare Node ServerResponse, where
+      // res.set is undefined and the throw leaves the request hanging until the function times out.
+      for (const [headerName, value] of Object.entries(httpResponse.headers)) res.setHeader(headerName, value);
       res.status(statusCode).json(httpResponse.body);
       return;
     }

@@ -1,6 +1,7 @@
 import { FC, useRef, useState } from 'react';
 import { Box, Dropdown, IconButton, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
-import { WorkOutline as BriefcaseIcon, Close as CloseIcon } from '@mui/icons-material';
+import BriefcaseIcon from '@mui/icons-material/WorkOutline';
+import CloseIcon from '@mui/icons-material/Close';
 import { BriefcasePanel } from '@client/app/components/Briefcase/BriefcasePanel';
 
 const fixedHeight = {

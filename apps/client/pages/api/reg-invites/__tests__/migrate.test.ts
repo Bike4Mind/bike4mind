@@ -56,6 +56,12 @@ describe('POST /api/reg-invites/migrate', () => {
     expect(h.createUser.mock.calls[0][0].username).toMatch(/^user-[0-9a-f]{8}$/);
   });
 
+  it('never derives the reserved test-persona prefix from a display name', async () => {
+    await run([{ email: 'a@b.test', name: 'Persona-Jane Doe' }]);
+
+    expect(h.createUser.mock.calls[0][0].username).toBe('Jane Doe');
+  });
+
   it('escapes the name in the welcome email body', async () => {
     await run([{ email: 'a@b.test', name: `<i>x</i> 'q'` }], true);
 

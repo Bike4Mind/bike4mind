@@ -201,7 +201,8 @@ export interface EmbeddingLabeledFile {
  * Retrieval path - divergence drops content from results, silently:
  *  - the corpus defer gate (b4m-core/services/src/llm/ChatCompletionProcess.ts),
  *  - isFabFileCitable (packages/server-utils/src/memory/lakeSourceReachability.ts),
- *  - the Atlas `$vectorSearch` filter clause (packages/database/src/models/content/FabFileModel.ts),
+ *  - the Atlas `$vectorSearch` filter clause, in vectorSearch and the warmVectorIndex keep-warm probe
+ *    (packages/database/src/models/content/FabFileModel.ts),
  *  - the self-host OpenSearch `term` clause, the same rule on the other backend
  *    (b4m-core/services/src/dataLakeService/openSearchChunkAdapter.ts).
  *

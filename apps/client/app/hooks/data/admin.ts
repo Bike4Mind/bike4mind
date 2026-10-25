@@ -7,6 +7,31 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { IInternalTeamMemberDocument } from '@bike4mind/common';
 
+export interface LiveOpsTriageEnv {
+  stage: string;
+  isForkProduction: boolean;
+  isSourceDeployment: boolean;
+  isPreviewEnvironment: boolean;
+  isLocalDevelopment: boolean;
+  showTab: boolean;
+}
+
+/**
+ * Deployment descriptor shared by the admin tabs: the stage, plus whether this is a fork's
+ * production stage. One query key, so AdminPage and the tab it renders share a single request.
+ */
+export function useLiveOpsTriageEnv(enabled = true) {
+  return useQuery({
+    queryKey: ['liveops-triage', 'env'],
+    queryFn: async () => {
+      const { data } = await api.get<LiveOpsTriageEnv>('/api/admin/liveops-triage-env');
+      return data;
+    },
+    enabled,
+    staleTime: 1000 * 60 * 60, // environment does not change
+  });
+}
+
 export interface SuspiciousPatternSummary {
   ip?: string;
   attempts: number;
@@ -176,13 +201,14 @@ export interface ApiKeyUsageItem {
   }>;
 }
 
-export const useGetApiUsage = () => {
+export const useGetApiUsage = (options?: { refetchInterval?: number }) => {
   return useQuery<ApiKeyUsageItem[]>({
     queryKey: ['admin', 'security', 'api-usage'],
     queryFn: async () => {
       const res = await api.get<{ items: ApiKeyUsageItem[] }>('/api/security/api-usage');
       return res.data.items;
     },
+    refetchInterval: options?.refetchInterval,
   });
 };
 

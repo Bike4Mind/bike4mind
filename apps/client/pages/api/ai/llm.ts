@@ -10,6 +10,7 @@ import {
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
@@ -144,6 +145,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...requestTurnAuth(req),
+      adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
     });
 
     // Handle case where quest creation failed (session or quest not found during invoke)

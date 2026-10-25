@@ -18,18 +18,16 @@ import {
   Button,
   Sheet,
 } from '@mui/joy';
-import {
-  GridView as GridIcon,
-  ViewList as TabsIcon,
-  UnfoldMore as AccordionIcon,
-  ContentCopy as CopyIcon,
-  Download as ExportIcon,
-  Sync as SyncIcon,
-  SyncDisabled as SyncDisabledIcon,
-  Speed as MetricsIcon,
-  CheckCircle as CheckCircleIcon,
-  RadioButtonUnchecked as UncheckedIcon,
-} from '@mui/icons-material';
+import GridIcon from '@mui/icons-material/GridView';
+import TabsIcon from '@mui/icons-material/ViewList';
+import AccordionIcon from '@mui/icons-material/UnfoldMore';
+import CopyIcon from '@mui/icons-material/ContentCopy';
+import ExportIcon from '@mui/icons-material/Download';
+import SyncIcon from '@mui/icons-material/Sync';
+import SyncDisabledIcon from '@mui/icons-material/SyncDisabled';
+import MetricsIcon from '@mui/icons-material/Speed';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import UncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import { IChatHistoryItem } from '@bike4mind/common';
 import PromptReplies from './PromptReplies';
 import ThoughtBubbles from './ThoughtBubbles';
@@ -37,7 +35,7 @@ import { ResearchModeConfiguration } from '../../types/ResearchMode';
 // import { useUserSettings } from '../../contexts/UserSettingsContext'; // Future use
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { toast } from 'sonner';
-import { Settings as SettingsIcon } from '@mui/icons-material';
+import SettingsIcon from '@mui/icons-material/Settings';
 import { extractThinking } from '@bike4mind/server-utils/shared/replyUtils';
 
 interface ResearchModeResult {
@@ -254,6 +252,8 @@ export const ResearchModeResponseDisplay: React.FC<ResearchModeResponseDisplayPr
     const responseQuest: IChatHistoryItem = {
       ...quest,
       id: `${quest.id}-${configId}`,
+      // The turn's timing belongs to the parent quest; per-panel it would repeat N times under a synthetic id.
+      turnTiming: undefined,
       reply: result?.response || streamingText || undefined,
       replies: result?.response ? [result.response] : streamingText ? [streamingText] : [],
       status: result?.success === false ? 'stopped' : streamingText ? 'running' : 'done',

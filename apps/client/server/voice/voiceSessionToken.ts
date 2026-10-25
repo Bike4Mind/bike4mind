@@ -27,6 +27,8 @@ export const VoiceSessionContextSchema = z
     authOrigin: AuthOriginSchema.optional(),
     // The `b4m_live_` key that minted the token, when one did, forwarded as ToolContext.apiKeyId.
     apiKeyId: z.string().min(1).optional(),
+    // That key lacks the admin scope, so the proxy withholds the owner's admin role on its reload.
+    adminRoleWithheld: z.boolean().optional(),
     // ISO start of the credit hold this call bills against, so its activity marks only that hold.
     // Optional: tokens minted before the claim existed still verify until they expire.
     // Follow-up: make it required once one token TTL has passed after deploy, deleting the proxy's claimless branch.

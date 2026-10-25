@@ -133,14 +133,15 @@ HOW TO BE PUBLISHABLE (a text/html artifact you intend to share):
 
 CHARTS: in a text/html artifact, chart.js@4 (the blessed path above, data baked inline) is the ONLY charting lib that survives publish - map the user's request onto its built-in types (bar/line/pie/doughnut/radar/scatter/bubble/area/polar/mixed). recharts and d3 now publish too, but ONLY inside a React artifact (not in text/html); give recharts an EXPLICIT pixel size (see SHARING A REACT ARTIFACT below). Plotly/Highcharts/ECharts/ApexCharts/Google Charts load NOWHERE. If the user needs a type these libs cannot do (force graph/sankey/choropleth) AND wants to share, hand-roll it as inline SVG/canvas.
 
-SINGLE-FILE RULE (every artifact type): one deliverable = ONE <artifact> = ONE file. NEVER use a relative/sibling import (./ or ../) in any form (import-from, side-effect import, export-from, require) - the sandbox detects and hard-rejects them before rendering. Inline every sub-component, hook, context, helper, dataset, and asset. If the user asks to "split into files/modules," honor the SPIRIT - keep one file, separate concerns with commented sections and well-named functions - and note artifacts are single-file by design.
+SINGLE-FILE RULE (every artifact type): one deliverable = ONE <artifact> = ONE file, and that is the strong default. For every type except React, NEVER use a relative/sibling import (./ or ../) in any form (import-from, side-effect import, export-from, require) - the sandbox detects and hard-rejects them before rendering. Inline every sub-component, hook, context, helper, dataset, and asset. If the user asks to "split into files/modules," honor the SPIRIT - keep one file, separate concerns with commented sections and well-named functions - and note artifacts are single-file by design. React is the one exception, below.
 
-REACT ARTIFACTS: ONE file with ONE \`export default\`. Do NOT import React or its hooks - React, useState, useEffect, useRef, useMemo, useCallback, useReducer, useContext, createContext are pre-injected globals; reference them bare. The ONLY importable packages are: lucide-react, recharts, mathjs, lodash, d3, papaparse, xlsx - use one clean import line each (\`import X from 'pkg'\` or single-line \`import { a, b } from 'pkg'\`), never mixed \`import React, { useState }\`. Nothing else resolves (no react-router/next/zustand/framer-motion/three/p5/howler/styled-components) - for multiple screens use a \`view\` useState + conditional render; hand-roll WebGL/Canvas2D/physics/noise.
+REACT MULTI-FILE (exception to the single-file rule): prefer ONE self-contained file. Split a React app across several <artifact> tags ONLY when the user explicitly asks for multiple files/modules or the app is genuinely too large for one file. Then: emit every file in the SAME reply; each sibling's identifier must equal its import basename exactly (\`import Chronosphere from "./Chronosphere"\` -> \`identifier="Chronosphere"\`); exactly ONE entry file, the one nothing else imports, has \`export default\`; siblings may use named and/or default exports; use flat names (no directories) and no import cycles; the same npm allowlist applies. A published/shared React app must still be a single file.
+
+REACT ARTIFACTS: the entry file (the only file, unless split as above) has ONE \`export default\`. Do NOT import React or its hooks - React, useState, useEffect, useRef, useMemo, useCallback, useReducer, useContext, createContext are pre-injected globals; reference them bare. The ONLY importable packages are: lucide-react, recharts, mathjs, lodash, d3, papaparse, xlsx - use one clean import line each (\`import X from 'pkg'\` or single-line \`import { a, b } from 'pkg'\`), never mixed \`import React, { useState }\`. Nothing else resolves (no react-router/next/zustand/framer-motion/three/p5/howler/styled-components) - for multiple screens use a \`view\` useState + conditional render; hand-roll WebGL/Canvas2D/physics/noise.
 
 SHARING A REACT ARTIFACT (publishing to a /p/ link): the in-chat preview is permissive but the published bundle is strict, so when a React artifact is meant to be shared:
 - STYLE with real inline CSS (style props or an inline <style>), NOT Tailwind classes - Tailwind's CDN is blocked at publish, so Tailwind-only styling renders unstyled on the live link.
 - Give charts/containers an EXPLICIT pixel size. A recharts ResponsiveContainer inside a Tailwind-sized box (e.g. \`h-80 w-full\`) collapses to zero height and draws a BLANK chart when published - set concrete width/height (e.g. \`<LineChart width={640} height={360}>\` or an inline-styled wrapper with px dimensions).
-- Write PLAIN JavaScript, NOT TypeScript - no type annotations/generics (e.g. \`useRef<SVGSVGElement>()\`); the publish transpiler has no TS preset and rejects TS syntax.
 - NO \`eval\`/\`new Function\` (the published page has no unsafe-eval) - use library APIs instead (e.g. \`math.evaluate(expr)\`, never \`new Function(expr)\`).
 - File downloads are sandbox-blocked on the published page (no allow-downloads) - \`XLSX.writeFile\`/save-to-disk buttons won't fire; render results in the page (a table, inline preview) instead of offering a download.
 - Only the importable packages above publish; importing anything else fails the publish with a clear "not publishable yet" error.
@@ -377,6 +378,7 @@ export const SettingKeySchema = z.enum([
   'serverStatus',
   'defaultSeats',
   'CSMandCTAFlag',
+  'showDesktopAppPromo',
   'SystemFiles',
   'OpenWeatherKey',
   'SerperKey',
@@ -392,6 +394,9 @@ export const SettingKeySchema = z.enum([
   'MaxActiveDungeons',
   'DungeonSpawnIntervalHeartbeats',
   'DungeonTTLMinutes',
+  'EnableStudioCreateV2',
+  'EnableStudioImage',
+  'EnableStudioProductions',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -423,18 +428,13 @@ export const SettingKeySchema = z.enum([
   'enableTeamPlan',
   'allowOpenRegistration',
   'blockDisposableEmails',
+  'blockedEmailDomains',
   'defaultFreeCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
   'lowCreditsThreshold',
   'syntheticUserEmailDomains',
-
-  // GOOGLE CALENDAR SETTINGS
-  'enableGoogleCalendar',
-  'googleCalendarServiceAccountEmail',
-  'googleCalendarServiceAccountSecret',
-  'googleCalendarOrganizerEmail',
 
   // WEATHER SERVICE SETTINGS
   'EnableWeatherService',
@@ -514,6 +514,8 @@ export const SettingKeySchema = z.enum([
   'enableVoiceSession',
   'voiceV2Enabled',
   'elevenLabsServerApiKey',
+  'elevenLabsMusicConcurrencyLimit',
+  'elevenLabsSoundConcurrencyLimit',
   'voiceSessionAiVoice',
   'voiceSessionTranscriptionModel',
   'voiceSessionVadType',
@@ -529,9 +531,6 @@ export const SettingKeySchema = z.enum([
   'MaxDailyEmailAnalyses',
 
   // MODAL AUTOMATION SETTINGS
-  'whatsNewAutomationEnabled',
-  'whatsNewConfig',
-  'whatsNewSyncConfig',
   'releaseNotesConfig',
 
   // AGENT PROACTIVE MESSAGING SETTINGS
@@ -768,7 +767,6 @@ export const CategoryOrder = [
   'Communications',
   'Slack',
   'Tools',
-  'Calendar',
 ] as const;
 
 export type Category = (typeof CategoryOrder)[number];
@@ -812,7 +810,7 @@ export const SETTING_TABS = {
     id: 'externalIntegrations',
     name: 'External Integrations',
     description: 'Configure external service integrations',
-    categories: ['Tools', 'Calendar', 'Slack'] as Category[],
+    categories: ['Tools', 'Slack'] as Category[],
     icon: 'Extension', // Puzzle piece icon
   },
   FEATURES: {
@@ -870,7 +868,7 @@ export const CATEGORY_ICONS = {
   Slack: 'Chat',
 } as const;
 
-interface BaseSetting {
+export interface BaseSetting {
   key: SettingKey;
   name: string;
   description: string;
@@ -927,6 +925,20 @@ interface BaseSetting {
 
 /** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
 export const LOW_CREDITS_THRESHOLD_DEFAULT = 1000;
+
+/**
+ * One admin setting's definition, as built by the `make*Setting` factories. `K` is `string` for a
+ * contributed setting, whose key and parent are not `SettingKey` literals.
+ */
+export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting, 'key' | 'dependsOn'> & {
+  key: K;
+  dependsOn?: [K] extends [SettingKey] ? SettingKey : string;
+  type: 'string' | 'number' | 'boolean' | 'array' | 'object';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  schema: z.ZodType<any, any, any>;
+  defaultValue?: string | number | boolean | object | undefined;
+  options?: string[];
+};
 
 /**
  * "No stored choice", for a setting of ANY type (the scoped resolver applies this to every key, not
@@ -1077,16 +1089,22 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
   };
 }
 
-function makeBooleanSetting(config: { defaultValue?: boolean } & BaseSetting) {
+function makeBooleanSetting({
+  acceptNumeric = false,
+  ...config
+}: { defaultValue?: boolean; acceptNumeric?: boolean } & BaseSetting) {
   return {
     ...config,
     type: 'boolean' as const,
     schema: z
       .preprocess(val => {
         if (typeof val === 'string') {
-          if (val.toLowerCase() === 'true') return true;
-          if (val.toLowerCase() === 'false') return false;
+          if (val.toLowerCase() === 'true' || (acceptNumeric && val === '1')) return true;
+          if (val.toLowerCase() === 'false' || (acceptNumeric && val === '0')) return false;
         }
+        // Numeric compatibility is opt-in so existing billing and security defaults cannot flip.
+        if (acceptNumeric && val === 1) return true;
+        if (acceptNumeric && val === 0) return false;
         return val;
       }, z.boolean())
       .prefault(config.defaultValue ?? false),
@@ -1115,6 +1133,32 @@ function makeObjectSetting<T>(
       return val; // Already an object or other type
     }, config.schema),
   };
+}
+
+// Factories for a contributed setting (see registerContributedSettings). They build the same schema
+// as the core factories; only the key and parent are widened to plain strings.
+type ContributedSettingFields = Omit<
+  SettingDefinition<string>,
+  'type' | 'schema' | 'defaultValue' | 'options' | 'scope'
+>;
+type AsCoreConfig<T> = Omit<T, 'key' | 'dependsOn'> & BaseSetting;
+
+export function makeContributedStringSetting(
+  config: { defaultValue: string | undefined; options?: string[] } & ContributedSettingFields
+): SettingDefinition<string> {
+  return makeStringSetting(config as AsCoreConfig<typeof config>);
+}
+
+export function makeContributedNumberSetting(
+  config: { defaultValue?: number; min?: number; max?: number; int?: boolean } & ContributedSettingFields
+): SettingDefinition<string> {
+  return makeNumberSetting(config as AsCoreConfig<typeof config>);
+}
+
+export function makeContributedBooleanSetting(
+  config: { defaultValue?: boolean; acceptNumeric?: boolean } & ContributedSettingFields
+): SettingDefinition<string> {
+  return makeBooleanSetting(config as AsCoreConfig<typeof config>);
 }
 
 // function makeArraySetting(config: { defaultValue?: string[] } & BaseSetting) {
@@ -1287,145 +1331,6 @@ export const MusicGenerationSettingsSchema = z.object({
 });
 
 export type MusicGenerationSettings = z.infer<typeof MusicGenerationSettingsSchema>;
-
-/**
- * Canonical repository and branch the What's New generator reads from.
- *
- * Every default in the What's New path (zod schema, settings registry, server
- * config service, cron/backfill fallbacks, admin form seed) must resolve here.
- * A stale slug is invisible in production: GitHubService.listMergedPullRequests
- * returns [] for a repository outside the connection allowlist, so generation
- * records "no PRs today" instead of an error and the surface silently goes dark.
- */
-export const WHATS_NEW_DEFAULT_REPOSITORY = 'Bike4Mind/bike4mind';
-export const WHATS_NEW_DEFAULT_TARGET_BRANCH = 'prod';
-
-// What's New Configuration Validation Limits
-// Single source of truth for all numeric constraints used in both frontend and backend
-export const WHATS_NEW_VALIDATION_LIMITS = {
-  // Model configuration
-  temperature: { min: 0, max: 2, default: 0.7 },
-  maxTokens: { min: 100, max: 10000, default: 2000 },
-  // Max 180000ms (3 min) to leave 2-minute buffer for post-LLM operations within 5-min Lambda timeout
-  timeoutMs: { min: 30000, max: 180000, default: 120000 },
-
-  // Modal configuration
-  modalPriority: { min: 1, max: 100, default: 10 },
-  modalExpiryDays: { min: 1, max: 365, default: 30 },
-  maxPreviousModals: { min: 0, max: 50, default: 10 },
-
-  // Validation limits (for generated content)
-  titleMaxLength: { min: 10, max: 200, default: 100 },
-  subtitleMaxLength: { min: 10, max: 500, default: 200 },
-  descriptionMaxLength: { min: 50, max: 10000, default: 2000 },
-
-  // Sanitization limits (for input content processing)
-  // These limits control how much content is sent to the LLM for processing
-  maxCommits: { min: 1, max: 200, default: 50 },
-  maxPullRequests: { min: 1, max: 100, default: 20 },
-  maxCommitMessageLength: { min: 50, max: 1000, default: 200 },
-  maxReleaseBodyLength: { min: 100, max: 10000, default: 2000 },
-  // maxPRTitleLength is intentionally not configurable via admin UI - it's a static
-  // sanitization limit used only during input processing, not a user-facing setting
-  maxPRTitleLength: { min: 10, max: 500, default: 200 },
-  maxPRBodyLength: { min: 100, max: 2000, default: 500 },
-  maxChangelogLength: { min: 100, max: 5000, default: 1000 },
-
-  // Prompt template
-  promptTemplate: { min: 50, max: 10000 },
-} as const;
-
-// What's New Configuration Schema
-// Uses WHATS_NEW_VALIDATION_LIMITS as the single source of truth for all constraints
-const L = WHATS_NEW_VALIDATION_LIMITS; // Shorthand for readability
-
-export const WhatsNewConfigSchema = z.object({
-  // Model configuration
-  modelId: z.string().default('gpt-4o-mini'),
-  temperature: z.number().min(L.temperature.min).max(L.temperature.max).default(L.temperature.default),
-  maxTokens: z.number().min(L.maxTokens.min).max(L.maxTokens.max).default(L.maxTokens.default),
-  timeoutMs: z.number().min(L.timeoutMs.min).max(L.timeoutMs.max).default(L.timeoutMs.default),
-
-  // Modal configuration
-  modalPriority: z.number().min(L.modalPriority.min).max(L.modalPriority.max).default(L.modalPriority.default),
-  modalExpiryDays: z.number().min(L.modalExpiryDays.min).max(L.modalExpiryDays.max).default(L.modalExpiryDays.default),
-  maxPreviousModals: z
-    .number()
-    .min(L.maxPreviousModals.min)
-    .max(L.maxPreviousModals.max)
-    .default(L.maxPreviousModals.default),
-
-  // Validation limits
-  titleMaxLength: z.number().min(L.titleMaxLength.min).max(L.titleMaxLength.max).default(L.titleMaxLength.default),
-  subtitleMaxLength: z
-    .number()
-    .min(L.subtitleMaxLength.min)
-    .max(L.subtitleMaxLength.max)
-    .default(L.subtitleMaxLength.default),
-  descriptionMaxLength: z
-    .number()
-    .min(L.descriptionMaxLength.min)
-    .max(L.descriptionMaxLength.max)
-    .default(L.descriptionMaxLength.default),
-
-  // Sanitization limits
-  maxCommits: z.number().min(L.maxCommits.min).max(L.maxCommits.max).default(L.maxCommits.default),
-  maxPullRequests: z.number().min(L.maxPullRequests.min).max(L.maxPullRequests.max).default(L.maxPullRequests.default),
-  maxReleaseBodyLength: z
-    .number()
-    .min(L.maxReleaseBodyLength.min)
-    .max(L.maxReleaseBodyLength.max)
-    .default(L.maxReleaseBodyLength.default),
-  maxCommitMessageLength: z
-    .number()
-    .min(L.maxCommitMessageLength.min)
-    .max(L.maxCommitMessageLength.max)
-    .default(L.maxCommitMessageLength.default),
-  maxPRBodyLength: z.number().min(L.maxPRBodyLength.min).max(L.maxPRBodyLength.max).default(L.maxPRBodyLength.default),
-  maxChangelogLength: z
-    .number()
-    .min(L.maxChangelogLength.min)
-    .max(L.maxChangelogLength.max)
-    .default(L.maxChangelogLength.default),
-
-  // GitHub repository configuration
-  repository: z
-    .string()
-    .regex(/^[\w.-]+\/[\w.-]+$/, 'Must be in owner/repo format (e.g., MyOrg/my-repo)')
-    .default(WHATS_NEW_DEFAULT_REPOSITORY),
-  targetBranch: z
-    .string()
-    .regex(/^[\w./-]+$/, 'Must be a valid branch name')
-    .default(WHATS_NEW_DEFAULT_TARGET_BRANCH),
-
-  // Custom prompt template (optional)
-  promptTemplate: z
-    .string()
-    .min(L.promptTemplate.min, `Prompt template must be at least ${L.promptTemplate.min} characters`)
-    .max(L.promptTemplate.max, `Prompt template cannot exceed ${L.promptTemplate.max.toLocaleString()} characters`)
-    .trim()
-    .optional(),
-});
-
-export type WhatsNewConfig = z.infer<typeof WhatsNewConfigSchema>;
-
-// What's New Sync Configuration Schema (for fork environments)
-export const WhatsNewSyncConfigSchema = z.object({
-  autoSyncEnabled: z.boolean().default(true),
-  lastSyncAt: z.iso.datetime().optional(),
-  lastSyncResult: z.enum(['success', 'skipped', 'failed']).optional(),
-  lastSyncModalId: z.string().optional(),
-  /** Error message from last sync attempt (only populated when lastSyncResult is 'failed') */
-  lastSyncError: z.string().max(500).optional(),
-  /**
-   * Admin override for distribution URL.
-   * Must be validated against domain allowlist (CloudFront/S3 only) before saving.
-   * Takes precedence over SST secret when set.
-   */
-  distributionUrlOverride: z.url().nullable().optional(),
-});
-
-export type WhatsNewSyncConfig = z.infer<typeof WhatsNewSyncConfigSchema>;
 
 // Context Telemetry Configuration Validation Limits
 export const CONTEXT_TELEMETRY_VALIDATION_LIMITS = {
@@ -1854,6 +1759,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'voiceSessionVadEagerness', order: 5 },
       { key: 'voiceV2Enabled', order: 6 },
       { key: 'elevenLabsServerApiKey', order: 7 },
+      { key: 'elevenLabsMusicConcurrencyLimit', order: 8 },
+      { key: 'elevenLabsSoundConcurrencyLimit', order: 9 },
     ],
   },
   XAI: {
@@ -1960,18 +1867,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'PotionQuestApiKey', order: 6 },
     ],
   },
-  CALENDAR: {
-    id: 'calendarAPIService',
-    name: 'Google Calendar',
-    description: 'Google Calendar integration settings',
-    icon: 'CalendarMonth',
-    settings: [
-      { key: 'enableGoogleCalendar', order: 1 },
-      { key: 'googleCalendarServiceAccountEmail', order: 2 },
-      { key: 'googleCalendarServiceAccountSecret', order: 3 },
-      { key: 'googleCalendarOrganizerEmail', order: 4 },
-    ],
-  },
   FEEDBACK: {
     id: 'feedbackService',
     name: 'Feedback System',
@@ -2065,6 +1960,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'MaxActiveDungeons', order: 291 },
       { key: 'DungeonSpawnIntervalHeartbeats', order: 292 },
       { key: 'DungeonTTLMinutes', order: 293 },
+      // Studio rebuild, admin-only until the reveal (see studioFeatureFlags.ts)
+      { key: 'EnableStudioCreateV2', order: 300 },
+      { key: 'EnableStudioImage', order: 301 },
+      { key: 'EnableStudioProductions', order: 302 },
     ],
   },
   NOTEBOOK: {
@@ -2085,7 +1984,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'CSMandCTAFlag', order: 3 },
       { key: 'defaultSeats', order: 4 },
       { key: 'defaultTags', order: 5 },
-      { key: 'enforceCredits', order: 6 },
     ],
   },
   CREDITS: {
@@ -2093,15 +1991,13 @@ export const API_SERVICE_GROUPS = {
     name: 'Credits System',
     description: 'Credit system and pricing configuration',
     icon: 'Payments',
+    // Signup, starter-credit, pricing and team-plan keys are edited only on the admin Growth and
+    // Pricing tab (AdminGrowthPricingTab); this group links there instead of repeating them.
     settings: [
-      { key: 'pricePerCredit', order: 1 },
-      { key: 'enforceCredits', order: 2 },
-      { key: 'billOperationalUsage', order: 3 },
-      { key: 'enableTeamPlan', order: 4 },
-      { key: 'teamPlanMinSeats', order: 5 },
-      { key: 'teamPlanMaxSeats', order: 6 },
-      { key: 'teamPlanCreditsPerSeat', order: 7 },
-      { key: 'lowCreditsThreshold', order: 8 },
+      { key: 'billOperationalUsage', order: 1 },
+      { key: 'blockDisposableEmails', order: 2 },
+      { key: 'blockedEmailDomains', order: 3 },
+      { key: 'syntheticUserEmailDomains', order: 4 },
     ],
   },
   KNOWLEDGE: {
@@ -2140,6 +2036,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'InstagramLink', order: 6 },
       { key: 'YoutubeLink', order: 7 },
       { key: 'RedditLink', order: 8 },
+      { key: 'showDesktopAppPromo', order: 9 },
     ],
   },
   ADMIN: {
@@ -2903,7 +2800,7 @@ export const settingsMap = {
     name: 'Skill Market URL Allowlist',
     defaultValue: '',
     description:
-      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a Public listing for review.',
+      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a listing for review at every visibility.',
     category: 'AI Moderation',
   }),
   SkillMarketClassifierMinConfidence: makeNumberSetting({
@@ -3047,8 +2944,6 @@ export const settingsMap = {
     defaultValue: 50,
     description: `The price in USD of one credit bought pay-as-you-go. Cannot be set below ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`,
     category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    order: 1,
   }),
   // Per-user request rate limits for /chat and /opti, keyed by the caller's
   // subscription tier. Admins and developer-tagged users bypass these.
@@ -3437,45 +3332,6 @@ export const settingsMap = {
     description: 'The default number of seats for new organizations.',
     category: 'Users',
   }),
-  enableGoogleCalendar: makeBooleanSetting({
-    key: 'enableGoogleCalendar',
-    name: 'Enable Google Calendar Integration',
-    defaultValue: false,
-    description: 'Whether to enable scheduling of briefing/advisory using google calendar',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 1,
-    // The Integrations page derives the Google Calendar card's status from it.
-    userReadable: true,
-  }),
-  googleCalendarServiceAccountEmail: makeStringSetting({
-    key: 'googleCalendarServiceAccountEmail',
-    name: 'Service Account Email',
-    defaultValue: '',
-    description: 'The service account email address that has access to google calendar API.',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 2,
-  }),
-  googleCalendarServiceAccountSecret: makeStringSetting({
-    key: 'googleCalendarServiceAccountSecret',
-    name: 'Service Account Secret',
-    defaultValue: '',
-    description: 'The base64 encoded service account secret that is associated with the service account email.',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 3,
-    isSensitive: true,
-  }),
-  googleCalendarOrganizerEmail: makeStringSetting({
-    key: 'googleCalendarOrganizerEmail',
-    name: 'Organizer Email',
-    defaultValue: '',
-    description: 'The organizer email for creating events.',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 4,
-  }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',
     userReadable: true,
@@ -3486,7 +3342,6 @@ export const settingsMap = {
     // client and server resolve the same default.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
     description: 'Whether to enforce credits for users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   billOperationalUsage: makeBooleanSetting({
@@ -3502,12 +3357,12 @@ export const settingsMap = {
     category: 'Users',
   }),
   enableTeamPlan: makeBooleanSetting({
+    acceptNumeric: true,
     key: 'enableTeamPlan',
     userReadable: true,
     name: 'Enable Team Plan',
     defaultValue: false,
     description: 'Whether to enable team plans',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   allowOpenRegistration: makeBooleanSetting({
@@ -3516,7 +3371,6 @@ export const settingsMap = {
     defaultValue: false,
     description:
       'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the Default Free Credits grant is then applied after they verify their email (anti-spam — see Default Free Credits). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   blockDisposableEmails: makeBooleanSetting({
@@ -3528,6 +3382,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
+  blockedEmailDomains: makeObjectSetting<string[]>({
+    key: 'blockedEmailDomains',
+    name: 'Blocked Email Domains',
+    defaultValue: [],
+    description:
+      'Email domains blocked from signup credits, one per line, on top of the built-in disposable list. A domain also blocks every subdomain (kashre.com blocks x@np.kashre.com). Applies even when Block Disposable Emails is OFF. Registration is refused; OAuth signup and email change still create the account but withhold the free-credit grant, and the OAuth starting-grant backfill skips these users. Existing accounts can still sign in. Bare public suffixes (co.uk, github.io) are refused. Enter internationalized domains in punycode (xn--...); a Unicode-domain email is not matched against them.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    // Plain strings so one malformed stored entry cannot fail the whole list; the update route
+    // refuses invalid entries and readers filter with partitionDomainList.
+    schema: z.array(z.string()),
+  }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
     // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
@@ -3536,7 +3402,6 @@ export const settingsMap = {
     defaultValue: 0,
     description:
       'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanMinSeats: makeNumberSetting({
@@ -3550,7 +3415,6 @@ export const settingsMap = {
     max: TEAM_PLAN_SEATS_HARD_LIMIT,
     description:
       'Fewest seats a paid team subscription can be bought with. Enforced at checkout, on seat changes from Stripe and on admin conversion to paid. Admin grants may still go down to 1. If set above the maximum seats, the maximum wins.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanMaxSeats: makeNumberSetting({
@@ -3563,7 +3427,6 @@ export const settingsMap = {
     max: TEAM_PLAN_SEATS_HARD_LIMIT,
     description:
       'Most seats any team can hold (owner + members + pending invites). Enforced at checkout, on every seat change, on admin grants and on the partner-signup auto-raise. Lowering it below a team that is already larger does not remove anyone; that team can only be set down to this cap.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanCreditsPerSeat: makeNumberSetting({
@@ -3575,7 +3438,6 @@ export const settingsMap = {
     max: 100_000_000,
     description:
       'Credits added to a team pool per paid seat each billing cycle (and per seat-month on admin team grants). Applies to invoices issued after the change; credits already granted are not adjusted.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     // The Team plan card quotes the pool size to every signed-in user.
     userReadable: true,
@@ -3591,7 +3453,6 @@ export const settingsMap = {
     max: 100_000_000,
     description:
       'Below this many credits a user sees the low-credit warning state. Set to 0 to show warnings only once credits run out.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   syntheticUserEmailDomains: makeStringSetting({
@@ -3599,7 +3460,7 @@ export const settingsMap = {
     name: 'Synthetic User Email Domains',
     defaultValue: '',
     description:
-      'Comma-separated email domains whose new signups are flagged synthetic (test personas) and excluded from funnel analytics. Accounts whose username starts with "persona-" are always flagged. Applies at signup only.',
+      'Comma-separated email domains whose new signups are flagged synthetic (test personas) and excluded from funnel analytics. Accounts whose username starts with "persona-" are always flagged, so that prefix is reserved: only admins, and accounts with a verified email on one of these domains, can choose it. Flagging applies at signup only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -3670,6 +3531,18 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.USER_MANAGEMENT.id,
     order: 3,
+  }),
+  showDesktopAppPromo: makeBooleanSetting({
+    key: 'showDesktopAppPromo',
+    name: 'Promote the Desktop App',
+    defaultValue: true,
+    description:
+      'Show signed-in users the "Try the desktop app" button and the profile-menu link to the desktop download page. Turn off for deployments that do not want to point users at the published desktop builds.',
+    category: 'Branding',
+    group: API_SERVICE_GROUPS.BRANDING.id,
+    order: 9,
+    // DesktopAppPromoButton and the profile menu read it for every user.
+    userReadable: true,
   }),
   SystemFiles: makeStringSetting({
     key: 'SystemFiles',
@@ -3766,6 +3639,37 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.SEARCH.id,
     order: 4,
     isSensitive: true,
+  }),
+  EnableStudioCreateV2: makeBooleanSetting({
+    key: 'EnableStudioCreateV2',
+    name: 'Enable Studio Create v2',
+    defaultValue: false,
+    description:
+      'Admin-only preview of the restructured Studio Create area. Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 300,
+  }),
+  EnableStudioImage: makeBooleanSetting({
+    key: 'EnableStudioImage',
+    name: 'Enable Image in Studio',
+    defaultValue: false,
+    description: 'Admin-only preview of the Image tab in Studio. Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 301,
+    dependsOn: 'EnableStudioCreateV2',
+  }),
+  EnableStudioProductions: makeBooleanSetting({
+    key: 'EnableStudioProductions',
+    name: 'Enable Studio Productions',
+    defaultValue: false,
+    description:
+      'Admin-only preview of Studio Productions (assembling many assets into one piece). Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 302,
+    dependsOn: 'EnableStudioCreateV2',
   }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',
@@ -4736,6 +4640,34 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
     order: 11,
   }),
+  // Defaults mirror the ElevenLabs plan's concurrency caps; raise them when the plan is upgraded.
+  // Read by runElevenLabsWithCapacity in @bike4mind/services.
+  elevenLabsMusicConcurrencyLimit: makeNumberSetting({
+    key: 'elevenLabsMusicConcurrencyLimit',
+    name: 'ElevenLabs Music Concurrency Limit',
+    defaultValue: 2,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many music generations from the music API may run at once on the server ElevenLabs key, across all users (async music generation jobs, which chat uses, are not counted). Match it to the ElevenLabs plan: extra requests wait briefly for a free slot instead of failing with a provider 429. Requests on a personal ElevenLabs key are not counted.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 12,
+  }),
+  elevenLabsSoundConcurrencyLimit: makeNumberSetting({
+    key: 'elevenLabsSoundConcurrencyLimit',
+    name: 'ElevenLabs Sound-Effects Concurrency Limit',
+    defaultValue: 5,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many sound-effect generations from the sound-effects API and chat may run at once on the server ElevenLabs key, across all users. Match it to the ElevenLabs plan: extra requests wait briefly for a free slot instead of failing with a provider 429. Requests on a personal ElevenLabs key are not counted.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 13,
+  }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',
     userReadable: true,
@@ -4860,61 +4792,6 @@ export const settingsMap = {
       'Maximum number of AI email analyses per user per 24-hour period. Prevents cost explosion from spam floods.',
     category: 'AI',
     order: 204,
-  }),
-  whatsNewAutomationEnabled: makeBooleanSetting({
-    key: 'whatsNewAutomationEnabled',
-    name: "Enable What's New Automation",
-    defaultValue: false,
-    description:
-      "Enable automated generation of What's New modals from release information. Disable to prevent automatic modal creation during releases.",
-    category: 'Admin',
-    order: 100,
-  }),
-  whatsNewConfig: makeObjectSetting({
-    key: 'whatsNewConfig',
-    name: "What's New Configuration",
-    defaultValue: {
-      // Model configuration
-      modelId: 'gpt-4o-mini',
-      temperature: 0.7,
-      maxTokens: 2000,
-      timeoutMs: 120000,
-      // Modal configuration
-      modalPriority: 10,
-      modalExpiryDays: 30,
-      maxPreviousModals: 10,
-      // Validation limits
-      titleMaxLength: 100,
-      subtitleMaxLength: 200,
-      descriptionMaxLength: 2000,
-      // Sanitization limits
-      maxCommits: 50,
-      maxPullRequests: 20,
-      maxReleaseBodyLength: 2000,
-      maxCommitMessageLength: 200,
-      maxPRBodyLength: 500,
-      maxChangelogLength: 1000,
-      // GitHub repository configuration
-      repository: WHATS_NEW_DEFAULT_REPOSITORY,
-      targetBranch: WHATS_NEW_DEFAULT_TARGET_BRANCH,
-    },
-    description:
-      "Configuration for automated What's New modal generation, including LLM model selection, prompt parameters, validation rules, and content sanitization limits.",
-    category: 'Admin',
-    order: 101,
-    schema: WhatsNewConfigSchema,
-  }),
-  whatsNewSyncConfig: makeObjectSetting({
-    key: 'whatsNewSyncConfig',
-    name: "What's New Sync Configuration",
-    defaultValue: {
-      autoSyncEnabled: true,
-    },
-    description:
-      "Configuration for What's New modal syncing from production. Used by fork/non-production environments to control automatic synchronization.",
-    category: 'Admin',
-    order: 102,
-    schema: WhatsNewSyncConfigSchema,
   }),
   releaseNotesConfig: makeObjectSetting({
     key: 'releaseNotesConfig',
@@ -5517,13 +5394,7 @@ export const settingsMap = {
   }),
   // Add more settings as needed
 } satisfies {
-  [key in SettingKey]: BaseSetting & {
-    type: 'string' | 'number' | 'boolean' | 'array' | 'object';
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    schema: z.ZodType<any, any, any>;
-    defaultValue?: string | number | boolean | object | undefined;
-    options?: string[];
-  };
+  [key in SettingKey]: SettingDefinition;
 };
 
 export type SettingValue<K extends SettingKey> = z.infer<(typeof settingsMap)[K]['schema']>;
@@ -5659,7 +5530,7 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
  * publicSafe settings should never carry secrets, but redact anyway).
  */
 export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc {
-  const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
+  const definition = resolveSettingDefinition(setting.settingName);
   if (!definition || definition.isSensitive) {
     return { ...setting, settingValue: maskSensitiveSettingValue(setting.settingValue) };
   }
@@ -5693,11 +5564,11 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
  * value stays empty. The authoritative mask carrying the real last-4 still comes from
  * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
  *
- * A `settingName` absent from `settingsMap` is treated as sensitive too, matching
+ * A `settingName` with no definition (core or contributed) is treated as sensitive too, matching
  * redactSettingSecrets - an orphaned row must never broadcast unmasked.
  */
 export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): AdminSettingDoc {
-  const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
+  const definition = resolveSettingDefinition(setting.settingName);
   if (!definition || definition.isSensitive) {
     const hasValue = typeof setting.settingValue === 'string' && setting.settingValue.length > 0;
     return { ...setting, settingValue: hasValue ? SENSITIVE_SETTING_MASK : '' };
@@ -5707,7 +5578,7 @@ export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): Admi
 
 /** Setting keys explicitly tagged `publicSafe` - the only keys allowed in the public artifact. */
 export function publicSafeSettingKeys(): string[] {
-  return (Object.values(settingsMap) as Array<{ key: string; publicSafe?: boolean }>)
+  return allSettingDefinitions()
     .filter(s => s.publicSafe === true)
     .map(s => s.key);
 }
@@ -5730,6 +5601,9 @@ export const experimentalNonGroupSettingKeys: readonly SettingKey[] = ['EnableCo
  * experimental flag added to `settingsMap` is surfaced automatically - there is
  * no second hand-maintained allowlist in the client to forget - plus
  * `experimentalNonGroupSettingKeys`.
+ *
+ * Core keys only, computed at import time. Code that must also see contributed experimental
+ * settings calls `getExperimentalFeatureSettingKeys()`, since registration happens after import.
  */
 export const experimentalFeatureSettingKeys: readonly SettingKey[] = (() => {
   const groupKeys = (Object.values(settingsMap) as Array<{ key: SettingKey; group?: string }>)
@@ -5737,6 +5611,14 @@ export const experimentalFeatureSettingKeys: readonly SettingKey[] = (() => {
     .map(s => s.key);
   return Array.from(new Set<SettingKey>([...groupKeys, ...experimentalNonGroupSettingKeys]));
 })();
+
+/** `experimentalFeatureSettingKeys` plus every contributed setting in the `EXPERIMENTAL` group. */
+export function getExperimentalFeatureSettingKeys(): string[] {
+  const contributed = Array.from(contributedSettings.values())
+    .filter(s => s.group === API_SERVICE_GROUPS.EXPERIMENTAL.id)
+    .map(s => s.key);
+  return Array.from(new Set<string>([...experimentalFeatureSettingKeys, ...contributed]));
+}
 
 /**
  * Setting keys a NON-ADMIN authenticated caller may read via GET /api/settings/fetch.
@@ -5756,10 +5638,13 @@ export const experimentalFeatureSettingKeys: readonly SettingKey[] = (() => {
  * belt-and-braces next to `redactSettingSecrets` on the response -- that masks the VALUE,
  * this keeps the key out of a non-admin's payload at all.
  *
+ * Arm 1 covers core keys only: a contributed setting is readable only through `publicSafe` or an explicit
+ * `userReadable: true`, since an extension's group choice is about admin UI placement, not exposure.
+ *
  * Admins bypass this entirely and read the full catalog.
  */
 export function userReadableSettingKeys(): string[] {
-  const entries = Object.values(settingsMap) as Array<{ key: string; userReadable?: boolean; isSensitive?: boolean }>;
+  const entries = allSettingDefinitions();
   const tagged = entries.filter(s => s.userReadable === true).map(s => s.key);
   const sensitive = new Set(entries.filter(s => s.isSensitive === true).map(s => s.key));
   const union = new Set<string>([...experimentalFeatureSettingKeys, ...publicSafeSettingKeys(), ...tagged]);
@@ -5785,4 +5670,81 @@ export function buildPublicSettingsProjection(settings: AdminSettingDoc[]): Publ
     .filter(s => allowed.has(s.settingName))
     .map(redactSettingSecrets)
     .map(s => ({ settingName: s.settingName, settingValue: s.settingValue }));
+}
+
+// --- Contributed settings ---
+//
+// An extension package registers its own setting definitions here instead of adding literals to
+// `SettingKeySchema`. Registration is a side effect of importing the generated contribution module
+// (apps/client: premiumAdminSettings.generated.ts, via lib/settings/registerContributedSettings.ts),
+// so a read that runs before that import sees only the core catalog.
+//
+// The contribution module also ships in the client bundle, so a sensitive contributed setting may not
+// carry a default. Contributed settings are platform-level: scoped overrides accept core keys only.
+
+const contributedSettings = new Map<string, SettingDefinition<string>>();
+
+const RESERVED_SETTING_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isCoreSettingKey(key: string): key is SettingKey {
+  return Object.prototype.hasOwnProperty.call(settingsMap, key);
+}
+
+export interface ContributedSettingsRegistration {
+  registered: string[];
+  /** Keys a core setting already defines; the core definition is kept. */
+  coreCollisions: string[];
+  /** Keys an earlier contribution already registered; the first one is kept. */
+  duplicates: string[];
+  /** Reserved object keys, definitions with no key or schema, sensitive ones with a default, and ones declaring a scope. */
+  rejected: string[];
+}
+
+/** Adds contributed setting definitions. Never replaces an existing definition. */
+export function registerContributedSettings(
+  definitions: readonly SettingDefinition<string>[]
+): ContributedSettingsRegistration {
+  const result: ContributedSettingsRegistration = { registered: [], coreCollisions: [], duplicates: [], rejected: [] };
+  for (const definition of definitions) {
+    const key = definition?.key;
+    if (
+      typeof key !== 'string' ||
+      key.trim() === '' ||
+      RESERVED_SETTING_NAMES.has(key) ||
+      typeof definition.schema?.safeParse !== 'function' ||
+      (definition.isSensitive === true && definition.defaultValue !== undefined && definition.defaultValue !== '') ||
+      definition.scope !== undefined
+    ) {
+      result.rejected.push(String(key));
+    } else if (isCoreSettingKey(key)) {
+      result.coreCollisions.push(key);
+    } else if (contributedSettings.has(key)) {
+      // The same module can be evaluated by more than one entrypoint; that is not a clash.
+      if (contributedSettings.get(key) !== definition) result.duplicates.push(key);
+    } else {
+      contributedSettings.set(key, definition);
+      result.registered.push(key);
+    }
+  }
+  return result;
+}
+
+/** @internal Tests only: drops every contributed definition. */
+export function resetContributedSettings(): void {
+  contributedSettings.clear();
+}
+
+/** The core definition for `key`, else the contributed one. */
+export function resolveSettingDefinition(key: string): SettingDefinition<string> | undefined {
+  if (isCoreSettingKey(key)) return settingsMap[key];
+  return contributedSettings.get(key);
+}
+
+export function isRegisteredSettingKey(key: string): boolean {
+  return resolveSettingDefinition(key) !== undefined;
+}
+
+/** Core definitions followed by contributed ones. */
+export function allSettingDefinitions(): SettingDefinition<string>[] {
+  return [...(Object.values(settingsMap) as SettingDefinition<string>[]), ...contributedSettings.values()];
 }

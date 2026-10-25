@@ -56,8 +56,15 @@ export type MembershipLake = Pick<
 
 // Membership decides who a file's bytes are billed to (reassignStorageOwner), so both doors take the
 // storage-owner repositories as required adapters: a caller cannot wire the tag write without them.
+export type LakeSourceShredDb = {
+  memoryLedger: {
+    markSourceShredded(kind: 'lake', principalId: string, ownerUserId: string, source: string): Promise<number>;
+  };
+};
+
 interface RemoveMembershipAdapters extends LakeMembershipAuditAdapters {
   db: LakeMembershipAuditAdapters['db'] &
+    LakeSourceShredDb &
     StorageOwnerTransferDb & {
       fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'>;
       // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
@@ -202,6 +209,7 @@ export const removeFileFromLake = async (
   // not membership in this lake, and unaffected by this write.
   const { inLake, tagsToPull, contentTags } = lakeMembershipSignals(lake, file);
   if (!file || !inLake) {
+    if (file) await db.memoryLedger.markSourceShredded('lake', lake.datalakeTag, lake.createdByUserId, file.id);
     // LOAD-BEARING for #2248's restore door: this refusal is the entire reason a removal record
     // (see removeFileFromDataLake) can never be minted for a file this lake never held - there is
     // no way to bootstrap one, since the only paths that make a file `inLake` in the first place
@@ -218,6 +226,7 @@ export const removeFileFromLake = async (
   // One atomic $pull for both signals. Two writes would leave a window - and on a crash, a
   // permanent state - where the meta-tag is gone but a prefixed tag still matches this lake.
   const pulled = await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
+  await db.memoryLedger.markSourceShredded('lake', lake.datalakeTag, lake.createdByUserId, file.id);
   // Recorded AFTER the write lands, matching the auto-activate config event: the membership
   // change is the artifact, and it has already happened by the time this runs.
   //

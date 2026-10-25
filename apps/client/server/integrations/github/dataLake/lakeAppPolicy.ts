@@ -1,5 +1,5 @@
 import type { GitHubLakeInstallationPolicyViolation } from '@bike4mind/common';
-import type { GitHubLakeInstallation } from './lakeAppClient';
+import type { GitHubLakeInstallation } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 
 /**
  * What an installation may grant. The App is registered with exactly these, but an App owner can

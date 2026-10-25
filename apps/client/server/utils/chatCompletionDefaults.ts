@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import {
   adminSettingsRepository,
@@ -31,7 +32,7 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import {
   ChatModels,
   bedrockClientCredentials,

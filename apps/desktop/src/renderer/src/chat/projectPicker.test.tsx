@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useConversation, type ProjectBindingController } from './useChat';
+import { setWorktreeByDefault } from './worktreeDefault';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -24,6 +25,7 @@ describe('cancelling the folder picker', () => {
   const updateProject = vi.fn();
   const inspectProject = vi.fn();
   const addContextDirectory = vi.fn();
+  const pickProjectDirectory = vi.fn<() => Promise<string | null>>(async () => null);
 
   function Harness() {
     const conversation = useConversation(SESSION, () => undefined);
@@ -36,6 +38,9 @@ describe('cancelling the folder picker', () => {
     updateProject.mockReset();
     inspectProject.mockReset();
     addContextDirectory.mockReset();
+    pickProjectDirectory.mockReset();
+    pickProjectDirectory.mockResolvedValue(null);
+    setWorktreeByDefault(false);
     vi.stubGlobal('requestAnimationFrame', () => 0);
     vi.stubGlobal('cancelAnimationFrame', () => undefined);
     (window as unknown as { b4m: unknown }).b4m = {
@@ -45,7 +50,7 @@ describe('cancelling the folder picker', () => {
         onSessionSummary: () => () => undefined,
         onQueueChanged: () => () => undefined,
         onStreamEvent: () => () => undefined,
-        pickProjectDirectory: async () => null,
+        pickProjectDirectory,
         updateProject,
         inspectProject,
         addContextDirectory,
@@ -61,7 +66,48 @@ describe('cancelling the folder picker', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    setWorktreeByDefault(false);
     vi.unstubAllGlobals();
+  });
+
+  it('starts the newly picked folder in a worktree when the user wants that by default', async () => {
+    setWorktreeByDefault(true);
+    pickProjectDirectory.mockResolvedValue('/other');
+    inspectProject.mockResolvedValue({ isRepository: true, branches: ['main'], currentBranch: 'main' });
+    updateProject.mockResolvedValue({ ok: true, session: PROJECT });
+
+    await act(async () => binding.pickDirectory());
+
+    expect(updateProject).toHaveBeenCalledWith(
+      expect.objectContaining({ directory: '/other', branch: 'main', workspace: true })
+    );
+  });
+
+  it('leaves the worktree off by default', async () => {
+    pickProjectDirectory.mockResolvedValue('/other');
+    inspectProject.mockResolvedValue({ isRepository: true, branches: ['main'], currentBranch: 'main' });
+    updateProject.mockResolvedValue({ ok: true, session: PROJECT });
+
+    await act(async () => binding.pickDirectory());
+
+    expect(inspectProject).toHaveBeenCalledWith('/other');
+    expect(updateProject).toHaveBeenCalledWith({
+      sessionId: SESSION,
+      directory: '/other',
+      branch: 'main',
+      workspace: false,
+    });
+  });
+
+  it('leaves the worktree off for a folder that cannot hold one', async () => {
+    setWorktreeByDefault(true);
+    pickProjectDirectory.mockResolvedValue('/plain');
+    inspectProject.mockResolvedValue({ isRepository: false, branches: [], currentBranch: null });
+    updateProject.mockResolvedValue({ ok: true, session: PROJECT });
+
+    await act(async () => binding.pickDirectory());
+
+    expect(updateProject).toHaveBeenCalledWith(expect.objectContaining({ directory: '/plain', workspace: false }));
   });
 
   it('leaves the project untouched and shows no notice', async () => {

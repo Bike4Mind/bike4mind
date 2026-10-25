@@ -43,7 +43,7 @@ import {
   dispatchIssueToSre,
   parseIssueNumberFromUrl,
   type SreIssuePayload,
-} from '@server/integrations/github/sreWebhookDispatch';
+} from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';

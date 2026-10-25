@@ -1,5 +1,6 @@
+import '@client/lib/settings/registerContributedSettings';
 import { authMiddleware, auth } from '@server/auth/auth';
-import { registerToolGearObserver } from '@server/services/gears/toolGearObserver';
+import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
 import { logging } from '@server/middlewares/logging';
 import errorHandler from '@server/middlewares/errorHandler';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
@@ -8,7 +9,7 @@ import { apiKeyAnomalyDetection } from '@server/middlewares/apiKeyAnomalyDetecti
 import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
 import { connectDB } from '@bike4mind/database';
-import { ApiKeyScope, MethodNotAllowedError } from '@bike4mind/common';
+import { ApiKeyScopeValue, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
@@ -36,7 +37,7 @@ interface BaseAPIOptions {
    * authorized, exactly as before. JWT/browser callers are never affected: the
    * scope gate only runs for requests authenticated by an API key.
    */
-  requiredScopes?: ApiKeyScope[];
+  requiredScopes?: ApiKeyScopeValue[];
   /**
    * API-key scopes this route ALSO requires, on top of `requiredScopes` (AND
    * semantics - every one of these must be held). Use when a route needs two
@@ -45,7 +46,7 @@ interface BaseAPIOptions {
    * `requiredScopes`, this has no staging grace period - see decideScopeGate's
    * doc comment (apiKeyScopeGate.ts).
    */
-  alsoRequiredScopes?: ApiKeyScope[];
+  alsoRequiredScopes?: ApiKeyScopeValue[];
   /**
    * OAuth reachability for this route. Relying-party OAuth access tokens are default-denied at
    * every JWT-authed route; set this to opt a route in.

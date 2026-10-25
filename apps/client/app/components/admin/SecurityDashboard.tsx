@@ -13,20 +13,18 @@ import {
   Typography,
   useTheme,
 } from '@mui/joy';
-import {
-  CheckCircle as CheckCircleIcon,
-  CloudOutlined as CloudOutlinedIcon,
-  CodeOutlined as CodeOutlinedIcon,
-  Error as ErrorIcon,
-  HomeRounded as HomeRoundedIcon,
-  Inventory2Outlined as Inventory2OutlinedIcon,
-  LockOutlined as LockOutlinedIcon,
-  MemoryOutlined as MemoryOutlinedIcon,
-  PlayCircleOutlined as PlayCircleOutlinedIcon,
-  ShieldOutlined as ShieldOutlinedIcon,
-  VpnKeyOutlined as VpnKeyOutlinedIcon,
-  Warning as WarningIcon,
-} from '@mui/icons-material';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
+import CodeOutlinedIcon from '@mui/icons-material/CodeOutlined';
+import ErrorIcon from '@mui/icons-material/Error';
+import HomeRoundedIcon from '@mui/icons-material/HomeRounded';
+import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
+import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
+import PlayCircleOutlinedIcon from '@mui/icons-material/PlayCircleOutlined';
+import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
+import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
+import WarningIcon from '@mui/icons-material/Warning';
 import { useMemo, useState } from 'react';
 import { useSecurityScanCooldown } from '@client/app/hooks/useSecurityScanCooldown';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
@@ -2972,14 +2970,7 @@ const SecurityWafTab = ({
 };
 
 type SecurityDashboardSectionId =
-  | 'overview'
-  | 'web'
-  | 'code'
-  | 'packages'
-  | 'secrets'
-  | 'cloud'
-  | 'waf'
-  | 'active-defense';
+  'overview' | 'web' | 'code' | 'packages' | 'secrets' | 'cloud' | 'waf' | 'active-defense';
 
 // Tabs temporarily hidden - functionality preserved but not exposed in UI
 const HIDDEN_TABS: SecurityDashboardSectionId[] = ['code', 'packages', 'secrets'];

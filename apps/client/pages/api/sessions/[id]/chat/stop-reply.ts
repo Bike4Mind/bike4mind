@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { Logger } from '@bike4mind/observability';
-import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
+import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, { urgent?: boolean; questId?: string }, { id?: string }>(async (req, res) => {

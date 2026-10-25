@@ -5,7 +5,8 @@ import { remarkGfmNoSingleTilde, promoteInlineLatexDollars, UNESCAPED } from '@c
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Box, Typography, IconButton, Tooltip } from '@mui/joy';
-import { ContentCopy, Check } from '@mui/icons-material';
+import ContentCopy from '@mui/icons-material/ContentCopy';
+import Check from '@mui/icons-material/Check';
 import MermaidChart from '../Charts/MermaidChart';
 import { locateCitedPassage, blockIntersectsPassage, type PassageRange } from './citedPassage';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';

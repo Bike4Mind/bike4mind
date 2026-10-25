@@ -13,6 +13,7 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   lakeMembershipRemovalRepository,
+  memoryLedgerRepository,
   adminSettingsRepository,
   fabFileRepository,
   fileTagRepository,
@@ -186,6 +187,7 @@ describe('toggleTags against real Mongo', () => {
       {
         db: {
           fabFiles: fabFileRepository,
+          memoryLedger: memoryLedgerRepository,
           fileTags: fileTagRepository,
           dataLakes: dataLakeRepository,
           users: userRepository,
@@ -210,6 +212,7 @@ describe('toggleTags against real Mongo', () => {
         {
           db: {
             fabFiles: fabFileRepository,
+            memoryLedger: memoryLedgerRepository,
             fileTags: fileTagRepository,
             dataLakes: dataLakeRepository,
             users: userRepository,
@@ -232,6 +235,7 @@ describe('toggleTags against real Mongo', () => {
       {
         db: {
           fabFiles: fabFileRepository,
+          memoryLedger: memoryLedgerRepository,
           fileTags: fileTagRepository,
           dataLakes: dataLakeRepository,
           users: userRepository,
@@ -254,6 +258,7 @@ describe('toggleTags against real Mongo', () => {
  */
 describe('restore after removal (#2248) against real Mongo', () => {
   const removeDb = {
+    memoryLedger: memoryLedgerRepository,
     dataLakes: dataLakeRepository,
     fabFiles: fabFileRepository,
     dataLakeAccessGrants: dataLakeAccessGrantRepository,

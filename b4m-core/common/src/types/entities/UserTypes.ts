@@ -170,6 +170,8 @@ export interface IUserPreferences {
   showFunTools?: boolean;
   /** Whether to show the prompt suggestion cards on the splash screen. Default: false. */
   showSplashCards?: boolean;
+  /** Set once the user closes the "Try the desktop app" pill in the sidebar; it never shows again. */
+  desktopPromoDismissed?: boolean;
 }
 
 /** Source of a moderation flag - which moderation backend produced the hit. */
@@ -180,7 +182,7 @@ export type ModerationHitSource = 'openai' | 'bedrock';
  * - `active`: no action; normal usage.
  * - `throttled`: auto-applied on repeat hits; a tighter rate limit is enforced until `throttledUntil`.
  * - `suspend_pending`: threshold for suspension reached - flagged for a human to confirm. NOT auto-blocking.
- * - `suspended`: human-confirmed suspension; chat/generation is blocked (mirrored to `isModerated`).
+ * - `suspended`: human-confirmed suspension; the account is blocked at sign-in.
  */
 export type UserModerationStatus = 'active' | 'throttled' | 'suspend_pending' | 'suspended';
 
@@ -255,8 +257,8 @@ export interface IUser extends ICreditHolder {
   isModerated: boolean;
   /**
    * Per-user moderation tracking + auto-throttle/suspend state.
-   * Absent until the user's first moderation hit. `moderation.status === 'suspended'`
-   * is mirrored to `isModerated` for legacy admin surfaces.
+   * Absent until the user's first moderation hit. Independent of `isModerated`, the admin's
+   * AI-only block.
    */
   moderation?: IUserModeration;
   /**
@@ -370,6 +372,7 @@ export interface IUser extends ICreditHolder {
   // Slack integration settings
   slackSettings?: {
     slackUserId?: string;
+    slackTeamId?: string;
     // User access token for user-scoped APIs (e.g., reminders). Protected by select: false in DB schema.
     slackUserToken?: string;
     // OAuth scopes granted by the user (e.g., ['identity.basic', 'reminders:write'])
@@ -702,8 +705,16 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   pullSystemFilesForUsers: (userIds: string[], fileIds: string[]) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
   removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;
-  /** Charge `count` referrals (floored at zero) and add the invites they created to `regInvites`. */
+  /**
+   * Charge `count` referrals (floored at zero) and add the invites they created to `regInvites`.
+   * @deprecated Reservations are not atomic and can overspend under concurrency. Use
+   * `reserveReferrals` before side effects and `settleReferrals` afterward.
+   */
   recordReferrals: (userId: string, count: number, newInviteIds: string[]) => Promise<void>;
+  /** Atomically charge `count` referrals; resolves false when the allowance is below `count`. */
+  reserveReferrals: (userId: string, count: number) => Promise<boolean>;
+  /** Refund `refundCount` failed referrals and add `newInviteIds` to `regInvites`; not idempotent, do not retry. */
+  settleReferrals: (userId: string, refundCount: number, newInviteIds: string[]) => Promise<void>;
   /**
    * Remove several group ids from ONE user's `groups[]` (idempotent $pull). Used when a member
    * leaves or is removed from an org, to strip that org's group ids from just that member.
@@ -787,8 +798,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    */
   recordModerationHit: (userId: string, hit: IModerationHit) => Promise<IUserDocument | null>;
   /**
-   * Transition a user's moderation escalation state. Mirrors `isModerated` when
-   * moving to/from `suspended`. Returns the updated user.
+   * Transition a user's moderation escalation state. Leaves `isModerated` alone. Returns the
+   * updated user.
    */
   setModerationStatus: (
     userId: string,

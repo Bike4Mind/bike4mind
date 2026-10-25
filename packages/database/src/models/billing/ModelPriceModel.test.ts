@@ -73,6 +73,18 @@ describe('ModelPriceRepository', () => {
     expect(perMinute?.pricing['1'].input).toBe(0.06);
   });
 
+  it('rowsInForce returns each row with its id (the aggregation skips virtuals), for the UsageEvent price stamp', async () => {
+    const appended = await modelPriceRepository.append({
+      modelId: 'gpt-x',
+      unit: 'per_token',
+      pricing: { '200000': tier },
+      effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+    });
+
+    const [row] = await modelPriceRepository.rowsInForce(new Date('2026-07-15T00:00:00Z'));
+    expect(row.id).toBe(String(appended!._id));
+  });
+
   it('historyForModel returns all rows newest first', async () => {
     const base = { modelId: 'gpt-x', unit: 'per_token' as const, pricing: { '200000': tier } };
     await modelPriceRepository.append({ ...base, effectiveFrom: new Date('2026-06-01T00:00:00Z') });

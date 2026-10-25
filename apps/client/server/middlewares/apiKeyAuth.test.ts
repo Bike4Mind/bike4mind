@@ -1,6 +1,13 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
-import { ApiKeyScope, CreditHolderType, ForbiddenError } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  ForbiddenError,
+  InternalServerError,
+  ServiceUnavailableError,
+  UnauthorizedError,
+} from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -33,7 +40,7 @@ const makeReq = () =>
     headers: { 'x-api-key': KEY },
     method: 'GET',
     originalUrl: '/api/v1/sessions',
-    logger: { warn: vi.fn(), info: vi.fn() },
+    logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   }) as unknown as Request & { logger: { warn: ReturnType<typeof vi.fn> } };
 
 const makeRes = () => ({ once: vi.fn(), statusCode: 200 }) as unknown as Response;
@@ -324,5 +331,95 @@ describe('apiKeyAuth blocked owner log', () => {
     const req = makeReq();
     expect((await run(undefined, req)).passed).toBe(true);
     expect(req.logger.warn).not.toHaveBeenCalledWith('API key rejected: owner account blocked', expect.anything());
+  });
+});
+
+describe('apiKeyAuth infrastructure failures', () => {
+  /** The driver's shape for a dropped socket, matched by name like the real one. */
+  const networkError = () =>
+    Object.assign(new Error('This socket has been ended by the other party'), { name: 'MongoNetworkError' });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false });
+  });
+
+  it('503s when the key lookup loses its database connection', async () => {
+    validateUserApiKeyMock.mockRejectedValue(networkError());
+    const { error } = await run(undefined, makeReq());
+    expect(error).toBeInstanceOf(ServiceUnavailableError);
+    expect((error as ServiceUnavailableError).additionalInfo).toMatchObject({ retryAfter: expect.any(Number) });
+  });
+
+  it('503s when the owner lookup loses its database connection', async () => {
+    findByIdMock.mockRejectedValue(networkError());
+    const { error } = await run(undefined, makeReq());
+    expect(error).toBeInstanceOf(ServiceUnavailableError);
+  });
+
+  it('500s any other unexpected error without echoing its message to the caller', async () => {
+    const unexpected = Object.assign(new Error('unexpected'), { name: 'MongoServerError' });
+    validateUserApiKeyMock.mockRejectedValue(unexpected);
+    const req = makeReq();
+    const { error } = await run(undefined, req);
+    expect(error).toBeInstanceOf(InternalServerError);
+    expect(error?.message).toBe('Authentication failed');
+    expect(req.logger.warn).toHaveBeenCalledWith('API key authentication error', unexpected);
+    expect(req.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still 401s an unknown key', async () => {
+    validateUserApiKeyMock.mockResolvedValue({ isValid: false, reason: 'not_found' });
+    const { error } = await run(undefined, makeReq());
+    expect(error).toBeInstanceOf(UnauthorizedError);
+    expect(error?.message).toBe('Invalid API key');
+  });
+});
+
+describe('apiKeyAuth admin role', () => {
+  const keyWith = (scopes: ApiKeyScope[]) =>
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'admin-1',
+      scopes,
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findByIdMock.mockResolvedValue({ id: 'admin-1', isBanned: false, isAdmin: true });
+  });
+
+  it('treats the owner as a regular user when the key lacks the admin scope', async () => {
+    keyWith([ApiKeyScope.AI_CHAT]);
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(false);
+  });
+
+  it('keeps the admin role for a key holding the admin scope', async () => {
+    keyWith([ApiKeyScope.ADMIN]);
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(true);
+  });
+
+  it('leaves a session-authenticated admin alone', async () => {
+    const req = makeReq();
+    req.user = { id: 'admin-1', isAdmin: true } as unknown as Request['user'];
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(true);
+    expect(validateUserApiKeyMock).not.toHaveBeenCalled();
   });
 });

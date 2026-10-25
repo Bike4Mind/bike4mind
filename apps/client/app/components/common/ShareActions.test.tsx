@@ -130,3 +130,42 @@ describe('ShareActions', () => {
     expect(toastSuccess).toHaveBeenCalled();
   });
 });
+
+describe('ShareActions - brand label contrast', () => {
+  const luminance = (rgb: number[]) => {
+    const [r, g, b] = rgb.map(c => {
+      const s = c / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a: number[], b: number[]) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const hex = (h: string) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  // Modal popup, panel surface and the outlined-button hover fill, per mode.
+  const BACKGROUNDS = {
+    light: ['#FFFFFF', '#F4F7F9', '#E3EFFB'],
+    dark: ['#000000', '#0E1214', '#0A2744'],
+  } as const;
+
+  it.each(['light', 'dark'] as const)('%s: every brand-coloured label reaches 4.5:1', mode => {
+    render(
+      <CssVarsProvider theme={appTheme} defaultMode={mode} modeStorageKey={`share-actions-test-${mode}`}>
+        <ShareActions title={TITLE} url={URL} markdown="# hi" />
+      </CssVarsProvider>
+    );
+    const failures = ['bluesky', 'linkedin', 'copy-markdown'].flatMap(id => {
+      const rgb = getComputedStyle(screen.getByTestId(`share-actions-${id}`))
+        .color.match(/\d+/g)!
+        .slice(0, 3)
+        .map(Number);
+      return BACKGROUNDS[mode]
+        .map(bg => ({ id, bg, ratio: contrast(rgb, hex(bg)) }))
+        .filter(({ ratio }) => ratio < 4.5)
+        .map(({ bg, ratio }) => `${id} on ${bg}: ${ratio.toFixed(2)}`);
+    });
+    expect(failures).toEqual([]);
+  });
+});

@@ -1,4 +1,4 @@
-import { getTextModelCost, getTurnsCost } from '@bike4mind/common';
+import { buildUsagePriceStamp, getTextModelCost, getTurnsCost } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordOperationalUsage } from '../../../billing';
 import type { ToolContext } from './types';
@@ -100,6 +100,12 @@ export async function recordToolOperationalUsage(
         cachedInputTokens,
         cacheWriteTokens,
         costUsd,
+        priceStamp: modelInfo
+          ? buildUsagePriceStamp(modelInfo, {
+              turns: turnUsage,
+              tierBasisTokens: inputTokens + cachedInputTokens + cacheWriteTokens,
+            })
+          : undefined,
         latencyMs: Date.now() - startTime,
         source: 'system',
         finishReason: completionInfo?.stopReason,

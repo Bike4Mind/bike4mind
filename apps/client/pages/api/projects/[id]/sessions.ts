@@ -7,6 +7,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
+import { isAiAccessRevoked } from '@bike4mind/services/userService/accountState';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -100,6 +101,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       // rather than failing the attach - the client types this response as ISessionDocument[],
       // leaving the warning log as where a skipped summary surfaces (#1852).
       const summarizableSessionIds = await filterSessionIdsByOperationalCredits(sessions, {
+        payerId: req.user.id,
         operationsPerSession: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
         operation: 'session summarization',
         logger: req.logger,
@@ -120,8 +122,13 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
             },
             { ability: req.ability }
           );
-          if (!summarizableSessionIds.has(session.id)) return;
-          await SessionEvents.Summarize.publish({ sessionId: session.id, callTagging: true, trigger: 'project' });
+          if (!summarizableSessionIds.has(session.id) || isAiAccessRevoked(req.user)) return;
+          await SessionEvents.Summarize.publish({
+            sessionId: session.id,
+            callTagging: true,
+            trigger: 'project',
+            payerId: req.user.id,
+          });
         })
       );
 

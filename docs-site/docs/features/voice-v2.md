@@ -59,6 +59,8 @@ Under **Admin → Settings → AI → Voice Session**:
 | --- | --- |
 | **Enable Voice v2 (Model-Agnostic)** (`voiceV2Enabled`) | Gate for the feature. When off, `POST /api/voice/v2/sessions` returns 403 and the toolbar button is hidden. |
 | **ElevenLabs Server API Key (Voice v2)** (`elevenLabsServerApiKey`) | Server-only key used to provision agents, mint signed URLs, and list workspace voices. Distinct from the per-user ElevenLabs key used for TTS preview. Marked sensitive — won't render in the UI after save. |
+| **ElevenLabs Music Concurrency Limit** (`elevenLabsMusicConcurrencyLimit`) | How many music generations on the server key may run at once across all users (default 2). Match it to your ElevenLabs plan: extra requests wait briefly for a free slot, then get a `429` with `Retry-After` and a credit refund. |
+| **ElevenLabs Sound-Effects Concurrency Limit** (`elevenLabsSoundConcurrencyLimit`) | The same for sound effects (default 5). Requests on a user's own ElevenLabs key are not counted against either limit. |
 
 Save each setting; they take effect on the next call without a redeploy.
 

@@ -4,7 +4,6 @@ vi.mock('@server/cli/auth', () => ({
   verifyApiKey: vi.fn().mockRejectedValue(new Error('no api key')),
   verifyJwtToken: vi.fn().mockResolvedValue({ id: 'u1' }),
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
-  checkApiKeyRateLimitOrThrow: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@server/websocket/utils', () => ({
@@ -15,7 +14,7 @@ vi.mock('@server/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { checkRateLimit } from '@server/cli/auth';
+import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
 import { sendToClient, sendToConnection } from '@server/websocket/utils';
 import { func } from './keepCommandRequest';
 
@@ -56,6 +55,36 @@ describe('keepCommandRequest websocket handler', () => {
       'conn-1',
       'https://example.test/test',
       expect.objectContaining({ action: 'keep_command_result', success: false })
+    );
+  });
+});
+
+describe('keepCommandRequest websocket handler - session-only auth', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('never accepts an API key: the token is checked only as a session JWT', async () => {
+    await run();
+
+    expect(verifyApiKey).not.toHaveBeenCalled();
+    expect(verifyJwtToken).toHaveBeenCalledWith('jwt-token');
+  });
+
+  it('does not relay the command when the token is not a valid session JWT', async () => {
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(new Error('bad token'));
+
+    await run();
+
+    expect(sendToClient).not.toHaveBeenCalled();
+    expect(sendToConnection).toHaveBeenCalledWith(
+      'conn-1',
+      'https://example.test/test',
+      expect.objectContaining({
+        action: 'keep_command_result',
+        success: false,
+        error: 'Authentication failed. Sign in again and retry.',
+      })
     );
   });
 });

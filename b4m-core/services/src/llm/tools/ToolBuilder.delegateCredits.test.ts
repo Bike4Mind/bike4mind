@@ -135,6 +135,22 @@ describe('ToolBuilder delegate_to_agent credit attribution', () => {
     expect(resolveAggregateToolModel(toolCreditModels)).toBeUndefined();
   });
 
+  it('records the attribution as a usage event carrying the subagent price stamp', async () => {
+    // The stamp is built in delegateToAgent and handed over by onSubagentCredits; this drives the
+    // whole hop, so dropping the handoff leaves the cost unattributable in the margin report.
+    mockDelegation(PARENT_MODEL);
+    const { delegateTool, recordUsage } = buildDelegateTool();
+
+    await delegateTool.toolFn({ task: 'research', agent: 'researcher' });
+
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(recordUsage.mock.calls[0][0]).toMatchObject({
+      model: PARENT_MODEL,
+      priceSource: 'literal',
+      rates: { tierKey: 128_000, input: 0.4, output: 1.6 },
+    });
+  });
+
   it('contributes nothing for a zero-credit delegation', async () => {
     mockDelegation('gpt-4.1-nano-not-listed', 0);
     const { delegateTool, toolCreditsMap, toolCreditModels, recordUsage } = buildDelegateTool();

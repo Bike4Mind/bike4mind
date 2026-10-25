@@ -160,6 +160,8 @@ export class StatusManager {
           ...(quest.researchModeResults ? { researchModeResults: quest.researchModeResults } : {}),
           // Include fallback info if present (for backend fallback mechanism)
           ...(quest.fallbackInfo ? { fallbackInfo: quest.fallbackInfo } : {}),
+          // Live, so a retried reply shows its turn ID and retry footnote without a reload
+          ...(quest.turnTiming ? { turnTiming: quest.turnTiming } : {}),
           images: quest.images ?? [],
           ...(quest.videoJobIds?.length ? { videoJobIds: quest.videoJobIds } : {}),
           ...(quest.generationJobs?.length ? { generationJobs: quest.generationJobs } : {}),

@@ -40,7 +40,7 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
   }): Promise<{ shouldContinue: boolean }> {
     const { message, quest, session } = args;
 
-    this.service.logger.log(`🚨🚨🚨 AGENT DETECTION: Message="${message}"`);
+    this.service.logger.log('Agent detection started', { messageLength: message.length });
 
     // Check for attached agents in the session or quest
     const attachedAgentIds = quest.agentIds || session.agentIds || [];
@@ -48,7 +48,7 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
 
     // Check for @mentions if no attached agents
     const mentions = await this.detectMentions(message);
-    this.service.logger.log(`🚨 Detected mentions: ${JSON.stringify(mentions)}`);
+    this.service.logger.log('Agent mentions detected', { mentionCount: mentions.length });
 
     let agentsToProcess: IAgent[] = [];
 
@@ -65,7 +65,10 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
         this.service.logger.log(`📋 Agent "${agent.name}" (${agent.id}):`);
         this.service.logger.log(`   - Has system prompt: ${!!agent.systemPrompt}`);
         if (agent.systemPrompt) {
-          this.service.logger.log(`   - System prompt preview: ${agent.systemPrompt.substring(0, 100)}...`);
+          this.service.logger.log('Agent system prompt configured', {
+            agentId: agent.id,
+            promptLength: agent.systemPrompt.length,
+          });
         }
         this.service.logger.log(`   - Has personality: ${!!agent.personality}`);
         this.service.logger.log(`   - Trigger words: ${agent.triggerWords?.join(', ') || 'none'}`);

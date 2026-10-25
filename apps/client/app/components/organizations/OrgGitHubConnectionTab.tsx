@@ -32,18 +32,16 @@ import {
   ListItem,
   ListDivider,
 } from '@mui/joy';
-import {
-  Refresh,
-  Delete,
-  Warning,
-  CheckCircle,
-  Error as ErrorIcon,
-  LinkOff,
-  VpnKey,
-  Schedule,
-  Speed,
-  Search,
-} from '@mui/icons-material';
+import Refresh from '@mui/icons-material/Refresh';
+import Delete from '@mui/icons-material/Delete';
+import Warning from '@mui/icons-material/Warning';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import LinkOff from '@mui/icons-material/LinkOff';
+import VpnKey from '@mui/icons-material/VpnKey';
+import Schedule from '@mui/icons-material/Schedule';
+import Speed from '@mui/icons-material/Speed';
+import Search from '@mui/icons-material/Search';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import {
   useGetOrgGitHubConnection,

@@ -73,13 +73,33 @@ vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
 // Product-scope access of the minting user; every product on by default so the embed/org cases
 // below are unaffected. The resolver itself is covered in server/entitlements/apiKeyScopeAccess.test.ts.
 const scopeAccess = vi.hoisted(() => ({
-  current: { hasOptiAccess: true, hasOverwatchAccess: true, hearthEnabled: true },
+  current: {
+    hasOptiAccess: true,
+    hasOverwatchAccess: true,
+    hearthEnabled: true,
+    bypass: false,
+    entitlements: new Set<string>() as ReadonlySet<string>,
+  },
 }));
 vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
   resolveApiKeyScopeAccess: vi.fn(async () => scopeAccess.current),
 }));
 
+// One contributed scope, so the merged catalog the route screens against holds a non-built-in row.
+vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+  premiumApiKeyScopes: [
+    {
+      value: 'acme:read',
+      label: 'Acme: Read',
+      description: 'Read Acme records',
+      endpoints: ['GET /api/acme'],
+      requiredEntitlement: 'acme:pro',
+    },
+  ],
+}));
+
 import { CreditHolderType } from '@bike4mind/common';
+import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import '@pages/api/user-api-keys/index';
 
 function post(body: unknown, opts: { isAdmin?: boolean } = {}) {
@@ -411,6 +431,12 @@ describe('POST /api/user-api-keys - scope allowlist guard', () => {
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('rejects release-notes:write (admin-provisioned only) with isAdmin=%s', async isAdmin => {
+    const { req, res } = post({ name: 'release', scopes: ['release-notes:write'] }, { isAdmin });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Scope not allowed/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
   it('allows a valid self-service scope through (notebooks:read)', async () => {
     const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
     await mockRefs.postHandler!(req, res);
@@ -574,7 +600,13 @@ describe('POST /api/user-api-keys - caller key scopes forwarded for containment'
 describe('POST /api/user-api-keys - product scope entitlement', () => {
   beforeEach(() => {
     createUserApiKey.mockClear();
-    scopeAccess.current = { hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false };
+    scopeAccess.current = {
+      hasOptiAccess: false,
+      hasOverwatchAccess: false,
+      hearthEnabled: false,
+      bypass: false,
+      entitlements: new Set<string>(),
+    };
   });
 
   it.each(['hearth:read', 'overwatch:read', 'marketing-reports:write', 'optihashi:compute'])(
@@ -597,5 +629,83 @@ describe('POST /api/user-api-keys - product scope entitlement', () => {
     const { req, res } = post({ name: 'k', scopes: ['me:read', 'files:read'] });
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('mints both Bob scopes without any product', async () => {
+    // Every signed-in account can use Bob, so neither scope waits on a product flag.
+    const { req, res } = post({ name: 'k', scopes: ['bob:read', 'bob:run'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ scopes: ['bob:read', 'bob:run'] }),
+      expect.anything()
+    );
+  });
+});
+
+describe('POST /api/user-api-keys - contributed scopes', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    scopeAccess.current = {
+      hasOptiAccess: false,
+      hasOverwatchAccess: false,
+      hearthEnabled: false,
+      bypass: false,
+      entitlements: new Set<string>(),
+    };
+  });
+
+  it('mints a contributed scope for a user holding its entitlement, passing the merged predicate', async () => {
+    scopeAccess.current = { ...scopeAccess.current, entitlements: new Set(['acme:pro']) };
+    const { req, res } = post({ name: 'k', scopes: ['acme:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    const adapters = createUserApiKey.mock.calls[0][2] as unknown as { isKnownScope: (v: string) => boolean };
+    expect(adapters.isKnownScope('acme:read')).toBe(true);
+    expect(adapters.isKnownScope('acme:write')).toBe(false);
+  });
+
+  it('mints a contributed scope for an admin or developer without the entitlement', async () => {
+    scopeAccess.current = { ...scopeAccess.current, bypass: true };
+    const { req, res } = post({ name: 'k', scopes: ['acme:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('refuses a contributed scope with 403 to a user without its entitlement', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['acme:read'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'Scope not available on your account: acme:read',
+    });
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('does not mint when the caller entitlement lookup fails', async () => {
+    const failure = new Error('entitlement lookup unavailable');
+    vi.mocked(resolveApiKeyScopeAccess).mockRejectedValueOnce(failure);
+    const { req, res } = post({ name: 'k', scopes: ['acme:read'] });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBe(failure);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it.each([['acme:write'], ['']])('refuses %j with the allowlist 400 before any entitlement check', async scope => {
+    scopeAccess.current = { ...scopeAccess.current, bypass: true };
+    const { req, res } = post({ name: 'k', scopes: [scope] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 400,
+      message: `Scope not allowed: ${scope}`,
+    });
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  // The route only screens what it is given; the service owns the empty and non-array refusals
+  // (see contributedScopes.e2e.test.ts beside this file).
+  it.each([[[]], ['acme:read']])('leaves %j to the service rather than refusing it here', async scopes => {
+    const { req, res } = post({ name: 'k', scopes });
+    await mockRefs.postHandler!(req, res);
+    expect(createUserApiKey).toHaveBeenCalledWith('u1', expect.objectContaining({ scopes }), expect.anything());
   });
 });

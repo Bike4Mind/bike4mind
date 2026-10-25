@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { stripe } from '@server/integrations/stripe/stripe';
+import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import {
   handleUserSubscriptionInvoice,
@@ -10,7 +10,7 @@ import { emitProductEvent } from '@server/analytics/emitActiveEvent';
 import { stableEventId } from '@server/analytics/signupEvents';
 import { userRepository } from '@bike4mind/database';
 
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     invoices: { retrieve: vi.fn() },
     subscriptions: { retrieve: vi.fn() },
@@ -168,6 +168,7 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
             value: 29.99,
             currency: 'USD',
             billingReason,
+            userAction: false,
           },
         ],
         [
