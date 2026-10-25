@@ -7,9 +7,9 @@ import path from 'node:path';
  * temp directory of its own, and is torn down and checked before its result is released.
  *
  *  - before: refuse unless the process table holds nothing but this runtime, its ancestors and
- *    the sandbox's init (PID 1), then empty the scratch root. On Lambda that is /tmp, which outlives even an environment
- *    reset, and where @sparticuz/chromium reuses an already-extracted browser rather than
- *    extracting it again from the deployment package;
+ *    the sandbox's init (PID 1), then empty the scratch root. On Lambda that is /tmp, which
+ *    outlives even an environment reset, and where @sparticuz/chromium reuses an
+ *    already-extracted browser rather than extracting it again from the deployment package;
  *  - during: the render gets a fresh workspace (profile + temp dir) under the scratch root;
  *  - after: SIGKILL every remaining descendant of this runtime by PID, check the table again,
  *    and empty the scratch root.
