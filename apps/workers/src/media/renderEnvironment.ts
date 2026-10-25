@@ -114,9 +114,13 @@ export function createRenderEnvironment({
   };
 
   const strayProcessProblem = async (): Promise<string | undefined> => {
-    const stray = strayProcesses(await processes.list(), selfPid);
+    const entries = await processes.list();
+    const stray = strayProcesses(entries, selfPid);
+    if (stray?.length === 0) return undefined;
+    // The whole table, so a refusal on real Lambda can be diagnosed from the logs alone.
+    console.error(`publish thumbnail render process table (self ${selfPid}): ${describeTable(entries)}`);
     if (stray === undefined) return 'the process table does not list this runtime';
-    return stray.length ? `unexpected processes ${describe(stray)}` : undefined;
+    return `unexpected processes ${describe(stray)}`;
   };
 
   const scratchProblem = async (): Promise<string | undefined> => {
@@ -301,13 +305,26 @@ async function collect(checks: Array<() => Promise<string | undefined>>): Promis
   return problems;
 }
 
-/** `pid name` pairs for a log line; names are process-controlled, so keep them short and plain. */
+/** `pid name` pairs for a log line. */
 function describe(entries: readonly ProcessEntry[]): string {
   const shown = entries
     .slice(0, 10)
-    .map(entry => `${entry.pid} ${entry.name.replace(/[^\w.-]/g, '?').slice(0, 16)}`)
+    .map(entry => `${entry.pid} ${plain(entry.name, 16)}`)
     .join(', ');
   return `[${shown}${entries.length > 10 ? `, +${entries.length - 10} more` : ''}]`;
+}
+
+/**
+ * `pid ppid state name` for every entry, kernel threads and exited processes included. Uncapped:
+ * Lambda allows an execution environment 1,024 processes, far below the log event size limit.
+ */
+function describeTable(entries: readonly ProcessEntry[]): string {
+  return `[${entries.map(entry => `${entry.pid} ${entry.ppid} ${plain(entry.state, 1)} ${plain(entry.name, 16)}`).join(', ')}]`;
+}
+
+/** Process-controlled text kept short and plain for a one-line log. */
+function plain(text: string, maxLength: number): string {
+  return text.replace(/[^\w.-]/g, '?').slice(0, maxLength);
 }
 
 function sleep(ms: number): Promise<void> {

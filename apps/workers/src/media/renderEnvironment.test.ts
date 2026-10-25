@@ -16,6 +16,7 @@ import {
   procfsProcessTable,
   RenderDeadlineError,
   RenderEnvironmentError,
+  strayProcesses,
   type ProcessEntry,
   type RenderWorkspace,
 } from './renderEnvironment';
@@ -45,7 +46,7 @@ function fakeProcesses(initial: ProcessEntry[], { unkillable = [] as number[] } 
 }
 
 const platform = () => [proc(1, 0, 'init'), proc(SELF, 1, 'node')];
-/** Lambda's shape: the runtime's parent is outside the sandbox, so init is not among its ancestors. */
+/** Lambda's shape: init is not among the runtime's ancestors (modelled as the runtime's PPID reading 0). */
 const lambdaPlatform = () => [proc(1, 0, 'init'), proc(SELF, 0, 'node')];
 
 let scratchRoot: string;
@@ -143,6 +144,46 @@ describe('createRenderEnvironment', () => {
     expect(table.kill).not.toHaveBeenCalled();
   });
 
+  it('withholds the result when a render leaves a process reparented to init on Lambda, signalling neither', async () => {
+    const processes = fakeProcesses(lambdaPlatform());
+    const failed = environmentWith(processes.table).run(async () => {
+      processes.spawn(proc(200, SELF, 'chromium'));
+      processes.spawn(proc(500, 1, 'reparented'));
+      return 'rendered';
+    });
+
+    await expect(failed).rejects.toThrow(/unexpected processes \[500 reparented\]$/);
+    expect(processes.table.kill.mock.calls).toEqual([[200]]);
+    expect(console.error).toHaveBeenCalledWith(
+      'publish thumbnail render process table (self 100): [1 0 S init, 100 0 S node, 500 1 S reparented]'
+    );
+  });
+
+  it('logs the whole process table it saw, as pid, ppid, state and name only, when the check fails', async () => {
+    const { table } = fakeProcesses([
+      ...lambdaPlatform(),
+      proc(2, 0, 'kthreadd', { kernelThread: true }),
+      proc(300, 1, 'defunct', { state: 'Z' }),
+      proc(400, 1, 'evil name\n/tmp/(x) and more'),
+      proc(401, 1, 'odd', { state: 'S (sleeping)' }),
+    ]);
+
+    await expect(environmentWith(table).run(async () => 'rendered')).rejects.toThrow(/unexpected processes/);
+    expect(console.error).toHaveBeenCalledWith(
+      'publish thumbnail render process table (self 100): ' +
+        '[1 0 S init, 100 0 S node, 2 0 S kthreadd, 300 1 Z defunct, 400 1 S evil?name??tmp??, 401 1 S odd]'
+    );
+  });
+
+  it('logs nothing when the checks pass', async () => {
+    const processes = fakeProcesses(lambdaPlatform());
+    await environmentWith(processes.table).run(async () => {
+      processes.spawn(proc(200, SELF, 'chromium'));
+      return 'rendered';
+    });
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
   it('refuses to start beside a process that is not part of this runtime, and never signals it', async () => {
     const { table } = fakeProcesses([...platform(), proc(400, 1, 'leftover')]);
     const render = vi.fn(async () => 'rendered');
@@ -197,6 +238,7 @@ describe('createRenderEnvironment', () => {
 
     const { table } = fakeProcesses([proc(1, 0, 'init')]);
     await expect(environmentWith(table).run(async () => 'rendered')).rejects.toThrow(/does not list this runtime/);
+    expect(console.error).toHaveBeenCalledWith('publish thumbnail render process table (self 100): [1 0 S init]');
   });
 
   it('fails closed when the scratch directory cannot be emptied', async () => {
@@ -261,6 +303,13 @@ describe('createRenderEnvironment', () => {
     await vi.waitFor(() => expect(readdirSync(scratchRoot)).toHaveLength(1));
     release();
     await expect(first).resolves.toBe('first');
+  });
+});
+
+describe('strayProcesses', () => {
+  it('allows PID 1 by PID, not by name, and nothing else beside the runtime', () => {
+    const entries = [...lambdaPlatform(), proc(7, 0, 'init'), proc(300, 0, 'extension'), proc(400, 1, 'orphan')];
+    expect(strayProcesses(entries, SELF)?.map(entry => entry.pid)).toEqual([7, 300, 400]);
   });
 });
 
