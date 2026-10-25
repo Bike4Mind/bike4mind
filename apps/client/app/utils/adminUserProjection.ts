@@ -31,6 +31,8 @@ export const ADMIN_USER_LIST_FIELDS = [
   'isOnline',
   'preferences',
   'storageLimit',
+  'storageLimitOverride',
+  'planStorageLimit',
   'currentStorageSize',
   'createdAt',
   'updatedAt',

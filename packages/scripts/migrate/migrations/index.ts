@@ -11,6 +11,7 @@
  */
 
 // 2. Import the file here:
+import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
 import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';
 import CreateAndPopulateQuests from './20240524172716_create-and-populate-quests';
@@ -389,6 +390,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureOverwatchUserDaySyntheticLaneIndex,
   EnsureArtifactSessionIdentifierIndex,
   EnsureAuthEventIndexes,
+  BackfillStorageLimitOverrides,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

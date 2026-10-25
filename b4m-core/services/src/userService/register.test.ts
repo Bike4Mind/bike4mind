@@ -84,6 +84,28 @@ describe('registerUser', () => {
     };
   });
 
+  it.each([
+    [null, 1000, null],
+    [1000, 1000, null],
+    [2500, 2500, 2500],
+  ])('resolves invite quota %s through the shared allocator', async (startingStorage, limit, override) => {
+    mockInvite.startingStorage = startingStorage;
+    const result = await registerUser(baseParams, mockAdapters);
+    expect(result.storageLimit).toBe(limit);
+    expect(result.storageLimitOverride).toBe(override);
+  });
+
+  it('keeps matched subscriber priority over an invite allocation', async () => {
+    mockInvite.email = baseParams.email;
+    mockInvite.startingStorage = 2500;
+    mockAdapters.db.subscribers = {
+      findByEmail: vi.fn().mockResolvedValue({ inviteCode: baseParams.inviteCode, startingStorage: null }),
+    };
+    const result = await registerUser(baseParams, mockAdapters);
+    expect(result.storageLimit).toBe(1000);
+    expect(result.storageLimitOverride).toBeNull();
+  });
+
   it('registers a new user with valid data and invite, deferring credits until email is proven', async () => {
     const result = await registerUser(baseParams, mockAdapters);
     expect(result).toMatchObject({ username: baseParams.username, email: baseParams.email, name: baseParams.name });

@@ -20,3 +20,23 @@ export const storageLimitToBytes = (storageLimitMb: number): number => storageLi
 /** An organization's effective quota in bytes: its own `storageLimit`, else DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
 export const organizationStorageLimitBytes = (organization: { storageLimit?: number | null }): number =>
   storageLimitToBytes(organization.storageLimit ?? DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB);
+
+export type UserStorageAllocation = {
+  storageLimit?: number | null;
+  storageLimitOverride?: number | null;
+  planStorageLimit?: number | null;
+};
+
+/** Explicit null retires the legacy fallback, allowing an override to be cleared. */
+export const resolveUserStorageLimit = (allocation: UserStorageAllocation) => {
+  const legacyOverride =
+    allocation.storageLimitOverride === undefined &&
+    allocation.planStorageLimit === undefined &&
+    allocation.storageLimit !== DEFAULT_STORAGE_LIMIT_MB
+      ? allocation.storageLimit
+      : null;
+  const override = allocation.storageLimitOverride ?? legacyOverride;
+  if (override != null) return { limitMb: override, source: 'override' as const };
+  if (allocation.planStorageLimit != null) return { limitMb: allocation.planStorageLimit, source: 'plan' as const };
+  return { limitMb: DEFAULT_STORAGE_LIMIT_MB, source: 'default' as const };
+};

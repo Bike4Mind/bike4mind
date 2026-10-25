@@ -261,7 +261,11 @@ export interface IUser extends ICreditHolder {
   hasUsablePassword?: boolean;
   groups: Array<string> | null;
   isAdmin: boolean;
-  storageLimit: number /** Storage limit in MBs */;
+  storageLimit: number /** Effective storage limit in decimal MB */;
+  /** Manual or custom signup allocation; null means use plan/default. */
+  storageLimitOverride?: number | null;
+  /** Plan allocation in decimal MB, separate from the manual override. */
+  planStorageLimit?: number | null;
   currentStorageSize: number /** Current storage size in Bytes */;
   tags: Array<string> | null;
   /**

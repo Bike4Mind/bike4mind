@@ -1,4 +1,4 @@
-import { ApiKeyScope, usernameSchema } from '@bike4mind/common';
+import { ApiKeyScope, usernameSchema, MAX_STORAGE_LIMIT_MB, DEFAULT_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   userRepository,
@@ -28,7 +28,7 @@ const createUserSchema = z.object({
   isAdmin: z.boolean().prefault(false),
   level: z.enum(['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser']).prefault('DemoUser'),
   initialCredits: z.number().min(0).prefault(0),
-  storageLimit: z.number().min(0).prefault(1000),
+  storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).prefault(DEFAULT_STORAGE_LIMIT_MB),
   tags: z.array(z.string()).prefault([]),
 });
 
