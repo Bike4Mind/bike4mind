@@ -97,6 +97,10 @@ export const ArtifactVersionMetaSchema = z.object({
   publishedBy: z.string(),
   size: z.object({ totalBytes: z.int().nonnegative(), fileCount: z.int().nonnegative() }),
   sha256Index: z.string(),
+  /** Byte length of this version's index.html, the only file archived to `versions/{sha256Index}.html`
+   *  once the version is replaced (`size` is the whole bundle). Counts toward the owner's storage
+   *  quota while the version is not current. Absent on entries recorded before it was tracked. */
+  indexBytes: z.int().nonnegative().optional(),
 });
 export type ArtifactVersionMeta = z.infer<typeof ArtifactVersionMetaSchema>;
 
@@ -162,6 +166,7 @@ export const PUBLISH_LIMITS = {
  * below; API-key callers are additionally metered per key by `apiKeyRateLimit`.
  *
  * Enforcement is aggregate-on-read: at publish time we sum `size.totalBytes`
+ * plus archived page versions (see `ArtifactVersionMetaSchema.indexBytes`)
  * for the owner's active rows, then compare against these caps. Two
  * concurrent publishes can each read stale usage and both pass, so the true
  * ceiling may be briefly exceeded by roughly one in-flight bundle. That
