@@ -45,6 +45,8 @@ function fakeProcesses(initial: ProcessEntry[], { unkillable = [] as number[] } 
 }
 
 const platform = () => [proc(1, 0, 'init'), proc(SELF, 1, 'node')];
+/** Lambda's shape: the runtime's parent is outside the sandbox, so init is not among its ancestors. */
+const lambdaPlatform = () => [proc(1, 0, 'init'), proc(SELF, 0, 'node')];
 
 let scratchRoot: string;
 beforeEach(() => {
@@ -117,6 +119,27 @@ describe('createRenderEnvironment', () => {
       proc(300, 1, 'defunct', { state: 'Z' }),
     ]);
     await expect(environmentWith(table).run(async () => 'rendered')).resolves.toBe('rendered');
+    expect(table.kill).not.toHaveBeenCalled();
+  });
+
+  it("allows the sandbox's init when it is not an ancestor of the runtime, as on Lambda", async () => {
+    const processes = fakeProcesses(lambdaPlatform());
+    const result = await environmentWith(processes.table).run(async () => {
+      processes.spawn(proc(200, SELF, 'chromium'));
+      return 'rendered';
+    });
+
+    expect(result).toBe('rendered');
+    expect(processes.table.kill.mock.calls).toEqual([[200]]);
+    expect(await processes.table.list()).toEqual(lambdaPlatform());
+  });
+
+  it('still refuses a process reparented to init beside a Lambda-shaped runtime, and never signals it', async () => {
+    const { table } = fakeProcesses([...lambdaPlatform(), proc(400, 1, 'leftover')]);
+    const render = vi.fn(async () => 'rendered');
+
+    await expect(environmentWith(table).run(render)).rejects.toThrow(/unexpected processes \[400 leftover\]$/);
+    expect(render).not.toHaveBeenCalled();
     expect(table.kill).not.toHaveBeenCalled();
   });
 

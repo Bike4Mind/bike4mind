@@ -6,8 +6,8 @@ import path from 'node:path';
  * starts with no process and no file left over from an earlier one, gets a browser profile and
  * temp directory of its own, and is torn down and checked before its result is released.
  *
- *  - before: refuse unless the process table holds nothing but this runtime and its ancestors,
- *    then empty the scratch root. On Lambda that is /tmp, which outlives even an environment
+ *  - before: refuse unless the process table holds nothing but this runtime, its ancestors and
+ *    the sandbox's init (PID 1), then empty the scratch root. On Lambda that is /tmp, which outlives even an environment
  *    reset, and where @sparticuz/chromium reuses an already-extracted browser rather than
  *    extracting it again from the deployment package;
  *  - during: the render gets a fresh workspace (profile + temp dir) under the scratch root;
@@ -95,6 +95,7 @@ const KILL_TIMEOUT_MS = 5_000;
 const TEARDOWN_MARGIN_MS = 3_000;
 const KILL_POLL_MS = 50;
 const EXITED_STATES = new Set(['Z', 'X', 'x']);
+const INIT_PID = 1;
 const WORKSPACE_PREFIX = 'thumbnail-render-';
 
 export function createRenderEnvironment({
@@ -169,11 +170,14 @@ export function createRenderEnvironment({
   };
 }
 
-/** Live processes other than `selfPid` and its ancestors; undefined when `selfPid` is not listed. */
+/** Live processes other than PID 1, `selfPid` and its ancestors; undefined when `selfPid` is not listed. */
 export function strayProcesses(entries: readonly ProcessEntry[], selfPid: number): ProcessEntry[] | undefined {
   const byPid = new Map(entries.map(entry => [entry.pid, entry]));
   if (!byPid.has(selfPid)) return undefined;
-  const allowed = new Set<number>();
+  // PID 1 is the sandbox's init, which a render can never leave behind. On Lambda it need not be an
+  // ancestor: the runtime's parent can sit outside the sandbox's PID namespace, so its PPID reads 0.
+  // A process merely reparented to init (PPID 1) is still stray.
+  const allowed = new Set<number>([INIT_PID]);
   for (let entry = byPid.get(selfPid); entry && !allowed.has(entry.pid); entry = byPid.get(entry.ppid)) {
     allowed.add(entry.pid);
   }
