@@ -138,6 +138,19 @@ describe('ensure-overwatch-user-day-synthetic-lane-index migration (real DB)', (
     expect(sameKey.map(i => i.name)).toEqual([INDEX_NAME]);
   });
 
+  it('is a no-op when autoIndex built the index first', async () => {
+    // A Lambda cold boot can finish the schema's build before the migrator runs on that deploy.
+    await OverwatchUserDay.createIndexes();
+    await migration.up();
+
+    const sameKey = (await OverwatchUserDay.collection.indexes()).filter(
+      i => JSON.stringify(i.key) === JSON.stringify({ productId: 1, date: 1 })
+    );
+    expect(sameKey.map(i => ({ name: i.name, partialFilterExpression: i.partialFilterExpression }))).toEqual([
+      { name: INDEX_NAME, partialFilterExpression: { lane: 'synthetic' } },
+    ]);
+  });
+
   it('wins the plan for synthetic-lane reads and is never used by reads that do not name the lane', async () => {
     await OverwatchUserDay.collection.createIndex({ productId: 1, date: 1, userId: 1 }, { unique: true });
     await migration.up();

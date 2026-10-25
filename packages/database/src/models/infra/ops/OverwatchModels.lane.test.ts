@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../../__test__/createMongoServer';
-import { OverwatchUserDay } from './OverwatchUserDayModel';
+import { OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX, OverwatchUserDay } from './OverwatchUserDayModel';
 import { OverwatchUserFirstSeen } from './OverwatchUserFirstSeenModel';
 import { OverwatchRollup } from './OverwatchRollupModel';
 
@@ -65,6 +65,13 @@ describe('OverwatchUserDay lane', () => {
 
   it('rejects a lane other than synthetic', async () => {
     await expect(OverwatchUserDay.create({ ...KEY, lane: 'real' })).rejects.toThrow(/lane/);
+  });
+
+  it('declares the synthetic-lane partial index, so autoIndex builds it where the migration has not run', async () => {
+    const idx = (await OverwatchUserDay.collection.indexes()).find(
+      i => i.name === OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX
+    );
+    expect(idx).toMatchObject({ key: { productId: 1, date: 1 }, partialFilterExpression: { lane: 'synthetic' } });
   });
 });
 
