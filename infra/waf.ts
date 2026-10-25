@@ -186,7 +186,7 @@ export const wafLoggingConfig =
  * blocks more than 50 requests in a 5-minute window.
  *
  * Emergency rollback if a rule is misfiring:
- *   Fast path — change "Action": {"Block": {}} to "Action": {"Count": {}} in
+ *   Fast path: change the rule's Block action to {"Count": {}} in
  *   the deployment's production policy and redeploy. The rule stays active
  *   but stops blocking; CloudWatch metrics keep accumulating so you can observe impact.
  *   Hard rollback: remove the rule from the JSON and redeploy.

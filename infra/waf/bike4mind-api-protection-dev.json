@@ -209,7 +209,17 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -861,7 +871,17 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -903,7 +923,17 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -1665,7 +1695,17 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -1757,7 +1797,17 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -1799,7 +1849,17 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,

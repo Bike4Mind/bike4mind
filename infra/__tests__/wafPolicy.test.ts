@@ -169,6 +169,10 @@ const EXPECTED_SCOPE_DOWNS: Record<string, UriPathMatch[]> = {
  */
 const INCLUSION_SCOPED_GROUPS = ['AWS-AWSManagedRulesAnonymousIpList'];
 
+const RATE_BLOCK = {
+  Block: { CustomResponse: { ResponseCode: 429, ResponseHeaders: [{ Name: 'retry-after', Value: '300' }] } },
+};
+
 /** Managed rule group rules for a stage, by rule name. */
 function managedRules(stage: string): Map<string, WafRule> {
   const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
@@ -296,6 +300,18 @@ describe('wafPolicy', () => {
       const rateLimitRule = parsed.find((rule: WafRule) => rule.Name === 'api-rate-limit');
       expect(rateLimitRule).toBeDefined();
       expect(rateLimitRule.Statement.RateBasedStatement.AggregateKeyType).toBe('IP');
+    });
+
+    it.each(['dev', 'production'])('answers every blocking rate rule with 429 and retry-after on %s', stage => {
+      const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+      // any: RateBasedStatement and Action shapes are deeply nested
+      const blocking = rules.filter(r => (r.Statement as any).RateBasedStatement && 'Block' in (r.Action as any));
+      expect(blocking.length).toBeGreaterThan(0);
+      for (const rule of blocking) {
+        const custom = (rule.Action as any).Block.CustomResponse;
+        expect(custom?.ResponseCode, `${rule.Name} status`).toBe(429);
+        expect(custom?.ResponseHeaders, `${rule.Name} headers`).toContainEqual({ Name: 'retry-after', Value: '300' });
+      }
     });
 
     // Cypress CI runs against staging, so the dev limit may only ever be looser than production's.
@@ -664,7 +680,7 @@ describe('wafPolicy', () => {
       expect(limits.map(r => r.Name).sort()).toEqual([...ENFORCED_RATE_LIMITS, ...COUNTING_RATE_LIMITS].sort());
 
       for (const rule of limits) {
-        const want = ENFORCED_RATE_LIMITS.includes(rule.Name) ? { Block: {} } : { Count: {} };
+        const want = ENFORCED_RATE_LIMITS.includes(rule.Name) ? RATE_BLOCK : { Count: {} };
         expect(rule.Action, `${rule.Name} action`).toEqual(want);
       }
     });
@@ -988,7 +1004,7 @@ describe('wafPolicy', () => {
           it('blocks per IP over a 300 second window', () => {
             const rule = find();
             expect(rule).toBeDefined();
-            expect(rule!.Action).toEqual({ Block: {} });
+            expect(rule!.Action).toEqual(RATE_BLOCK);
             // any: RateBasedStatement shape is deeply nested
             const rate = (rule!.Statement as any).RateBasedStatement;
             expect(rate.AggregateKeyType).toBe('IP');
