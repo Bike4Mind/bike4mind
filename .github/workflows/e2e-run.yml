@@ -236,7 +236,7 @@ jobs:
           # below (same-account). Preview stacks live in a SEPARATE AWS account the
           # dev role can't `sst shell` into, so for pr<N> runs we inject the secret
           # directly from this repo secret instead. It must match the preview-tier value
-          # the deployer seeds onto preview stages (bike4mind-deployer _tier-deploy.yml).
+          # the deployer seeds onto preview stages.
           # Empty for dev/staging: the suite prefers the env var over SST, so the preview
           # value must never reach a staging run.
           # E2E_CLEANUP_SECRET is the ONLY SST value the suite needs.

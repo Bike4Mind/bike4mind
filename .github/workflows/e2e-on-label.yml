@@ -97,7 +97,7 @@ jobs:
           # Preview stacks live in a SEPARATE AWS account the dev role can't `sst shell`
           # into, so inject E2E_CLEANUP_SECRET (the only SST value the suite needs) directly
           # from this repo secret. It must match the preview-tier value the deployer seeds
-          # onto preview stages (bike4mind-deployer _tier-deploy.yml).
+          # onto preview stages.
           E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET_PREVIEW }}
           AI_LATENCY_RUN: 'false'
           PW_WORKERS: '1'
