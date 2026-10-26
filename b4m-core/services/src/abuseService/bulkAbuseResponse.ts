@@ -361,9 +361,10 @@ async function revokeKeysStep(user: IUser, { db, audit }: BulkAbuseExecuteAdapte
 async function revokeSessionsStep(user: IUser, { db, audit }: BulkAbuseExecuteAdapters): Promise<StepResult> {
   const revokedSessions = await db.authSessions.revokeAllByUserId(user.id);
   const trustedDevices = await db.trustedDevices.revokeAllForUser(user.id);
-  if (revokedSessions === 0 && trustedDevices === 0) return { outcome: 'skipped' };
-  // Both the bump and the session revoke are needed; see revokeUserSessions.
+  // Bump unconditionally: legacy JWT refresh/access tokens have no AuthSession row and are gated only by
+  // tokenVersion. Only the audit row and the applied outcome depend on something having been revoked.
   await db.users.incrementTokenVersion(user.id);
+  if (revokedSessions === 0 && trustedDevices === 0) return { outcome: 'skipped' };
   await audit({
     action: 'abuse.bulk.revoke_sessions',
     user,

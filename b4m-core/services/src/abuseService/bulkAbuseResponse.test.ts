@@ -359,7 +359,7 @@ describe('executeBulkAbuse', () => {
     ]);
   });
 
-  it('skips session revocation, its audit row and the token bump when nothing was left to revoke', async () => {
+  it('still bumps tokenVersion but skips the audit row and sockets when nothing was left to revoke', async () => {
     const user = makeUser(1);
     const { adapters, audit } = executeAdapters([user], []);
     await executeBulkAbuse([user], ONLY('revokeSessions'), ACTOR_ID, adapters);
@@ -372,8 +372,20 @@ describe('executeBulkAbuse', () => {
 
     expect(rerun.steps.revokeSessions).toBe('skipped');
     expect(audit).not.toHaveBeenCalled();
-    expect(adapters.db.users.incrementTokenVersion).not.toHaveBeenCalled();
+    expect(adapters.db.users.incrementTokenVersion).toHaveBeenCalledWith(id(1));
     expect(adapters.db.realtimeConnections.endConnections).not.toHaveBeenCalled();
+  });
+
+  it('bumps tokenVersion for a user with no sessions so legacy JWTs stop working', async () => {
+    const user = makeUser(1);
+    const { adapters, audit } = executeAdapters([user], []);
+    vi.mocked(adapters.db.authSessions.revokeAllByUserId).mockResolvedValue(0);
+
+    const [result] = await executeBulkAbuse([user], ONLY('revokeSessions'), ACTOR_ID, adapters);
+
+    expect(result.steps.revokeSessions).toBe('skipped');
+    expect(adapters.db.users.incrementTokenVersion).toHaveBeenCalledWith(id(1));
+    expect(audit).not.toHaveBeenCalled();
   });
 
   it('ends session sockets after the commit when sessions were revoked', async () => {
