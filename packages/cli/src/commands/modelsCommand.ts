@@ -12,11 +12,13 @@ import {
   ModelNotFoundError,
   OllamaRuntime,
   detectRuntimes,
+  isAbliteratedModel,
   isHubRepoId,
   type DetectedRuntime,
   type HubGated,
   type HubGgufBuild,
   type HubModelDetail,
+  type HubModelSummary,
   type LocalRuntime,
   type OllamaRefIssue,
 } from '@bike4mind/local-models';
@@ -37,6 +39,7 @@ interface ModelsCommandArgs {
   ref?: string;
   repo?: string;
   query?: string | string[];
+  'include-abliterated'?: boolean;
   yes?: boolean;
   'accept-license'?: boolean;
   'ollama-host'?: string;
@@ -78,6 +81,7 @@ export interface ModelsOptions {
   json: boolean;
   yes: boolean;
   acceptLicense: boolean;
+  includeAbliterated: boolean;
 }
 
 export type PullTarget = { kind: 'hub'; repo: string; tag: string | null } | { kind: 'ollama'; name: string };
@@ -328,27 +332,63 @@ export async function listModels(deps: ModelsDeps, opts: ModelsOptions): Promise
   return 0;
 }
 
+export const NOT_RECOMMENDED_LABEL = 'abliterated or uncensored build';
+
+export function hiddenAbliteratedMessage(count: number): string {
+  return `${count} abliterated or uncensored ${count === 1 ? 'build was' : 'builds were'} left out.`;
+}
+
+/** Drops abliterated builds unless asked for; the ones kept go after every other hit and are flagged. */
+export function rankSearchHits<T extends Pick<HubModelSummary, 'id' | 'tags' | 'baseModels'>>(
+  models: T[],
+  includeAbliterated: boolean
+): { hits: Array<T & { notRecommended?: string }>; hidden: number } {
+  const flagged = models.filter(isAbliteratedModel);
+  const plain = models.filter(model => !isAbliteratedModel(model));
+  return {
+    hits: [
+      ...plain,
+      ...(includeAbliterated ? flagged.map(model => ({ ...model, notRecommended: NOT_RECOMMENDED_LABEL })) : []),
+    ],
+    hidden: includeAbliterated ? 0 : flagged.length,
+  };
+}
+
 export async function searchModels(query: string, deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
   const page = await deps.hub().search({ query, limit: SEARCH_LIMIT, signal: deps.signal });
+  const { hits, hidden } = rankSearchHits(page.models, opts.includeAbliterated);
   if (opts.json) {
-    deps.log(JSON.stringify(page, null, 2));
+    deps.log(
+      JSON.stringify(
+        { ...page, models: hits, ...(hidden > 0 && { hidden: hiddenAbliteratedMessage(hidden) }) },
+        null,
+        2
+      )
+    );
     return 0;
   }
-  if (page.models.length === 0) {
+  if (hits.length === 0) {
     deps.log(`No GGUF models on Hugging Face match "${clean(query)}".`);
-    return 0;
+  } else {
+    const labelled = hits.some(model => model.notRecommended);
+    const lines = table([
+      ['REPO', 'DOWNLOADS', 'LIKES', 'LICENSE', 'GATED', ...(labelled ? ['NOTE'] : [])],
+      ...hits.map(model => [
+        clean(model.id),
+        formatCount(model.downloads),
+        formatCount(model.likes),
+        model.licenses.map(clean).join(', ') || '-',
+        formatGated(model.gated),
+        ...(labelled ? [model.notRecommended ? `not recommended: ${NOT_RECOMMENDED_LABEL}` : ''] : []),
+      ]),
+    ]);
+    for (const line of lines) deps.log(line);
   }
-  const lines = table([
-    ['REPO', 'DOWNLOADS', 'LIKES', 'LICENSE', 'GATED'],
-    ...page.models.map(model => [
-      clean(model.id),
-      formatCount(model.downloads),
-      formatCount(model.likes),
-      model.licenses.map(clean).join(', ') || '-',
-      formatGated(model.gated),
-    ]),
-  ]);
-  for (const line of lines) deps.log(line);
+  if (hidden > 0) {
+    deps.log('');
+    deps.log(`${hiddenAbliteratedMessage(hidden)} Show them with --include-abliterated.`);
+  }
+  if (hits.length === 0) return 0;
   deps.log('');
   deps.log('Builds and sizes: b4m models show <repo>');
   return 0;
@@ -359,7 +399,13 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
   const hub = deps.hub();
   const detail = await hub.getModel(repo, { signal: deps.signal });
   if (opts.json) {
-    deps.log(JSON.stringify(detail, null, 2));
+    deps.log(
+      JSON.stringify(
+        isAbliteratedModel(detail) ? { ...detail, notRecommended: NOT_RECOMMENDED_LABEL } : detail,
+        null,
+        2
+      )
+    );
     return 0;
   }
   const license = licenseFor(detail, hub.endpoint);
@@ -371,6 +417,7 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
   );
   deps.log(`  Revision:  ${clean(detail.revision)}`);
   if (detail.baseModels.length > 0) deps.log(`  Based on:  ${detail.baseModels.map(clean).join(', ')}`);
+  if (isAbliteratedModel(detail)) deps.log(`  Caution:   not recommended: ${NOT_RECOMMENDED_LABEL}`);
   if (detail.gguf) {
     const facts = [
       detail.gguf.architecture && clean(detail.gguf.architecture),
@@ -665,6 +712,7 @@ export async function runModelsCommand(
     json: argv['output-format'] === 'json',
     yes: Boolean(argv.yes),
     acceptLicense: Boolean(argv['accept-license']),
+    includeAbliterated: Boolean(argv['include-abliterated']),
   };
   try {
     switch (subcommand) {
