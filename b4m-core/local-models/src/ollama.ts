@@ -245,6 +245,9 @@ export class OllamaRuntime implements LocalRuntime {
    */
   async pull(ref: string, opts: PullOptions = {}): Promise<void> {
     const idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_PULL_IDLE_TIMEOUT_MS;
+    if (!(idleTimeoutMs > 0)) {
+      throw new LocalRuntimeError(`idleTimeoutMs must be a positive number or Infinity, got ${idleTimeoutMs}`, this.id);
+    }
     const idle = new AbortController();
     const idleError = new LocalRuntimeError(
       `${this.id} sent nothing for ${idleTimeoutMs}ms while pulling ${ref}`,

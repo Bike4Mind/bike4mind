@@ -462,6 +462,14 @@ describe('OllamaRuntime.pull', () => {
     await expect(runtimeFor(server).pull('qwen3:8b', { idleTimeoutMs: 500 })).resolves.toBeUndefined();
   });
 
+  it.each([0, -1, NaN])('rejects idleTimeoutMs %s before contacting the runtime', async idleTimeoutMs => {
+    server = await startFakeServer({});
+    await expect(runtimeFor(server).pull('qwen3:8b', { idleTimeoutMs })).rejects.toThrow(
+      'idleTimeoutMs must be a positive number or Infinity'
+    );
+    expect(server.requests).toHaveLength(0);
+  });
+
   it('treats an infinite idle timeout as no watchdog', async () => {
     server = await startFakeServer({
       'POST /api/pull': async (_request, response) => {
