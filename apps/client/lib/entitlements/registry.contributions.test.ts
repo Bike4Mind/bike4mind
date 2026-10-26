@@ -394,7 +394,7 @@ describe('mergeContributedRows', () => {
           impliedEntitlements: [{ ifHeld: 'example:a', alsoGrant: ['core:addon'] }],
         },
       ],
-    ])('still drops %s naming a credited key core also grants', async (_case, contributed) => {
+    ])('still drops %s naming a key core also grants', async (_case, contributed) => {
       const { merged, reasons } = await mergeOver(contributed);
 
       expect(merged.impliedRows).toEqual(CREDIT_ONLY.impliedRows);
