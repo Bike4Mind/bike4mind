@@ -8,6 +8,7 @@ const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
 const mockRevokeAllByUserId = vi.fn();
 const mockUserRepositoryUpdate = vi.fn();
+const mockClearPending = vi.fn();
 const mockEndConnections = vi.fn();
 
 // Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
@@ -26,7 +27,10 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   creditLotRepository: {},
   organizationRepository: {},
-  userRepository: { update: (...args: unknown[]) => mockUserRepositoryUpdate(...args) },
+  userRepository: {
+    update: (...args: unknown[]) => mockUserRepositoryUpdate(...args),
+    clearPendingFreeCreditGrant: (...args: unknown[]) => mockClearPending(...args),
+  },
 }));
 
 const mockEmitVerifiedFunnel = vi.fn();
@@ -105,6 +109,8 @@ beforeEach(() => {
   mockRevokeAllUserSessions.mockClear();
   mockUserRepositoryUpdate.mockReset();
   mockUserRepositoryUpdate.mockResolvedValue(undefined);
+  mockClearPending.mockReset();
+  mockClearPending.mockImplementation(async (id: string) => ({ id, tags: [] }));
   mockEmitVerifiedFunnel.mockReset();
   mockReleasePending.mockReset();
   mockReleasePending.mockImplementation(async (user: { tags?: string[] | null }) =>
@@ -1162,7 +1168,7 @@ describe('verifyCallback - starter credits on OAuth signup', () => {
         expect.objectContaining({ id: 'new-id', tags: [PENDING_FREE_CREDITS_TAG] }),
         expect.objectContaining({ reason: 'OAuth signup (provider-verified email)' })
       );
-      expect(mockUserRepositoryUpdate).toHaveBeenCalledWith({ id: 'new-id', tags: [], pendingCreditGrant: null });
+      expect(mockClearPending).toHaveBeenCalledWith('new-id');
       expect((user as { signupCreditsGranted?: number }).signupCreditsGranted).toBe(100);
     }
   );
@@ -1216,11 +1222,11 @@ describe('verifyCallback - starter credits on OAuth signup', () => {
     expect(err).toBeNull();
     expect(user).toBeDefined();
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ tags: [PENDING_FREE_CREDITS_TAG] }));
-    expect(mockUserRepositoryUpdate).not.toHaveBeenCalled();
+    expect(mockClearPending).not.toHaveBeenCalled();
   });
 
   it('completes the login when persisting the tag removal fails', async () => {
-    mockUserRepositoryUpdate.mockRejectedValue(new Error('db down'));
+    mockClearPending.mockRejectedValue(new Error('db down'));
 
     const { err, user } = await runStandard(AuthStrategy.Google, verifiedProfile);
 
@@ -1341,11 +1347,7 @@ describe('verifyCallback - pending free credits on account link', () => {
       { id: 'u-pending', tags: ['Customer', PENDING_FREE_CREDITS_TAG], pendingCreditGrant: 250 },
       expect.objectContaining({ reason: 'OAuth account link (email verified)' })
     );
-    expect(mockUserRepositoryUpdate).toHaveBeenCalledWith({
-      id: 'u-pending',
-      tags: ['Customer'],
-      pendingCreditGrant: null,
-    });
+    expect(mockClearPending).toHaveBeenCalledWith('u-pending');
   });
 
   it('does not release on a plain link of an already-verified account', async () => {
@@ -1434,6 +1436,6 @@ describe('verifyCallback - pending free credits on account link', () => {
 
     expect(err).toBeNull();
     expect(user).toBeDefined();
-    expect(mockUserRepositoryUpdate).not.toHaveBeenCalled();
+    expect(mockClearPending).not.toHaveBeenCalled();
   });
 });
