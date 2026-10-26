@@ -122,9 +122,11 @@ export async function lapseDepartedMemberLakeAccess(
  * the lake resolving to its creator through the `createdByUserId` fallback.
  *
  * Phase 1 is roster-scoped: grants held by non-members can be deliberate cross-org grants, and
- * `organization`-principal grants describe the org, so neither is touched. Phase 2 also covers every
- * creator of an org lake who is off the roster (left before departures lapsed access, or reached the
- * org another way), since the org going away leaves nobody else to hand their lakes on. The billing
+ * `organization`-principal grants describe the org, so neither is touched. Phase 2 also covers an
+ * off-roster creator of an org lake with no live owner grant (left before departures lapsed access,
+ * or reached the org another way), since the org going away leaves nobody else to hand their lakes
+ * on. One who still holds the seeded owner grant keeps the lake, consistent with leaving non-member
+ * grants alone. The billing
  * owner is neither lapsed nor handed off from: they are the successor. One grants read serves both
  * phases. Idempotent under a transaction retry for the same reasons as the single-member path.
  */

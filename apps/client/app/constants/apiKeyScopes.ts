@@ -296,6 +296,8 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/data-lakes/ownership-offers/:offerId/accept',
       'POST /api/data-lakes/ownership-offers/:offerId/decline',
       'DELETE /api/organizations/:id',
+      'DELETE /api/organizations/:id/members',
+      'DELETE /api/organizations/:id/members/:userId',
     ],
   },
   {
