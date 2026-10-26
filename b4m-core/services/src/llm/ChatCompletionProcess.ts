@@ -181,6 +181,7 @@ import {
   reserveShadowTokenBudget,
   resolveShadowModelInfo,
   resolveShadowRouting,
+  shadowCandidates,
 } from './shadowTier';
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
@@ -318,6 +319,10 @@ const STREAMING_HEARTBEAT_ERROR_ESCALATION_THRESHOLD = 3;
 
 /** Final reply when the model stayed too slow through its retry and any fallback. Not "busy": the provider never said so. */
 export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
+
+/** Final reply when every allowlisted model failed a substituted turn; the provider's own wording would name the substitute. */
+export const MODEL_UNAVAILABLE_ERROR_REPLY =
+  'The AI service is temporarily unavailable. Please try again in a few minutes.';
 
 // Context management constants: message-history limits per query type
 
@@ -5152,7 +5157,7 @@ export class ChatCompletionProcess {
               } LLM COMPLETION === (${currentModel.id})`
             );
 
-            if (!isInitialAttempt) {
+            if (!isInitialAttempt && !this.shadowSubstitution) {
               // Update quest metadata to reflect fallback attempt
               quest.promptMeta!.model!.name = currentModel.id;
               quest.promptMeta!.model!.backend = currentModel.backend;
@@ -5541,7 +5546,7 @@ export class ChatCompletionProcess {
               );
               messages = stripAllToolBlocks(messages, logger);
               outboundMessages = stripAllToolBlocks(outboundMessages, logger);
-              turnTiming.recordRetry(lastError, 0, currentModel.id);
+              turnTiming.recordRetry(lastError, 0, this.ledgerModel(currentModel).id);
 
               resetStreamStateForRetry();
 
@@ -5581,7 +5586,7 @@ export class ChatCompletionProcess {
                   { statusAt: new Date() }
                 );
 
-                turnTiming.recordRetry(lastError, totalDelay, currentModel.id);
+                turnTiming.recordRetry(lastError, totalDelay, this.ledgerModel(currentModel).id);
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
                 resetStreamStateForRetry();
@@ -5607,7 +5612,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
-              turnTiming.recordRetry(lastError, TIMEOUT_RETRY_DELAY_MS + jitter, currentModel.id);
+              turnTiming.recordRetry(lastError, TIMEOUT_RETRY_DELAY_MS + jitter, this.ledgerModel(currentModel).id);
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5630,7 +5635,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
-              turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, currentModel.id);
+              turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, this.ledgerModel(currentModel).id);
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5643,8 +5648,36 @@ export class ChatCompletionProcess {
               logger.warn(`🚫 [Fallback] Multi-hop budget exhausted (${MAX_FALLBACK_HOPS} hops), no more attempts`);
               throw lastError;
             }
-            // The restricted tier never hops: every chain model is outside its allowlist.
-            if (shadowSettings) throw lastError;
+            // The restricted tier never takes the fallback chain: every chain model is outside its
+            // allowlist. A substituted turn walks the rest of the allowlist instead, as silently as
+            // the substitution itself (no status, no fallbackInfo, the requested id stays shown).
+            if (shadowSettings) {
+              const substitution = this.shadowSubstitution;
+              if (!substitution) throw lastError;
+              const next = shadowCandidates(models, shadowSettings.allowlist).find(m => !triedModelIds.has(m.id));
+              const nextLlm =
+                next && getLlmByModel(chatApiKeyTable, { modelInfo: next, logger, endUserId: this.user.id });
+              if (!next || !nextLlm) {
+                throw isOverloadedError(lastError) || isSlowModelTimeout
+                  ? lastError
+                  : new Error(MODEL_UNAVAILABLE_ERROR_REPLY);
+              }
+              logger.info('[ModelRouting] substitute failed; trying the next allowlisted model', {
+                failed: currentModel.id,
+                next: next.id,
+              });
+              turnTiming.recordRetry(lastError, 0, this.ledgerModel(currentModel).id);
+              substitution.actual = next;
+              currentModel = next;
+              currentLlm = nextLlm;
+              if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;
+              triedModelIds.add(next.id);
+              fallbackAttempt++;
+              resetStreamStateForRetry();
+              deliverableCountAtFallbackHop = countDeliverables();
+              pendingActionAtFallbackHop = quest.pendingAction;
+              continue;
+            }
 
             // Fallback: try to get a fallback model
             try {

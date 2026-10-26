@@ -20,6 +20,7 @@ import {
   FORCE_FALLBACK_TEST_MARKER,
   FORCE_STREAM_STALL_TEST_MARKER,
   SLOW_MODEL_ERROR_REPLY,
+  MODEL_UNAVAILABLE_ERROR_REPLY,
 } from './ChatCompletionProcess';
 import {
   buildAndSortMessages,
@@ -1019,11 +1020,11 @@ describe('ChatCompletionProcess', () => {
       pricing: {},
       supportsImageVariation: false,
     };
-    const restrict = (overrides: Record<string, unknown> = {}) => {
+    const restrict = (overrides: Record<string, unknown> = {}, allowlist = ['cheap-model']) => {
       (service as any).user = { ...mockUser, throttle: { tier: 'shadow' }, ...overrides }; // any: user is private
       const prev = mockedGetSettingsValue.getMockImplementation();
       mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) => {
-        if (key === 'shadowTierModelAllowlist') return ['cheap-model'];
+        if (key === 'shadowTierModelAllowlist') return allowlist;
         if (key === 'shadowTierDailyTokenCap') return 20000;
         return prev?.(key as never, settings);
       }) as typeof getSettingsValue);
@@ -1099,6 +1100,57 @@ describe('ChatCompletionProcess', () => {
 
       expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
       expect(JSON.stringify(vi.mocked(service.sendStatusUpdate).mock.calls)).not.toContain('Trying alternative model');
+    });
+
+    describe('when the substitute fails', () => {
+      const secondCheap = { ...cheapModel, id: 'cheap-model-2', name: 'Cheap 2', backend: ModelBackend.OpenAI };
+      const wireFailingSubstitute = async (failing: string[]) => {
+        const { body } = wireRestrictedTurn();
+        const requested = ((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0];
+        mockedGetAvailableModels.mockResolvedValue([requested, secondCheap, cheapModel] as never);
+        const complete = vi.fn().mockImplementation(async (modelId: string, _messages, _opts, cb) => {
+          if (failing.includes(modelId)) throw new Error('401 Incorrect API key provided: sk-proj-***');
+          await cb(['Hi!'], { inputTokens: 40, outputTokens: 2 });
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: '' } as any); // any: minimal backend shape, as elsewhere in this file
+        mockedShouldTriggerFallback.mockReturnValue(true);
+        mockedIsOverloadedError.mockReturnValue(false);
+        restrict({}, ['cheap-model', 'cheap-model-2']);
+        return { body, complete, requested };
+      };
+      const statusText = () => JSON.stringify(vi.mocked(service.sendStatusUpdate).mock.calls);
+
+      it('silently runs the next allowlisted model under the requested id', async () => {
+        const { body, complete, requested } = await wireFailingSubstitute(['cheap-model']);
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model', 'cheap-model-2']);
+        expect(complete.mock.calls[1][2]).toMatchObject({
+          modelDisplayName: requested.name,
+          modelIdentityId: requested.id,
+        });
+        expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+        const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+        expect(lastSave.type).not.toBe('error');
+        expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
+        expect(lastSave.fallbackInfo ?? null).toBeNull();
+        expect(statusText()).not.toMatch(/cheap-model|Trying alternative model/);
+      });
+
+      it('fails without naming the substitute once every allowlisted model fails', async () => {
+        const { body, complete } = await wireFailingSubstitute(['cheap-model', 'cheap-model-2']);
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model', 'cheap-model-2']);
+        expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+        const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+        expect(lastSave.type).toBe('error');
+        expect(lastSave.reply).toBe(MODEL_UNAVAILABLE_ERROR_REPLY);
+        expect(lastSave.fallbackInfo ?? null).toBeNull();
+        expect(statusText()).not.toMatch(/cheap-model|Trying alternative model/);
+      });
     });
 
     it('runs the requested model when no allowlisted model is available', async () => {

@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
-import { recordShadowTokenUsage, reserveShadowTokenBudget, resolveShadowModelInfo, shadowTokenKey } from './shadowTier';
+import {
+  recordShadowTokenUsage,
+  reserveShadowTokenBudget,
+  resolveShadowModelInfo,
+  shadowCandidates,
+  shadowTokenKey,
+} from './shadowTier';
 
 const shadow = { id: 'u1', throttle: { tier: 'shadow' as const } };
 const normal = { id: 'u2' };
@@ -38,6 +44,18 @@ describe('resolveShadowModelInfo', () => {
     const models = [model('premium'), model('cheap-a', { disabled: true }), model('image', { type: 'image' })];
     expect(resolveShadowModelInfo(shadow, models[0], models, allowlist)).toBeUndefined();
     expect(resolveShadowModelInfo(shadow, models[2], [...models, model('cheap-b')], allowlist)).toBeUndefined();
+  });
+});
+
+describe('shadowCandidates', () => {
+  const model = (id: string, extra: Partial<ModelInfo> = {}) => ({ id, type: 'text', ...extra }) as ModelInfo;
+
+  it('lists the runnable allowlisted models in allowlist order', () => {
+    const models = [model('cheap-b'), model('premium'), model('cheap-a')];
+    expect(shadowCandidates(models, allowlist).map(m => m.id)).toEqual(['cheap-a', 'cheap-b']);
+    expect(
+      shadowCandidates([model('cheap-a', { disabled: true }), model('cheap-b')], allowlist).map(m => m.id)
+    ).toEqual(['cheap-b']);
   });
 });
 

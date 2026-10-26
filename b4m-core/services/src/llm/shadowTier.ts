@@ -28,14 +28,19 @@ export function resolveShadowModelInfo(
   logger?: Pick<Logger, 'warn'>
 ): ModelInfo | undefined {
   if (requested.type !== 'text' || !isShadowTier(user) || allowlist.includes(requested.id)) return undefined;
-  const runnable = models.filter(m => m.type === 'text' && !m.disabled);
-  const substitute = allowlist.map(id => runnable.find(m => m.id === id)).find(Boolean);
+  const substitute = shadowCandidates(models, allowlist)[0];
   if (!substitute) {
     logger?.warn('[ModelRouting] no allowlisted model available; running the requested model', {
       requested: requested.id,
     });
   }
   return substitute;
+}
+
+/** The enabled allowlisted text models, in allowlist order: the substitute, then its silent fallbacks. */
+export function shadowCandidates(models: ModelInfo[], allowlist: string[]): ModelInfo[] {
+  const runnable = models.filter(m => m.type === 'text' && !m.disabled);
+  return allowlist.flatMap(id => runnable.find(m => m.id === id) ?? []);
 }
 
 export type ShadowTierSettings = Awaited<ReturnType<typeof loadShadowTierSettings>>;
