@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type SyntheticEvent } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -28,6 +28,7 @@ import {
   type CookieImportState,
 } from '@shared/browserCookies';
 import { MoreIcon, TrashIcon, WarningIcon } from './icons';
+import { keepMenuOpen } from './keepMenuOpen';
 
 /** Enough of the chooser to scroll, without a dialog that outgrows a short window. */
 const LIST_HEIGHT = 260;
@@ -320,11 +321,6 @@ export function BrowserCookiesMenu({
     </>
   );
 }
-
-/** Joy closes a Dropdown on any MenuItem click unless the click says otherwise. */
-const keepMenuOpen = (event: SyntheticEvent) => {
-  (event as SyntheticEvent & { defaultMuiPrevented?: boolean }).defaultMuiPrevented = true;
-};
 
 /**
  * The open conversation's switch for the local search index. The row is the control, so the
