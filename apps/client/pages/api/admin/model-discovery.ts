@@ -169,17 +169,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       });
     }
 
+    let dispatched: Awaited<ReturnType<typeof dispatchDiscoveryRunNow>>['dispatched'];
     try {
       // No debounce: the service's lease turns a concurrent trigger into a
       // 'skipped' run, so the only cost of a double-click is a second log line.
-      const { dispatched } = await dispatchDiscoveryRunNow(logger);
-      await recordAdminActionFromRequest(req, {
-        action: 'settings.model_discovery.triggered',
-        target: { kind: 'system', id: 'model-discovery', displayName: 'Model discovery run' },
-        summary: 'triggered a model discovery run',
-        details: { dispatched },
-      });
-      return res.status(202).json({ dispatched });
+      ({ dispatched } = await dispatchDiscoveryRunNow(logger));
     } catch (error) {
       if (error instanceof DiscoveryDispatchUnavailableError) {
         logger.error('[model-discovery] run now unavailable', { error: error.message });
@@ -187,6 +181,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
       throw error;
     }
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.model_discovery.triggered',
+      target: { kind: 'system', id: 'model-discovery', displayName: 'Model discovery run' },
+      summary: 'triggered a model discovery run',
+      details: { dispatched },
+    });
+    return res.status(202).json({ dispatched });
   });
 
 export default handler;
