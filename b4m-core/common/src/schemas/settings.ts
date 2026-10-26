@@ -432,6 +432,9 @@ export const SettingKeySchema = z.enum([
   'signupBurstThreshold',
   'signupBurstWindowHours',
   'signupBurstAutoHold',
+  'enableDomainIntelligence',
+  'holdSignupsFromDomainsYoungerThanDays',
+  'domainIntelligenceTimeoutMs',
   'apiKeyTrustGateEnabled',
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
@@ -2014,6 +2017,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupBurstThreshold', order: 8 },
       { key: 'signupBurstWindowHours', order: 9 },
       { key: 'signupBurstAutoHold', order: 10 },
+      { key: 'enableDomainIntelligence', order: 11 },
+      { key: 'holdSignupsFromDomainsYoungerThanDays', order: 12 },
+      { key: 'domainIntelligenceTimeoutMs', order: 13 },
     ],
   },
   KNOWLEDGE: {
@@ -3506,6 +3512,38 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Hold patterned signup domains for admin review and defer their pending free credits. Granted balances are never changed. Review in Signup Domain Holds.',
+  }),
+  enableDomainIntelligence: makeBooleanSetting({
+    key: 'enableDomainIntelligence',
+    name: 'Hold Risky Signup Domains',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Hold the free credits of signups from domains on only the aggregate disposable list, freshly registered domains, or domains whose mail is handled by a known disposable provider. Lookups fail open. Review in Signup Domain Holds.',
+  }),
+  holdSignupsFromDomainsYoungerThanDays: makeNumberSetting({
+    key: 'holdSignupsFromDomainsYoungerThanDays',
+    name: 'Hold Signups From Domains Younger Than (days)',
+    defaultValue: 30,
+    int: true,
+    min: 0,
+    max: 365,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Registration age (from RDAP) below which a signup domain is held for review. 0 turns the age check off.',
+  }),
+  domainIntelligenceTimeoutMs: makeNumberSetting({
+    key: 'domainIntelligenceTimeoutMs',
+    name: 'Domain Lookup Timeout (ms)',
+    defaultValue: 2000,
+    int: true,
+    min: 250,
+    max: 5000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Budget for the RDAP and MX lookups on an uncached signup domain. A timeout lets the signup through.',
   }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',

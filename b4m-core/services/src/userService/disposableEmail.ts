@@ -16,6 +16,7 @@ import {
   partitionDomainList,
   settingsMap,
 } from '@bike4mind/common';
+import type { DisposableListSource, SignupProtection } from '@bike4mind/common';
 
 // ~4.5k entries from the maintained `disposable-email-domains` list.
 const DISPOSABLE_DOMAINS = new Set<string>(disposableDomains as string[]);
@@ -29,7 +30,14 @@ const DISPOSABLE_DOMAINS = new Set<string>(disposableDomains as string[]);
 export const isDisposableEmail = (email: string): boolean =>
   emailDomainCandidates(email).some(domain => DISPOSABLE_DOMAINS.has(domain));
 
-const blockedDomainsFrom = (settingValue: unknown): Set<string> => {
+/**
+ * Refreshed lists precise enough to reject on: the human-curated list and fakefilter (observed on
+ * live temp-mail services). The `aggregate` list also scrapes, so a domain only there is held for
+ * review instead (see domainIntelligence.ts).
+ */
+export const REJECT_TIER_SOURCES: ReadonlySet<DisposableListSource> = new Set(['curated', 'fakefilter']);
+
+export const blockedDomainsFrom = (settingValue: unknown): Set<string> => {
   const parsed = settingsMap.blockedEmailDomains.schema.safeParse(settingValue);
   return new Set(parsed.success ? partitionDomainList(parsed.data).valid : []);
 };
@@ -53,17 +61,24 @@ export const isAdminBlockedEmailDomain = async (
 
 /**
  * The anti-sybil gate for credit-bearing signups: true when the email is on an admin-blocked
- * domain, or is disposable and the blockDisposableEmails setting (default ON) is enabled. The
- * admin list applies regardless of that toggle, which exists to work around a false positive in
- * the package list. Shared by registerUser and the free-credit eligibility check in
+ * domain, or is disposable and the blockDisposableEmails setting (default ON) is enabled. Disposable
+ * means the static package list or, when `signupProtection` carries the refreshed lists, a
+ * reject-tier source (REJECT_TIER_SOURCES). The admin list applies regardless of that toggle, which
+ * exists to work around a false positive in the lists. A failed list read throws, so callers fail
+ * closed. Shared by registerUser and the free-credit eligibility check in
  * apps/client/server/auth/emailVerifiedGrants.ts (OAuth signup, email change) so they cannot drift.
  */
 export const shouldBlockDisposableEmail = async (
   email: string,
-  { adminSettings }: { adminSettings: IAdminSettingsRepository }
+  { adminSettings, signupProtection }: { adminSettings: IAdminSettingsRepository; signupProtection?: SignupProtection }
 ): Promise<boolean> => {
   if (await isAdminBlockedEmailDomain(email, { adminSettings })) return true;
-  if (!isDisposableEmail(email)) return false;
+  const disposable =
+    isDisposableEmail(email) ||
+    ((await signupProtection?.repository.disposableSources?.(emailDomainCandidates(email))) ?? []).some(source =>
+      REJECT_TIER_SOURCES.has(source)
+    );
+  if (!disposable) return false;
   const setting = await adminSettings.findBySettingName('blockDisposableEmails');
   return blockDisposableFrom(setting?.settingValue);
 };

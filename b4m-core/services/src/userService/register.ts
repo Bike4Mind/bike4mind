@@ -139,7 +139,12 @@ export const registerUser = async (
   // the same shouldBlockDisposableEmail gate; Okta/SAML signup and admin user creation grant no
   // flat credits. Registration-only - OTC sign-in for existing accounts never reaches this
   // function, so grandfathered users on such domains are unaffected.
-  if (await shouldBlockDisposableEmail(normalizedEmail, { adminSettings: db.adminSettings })) {
+  if (
+    await shouldBlockDisposableEmail(normalizedEmail, {
+      adminSettings: db.adminSettings,
+      signupProtection: db.signupProtection,
+    })
+  ) {
     throw new BadRequestError('This email domain is not allowed');
   }
 

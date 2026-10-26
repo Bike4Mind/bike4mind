@@ -30,3 +30,4 @@ export * from './requestModerationAppeal';
 
 export * from './signupBurstDetector';
 export * from './signupProtection';
+export * from './domainIntelligence';
