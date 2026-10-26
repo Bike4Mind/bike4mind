@@ -74,6 +74,7 @@ describe('BaseBedrockBackend empty-response guard', () => {
     const err = await run(withBody(streamBody([]))).catch((e: Error) => e);
 
     expect((err as Error).message).not.toMatch(/stream timeout/i);
+    expect((err as Error).message).not.toContain('without a terminal event');
   });
 
   it('does NOT throw when the request was aborted before the first token', async () => {

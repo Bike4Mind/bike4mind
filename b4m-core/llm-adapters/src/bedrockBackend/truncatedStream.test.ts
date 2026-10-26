@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
 import type { ICompletionOptions, ICompletionResponseChunk, IMessage, ModelInfo } from '@bike4mind/common';
@@ -98,6 +98,10 @@ const textChunk = (text: string, terminal = false) =>
   }) as unknown as ICompletionResponseChunk;
 
 describe('BaseBedrockBackend truncated-stream guard', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('throws when text was produced but no terminal event ever arrived', async () => {
     const body = streamBody([textChunk('half an answ')]);
     await expect(run(withBody(new TerminalSignallingBackend(), body))).rejects.toThrow(/TRUNCATED/);
@@ -188,6 +192,22 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     expect(message).not.toContain('without a terminal event');
   });
 
+  it('words a real Anthropic stall (message_start, no message_stop) so the retry path classifies it', async () => {
+    const body = streamBody([{ type: 'message_start', message: { usage: { input_tokens: 5, output_tokens: 1 } } }]);
+    const backend = new (class extends AnthropicBedrockBackend {
+      protected override async invokeModelStream() {
+        return { body };
+      }
+    })();
+    const err = await backend
+      .complete(ChatModels.CLAUDE_4_5_SONNET_BEDROCK, [{ role: 'user', content: 'hi' }], { stream: true }, cb)
+      .catch((e: Error) => e);
+    const message = (err as Error).message;
+
+    expect(message).toMatch(/stream timeout/);
+    expect(message).toContain('without a terminal event');
+  });
+
   // The retry and fallback downstream log the failure at WARN, so this backend log is the ERROR
   // signal a persistent misroute (every call empty) still raises.
   it('logs a stalled empty stream at ERROR before it is retried', async () => {
@@ -197,16 +217,21 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
 
     expect(error).toHaveBeenCalledTimes(1);
     expect(error.mock.calls[0][1]).toMatchObject({ message: expect.stringContaining('EMPTY response') });
-    error.mockRestore();
   });
 
   it('does not report an aborted empty stream as an EMPTY response', async () => {
     const controller = new AbortController();
     controller.abort();
+    const callback = vi.fn(cb);
 
-    await expect(
-      run(withBody(new TerminalSignallingBackend(), streamBody([])), { abortSignal: controller.signal })
-    ).resolves.not.toThrow();
+    await withBody(new TerminalSignallingBackend(), streamBody([])).complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'hi' }],
+      { stream: true, abortSignal: controller.signal } as Partial<ICompletionOptions>,
+      callback
+    );
+
+    for (const [text] of callback.mock.calls) expect(text.filter(Boolean)).toEqual([]);
   });
 
   it('still reports an empty stream when an abortSignal is present but un-aborted', async () => {
