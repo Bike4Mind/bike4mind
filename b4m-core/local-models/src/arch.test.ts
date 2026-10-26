@@ -68,6 +68,7 @@ describe('archFromModelInfo', () => {
     expect(archFromModelInfo(qwen3)).toEqual({
       contextMax: 40960,
       blockCount: 36,
+      headCount: 32,
       full: dense(36, 8, 128),
       mtpLayers: 0,
     });
@@ -75,6 +76,22 @@ describe('archFromModelInfo', () => {
 
   it('derives the head dim from embedding_length / head_count when key_length is absent', () => {
     expect(archFromModelInfo(liveModelInfo['qwen2.5:0.5b'])?.full).toEqual(dense(24, 2, 64));
+  });
+
+  it('reads a scalar head_count from the real qwen2.5 header', () => {
+    expect(archFromModelInfo(liveModelInfo['qwen2.5:0.5b'])?.headCount).toBe(14);
+  });
+
+  it('takes the widest layer of a per-layer head_count, ignoring the zeros of recurrent layers', () => {
+    const { modelInfo } = ggufModels['jamba-reasoning-3b'];
+    const heads = modelInfo['jamba.attention.head_count_kv'].map(kv => (kv > 0 ? 20 : 0));
+    const info = { ...modelInfo, 'jamba.attention.head_count': heads, 'jamba.attention.key_length': 128 };
+    expect(archFromModelInfo(info)?.headCount).toBe(20);
+  });
+
+  it('omits headCount when head_count is missing or all zero', () => {
+    expect(archFromModelInfo({ ...qwen3, 'qwen3.attention.head_count': undefined })).not.toHaveProperty('headCount');
+    expect(archFromModelInfo(ggufModels['rwkv-6-world-7b'].modelInfo)).not.toHaveProperty('headCount');
   });
 
   it('treats a missing head_count_kv as multi-head attention', () => {
@@ -100,7 +117,7 @@ describe('archFromModelInfo', () => {
   it('keeps layers with zero KV heads out of the cache even without recurrent state keys', () => {
     expect(
       archFromModelInfo({ ...qwen3, 'qwen3.block_count': 4, 'qwen3.attention.head_count_kv': [0, 8, 0, 8] })
-    ).toEqual({ contextMax: 40960, blockCount: 4, full: dense(2, 8, 128), mtpLayers: 0 });
+    ).toEqual({ contextMax: 40960, blockCount: 4, headCount: 32, full: dense(2, 8, 128), mtpLayers: 0 });
   });
 
   it.each([[undefined], [null], [[]]])('falls back to full_attention_interval when recurrent_layers is %j', flags => {
@@ -180,6 +197,7 @@ describe('archFromModelInfo', () => {
       expect(archFromModelInfo(gptOss)).toEqual({
         contextMax: 131072,
         blockCount: 24,
+        headCount: 64,
         full: dense(12, 8, 64),
         swa: { ...dense(12, 8, 64), window: 128 },
         mtpLayers: 0,
@@ -206,6 +224,7 @@ describe('archFromModelInfo', () => {
       expect(archFromModelInfo(gemma4)).toEqual({
         contextMax: 131072,
         blockCount: 12,
+        headCount: 8,
         full: dense(1, 1, 512),
         swa: { ...dense(7, 2, 256), window: 512 },
         mtpLayers: 0,
@@ -260,6 +279,7 @@ describe('archFromModelInfo', () => {
       expect(archFromModelInfo(lfm2)).toEqual({
         contextMax: 128000,
         blockCount: 4,
+        headCount: 16,
         full: dense(0, 8, 64),
         swa: { ...dense(2, 8, 64), window: 4096 },
         recurrent: { layers: 2, stateBytesPerSeq: 2 * 1024 * 2 * 4 },
@@ -289,6 +309,7 @@ describe('archFromModelInfo', () => {
     expect(archFromModelInfo(deepseek)).toEqual({
       contextMax: 163840,
       blockCount: 61,
+      headCount: 128,
       full: dense(0, 1, 576, 512),
       mla: { layers: 60, kvLoraRank: 512, ropeDim: 64 },
       mtpLayers: 1,

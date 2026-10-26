@@ -59,6 +59,7 @@ export const ggufModels = {
     arch: {
       contextMax: 1048576,
       blockCount: 52,
+      headCount: 32,
       full: { layers: 6, kvHeads: 2, keyLength: 128, valueLength: 128 },
       recurrent: { layers: 23, stateBytesPerSeq: 49930240 },
       mtpLayers: 0,
@@ -94,6 +95,7 @@ export const ggufModels = {
     arch: {
       contextMax: 1048576,
       blockCount: 56,
+      headCount: 40,
       full: { layers: 4, kvHeads: 8, keyLength: 128, valueLength: 128 },
       recurrent: { layers: 27, stateBytesPerSeq: 145539072 },
       mtpLayers: 0,
@@ -120,6 +122,7 @@ export const ggufModels = {
     arch: {
       contextMax: 16384,
       blockCount: 36,
+      headCount: 8,
       full: { layers: 36, kvHeads: 2, keyLength: 64, valueLength: 64 },
       recurrent: { layers: 36, stateBytesPerSeq: 29085696 },
       mtpLayers: 0,
@@ -147,6 +150,7 @@ export const ggufModels = {
     arch: {
       contextMax: 262144,
       blockCount: 28,
+      headCount: 20,
       full: { layers: 2, kvHeads: 1, keyLength: 128, valueLength: 128 },
       recurrent: { layers: 26, stateBytesPerSeq: 10117120 },
       mtpLayers: 0,
@@ -207,6 +211,7 @@ export const ggufModels = {
     arch: {
       contextMax: 1048576,
       blockCount: 27,
+      headCount: 32,
       full: { layers: 0, kvHeads: 1, keyLength: 576, valueLength: 72 },
       mla: { layers: 7, kvLoraRank: 512, ropeDim: 64 },
       recurrent: { layers: 20, stateBytesPerSeq: 44892160 },

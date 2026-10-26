@@ -37,6 +37,7 @@ export interface AttentionGroup {
 export interface ModelArch {
   contextMax: number;
   blockCount: number;
+  headCount?: number;
   /** Full (global) attention layers. */
   full: AttentionGroup;
   swa?: AttentionGroup & { window: number };

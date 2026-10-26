@@ -87,6 +87,9 @@ export function archFromModelInfo(modelInfo: ModelInfo | null | undefined, tenso
 
   const rawHeads = field('attention.head_count');
   const headCount = positiveInt(Array.isArray(rawHeads) ? rawHeads[0] : rawHeads);
+  // A per-layer array holds 0 on recurrent layers, so the widest attention layer stands for the model.
+  const maxHeads = Math.max(0, ...(perLayer(rawHeads, blockCount) ?? []));
+  const headFields = maxHeads > 0 ? { headCount: maxHeads } : {};
   const embedding = positiveInt(field('embedding_length'));
   const keyLength =
     positiveInt(field('attention.key_length')) ??
@@ -100,6 +103,7 @@ export function archFromModelInfo(modelInfo: ModelInfo | null | undefined, tenso
     return {
       contextMax,
       blockCount,
+      ...headFields,
       full: { layers: 0, kvHeads: 1, keyLength: 1, valueLength: 1 },
       recurrent: { layers: trunk, stateBytesPerSeq: trunk * stateBytesPerLayer },
       mtpLayers,
@@ -147,6 +151,7 @@ export function archFromModelInfo(modelInfo: ModelInfo | null | undefined, tenso
   const result: ModelArch = {
     contextMax,
     blockCount,
+    ...headFields,
     full: isMla ? group([], keyLength, valueLength) : group(fullKv, keyLength, valueLength),
     mtpLayers,
   };

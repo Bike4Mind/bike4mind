@@ -172,6 +172,7 @@ export const liveArch = {
   'gemma3:270m': {
     contextMax: 32768,
     blockCount: 18,
+    headCount: 4,
     full: { layers: 3, kvHeads: 1, keyLength: 256, valueLength: 256 },
     swa: { layers: 15, kvHeads: 1, keyLength: 256, valueLength: 256, window: 512 },
     mtpLayers: 0,
@@ -179,6 +180,7 @@ export const liveArch = {
   'qwen3.5:0.8b': {
     contextMax: 262144,
     blockCount: 24,
+    headCount: 8,
     full: { layers: 6, kvHeads: 2, keyLength: 256, valueLength: 256 },
     recurrent: { layers: 18, stateBytesPerSeq: 20201472 },
     mtpLayers: 0,
@@ -186,6 +188,7 @@ export const liveArch = {
   'granite4:350m-h': {
     contextMax: 1048576,
     blockCount: 32,
+    headCount: 12,
     full: { layers: 4, kvHeads: 4, keyLength: 64, valueLength: 64 },
     recurrent: { layers: 28, stateBytesPerSeq: 22622208 },
     mtpLayers: 0,
@@ -193,6 +196,7 @@ export const liveArch = {
   'qwen2.5:0.5b': {
     contextMax: 32768,
     blockCount: 24,
+    headCount: 14,
     full: { layers: 24, kvHeads: 2, keyLength: 64, valueLength: 64 },
     mtpLayers: 0,
   },
