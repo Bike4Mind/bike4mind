@@ -1,11 +1,33 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import {
   accountCreationAlarmArgs,
   accountCreationAlarmThreshold,
   emailRateQueries,
   emailRateThreshold,
 } from '../accountCreationAlarmConfig';
+
+const alarmSource = readFileSync(new URL('../accountCreationAlarms.ts', import.meta.url), 'utf8');
+
+function resourceConfiguration(name: string): Record<string, string> {
+  const sourceFile = ts.createSourceFile('accountCreationAlarms.ts', alarmSource, ts.ScriptTarget.Latest, true);
+  let configuration: ts.ObjectLiteralExpression | undefined;
+  const visit = (node: ts.Node): void => {
+    if (ts.isNewExpression(node) && node.arguments?.[0]?.getText(sourceFile).slice(1, -1) === name) {
+      const argument = node.arguments[1];
+      if (argument && ts.isObjectLiteralExpression(argument)) configuration = argument;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  if (!configuration) throw new Error(`Missing resource configuration: ${name}`);
+  return Object.fromEntries(
+    configuration.properties
+      .filter(ts.isPropertyAssignment)
+      .map(property => [property.name.getText(sourceFile), property.initializer.getText(sourceFile)])
+  );
+}
 
 describe('account creation alarms', () => {
   it.each([undefined, '', ' '])('is opt-in for %s', value => {
@@ -26,14 +48,29 @@ describe('account creation alarms', () => {
       treatMissingData: 'notBreaching',
     });
   });
-  it('wires monitored failure delivery and alarms to the existing notification topic', () => {
-    const source = readFileSync(new URL('../accountCreationAlarms.ts', import.meta.url), 'utf8');
-    expect(source).toContain('alarmActions: [dlqAlarmTopic.arn]');
-    expect(source).toContain('deadLetterConfig: { targetArn: failures.arn }');
-    expect(source).toContain('deadLetterConfig: { arn: failures.arn }');
-    expect(source).toContain("metricName: 'CensusCompleted'");
-    expect(source).toContain("treatMissingData: 'breaching'");
-    expect(source).toContain("['dev', 'production']");
+  it.each([
+    'AccountCreation${signal.metric}',
+    'AccountCreationMetricsMissing',
+    'AccountCreationMetricsFailed',
+    'OtcEmail${metric}Rate',
+  ])('routes %s to the existing notification topic', name => {
+    expect(resourceConfiguration(name).alarmActions).toBe('[dlqAlarmTopic.arn]');
+  });
+  it('dead-letters both failed invocations and failed schedule deliveries', () => {
+    expect(resourceConfiguration('AccountCreationMetrics').transform).toBe(
+      '{ function: { deadLetterConfig: { targetArn: failures.arn } } }'
+    );
+    expect(resourceConfiguration('AccountCreationMetricsTarget').deadLetterConfig).toBe('{ arn: failures.arn }');
+  });
+  it('alarms when the census stops publishing completion metrics', () => {
+    expect(resourceConfiguration('AccountCreationMetricsMissing')).toMatchObject({
+      metricName: "'CensusCompleted'",
+      comparisonOperator: "'LessThanThreshold'",
+      threshold: '1',
+      treatMissingData: "'breaching'",
+    });
+  });
+  it('exposes census thresholds through the deploy contract', () => {
     const contract = JSON.parse(readFileSync(new URL('../deploy-contract.json', import.meta.url), 'utf8'));
     expect(contract.deployEnv).toEqual(
       expect.arrayContaining(['SIGNUP_ALARM_PER_HOUR', 'NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR'])
