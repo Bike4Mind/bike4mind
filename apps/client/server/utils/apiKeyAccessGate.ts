@@ -1,5 +1,5 @@
-import { CreditHolderType, hasDeveloperUserTag } from '@bike4mind/common';
-import { adminSettingsRepository } from '@bike4mind/database';
+import { CreditHolderType, OAUTH_DEVICE_CLIENT_IDS, hasDeveloperUserTag } from '@bike4mind/common';
+import { adminSettingsRepository, authSessionRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
@@ -10,6 +10,10 @@ import { ladderRateTier, resolveUserRateTier, type RateTierUser } from '@server/
 export type ApiKeyAccessMode = 'all' | 'paid' | 'disabled';
 
 export const API_KEY_ACCESS_DENIED_MESSAGE = 'API keys require an active paid subscription';
+export const CLI_ACCESS_DENIED_MESSAGE = 'The CLI and desktop app require an active paid subscription';
+
+/** OAuth error code for a refusal by this switch, distinct from a revoked or denied grant. */
+export const SUBSCRIPTION_REQUIRED_ERROR = 'subscription_required';
 
 /** Who a key bills. Org-billed keys are paid for by the org, so its plan counts too. */
 export interface ApiKeyBillingRef {
@@ -71,5 +75,29 @@ export async function isApiKeyAccessAllowed(user: RateTierUser, billing?: ApiKey
 export async function assertApiKeyAccessAllowed(user: RateTierUser, billing?: ApiKeyBillingRef): Promise<void> {
   if (!(await isApiKeyAccessAllowed(user, billing))) {
     throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
+  }
+}
+
+/** True for a session minted by the device flow, i.e. the CLI or desktop app. */
+function isDeviceClientSession(session: { createdVia?: string; clientId?: string | null } | null): boolean {
+  if (!session) return false;
+  return (
+    session.createdVia === 'device' || (OAUTH_DEVICE_CLIENT_IDS as readonly string[]).includes(session.clientId ?? '')
+  );
+}
+
+/**
+ * The same switch for CLI and desktop sessions, which authenticate with a session JWT rather
+ * than a key. Browser sessions are untouched. Reads the auth session first (one indexed read)
+ * so web traffic never pays the subscription reads. A token without a `sid` predates server
+ * sessions and is left alone; it expires on its own.
+ * @throws ForbiddenError when the session is a device-flow session the setting denies.
+ */
+export async function assertCliSessionAllowed(user: RateTierUser, sid: string | undefined): Promise<void> {
+  if (!sid || user.isAdmin || hasDeveloperUserTag(user.tags)) return;
+  const session = await authSessionRepository.findBySid(sid);
+  if (!isDeviceClientSession(session)) return;
+  if (!(await isApiKeyAccessAllowed(user))) {
+    throw new ForbiddenError(CLI_ACCESS_DENIED_MESSAGE);
   }
 }

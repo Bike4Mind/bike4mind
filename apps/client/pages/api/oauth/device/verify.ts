@@ -4,6 +4,11 @@ import { cacheRepository, deviceAuthorizationRepository, DeviceAuthorizationMode
 import { z } from 'zod';
 import { LEGACY_DEVICE_CLIENT_ID, oauthClientDisplayName } from '@bike4mind/common';
 import { LIVE_PENDING_COUNTER_KEY } from '@server/utils/oauth/deviceAuthHelpers';
+import {
+  CLI_ACCESS_DENIED_MESSAGE,
+  SUBSCRIPTION_REQUIRED_ERROR,
+  isApiKeyAccessAllowed,
+} from '@server/utils/apiKeyAccessGate';
 
 const VerifyRequestSchema = z.object({
   user_code: z.string(),
@@ -44,6 +49,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
         error: 'too_many_attempts',
         error_description: 'Too many verification attempts',
       });
+    }
+
+    // The admin paid-only switch: the device flow only serves the CLI and desktop app.
+    if (action === 'approve' && req.user && !(await isApiKeyAccessAllowed(req.user))) {
+      return res.status(403).json({ error: SUBSCRIPTION_REQUIRED_ERROR, error_description: CLI_ACCESS_DENIED_MESSAGE });
     }
 
     // direct model update: BaseRepository.update() strips userId to avoid path

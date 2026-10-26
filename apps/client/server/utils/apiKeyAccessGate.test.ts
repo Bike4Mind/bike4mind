@@ -10,7 +10,11 @@ const { getSettingsMapMock, resolveUserRateTierMock, findActiveSubscriptionsByOw
   }));
 
 vi.unmock('@server/utils/apiKeyAccessGate');
-vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
+const { findBySidMock } = vi.hoisted(() => ({ findBySidMock: vi.fn() }));
+vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
+  authSessionRepository: { findBySid: findBySidMock },
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: (...args: unknown[]) => getSettingsMapMock(...args),
   getSettingsValue: (key: string, settings: Record<string, string>) => settings[key],
@@ -27,6 +31,8 @@ import {
   assertApiKeyAccessAllowed,
   isApiKeyAccessAllowed,
   API_KEY_ACCESS_DENIED_MESSAGE,
+  assertCliSessionAllowed,
+  CLI_ACCESS_DENIED_MESSAGE,
 } from '@server/utils/apiKeyAccessGate';
 
 const USER = { id: 'user-1', isAdmin: false, tags: [] };
@@ -164,5 +170,49 @@ describe('assertApiKeyAccessAllowed', () => {
     setMode('paid');
     resolveUserRateTierMock.mockResolvedValue('basic');
     await expect(assertApiKeyAccessAllowed(USER)).resolves.toBeUndefined();
+  });
+});
+
+describe('assertCliSessionAllowed', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setMode('paid');
+    resolveUserRateTierMock.mockResolvedValue('free');
+  });
+
+  it('refuses a device-flow (CLI) session the setting denies', async () => {
+    findBySidMock.mockResolvedValue({ createdVia: 'device', clientId: 'b4m-cli' });
+    const error = await assertCliSessionAllowed(USER, 'sid-1').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect((error as Error).message).toBe(CLI_ACCESS_DENIED_MESSAGE);
+  });
+
+  it('refuses a desktop session identified only by its client id', async () => {
+    findBySidMock.mockResolvedValue({ createdVia: 'legacy-migration', clientId: 'b4m-desktop' });
+    await expect(assertCliSessionAllowed(USER, 'sid-1')).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it('leaves browser sessions alone without reading subscriptions', async () => {
+    findBySidMock.mockResolvedValue({ createdVia: 'otc', clientId: null });
+    await expect(assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
+    expect(resolveUserRateTierMock).not.toHaveBeenCalled();
+  });
+
+  it('admits a CLI session for a subscriber', async () => {
+    findBySidMock.mockResolvedValue({ createdVia: 'device', clientId: 'b4m-cli' });
+    resolveUserRateTierMock.mockResolvedValue('basic');
+    await expect(assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
+  });
+
+  it('admits every CLI session under all', async () => {
+    setMode('all');
+    findBySidMock.mockResolvedValue({ createdVia: 'device', clientId: 'b4m-cli' });
+    await expect(assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
+  });
+
+  it('skips the session read for admins and for tokens without a sid', async () => {
+    await assertCliSessionAllowed(ADMIN, 'sid-1');
+    await assertCliSessionAllowed(USER, undefined);
+    expect(findBySidMock).not.toHaveBeenCalled();
   });
 });

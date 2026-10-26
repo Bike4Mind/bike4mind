@@ -14,7 +14,11 @@ import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcce
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
-import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import {
+  API_KEY_ACCESS_DENIED_MESSAGE,
+  assertCliSessionAllowed,
+  isApiKeyAccessAllowed,
+} from '@server/utils/apiKeyAccessGate';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
@@ -79,6 +83,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       typ?: string;
       kind?: string;
       impersonatedBy?: string;
+      sid?: string;
     };
 
     // A relying-party OAuth access token is scope/audience-bound to OAuth-reachable REST routes
@@ -140,6 +145,11 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {
       throw new ForbiddenError(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
     }
+
+    // The admin paid-only switch covers CLI/desktop sessions too, not only keys, so a refused
+    // key cannot be swapped for `b4m login`. Checked per use, so sessions issued before a flip
+    // are refused as well.
+    await assertCliSessionAllowed(user, decoded.sid);
 
     return {
       id: user.id,

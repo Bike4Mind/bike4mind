@@ -9,12 +9,14 @@ import {
 
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
 const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+const assertCliSessionAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _sid?: string) => undefined));
 vi.mock('@server/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
   return {
     API_KEY_ACCESS_DENIED_MESSAGE: message,
     isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertCliSessionAllowed: assertCliSessionAllowedMock,
     assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
       if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
     },
@@ -812,5 +814,30 @@ describe('api-key paid-only access switch (mirrors apiKeyAuth)', () => {
   it('turns an access-check read failure into a 5xx, never a pass', async () => {
     isApiKeyAccessAllowedMock.mockRejectedValueOnce(new Error('db down'));
     await expect(verifyApiKey({})).rejects.toMatchObject({ statusCode: 500 });
+  });
+});
+
+describe('verifyJwtToken paid-only switch for CLI sessions', () => {
+  beforeEach(() => {
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', aupAcceptedVersion: 'v1' });
+    mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
+    assertCliSessionAllowedMock.mockClear();
+  });
+
+  it('checks the session the token names, so pre-existing CLI sessions are covered', async () => {
+    await verifyJwtToken(jwt.sign({ id: 'u1', sid: 'sid-1' }, 'test-secret'));
+    expect(assertCliSessionAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'sid-1');
+  });
+
+  it('refuses a CLI session the setting denies with the subscription message', async () => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+    assertCliSessionAllowedMock.mockRejectedValueOnce(
+      new ForbiddenError('The CLI and desktop app require an active paid subscription')
+    );
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', sid: 'sid-1' }, 'test-secret'))).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'The CLI and desktop app require an active paid subscription',
+    });
   });
 });
