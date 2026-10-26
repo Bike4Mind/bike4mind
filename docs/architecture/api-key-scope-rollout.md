@@ -27,7 +27,7 @@ land on their own: a scope nobody requires yet changes no request's outcome.
 Two generated/declared files trail step 1 and are gated in CI, not locally:
 
 - `apps/client/public/openapi.json` is committed, and its `info.description` publishes the documented
-  scopes (`PUBLIC_API_KEY_SCOPES`, the enum minus `UNDOCUMENTED_API_KEY_SCOPES`). Adding a value drifts the
+  scopes (`PUBLIC_DOC_API_KEY_SCOPES`, the enum minus `UNDOCUMENTED_API_KEY_SCOPES`). Adding a value drifts the
   snapshot - run `pnpm turbo:openapi:generate` and commit the result, or the `OpenAPI Spec` job fails. Classify
   the new scope as published or undocumented too: the test in `UserApiKeyTypes.test.ts` fails until you do.
 - `infra/deploy-contract.json` must name any `process.env` that `infra/` reads at deploy

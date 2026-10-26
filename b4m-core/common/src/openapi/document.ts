@@ -1,7 +1,7 @@
 import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
-import { PUBLIC_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
-import { API_KEY_RATE_LIMIT_DEFAULTS } from '../types/entities/UserApiKeyTypes';
+import { REQUIRED_SCOPES } from './security';
+import { API_KEY_RATE_LIMIT_DEFAULTS, PUBLIC_DOC_API_KEY_SCOPES } from '../types/entities/UserApiKeyTypes';
 import { API_KEY_RATE_LIMIT_HEADERS, API_KEY_RATE_LIMIT_HEADER_NAMES } from '../apiKeyRateLimitHeaders';
 
 // Importing these modules is what registers their schemas/paths against the
@@ -63,7 +63,7 @@ function infoDescription(): string {
     '',
     '## Scopes',
     'API keys carry `resource:action` scopes. The documented scopes are:',
-    ...PUBLIC_API_KEY_SCOPES.map(s => `- \`${s}\``),
+    ...PUBLIC_DOC_API_KEY_SCOPES.map(s => `- \`${s}\``),
     '',
     'Per-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: ' +
       "a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no " +

@@ -1,5 +1,4 @@
 import { registry } from './registry';
-import { PUBLIC_DOC_API_KEY_SCOPES } from '../types/entities/UserApiKeyTypes';
 
 /**
  * Security schemes, declared once and referenced by every operation.
@@ -51,14 +50,6 @@ export const SECURITY_REQUIREMENT: Array<Record<string, string[]>> = [{ bearerAu
 
 /** Security requirement for JWT-only operations (e.g. the tools endpoint). */
 export const JWT_SECURITY_REQUIREMENT: Array<Record<string, string[]>> = [{ jwtAuth: [] }];
-
-/**
- * API key scopes published in `info.description`: the array form of
- * {@link PUBLIC_DOC_API_KEY_SCOPES}, which is the `ApiKeyScope` enum minus
- * `UNDOCUMENTED_API_KEY_SCOPES` (both in ../types/entities/UserApiKeyTypes).
- * Built-in scopes only: scopes an overlay contributes are left out of the published spec.
- */
-export const PUBLIC_API_KEY_SCOPES: string[] = [...PUBLIC_DOC_API_KEY_SCOPES];
 
 /**
  * Legacy per-operation scope map for any hand-registered operation. Now EMPTY:
