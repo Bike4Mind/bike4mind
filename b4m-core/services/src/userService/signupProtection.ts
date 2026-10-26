@@ -1,12 +1,18 @@
 import {
   DISALLOWED_SIGNUP_RULE_DOMAINS,
   personalEmailProviders,
+  regionalPersonalEmailProviders,
   isEmailInDomains,
   settingsMap,
 } from '@bike4mind/common';
 import type { IAdminSettingsRepository, IUserRepository, SignupProtection } from '@bike4mind/common';
-import { shouldBlockDisposableEmail } from './disposableEmail';
 import { detectSignupBurst, signupDomain } from './signupBurstDetector';
+
+const PUBLIC_MAILBOX_DOMAINS: ReadonlySet<string> = new Set([
+  ...DISALLOWED_SIGNUP_RULE_DOMAINS,
+  ...personalEmailProviders,
+  ...regionalPersonalEmailProviders,
+]);
 
 export async function protectSignupCredits(
   userId: string,
@@ -16,7 +22,6 @@ export async function protectSignupCredits(
   if (!protection) return false;
   const user = await adapters.users.findById(userId);
   if (!user?.email) return false;
-  if (await shouldBlockDisposableEmail(user.email, { adminSettings: adapters.adminSettings })) return true;
   const domain = signupDomain(user.email);
   if (!domain) return false;
   const repository = protection.repository;
@@ -31,43 +36,15 @@ export async function protectSignupCredits(
   const valueOf = (name: string) => settings.find(setting => setting.settingName === name)?.settingValue;
   const autoHold = settingsMap.signupBurstAutoHold.schema.parse(valueOf('signupBurstAutoHold') ?? false);
   const synthetic = settingsMap.syntheticUserEmailDomains.schema.parse(valueOf('syntheticUserEmailDomains') ?? '');
+  const syntheticDomains = new Set(
+    synthetic
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .filter(Boolean)
+  );
   if (
-    isEmailInDomains(
-      user.email,
-      new Set([
-        ...DISALLOWED_SIGNUP_RULE_DOMAINS,
-        ...personalEmailProviders,
-        'yahoo.co.jp',
-        'yahoo.co.uk',
-        'yahoo.fr',
-        'yahoo.de',
-        'yahoo.com.br',
-        'yahoo.com.au',
-        'hotmail.co.uk',
-        'hotmail.fr',
-        'hotmail.de',
-        'outlook.jp',
-        'outlook.fr',
-        'outlook.de',
-        'qq.com',
-        '163.com',
-        '126.com',
-        'naver.com',
-        'daum.net',
-        'hanmail.net',
-        'web.de',
-        'gmx.de',
-        'orange.fr',
-        'wanadoo.fr',
-        'laposte.net',
-        'tuta.com',
-        'tuta.io',
-        ...synthetic
-          .toLowerCase()
-          .split(/[\s,]+/)
-          .filter(Boolean),
-      ])
-    ) ||
+    isEmailInDomains(user.email, PUBLIC_MAILBOX_DOMAINS) ||
+    isEmailInDomains(user.email, syntheticDomains) ||
     (await repository.isOrganizationDomain(user.email))
   )
     return false;
