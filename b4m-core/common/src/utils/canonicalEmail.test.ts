@@ -18,13 +18,24 @@ describe('canonicalizeEmail', () => {
     ['me+news@outlook.com', 'me@outlook.com'],
     ['Me+news@iCloud.com', 'me@icloud.com'],
     ['me+a+b@proton.me', 'me@proton.me'],
+    ['me+news@hotmail.co.uk', 'me@hotmail.co.uk'],
   ])('strips the plus tag for the plus-addressing provider in %s', (input, expected) => {
+    expect(canonicalizeEmail(input)).toBe(expected);
+  });
+
+  it.each([
+    ['me@me.com', 'me@icloud.com'],
+    ['me+tag@mac.com', 'me@icloud.com'],
+    ['me@protonmail.com', 'me@proton.me'],
+    ['me+tag@pm.me', 'me@proton.me'],
+  ])('folds the same-mailbox domain in %s', (input, expected) => {
     expect(canonicalizeEmail(input)).toBe(expected);
   });
 
   it.each([
     ['First.Last+tag@Example.com', 'first.last+tag@example.com'],
     ['a.b@outlook.com', 'a.b@outlook.com'],
+    ['me@constructor', 'me@constructor'],
   ])('only lowercases where the provider does not alias %s', (input, expected) => {
     expect(canonicalizeEmail(input)).toBe(expected);
   });

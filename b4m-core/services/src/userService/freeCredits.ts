@@ -76,10 +76,13 @@ export const grantFreeCredits = async (
   });
   if (legacyGrant) return { creditsGranted: 0, currentCredits: null };
 
-  // The transactionId dedupes per account; the claim dedupes per inbox, so an alias of an
-  // address that already earned a grant (x+1@gmail.com, x.y@gmail.com) earns none.
-  const claimed = await db.users.claimFreeCreditGrant(user.id);
-  if (!claimed) return { creditsGranted: 0, currentCredits: null };
+  // The transactionId dedupes per account; the claim dedupes the open-registration default per
+  // inbox, so an alias of an address that already earned it (x+1@gmail.com, x.y@gmail.com) earns
+  // none. An invite-resolved amount is an explicit grant to that account and is not claimed.
+  const isDefaultGrant = user.pendingCreditGrant === null || user.pendingCreditGrant === undefined;
+  if (isDefaultGrant && !(await db.users.claimFreeCreditGrant(user.id))) {
+    return { creditsGranted: 0, currentCredits: null };
+  }
 
   const holder = await addCredits(
     {

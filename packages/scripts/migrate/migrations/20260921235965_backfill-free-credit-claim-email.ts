@@ -4,7 +4,8 @@ import { CreditTransaction, safeDropIndex, User } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 // Every runtime free grant keys on one of these (see grantFreeCredits in userService/freeCredits.ts).
-const FREE_GRANT_TRANSACTION_ID = /^(?:verify-grant|otc-register-grant):/;
+// One anchored literal prefix per query, so each scan stays bounded on the transactionId index.
+const FREE_GRANT_TRANSACTION_ID_PREFIXES = [/^verify-grant:/, /^otc-register-grant:/];
 const CLAIM_INDEX_NAME = 'freeCreditClaimEmail_1';
 const BATCH_SIZE = 1000;
 const MAX_CLUSTERS_LOGGED = 50;
@@ -79,15 +80,17 @@ const chunk = <T>(items: T[], size: number): T[][] =>
 
 async function loadEarliestGrants(): Promise<Map<string, Date>> {
   const earliest = new Map<string, Date>();
-  const cursor = CreditTransaction.collection
-    .find(
-      { ownerType: 'User', transactionId: { $regex: FREE_GRANT_TRANSACTION_ID } },
+  for (const prefix of FREE_GRANT_TRANSACTION_ID_PREFIXES) {
+    const cursor = CreditTransaction.collection.find(
+      { transactionId: { $regex: prefix }, ownerType: 'User' },
       { projection: { ownerId: 1, createdAt: 1 } }
-    )
-    .sort({ createdAt: 1 });
-  for await (const grant of cursor) {
-    const ownerId = String(grant.ownerId);
-    if (!earliest.has(ownerId)) earliest.set(ownerId, grant.createdAt ?? new Date(0));
+    );
+    for await (const grant of cursor) {
+      const ownerId = String(grant.ownerId);
+      const grantedAt: Date = grant.createdAt ?? new Date(0);
+      const known = earliest.get(ownerId);
+      if (!known || grantedAt < known) earliest.set(ownerId, grantedAt);
+    }
   }
   return earliest;
 }
@@ -156,10 +159,11 @@ function logClusters(clusters: ClaimCluster[]): void {
  * UserRepository.claimFreeCreditGrant) for accounts that already received a grant, then build the
  * unique index that makes runtime claims atomic. The earliest-granted account on each inbox holds
  * its claim; the other accounts keep the credits they already have and are logged by user id so
- * clustered signups can be reviewed. Runs on the raw collections so soft-deleted accounts count.
+ * clustered signups can be reviewed. Runs on the raw collections so accounts flagged deletedAt count.
  *
- * Idempotent. If a runtime claim races the backfill into a duplicate, the index build fails and a
- * re-run resolves it. Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001),
+ * Idempotent. Deployed environments migrate before the new code serves, so no runtime claim races
+ * the backfill; if one does (code deployed first), the index build fails on the duplicate and a
+ * re-run clears it. Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001),
  * which must stay last.
  */
 const migration: MigrationFile = {

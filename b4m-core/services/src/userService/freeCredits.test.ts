@@ -91,6 +91,16 @@ describe('free credits service', () => {
       expect(addCreditsSpy).not.toHaveBeenCalled();
     });
 
+    it('grants an invite-resolved amount without claiming the inbox', async () => {
+      const adapters = buildAdapters('100');
+      adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
+
+      const result = await grantFreeCredits({ id: 'user-2', pendingCreditGrant: 5000 }, adapters);
+
+      expect(adapters.db.users.claimFreeCreditGrant).not.toHaveBeenCalled();
+      expect(result.creditsGranted).toBe(5000);
+    });
+
     it('does not spend the inbox claim when there is nothing to grant', async () => {
       const adapters = buildAdapters('0');
       await grantFreeCredits({ id: 'user-1' }, adapters);
