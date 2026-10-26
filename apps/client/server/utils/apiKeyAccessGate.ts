@@ -1,7 +1,7 @@
 import { CreditHolderType, OAUTH_DEVICE_CLIENT_IDS, hasDeveloperUserTag } from '@bike4mind/common';
 import { adminSettingsRepository, authSessionRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import {
@@ -10,7 +10,6 @@ import {
 } from '@server/entitlements/activeSubscriptions';
 import { hasPaidSubscription, type RateTierUser } from '@server/utils/userRateTier';
 
-/** Values of the `apiKeyAccess` admin setting (settings.ts). */
 export type ApiKeyAccessMode = 'all' | 'paid' | 'disabled';
 
 export const API_KEY_ACCESS_DENIED_MESSAGE = 'API keys require an active paid subscription';
@@ -19,49 +18,42 @@ export const CLI_ACCESS_DENIED_MESSAGE = 'The CLI and desktop app require an act
 /** OAuth error code for a refusal by this switch, distinct from a revoked or denied grant. */
 export const SUBSCRIPTION_REQUIRED_ERROR = 'subscription_required';
 
-/** The key being minted or used: who it bills, and whether an admin provisioned it. */
-export interface ApiKeyBillingRef {
+export type ApiKeyBillingRef = {
   billingOwnerType?: CreditHolderType;
   organizationId?: string;
-  /** Set only by the admin generate-api-key route (metadata.createdByUserId). */
+  /** Trusted validation metadata, never accepted from a mint request. */
   createdByUserId?: string;
-}
+};
 
-/** A flip reaches every process within this window without a settings read per request. */
-const MODE_CACHE_TTL_MS = 30_000;
-let modeCache: { mode: ApiKeyAccessMode; expiresAt: number } | undefined;
+const MODE_TTL_MS = 30_000;
+let cachedMode: { value: ApiKeyAccessMode; expiresAt: number } | undefined;
+let modeRead: Promise<ApiKeyAccessMode> | undefined;
 
-/** Drops the cached setting, e.g. in tests or right after an admin write in this process. */
+/** Drops the cached setting in this process. */
 export function clearApiKeyAccessModeCache(): void {
-  modeCache = undefined;
+  cachedMode = undefined;
 }
 
 async function readMode(): Promise<ApiKeyAccessMode> {
-  if (modeCache && modeCache.expiresAt > Date.now()) return modeCache.mode;
-  // Bypasses the shared 5-minute settings cache; one indexed read per process per TTL.
-  const settings = await getSettingsMap(
-    { adminSettings: adminSettingsRepository },
-    { skipCache: true, names: ['apiKeyAccess'] }
-  );
-  // getSettingsValue resolves an unset or invalid stored value to the settings.ts default.
-  const value = getSettingsValue('apiKeyAccess', settings);
-  const mode: ApiKeyAccessMode = value === 'all' || value === 'disabled' ? value : 'paid';
-  modeCache = { mode, expiresAt: Date.now() + MODE_CACHE_TTL_MS };
-  return mode;
-}
+  if (cachedMode && cachedMode.expiresAt > Date.now()) return cachedMode.value;
+  if (modeRead) return modeRead;
 
-/**
- * The user's active subscriptions, through the request memo when there is one. Strict, so an
- * org-leg read error reaches the caller as a 5xx instead of under-granting a seat member to a
- * terminal 403. A successful read seeds `req.activeSubscriptions` for the rate limiter and
- * entitlement gate later in the same request.
- */
-async function userSubscriptions(user: RateTierUser, req?: ActiveSubscriptionsRequest) {
-  const sameUser = req && (!req.user || req.user.id === user.id);
-  if (sameUser && req.activeSubscriptions) return req.activeSubscriptions;
-  const rows = await getActiveSubscriptionsForUser(user.id, { strict: true });
-  if (sameUser) req.activeSubscriptions = rows;
-  return rows;
+  // Single-flight the refresh; an expired value never grants access on a failed read.
+  modeRead = (async () => {
+    const settings = await getSettingsMap(
+      { adminSettings: adminSettingsRepository },
+      { skipCache: true, names: ['apiKeyAccess'] }
+    );
+    const value = getSettingsValue('apiKeyAccess', settings);
+    const mode = value === 'all' || value === 'disabled' ? value : 'paid';
+    cachedMode = { value: mode, expiresAt: Date.now() + MODE_TTL_MS };
+    return mode;
+  })();
+  try {
+    return await modeRead;
+  } finally {
+    modeRead = undefined;
+  }
 }
 
 async function orgHasPaidPlan(organizationId: string): Promise<boolean> {
@@ -72,41 +64,43 @@ async function orgHasPaidPlan(organizationId: string): Promise<boolean> {
 }
 
 /**
- * Whether `user` may mint or use a personal API key under the `apiKeyAccess` setting.
- * Admins, developer-tagged users and admin-provisioned keys always pass. Under `paid`, the
- * user needs an active paid plan (own or org seat, see getActiveSubscriptionsForUser), or the
- * key is org-billed and that org holds one. A setting or subscription read error propagates:
- * the caller fails closed with a 5xx (toApiKeyAuthError), never an allow and never a 403 that
- * would tell a machine client its key is bad.
+ * Admins, developers and trusted admin-provisioned keys bypass the switch. Paid access includes
+ * standalone plans and org seats. Read failures propagate so clients get a retryable 5xx.
  */
 export async function isApiKeyAccessAllowed(
   user: RateTierUser,
-  key?: ApiKeyBillingRef,
+  billing?: ApiKeyBillingRef,
   req?: ActiveSubscriptionsRequest
 ): Promise<boolean> {
-  if (user.isAdmin || hasDeveloperUserTag(user.tags)) return true;
-  // An admin chose to provision this key for the account, so it is not self-service access.
-  if (key?.createdByUserId) return true;
+  if (user.isAdmin || hasDeveloperUserTag(user.tags) || billing?.createdByUserId) return true;
 
   const mode = await readMode();
   if (mode === 'all') return true;
   if (mode === 'disabled') return false;
 
-  if (hasPaidSubscription(await userSubscriptions(user, req))) return true;
+  const matchingRequest = req && (!req.user || req.user.id === user.id) ? req : undefined;
+  const rows =
+    matchingRequest?.activeSubscriptionsStrict && matchingRequest.activeSubscriptions
+      ? matchingRequest.activeSubscriptions
+      : await getActiveSubscriptionsForUser(user.id, { strict: true });
+  if (matchingRequest) {
+    matchingRequest.activeSubscriptions = rows;
+    matchingRequest.activeSubscriptionsStrict = true;
+  }
+  if (hasPaidSubscription(rows)) return true;
 
-  if (key?.billingOwnerType === CreditHolderType.Organization && key.organizationId) {
-    return orgHasPaidPlan(key.organizationId);
+  if (billing?.billingOwnerType === CreditHolderType.Organization && billing.organizationId) {
+    return orgHasPaidPlan(billing.organizationId);
   }
   return false;
 }
 
-/** Throws ForbiddenError when {@link isApiKeyAccessAllowed} denies. */
 export async function assertApiKeyAccessAllowed(
   user: RateTierUser,
-  key?: ApiKeyBillingRef,
+  billing?: ApiKeyBillingRef,
   req?: ActiveSubscriptionsRequest
 ): Promise<void> {
-  if (!(await isApiKeyAccessAllowed(user, key, req))) {
+  if (!(await isApiKeyAccessAllowed(user, billing, req))) {
     throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
   }
 }
@@ -120,16 +114,23 @@ function isDeviceClientSession(session: { createdVia?: string; clientId?: string
 }
 
 /**
- * The same switch for CLI and desktop sessions, which authenticate with a session JWT rather
- * than a key. Browser sessions are untouched. Reads the auth session first (one indexed read)
- * so web traffic never pays the subscription reads. A token without a `sid` predates server
- * sessions and is left alone; it expires on its own.
- * @throws ForbiddenError when the session is a device-flow session the setting denies.
+ * Shared web surfaces gate device sessions; dedicated API/CLI surfaces gate every JWT,
+ * including browser tokens and legacy sidless tokens. Session metadata comes from the server.
  */
-export async function assertCliSessionAllowed(user: RateTierUser, sid: string | undefined): Promise<void> {
-  if (!sid || user.isAdmin || hasDeveloperUserTag(user.tags)) return;
-  const session = await authSessionRepository.findBySid(sid);
-  if (!isDeviceClientSession(session)) return;
+export async function assertCliSessionAllowed(
+  user: RateTierUser,
+  sid: string | undefined,
+  options: { requireApiAccess?: boolean } = {}
+): Promise<void> {
+  if (user.isAdmin || hasDeveloperUserTag(user.tags)) return;
+
+  if (!options.requireApiAccess) {
+    if (!sid) return;
+    const session = await authSessionRepository.findBySid(sid);
+    if (!session) throw new UnauthorizedError('Session expired');
+    if (!isDeviceClientSession(session)) return;
+  }
+
   if (!(await isApiKeyAccessAllowed(user))) {
     throw new ForbiddenError(CLI_ACCESS_DENIED_MESSAGE);
   }

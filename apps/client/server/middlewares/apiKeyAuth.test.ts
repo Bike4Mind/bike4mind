@@ -505,29 +505,35 @@ describe('apiKeyAuth paid-only access switch', () => {
     const req = makeReq();
     expect((await run(undefined, req)).passed).toBe(true);
     expect(isAdminAtCheck).toBe(true);
-    // The request rides along so the gate seeds the per-request subscription memo.
     expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(
       expect.anything(),
-      { billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1', createdByUserId: undefined },
+      {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+        createdByUserId: undefined,
+      },
       req
     );
   });
 
-  it('passes the provisioning admin so admin-provisioned keys are exempt', async () => {
-    validateUserApiKeyMock.mockResolvedValue({
+  it('forwards trusted admin provisioning provenance to the gate without granting admin authority', async () => {
+    validateUserApiKeyMock.mockResolvedValueOnce({
       isValid: true,
       keyId: 'key-1',
       userId: 'user-1',
       scopes: [ApiKeyScope.AI_CHAT],
       rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
-      createdByUserId: 'admin-9',
+      createdByUserId: 'admin-provisioner',
     });
-    expect((await run(undefined, makeReq())).passed).toBe(true);
-    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ createdByUserId: 'admin-9' }),
-      expect.anything()
+    findByIdMock.mockResolvedValueOnce({ id: 'user-1', isBanned: false, isAdmin: false });
+    const req = makeReq();
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'user-1', isAdmin: false }),
+      expect.objectContaining({ createdByUserId: 'admin-provisioner' }),
+      req
     );
+    expect(req.user?.isAdmin).toBe(false);
   });
 
   it('fails closed with a 5xx, not a pass, when the access check cannot read', async () => {

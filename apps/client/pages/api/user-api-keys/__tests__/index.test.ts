@@ -18,15 +18,17 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
-const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+const isApiKeyAccessAllowedMock = vi.hoisted(() =>
+  vi.fn(async (_user: unknown, _billing?: unknown, _request?: unknown) => true)
+);
 vi.mock('@server/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
   return {
     API_KEY_ACCESS_DENIED_MESSAGE: message,
     isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
-    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
-      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown, request?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing, request))) throw new ForbiddenError(message);
     },
   };
 });
@@ -343,6 +345,7 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
 describe('POST /api/user-api-keys - org-billed authorization', () => {
   beforeEach(() => {
     createUserApiKey.mockClear();
+    isApiKeyAccessAllowedMock.mockClear();
     findIdsAdministeredBy.mockResolvedValue([]);
   });
 
@@ -379,6 +382,7 @@ describe('POST /api/user-api-keys - org-billed authorization', () => {
     findIdsAdministeredBy.mockResolvedValue([]);
     const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', organizationId: 'org-9' });
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/permission/i);
+    expect(isApiKeyAccessAllowedMock).not.toHaveBeenCalled();
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 });
@@ -785,9 +789,13 @@ describe('POST /api/user-api-keys - paid-only access switch', () => {
   it('passes the org as billing owner for an org-billed mint', async () => {
     const { req, res } = post({ name: 'k', scopes: ['notebooks:read'], organizationId: 'org-9' }, { isAdmin: true });
     await mockRefs.postHandler!(req, res);
-    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), {
-      billingOwnerType: CreditHolderType.Organization,
-      organizationId: 'org-9',
-    });
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'u1' }),
+      {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-9',
+      },
+      req
+    );
   });
 });

@@ -71,7 +71,10 @@ export interface ApiKeyInfo {
  * Verify JWT token from Authorization header
  * @throws Error if token is invalid or expired
  */
-export async function verifyJwtToken(token: string | undefined): Promise<VerifiedUser> {
+export async function verifyJwtToken(
+  token: string | undefined,
+  options: { requireApiAccess?: boolean } = {}
+): Promise<VerifiedUser> {
   if (!token) {
     throw new Error('No authorization token provided');
   }
@@ -80,12 +83,12 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     // Pin HS256 to match the REST strategy / verifyRefreshToken (no algorithm-confusion surface).
     const decoded = jwt.verify(token, Config.JWT_SECRET, { algorithms: ['HS256'] }) as {
       id: string;
+      sid?: string;
       tokenVersion?: number;
       mfaPending?: boolean;
       typ?: string;
       kind?: string;
       impersonatedBy?: string;
-      sid?: string;
     };
 
     // A relying-party OAuth access token is scope/audience-bound to OAuth-reachable REST routes
@@ -148,10 +151,13 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       throw new ForbiddenError(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
     }
 
-    // The admin paid-only switch covers CLI/desktop sessions too, not only keys, so a refused
-    // key cannot be swapped for `b4m login`. Checked per use, so sessions issued before a flip
-    // are refused as well.
-    await assertCliSessionAllowed(user, decoded.sid);
+    // Shared web surfaces identify device sessions from trusted server metadata;
+    // dedicated CLI/API surfaces apply the policy to every JWT.
+    try {
+      await assertCliSessionAllowed(user, decoded.sid, options);
+    } catch (error) {
+      throw toApiKeyAuthError(error);
+    }
 
     return {
       id: user.id,

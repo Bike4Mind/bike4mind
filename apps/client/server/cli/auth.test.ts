@@ -9,7 +9,9 @@ import {
 
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
 const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
-const assertCliSessionAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _sid?: string) => undefined));
+const assertCliSessionAllowedMock = vi.hoisted(() =>
+  vi.fn(async (_user: unknown, _sid?: string, _options?: { requireApiAccess?: boolean }) => undefined)
+);
 vi.mock('@server/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
@@ -300,6 +302,8 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
 
   beforeEach(() => {
     vi.mocked(User.findById).mockReset();
+    assertCliSessionAllowedMock.mockReset().mockResolvedValue(undefined);
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
     mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
   });
 
@@ -808,6 +812,24 @@ describe('api-key paid-only access switch (mirrors apiKeyAuth)', () => {
     expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), {
       billingOwnerType: CreditHolderType.Organization,
       organizationId: 'org-1',
+      createdByUserId: undefined,
+    });
+  });
+
+  it('preserves trusted admin-provisioned provenance on raw and by-id key validation', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValueOnce({ ...orgKey, createdByUserId: 'admin-1' });
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValueOnce({
+      ...orgKey,
+      createdByUserId: 'admin-1',
+    });
+    const raw = await verifyEmbedApiKey({});
+    const byId = await verifyEmbedKeyById('k1');
+    expect(raw.createdByUserId).toBe('admin-1');
+    expect(byId.createdByUserId).toBe('admin-1');
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }), {
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+      createdByUserId: 'admin-1',
     });
   });
 
@@ -822,12 +844,26 @@ describe('verifyJwtToken paid-only switch for CLI sessions', () => {
     vi.mocked(User.findById).mockReset();
     vi.mocked(User.findById).mockResolvedValue({ id: 'u1', aupAcceptedVersion: 'v1' });
     mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
-    assertCliSessionAllowedMock.mockClear();
+    assertCliSessionAllowedMock.mockReset().mockResolvedValue(undefined);
   });
 
   it('checks the session the token names, so pre-existing CLI sessions are covered', async () => {
     await verifyJwtToken(jwt.sign({ id: 'u1', sid: 'sid-1' }, 'test-secret'));
-    expect(assertCliSessionAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'sid-1');
+    expect(assertCliSessionAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'sid-1', {});
+  });
+
+  it('requires access for dedicated CLI surfaces even for a legacy JWT without a session id', async () => {
+    await verifyJwtToken(jwt.sign({ id: 'u1' }, 'test-secret'), { requireApiAccess: true });
+    expect(assertCliSessionAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), undefined, {
+      requireApiAccess: true,
+    });
+  });
+
+  it('maps session and subscription lookup failures to server errors', async () => {
+    assertCliSessionAllowedMock.mockRejectedValueOnce(new Error('database down'));
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', sid: 'sid-1' }, 'test-secret'))).rejects.toMatchObject({
+      statusCode: 500,
+    });
   });
 
   it('refuses a CLI session the setting denies with the subscription message', async () => {

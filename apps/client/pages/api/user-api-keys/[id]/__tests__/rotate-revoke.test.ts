@@ -15,15 +15,17 @@ const mockRefs = vi.hoisted(() => ({
 }));
 
 // A fresh chain per import so rotate and revoke capture their own handler.
-const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+const isApiKeyAccessAllowedMock = vi.hoisted(() =>
+  vi.fn(async (_user: unknown, _billing?: unknown, _request?: unknown) => true)
+);
 vi.mock('@server/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
   return {
     API_KEY_ACCESS_DENIED_MESSAGE: message,
     isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
-    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
-      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown, request?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing, request))) throw new ForbiddenError(message);
     },
   };
 });
@@ -47,7 +49,10 @@ const rotateUserApiKey = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ id: 'key-1', name: 'k', keyPrefix: 'b4m_live_x', key: 'b4m_live_secret' })
 );
 const revokeUserApiKey = vi.hoisted(() => vi.fn().mockResolvedValue({ name: 'k' }));
-vi.mock('@bike4mind/services', () => ({ userApiKeyService: { rotateUserApiKey, revokeUserApiKey } }));
+const resolveOwnedApiKey = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'key-1' }));
+vi.mock('@bike4mind/services', () => ({
+  userApiKeyService: { rotateUserApiKey, revokeUserApiKey, resolveOwnedApiKey },
+}));
 
 const notifyApiKeyRotationReown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyRotationReown }));
@@ -244,5 +249,45 @@ describe('POST /api/user-api-keys/[id]/rotate - paid-only access switch', () => 
     const { req, res } = post('key-1');
     await expect(mockRefs.rotateHandler!(req, res)).rejects.toThrow('API keys require an active paid subscription');
     expect(rotateUserApiKey).not.toHaveBeenCalled();
+  });
+});
+
+describe('rotation billing policy wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveOwnedApiKey.mockResolvedValue({ id: 'key-1' });
+    isApiKeyAccessAllowedMock.mockResolvedValue(true);
+  });
+
+  it('authorizes the key before consulting subscription policy', async () => {
+    resolveOwnedApiKey.mockResolvedValueOnce(null);
+    const { req, res } = post('other-key');
+    await expect(mockRefs.rotateHandler!(req, res)).rejects.toMatchObject({ statusCode: 404 });
+    expect(isApiKeyAccessAllowedMock).not.toHaveBeenCalled();
+    expect(rotateUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('passes organization billing and admin provisioning provenance from the authorized key', async () => {
+    resolveOwnedApiKey.mockResolvedValueOnce({
+      id: 'key-1',
+      billingOwnerType: 'Organization',
+      organizationId: 'org-1',
+      metadata: { createdByUserId: 'provisioning-admin' },
+    });
+    const { req, res } = post('key-1');
+    await mockRefs.rotateHandler!(req, res);
+    expect(resolveOwnedApiKey).toHaveBeenCalledWith('admin-user', 'key-1', {
+      db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository },
+    });
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(
+      req.user,
+      {
+        billingOwnerType: 'Organization',
+        organizationId: 'org-1',
+        createdByUserId: 'provisioning-admin',
+      },
+      req
+    );
+    expect(rotateUserApiKey).toHaveBeenCalledTimes(1);
   });
 });

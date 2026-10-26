@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+const isApiKeyAccessAllowedMock = vi.hoisted(() =>
+  vi.fn(async (_user: unknown, _billing?: unknown, _request?: unknown) => true)
+);
 vi.mock('@server/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
@@ -9,8 +11,8 @@ vi.mock('@server/utils/apiKeyAccessGate', async () => {
     API_KEY_ACCESS_DENIED_MESSAGE: message,
     SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
     isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
-    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
-      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown, request?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing, request))) throw new ForbiddenError(message);
     },
   };
 });
@@ -145,6 +147,7 @@ function makeReq(body: any = VALID_BODY, headers: Record<string, string> = {}) {
 describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isApiKeyAccessAllowedMock.mockResolvedValue(true);
     // Defaults for the happy path; individual tests override.
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
     mockVerifyClientSecret.mockResolvedValue(FEDERATED_CLIENT);
@@ -384,6 +387,7 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       error: 'subscription_required',
       error_description: 'API keys require an active paid subscription',
     });
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(CONSENTED_USER, undefined, req);
     expect(mockCreateUserApiKey).not.toHaveBeenCalled();
     expect(mockRevokeUserApiKey).not.toHaveBeenCalled();
   });
@@ -725,6 +729,7 @@ describe('POST /api/oauth/ai-token error logging', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    isApiKeyAccessAllowedMock.mockResolvedValue(true);
     process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
     mockVerifyClientSecret.mockResolvedValue(FEDERATED_CLIENT);

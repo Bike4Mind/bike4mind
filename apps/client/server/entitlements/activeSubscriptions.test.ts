@@ -119,11 +119,20 @@ describe('getActiveSubscriptionsForUser', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('strict rethrows an org-leg failure instead of degrading to the user rows', async () => {
+  it('strict access reads propagate membership lookup failures even for personal subscribers', async () => {
     findActiveUserSubscriptions.mockResolvedValue([own]);
-    findPlanHolderOrgIds.mockRejectedValue(new Error('mongo unavailable'));
+    findPlanHolderOrgIds.mockRejectedValue(new Error('membership down'));
 
-    await expect(getActiveSubscriptionsForUser('u1', { strict: true })).rejects.toThrow('mongo unavailable');
+    await expect(getActiveSubscriptionsForUser('u1', { strict: true })).rejects.toThrow('membership down');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('strict access reads propagate org subscription failures even for a personal subscriber', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([own]);
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwners.mockRejectedValue(new Error('org subscriptions down'));
+
+    await expect(getActiveSubscriptionsForUser('u1', { strict: true })).rejects.toThrow('org subscriptions down');
     expect(warn).not.toHaveBeenCalled();
   });
 

@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { notifyApiKeyRotationReown } from '@server/utils/apiKeyRotationNotifier';
 import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 
@@ -17,7 +17,19 @@ const handler = baseApi().post(
     if (!keyId) throw new BadRequestError('Invalid key ID');
 
     // Rotation mints a fresh secret, so it is a mint for the admin paid-only switch.
-    await assertApiKeyAccessAllowed(req.user);
+    const apiKey = await userApiKeyService.resolveOwnedApiKey(userId, keyId, {
+      db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository },
+    });
+    if (!apiKey) throw new NotFoundError('API key not found');
+    await assertApiKeyAccessAllowed(
+      req.user,
+      {
+        billingOwnerType: apiKey.billingOwnerType,
+        organizationId: apiKey.organizationId,
+        createdByUserId: apiKey.metadata?.createdByUserId,
+      },
+      req
+    );
 
     const rotatedKey = await userApiKeyService.rotateUserApiKey(
       userId,

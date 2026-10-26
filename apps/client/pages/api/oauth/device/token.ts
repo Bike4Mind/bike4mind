@@ -110,7 +110,7 @@ const handler = baseApi({ auth: false })
         }
 
         // Re-checked here for approvals made before the switch was flipped.
-        if (!(await isApiKeyAccessAllowed(authorizedUser))) {
+        if (!(await isApiKeyAccessAllowed(authorizedUser, undefined, req))) {
           return res
             .status(403)
             .json({ error: SUBSCRIPTION_REQUIRED_ERROR, error_description: CLI_ACCESS_DENIED_MESSAGE });

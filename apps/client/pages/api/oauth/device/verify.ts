@@ -28,7 +28,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const { user_code, action } = VerifyRequestSchema.parse(req.body);
     const userId = req.user?.id;
 
-    if (!userId) {
+    if (!userId || !req.user) {
       return res.status(401).json({
         error: 'unauthorized',
         error_description: 'Must be logged in',
@@ -52,7 +52,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
 
     // The admin paid-only switch: the device flow only serves the CLI and desktop app.
-    if (action === 'approve' && req.user && !(await isApiKeyAccessAllowed(req.user))) {
+    if (action === 'approve' && req.user && !(await isApiKeyAccessAllowed(req.user, undefined, req))) {
       return res.status(403).json({ error: SUBSCRIPTION_REQUIRED_ERROR, error_description: CLI_ACCESS_DENIED_MESSAGE });
     }
 

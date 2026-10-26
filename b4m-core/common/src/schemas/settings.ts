@@ -3061,7 +3061,7 @@ export const settingsMap = {
     // defaults to paid-only so the gate is live without an admin write.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? 'all' : 'paid',
     description:
-      'Who may mint and use personal API keys. "all": anyone. "paid": only users with an active paid ladder subscription (Basic/Pro, including org seats, or an org-billed key whose org holds one), plus admins and developer-tagged users. "disabled": nobody except admins and developer-tagged users. Covers both minting and use, so changing it also cuts off keys that already exist. Defaults to "paid" on hosted and "all" on self-host.',
+      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,

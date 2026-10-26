@@ -1,260 +1,362 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { CreditHolderType, ForbiddenError } from '@bike4mind/common';
+import { CreditHolderType, ForbiddenError, OAUTH_DEVICE_CLIENT_IDS, settingsMap } from '@bike4mind/common';
+import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
 
-// Price ids are read from env when the plan constants load, so set them before any import:
-// the real SUBSCRIPTION_PLANS / TEAM_PLAN then carry these ids, and the gate resolves them
-// through the real getEntitlingPlanByPriceId.
-const PRICE = vi.hoisted(() => {
-  const ids = { basic: 'price_test_professional', team: 'price_test_team', standalone: 'price_test_libonc' };
-  process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST = ids.basic;
-  process.env.NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_TEST = ids.team;
-  process.env.NEXT_PUBLIC_STRIPE_PRICE_LIBONC_TEST = ids.standalone;
-  return ids;
-});
-
-const { getSettingsMapMock, getActiveSubscriptionsForUserMock, findActiveSubscriptionsByOwnersMock, findBySidMock } =
-  vi.hoisted(() => ({
-    getSettingsMapMock: vi.fn<(...args: unknown[]) => Promise<Record<string, string>>>(),
-    getActiveSubscriptionsForUserMock: vi.fn(),
-    findActiveSubscriptionsByOwnersMock: vi.fn(),
-    findBySidMock: vi.fn(),
-  }));
+const { getSettingsMapMock, findActiveUserSubscriptions, findActiveSubscriptionsByOwners, findPlanHolderOrgIds } =
+  vi.hoisted(() => {
+    return {
+      getSettingsMapMock: vi.fn<(...args: unknown[]) => Promise<Record<string, string>>>(),
+      findActiveUserSubscriptions: vi.fn(),
+      findActiveSubscriptionsByOwners: vi.fn(),
+      findPlanHolderOrgIds: vi.fn(),
+    };
+  });
 
 vi.unmock('@server/utils/apiKeyAccessGate');
+const { findBySidMock } = vi.hoisted(() => ({ findBySidMock: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   authSessionRepository: { findBySid: findBySidMock },
+  organizationRepository: { findPlanHolderOrgIds },
 }));
-vi.mock('@bike4mind/utils', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
-  getSettingsMap: (...args: unknown[]) => getSettingsMapMock(...args),
-}));
+vi.mock('@bike4mind/utils', async () => {
+  const { getSettingsValue } = await import('../../../../b4m-core/utils/src/settings');
+  return { getSettingsMap: getSettingsMapMock, getSettingsValue };
+});
 vi.mock('@server/models/Subscription', () => ({
-  subscriptionRepository: { findActiveSubscriptionsByOwners: findActiveSubscriptionsByOwnersMock },
+  subscriptionRepository: { findActiveUserSubscriptions, findActiveSubscriptionsByOwners },
 }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({
-  getActiveSubscriptionsForUser: getActiveSubscriptionsForUserMock,
-  getRequestActiveSubscriptions: vi.fn(),
-}));
-
-import {
-  API_KEY_ACCESS_DENIED_MESSAGE,
-  CLI_ACCESS_DENIED_MESSAGE,
-  assertApiKeyAccessAllowed,
-  assertCliSessionAllowed,
-  clearApiKeyAccessModeCache,
-  isApiKeyAccessAllowed,
-} from '@server/utils/apiKeyAccessGate';
 
 const USER = { id: 'user-1', isAdmin: false, tags: [] };
 const ADMIN = { id: 'admin-1', isAdmin: true, tags: [] };
-const DEV = { id: 'dev-1', tags: ['developer'] };
-
+const ORG_BILLING = { billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1' };
 const setMode = (mode: string | undefined) =>
   getSettingsMapMock.mockResolvedValue(mode === undefined ? {} : { apiKeyAccess: mode });
-const subscribedTo = (...priceIds: string[]) =>
-  getActiveSubscriptionsForUserMock.mockResolvedValue(priceIds.map(priceId => ({ priceId })));
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  clearApiKeyAccessModeCache();
-  subscribedTo();
-  findActiveSubscriptionsByOwnersMock.mockResolvedValue([]);
+let gate: typeof import('@server/utils/apiKeyAccessGate');
+let plans: typeof import('@client/lib/userSubscriptions/constants');
+
+beforeEach(async () => {
+  vi.resetModules();
+  vi.resetAllMocks();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-10-26T00:00:00Z'));
+  setMode('paid');
+  findActiveUserSubscriptions.mockResolvedValue([]);
+  findPlanHolderOrgIds.mockResolvedValue([]);
+  findActiveSubscriptionsByOwners.mockResolvedValue([]);
+  gate = await import('@server/utils/apiKeyAccessGate');
+  plans = await import('@client/lib/userSubscriptions/constants');
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('isApiKeyAccessAllowed', () => {
-  // [mode, plan, expected]. Basic = Professional, Pro = Team (org seat), standalone = tier-less plan.
-  const matrix: [string, keyof typeof PRICE | 'none', boolean][] = [
-    ['all', 'none', true],
-    ['all', 'basic', true],
-    ['paid', 'none', false],
-    ['paid', 'basic', true],
-    ['paid', 'team', true],
-    ['paid', 'standalone', true],
-    ['disabled', 'basic', false],
-    ['disabled', 'team', false],
-    ['disabled', 'none', false],
-  ];
-
-  it.each(matrix)('mode=%s plan=%s -> %s', async (mode, plan, expected) => {
-    setMode(mode);
-    if (plan === 'none') subscribedTo();
-    else subscribedTo(PRICE[plan]);
-    expect(await isApiKeyAccessAllowed(USER)).toBe(expected);
-  });
-
-  it('denies an unknown price id under paid', async () => {
-    setMode('paid');
-    subscribedTo('price_unknown');
-    expect(await isApiKeyAccessAllowed(USER)).toBe(false);
-  });
-
   it.each([
-    ['admin', ADMIN],
-    ['developer-tagged', DEV],
-  ])('lets an %s through under disabled without reading anything', async (_label, user) => {
+    ['all', true],
+    ['paid', false],
+    ['disabled', false],
+  ] as const)('mode=%s free user -> %s', async (mode, allowed) => {
+    setMode(mode);
+    expect(await gate.isApiKeyAccessAllowed(USER)).toBe(allowed);
+    if (mode !== 'paid') expect(findActiveUserSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it.each(['all', 'paid', 'disabled'])('preserves admin and developer bypass under %s', async mode => {
+    setMode(mode);
+    expect(await gate.isApiKeyAccessAllowed(ADMIN)).toBe(true);
+    expect(await gate.isApiKeyAccessAllowed({ ...USER, tags: ['developer'] })).toBe(true);
+    expect(getSettingsMapMock).not.toHaveBeenCalled();
+    expect(findActiveUserSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('preserves trusted admin-provisioned keys even when the switch is disabled', async () => {
     setMode('disabled');
-    expect(await isApiKeyAccessAllowed(user)).toBe(true);
+    expect(await gate.isApiKeyAccessAllowed(USER, { createdByUserId: 'admin-1' })).toBe(true);
     expect(getSettingsMapMock).not.toHaveBeenCalled();
   });
 
-  it('exempts an admin-provisioned key for a free owner, even under disabled', async () => {
-    setMode('disabled');
-    expect(await isApiKeyAccessAllowed(USER, { createdByUserId: 'admin-1' })).toBe(true);
+  it.each([undefined, 'PAID', '', 'invalid'])('uses the real settings default for stored %s', async stored => {
+    setMode(stored);
+    expect(await gate.isApiKeyAccessAllowed(USER)).toBe(settingsMap.apiKeyAccess.defaultValue === 'all');
   });
 
-  describe('setting resolution (real getSettingsValue)', () => {
-    it('defaults to paid on hosted when unset', async () => {
-      setMode(undefined);
-      expect(await isApiKeyAccessAllowed(USER)).toBe(false);
-      clearApiKeyAccessModeCache();
-      subscribedTo(PRICE.basic);
-      expect(await isApiKeyAccessAllowed(USER)).toBe(true);
-    });
+  it.each(['basic', 'standalone', 'team'] as const)('admits a real %s plan independently of rate tier', async kind => {
+    const plan =
+      kind === 'team'
+        ? plans.TEAM_PLAN
+        : plans.SUBSCRIPTION_PLANS.find(row =>
+            kind === 'standalone' ? row.tier === undefined : row.tier !== undefined
+          );
+    expect(plan?.priceId).toBeTruthy();
+    if (!plan) throw new Error('Missing test plan');
+    findActiveUserSubscriptions.mockResolvedValue([{ priceId: plan.priceId }]);
+    expect(await gate.isApiKeyAccessAllowed(USER)).toBe(true);
+    const { ladderRateTier } = await import('./userRateTier');
+    expect(ladderRateTier([{ priceId: plan.priceId }])).toBe(
+      kind === 'standalone' ? 'free' : kind === 'team' ? 'pro' : 'basic'
+    );
+    expect(findActiveUserSubscriptions).toHaveBeenCalledWith(USER.id);
+  });
 
-    it('resolves an invalid stored value to the default (paid), failing closed', async () => {
-      setMode('PAID');
-      expect(await isApiKeyAccessAllowed(USER)).toBe(false);
-    });
+  it.each(['basic', 'standalone', 'team'] as const)('disables access even for a real %s subscriber', async kind => {
+    const plan =
+      kind === 'team'
+        ? plans.TEAM_PLAN
+        : plans.SUBSCRIPTION_PLANS.find(row =>
+            kind === 'standalone' ? row.tier === undefined : row.tier !== undefined
+          );
+    if (!plan?.priceId) throw new Error('Missing test plan');
+    setMode('disabled');
+    findActiveUserSubscriptions.mockResolvedValue([{ priceId: plan.priceId }]);
 
-    it('reads the setting outside the shared settings cache', async () => {
+    expect(await gate.isApiKeyAccessAllowed(USER)).toBe(false);
+    expect(findActiveUserSubscriptions).not.toHaveBeenCalled();
+    expect(findPlanHolderOrgIds).not.toHaveBeenCalled();
+  });
+
+  it.each(['', 'price_unknown', '__proto__', 'constructor', 'toString'])(
+    'does not treat unresolved price %s as paid',
+    async priceId => {
+      findActiveUserSubscriptions.mockResolvedValue([{ priceId }]);
+      expect(await gate.isApiKeyAccessAllowed(USER)).toBe(false);
+    }
+  );
+
+  it('admits an org seat using the real Team price', async () => {
+    findPlanHolderOrgIds.mockResolvedValue(['org-1']);
+    findActiveSubscriptionsByOwners.mockResolvedValue([{ priceId: plans.TEAM_PLAN.priceId }]);
+    expect(await gate.isApiKeyAccessAllowed(USER)).toBe(true);
+    expect(findPlanHolderOrgIds).toHaveBeenCalledWith(USER.id);
+    expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['org-1']);
+  });
+
+  it('admits an org-billed key backed by a real standalone plan', async () => {
+    const standalone = plans.SUBSCRIPTION_PLANS.find(plan => plan.tier === undefined);
+    expect(standalone?.priceId).toBeTruthy();
+    findActiveSubscriptionsByOwners.mockResolvedValue([{ priceId: standalone?.priceId }]);
+    expect(await gate.isApiKeyAccessAllowed(USER, ORG_BILLING)).toBe(true);
+    expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['org-1']);
+  });
+
+  it('denies org-billed keys when no paying plan exists', async () => {
+    expect(await gate.isApiKeyAccessAllowed(USER, ORG_BILLING)).toBe(false);
+  });
+
+  it('never admits an org-billed key under disabled', async () => {
+    setMode('disabled');
+    findActiveSubscriptionsByOwners.mockResolvedValue([{ priceId: plans.TEAM_PLAN.priceId }]);
+    expect(await gate.isApiKeyAccessAllowed(USER, ORG_BILLING)).toBe(false);
+    expect(findActiveSubscriptionsByOwners).not.toHaveBeenCalled();
+  });
+
+  it('does not consult an org for a user-billed key', async () => {
+    expect(await gate.isApiKeyAccessAllowed(USER, { billingOwnerType: CreditHolderType.User })).toBe(false);
+    expect(findActiveSubscriptionsByOwners).not.toHaveBeenCalled();
+  });
+
+  it('seeds the authenticated request memo for the rate limiter and entitlement gate', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([{ priceId: plans.PROFESSIONAL_PRICE_ID }]);
+    const req: ActiveSubscriptionsRequest = {};
+    expect(await gate.isApiKeyAccessAllowed(USER, undefined, req)).toBe(true);
+    req.user = USER as Express.User;
+    const { resolveUserRateTier } = await import('./userRateTier');
+    expect(await resolveUserRateTier(USER, req)).toBe('basic');
+    const { getRequestActiveSubscriptions } = await import('@server/entitlements/activeSubscriptions');
+    expect(await getRequestActiveSubscriptions(req)).toBe(req.activeSubscriptions);
+    expect(await gate.isApiKeyAccessAllowed(USER, undefined, req)).toBe(true);
+    expect(findActiveUserSubscriptions).toHaveBeenCalledTimes(1);
+    expect(findPlanHolderOrgIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reuse or overwrite a different authenticated user memo', async () => {
+    const rows = [{ priceId: plans.PROFESSIONAL_PRICE_ID }] as ActiveSubscriptionsRequest['activeSubscriptions'];
+    const req: ActiveSubscriptionsRequest = {
+      user: { id: 'someone-else' } as Express.User,
+      activeSubscriptions: rows,
+      activeSubscriptionsStrict: true,
+    };
+    expect(await gate.isApiKeyAccessAllowed(USER, undefined, req)).toBe(false);
+    expect(req.activeSubscriptions).toBe(rows);
+  });
+
+  it('does not trust a possibly degraded request memo for authorization', async () => {
+    const req: ActiveSubscriptionsRequest = { user: USER as Express.User, activeSubscriptions: [] };
+    findPlanHolderOrgIds.mockRejectedValue(new Error('org lookup down'));
+    await expect(gate.isApiKeyAccessAllowed(USER, undefined, req)).rejects.toThrow('org lookup down');
+    expect(req.activeSubscriptionsStrict).toBeUndefined();
+  });
+
+  describe('settings TTL', () => {
+    it('reuses the fresh setting and applies a flip at the 30-second expiry', async () => {
       setMode('all');
-      await isApiKeyAccessAllowed(USER);
-      expect(getSettingsMapMock).toHaveBeenCalledWith(expect.anything(), {
+      expect(await gate.isApiKeyAccessAllowed(USER)).toBe(true);
+      setMode('disabled');
+      vi.advanceTimersByTime(29_999);
+      expect(await gate.isApiKeyAccessAllowed(USER)).toBe(true);
+      expect(getSettingsMapMock).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1);
+      expect(await gate.isApiKeyAccessAllowed(USER)).toBe(false);
+      expect(getSettingsMapMock).toHaveBeenCalledTimes(2);
+      expect(getSettingsMapMock).toHaveBeenLastCalledWith(expect.anything(), {
         skipCache: true,
         names: ['apiKeyAccess'],
       });
     });
-  });
 
-  describe('30 s in-process cache', () => {
-    afterEach(() => vi.useRealTimers());
-
-    it('serves the cached mode within the TTL and rereads after it', async () => {
-      vi.useFakeTimers();
+    it('allows an explicit cache clear to apply the next setting without waiting for expiry', async () => {
       setMode('all');
-      expect(await isApiKeyAccessAllowed(USER)).toBe(true);
+      expect(await gate.isApiKeyAccessAllowed(USER)).toBe(true);
       setMode('disabled');
-      expect(await isApiKeyAccessAllowed(USER)).toBe(true);
-      expect(getSettingsMapMock).toHaveBeenCalledTimes(1);
-
-      vi.advanceTimersByTime(30_001);
-      expect(await isApiKeyAccessAllowed(USER)).toBe(false);
+      gate.clearApiKeyAccessModeCache();
+      expect(await gate.isApiKeyAccessAllowed(USER)).toBe(false);
       expect(getSettingsMapMock).toHaveBeenCalledTimes(2);
     });
-  });
 
-  describe('org-billed keys under paid', () => {
-    const orgBilling = { billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1' };
-
-    beforeEach(() => setMode('paid'));
-
-    it('admits a free minter when the paying org holds the Team plan', async () => {
-      findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: PRICE.team }]);
-      expect(await isApiKeyAccessAllowed(USER, orgBilling)).toBe(true);
-      expect(findActiveSubscriptionsByOwnersMock).toHaveBeenCalledWith('Organization', ['org-1']);
-    });
-
-    it('denies when the paying org has no paid plan', async () => {
-      expect(await isApiKeyAccessAllowed(USER, orgBilling)).toBe(false);
-    });
-
-    it('does not consult an org for a user-billed key', async () => {
-      expect(await isApiKeyAccessAllowed(USER, { billingOwnerType: CreditHolderType.User })).toBe(false);
-      expect(findActiveSubscriptionsByOwnersMock).not.toHaveBeenCalled();
-    });
-
-    it('never admits an org-billed key under disabled', async () => {
-      clearApiKeyAccessModeCache();
+    it('fails closed after expiry and retries a failed refresh', async () => {
+      setMode('all');
+      expect(await gate.isApiKeyAccessAllowed(USER)).toBe(true);
+      getSettingsMapMock.mockRejectedValueOnce(new Error('settings down'));
+      vi.advanceTimersByTime(30_000);
+      await expect(gate.isApiKeyAccessAllowed(USER)).rejects.toThrow('settings down');
       setMode('disabled');
-      findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: PRICE.team }]);
-      expect(await isApiKeyAccessAllowed(USER, orgBilling)).toBe(false);
+      expect(await gate.isApiKeyAccessAllowed(USER)).toBe(false);
+      expect(getSettingsMapMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('shares an in-flight settings refresh between concurrent callers', async () => {
+      const pending = Promise.withResolvers<Record<string, string>>();
+      getSettingsMapMock.mockReturnValue(pending.promise);
+      const first = gate.isApiKeyAccessAllowed(USER);
+      const second = gate.isApiKeyAccessAllowed(USER);
+      expect(getSettingsMapMock).toHaveBeenCalledTimes(1);
+      pending.resolve({ apiKeyAccess: 'all' });
+      expect(await Promise.all([first, second])).toEqual([true, true]);
     });
   });
 
-  describe('request memo', () => {
-    beforeEach(() => setMode('paid'));
-
-    it('reads strictly and seeds req.activeSubscriptions for the rest of the request', async () => {
-      subscribedTo(PRICE.basic);
-      const req: { user?: { id: string }; activeSubscriptions?: unknown[] } = {};
-      expect(await isApiKeyAccessAllowed(USER, undefined, req)).toBe(true);
-      expect(getActiveSubscriptionsForUserMock).toHaveBeenCalledWith('user-1', { strict: true });
-      expect(req.activeSubscriptions).toEqual([{ priceId: PRICE.basic }]);
+  describe('read failures', () => {
+    it('propagates a settings failure', async () => {
+      getSettingsMapMock.mockRejectedValue(new Error('settings down'));
+      await expect(gate.isApiKeyAccessAllowed(USER)).rejects.toThrow('settings down');
     });
-
-    it('reuses an existing memo for the same user', async () => {
-      const req = { user: { id: 'user-1' }, activeSubscriptions: [{ priceId: PRICE.team }] };
-      expect(await isApiKeyAccessAllowed(USER, undefined, req as never)).toBe(true);
-      expect(getActiveSubscriptionsForUserMock).not.toHaveBeenCalled();
+    it('propagates user subscription failures', async () => {
+      findActiveUserSubscriptions.mockRejectedValue(new Error('subscriptions down'));
+      await expect(gate.isApiKeyAccessAllowed(USER)).rejects.toThrow('subscriptions down');
     });
-  });
-
-  describe('read errors fail closed', () => {
-    it('propagates a setting read failure instead of allowing', async () => {
-      getSettingsMapMock.mockRejectedValue(new Error('db down'));
-      await expect(isApiKeyAccessAllowed(USER)).rejects.toThrow('db down');
+    it('propagates org lookup failures', async () => {
+      findPlanHolderOrgIds.mockRejectedValue(new Error('org lookup down'));
+      await expect(gate.isApiKeyAccessAllowed(USER)).rejects.toThrow('org lookup down');
     });
-
-    it('propagates a subscription (including org-leg) read failure under paid instead of allowing', async () => {
-      setMode('paid');
-      getActiveSubscriptionsForUserMock.mockRejectedValue(new Error('org leg down'));
-      await expect(isApiKeyAccessAllowed(USER)).rejects.toThrow('org leg down');
+    it('propagates org seat subscription failures', async () => {
+      findPlanHolderOrgIds.mockResolvedValue(['org-1']);
+      findActiveSubscriptionsByOwners.mockRejectedValue(new Error('org subscriptions down'));
+      await expect(gate.isApiKeyAccessAllowed(USER)).rejects.toThrow('org subscriptions down');
+    });
+    it('propagates billing org subscription failures', async () => {
+      findActiveSubscriptionsByOwners.mockRejectedValue(new Error('billing org down'));
+      await expect(gate.isApiKeyAccessAllowed(USER, ORG_BILLING)).rejects.toThrow('billing org down');
     });
   });
 });
 
 describe('assertApiKeyAccessAllowed', () => {
-  it('throws ForbiddenError with the paid-subscription message on deny', async () => {
-    setMode('paid');
-    const error = await assertApiKeyAccessAllowed(USER).catch((e: unknown) => e);
+  it('throws ForbiddenError with the subscription message on denial', async () => {
+    const error = await gate.assertApiKeyAccessAllowed(USER).catch((error: unknown) => error);
     expect(error).toBeInstanceOf(ForbiddenError);
-    expect((error as Error).message).toBe(API_KEY_ACCESS_DENIED_MESSAGE);
+    expect((error as Error).message).toBe(gate.API_KEY_ACCESS_DENIED_MESSAGE);
   });
-
-  it('resolves on allow', async () => {
-    setMode('paid');
-    subscribedTo(PRICE.basic);
-    await expect(assertApiKeyAccessAllowed(USER)).resolves.toBeUndefined();
+  it('resolves for a paying subscriber', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([{ priceId: plans.PROFESSIONAL_PRICE_ID }]);
+    await expect(gate.assertApiKeyAccessAllowed(USER)).resolves.toBeUndefined();
   });
 });
 
 describe('assertCliSessionAllowed', () => {
-  beforeEach(() => setMode('paid'));
-
-  it('refuses a device-flow (CLI) session the setting denies', async () => {
+  it('refuses a device-flow CLI session the setting denies', async () => {
     findBySidMock.mockResolvedValue({ createdVia: 'device', clientId: 'b4m-cli' });
-    const error = await assertCliSessionAllowed(USER, 'sid-1').catch((e: unknown) => e);
+    const error = await gate.assertCliSessionAllowed(USER, 'sid-1').catch((error: unknown) => error);
     expect(error).toBeInstanceOf(ForbiddenError);
-    expect((error as Error).message).toBe(CLI_ACCESS_DENIED_MESSAGE);
+    expect((error as Error).message).toBe(gate.CLI_ACCESS_DENIED_MESSAGE);
+    expect(findBySidMock).toHaveBeenCalledWith('sid-1');
   });
 
-  it('refuses a desktop session identified only by its client id', async () => {
-    findBySidMock.mockResolvedValue({ createdVia: 'legacy-migration', clientId: 'b4m-desktop' });
-    await expect(assertCliSessionAllowed(USER, 'sid-1')).rejects.toBeInstanceOf(ForbiddenError);
+  it.each(OAUTH_DEVICE_CLIENT_IDS)('refuses a session identified only by known client %s', async clientId => {
+    findBySidMock.mockResolvedValue({ createdVia: 'legacy-migration', clientId });
+    await expect(gate.assertCliSessionAllowed(USER, 'sid-1')).rejects.toBeInstanceOf(ForbiddenError);
   });
 
-  it('leaves browser sessions alone without reading subscriptions', async () => {
+  it('leaves browser sessions alone without reading settings or subscriptions', async () => {
+    setMode('disabled');
     findBySidMock.mockResolvedValue({ createdVia: 'otc', clientId: null });
-    await expect(assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
-    expect(getActiveSubscriptionsForUserMock).not.toHaveBeenCalled();
+    await expect(gate.assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
+    expect(getSettingsMapMock).not.toHaveBeenCalled();
+    expect(findActiveUserSubscriptions).not.toHaveBeenCalled();
   });
 
-  it('admits a CLI session for a subscriber, including a standalone plan', async () => {
+  it.each(['basic', 'standalone'] as const)('admits a CLI session with the real %s plan', async kind => {
+    const plan = plans.SUBSCRIPTION_PLANS.find(row =>
+      kind === 'standalone' ? row.tier === undefined : row.tier !== undefined
+    );
+    if (!plan?.priceId) throw new Error('Missing test plan');
     findBySidMock.mockResolvedValue({ createdVia: 'device', clientId: 'b4m-cli' });
-    subscribedTo(PRICE.standalone);
-    await expect(assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
+    findActiveUserSubscriptions.mockResolvedValue([{ priceId: plan.priceId }]);
+    await expect(gate.assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
   });
 
   it('admits every CLI session under all', async () => {
     setMode('all');
     findBySidMock.mockResolvedValue({ createdVia: 'device', clientId: 'b4m-cli' });
-    await expect(assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
+    await expect(gate.assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
   });
 
-  it('skips the session read for admins and for tokens without a sid', async () => {
-    await assertCliSessionAllowed(ADMIN, 'sid-1');
-    await assertCliSessionAllowed(USER, undefined);
+  it('preserves admin and developer bypass on dedicated CLI surfaces', async () => {
+    setMode('disabled');
+    await gate.assertCliSessionAllowed(ADMIN, 'sid-1', { requireApiAccess: true });
+    await gate.assertCliSessionAllowed({ ...USER, tags: ['developer'] }, 'sid-1', { requireApiAccess: true });
     expect(findBySidMock).not.toHaveBeenCalled();
+    expect(getSettingsMapMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves legacy sidless browser sessions alone', async () => {
+    await gate.assertCliSessionAllowed(USER, undefined);
+    expect(findBySidMock).not.toHaveBeenCalled();
+    expect(getSettingsMapMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing session instead of treating it as a browser session', async () => {
+    findBySidMock.mockResolvedValue(null);
+    await expect(gate.assertCliSessionAllowed(USER, 'missing-sid')).rejects.toMatchObject({
+      statusCode: 401,
+      message: 'Session expired',
+    });
+    expect(getSettingsMapMock).not.toHaveBeenCalled();
+  });
+
+  it('propagates session lookup failures rather than allowing or denying as unpaid', async () => {
+    const failure = new Error('session lookup down');
+    findBySidMock.mockRejectedValue(failure);
+    await expect(gate.assertCliSessionAllowed(USER, 'sid-1')).rejects.toBe(failure);
+    expect(getSettingsMapMock).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, 'browser-sid'])(
+    'enforces dedicated API policy for token sid=%s without a session lookup',
+    async sid => {
+      findBySidMock.mockResolvedValue({ createdVia: 'otc', clientId: null });
+      await expect(gate.assertCliSessionAllowed(USER, sid, { requireApiAccess: true })).rejects.toBeInstanceOf(
+        ForbiddenError
+      );
+      expect(findBySidMock).not.toHaveBeenCalled();
+      expect(findActiveUserSubscriptions).toHaveBeenCalledWith(USER.id);
+    }
+  );
+
+  it('propagates strict org subscription failures for a CLI session', async () => {
+    findBySidMock.mockResolvedValue({ createdVia: 'device', clientId: 'b4m-cli' });
+    findPlanHolderOrgIds.mockRejectedValue(new Error('org lookup down'));
+    await expect(gate.assertCliSessionAllowed(USER, 'sid-1')).rejects.toThrow('org lookup down');
   });
 });

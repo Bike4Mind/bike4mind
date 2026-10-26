@@ -26,8 +26,7 @@ async function getActiveOrgSubscriptionsForUser(userId: string): Promise<ActiveS
  * If the org leg (membership or org-subscription read) fails, this degrades to the user's own rows
  * and logs: a seat member is under-granted for that request (the pre-seat behavior) instead of
  * every gated route and `/me` failing for every org member. The user-row read still throws.
- * `strict` rethrows the org-leg error instead, for callers that must not mistake a read
- * failure for "no plan" (the API key access gate, which would otherwise answer a terminal 403).
+ * Access gates opt into strict so an unknown plan yields a retryable error, not denial.
  */
 export async function getActiveSubscriptionsForUser(
   userId: string,
@@ -66,6 +65,8 @@ export const activePlanResolver: ActivePlanResolver = {
 
 export interface ActiveSubscriptionsRequest extends MembershipRequest {
   activeSubscriptions?: ActiveSubscription[];
+  /** A degraded org read must never be reused by an access gate. */
+  activeSubscriptionsStrict?: boolean;
 }
 
 /**
