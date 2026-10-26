@@ -670,20 +670,125 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       }
     );
 
-    it('persists the NCMEC report id and returns 500 when the confirmed_csam audit write rejects', async () => {
+    const jsonBody = (res: unknown) => (res as { json: ReturnType<typeof vi.fn> }).json.mock.calls[0][0];
+
+    it('keeps the incident reported without the audit when the confirmed_csam audit write rejects', async () => {
+      arrange.confirmed_csam();
+      const txStates: boolean[] = [];
+      mockUpdateReviewStatus.mockImplementation(async () => {
+        txStates.push(audit.txActive);
+        return REPORTED;
+      });
+      audit.record.mockRejectedValue(new Error('audit down'));
+      const req = makeReq({ verdict: 'confirmed_csam' });
+      const res = makeRes();
+
+      await runHandler(req, res);
+
+      expect(mockUpdateReviewStatus).toHaveBeenCalledTimes(2);
+      expect(mockUpdateReviewStatus).toHaveBeenLastCalledWith('inc-1', 'reported', 'RPT-001', 'admin-1');
+      expect(txStates).toEqual([true, false]);
+      expect(mockSetNcmecReportId).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(jsonBody(res)).toEqual({ ok: true, ncmecReportId: 'RPT-001', auditRecorded: false });
+      expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('without an admin audit entry'));
+      expect(mockSubmitNcmecReport).toHaveBeenCalledOnce();
+      expect(mockFinishNcmecReport).not.toHaveBeenCalled();
+    });
+
+    it('keeps the incident reported when the confirmed_csam primary write rejects once and the fallback succeeds', async () => {
+      arrange.confirmed_csam();
+      mockUpdateReviewStatus.mockRejectedValueOnce(new Error('db blip')).mockResolvedValue(REPORTED);
+      const req = makeReq({ verdict: 'confirmed_csam' });
+      const res = makeRes();
+
+      await runHandler(req, res);
+
+      expect(mockUpdateReviewStatus).toHaveBeenCalledTimes(2);
+      expect(mockSetNcmecReportId).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(jsonBody(res)).toEqual({ ok: true, ncmecReportId: 'RPT-001', auditRecorded: false });
+      expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('without an admin audit entry'));
+    });
+
+    it('returns 409 when the confirmed_csam fallback write finds the incident already resolved', async () => {
+      arrange.confirmed_csam();
+      mockUpdateReviewStatus.mockResolvedValueOnce(REPORTED).mockResolvedValueOnce(null);
+      audit.record.mockRejectedValue(new Error('audit down'));
+      const res = makeRes();
+
+      await runHandler(makeReq({ verdict: 'confirmed_csam' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+    });
+
+    it('does not let retry_finish re-finish a report whose confirmed_csam audit failed (regression)', async () => {
       arrange.confirmed_csam();
       audit.record.mockRejectedValue(new Error('audit down'));
+      await runHandler(makeReq({ verdict: 'confirmed_csam' }), makeRes());
+
+      expect(mockUpdateReviewStatus).toHaveBeenLastCalledWith('inc-1', 'reported', 'RPT-001', 'admin-1');
+
+      // The incident now reads as reported, exactly as the fallback wrote it.
+      mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'reported', ncmecReportId: 'RPT-001' });
+      const retryRes = makeRes();
+      await runHandler(makeReq({ verdict: 'retry_finish' }), retryRes);
+
+      expect(retryRes.status).toHaveBeenCalledWith(409);
+      expect(mockFinishNcmecReport).not.toHaveBeenCalled();
+    });
+
+    it('keeps the incident reported without the audit when the retry_finish audit write rejects', async () => {
+      arrange.retry_finish();
+      const txStates: boolean[] = [];
+      mockResolveConfirmedCsam.mockImplementation(async () => {
+        txStates.push(audit.txActive);
+        return REPORTED;
+      });
+      audit.record.mockRejectedValue(new Error('audit down'));
+      const req = makeReq({ verdict: 'retry_finish' });
+      const res = makeRes();
+
+      await runHandler(req, res);
+
+      expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledTimes(2);
+      expect(mockResolveConfirmedCsam).toHaveBeenLastCalledWith(
+        'inc-1',
+        { status: 'reported', ncmecReportId: 'RPT-001', reportedBy: 'admin-1' },
+        0
+      );
+      expect(txStates).toEqual([true, false]);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(jsonBody(res)).toEqual({ ok: true, ncmecReportId: 'RPT-001', auditRecorded: false });
+      expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('without an admin audit entry'));
+    });
+
+    it('keeps the incident reported when the retry_finish primary write rejects once and the fallback succeeds', async () => {
+      arrange.retry_finish();
+      mockResolveConfirmedCsam.mockRejectedValueOnce(new Error('db blip')).mockResolvedValue(REPORTED);
+      const res = makeRes();
+
+      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledTimes(2);
+      expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(jsonBody(res)).toEqual({ ok: true, ncmecReportId: 'RPT-001', auditRecorded: false });
+    });
+
+    it('persists the NCMEC report id and returns 500 when the confirmed_csam audit and fallback writes both reject', async () => {
+      arrange.confirmed_csam();
+      audit.record.mockRejectedValue(new Error('audit down'));
+      mockUpdateReviewStatus.mockResolvedValueOnce(REPORTED).mockRejectedValue(new Error('db down'));
       mockSetNcmecReportId.mockResolvedValue(undefined);
       const res = makeRes();
 
       await runHandler(makeReq({ verdict: 'confirmed_csam' }), res);
 
       expect(mockSetNcmecReportId).toHaveBeenCalledWith('inc-1', 'RPT-001');
-      expect(mockSetNcmecReportId.mock.invocationCallOrder[0]).toBeGreaterThan(
-        audit.record.mock.invocationCallOrder[0]
-      );
       expect(res.status).toHaveBeenCalledWith(500);
-      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      const body = jsonBody(res);
       expect(body).toMatchObject({ ncmecReportId: 'RPT-001' });
       expect(body.error).toContain('mark_reported');
       expect(body.error).toContain('10 minutes');
@@ -692,35 +797,28 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(mockFinishNcmecReport).not.toHaveBeenCalled();
     });
 
-    it.each(['audit', 'database'])(
-      'returns mark_reported recovery instructions when the retry_finish %s write rejects',
-      async failure => {
-        arrange.retry_finish();
-        if (failure === 'audit') {
-          audit.record.mockRejectedValueOnce(new Error('audit down'));
-        } else {
-          mockResolveConfirmedCsam.mockRejectedValueOnce(new Error('db down'));
-        }
-        const res = makeRes();
+    it('returns mark_reported recovery instructions when the retry_finish database write and fallback both reject', async () => {
+      arrange.retry_finish();
+      mockResolveConfirmedCsam.mockRejectedValue(new Error('db down'));
+      const res = makeRes();
 
-        await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
 
-        expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
-        expect(mockResolveConfirmedCsam).toHaveBeenCalledOnce();
-        expect(mockSubmitNcmecReport).not.toHaveBeenCalled();
-        expect(res.status).toHaveBeenCalledWith(500);
-        expect(res.status).not.toHaveBeenCalledWith(200);
-        const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0];
-        expect(body).toMatchObject({ ncmecReportId: 'RPT-001' });
-        expect(body.error).toContain('mark_reported');
-        expect(body.error).toContain('10 minutes');
-        expect(body.error).not.toContain('retry_finish');
-      }
-    );
+      expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledTimes(2);
+      expect(mockSubmitNcmecReport).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.status).not.toHaveBeenCalledWith(200);
+      const body = jsonBody(res);
+      expect(body).toMatchObject({ ncmecReportId: 'RPT-001' });
+      expect(body.error).toContain('mark_reported');
+      expect(body.error).toContain('10 minutes');
+      expect(body.error).not.toContain('retry_finish');
+    });
 
     it('returns mark_reported recovery instructions when the confirmed_csam database write rejects', async () => {
       arrange.confirmed_csam();
-      mockUpdateReviewStatus.mockRejectedValueOnce(new Error('db down'));
+      mockUpdateReviewStatus.mockRejectedValue(new Error('db down'));
       mockSetNcmecReportId.mockResolvedValue(undefined);
       const res = makeRes();
 
@@ -741,6 +839,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
     it('still returns 500 with the report id when persisting it after a failed audit also fails', async () => {
       arrange.confirmed_csam();
       audit.record.mockRejectedValue(new Error('audit down'));
+      mockUpdateReviewStatus.mockResolvedValueOnce(REPORTED).mockRejectedValue(new Error('db down'));
       mockSetNcmecReportId.mockRejectedValue(new Error('db down'));
       const res = makeRes();
 

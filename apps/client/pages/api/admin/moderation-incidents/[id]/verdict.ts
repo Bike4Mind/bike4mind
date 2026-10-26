@@ -186,17 +186,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       `[NCMEC] retry_finish succeeded for incident ${incidentId}, reportId=${incident.ncmecReportId}, by admin=${req.user.id}; marking reported`
     );
     // staleAfterMs=0: /finish just succeeded, so there is no in-flight submission to wait out.
-    // Audited even if a concurrent resolution won; on failure, recover with mark_reported, never a second /finish.
+    // A failed audit must not undo this write (a still-confirmed_csam incident invites a second /finish), so fall back to an unaudited write.
     const ncmecReportId = incident.ncmecReportId;
     const adminId = req.user.id;
+    const resolveReported = () =>
+      imageModerationIncidentRepository.resolveConfirmedCsam(
+        incidentId,
+        { status: 'reported', ncmecReportId, reportedBy: adminId },
+        0
+      );
     let updated;
+    let auditRecorded = true;
     try {
       updated = await withTransaction(async () => {
-        const resolved = await imageModerationIncidentRepository.resolveConfirmedCsam(
-          incidentId,
-          { status: 'reported', ncmecReportId, reportedBy: adminId },
-          0
-        );
+        const resolved = await resolveReported();
         await recordVerdict(req, { incidentId, userId: incident.userId }, body.verdict, {
           ncmecReportId,
           incidentUpdated: resolved !== null,
@@ -205,12 +208,23 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       });
     } catch (err) {
       req.logger.error(
-        `[NCMEC] recording retry_finish for incident ${incidentId} failed after NCMEC finalized reportId=${ncmecReportId}: ${(err as Error).message}`
+        `[NCMEC] recording retry_finish audit for incident ${incidentId} failed after NCMEC finalized reportId=${ncmecReportId}: ${(err as Error).message}`
       );
-      return res.status(500).json({
-        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the claim is stale (up to 10 minutes), use mark_reported with this reportId.`,
-        ncmecReportId,
-      });
+      try {
+        updated = await resolveReported();
+        auditRecorded = false;
+      } catch (fallbackErr) {
+        req.logger.error(
+          `[NCMEC] fallback status write for retry_finish on incident ${incidentId} failed, reportId=${ncmecReportId}: ${(fallbackErr as Error).message}`
+        );
+        return res.status(500).json({
+          error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the claim is stale (up to 10 minutes), use mark_reported with this reportId.`,
+          ncmecReportId,
+        });
+      }
+      req.logger.error(
+        `[NCMEC] incident ${incidentId} marked reported without an admin audit entry: verdict=${body.verdict}, reportId=${ncmecReportId}, admin=${adminId}`
+      );
     }
     if (!updated) {
       // Concurrent mark_reported or requeue resolved the incident between our /finish call
@@ -219,7 +233,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
         `[NCMEC] retry_finish: /finish succeeded but DB update found no matching document (concurrent resolution?) for incident ${incidentId}`
       );
     }
-    return res.status(200).json({ ok: true, ncmecReportId: incident.ncmecReportId });
+    return res.status(200).json({ ok: true, ncmecReportId, ...(auditRecorded ? {} : { auditRecorded: false }) });
   }
 
   if (body.verdict === 'record_manual_report') {
@@ -350,19 +364,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       `[NCMEC] submission accepted for incident ${incidentId}, reportId=${ncmecReportId}; persisting to DB`
     );
 
-    // A failed audit rolls this write back and leaves the incident in confirmed_csam. Persist
-    // the reportId outside the transaction so mark_reported can recover it once the claim is stale.
-    // submitNcmecReport already finalized the report; calling /finish again is not safe.
+    // submitNcmecReport already finalized the report; a failed audit must not roll the status back
+    // (retry_finish would then call /finish again), so fall back to an unaudited write.
     const adminId = req.user.id;
+    const markReported = () =>
+      imageModerationIncidentRepository.updateReviewStatus(incidentId, 'reported', ncmecReportId, adminId);
     let updated;
+    let auditRecorded = true;
     try {
       updated = await withTransaction(async () => {
-        const reported = await imageModerationIncidentRepository.updateReviewStatus(
-          incidentId,
-          'reported',
-          ncmecReportId,
-          adminId
-        );
+        const reported = await markReported();
         if (reported) {
           await recordVerdict(req, { incidentId, userId: claimed.userId }, body.verdict, { ncmecReportId });
         }
@@ -370,19 +381,30 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       });
     } catch (err) {
       req.logger.error(
-        `[NCMEC] marking incident ${incidentId} reported failed after NCMEC accepted reportId=${ncmecReportId}: ${(err as Error).message}`
+        `[NCMEC] recording incident ${incidentId} failed after NCMEC finalized reportId=${ncmecReportId}: ${(err as Error).message}`
       );
-      await imageModerationIncidentRepository
-        .setNcmecReportId(incidentId, ncmecReportId)
-        .catch(persistErr =>
-          req.logger.error(
-            `[NCMEC] failed to persist reportId for incident ${incidentId}: ${(persistErr as Error).message}`
-          )
+      try {
+        updated = await markReported();
+        auditRecorded = false;
+      } catch (fallbackErr) {
+        req.logger.error(
+          `[NCMEC] fallback status write failed for incident ${incidentId}, reportId=${ncmecReportId}: ${(fallbackErr as Error).message}`
         );
-      return res.status(500).json({
-        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the claim is stale (up to 10 minutes), use mark_reported with this reportId.`,
-        ncmecReportId,
-      });
+        await imageModerationIncidentRepository
+          .setNcmecReportId(incidentId, ncmecReportId)
+          .catch(persistErr =>
+            req.logger.error(
+              `[NCMEC] failed to persist reportId for incident ${incidentId}: ${(persistErr as Error).message}`
+            )
+          );
+        return res.status(500).json({
+          error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the claim is stale (up to 10 minutes), use mark_reported with this reportId.`,
+          ncmecReportId,
+        });
+      }
+      req.logger.error(
+        `[NCMEC] incident ${incidentId} marked reported without an admin audit entry: verdict=${body.verdict}, reportId=${ncmecReportId}, admin=${adminId}`
+      );
     }
     if (!updated) {
       req.logger.warn(
@@ -394,7 +416,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     req.logger.info(
       `[NCMEC] incident ${incidentId} marked reported, reportId=${ncmecReportId}, by admin=${req.user.id}`
     );
-    return res.status(200).json({ ok: true, ncmecReportId });
+    return res.status(200).json({ ok: true, ncmecReportId, ...(auditRecorded ? {} : { auditRecorded: false }) });
   }
 
   // false_positive: no NCMEC submission, just update the status.
