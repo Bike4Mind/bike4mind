@@ -92,7 +92,8 @@ export function getClientIp(req: ClientIpRequest): string {
  * Truncate an IP address for privacy (GDPR Breyer ruling compliance).
  * IPv4: zeros the last octet (e.g., 192.168.1.42 -> 192.168.1.0)
  * IPv6: keeps first 3 groups, zeros the rest (/48 mask)
- * IPv4-mapped IPv6: truncates the embedded IPv4 (::ffff:192.168.1.42 -> ::ffff:192.168.1.0)
+ * IPv4-mapped/translated IPv6: truncates the embedded IPv4 (::ffff:192.168.1.42 -> ::ffff:192.168.1.0),
+ * compressed or expanded, for ::ffff:0:0/96 and ::ffff:0:0:0/96
  * Idempotent: truncating a truncated address returns it unchanged.
  *
  * Applied to telemetry audit logs, and to the signup IP once it passes its retention window
@@ -104,7 +105,7 @@ export function truncateIp(ip: string): string {
 
   // IPv4-mapped IPv6 (a dual-stack socket's remoteAddress): truncate the embedded IPv4. The /48
   // rule below would zero every group and lose the network entirely.
-  const mapped = /^(::ffff:)(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  const mapped = /^((?:(?:0{1,4}:){5}|::)ffff:|(?:(?:0{1,4}:){4}|::)ffff:0{1,4}:)(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
   if (mapped) return `${mapped[1]}${truncateIp(mapped[2])}`;
 
   // IPv6: expand compressed notation, keep first 3 groups (/48), zero the rest
