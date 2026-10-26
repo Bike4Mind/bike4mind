@@ -18,8 +18,15 @@ import {
   SessionListFilters,
   SessionOriginChannel,
   tagAttemptDueFilter,
+  SessionResponseSchema,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
+
+// The public session fields, minus the id pair Mongo returns anyway, so findPageByIds cannot load
+// less than toPublicSession (apps/client/server/sessions) emits.
+const PUBLIC_SESSION_PROJECTION = Object.keys(SessionResponseSchema.shape)
+  .filter(key => key !== 'id' && key !== '_id')
+  .join(' ');
 import User from './UserModel';
 import { NotFoundError } from '@bike4mind/utils';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -559,13 +566,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     };
     if (afterId !== undefined) idCondition.$gt = new mongoose.Types.ObjectId(afterId);
 
-    // Only what the public session shape reads; must stay in sync with
-    // apps/client/server/sessions/toPublicSession.ts, the only caller.
     const result = await this.sessionModel
       .find({ _id: idCondition })
-      .select(
-        'name userId knowledgeIds artifactIds tags forceKnowledgeRetrieval retrievalTags lakeScopeExplicit lastUsedModel firstCreated lastUpdated'
-      )
+      .select(PUBLIC_SESSION_PROJECTION)
       .sort({ _id: 1 })
       .limit(limit + 1)
       .exec();

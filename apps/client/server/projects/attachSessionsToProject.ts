@@ -9,7 +9,7 @@ import type { Ability } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { isAiAccessRevoked } from '@bike4mind/services/userService/accountState';
 import type { Logger } from '@bike4mind/observability';
-import { ProjectEvents, type ISessionDocument } from '@bike4mind/common';
+import { NotFoundError, ProjectEvents, type ISessionDocument } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 import { SessionEvents } from '@server/utils/eventBus';
 import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
@@ -44,7 +44,7 @@ export async function attachSessionsToProject(
   const sessions = await withTransaction(async () => {
     const user = await userRepository.findById(ctx.user.id);
     if (!user) {
-      throw new Error('User not found');
+      throw new NotFoundError('User not found');
     }
     return projectService.addSessions(
       user,
