@@ -1,4 +1,4 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
+import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
 import {
   AuthStrategy,
   CollectionType,
@@ -26,6 +26,10 @@ import { NETWORK_META_FIELDS } from './networkMetaFields';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
 }
 
 export interface IUserObject extends IUserDocument, Omit<Document, 'id'> {}
@@ -470,6 +474,35 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Claim the one free-credit grant allowed per inbox (canonicalizeEmail of the account's email).
+   * True when this account holds the claim, including from an earlier attempt, so a retried grant
+   * stays idempotent; false when another account already holds it. The unique
+   * freeCreditClaimEmail_1 index makes the claim atomic across concurrent signups; the pre-check
+   * covers a deployment whose index has not been built yet. An account without a usable email has
+   * nothing to dedupe on and is allowed.
+   */
+  async claimFreeCreditGrant(userId: string): Promise<boolean> {
+    const user = await this.model.findById(userId, { email: 1, freeCreditClaimEmail: 1 }).lean();
+    if (!user) return false;
+    if (user.freeCreditClaimEmail) return true;
+    const claimEmail = user.email ? canonicalizeEmail(user.email) : null;
+    if (!claimEmail) return true;
+
+    if (await this.model.exists({ freeCreditClaimEmail: claimEmail, _id: { $ne: userId } })) return false;
+    try {
+      const result = await this.model.updateOne(
+        { _id: userId, freeCreditClaimEmail: null },
+        { $set: { freeCreditClaimEmail: claimEmail } }
+      );
+      // A zero-match update means a concurrent call for this same account claimed first.
+      return result.modifiedCount === 1 || result.matchedCount === 0;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
+  }
+
+  /**
    * Remove `codeHash` from the stored backup codes, only if it is still present. Returns true
    * exactly once per code, so a backup code cannot be consumed by two requests at once. A
    * whole-document write from a pre-read snapshot would instead restore a code another request
@@ -866,6 +899,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Invite-resolved credits awaiting proof of email ownership; paired with
     // the pending-free-credits tag and nulled once granted.
     pendingCreditGrant: { type: Number, default: null },
+    // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
+    // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
+    freeCreditClaimEmail: { type: String },
     lastCreditsPurchasedAt: { type: Date, default: null },
     tags: { type: [String], default: [] },
     level: { type: String, default: 'DemoUser' },
@@ -1171,6 +1207,17 @@ UserSchema.index({
 UserSchema.index(
   { email: 1 },
   { unique: true, partialFilterExpression: { email: { $type: 'string' } }, name: 'email_1' }
+);
+
+// One free-credit grant per inbox: see claimFreeCreditGrant. Partial so unclaimed accounts are
+// not indexed. Existing deployments are backfilled and indexed by migration 20260921235965.
+UserSchema.index(
+  { freeCreditClaimEmail: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { freeCreditClaimEmail: { $type: 'string' } },
+    name: 'freeCreditClaimEmail_1',
+  }
 );
 
 // Case-insensitive email index for collation-based lookups (findByEmail).
