@@ -14,7 +14,6 @@ gear unlock rate among users who saw the modal.
 
 The modal opens on app load when ALL of these hold:
 
-- the account is older than **2 days** (`DISCOVERY_MIN_ACCOUNT_AGE_MS`);
 - at least **1** unused visible gear remains (`DISCOVERY_MIN_CANDIDATES`; started at 3, lowered so the last 1-2 gears still get shown);
 - at least **1 day** has passed since it was last shown (`DISCOVERY_COOLDOWN_MS`);
 - the user has not chosen "Don't show again";
@@ -61,7 +60,7 @@ What's New (`modalStorage` in `modalHelpers.ts`). Per-device by design; acceptab
    and the modal.
 3. **`lib/gears/discovery.ts`** - pure logic, no React: constants,
    `DISCOVERY_PRIORITY`, `pickDiscoveryGears(gears, rotation)`,
-   `shouldShowDiscovery({ createdAt, state, candidateCount, now })`, and the localStorage
+   `shouldShowDiscovery({ state, candidateCount, now })`, and the localStorage
    read/write helpers.
 4. **`app/hooks/useGearsDiscovery.ts`** - combines `useVisibleGears`, the user, streaming
    state, the What's New session flag and storage; returns
@@ -94,7 +93,7 @@ Add to `FirstRunEvents` (`b4m-core/common/src/schemas/analytics/events/firstRun.
 
 ## Testing
 
-- Unit (`lib/gears/discovery.test.ts`): account-age and cooldown boundaries, minimum
+- Unit (`lib/gears/discovery.test.ts`): cooldown boundaries, minimum
   candidates, dismissed flag, priority ordering with unknown keys appended, rotation
   wrap-around, fewer than 5 candidates.
 - RTL (`GearsDiscoveryModal.test.tsx`): renders the given cards, card click closes and

@@ -5,7 +5,6 @@
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export const DISCOVERY_MIN_ACCOUNT_AGE_MS = 2 * DAY_MS;
 export const DISCOVERY_COOLDOWN_MS = DAY_MS;
 export const DISCOVERY_MIN_CANDIDATES = 1;
 export const DISCOVERY_MAX_CARDS = 3;
@@ -80,22 +79,17 @@ export function pickDiscoveryGears<T>(candidates: readonly T[], rotation: number
 }
 
 export function shouldShowDiscovery({
-  createdAt,
   state,
   candidateCount,
   now,
 }: {
-  createdAt: Date | string | number | null | undefined;
   state: DiscoveryState;
   candidateCount: number;
   now: number;
 }): boolean {
   if (state.dismissed || candidateCount < DISCOVERY_MIN_CANDIDATES) return false;
   // A future timestamp means the clock moved back; honouring it could hide the modal for months.
-  if (state.lastShownAt <= now && now - state.lastShownAt < DISCOVERY_COOLDOWN_MS) return false;
-  if (!createdAt) return false;
-  const createdMs = new Date(createdAt).getTime();
-  return Number.isFinite(createdMs) && now - createdMs >= DISCOVERY_MIN_ACCOUNT_AGE_MS;
+  return !(state.lastShownAt <= now && now - state.lastShownAt < DISCOVERY_COOLDOWN_MS);
 }
 
 const storageKey = (userId: string) => `gears_discovery_${userId}`;

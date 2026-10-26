@@ -32,7 +32,6 @@ export interface GearsDiscovery {
 /** Decides at most once per page load whether to show the gears discovery modal. Rules: lib/gears/discovery.ts. */
 export function useGearsDiscovery(): GearsDiscovery {
   const userId = useUser(s => s.currentUser?.id);
-  const createdAt = useUser(s => s.currentUser?.createdAt);
   const { gears, isPending, isError, refetch } = useVisibleGears();
   const isStreaming = useStreamingState(s => s.isAnyStreaming());
   const pathname = useRouterState({ select: s => s.location.pathname });
@@ -68,7 +67,7 @@ export function useGearsDiscovery(): GearsDiscovery {
     const now = Date.now();
     const state = readDiscoveryState(userId);
     const candidates = discoveryCandidates(gears);
-    if (!shouldShowDiscovery({ createdAt, state, candidateCount: candidates.length, now })) return;
+    if (!shouldShowDiscovery({ state, candidateCount: candidates.length, now })) return;
 
     const picked = pickDiscoveryGears(candidates, state.rotation);
     writeDiscoveryState(userId, { ...state, lastShownAt: now, rotation: state.rotation + DISCOVERY_MAX_CARDS });
@@ -78,7 +77,7 @@ export function useGearsDiscovery(): GearsDiscovery {
       type: FirstRunEvents.GEARS_DISCOVERY_SHOWN,
       metadata: { count: picked.length, keys: picked.map(g => g.key).join(',') },
     });
-  }, [settled, userId, isError, pathname, isStreaming, tick, gears, createdAt, logEvent]);
+  }, [settled, userId, isError, pathname, isStreaming, tick, gears, logEvent]);
 
   const dismiss = (how: 'close' | 'never' | 'see_all') => {
     setShown(null);

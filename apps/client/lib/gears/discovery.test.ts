@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   DISCOVERY_COOLDOWN_MS,
-  DISCOVERY_MIN_ACCOUNT_AGE_MS,
   DISCOVERY_PRIORITY,
   EMPTY_DISCOVERY_STATE,
   discoveryCandidates,
@@ -13,7 +12,6 @@ import {
 
 const g = (key: string, unlocked = false, claimed = false) => ({ key, unlocked, claimed });
 const NOW = Date.UTC(2026, 9, 26);
-const OLD = NOW - DISCOVERY_MIN_ACCOUNT_AGE_MS - 1;
 
 describe('discoveryCandidates', () => {
   it('drops used gears, unlocked or claimed', () => {
@@ -47,19 +45,10 @@ describe('pickDiscoveryGears', () => {
 });
 
 describe('shouldShowDiscovery', () => {
-  const base = { createdAt: OLD, state: EMPTY_DISCOVERY_STATE, candidateCount: 3, now: NOW };
+  const base = { state: EMPTY_DISCOVERY_STATE, candidateCount: 3, now: NOW };
 
-  it('shows for an eligible account', () => {
+  it('shows when never shown before', () => {
     expect(shouldShowDiscovery(base)).toBe(true);
-  });
-
-  it('waits until the account is older than 2 days', () => {
-    expect(shouldShowDiscovery({ ...base, createdAt: NOW - DISCOVERY_MIN_ACCOUNT_AGE_MS + 1 })).toBe(false);
-  });
-
-  it('does not show without a usable createdAt', () => {
-    expect(shouldShowDiscovery({ ...base, createdAt: undefined })).toBe(false);
-    expect(shouldShowDiscovery({ ...base, createdAt: 'not a date' })).toBe(false);
   });
 
   it('shows with a single candidate but not with none', () => {

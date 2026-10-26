@@ -81,7 +81,7 @@ beforeEach(() => {
   h.gears = ['image', 'agents', 'websearch', 'video', 'models', 'slack', 'mcp'].map(k => gear(k));
   h.isPending = false;
   h.isError = false;
-  h.user = { id: 'u1', createdAt: new Date(Date.now() - 10 * DAY).toISOString() };
+  h.user = { id: 'u1', createdAt: new Date().toISOString() };
   h.streaming = false;
   h.pathname = '/';
   h.dialogOpen = false;
