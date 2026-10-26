@@ -54,7 +54,7 @@ export const JWT_SECURITY_REQUIREMENT: Array<Record<string, string[]>> = [{ jwtA
 
 /**
  * API key scopes published in `info.description`, from the runtime {@link ApiKeyScope} enum
- * minus the scopes a self-service key cannot hold (see {@link PUBLIC_DOC_API_KEY_SCOPES}).
+ * minus the undocumented scopes (see {@link PUBLIC_DOC_API_KEY_SCOPES}).
  * Built-in scopes only: scopes an overlay contributes are left out of the published spec.
  */
 export const PUBLIC_API_KEY_SCOPES: string[] = [...PUBLIC_DOC_API_KEY_SCOPES];

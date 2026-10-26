@@ -62,7 +62,7 @@ function infoDescription(): string {
       '`Authorization: Bearer` header.',
     '',
     '## Scopes',
-    'API keys carry `resource:action` scopes. The scopes a self-service key can hold are:',
+    'API keys carry `resource:action` scopes. The documented scopes are:',
     ...PUBLIC_API_KEY_SCOPES.map(s => `- \`${s}\``),
     '',
     'Per-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: ' +

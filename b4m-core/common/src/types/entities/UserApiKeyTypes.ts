@@ -214,9 +214,9 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
 ];
 
 /**
- * Built-in scopes left out of the public API reference: platform administration, every confined
- * scope except the customer-minted `skills:read`, and tooling scopes a customer key is not minted with. Documentation only - it never
- * affects which scopes a key may hold or what the runtime accepts.
+ * Built-in scopes left out of the public API reference: `admin:*`, scopes confined to internal
+ * integrations, and scopes for product surfaces not yet documented there. Documentation only -
+ * it never affects which scopes a key may hold or what the runtime accepts.
  */
 export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.ADMIN,
@@ -225,7 +225,10 @@ export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.OPTIHASHI_COMPUTE,
 ];
 
-/** Built-in scopes published in the public OpenAPI spec: every {@link ApiKeyScope} not in {@link UNDOCUMENTED_API_KEY_SCOPES}. */
+/**
+ * Built-in scopes published in the public OpenAPI spec: every {@link ApiKeyScope} not in
+ * {@link UNDOCUMENTED_API_KEY_SCOPES}.
+ */
 export const PUBLIC_DOC_API_KEY_SCOPES: readonly ApiKeyScope[] = Object.values(ApiKeyScope).filter(
   scope => !UNDOCUMENTED_API_KEY_SCOPES.includes(scope)
 );
