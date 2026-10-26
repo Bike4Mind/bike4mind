@@ -7,18 +7,19 @@ import type { Theme } from '@mui/joy/styles';
 export const modalCustomizations = {
   JoyModalDialog: {
     styleOverrides: {
-      root: ({ theme }: { theme: Theme }) => ({
+      root: ({ theme, ownerState }: { theme: Theme; ownerState: { size?: string; layout?: string } }) => ({
         // Joy positions ModalClose from this variable.
         '--ModalClose-inset': '10px',
         backgroundColor: theme.palette.background.surface2,
         boxShadow: 'none',
-        paddingTop: '32px',
-        paddingBottom: '24px',
-        // Only the variable switches on phones: a media rule setting padding itself would be emitted after
-        // the dialog's own `sx` and beat a plain `p`/`px` there.
-        '--app-ModalDialog-paddingInline': '24px',
-        [theme.breakpoints.down('sm')]: { '--app-ModalDialog-paddingInline': '16px' },
-        paddingInline: 'var(--app-ModalDialog-paddingInline)',
+        // Padding goes through Joy's --Card-padding so Divider/CardOverflow bleed and a dialog's own `p` keep working.
+        // Explicit sizes and fullscreen dialogs keep Joy's own sizing.
+        ...(ownerState.size === 'md' &&
+          ownerState.layout !== 'fullscreen' && {
+            '--Card-padding': '24px',
+            [theme.breakpoints.down('sm')]: { '--Card-padding': '16px' },
+            paddingTop: '32px',
+          }),
       }),
     },
   },
