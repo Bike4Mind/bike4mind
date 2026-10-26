@@ -41,4 +41,6 @@ const ref = build && (await hub.verifyOllamaRef(detail, build));
 if (ref) await new OllamaRuntime().pull(ref);
 ```
 
+`isAbliteratedModel(model)` flags a search hit or detail whose repo id, tags or base models mark it as abliterated, decensored, uncensored or heretic (whole words except `abliterat`); callers hide these by default and never recommend them.
+
 Live check against real runtimes (skipped unless the variables are set; set either runtime alone, `LOCAL_MODELS_LIVE_OPENAI_KEY` only for a server started with a key, `LOCAL_MODELS_LIVE_OLLAMA_MODELS` to pull something other than `qwen2.5:0.5b`, and `LOCAL_MODELS_LIVE_HF` to query the Hub, which with Ollama also pulls and removes a 105 MB SmolLM2 build): `LOCAL_MODELS_LIVE_OLLAMA=http://127.0.0.1:11434 LOCAL_MODELS_LIVE_OPENAI=http://127.0.0.1:8080 LOCAL_MODELS_LIVE_OPENAI_KEY=<key> LOCAL_MODELS_LIVE_HF=https://huggingface.co pnpm --filter @bike4mind/local-models test live`

@@ -25,6 +25,7 @@ export {
   RuntimeProtocolError,
   RuntimeUnsupportedError,
 } from './errors';
+export { isAbliteratedModel } from './abliterated';
 export { archFromModelInfo, tensorStatsFromTensors } from './arch';
 export { DEFAULT_OLLAMA_URL, DEFAULT_PULL_IDLE_TIMEOUT_MS, OllamaRuntime, type OllamaRuntimeOptions } from './ollama';
 export { OpenAICompatibleRuntime, type OpenAICompatibleRuntimeOptions } from './openaiCompatible';
