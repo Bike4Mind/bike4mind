@@ -444,7 +444,7 @@ describe('PermissionsSettings ledger synchronization', () => {
     await render();
     const button = host.querySelector<HTMLButtonElement>('[data-testid="capability-revoke-btn"]');
     await act(async () => button?.click());
-    expect(host.querySelectorAll('[data-testid="permissions-rule-remove-btn"]')).toHaveLength(0);
+    expect(host.querySelector('fieldset')?.disabled).toBe(true);
     expect(host.querySelector<HTMLButtonElement>('[data-testid="permissions-reload-btn"]')?.disabled).toBe(true);
     await act(async () => {
       button?.click();
@@ -471,7 +471,7 @@ describe('PermissionsSettings ledger synchronization', () => {
     };
     await render();
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="capability-revoke-btn"]')?.click());
-    expect(host.querySelectorAll('[data-testid="permissions-rule-remove-btn"]')).toHaveLength(0);
+    expect(host.querySelector('fieldset')?.disabled).toBe(true);
     expect(host.textContent).toContain('read failed');
     await act(async () =>
       host.querySelector<HTMLButtonElement>('[data-testid="permissions-rule-remove-btn"]')?.click()
@@ -504,7 +504,7 @@ describe('PermissionsSettings ledger synchronization', () => {
     expect(setRules).toHaveBeenCalledWith({ kind: 'user' }, { allow: [], ask: [], deny: [] });
   });
 
-  it('keeps edits hidden when both revocation and the rules refresh reject', async () => {
+  it('keeps the panel but locks edits when both revocation and the rules refresh reject', async () => {
     const nextState = { ...state, user: state.user.slice(1) };
     const getState = vi
       .fn()
@@ -525,8 +525,9 @@ describe('PermissionsSettings ledger synchronization', () => {
     await render();
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="capability-revoke-btn"]')?.click());
     expect(host.textContent).toContain('Could not reload permission rules: Error: read failed');
-    expect(host.querySelectorAll('[data-testid="permissions-rule-remove-btn"]')).toHaveLength(0);
-    expect(host.querySelectorAll('[data-testid="permissions-add-input"]')).toHaveLength(0);
+    expect(host.querySelector('fieldset')?.disabled).toBe(true);
+    expect(host.querySelector('[data-testid="permissions-stale-banner"]')).not.toBeNull();
+    expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(1);
     expect(setRules).not.toHaveBeenCalled();
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="permissions-reload-btn"]')?.click());
     expect(host.querySelectorAll('[data-testid="permissions-rule-row"]')).toHaveLength(1);
