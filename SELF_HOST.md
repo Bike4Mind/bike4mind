@@ -1142,7 +1142,7 @@ Every hour the worker compares each user's and organization's `currentStorageSiz
 
 ### Drive lake re-sync poll
 
-Every hour the worker enqueues each connected Google Drive folder that is due onto the Drive lake ingest queue, the same path the manual Re-sync button uses, so connected folders stay in sync without a click. It runs only while both the `EnableDataLakes` and `EnableDataLakeDrivePoll` admin settings are on, and does nothing otherwise. A connection that has not been fully re-walked in 24 hours is re-walked in full; the rest sync incrementally. There is no run at startup, and Drive push notifications are not used.
+Every hour the worker enqueues each connected Google Drive folder that is due onto the Drive lake ingest queue, the same path the manual Re-sync button uses, so connected folders stay in sync without a click. A folder is due once it has not been polled for 6 hours, and each run enqueues at most 200, the longest-waiting first. It runs only while both the `EnableDataLakes` and `EnableDataLakeDrivePoll` admin settings are on, and does nothing otherwise. A connection that has not been fully re-walked in 24 hours is re-walked in full; the rest sync incrementally. There is no run at startup, and Drive push notifications are not used.
 
 ### Daily telemetry retention
 
