@@ -17,7 +17,8 @@ interface BarkeepChatRequest {
   history?: { role: 'user' | 'assistant'; content: string }[];
 }
 
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 50 : 20,

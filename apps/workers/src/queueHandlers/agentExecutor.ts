@@ -79,6 +79,7 @@ import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteTool
 import { getUserEntitlements } from '@server/entitlements';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -1001,9 +1002,11 @@ async function processExecution(
 
     await agentExecutionRepository.updateConnectionId(executionId, connectionId);
 
-    // Load user
-    const user = await User.findById(execution.userId);
-    if (!user) throw new Error(`User ${execution.userId} not found`);
+    // Load user. A run started by a key without the admin scope sees the owner as a non-admin,
+    // as the HTTP doors do through apiKeyAuth.
+    const storedUser = await User.findById(execution.userId);
+    if (!storedUser) throw new Error(`User ${execution.userId} not found`);
+    const user = execution.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
 
     // Validate session ownership
     const loadedSession = await sessionRepository.findById(execution.sessionId);
@@ -1461,6 +1464,7 @@ async function processExecution(
           linkedQuestId: execution.linkedQuestId,
           ...executionTurnAuth(execution),
           ...(execution.scopeDeniedTools?.length && { scopeDeniedTools: execution.scopeDeniedTools }),
+          ...(execution.adminRoleWithheld && { adminRoleWithheld: true }),
           query: info.task,
           model: info.model,
           // Snapshot of the parent's lists: a Lambda-dispatched child rebuilds its tool gate
@@ -1737,6 +1741,7 @@ async function processExecution(
         linkedQuestId: execution.linkedQuestId,
         ...executionTurnAuth(execution),
         scopeDeniedTools: execution.scopeDeniedTools,
+        adminRoleWithheld: execution.adminRoleWithheld,
         approvedTools,
         deniedTools,
         spawnedByExecutionId: executionId,
@@ -3682,8 +3687,9 @@ async function processSubagentDispatch(
     await agentExecutionRepository.updateConnectionId(childExecutionId, connectionId);
 
     // Auth + ownership checks (mirror processExecution).
-    const user = await User.findById(child.userId);
-    if (!user) throw new Error(`User ${child.userId} not found`);
+    const storedUser = await User.findById(child.userId);
+    if (!storedUser) throw new Error(`User ${child.userId} not found`);
+    const user = child.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
     const loadedSession = await sessionRepository.findById(child.sessionId);
     if (!loadedSession) throw new Error(`Session ${child.sessionId} not found`);
     if (loadedSession.userId !== child.userId) {

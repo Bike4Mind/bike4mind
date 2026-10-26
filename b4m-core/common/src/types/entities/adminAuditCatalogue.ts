@@ -76,6 +76,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
+  'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
   'settings.whats_new.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.whats_new.synced': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.whats_new.generation_triggered': { category: 'settings', severity: 'info', write: 'bestEffort' },
@@ -175,6 +176,16 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.gear_override.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: rapid reply
+  'settings.rapid_reply_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.bulk_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;

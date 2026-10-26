@@ -111,7 +111,7 @@ describe('recordOperationalUsage', () => {
     expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 100 });
   });
 
-  it('stays recorded-only when the toggle is on but billing repos are absent (tool context)', async () => {
+  it('stays recorded-only when the toggle is on but billing repos are absent (a host that does not bill)', async () => {
     setToggles({ bill: true, enforce: true });
     const record = vi.fn().mockResolvedValue(null);
 
@@ -124,8 +124,8 @@ describe('recordOperationalUsage', () => {
     expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
   });
 
-  // The knowledge-base and LLM-tool callers record once per search/tool call, so a fresh flag
-  // read here would be a per-call round-trip on a path that can never reach the debit branch.
+  // A record-only host can issue one record per search/tool call, so a fresh flag read here
+  // would be a per-call round-trip on a path that can never reach the debit branch.
   it('does not read the billing flags at all when billing repos are absent', async () => {
     setToggles({ bill: true, enforce: true });
     const record = vi.fn().mockResolvedValue(null);
@@ -174,6 +174,89 @@ describe('recordOperationalUsage', () => {
 
     expect(record).toHaveBeenCalledTimes(1);
     expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
+  });
+
+  describe('free-tier holders', () => {
+    const plans = (hasActivePlan: boolean) => ({ hasActivePlan: vi.fn().mockResolvedValue(hasActivePlan) });
+
+    it('debits a holder with no purchase and no plan even when billOperationalUsage is off', async () => {
+      setToggles({ bill: false, enforce: true });
+      const record = vi.fn().mockResolvedValue(null);
+      const activePlans = plans(false);
+
+      await recordOperationalUsage(baseParams, { db: { ...fullBillingDb(record), activePlans }, logger });
+
+      expect(activePlans.hasActivePlan).toHaveBeenCalledWith('u1');
+      expect(deductMock).toHaveBeenCalledTimes(1);
+      expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 100 });
+    });
+
+    it.each([
+      ['an active plan', { user, activePlans: plans(true) }],
+      ['a credit purchase', { user: { id: 'u1', lastCreditsPurchasedAt: new Date() }, activePlans: plans(false) }],
+      // An org-funded member: no personal purchase, no plan, and nothing on the org says it is funded.
+      ['an org paying for it', { user, organization: { id: 'org1' }, activePlans: plans(false) }],
+    ])('stays recorded-only for a holder with %s while the toggle is off', async (_label, holder) => {
+      setToggles({ bill: false, enforce: true });
+      const record = vi.fn().mockResolvedValue(null);
+
+      await recordOperationalUsage(
+        { ...baseParams, user: holder.user as never, organization: (holder.organization ?? null) as never },
+        { db: { ...fullBillingDb(record), activePlans: holder.activePlans }, logger }
+      );
+
+      expect(deductMock).not.toHaveBeenCalled();
+      expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
+    });
+
+    it('never debits a free-tier holder when credits are not enforced', async () => {
+      setToggles({ bill: false, enforce: false });
+      const record = vi.fn().mockResolvedValue(null);
+
+      await recordOperationalUsage(baseParams, {
+        db: { ...fullBillingDb(record), activePlans: plans(false) },
+        logger,
+      });
+
+      expect(deductMock).not.toHaveBeenCalled();
+    });
+
+    it('records unbilled when the plan read fails', async () => {
+      setToggles({ bill: false, enforce: true });
+      const record = vi.fn().mockResolvedValue(null);
+      const activePlans = { hasActivePlan: vi.fn().mockRejectedValue(new Error('plans down')) };
+
+      await recordOperationalUsage(baseParams, { db: { ...fullBillingDb(record), activePlans }, logger });
+
+      expect(deductMock).not.toHaveBeenCalled();
+      expect(record).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('uses a caller-scoped billing check when one is given', async () => {
+    const record = vi.fn().mockResolvedValue(null);
+    const billingCheck = vi.fn().mockResolvedValue(true);
+    const activePlans = { hasActivePlan: vi.fn() };
+
+    await recordOperationalUsage(baseParams, {
+      db: { ...fullBillingDb(record), activePlans },
+      billingCheck,
+      logger,
+    });
+
+    expect(billingCheck).toHaveBeenCalledWith({ user, organization: undefined, activePlans });
+    expect(getSettingsValueMock).not.toHaveBeenCalled();
+    expect(deductMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, 7])('records %s caller-settled credits without debiting again', async settledCredits => {
+    setToggles({ bill: true, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+
+    await recordOperationalUsage({ ...baseParams, settledCredits }, { db: fullBillingDb(record), logger });
+
+    expect(deductMock).not.toHaveBeenCalled();
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: settledCredits });
   });
 
   it('is a no-op-safe when no usageEvents repo is wired', async () => {
