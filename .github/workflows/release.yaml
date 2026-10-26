@@ -202,7 +202,7 @@ jobs:
   # Automated release: creates Version Packages PR or publishes when that PR is merged
   release:
     if: github.event_name == 'push' && github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 20
     permissions:
       contents: write
