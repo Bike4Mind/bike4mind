@@ -1,0 +1,68 @@
+export const TURNSTILE_SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+export const TURNSTILE_TIMEOUT_MS = 2000;
+export const TURNSTILE_MAX_TOKEN_LENGTH = 2048;
+
+export type TurnstileResult =
+  { ok: true } | { ok: false; reason: 'missing' | 'invalid' | 'unavailable'; errorCodes?: string[] };
+
+export interface VerifyTurnstileInput {
+  token: unknown;
+  secret: string;
+  ip?: string;
+  expectedAction: string;
+  /** Lowercase hostnames the widget may have been solved on; empty skips the hostname check. */
+  allowedHostnames?: string[];
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}
+
+interface SiteverifyResponse {
+  success?: boolean;
+  hostname?: string;
+  action?: string;
+  'error-codes'?: string[];
+}
+
+/** Secrets default to this placeholder on stages that never provisioned a key. */
+export function isTurnstileSecretConfigured(secret: string | undefined): secret is string {
+  return !!secret && secret.trim() !== '' && secret !== 'not-configured';
+}
+
+/**
+ * Verifies a Turnstile token with Cloudflare siteverify. Tokens are single-use, so a duplicate or
+ * expired token comes back as `invalid`. A network failure, timeout or non-2xx answer is
+ * `unavailable` so the caller can choose to fail open or closed.
+ */
+export async function verifyTurnstile(input: VerifyTurnstileInput): Promise<TurnstileResult> {
+  const { token, secret, ip, expectedAction, allowedHostnames = [] } = input;
+  if (typeof token !== 'string' || token.length === 0) return { ok: false, reason: 'missing' };
+  if (token.length > TURNSTILE_MAX_TOKEN_LENGTH) return { ok: false, reason: 'invalid' };
+
+  const body = new URLSearchParams({ secret, response: token });
+  if (ip) body.set('remoteip', ip);
+
+  let data: SiteverifyResponse;
+  try {
+    const response = await (input.fetchImpl ?? fetch)(TURNSTILE_SITEVERIFY_URL, {
+      method: 'POST',
+      body,
+      signal: AbortSignal.timeout(input.timeoutMs ?? TURNSTILE_TIMEOUT_MS),
+    });
+    if (!response.ok) return { ok: false, reason: 'unavailable' };
+    data = (await response.json()) as SiteverifyResponse;
+  } catch {
+    return { ok: false, reason: 'unavailable' };
+  }
+
+  const errorCodes = data['error-codes'];
+  if (data.success !== true) {
+    // A rejected secret or malformed request is our misconfiguration, not the caller's fault.
+    if (errorCodes?.some(code => code === 'internal-error')) return { ok: false, reason: 'unavailable', errorCodes };
+    return { ok: false, reason: 'invalid', errorCodes };
+  }
+  if (data.action !== expectedAction) return { ok: false, reason: 'invalid', errorCodes: ['action-mismatch'] };
+  if (allowedHostnames.length > 0 && !allowedHostnames.includes((data.hostname ?? '').toLowerCase())) {
+    return { ok: false, reason: 'invalid', errorCodes: ['hostname-mismatch'] };
+  }
+  return { ok: true };
+}

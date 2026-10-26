@@ -19,6 +19,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
+const turnstileActions = vi.hoisted(() => [] as string[]);
+vi.mock('@server/middlewares/requireTurnstile', () => ({
+  requireTurnstile: (action: string) => {
+    turnstileActions.push(action);
+    return (_req: any, _res: any, next: any) => next?.();
+  },
+}));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({ getLogoUrl: () => undefined }));
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-pending-token' } }));
@@ -110,6 +117,10 @@ describe('/api/otc/send limiter wiring', () => {
     vi.clearAllMocks();
     resetCache();
     mockIsE2EEnabled.mockReturnValue(false);
+  });
+
+  it('gates the route on the otc-send Turnstile challenge before any limiter runs', () => {
+    expect(turnstileActions).toEqual(['otc-send']);
   });
 
   it('counts every request against the per-IP and distinct-email-per-IP limits, but not the per-email ones', async () => {

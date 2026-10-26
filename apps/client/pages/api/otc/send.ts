@@ -11,6 +11,8 @@ import {
   otcEmailBudgetRetryAfter,
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
+import { requireTurnstile } from '@server/middlewares/requireTurnstile';
+import { TURNSTILE_ACTION_OTC_SEND } from '@server/utils/auth/turnstile';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { Config, isE2EEnabled } from '@bike4mind/server-utils/utils/config';
@@ -18,6 +20,7 @@ import jwt from 'jsonwebtoken';
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
+  .use(requireTurnstile(TURNSTILE_ACTION_OTC_SEND))
   .use(otcCounterLimit({ bucket: 'send-ip-daily', ...OTC_LIMITS.send.perIpDaily, subject: ipSubject }))
   .use(otcCounterLimit({ bucket: 'send-ip-total', ...OTC_LIMITS.send.perIpTotal, subject: ipSubject }))
   .use(otcDistinctEmailsPerIpLimit())

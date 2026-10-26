@@ -3,6 +3,7 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
+import { getTurnstilePolicy } from '@server/utils/auth/turnstile';
 import { isLocalAppUrl } from '@server/utils/validators';
 
 export type ServerConfigPublic = {
@@ -14,6 +15,8 @@ export type ServerConfigPublic = {
   pyodideBaseUrl: string;
   /** When true, the MFA prompt offers "remember this device" so the next login skips TOTP. */
   allowTrustedDevices: boolean;
+  /** Turnstile site key; empty when the challenge is not enforced on this stage. */
+  turnstileSiteKey: string;
 };
 
 // Public pre-login config - minimal fields only.
@@ -35,6 +38,8 @@ const handler = baseApi({ auth: false }).get(
     const trustedParsed = settingsMap.allowTrustedDevices.schema.safeParse(trustedSetting?.settingValue);
     const allowTrustedDevices = trustedParsed.success ? trustedParsed.data : true;
 
+    const turnstile = await getTurnstilePolicy().catch(() => null);
+
     const config: ServerConfigPublic = {
       // In dev, derive from request host so the URL matches the actual port
       apiUrl: isLocalAppUrl()
@@ -44,6 +49,7 @@ const handler = baseApi({ auth: false }).get(
       allowOpenRegistration,
       pyodideBaseUrl: process.env.PYODIDE_BASE_URL || '',
       allowTrustedDevices,
+      turnstileSiteKey: turnstile?.active ? turnstile.siteKey : '',
     };
 
     return res.json(config);
