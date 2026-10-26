@@ -32,7 +32,16 @@ const SUITE_PREFIX = /^:[a-z0-9_+-]+: /;
 const SUITE_COUNTS = /^(\d+)\/(\d+)(?: \((\d+) did not run\))?$/;
 const CREDITS_VALUE = /^\d+(?:\.\d+)?$/;
 // printf '%.2fs / <=%ss' plus the breach suffixes, or N/A when the spec declares no threshold.
-const LATENCY_CELL = /^(\d+\.\d{2})s \/ <=(?:N\/A|(\d+(?:\.\d+)?)s)(?: FAIL(?: \(\d+ prompt\(s\) never finished\))?)?$/;
+// Median-era posts put ' (TTFT %.2fs)' after the value and may end in a retried-attempts note.
+// The suffixes come in the Aggregate step's order: artifact-mode, never finished, retried.
+const LATENCY_CELL =
+  /^(\d+\.\d{2})s(?: \(TTFT \d+\.\d{2}s\))? \/ <=(?:N\/A|(\d+(?:\.\d+)?)s)(?: FAIL)?(?: \(\d+ artifact-mode excluded\))?(?: \(\d+ prompt\(s\) never finished\))?(?: \(\d+ retried attempt\(s\) kept\))?$/;
+// The Latency column's header names the statistic the cell holds: a mean before the switch to a
+// median, the median after. Each maps to the results-file key the Aggregate step read it from.
+const LATENCY_COLUMNS = new Map([
+  [' Average Latency', 'averageResponseTimeSec'],
+  [' Median Latency (TTFT)', 'medianResponseTimeSec'],
+]);
 const TABLE_RULE = /^[- ]+$/;
 const QUALITY = new Set(['Pass', 'Fail', '---']);
 const RUN_PATH = /^\/[^/]+\/[^/]+\/actions\/runs\/\d+$/;
@@ -108,7 +117,8 @@ function parseSuiteLines(body) {
   return body.split('\n').map(line => {
     const prefix = SUITE_PREFIX.exec(line)?.[0] ?? fail(`bad suite line "${clip(line)}"`);
     const sep = line.lastIndexOf(': ');
-    const counts = (sep > prefix.length && SUITE_COUNTS.exec(line.slice(sep + 2))) || fail(`bad suite line "${clip(line)}"`);
+    const counts =
+      (sep > prefix.length && SUITE_COUNTS.exec(line.slice(sep + 2))) || fail(`bad suite line "${clip(line)}"`);
     return {
       name: unescapeSlack(line.slice(prefix.length, sep)),
       passed: Number(counts[1]),
@@ -154,7 +164,8 @@ function latencyRows(body) {
   const close = body.indexOf(`\n${FENCE}`);
   if (!body.startsWith(FENCE) || close === -1) fail('Normal Prompts has no table');
   const [head, rule, ...lines] = body.slice(FENCE.length, close).split('\n');
-  if (!head.startsWith('Suite ') || !head.endsWith(' Average Latency') || !TABLE_RULE.test(rule ?? '')) {
+  const latencyKey = [...LATENCY_COLUMNS].find(([column]) => head?.endsWith(column))?.[1];
+  if (!head.startsWith('Suite ') || latencyKey === undefined || !TABLE_RULE.test(rule ?? '')) {
     fail('Normal Prompts table header changed');
   }
   if (lines.length === 0) fail('Normal Prompts table has no rows');
@@ -164,14 +175,15 @@ function latencyRows(body) {
     const q = tokens.findIndex((t, i) => i >= 2 && QUALITY.has(t));
     if (q === -1) fail(`bad latency row "${clip(line)}"`);
     const cell = tokens.slice(q + 1).join(' ');
-    const m = cell === 'No Data' ? null : (LATENCY_CELL.exec(cell) ?? fail(`bad latency cell "${clip(cell)}"`));
+    // 'No Data' can carry an annotation, e.g. 'No Data (2 artifact-mode excluded)'.
+    const m = cell.startsWith('No Data') ? null : (LATENCY_CELL.exec(cell) ?? fail(`bad latency cell "${clip(cell)}"`));
     return {
       spec: tokens[0],
       model: tokens.slice(1, q).join(' '),
       quality: tokens[q],
-      // The Aggregate step's own inputs; "No Data" is averageResponseTimeSec 0 there.
+      // The Aggregate step's own inputs; "No Data" is a 0 latency there.
       latency: {
-        averageResponseTimeSec: m ? Number(m[1]) : 0,
+        [latencyKey]: m ? Number(m[1]) : 0,
         ...(m?.[2] !== undefined && { thresholdSec: Number(m[2]) }),
       },
     };
@@ -296,7 +308,8 @@ function parseArgs(argv) {
 async function readHistory(file) {
   const raw = JSON.parse(await fs.readFile(file, 'utf8'));
   const messages = Array.isArray(raw) ? raw : raw?.messages;
-  if (!Array.isArray(messages)) throw new Error(`${file}: expected a conversations.history response or a message array`);
+  if (!Array.isArray(messages))
+    throw new Error(`${file}: expected a conversations.history response or a message array`);
   return messages;
 }
 
@@ -316,7 +329,8 @@ async function slackHistory({ token, channel, oldest, latest, fetchImpl, sleep }
         continue;
       }
       const parsed = await res.json().catch(() => null);
-      if (!res.ok || !parsed?.ok) throw new Error(`conversations.history failed: ${parsed?.error ?? `HTTP ${res.status}`}`);
+      if (!res.ok || !parsed?.ok)
+        throw new Error(`conversations.history failed: ${parsed?.error ?? `HTTP ${res.status}`}`);
       body = parsed;
     }
     messages.push(...(body.messages ?? []));

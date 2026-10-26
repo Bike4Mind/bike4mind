@@ -50,6 +50,8 @@ export const secrets = {
   // Anthropic Admin API key for billing/spend reconciliation (cost_report endpoint).
   // Requires an admin-scoped key from console.anthropic.com.
   ANTHROPIC_ADMIN_API_KEY: new sst.Secret('ANTHROPIC_ADMIN_API_KEY', 'not-configured'),
+  // Cloudflare Turnstile secret key; the check stays off until a real value is set.
+  TURNSTILE_SECRET_KEY: new sst.Secret('TURNSTILE_SECRET_KEY', 'not-configured'),
   GEMINI_API_KEY: new sst.Secret('GEMINI_API_KEY', 'not-configured'),
   // Deployment-level provider keys for model discovery (spec 5.7). Discovery has
   // no user, so its only other source is the admin demo-key tier, which exists

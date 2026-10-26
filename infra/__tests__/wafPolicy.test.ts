@@ -169,6 +169,10 @@ const EXPECTED_SCOPE_DOWNS: Record<string, UriPathMatch[]> = {
  */
 const INCLUSION_SCOPED_GROUPS = ['AWS-AWSManagedRulesAnonymousIpList'];
 
+const RATE_BLOCK = {
+  Block: { CustomResponse: { ResponseCode: 429, ResponseHeaders: [{ Name: 'retry-after', Value: '300' }] } },
+};
+
 /** Managed rule group rules for a stage, by rule name. */
 function managedRules(stage: string): Map<string, WafRule> {
   const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
@@ -296,6 +300,18 @@ describe('wafPolicy', () => {
       const rateLimitRule = parsed.find((rule: WafRule) => rule.Name === 'api-rate-limit');
       expect(rateLimitRule).toBeDefined();
       expect(rateLimitRule.Statement.RateBasedStatement.AggregateKeyType).toBe('IP');
+    });
+
+    it.each(['dev', 'production'])('answers every blocking rate rule with 429 and retry-after on %s', stage => {
+      const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+      // any: RateBasedStatement and Action shapes are deeply nested
+      const blocking = rules.filter(r => (r.Statement as any).RateBasedStatement && 'Block' in (r.Action as any));
+      expect(blocking.length).toBeGreaterThan(0);
+      for (const rule of blocking) {
+        const custom = (rule.Action as any).Block.CustomResponse;
+        expect(custom?.ResponseCode, `${rule.Name} status`).toBe(429);
+        expect(custom?.ResponseHeaders, `${rule.Name} headers`).toContainEqual({ Name: 'retry-after', Value: '300' });
+      }
     });
 
     // Cypress CI runs against staging, so the dev limit may only ever be looser than production's.
@@ -543,7 +559,7 @@ describe('wafPolicy', () => {
           const matches = rateLimitByteMatches(rule);
           expect(matches.length, `${rule.Name} scope-down must match on a path`).toBeGreaterThan(0);
 
-          for (const byteMatch of matches) {
+          for (const byteMatch of matches.filter(m => m.FieldToMatch.UriPath)) {
             const ordered = [...(byteMatch.TextTransformations ?? [])]
               .sort((a: { Priority: number }, b: { Priority: number }) => a.Priority - b.Priority)
               .map((t: { Type: string }) => t.Type);
@@ -559,7 +575,13 @@ describe('wafPolicy', () => {
 
       it(`anchors every ${stage} rate limit to a URI path prefix`, () => {
         for (const rule of scopedRateLimits(stage)) {
-          for (const byteMatch of rateLimitByteMatches(rule)) {
+          const matches = rateLimitByteMatches(rule);
+          expect(
+            matches.some(m => m.FieldToMatch.UriPath),
+            `${rule.Name} must match on UriPath`
+          ).toBe(true);
+          // A Method match narrows by verb and is exempt; every other match must be a UriPath one.
+          for (const byteMatch of matches.filter(m => !m.FieldToMatch.Method)) {
             expect(byteMatch.FieldToMatch.UriPath, `${rule.Name} must match on UriPath`).toBeDefined();
             // EXACTLY is accepted alongside STARTS_WITH because it is strictly tighter: it is what
             // single files such as /version.json use, so the match cannot creep to /version.jsonx.
@@ -635,33 +657,31 @@ describe('wafPolicy', () => {
       expect(rateBased.Limit).toBeGreaterThan(apiLimit);
     });
 
-    // Production's rate limits are in Count for one measurement week, deliberately, and this
-    // assertion is the thing that makes going back to Block a build requirement rather than
-    // something someone remembers. Nothing else in the file would notice: #1893's parity guard
-    // deep-equals Statement and never the rule object.
-    //
-    // What has to be true before each rule flips back to Block:
-    //   api-rate-limit         a week of CountedRequests on production traffic, not staging's,
-    //                          since the January 0.7% was measured on the old blanket shape
-    //   default-rate-limit     no measurement under it anywhere yet
-    //   image-rate-limit       likewise, and it is the one expensive non-API path
-    //   ai-route, register     both shadows have read zero on staging for weeks, so a Count week
-    //                          is the first real signal either has produced
-    //   static-asset           a DoS backstop, so the reading matters least of the six
-    //
-    // Flip the rule and this assertion together, per rule, as each reading justifies it.
-    // emergency-ip-block and the managed rule groups are untouched and stay enforcing.
-    it('counts, rather than blocks, every production rate limit during the measurement week', () => {
+    // Which production rate limits enforce and which still only count. Flip a rule in the policy
+    // and in this table together, so loosening one is a reviewed change rather than a silent one.
+    // static-asset, image and default stay in Count until production traffic justifies a reading.
+    const ENFORCED_RATE_LIMITS = [
+      'ai-route-rate-limit',
+      'api-rate-limit',
+      'register-rate-limit',
+      'otc-verify-rate-limit',
+      'api-key-create-rate-limit',
+      'credits-rate-limit',
+    ];
+    const COUNTING_RATE_LIMITS = ['static-asset-rate-limit', 'image-rate-limit', 'default-rate-limit'];
+
+    it('enforces the path-scoped rate limits and keeps the broad ones in Count in production', () => {
       const rules: WafRule[] = JSON.parse(
         buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
       );
 
       // any: RateBasedStatement shape is deeply nested and varies by statement type
       const limits = rules.filter(r => (r.Statement as any).RateBasedStatement);
-      expect(limits.length).toBeGreaterThan(0);
+      expect(limits.map(r => r.Name).sort()).toEqual([...ENFORCED_RATE_LIMITS, ...COUNTING_RATE_LIMITS].sort());
 
       for (const rule of limits) {
-        expect(rule.Action, `${rule.Name} is in Count for the measurement week`).toEqual({ Count: {} });
+        const want = ENFORCED_RATE_LIMITS.includes(rule.Name) ? RATE_BLOCK : { Count: {} };
+        expect(rule.Action, `${rule.Name} action`).toEqual(want);
       }
     });
 
@@ -958,6 +978,82 @@ describe('wafPolicy', () => {
     });
   });
 
+  describe('path-scoped rate rules', () => {
+    const forStage = (stage: string): WafRule[] =>
+      JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+
+    const uriMatch = (path: string, positionalConstraint: string) => ({
+      path,
+      positionalConstraint,
+    });
+
+    const SCOPED: Record<string, { uris: ReturnType<typeof uriMatch>[]; postOnly?: boolean }> = {
+      'otc-verify-rate-limit': { uris: [uriMatch('/api/otc/verify', 'STARTS_WITH')] },
+      'api-key-create-rate-limit': {
+        uris: [uriMatch('/api/user-api-keys', 'EXACTLY'), uriMatch('/api/user-api-keys/', 'EXACTLY')],
+        postOnly: true,
+      },
+      'credits-rate-limit': { uris: [uriMatch('/api/v1/credits', 'STARTS_WITH')] },
+    };
+
+    for (const stage of ['dev', 'production']) {
+      for (const [name, { uris, postOnly }] of Object.entries(SCOPED)) {
+        describe(`${name} on ${stage}`, () => {
+          const find = () => forStage(stage).find(r => r.Name === name);
+
+          it('blocks per IP over a 300 second window', () => {
+            const rule = find();
+            expect(rule).toBeDefined();
+            expect(rule!.Action).toEqual(RATE_BLOCK);
+            // any: RateBasedStatement shape is deeply nested
+            const rate = (rule!.Statement as any).RateBasedStatement;
+            expect(rate.AggregateKeyType).toBe('IP');
+            expect(rate.EvaluationWindowSec).toBe(300);
+          });
+
+          it('is scoped to its path', () => {
+            const rule = find()!;
+            const matches = rateLimitByteMatches(rule);
+            const paths = matches.filter(m => m.FieldToMatch.UriPath);
+            expect(paths.map(m => [m.SearchString, m.PositionalConstraint])).toEqual(
+              uris.map(uri => [uri.path, uri.positionalConstraint])
+            );
+
+            if (postOnly) {
+              // any: RateBasedStatement shape is deeply nested
+              const and = (rule.Statement as any).RateBasedStatement.ScopeDownStatement.AndStatement;
+              expect(and.Statements).toHaveLength(2);
+              // Both collection spellings share one bucket; child routes must remain outside it.
+              expect(and.Statements[1]).toEqual({
+                OrStatement: { Statements: paths.map(ByteMatchStatement => ({ ByteMatchStatement })) },
+              });
+              const methods = matches.filter(m => m.FieldToMatch.Method);
+              expect(methods).toHaveLength(1);
+              expect(methods[0].SearchString).toBe('POST');
+              expect(methods[0].PositionalConstraint).toBe('EXACTLY');
+            } else {
+              expect(matches.filter(m => !m.FieldToMatch.UriPath)).toHaveLength(0);
+            }
+          });
+        });
+      }
+    }
+
+    it('gives every dev path-scoped rule a Count twin in the prod-shadow style', () => {
+      const dev = forStage('dev');
+      for (const name of Object.keys(SCOPED)) {
+        const shadow = dev.find(r => r.Name === `${name}${SHADOW_SUFFIX}`);
+        expect(shadow, `${name} shadow`).toBeDefined();
+        expect(shadow!.Action).toEqual({ Count: {} });
+        const enforcing = dev.find(rule => rule.Name === name)!;
+        // A terminating Block at the same threshold would hide overflow from the Count twin.
+        expect(shadow!.Priority, `${name} shadow must observe requests before blocking`).toBeLessThan(
+          enforcing.Priority
+        );
+      }
+    });
+  });
+
   // Exact limits belong to each deployment, so these only pin the committed sample.
   describe.skipIf(externalPolicy)('sample policy rate limits', () => {
     // Pinned, not bounded: a greater-than assertion would pass a 10x loosening while failing a
@@ -966,18 +1062,27 @@ describe('wafPolicy', () => {
       production: {
         'ai-route-rate-limit': 100,
         'api-rate-limit': 1000,
-        'register-rate-limit': 50,
+        'register-rate-limit': 30,
         'static-asset-rate-limit': 20000,
         'image-rate-limit': 500,
         'default-rate-limit': 2000,
+        'otc-verify-rate-limit': 30,
+        'api-key-create-rate-limit': 20,
+        'credits-rate-limit': 100,
       },
       dev: {
         'api-rate-limit': 5000,
         'static-asset-rate-limit': 20000,
         'register-rate-limit': 500,
+        'otc-verify-rate-limit': 30,
+        'api-key-create-rate-limit': 20,
+        'credits-rate-limit': 100,
+        'otc-verify-rate-limit-prod-shadow': 30,
+        'api-key-create-rate-limit-prod-shadow': 20,
+        'credits-rate-limit-prod-shadow': 100,
         'api-rate-limit-prod-shadow': 1000,
         'ai-route-rate-limit-prod-shadow': 100,
-        'register-rate-limit-prod-shadow': 50,
+        'register-rate-limit-prod-shadow': 30,
         'image-rate-limit-prod-shadow': 500,
         'default-rate-limit-prod-shadow': 2000,
         'static-asset-rate-limit-prod-shadow': 20000,
@@ -1022,10 +1127,10 @@ describe('wafPolicy', () => {
       forStage(stage).find(rule => rule.Name === BOT_CONTROL_RULE) as BotControlRule | undefined;
 
     for (const stage of ['dev', 'production']) {
-      it(`runs the group at Priority 20 on ${stage}`, () => {
+      it(`runs the group at Priority 30 on ${stage}`, () => {
         const rule = botControlForStage(stage);
         expect(rule).toBeDefined();
-        expect(rule!.Priority).toBe(20);
+        expect(rule!.Priority).toBe(30);
         expect(rule!.Action).toBeUndefined();
         const mgs = rule!.Statement.ManagedRuleGroupStatement;
         expect(mgs.VendorName).toBe('AWS');

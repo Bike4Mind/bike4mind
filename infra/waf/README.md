@@ -27,7 +27,7 @@ fail by design.
 ## Bot Control telemetry
 
 Both stage policies run `AWSManagedRulesBotControlRuleSet` at the `COMMON`
-inspection level, last at priority 20, with the group return action overridden
+inspection level, last at priority 30, with the group return action overridden
 to `Count`. It cannot block, challenge, or CAPTCHA requests.
 
 This is partial telemetry: earlier terminating Allow or Block rules prevent
@@ -54,8 +54,9 @@ with `CLOUDFRONT` scope, compared the policies before and after Bot Control:
 The API measured the complete rule lists, replacing the emergency IPSet ARN
 placeholder with an existing CloudFront IPSet ARN. AWS optimizes combined rule
 capacity, so summing individual statement costs overestimates these policies.
-Both remain below the 1,500 WCU base-pricing threshold, but dev has only 4 WCU
-of headroom. Re-run `CheckCapacity` after policy changes or managed-rule updates;
+These are historical measurements from before the additional path-scoped rate
+rules. They do not describe the current policy's capacity or pricing tier.
+Re-run `CheckCapacity` after policy changes or managed-rule updates;
 these measurements are not a permanent capacity guarantee.
 
 [WAF pricing](https://aws.amazon.com/waf/pricing/) adds a per-request charge for

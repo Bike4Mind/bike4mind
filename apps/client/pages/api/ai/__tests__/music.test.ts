@@ -491,6 +491,7 @@ describe('POST /api/ai/music', () => {
           modelId: expect.any(String),
           prompt: 'lofi beat',
           durationSeconds: 30,
+          request: expect.objectContaining({ prompt: 'lofi beat', lengthMs: 30000 }),
         },
       },
       expect.anything()

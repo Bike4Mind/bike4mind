@@ -2,6 +2,7 @@ import {
   GenerateImageToolCall,
   ImageModels,
   ModelInfo,
+  isBflImageModel,
   isGPTImageModel,
   isGeminiImageModel,
   UnprocessableEntityError,
@@ -51,14 +52,10 @@ export function computeImageUsdCostPerImage(modelId: string, input: CostInput): 
     // the conditional guarantees this branch only sees an OpenAICostInput.
     return new OpenAIImageCostCalculator().getCost(input as OpenAICostInput);
   }
-  if (
-    modelId === ImageModels.FLUX_PRO_ULTRA ||
-    modelId === ImageModels.FLUX_PRO_1_1 ||
-    modelId === ImageModels.FLUX_PRO ||
-    modelId === ImageModels.FLUX_PRO_FILL ||
-    modelId === ImageModels.FLUX_KONTEXT_PRO ||
-    modelId === ImageModels.FLUX_KONTEXT_MAX
-  ) {
+  // Every BFL model is priced in FluxImageCostCalculator, and this is the only place the
+  // dispatch could miss one: an id missing here throws "Model not supported" at the credit
+  // gate, so the family predicate (which cannot drift from BFL_IMAGE_MODELS) decides.
+  if (isBflImageModel(modelId)) {
     return new FluxImageCostCalculator().getCost({ model: modelId });
   }
   if (modelId === ImageModels.GROK_IMAGINE_IMAGE_QUALITY) {

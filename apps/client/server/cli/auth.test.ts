@@ -55,6 +55,13 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   },
 }));
 
+const applyUntrustedRateLimit = vi.hoisted(() =>
+  vi.fn(
+    async (_owner: unknown, key: { rateLimit: { requestsPerMinute: number; requestsPerDay: number } }) => key.rateLimit
+  )
+);
+vi.mock('@server/utils/apiKeyTrust', () => ({ applyUntrustedRateLimit }));
+
 vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
   extractApiKeyFromHeaders: vi.fn(),
   checkApiKeyRateLimit: vi.fn(),
@@ -560,6 +567,21 @@ describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
 
   // The thrown error class + message must stay in sync with apiKeyAuth.ts: a bare
   // Error would flatten to a 500 (or the wrong status) on the surfaces this path backs.
+  it("returns the rate limit clamped by the owner's trust standing", async () => {
+    const owner = { id: 'u1', isBanned: false };
+    const clamped = { requestsPerMinute: 3, requestsPerDay: 100 };
+    vi.mocked(User.findById).mockResolvedValue(owner);
+    applyUntrustedRateLimit.mockResolvedValueOnce(clamped);
+
+    const info = await verifyApiKey({});
+
+    expect(info.rateLimit).toEqual(clamped);
+    expect(applyUntrustedRateLimit).toHaveBeenLastCalledWith(
+      owner,
+      expect.objectContaining({ rateLimit: validKey.rateLimit })
+    );
+  });
+
   it('refuses a banned owner with an UnauthorizedError', async () => {
     vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: true });
     await expect(verifyApiKey({})).rejects.toBeInstanceOf(UnauthorizedError);

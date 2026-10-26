@@ -73,6 +73,7 @@ const Config = {
   MAIL_PASSWORD: Resource.MAIL_PASSWORD.value,
   ANTHROPIC_API_KEY: Resource.ANTHROPIC_API_KEY.value,
   ANTHROPIC_ADMIN_API_KEY: readOptionalSecret('ANTHROPIC_ADMIN_API_KEY', () => Resource.ANTHROPIC_ADMIN_API_KEY.value),
+  TURNSTILE_SECRET_KEY: readOptionalSecret('TURNSTILE_SECRET_KEY', () => Resource.TURNSTILE_SECRET_KEY.value),
   OPENAI_ADMIN_API_KEY: readOptionalSecret('OPENAI_ADMIN_API_KEY', () => Resource.OPENAI_ADMIN_API_KEY.value),
   GEMINI_API_KEY: Resource.GEMINI_API_KEY.value,
   OKTA_AUDIENCE: Resource.OKTA_AUDIENCE.value,
