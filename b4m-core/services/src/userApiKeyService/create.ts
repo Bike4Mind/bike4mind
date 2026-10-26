@@ -16,6 +16,7 @@ import {
   isWellFormedApiKeyScope,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { encryptAtRest } from '@bike4mind/utils/security';
 import { randomBytes } from 'crypto';
@@ -399,6 +400,14 @@ const mintUserApiKey = async (
       throw new BadRequestError(message, { errorCode: API_KEY_USER_CAP_ERROR_CODE });
     }
     apiKeyDocument = result;
+  }
+
+  // Count committed mints from every surface, without inheriting request identity or secrets.
+  // Rotation keeps the same record and is deliberately not a creation event.
+  try {
+    new Logger({ logInJson: true, prettyPrint: false, minLevel: 'info' }).info('user-api-key-created');
+  } catch {
+    // A metric output failure must not turn a successfully minted key into a failed request.
   }
 
   return {

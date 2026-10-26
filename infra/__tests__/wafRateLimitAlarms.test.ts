@@ -5,6 +5,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getWafRateLimitAlarmRules } from '../wafPolicy';
 
+const usEast1 = expect.objectContaining({ provider: expect.objectContaining({ region: 'us-east-1' }) });
+
 const temporaryDirectories: string[] = [];
 
 const resources = vi.hoisted(() => {
@@ -21,7 +23,8 @@ const resources = vi.hoisted(() => {
     };
   });
   const alarm = vi.fn(function (_name: string, _args: Record<string, unknown>, _options: unknown) {});
-  return { output, resource, alarm };
+  const filter = vi.fn(function (_name: string, _args: Record<string, unknown>, _options: unknown) {});
+  return { output, resource, alarm, filter };
 });
 
 vi.mock('../secrets', () => ({ secrets: { SLACK_ERROR_REPORTING_WEBHOOK_URL: 'webhook-secret' } }));
@@ -93,7 +96,7 @@ async function loadWafResources(): Promise<void> {
       WebAcl: resources.resource,
       WebAclLoggingConfiguration: resources.resource,
     },
-    cloudwatch: { LogGroup: resources.resource, MetricAlarm: resources.alarm },
+    cloudwatch: { LogGroup: resources.resource, MetricAlarm: resources.alarm, LogMetricFilter: resources.filter },
     sns: { Topic: resources.resource, TopicSubscription: resources.resource },
     lambda: { Permission: resources.resource },
     sqs: { Queue: resources.resource, QueuePolicy: resources.resource },
@@ -210,5 +213,70 @@ describe('WAF rate-limit alarm wiring', () => {
 
     const rateAlarms = resources.alarm.mock.calls.filter(([, args]) => args.namespace === 'AWS/WAFV2');
     expect(rateAlarms.map(([name]) => name)).toEqual(['waf-custom-rate-blocks', 'waf-custom-Rate-blocks']);
+  });
+});
+
+describe('WAF sign-in code edge-signal alarm', () => {
+  it('counts labelled /api/otc/ requests on the us-east-1 WAF log group', async () => {
+    vi.stubEnv('WAF_POLICY_DIR', '');
+    await loadWafResources();
+
+    expect(resources.filter).toHaveBeenCalledExactlyOnceWith(
+      'wafOtcEdgeSignalFilter',
+      {
+        name: 'test-app-production-waf-otc-edge-signals',
+        logGroupName: 'aws-waf-logs-bike4mind-production',
+        pattern:
+          '{ $.httpRequest.uri = "/api/otc/*" && ' +
+          '($.labels[*].name = "awswaf:managed:aws:anonymous-ip-list:HostingProviderIPList" || ' +
+          '$.labels[*].name = "awswaf:managed:aws:bot-control:signal:*") }',
+        metricTransformation: {
+          name: 'OtcEdgeSignalRequests',
+          namespace: 'test-app/production/Signup',
+          value: '1',
+          unit: 'Count',
+        },
+      },
+      usEast1
+    );
+  });
+
+  it('alarms at 5 per 5 minutes to the us-east-1 Slack and email topics', async () => {
+    vi.stubEnv('WAF_POLICY_DIR', '');
+    await loadWafResources();
+
+    type Arn = { apply: (callback: (value: string) => string) => string };
+    const resolve = (arns: unknown) => (arns as Arn[]).map(arn => arn.apply(value => value));
+    const actions = ['WafAiRateLimitAlarmTopic-arn', 'WafOobAlarmTopic-arn'];
+    const call = resources.alarm.mock.calls.find(([name]) => name === 'wafOtcEdgeSignalRate');
+    expect(call?.[1]).toMatchObject({
+      metricName: 'OtcEdgeSignalRequests',
+      namespace: 'test-app/production/Signup',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 5,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      treatMissingData: 'notBreaching',
+    });
+    expect(resolve(call?.[1].alarmActions)).toEqual(actions);
+    expect(resolve(call?.[1].okActions)).toEqual(actions);
+    expect(call?.[2]).toEqual(usEast1);
+  });
+
+  it('reads a configured ceiling', async () => {
+    vi.stubEnv('WAF_POLICY_DIR', '');
+    vi.stubEnv('SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN', '12');
+    await loadWafResources();
+
+    expect(resources.alarm.mock.calls.find(([name]) => name === 'wafOtcEdgeSignalRate')?.[1].threshold).toBe(12);
+  });
+
+  it('keeps the out-of-band topic and its email subscription', async () => {
+    vi.stubEnv('WAF_POLICY_DIR', '');
+    await loadWafResources();
+
+    const names = resources.resource.mock.calls.map(([name]) => name);
+    expect(names).toContain('WafOobAlarmTopic');
+    expect(names).toContain('WafOobAlarmTopicEmailSub');
   });
 });
