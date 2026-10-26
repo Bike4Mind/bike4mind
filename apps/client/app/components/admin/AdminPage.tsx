@@ -269,6 +269,8 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   return (
     <>
       <Sheet
+        // Admin skin scope (utils/themes/customizations/adminSkin.ts); #5844 moves it to the admin layout root.
+        data-admin-surface
         sx={theme => ({
           height: '100vh',
           overflow: 'hidden',

@@ -113,12 +113,26 @@ describe('admin token contrast', () => {
   it.each(MODES)('%s: admin text and status labels reach 4.5:1', mode => {
     const palette = theme.colorSchemes[mode].palette.admin;
     for (const text of [palette.ink, palette.inkMuted, palette.accent, palette.danger]) {
-      for (const surface of [palette.canvas, palette.surface]) {
+      for (const surface of [palette.canvas, palette.surface, palette.surfaceSubtle]) {
         expect(contrast(text, surface), `${text} on ${surface}`).toBeGreaterThanOrEqual(AA_TEXT);
       }
     }
     for (const tone of Object.values(palette.status)) {
       expect(contrast(tone.foreground, tone.background)).toBeGreaterThanOrEqual(AA_TEXT);
+    }
+  });
+
+  // Pairs the admin skin (customizations/adminSkin.ts) sets text on, beyond plain surfaces.
+  it.each(MODES)('%s: admin skin buttons, tooltips and hover fills reach 4.5:1', mode => {
+    const palette = theme.colorSchemes[mode].palette.admin;
+    const pairs = {
+      'primary button and tooltip': [palette.surface, palette.ink],
+      'solid danger button': [palette.surface, palette.danger],
+      'ghost button hover': [palette.ink, palette.hover],
+      'outlined danger hover': [palette.danger, palette.status.bad.background],
+    };
+    for (const [use, [text, fill]] of Object.entries(pairs)) {
+      expect(contrast(text, fill), use).toBeGreaterThanOrEqual(AA_TEXT);
     }
   });
 });
