@@ -10,6 +10,7 @@ vi.mock('fs', async () => {
   return {
     ...actual,
     writeFileSync: vi.fn(),
+    realpathSync: vi.fn(actual.realpathSync),
     unlinkSync: vi.fn(),
     mkdtempSync: vi.fn(() => '/tmp/b4m-sandbox-test'),
   };
@@ -338,6 +339,42 @@ describe('SeatbeltRuntime', () => {
         if (original === undefined) delete process.env.DOCKER_HOST;
         else process.env.DOCKER_HOST = original;
         fs.rmSync(fixture, { recursive: true, force: true });
+      }
+    });
+
+    it.each(['EACCES', 'ELOOP', 'EPERM'])('still denies a container path that fails to resolve with %s', async code => {
+      const fs = await vi.importActual<typeof import('fs')>('fs');
+      const blocked = '/seatbelt-unresolvable/colima';
+      const original = process.env.COLIMA_HOME;
+      vi.mocked(realpathSync).mockImplementation(((p: string) => {
+        if (p.startsWith('/seatbelt-unresolvable')) throw Object.assign(new Error(code), { code });
+        return fs.realpathSync(p);
+      }) as typeof realpathSync);
+      try {
+        process.env.COLIMA_HOME = blocked;
+        const profile = runtime.generateProfile({ ...baseOptions, networkEnabled: false });
+        expect(profile).toContain(`(deny network-outbound (remote unix-socket (subpath "${blocked}")))`);
+      } finally {
+        vi.mocked(realpathSync).mockImplementation(fs.realpathSync as typeof realpathSync);
+        if (original === undefined) delete process.env.COLIMA_HOME;
+        else process.env.COLIMA_HOME = original;
+      }
+    });
+
+    it('rethrows other resolution errors', async () => {
+      const fs = await vi.importActual<typeof import('fs')>('fs');
+      const original = process.env.COLIMA_HOME;
+      vi.mocked(realpathSync).mockImplementation(((p: string) => {
+        if (p.startsWith('/seatbelt-unresolvable')) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        return fs.realpathSync(p);
+      }) as typeof realpathSync);
+      try {
+        process.env.COLIMA_HOME = '/seatbelt-unresolvable/colima';
+        expect(() => runtime.generateProfile({ ...baseOptions, networkEnabled: false })).toThrow('EIO');
+      } finally {
+        vi.mocked(realpathSync).mockImplementation(fs.realpathSync as typeof realpathSync);
+        if (original === undefined) delete process.env.COLIMA_HOME;
+        else process.env.COLIMA_HOME = original;
       }
     });
 

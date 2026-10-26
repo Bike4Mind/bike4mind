@@ -8,6 +8,7 @@ import { writeFileSync, mkdtempSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
+import { logger } from '../../utils/Logger.js';
 import {
   resolveSandboxPath,
   getContainerSocketPaths,
@@ -41,6 +42,19 @@ function assertPort(port: number): void {
   }
 }
 
+/** Unresolvable paths keep their deny at the unresolved location instead of failing profile generation. */
+function resolveContainerPath(p: string): string {
+  try {
+    return resolveSandboxPath(p);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && ['EACCES', 'ELOOP', 'EPERM'].includes(String(error.code))) {
+      logger.debug(`Sandbox: using unresolved container socket path ${p}: ${error.code}`);
+      return p;
+    }
+    throw error;
+  }
+}
+
 /**
  * Seatbelt matches a socket connect against the fully resolved path, so a symlink like
  * /var/run/docker.sock is denied at its current target, resolved each time a profile is built.
@@ -51,8 +65,8 @@ function containerSocketDenies(): { network: string[]; fileWrite: string[] } {
   const network = new Set<string>();
   const fileWrite = new Set<string>();
   for (const entry of getContainerSocketPaths()) {
-    const resolvedParent = path.join(resolveSandboxPath(path.dirname(entry.path)), path.basename(entry.path));
-    for (const candidate of [resolvedParent, resolveSandboxPath(entry.path)]) {
+    const resolvedParent = path.join(resolveContainerPath(path.dirname(entry.path)), path.basename(entry.path));
+    for (const candidate of [resolvedParent, resolveContainerPath(entry.path)]) {
       const filter = entry.directory ? 'subpath' : 'path-literal';
       const escaped = escapeSeatbeltPath(candidate);
       network.add(`(deny network-outbound (remote unix-socket (${filter} "${escaped}")))`);
