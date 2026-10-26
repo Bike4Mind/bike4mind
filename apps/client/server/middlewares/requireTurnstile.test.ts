@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Request, Response } from 'express';
 
 const policy = vi.hoisted(() => ({
@@ -7,6 +7,7 @@ const policy = vi.hoisted(() => ({
 const verify = vi.hoisted(() => vi.fn());
 const getPolicy = vi.hoisted(() => vi.fn());
 const e2eEnabled = vi.hoisted(() => ({ value: false }));
+const e2eSecret = vi.hoisted(() => ({ value: 'e2e-secret' as string | undefined }));
 
 vi.mock('@server/utils/auth/turnstile', () => ({
   getTurnstilePolicy: getPolicy,
@@ -15,7 +16,7 @@ vi.mock('@server/utils/auth/turnstile', () => ({
 vi.mock('@bike4mind/server-utils/utils/turnstile', () => ({ verifyTurnstile: verify }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.9' }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: () => e2eEnabled.value }));
-vi.mock('sst', () => ({ Resource: { E2E_CLEANUP_SECRET: { value: 'e2e-secret' } } }));
+vi.mock('sst', () => ({ Resource: { E2E_CLEANUP_SECRET: e2eSecret } }));
 
 import { requireTurnstile } from './requireTurnstile';
 
@@ -37,7 +38,11 @@ describe('requireTurnstile', () => {
     getPolicy.mockImplementation(async () => policy.value);
     policy.value = { active: true, failClosed: false, siteKey: 'site', secret: 'secret' };
     e2eEnabled.value = false;
+    e2eSecret.value = 'e2e-secret';
+    vi.stubEnv('E2E_CLEANUP_SECRET', '');
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it('refuses and logs an unreadable policy instead of bypassing verification', async () => {
     getPolicy.mockRejectedValue(new Error('database unavailable'));
@@ -111,6 +116,9 @@ describe('requireTurnstile', () => {
       ['wrong secret', true, e2eBody, { 'x-e2e-cleanup-secret': 'nope' }],
       ['missing secret', true, e2eBody, {}],
       ['real email', true, { email: 'someone@example.com' }, e2eHeaders],
+      ['missing email', true, {}, e2eHeaders],
+      ['non-string email', true, { email: ['login-e2e@test.com'] }, e2eHeaders],
+      ['lookalike email', true, { email: 'login-e2e@test.com.evil.example' }, e2eHeaders],
     ])('still verifies the token on a %s', async (_label, enabled, body, headers) => {
       e2eEnabled.value = enabled;
       verify.mockResolvedValue({ ok: false, reason: 'missing' });
@@ -118,6 +126,25 @@ describe('requireTurnstile', () => {
       expect(next).not.toHaveBeenCalled();
       expect(verify).toHaveBeenCalled();
       expect(status).toHaveBeenCalledWith(403);
+    });
+
+    it.each([undefined, '', 'not-configured'])('still verifies with an unconfigured E2E secret (%s)', async secret => {
+      e2eEnabled.value = true;
+      e2eSecret.value = secret;
+      verify.mockResolvedValue({ ok: false, reason: 'missing' });
+      const { next, status } = await run(e2eBody, { 'x-e2e-cleanup-secret': secret ?? '' });
+      expect(next).not.toHaveBeenCalled();
+      expect(verify).toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(403);
+    });
+
+    it('accepts the environment secret when no resource secret is provisioned', async () => {
+      e2eEnabled.value = true;
+      e2eSecret.value = undefined;
+      vi.stubEnv('E2E_CLEANUP_SECRET', 'environment-secret');
+      const { next } = await run(e2eBody, { 'x-e2e-cleanup-secret': 'environment-secret' });
+      expect(next).toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
     });
   });
 });
