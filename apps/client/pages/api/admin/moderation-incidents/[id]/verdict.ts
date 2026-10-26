@@ -3,10 +3,10 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { imageModerationIncidentRepository, userRepository, withTransaction } from '@bike4mind/database';
+import { imageModerationIncidentRepository, withTransaction } from '@bike4mind/database';
 import { ncmecService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest, userAuditTarget } from '@server/utils/adminAudit';
 
 // Resolve NCMEC credentials from SST Resource (linked secrets expose Resource.X.value, not
 // process.env.X). Fall back to process.env for local dev and self-host. useSandbox defaults
@@ -86,10 +86,9 @@ const recordVerdict = async (
   verdict: Verdict,
   details: Record<string, unknown> = {}
 ) => {
-  const user = await userRepository.findById(incident.userId);
   await recordAdminActionFromRequest(req, {
     action: 'moderation.incident.verdict_recorded',
-    target: { kind: 'user', id: incident.userId, displayName: user?.email ?? user?.username ?? incident.userId },
+    target: await userAuditTarget(incident.userId),
     summary: `recorded verdict on moderation incident ${incident.incidentId}`,
     details: { incidentId: incident.incidentId, verdict, ...details },
   });

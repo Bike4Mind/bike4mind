@@ -23,7 +23,6 @@ vi.mock('@bike4mind/database', () => ({
     setNcmecReportId: (...args: unknown[]) => mockSetNcmecReportId(...args),
     recordManualReport: (...args: unknown[]) => mockRecordManualReport(...args),
   },
-  userRepository: { findById: (...args: unknown[]) => mockUserFindById(...args) },
   withTransaction: async (fn: () => Promise<unknown>) => {
     audit.txActive = true;
     try {
@@ -34,7 +33,13 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit.record }));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: audit.record,
+  userAuditTarget: async (id: string) => {
+    const user = await mockUserFindById(id);
+    return { kind: 'user', id, displayName: user?.email ?? user?.username ?? id };
+  },
+}));
 
 vi.mock('@bike4mind/services', () => {
   class NcmecRejectedError extends Error {

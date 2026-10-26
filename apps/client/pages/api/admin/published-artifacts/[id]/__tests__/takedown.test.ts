@@ -7,7 +7,13 @@ const { mockFindOneAndUpdate, mockReportUpdateMany, mockUserFindById } = vi.hois
   mockReportUpdateMany: vi.fn(),
 }));
 const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit.record }));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: audit.record,
+  userAuditTarget: async (id: string) => {
+    const user = await mockUserFindById(id);
+    return { kind: 'user', id, displayName: user?.email ?? user?.username ?? id };
+  },
+}));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is the handler.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -38,7 +44,6 @@ vi.mock('@bike4mind/database', () => ({
   PublishedArtifactReport: {
     updateMany: (...a: unknown[]) => Promise.resolve(mockReportUpdateMany(...a)),
   },
-  userRepository: { findById: (...a: unknown[]) => mockUserFindById(...a) },
   withTransaction: async (fn: () => Promise<unknown>) => {
     audit.txActive = true;
     try {
