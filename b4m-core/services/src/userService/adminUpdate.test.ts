@@ -342,6 +342,15 @@ describe('adminUpdateUser - signed creditDelta path', () => {
     expect(target.currentCredits).toBe(-100);
   });
 
+  it('applies creditDelta and ignores currentCredits when both are passed', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(100);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 20, currentCredits: 500 }, adapters);
+
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_add');
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 20, expect.anything());
+  });
+
   it('rejects negative absolute and oversized credit values', () => {
     const base = { id: TARGET_ID };
     expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: -5 }).success).toBe(false);
