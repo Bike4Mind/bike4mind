@@ -117,6 +117,19 @@ describe('runOauthAbuseAutoBlock', () => {
     );
   });
 
+  it('keeps escalating past an expired auto block that isBlocked() swept after expiry', async () => {
+    const swept = {
+      active: false,
+      expiresAt: ago(11 * MIN),
+      unblockedAt: ago(10 * MIN),
+      source: 'auto' as const,
+      escalationLevel: 1,
+    };
+    const { deps } = setup({}, { '1.1.1.1': swept });
+    const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
+    expect(result.blocked[0]).toMatchObject({ ip: '1.1.1.1', durationMs: 1440 * MIN, escalationLevel: 2 });
+  });
+
   it.each([
     ['a manual block', { source: 'manual' as const, escalationLevel: 0, expiresAt: ago(11 * MIN) }],
     [
