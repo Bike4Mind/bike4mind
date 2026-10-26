@@ -25,7 +25,7 @@ import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
-import { createModelAdmission, loadModelConfigurations } from './modelAdmission';
+import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './modelAdmission';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { filterBuiltInTools } from './tools/toolManager';
@@ -340,91 +340,93 @@ export class ChatCompletionInvoke {
     }
 
     // Parallelize independent operations: quest ops + admin settings + session update
-    const [quest, defaultEmbeddingModel, modelConfigurations, enforceCredits] = await Promise.all([
-      // Quest creation/update
-      questId
-        ? this.db.quests.findById(questId).then(async q => {
-            if (!q) {
-              this.logger.warn(
-                `Quest not found for questId: ${questId}. Quest may have been deleted before the quest was started.`
+    const [quest, defaultEmbeddingModel, modelConfigurations, enforceCredits, freeTierAllowedModels] =
+      await Promise.all([
+        // Quest creation/update
+        questId
+          ? this.db.quests.findById(questId).then(async q => {
+              if (!q) {
+                this.logger.warn(
+                  `Quest not found for questId: ${questId}. Quest may have been deleted before the quest was started.`
+                );
+                throw new NotFoundError('Quest not found');
+              }
+              // Bind the retry to the caller's target session. `sessionId` was resolved through an
+              // access-scoped lookup upstream (getOrCreateSession), so refusing a quest that belongs
+              // to a different session stops a caller retrying/overwriting another user's quest by id.
+              // Throw rather than returning null: a bare null flowed to `if (!quest) return` and made
+              // the invoke a silent no-op (a 200 with no quest on the media routes). The same generic
+              // NotFound as the missing-quest case keeps the refusal from leaking whether the quest
+              // exists in a session the caller cannot see.
+              if (q.sessionId !== sessionId) {
+                this.logger.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
+                throw new NotFoundError('Quest not found');
+              }
+              // Retry path: clear prior replies and images.
+              q.type = 'message';
+              q.reply = null;
+              q.replies = [];
+              q.questMasterReply = null;
+              q.fallbackInfo = null;
+              q.images = [];
+              q.prompt = message;
+              q.fabFileIds = messageFileIds || []; // ONLY message files
+              q.timestamp = now;
+              q.status = 'running';
+              q.promptMeta = promptMeta;
+              q.agentIds = session.agentIds || [];
+              // Clear a stale classifier from a prior failed attempt - otherwise a retry that
+              // succeeds (or fails for a different, uncoded reason) still reports the old code.
+              // Two clears, both needed: this one is what the caller sees, because the function
+              // returns this local `q` and not the update's result. It does NOT reach the database
+              // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
+              // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
+              q.errorCode = undefined;
+              q.turnTiming = undefined;
+              await this.db.quests.update(
+                {
+                  id: q.id,
+                  type: q.type,
+                  reply: q.reply,
+                  replies: q.replies,
+                  questMasterReply: q.questMasterReply,
+                  fallbackInfo: q.fallbackInfo,
+                  images: q.images,
+                  prompt: q.prompt,
+                  fabFileIds: q.fabFileIds,
+                  timestamp: q.timestamp,
+                  status: q.status,
+                  promptMeta: q.promptMeta,
+                  agentIds: q.agentIds,
+                },
+                { unset: ['errorCode', 'turnTiming'] }
               );
-              throw new NotFoundError('Quest not found');
-            }
-            // Bind the retry to the caller's target session. `sessionId` was resolved through an
-            // access-scoped lookup upstream (getOrCreateSession), so refusing a quest that belongs
-            // to a different session stops a caller retrying/overwriting another user's quest by id.
-            // Throw rather than returning null: a bare null flowed to `if (!quest) return` and made
-            // the invoke a silent no-op (a 200 with no quest on the media routes). The same generic
-            // NotFound as the missing-quest case keeps the refusal from leaking whether the quest
-            // exists in a session the caller cannot see.
-            if (q.sessionId !== sessionId) {
-              this.logger.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
-              throw new NotFoundError('Quest not found');
-            }
-            // Retry path: clear prior replies and images.
-            q.type = 'message';
-            q.reply = null;
-            q.replies = [];
-            q.questMasterReply = null;
-            q.fallbackInfo = null;
-            q.images = [];
-            q.prompt = message;
-            q.fabFileIds = messageFileIds || []; // ONLY message files
-            q.timestamp = now;
-            q.status = 'running';
-            q.promptMeta = promptMeta;
-            q.agentIds = session.agentIds || [];
-            // Clear a stale classifier from a prior failed attempt - otherwise a retry that
-            // succeeds (or fails for a different, uncoded reason) still reports the old code.
-            // Two clears, both needed: this one is what the caller sees, because the function
-            // returns this local `q` and not the update's result. It does NOT reach the database
-            // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
-            // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
-            q.errorCode = undefined;
-            q.turnTiming = undefined;
-            await this.db.quests.update(
-              {
-                id: q.id,
-                type: q.type,
-                reply: q.reply,
-                replies: q.replies,
-                questMasterReply: q.questMasterReply,
-                fallbackInfo: q.fallbackInfo,
-                images: q.images,
-                prompt: q.prompt,
-                fabFileIds: q.fabFileIds,
-                timestamp: q.timestamp,
-                status: q.status,
-                promptMeta: q.promptMeta,
-                agentIds: q.agentIds,
-              },
-              { unset: ['errorCode', 'turnTiming'] }
-            );
-            return q;
-          })
-        : this.db.quests.create({
-            sessionId,
-            prompt: message,
-            fabFileIds: messageFileIds || [], // ONLY message files
-            type: 'message' as const,
-            timestamp: now,
-            replies: [],
-            status: 'running',
-            promptMeta,
-            agentIds: session.agentIds || [],
-            // Session-bound by the guard above, so the chain a correction claims to extend is
-            // always one the caller can actually see.
-            correctsQuestId,
-          }),
+              return q;
+            })
+          : this.db.quests.create({
+              sessionId,
+              prompt: message,
+              fabFileIds: messageFileIds || [], // ONLY message files
+              type: 'message' as const,
+              timestamp: now,
+              replies: [],
+              status: 'running',
+              promptMeta,
+              agentIds: session.agentIds || [],
+              // Session-bound by the guard above, so the chain a correction claims to extend is
+              // always one the caller can actually see.
+              correctsQuestId,
+            }),
 
-      // Admin settings fetches
-      this.db.adminSettings.getSettingsValue('defaultEmbeddingModel'),
-      this.modelConfigurationsCache || this.getModelConfigurations(),
-      this.db.adminSettings.getSettingsValue('enforceCredits'),
+        // Admin settings fetches
+        this.db.adminSettings.getSettingsValue('defaultEmbeddingModel'),
+        this.modelConfigurationsCache || this.getModelConfigurations(),
+        this.db.adminSettings.getSettingsValue('enforceCredits'),
+        loadFreeTierAllowedModels(this.db.adminSettings),
 
-      // Session update (fire-and-forget but ensure completion)
-      sessionUpdatePromise,
-    ]);
+        // Session update (fire-and-forget but ensure completion)
+        sessionUpdatePromise,
+      ]);
 
     if (!this.modelConfigurationsCache && modelConfigurations) {
       this.modelConfigurationsCache = modelConfigurations;
@@ -447,6 +449,7 @@ export class ChatCompletionInvoke {
         getEntitlements: () => this.resolveEntitlementKeys(),
         models: modelInfo,
         enforceCredits: enforceCredits === true,
+        freeTierAllowedModels,
       });
       for (const gatedModelId of [originalModel, ...researchModelIds]) {
         await admission.assert(gatedModelId).catch(err => {

@@ -7,7 +7,7 @@ import {
   getRequestActiveSubscriptions,
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
-import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
+import { getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
 import { UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 
@@ -58,17 +58,8 @@ export async function resolveUserRateTier(user: RateTierUser, req?: ActiveSubscr
   const activeSubscriptions =
     req?.user?.id === user.id ? await getRequestActiveSubscriptions(req) : await getActiveSubscriptionsForUser(user.id);
 
-  // Take the HIGHEST ladder tier across active subscriptions. Plans with no
-  // `tier` (standalone single-product plans sold off the main ladder) are not
-  // on the ladder and don't confer a rate tier - they fall through to `free`
-  // unless another active subscription grants one.
-  let highestTier: UserSubscriptionTier | undefined;
-  for (const subscription of activeSubscriptions) {
-    const planTier = getEntitlingPlanByPriceId(subscription.priceId)?.tier;
-    if (planTier !== undefined && (highestTier === undefined || planTier > highestTier)) {
-      highestTier = planTier;
-    }
-  }
+  // Same ladder read as the `plan:paid` entitlement (@server/entitlements), so the two never disagree.
+  const highestTier = getHighestLadderTier(activeSubscriptions);
 
   if (highestTier === UserSubscriptionTier.Pro) return 'pro';
   if (highestTier === UserSubscriptionTier.Basic) return 'basic';

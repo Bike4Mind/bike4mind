@@ -39,6 +39,23 @@ export function getEntitlingPlanByPriceId(
 }
 
 /**
+ * The highest ladder tier across active subscription rows, or undefined when none is on the ladder.
+ * Plans with no `tier` (standalone single-product plans sold off the main ladder) confer none.
+ */
+export function getHighestLadderTier(
+  activeSubscriptions: readonly { priceId: string }[]
+): UserSubscriptionTier | undefined {
+  let highestTier: UserSubscriptionTier | undefined;
+  for (const subscription of activeSubscriptions) {
+    const planTier = getEntitlingPlanByPriceId(subscription.priceId)?.tier;
+    if (planTier !== undefined && (highestTier === undefined || planTier > highestTier)) {
+      highestTier = planTier;
+    }
+  }
+  return highestTier;
+}
+
+/**
  * Checks if subscription plans are of the same tier.
  */
 export function isSameTier(oldTier: UserSubscriptionTier, newTier: UserSubscriptionTier) {

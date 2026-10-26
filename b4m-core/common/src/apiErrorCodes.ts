@@ -2,6 +2,7 @@ export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
 export const API_KEY_TRUST_REQUIRED_ERROR_CODE = 'api_key_trust_required';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
+export const MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE = 'model_requires_subscription';
 export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mismatch';
 export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
 
@@ -38,6 +39,8 @@ export const API_ERROR_CODES = [
   'provider_rejected',
   /** The `model` is not one this caller can use; remediation is choosing an id from GET /api/v1/models. */
   UNKNOWN_MODEL_ERROR_CODE,
+  /** The model is outside the free-tier allowlist; remediation is a paid plan or a model from GET /api/v1/models. */
+  MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   /** An organization-billed API key named a different billing organization; remediation is omitting it. */
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   /** A blocking request ran past its server-side deadline; the turn was ended and the body names it for polling. */

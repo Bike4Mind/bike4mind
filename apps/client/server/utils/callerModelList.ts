@@ -1,9 +1,22 @@
 import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
-import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
+import {
+  isFreeTierExempt,
+  isFreeTierModel,
+  isUnpricedTextModel,
+  loadFreeTierAllowedModels,
+} from '@bike4mind/services/llm/modelAdmission';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { getImageModelCapabilities, isImageModel, type ModelInfo, type SupersededModelInfo } from '@bike4mind/common';
+import {
+  getImageModelCapabilities,
+  isImageModel,
+  PAID_PLAN_ENTITLEMENT_KEY,
+  type IUserDocument,
+  type ModelInfo,
+  type SupersededModelInfo,
+} from '@bike4mind/common';
+import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
 
@@ -41,9 +54,7 @@ async function buildCallerModelList(userId: string | null, enforceCredits: boole
   const listedModels = await getAvailableModels(apiKeys, modelCatalogListingOptions());
   // Same rule createModelAdmission refuses at call time (llm/modelAdmission.ts): with credits on,
   // an unpriced text model settles at $0, so the picker must not offer it either.
-  const offered = enforceCredits
-    ? listedModels.filter(model => !isUnpricedTextModel(model))
-    : listedModels;
+  const offered = enforceCredits ? listedModels.filter(model => !isUnpricedTextModel(model)) : listedModels;
   const models = offered.map(withImageCapabilities);
 
   // Superseded pins the client can offer to upgrade, resolved by llm-adapters
@@ -52,7 +63,31 @@ async function buildCallerModelList(userId: string | null, enforceCredits: boole
   return { models, supersededModels: getSupersededModels(offered) };
 }
 
+/**
+ * Same free-tier rule createModelAdmission refuses at call time (llm/modelAdmission.ts), applied after the
+ * cache so a plan change or a gate toggle shows on the next load. An anonymous caller is left unfiltered:
+ * it cannot call a model, so this list is not a gate for it.
+ */
+async function withoutPaidOnlyModels(list: CallerModelList, user: IUserDocument | null): Promise<CallerModelList> {
+  if (!user || isFreeTierExempt(user)) return list;
+  const allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
+  if (!allowedModels) return list;
+  const entitlements = await getUserEntitlements(toEntitlementUser(user));
+  if (entitlements.includes(PAID_PLAN_ENTITLEMENT_KEY)) return list;
+  const models = list.models.filter(model => isFreeTierModel(model.id, model, allowedModels));
+  const offeredIds = new Set(models.map(model => model.id));
+  // An upgrade offer pointing at a paid-only model would only lead to a refusal.
+  return { models, supersededModels: list.supersededModels.filter(entry => offeredIds.has(entry.replacementId)) };
+}
+
 export async function getCallerModelList(
+  user: IUserDocument | null,
+  logger: { log: (message: string) => void }
+): Promise<CallerModelList> {
+  return withoutPaidOnlyModels(await getCachedCallerModelList(user?.id ?? null, logger), user);
+}
+
+async function getCachedCallerModelList(
   userId: string | null,
   logger: { log: (message: string) => void }
 ): Promise<CallerModelList> {
