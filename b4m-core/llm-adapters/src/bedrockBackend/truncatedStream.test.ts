@@ -136,27 +136,49 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     expect((err as Error).message).toMatch(/5 chars/);
   });
 
-  // The empty-stream case has its own, more actionable message (misrouted inference profile), so
-  // it must win rather than being reported as a truncation.
-  it('defers to the empty-response guard when nothing was produced at all', async () => {
-    const body = streamBody([]);
-    await expect(run(withBody(new TerminalSignallingBackend(), body))).rejects.toThrow(/EMPTY response/i);
-  });
-
-  /**
-   * The two post-loop guards need OPPOSITE handling, so their messages must stay textually
-   * distinguishable. A truncation is a transient transport failure and retry-once is right; an
-   * empty response is deterministic (in production it is the max-tool-calls cap path), and
-   * retrying it re-runs every tool call only to fail again. Since the retry decision is made by
-   * substring match on the message, letting "stream timeout" leak into the empty-response
-   * wording would silently convert a deterministic failure into an expensive retry loop.
-   */
-  it('keeps the empty-response message out of the stream-idle retry classification', async () => {
+  // Nothing produced and no terminal event is a stall before the first token, not a truncation:
+  // it is reported as EMPTY, worded so the stream-idle retry path still classifies it.
+  it('reports a stall before the first token as an EMPTY response the retry path classifies', async () => {
     const err = await run(withBody(new TerminalSignallingBackend(), streamBody([]))).catch((e: Error) => e);
     const message = (err as Error).message;
 
     expect(message).toMatch(/EMPTY response/i);
+    expect(message).toMatch(/stream timeout/);
+    expect(message).toContain('without a terminal event');
+  });
+
+  /**
+   * An empty stream that DID end with a terminal event needs OPPOSITE handling from a stall. It
+   * is deterministic (in production it is the max-tool-calls cap path), and retrying it re-runs
+   * every tool call only to fail again. Since the retry decision is made by substring match on
+   * the message, letting "stream timeout" leak into this wording would silently convert a
+   * deterministic failure into an expensive retry loop.
+   */
+  it('keeps an empty response that ended with a terminal event out of the retry classification', async () => {
+    const body = streamBody([{ terminal: true, choices: [] }]);
+    const err = await run(withBody(new TerminalSignallingBackend(), body)).catch((e: Error) => e);
+    const message = (err as Error).message;
+
+    expect(message).toMatch(/EMPTY response/i);
     expect(message).not.toMatch(/stream timeout/i);
+    expect(message).not.toContain('without a terminal event');
+  });
+
+  it('does not report an aborted empty stream as an EMPTY response', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      run(withBody(new TerminalSignallingBackend(), streamBody([])), { abortSignal: controller.signal })
+    ).resolves.not.toThrow();
+  });
+
+  it('still reports an empty stream when an abortSignal is present but un-aborted', async () => {
+    const controller = new AbortController();
+
+    await expect(
+      run(withBody(new TerminalSignallingBackend(), streamBody([])), { abortSignal: controller.signal })
+    ).rejects.toThrow(/EMPTY response/i);
   });
 
   /**
