@@ -159,4 +159,30 @@ describe('OrganizationProfileModal', () => {
 
     expect(screen.getByTestId('org-profile-close-btn').textContent).toBe('Acme Renamed');
   });
+
+  it('shows a loader, not cached data, while a reopened organization refetches', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'organizations', orgId: ORG_ID }));
+    useGetOrganizationMock.mockReturnValue({ data: { id: ORG_ID, name: 'Acme' }, isFetching: true, error: null });
+    const { rerender } = render(
+      <CssVarsProvider theme={appTheme}>
+        <OrganizationProfileModal onClosed={vi.fn()} />
+      </CssVarsProvider>
+    );
+
+    expect(screen.getByTestId('admin-organization-profile-loading')).toBeTruthy();
+    expect(screen.queryByTestId('org-profile-close-btn')).toBeNull();
+
+    useGetOrganizationMock.mockReturnValue({
+      data: { id: ORG_ID, name: 'Acme Renamed' },
+      isFetching: false,
+      error: null,
+    });
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <OrganizationProfileModal onClosed={vi.fn()} />
+      </CssVarsProvider>
+    );
+
+    expect(screen.getByTestId('org-profile-close-btn').textContent).toBe('Acme Renamed');
+  });
 });

@@ -18,7 +18,9 @@ const OrganizationProfileModal: React.FC<{ onClosed: () => void }> = ({ onClosed
 
   const [openedOrganization, setOpenedOrganization] = useState<WithId<IOrganizationDocument> | null>(null);
   if (!orgId && openedOrganization) setOpenedOrganization(null);
-  if (orgId && organization.data?.id === orgId && openedOrganization?.id !== orgId) {
+  // Wait for the fetch to settle: a closed org's cached query is invalidated without being refetched,
+  // so reopening it serves stale data first, and saving the profile would write that back.
+  if (orgId && !organization.isFetching && organization.data?.id === orgId && openedOrganization?.id !== orgId) {
     setOpenedOrganization(organization.data);
   }
   const shownOrganization = openedOrganization?.id === orgId ? openedOrganization : null;
