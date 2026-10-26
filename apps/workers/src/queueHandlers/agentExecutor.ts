@@ -1631,6 +1631,7 @@ async function processExecution(
         if (credits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, credits);
         }
+        await subagentTextDeltas.flush(childExecutionId);
         await sendWs('subagent_completed', {
           executionId,
           childExecutionId,
@@ -1666,6 +1667,7 @@ async function processExecution(
         if (partialCredits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, partialCredits);
         }
+        await subagentTextDeltas.flush(childExecutionId);
         await sendWs('subagent_failed', {
           executionId,
           childExecutionId,
