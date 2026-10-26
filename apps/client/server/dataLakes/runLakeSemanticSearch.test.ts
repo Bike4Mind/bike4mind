@@ -43,7 +43,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
   scopedSettingsService: { scopeForCaller: () => ({ userId: 'u1' }) },
-  isOperationalBillingEnabled: mockBillingEnabled,
+  memoizeOperationalBillingCheck: (db: unknown, logger: unknown) => (holder?: unknown) =>
+    mockBillingEnabled(db, logger, holder),
   recordOperationalUsage: mockRecordOperationalUsage,
   organizationService: { isCurrentOrgMember: mockIsCurrentOrgMember },
   creditService: { isMemberCreditCapExceeded: () => false },
@@ -226,7 +227,9 @@ describe('runLakeSemanticSearch billing owner and source', () => {
   it('settles with the plan resolver so the charge agrees with the pre-flight', async () => {
     await runLakeSemanticSearch(apiKeyReq({ billingOwnerType: CreditHolderType.User }), input());
 
-    expect(mockRecordOperationalUsage.mock.calls[0][1].db.activePlans).toBe(activePlanResolver);
+    const adapters = mockRecordOperationalUsage.mock.calls[0][1];
+    expect(adapters.db.activePlans).toBe(activePlanResolver);
+    expect(adapters.billingCheck).toEqual(expect.any(Function));
   });
 
   it('refuses an org-billed key whose holder has left the org when billing is on', async () => {

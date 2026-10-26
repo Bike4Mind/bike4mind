@@ -194,10 +194,8 @@ describe('recordOperationalUsage', () => {
     it.each([
       ['an active plan', { user, activePlans: plans(true) }],
       ['a credit purchase', { user: { id: 'u1', lastCreditsPurchasedAt: new Date() }, activePlans: plans(false) }],
-      [
-        'an org credit purchase',
-        { user, organization: { id: 'org1', lastCreditsPurchasedAt: new Date() }, activePlans: plans(false) },
-      ],
+      // An org-funded member: no personal purchase, no plan, and nothing on the org says it is funded.
+      ['an org paying for it', { user, organization: { id: 'org1' }, activePlans: plans(false) }],
     ])('stays recorded-only for a holder with %s while the toggle is off', async (_label, holder) => {
       setToggles({ bill: false, enforce: true });
       const record = vi.fn().mockResolvedValue(null);
@@ -233,6 +231,22 @@ describe('recordOperationalUsage', () => {
       expect(deductMock).not.toHaveBeenCalled();
       expect(record).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('uses a caller-scoped billing check when one is given', async () => {
+    const record = vi.fn().mockResolvedValue(null);
+    const billingCheck = vi.fn().mockResolvedValue(true);
+    const activePlans = { hasActivePlan: vi.fn() };
+
+    await recordOperationalUsage(baseParams, {
+      db: { ...fullBillingDb(record), activePlans },
+      billingCheck,
+      logger,
+    });
+
+    expect(billingCheck).toHaveBeenCalledWith({ user, organization: undefined, activePlans });
+    expect(getSettingsValueMock).not.toHaveBeenCalled();
+    expect(deductMock).toHaveBeenCalledTimes(1);
   });
 
   it('records caller-settled credits without debiting again', async () => {

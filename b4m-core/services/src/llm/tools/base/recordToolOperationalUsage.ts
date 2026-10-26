@@ -118,6 +118,7 @@ export async function recordToolOperationalUsage(
           // A host that folds this spend through onToolLlmUsage already charges it.
           ...(context.onToolLlmUsage ? {} : context.db.operationalBilling),
         },
+        billingCheck: context.operationalBillingCheck,
         logger: context.logger,
       }
     );

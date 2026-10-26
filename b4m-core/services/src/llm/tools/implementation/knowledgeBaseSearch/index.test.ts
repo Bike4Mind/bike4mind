@@ -1012,6 +1012,28 @@ describe('search_knowledge_base alternate-model billing', () => {
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: VOYAGE_3, provider: 'voyageai' }));
   });
 
+  // The check is reached only when all three billing repos arrived, and the holder it sees is
+  // built from the wired plan resolver, so both halves of operationalBilling made it through.
+  it('passes the host billing repos and plan resolver through to the recorder', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+    });
+    const activePlans = { hasActivePlan: vi.fn() };
+    const billingCheck = vi.fn().mockResolvedValue(false);
+    const base = billingContext();
+    const ctx = {
+      ...base,
+      operationalBillingCheck: billingCheck,
+      db: { ...base.db, operationalBilling: { creditTransactions: {}, users: {}, organizations: {}, activePlans } },
+    } as ToolContext;
+
+    await run(ctx);
+
+    expect(billingCheck).toHaveBeenCalledWith(expect.objectContaining({ activePlans }));
+    expect(ctx.db.usageEvents!.record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+  });
+
   it('bills only the primary model when no alternates were embedded', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({
       ...emptySemanticResult(),

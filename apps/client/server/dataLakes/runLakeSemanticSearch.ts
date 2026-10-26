@@ -15,7 +15,7 @@ import {
   apiKeyService,
   creditService,
   dataLakeService,
-  isOperationalBillingEnabled,
+  memoizeOperationalBillingCheck,
   recordOperationalUsage,
   scopedSettingsService,
 } from '@bike4mind/services';
@@ -226,7 +226,9 @@ export async function runLakeSemanticSearch(
   // check and still charges. Here it gates the check AND the charge in this one request
   // (see the `shouldBill &&` guard on the settlement below), so falling back to `false`
   // would hand out an unbilled search. A throw is the safer failure for that shape.
-  const billsEveryHolder = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, req.logger);
+  // Request-scoped, so the pre-flight and every model's settlement below share one set of reads.
+  const billingCheck = memoizeOperationalBillingCheck({ adminSettings: adminSettingsRepository }, req.logger);
+  const billsEveryHolder = await billingCheck();
   const source = resolveRequestUsageSource(req);
 
   // Resolved once and reused by the settlement below, so the pre-flight and the charge
@@ -252,11 +254,7 @@ export async function runLakeSemanticSearch(
   const shouldBill =
     billingUser !== null &&
     (billsEveryHolder ||
-      (await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, req.logger, {
-        user: billingUser,
-        organization: billingOrg,
-        activePlans: activePlanResolver,
-      })));
+      (await billingCheck({ user: billingUser, organization: billingOrg, activePlans: activePlanResolver })));
 
   // Gated on billing alone, not on the query having a price: unlike reserveRequestCredits, which
   // skips the check for a free request, a departed holder is refused here even on a zero-cost
@@ -515,6 +513,7 @@ export async function runLakeSemanticSearch(
                 organizations: organizationRepository,
                 activePlans: activePlanResolver,
               },
+              billingCheck,
               logger: req.logger,
             }
           );

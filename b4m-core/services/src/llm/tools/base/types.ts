@@ -7,6 +7,7 @@ import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
 import type { ProviderSlotStore } from '../../../providerCapacity';
 import type { OperationalBillingAdapters } from '../../../billing/recordOperationalUsage';
+import type { OperationalBillingCheck } from '../../../billing/isOperationalBillingEnabled';
 import {
   IChatHistoryItemDocument,
   IChatHistoryItemRepository,
@@ -436,6 +437,8 @@ export interface ToolContext {
    * write. Keep implementations pure arithmetic (see agentExecutor's addToolUsage).
    */
   onToolLlmUsage?: (usage: ToolLlmUsage) => void;
+  /** Turn-scoped memo of the operational billing decision, set alongside `db.operationalBilling`. */
+  operationalBillingCheck?: OperationalBillingCheck;
   /**
    * Runs one typed decision through the host's shared runner, so a `decide` call bills, retries
    * and normalizes exactly as POST /api/v1/decisions does. Injected because that runner's credit

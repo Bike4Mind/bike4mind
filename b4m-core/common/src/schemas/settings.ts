@@ -3374,7 +3374,7 @@ export const settingsMap = {
     // whether paying accounts are billed for it too, and turning it on is a pricing change.
     defaultValue: false,
     description:
-      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings, file indexing) is billed to every user/org. Off = billed only to free-tier accounts (no credit purchase or active plan) and recorded as platform cost for everyone else. Requires Enforce Credits.',
+      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings, file indexing) is billed to every user/org. Off = billed only to free-tier users paying for themselves (no credit purchase or active plan) and recorded as platform cost for everyone else. Requires Enforce Credits.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

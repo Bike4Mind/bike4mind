@@ -358,14 +358,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       let creditReservation: CreditReservation | null = null;
       let billingOrganization: Awaited<ReturnType<typeof organizationRepository.findById>> = null;
       if (!spendScope) {
-        billingOrganization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
-        const billable =
-          missCostUsd > 0 &&
-          (await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, logger, {
-            user,
-            organization: billingOrganization,
-            activePlans: activePlanResolver,
-          }));
+        let billable = false;
+        try {
+          billingOrganization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
+          billable =
+            missCostUsd > 0 &&
+            (await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, logger, {
+              user,
+              organization: billingOrganization,
+              activePlans: activePlanResolver,
+            }));
+        } catch (err) {
+          logger.warn(`[fabFileVectorize] billing check failed for ${fabFileId}; indexing unbilled: ${err}`);
+        }
         if (billable) {
           creditReservation = await reserveRequestCredits({
             req: { user, logger },

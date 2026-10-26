@@ -1,5 +1,5 @@
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import type { IAdminSettingsRepository, IOrganization, IUserDocument } from '@bike4mind/common';
+import type { IAdminSettingsRepository, IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 /** The settings store this helper reads, narrowed to what `getSettingsMap` needs. */
@@ -10,20 +10,46 @@ export type OperationalBillingSettingsAdapter = {
 /** Whether a user holds an active plan, their own or an org seat. Wired by the app tier. */
 export type ActivePlanResolver = { hasActivePlan(userId: string): Promise<boolean> };
 
-/** The account an operational charge would land on, as the free-tier check reads it. */
+/** The account an operational charge would land on; `organization` set means the org pool pays. */
 export type OperationalBillingHolder = {
   user: Pick<IUserDocument, 'id' | 'lastCreditsPurchasedAt'>;
-  organization?: Pick<IOrganization, 'lastCreditsPurchasedAt'> | null;
+  organization?: Pick<IOrganizationDocument, 'id'> | null;
   activePlans: ActivePlanResolver;
 };
 
 /**
- * No credit purchase on the user or their org, and no active plan: the paid signals the API key
- * trust gate reads (userApiKeyService/trust.ts). The plan read is lazy, as it is there.
+ * A user paying for themselves with no credit purchase and no active plan (own or an org seat):
+ * the paid signals the API key trust gate reads (userApiKeyService/trust.ts), plan read lazily as
+ * there. Org-paid spend is never free tier, since no org-level signal says whether the pool is funded.
  */
 export async function isFreeTierHolder(holder: OperationalBillingHolder): Promise<boolean> {
-  if (holder.user.lastCreditsPurchasedAt || holder.organization?.lastCreditsPurchasedAt) return false;
+  if (holder.organization || holder.user.lastCreditsPurchasedAt) return false;
   return !(await holder.activePlans.hasActivePlan(holder.user.id));
+}
+
+/** `isOperationalBillingEnabled` bound to one settings store; see memoizeOperationalBillingCheck. */
+export type OperationalBillingCheck = (holder?: OperationalBillingHolder) => Promise<boolean>;
+
+/**
+ * One request's or turn's view of `isOperationalBillingEnabled`: the settings and plan reads run
+ * at most once per holder, so repeated spend in the same unit of work does not repeat them. A
+ * rejected read is not kept. Never share one across requests: it would pin a stale answer.
+ */
+export function memoizeOperationalBillingCheck(
+  db: OperationalBillingSettingsAdapter,
+  logger?: Logger
+): OperationalBillingCheck {
+  const memo = new Map<string, Promise<boolean>>();
+  return holder => {
+    const key = holder ? `${holder.user.id}:${holder.organization?.id ?? ''}` : '';
+    let pending = memo.get(key);
+    if (!pending) {
+      pending = isOperationalBillingEnabled(db, logger, holder);
+      memo.set(key, pending);
+      pending.catch(() => memo.delete(key));
+    }
+    return pending;
+  };
 }
 
 /**

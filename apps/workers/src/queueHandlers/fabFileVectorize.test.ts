@@ -1568,6 +1568,30 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     );
   });
 
+  it('indexes unbilled when the billing check fails', async () => {
+    h.isOperationalBillingEnabled.mockRejectedValueOnce(new Error('settings down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.getVector).toHaveBeenCalled();
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ settledCredits: undefined }),
+      expect.anything()
+    );
+  });
+
+  it('indexes unbilled when the organization read fails', async () => {
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'u1', organizationId: 'org-1' });
+    h.organizationFindById.mockRejectedValueOnce(new Error('org lookup down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.isOperationalBillingEnabled).not.toHaveBeenCalled();
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.getVector).toHaveBeenCalled();
+  });
+
   it('never reserves for data-lake work, which its own spend gate governs', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
 

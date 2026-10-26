@@ -19,6 +19,7 @@ import {
   isOperationalBillingEnabled,
   areCreditsEnforced,
   type ActivePlanResolver,
+  type OperationalBillingCheck,
 } from './isOperationalBillingEnabled';
 import { usageEventStatusForFinish } from '../llm/earlyStopStamp';
 
@@ -102,6 +103,8 @@ export interface RecordOperationalUsageAdapters {
     // Billing repos are all-or-nothing: the deduct path runs only when all three are present.
     // A caller that omits them (a host that does not bill) gets recorded-only.
   } & Partial<OperationalBillingAdapters>;
+  /** A request- or turn-scoped memo of the billing decision (memoizeOperationalBillingCheck). */
+  billingCheck?: OperationalBillingCheck;
   logger: Logger;
 }
 
@@ -157,9 +160,7 @@ export async function recordOperationalUsage(
       canDebit &&
       (params.forceCreditBilling
         ? await areCreditsEnforced(db, logger)
-        : await isOperationalBillingEnabled(
-            db,
-            logger,
+        : await (adapters.billingCheck ?? (holder => isOperationalBillingEnabled(db, logger, holder)))(
             db.activePlans ? { user, organization, activePlans: db.activePlans } : undefined
           ));
 

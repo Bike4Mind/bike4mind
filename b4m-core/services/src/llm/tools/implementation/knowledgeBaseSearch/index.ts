@@ -391,6 +391,7 @@ async function recordEmbeddingUsage(
           adminSettings: context.db.adminSettings,
           ...context.db.operationalBilling,
         },
+        billingCheck: context.operationalBillingCheck,
         logger: context.logger,
       }
     );
