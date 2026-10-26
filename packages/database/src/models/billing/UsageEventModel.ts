@@ -161,6 +161,24 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return this.create(event as IUsageEventDocument);
   }
 
+  /**
+   * Every token (input, output, cache read and cache write) a user's provider calls settled since
+   * `since`, and when the oldest of those calls landed. Served by the { userId, createdAt } index.
+   */
+  async userTokensSince(userId: string, since: Date): Promise<{ tokens: number; oldestAt?: Date }> {
+    const [row] = await this.model.aggregate<{ tokens: number; oldestAt: Date }>([
+      { $match: { userId, createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          tokens: { $sum: { $add: ['$inputTokens', '$outputTokens', '$cachedInputTokens', '$cacheWriteTokens'] } },
+          oldestAt: { $min: '$createdAt' },
+        },
+      },
+    ]);
+    return row ? { tokens: row.tokens, oldestAt: row.oldestAt } : { tokens: 0 };
+  }
+
   async marginByModelDay(since?: Date): Promise<IModelDayMargin[]> {
     const from = since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     return this.model.aggregate<IModelDayMargin>([

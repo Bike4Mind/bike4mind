@@ -7,6 +7,8 @@ import {
   UNKNOWN_MODEL_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
+  TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+  CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
 } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
@@ -61,6 +63,8 @@ describe('API_ERROR_CODES', () => {
     // BILLING_ORGANIZATION_MISMATCH_ERROR_CODE likewise; proven by apps/client/server/billing/resolveMediaBillingOrgId.test.ts.
     // REQUEST_TIMEOUT_ERROR_CODE likewise; proven by apps/client/pages/api/__tests__/chat.integration.test.ts (over the wait=true deadline).
     // API_KEY_TRUST_REQUIRED_ERROR_CODE likewise; proven by userApiKeyService/__tests__/trust.test.ts.
+    // TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE and CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE likewise; proven by
+    // apps/client/server/utils/untrustedCompletionQuota.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
@@ -70,6 +74,8 @@ describe('API_ERROR_CODES', () => {
       REQUEST_TIMEOUT_ERROR_CODE,
       ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
       API_KEY_TRUST_REQUIRED_ERROR_CODE,
+      TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+      CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

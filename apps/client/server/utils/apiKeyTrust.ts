@@ -32,7 +32,7 @@ export async function resolveApiKeyTrust(
 }
 
 /**
- * Request-time ceiling for a personal key whose owner is untrusted, so keys minted before the
+ * Request-time ceilings (per minute, and per day when that setting is on) for a personal key whose owner is untrusted, so keys minted before the
  * gate existed are throttled rather than revoked. Lifts on its own once the owner becomes
  * trusted. Org-billed keys are exempt, as they are at mint time. The key's own lower limit wins.
  */
@@ -47,5 +47,8 @@ export async function applyUntrustedRateLimit(
   return {
     ...key.rateLimit,
     requestsPerMinute: Math.min(key.rateLimit.requestsPerMinute, settings.untrustedRateLimitPerMinute),
+    ...(settings.untrustedRequestsPerDay > 0 && {
+      requestsPerDay: Math.min(key.rateLimit.requestsPerDay, settings.untrustedRequestsPerDay),
+    }),
   };
 }

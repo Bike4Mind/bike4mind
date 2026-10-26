@@ -209,6 +209,9 @@ X-RateLimit-Reset-Minute: 1705334430
 - Too many requests in time window
 - Per-minute limit hit
 - Per-day limit hit
+- An account-level limit hit. Some accounts also have a tokens-per-minute limit and a limit on completions in flight at once. The body then names which one in `errorCode`:
+  - `token_rate_limit_exceeded`: wait for `Retry-After` seconds.
+  - `concurrency_limit_exceeded`: retry when one of your running completions finishes.
 
 **Solutions:**
 

@@ -242,8 +242,18 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
+// Admits everything by default; the quota describe below drives refusals and slot releases.
+const { mockAdmitApiKeyCompletion, mockQuotaRelease } = vi.hoisted(() => ({
+  mockAdmitApiKeyCompletion: vi.fn(async () => ({ release: async () => {} })),
+  mockQuotaRelease: vi.fn(),
+}));
+vi.mock('@server/utils/untrustedCompletionQuota', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  admitApiKeyCompletion: (...a: unknown[]) => mockAdmitApiKeyCompletion(...a),
+}));
+
 import handler from '../chat';
-import { ApiKeyScope, BadRequestError } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, TooManyRequestsError } from '@bike4mind/common';
 import { Types } from 'mongoose';
 
 const VALID_KEY = 'sk-test-valid-key';
@@ -1515,5 +1525,87 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
         expect.objectContaining({ status: 'done', type: 'error', reply: expect.stringMatching(/timed out/i) })
       );
     });
+  });
+});
+
+describe('POST /api/chat (integration - untrusted owner quotas)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSettingsMap.mockResolvedValue({});
+    mockInvoke.mockResolvedValue({ id: 'quest-3', status: 'done', type: 'message', reply: 'hi', replies: ['hi'] });
+    mockProcess.mockResolvedValue(undefined);
+    mockFindById.mockReturnValue(
+      Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false })
+    );
+    mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+    mockResolveUserRateLimitPerMin.mockResolvedValue(60);
+    mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockCreateSession.mockResolvedValue({ id: 'new-session' });
+    mockResolveDefaultChatModel.mockResolvedValue({ model: 'test-default-model' });
+    mockIsChatModelUsable.mockReturnValue(true);
+    mockQuotaRelease.mockResolvedValue(undefined);
+    mockAdmitApiKeyCompletion.mockResolvedValue({ release: mockQuotaRelease });
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+  });
+
+  it('admits a queued API-key turn without holding a concurrency slot', async () => {
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: expect.objectContaining({ id: 'user-1' }), holdSlot: false })
+    );
+    expect(mockQuotaRelease).toHaveBeenCalled();
+  });
+
+  it('holds a slot for a blocking turn and frees it once the turn has answered', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith(expect.objectContaining({ holdSlot: true }));
+    expect(mockQuotaRelease).toHaveBeenCalled();
+  });
+
+  it('frees the slot when the turn fails', async () => {
+    mockProcess.mockRejectedValue(new Error('provider down'));
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(500);
+    expect(mockQuotaRelease).toHaveBeenCalled();
+  });
+
+  it('frees the slot when the client disconnects before the turn answers', async () => {
+    let finishTurn: () => void = () => {};
+    mockProcess.mockImplementation(() => new Promise<void>(resolve => (finishTurn = resolve)));
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    const pending = handler(req, res);
+    await vi.waitFor(() => expect(mockProcess).toHaveBeenCalled());
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
+
+    res.emit('close');
+    expect(mockQuotaRelease).toHaveBeenCalled();
+
+    finishTurn();
+    await pending;
+  });
+
+  it('refuses an over-quota turn with a 429 and its errorCode before opening a notebook', async () => {
+    mockAdmitApiKeyCompletion.mockRejectedValue(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 9 })
+    );
+    const { req, res } = fire({ body: { message: 'hello' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'token_rate_limit_exceeded' });
+    expect(res._getHeaders()['retry-after']).toBe('9');
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('does not apply them to a JWT session', async () => {
+    const { req, res } = fire({ apiKey: null, bearer: 'jwt' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdmitApiKeyCompletion).not.toHaveBeenCalled();
   });
 });

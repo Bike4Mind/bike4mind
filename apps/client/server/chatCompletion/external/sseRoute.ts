@@ -54,6 +54,11 @@ import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
 import { getUserEntitlements } from '@server/entitlements';
+import {
+  admitApiKeyCompletion,
+  NO_COMPLETION_QUOTA,
+  type CompletionQuotaGrant,
+} from '@server/utils/untrustedCompletionQuota';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -236,6 +241,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     let userId: string | undefined;
     let apiKeyInfo: ApiKeyInfo | undefined;
     let apiKeyInfoForCompletion: { keyId: string; keyName: string } | undefined;
+    let quota: CompletionQuotaGrant = NO_COMPLETION_QUOTA;
 
     try {
       // The service connects at boot in the background; a request can land first.
@@ -279,6 +285,13 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           endpoint: COMPLETIONS_ENDPOINT,
           method: req.method,
         });
+        quota = await admitApiKeyCompletion({
+          owner: apiKeyInfo.userId,
+          billingOwnerType: apiKeyInfo.billingOwnerType,
+          holdSlot: true,
+        });
+        // A client that disconnects frees its slot even while the provider call is still unwinding.
+        res.once('close', () => void quota.release());
       } else {
         logger.info('[CLI_LLM] Authenticated via JWT', { userId });
         await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
@@ -417,6 +430,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
     } finally {
       if (heartbeat) clearInterval(heartbeat);
+      await quota.release();
       if (timing) logger.info('[CLI_TIMING] completion phases', timing.summary());
     }
   });

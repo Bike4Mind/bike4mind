@@ -42,12 +42,13 @@ import {
   questReplyText,
   toToolPayloads,
   type ChatToolMode,
+  type RequestBodyOf,
   type SimplifiedChatRequest,
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
@@ -55,6 +56,7 @@ import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
 import {
   TIMED_OUT_RUN,
@@ -66,6 +68,8 @@ import {
 // Both are bounded by the same number so the response is no less bounded than the log; the cap is
 // part of the documented contract (see the `tools` description in schemas/chat.ts).
 const UNRECOGNIZED_TOOL_REPORT_LIMIT = 10;
+
+type ChatRequest = Request & { validated: RequestBodyOf<typeof chatContract> };
 
 // Auth mode, required scopes, and request validation all come from chatContract
 // (the single source of truth also driving the OpenAPI spec). `req.validated` is
@@ -79,6 +83,25 @@ const handler = nextRouteForContract(chatContract, {
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {
+  // Admitted before the notebook is resolved, so a refused turn creates nothing. Only a blocking
+  // turn holds a concurrency slot: a queued one finishes in the ChatCompletion service.
+  const quota = isApiKeyAuth(req)
+    ? await admitApiKeyCompletion({
+        owner: req.user,
+        billingOwnerType: req.apiKeyInfo?.billingOwnerType,
+        holdSlot: Boolean(req.validated.wait),
+        req,
+      })
+    : NO_COMPLETION_QUOTA;
+  res.once('close', () => void quota.release());
+  try {
+    return await handleChat(req, res);
+  } finally {
+    await quota.release();
+  }
+});
+
+async function handleChat(req: ChatRequest, res: Response) {
   const requestStartedAt = Date.now();
   const apiTimer = new PipelineTimer();
   apiTimer.phase('settings');
@@ -403,7 +426,7 @@ const handler = nextRouteForContract(chatContract, {
       poll_url: `/api/quests/${quest.id}`,
     },
   });
-});
+}
 
 /**
  * The tool decision this layer made, echoed back as the response's `tools` field so a caller can

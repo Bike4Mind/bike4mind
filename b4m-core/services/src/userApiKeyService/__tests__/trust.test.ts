@@ -27,6 +27,9 @@ const SETTINGS: ApiKeyTrustSettings = {
   minAccountAgeDays: 7,
   maxActiveKeysUntrusted: 1,
   untrustedRateLimitPerMinute: 20,
+  untrustedRequestsPerDay: 0,
+  untrustedTokensPerMinute: 0,
+  untrustedMaxConcurrent: 0,
 };
 
 const youngVerifiedUser = (overrides: Partial<ApiKeyTrustSubject> = {}): ApiKeyTrustSubject => ({
