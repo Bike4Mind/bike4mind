@@ -538,11 +538,15 @@ Cases it handles rather than failing:
 - **The session already has its worktree** - reused, not recreated. Reuse is keyed only on the
   session's _own_ branch, which is saved on the session and handed back on every later
   resolution. A worktree some other tool registered for the base branch is never adopted.
-- **The branch does not exist yet** - created from the base's remote-tracking ref once that is
-  proven to contain the local base (so a stale local `main` does not start the branch behind),
-  otherwise from the base itself. With no base picked it is the branch `origin/HEAD` points
-  at, then `origin/main`, then `origin/master`, then `HEAD`. Always `--no-track`, so a later
-  `git push` does not aim at the base.
+- **The branch does not exist yet** - for a `main` base (`main`, `origin/main`, or no base
+  picked while the checkout is on `main`) it is created from `origin/main` right after a
+  successful fetch, so local-only or diverged `main` commits never seed it; if that fetch fails
+  the session fails to prepare instead of starting from stale history. Local `main` is never
+  touched. Any other base is created from its remote-tracking ref once that is proven to
+  contain the local base, otherwise from the base itself. With no base picked it is the branch
+  `origin/HEAD` points at, then `origin/main`, then `origin/master`, then `HEAD`. Always
+  `--no-track`, so a later `git push` does not aim at the base. A repository without an
+  `origin` remote uses its local `main`.
 
 **An occupied path is refused, never adopted or cleared.** If the target folder is already a
 git worktree holding something else, or exists but is not a worktree, the session fails to
