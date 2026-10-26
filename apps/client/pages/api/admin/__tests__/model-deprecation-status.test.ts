@@ -253,6 +253,26 @@ describe('POST /api/admin/model-deprecation-status', () => {
     });
   });
 
+  it('records only the date when accepting a date-only aggregator suggestion', async () => {
+    // The planner stamps 'active' on these; a status-less row would fall back to
+    // 'deprecated' and hide the model the moment the operator accepts.
+    mockFindByModelId.mockResolvedValue({
+      modelId: 'gpt-live',
+      suggestion: { status: 'active', deprecationDate: '2099-08-01', source: 'litellm', suggestedAt: new Date() },
+    });
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-live', action: 'accept', note: 'litellm announced a sunset date' },
+    });
+    await run();
+
+    expect(mockAppend.mock.calls[0][0].patch.lifecycle).toMatchObject({
+      status: 'active',
+      deprecationDate: '2099-08-01',
+    });
+    expect(mockResolveSuggestion).toHaveBeenCalledWith('gpt-live', 'accepted');
+  });
+
   it.each([true, false])(
     'preserves superseded metadata (%s) through acceptance and catalog merge',
     async isSuperseded => {

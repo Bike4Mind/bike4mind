@@ -39,6 +39,12 @@ describe('scheduled model reference audit', () => {
         { surface: 'fallback-chain', key: 'primary', referencedId: 'optional', problem: 'not-invocable' },
         { surface: 'fallback-chain', key: 'primary', referencedId: 'retired', problem: 'retired' },
         { surface: 'configured-model', key: 'primaryModel', referencedId: 'required', problem: 'not-invocable' },
+        {
+          surface: 'configured-model',
+          key: 'orchestrationDefaults.intentClassifier.fallbackModels.0',
+          referencedId: 'optional',
+          problem: 'not-invocable',
+        },
       ])
     ).toEqual([
       { surface: 'fallback-chain', key: 'primary', referencedId: 'retired', problem: 'retired' },
@@ -70,6 +76,22 @@ describe('scheduled model reference audit', () => {
         },
       ]),
     });
+  });
+
+  it('publishes zero when every reported reference is an exempt optional fallback', async () => {
+    report.mockResolvedValue([
+      {
+        surface: 'configured-model',
+        key: 'orchestrationDefaults.fallbackModels.1',
+        referencedId: 'keyless',
+        problem: 'not-invocable',
+      },
+    ]);
+    await auditModelReferences('dev');
+    expect(warn).not.toHaveBeenCalled();
+    expect(send.mock.calls[0][0].input.MetricData).toContainEqual(
+      expect.objectContaining({ MetricName: 'UnavailableModelReferences', Value: 0 })
+    );
   });
 
   it('emits an explicit healthy zero and fails on read or metric publication errors', async () => {

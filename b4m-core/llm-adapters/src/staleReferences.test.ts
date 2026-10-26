@@ -160,6 +160,17 @@ describe('checkStaleModelReferences', () => {
       ]);
     });
 
+    it('classifies a listed but disabled model as not-invocable, since admission refuses it', () => {
+      const found = run({
+        models: [{ id: 'paused', disabled: true }],
+        configuredModels: { DefaultAPIModel: 'paused' },
+      });
+
+      expect(forSurface(found, 'configured-model')).toEqual([
+        { surface: 'configured-model', key: 'DefaultAPIModel', referencedId: 'paused', problem: 'not-invocable' },
+      ]);
+    });
+
     it('reports every agent, keyed by name', () => {
       const found = forSurface(
         run({ agentModels: { researcher: { model: 'never-existed' }, analyst: { model: 'gone-1' } } }),

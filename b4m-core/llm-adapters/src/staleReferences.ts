@@ -11,7 +11,7 @@ import { DEPRECATED_MODEL_MAP, replacedByOverlayEntries } from './resolveDepreca
 /**
  * 'not-invocable': the catalog knows the id but the merged list does not carry
  * it - a metadata-only lifecycle ('discovered', 'unlisted'), or a backend this
- * deployment has no key for. Routing to it fails exactly like 'unknown' does,
+ * deployment has no key for - or lists it as disabled. Routing to it fails exactly like 'unknown' does,
  * which is why it is a problem and not a clean bill of health.
  */
 export type StaleReferenceProblem = 'deprecated' | 'retired' | 'not-invocable' | 'unknown';
@@ -47,6 +47,7 @@ export interface StaleModelReference {
 export interface StaleReferenceModel {
   id: string;
   deprecationDate?: string;
+  disabled?: boolean;
 }
 
 export interface StaleReferenceInput {
@@ -111,8 +112,9 @@ function referenceClassifier(input: StaleReferenceInput): (referencedId: string)
     }
     // Known to the catalog but missing from the merged list: invocabilityBlocker
     // kept it out (a status other than 'active', no dispatchable family) or the
-    // caller's keys gate it. Either way new traffic cannot reach it.
-    if (!model) return 'not-invocable';
+    // caller's keys gate it. Either way new traffic cannot reach it. A disabled
+    // model stays listed but admission refuses it (services llm/modelAdmission.ts).
+    if (!model || model.disabled) return 'not-invocable';
     return null;
   };
 }

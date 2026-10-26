@@ -122,6 +122,19 @@ describe('planLifecycleSignals', () => {
     expect(signals.contributions[0].records[0].patch.lifecycle).toEqual(lifecycle);
   });
 
+  it('marks a date-only aggregator suggestion active when the held model has no lifecycle status', () => {
+    // Accept falls back to 'deprecated' for a status-less suggestion, which would hide the model now.
+    const result = plan({
+      base: new Map([active('gpt-5', { lifecycle: {} })]),
+      aggregatorSunsets: new Map([
+        ['gpt-5', { modelId: 'gpt-5', source: 'litellm', lifecycle: { deprecationDate: '2027-01-01' } }],
+      ]),
+    });
+    expect(result.suggestions).toEqual([
+      expect.objectContaining({ modelId: 'gpt-5', status: 'active', deprecationDate: '2027-01-01' }),
+    ]);
+  });
+
   it('does not requeue aggregator dates the catalog already confirms', () => {
     const base = new Map([
       active('gpt-5', {

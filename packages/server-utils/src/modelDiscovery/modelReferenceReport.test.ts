@@ -74,6 +74,32 @@ describe('modelReferenceReport', () => {
     await expect(modelReferenceReport()).rejects.toThrow('database unavailable');
   });
 
+  it('audits the SRE diagnostician pin of each enabled repo only', async () => {
+    mocks.getSettingsValue.mockImplementation(async (key: string) => {
+      if (key === 'orchestrationDefaults') {
+        return { fallbackModels: [], intentClassifier: { enabled: false, primaryModel: 'live', fallbackModels: [] } };
+      }
+      if (key === 'sreAgentConfig') {
+        return {
+          repos: [
+            { enabled: false, modelId: 'paused-repo-model' },
+            { enabled: true, modelId: 'missing' },
+          ],
+        };
+      }
+      return '';
+    });
+    const report = await modelReferenceReport();
+    expect(report.filter(reference => reference.surface === 'configured-model')).toEqual([
+      {
+        surface: 'configured-model',
+        key: 'sreAgentConfig.repos.1.modelId',
+        referencedId: 'missing',
+        problem: 'unknown',
+      },
+    ]);
+  });
+
   it('does not audit the disabled intent classifier', async () => {
     mocks.getSettingsValue.mockImplementation(async (key: string) =>
       key === 'orchestrationDefaults'

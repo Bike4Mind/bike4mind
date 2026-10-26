@@ -40,6 +40,10 @@ export async function configuredModelReferences(): Promise<Record<string, string
       references[`orchestrationDefaults.intentClassifier.fallbackModels.${index}`] = model;
     }
   }
+  const sreConfig = await adminSettingsRepository.getSettingsValue('sreAgentConfig');
+  for (const [index, repo] of (sreConfig?.repos ?? []).entries()) {
+    if (repo.enabled) references[`sreAgentConfig.repos.${index}.modelId`] = repo.modelId;
+  }
   return references;
 }
 
