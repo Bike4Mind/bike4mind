@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 
-const { handlers, find, reviewUpdate, release, count, baseOptions } = vi.hoisted(() => ({
+const { handlers, find, reviewUpdate, release, eligible, count, baseOptions } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
   find: vi.fn(),
   reviewUpdate: vi.fn(),
   release: vi.fn(),
+  eligible: vi.fn(),
   count: vi.fn(),
   baseOptions: vi.fn(),
 }));
@@ -31,7 +32,10 @@ vi.mock('@bike4mind/database', () => ({
   SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate },
   User: { find, countDocuments: count },
 }));
-vi.mock('@server/auth/emailVerifiedGrants', () => ({ releaseVerifiedPendingFreeCredits: release }));
+vi.mock('@server/auth/emailVerifiedGrants', () => ({
+  isEligibleForFreeCredits: eligible,
+  releaseVerifiedPendingFreeCredits: release,
+}));
 import '@pages/api/admin/signup-domain-holds';
 
 const makeRequest = (body: unknown, isAdmin = true) => {
@@ -43,11 +47,16 @@ beforeEach(() => {
   reviewUpdate.mockReset().mockResolvedValue({ domain: 'example.net', status: 'released' });
   find.mockReset().mockReturnValue({
     sort: vi.fn().mockReturnValue({
-      limit: vi.fn().mockResolvedValue([{ _id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG], pendingCreditGrant: 25 }]),
+      limit: vi
+        .fn()
+        .mockResolvedValue([
+          { _id: 'user-1', email: 'a@sub.example.net', tags: [PENDING_FREE_CREDITS_TAG], pendingCreditGrant: 25 },
+        ]),
     }),
   });
   count.mockReset().mockResolvedValue(0);
-  release.mockReset().mockResolvedValue({ creditsGranted: 25 });
+  release.mockReset().mockResolvedValue({ creditsGranted: 25, tags: [] });
+  eligible.mockReset().mockResolvedValue(true);
 });
 describe('signup domain hold decisions', () => {
   it('is session-only and rejects non-admin decisions before reading or writing', async () => {
@@ -76,11 +85,28 @@ describe('signup domain hold decisions', () => {
       expect.anything()
     );
     expect(res._getJSONData()).toEqual({ status: 'released', creditsReleased: 25, remaining: 0, nextCursor: null });
+    // A single page saw every candidate, so the unindexed regex is not scanned a second time.
+    expect(count).not.toHaveBeenCalled();
+  });
+  it('keeps users on a blocked or disposable domain pending when the hold is released', async () => {
+    eligible.mockResolvedValue(false);
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
+    await handlers.post(req, res);
+    expect(eligible).toHaveBeenCalledWith('a@sub.example.net', expect.anything());
+    expect(release).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toMatchObject({ creditsReleased: 0, remaining: 1, nextCursor: null });
+  });
+  it('counts a failed release as still pending', async () => {
+    release.mockResolvedValue({ creditsGranted: 0, tags: null });
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
+    await handlers.post(req, res);
+    expect(res._getJSONData()).toMatchObject({ creditsReleased: 0, remaining: 1 });
   });
   it('continues after a failed full batch rather than starving later users', async () => {
     const cursor = '000000000000000000000064';
     const candidates = Array.from({ length: 100 }, (_, index) => ({
       _id: (index + 1).toString(16).padStart(24, '0'),
+      email: `user${index}@example.net`,
       tags: [PENDING_FREE_CREDITS_TAG],
     }));
     find.mockReturnValue({ sort: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(candidates) }) });
@@ -92,14 +118,20 @@ describe('signup domain hold decisions', () => {
     find.mockClear();
     find.mockReturnValue({
       sort: vi.fn().mockReturnValue({
-        limit: vi.fn().mockResolvedValue([{ _id: '000000000000000000000065', tags: [PENDING_FREE_CREDITS_TAG] }]),
+        limit: vi
+          .fn()
+          .mockResolvedValue([
+            { _id: '000000000000000000000065', email: 'late@example.net', tags: [PENDING_FREE_CREDITS_TAG] },
+          ]),
       }),
     });
-    release.mockResolvedValue({ creditsGranted: 25 });
+    release.mockResolvedValue({ creditsGranted: 25, tags: [] });
+    count.mockResolvedValue(0);
     const next = makeRequest({ domain: 'example.net', action: 'release', afterUserId: cursor });
     await handlers.post(next.req, next.res);
     expect(find.mock.calls[0][0]).toMatchObject({ _id: { $gt: cursor } });
-    expect(next.res._getJSONData()).toMatchObject({ creditsReleased: 25, nextCursor: null });
+    expect(next.res._getJSONData()).toMatchObject({ creditsReleased: 25, remaining: 0, nextCursor: null });
+    expect(count).toHaveBeenCalledTimes(2);
   });
   it('confirmation grants no credits', async () => {
     const { req, res } = makeRequest({ domain: 'example.net', action: 'confirm' });

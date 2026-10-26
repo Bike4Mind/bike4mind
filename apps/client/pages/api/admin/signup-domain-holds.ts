@@ -6,7 +6,7 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
+import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 
 const decisionSchema = z.object({
   domain: z.string().min(1).max(253),
@@ -71,15 +71,23 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           .sort({ _id: 1 })
           .limit(100);
         if (users.length === 100) nextCursor = String(users[users.length - 1]._id);
+        let stillPending = 0;
         for (const user of users) {
+          // Releasing a hold never overrides the disposable/blocked-domain gate; those users stay pending.
+          if (!user.email || !(await isEligibleForFreeCredits(user.email, req.logger))) {
+            stillPending++;
+            continue;
+          }
           const result = await releaseVerifiedPendingFreeCredits(
             { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
             'Signup domain hold released by admin',
             req.logger
           );
           creditsReleased += result.creditsGranted;
+          if (!result.tags) stillPending++;
         }
-        remaining = await User.countDocuments(pendingQuery);
+        // The regex cannot use an index, so recount only when this request did not see every candidate.
+        remaining = afterUserId || nextCursor ? await User.countDocuments(pendingQuery) : stillPending;
       }
       res.status(200).json({ status, creditsReleased, remaining, nextCursor });
     })
