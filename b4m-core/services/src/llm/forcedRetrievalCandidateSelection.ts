@@ -25,12 +25,37 @@ type AnnChunkHit = { fabFileId: string; score: number };
  * 3. index-ready files the ANN ranked outside its pool, in input order.
  * Tier 2 outranks tier 3 because the index has already judged tier 3 and has no opinion on tier 2.
  * Hits naming a file outside `files` are ignored. `files` is expected in the stable scan order.
+ * This is the uncut order; selectRelevanceCandidates applies the cap and the tier-2 reserve.
  */
 export function rankCandidateFilesByRelevance<T extends VectorSearchReadinessFile>(
   files: T[],
   hits: AnnChunkHit[],
   now: Date
 ): T[] {
+  const { withHit, notIndexed, rankedOutside } = splitByRelevanceTier(files, hits, now);
+  return [...withHit, ...notIndexed, ...rankedOutside];
+}
+
+/**
+ * rankCandidateFilesByRelevance cut at `cap`, except that up to `notIndexedReserve` tier-2 files are
+ * placed ahead of the lowest-scoring hits. A file embedded within the mongot lag has no hit yet,
+ * so without the reserve it would sit behind a full cap of hits and be dropped silently.
+ * `notIndexedCut` counts the tier-2 files that still fell past the cap, for the coverage notice.
+ */
+export function selectRelevanceCandidates<T extends VectorSearchReadinessFile>(
+  files: T[],
+  hits: AnnChunkHit[],
+  now: Date,
+  { cap, notIndexedReserve }: { cap: number; notIndexedReserve: number }
+): { files: T[]; notIndexedCut: number } {
+  const { withHit, notIndexed, rankedOutside } = splitByRelevanceTier(files, hits, now);
+  const hitSlots = Math.max(0, cap - Math.min(notIndexed.length, notIndexedReserve));
+  const ordered = [...withHit.slice(0, hitSlots), ...notIndexed, ...withHit.slice(hitSlots), ...rankedOutside];
+  const notIndexedKept = Math.min(notIndexed.length, Math.max(0, cap - Math.min(withHit.length, hitSlots)));
+  return { files: ordered.slice(0, cap), notIndexedCut: notIndexed.length - notIndexedKept };
+}
+
+function splitByRelevanceTier<T extends VectorSearchReadinessFile>(files: T[], hits: AnnChunkHit[], now: Date) {
   const bestScoreByFileId = new Map<string, number>();
   for (const hit of hits) {
     if (!Number.isFinite(hit.score)) continue;
@@ -51,7 +76,7 @@ export function rankCandidateFilesByRelevance<T extends VectorSearchReadinessFil
     if (byScore !== 0) return byScore;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
-  return [...withHit, ...notIndexed, ...rankedOutside];
+  return { withHit, notIndexed, rankedOutside };
 }
 
 export class DeadlineExceededError extends Error {

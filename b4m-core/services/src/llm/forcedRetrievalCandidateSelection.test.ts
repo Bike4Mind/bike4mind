@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { rankCandidateFilesByRelevance, withDeadline } from './forcedRetrievalCandidateSelection';
+import {
+  rankCandidateFilesByRelevance,
+  selectRelevanceCandidates,
+  withDeadline,
+} from './forcedRetrievalCandidateSelection';
 
 const NOW = new Date('2026-09-29T12:00:00Z');
 const STAMPED = new Date('2026-09-01T00:00:00Z');
@@ -42,6 +46,51 @@ describe('rankCandidateFilesByRelevance', () => {
       NOW
     );
     expect(ranked.map(f => f.id)).toEqual(['y', 'z', 'x']);
+  });
+});
+
+describe('selectRelevanceCandidates', () => {
+  const opts = { cap: 100, notIndexedReserve: 10 };
+  const fresh = new Date(NOW.getTime() - 1000);
+  const hitFiles = (n: number) => Array.from({ length: n }, (_, i) => file(`h${String(i).padStart(3, '0')}`));
+  const hitsFor = (files: { id: string }[]) => files.map((f, i) => ({ fabFileId: f.id, score: 1 - i / 1000 }));
+
+  it('keeps a not-yet-indexed file inside the cap when hits alone would fill it', () => {
+    const hits = hitFiles(110);
+    const target = file('zz-fresh', fresh);
+    const { files, notIndexedCut } = selectRelevanceCandidates([...hits, target], hitsFor(hits), NOW, opts);
+    expect(files).toHaveLength(100);
+    expect(files.map(f => f.id)).toContain('zz-fresh');
+    expect(notIndexedCut).toBe(0);
+  });
+
+  it('reports the not-yet-indexed files the reserve could not hold, and keeps the top hits', () => {
+    const hits = hitFiles(110);
+    const freshFiles = Array.from({ length: 15 }, (_, i) => file(`fresh${i}`, fresh));
+    const { files, notIndexedCut } = selectRelevanceCandidates([...hits, ...freshFiles], hitsFor(hits), NOW, opts);
+    expect(files).toHaveLength(100);
+    expect(files.filter(f => f.id.startsWith('fresh'))).toHaveLength(10);
+    expect(files.slice(0, 90).map(f => f.id)).toEqual(hits.slice(0, 90).map(f => f.id));
+    expect(notIndexedCut).toBe(5);
+  });
+
+  it('keeps the tier order when hits do not fill the cap', () => {
+    const hits = hitFiles(30);
+    const notIndexed = Array.from({ length: 50 }, (_, i) => file(`ni${i}`, null));
+    const misses = Array.from({ length: 40 }, (_, i) => file(`miss${i}`));
+    const input = [...misses, ...notIndexed, ...hits];
+    const { files, notIndexedCut } = selectRelevanceCandidates(input, hitsFor(hits), NOW, opts);
+    expect(files.map(f => f.id)).toEqual(
+      rankCandidateFilesByRelevance(input, hitsFor(hits), NOW)
+        .slice(0, 100)
+        .map(f => f.id)
+    );
+    expect(notIndexedCut).toBe(0);
+  });
+
+  it('counts not-yet-indexed files cut when they alone overflow the cap', () => {
+    const notIndexed = Array.from({ length: 120 }, (_, i) => file(`ni${i}`, null));
+    expect(selectRelevanceCandidates(notIndexed, [], NOW, opts)).toMatchObject({ notIndexedCut: 20 });
   });
 });
 

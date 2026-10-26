@@ -1166,6 +1166,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       };
     });
     const TARGET = 'f149';
+    const TARGET_INDEX = 149;
     // The query embeds to [1, 0]: the target's chunk scores 1, every other chunk 0 (below the floor).
     const rows = (ids: string[]) =>
       ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: id === TARGET ? [1, 0] : [0, 1] }));
@@ -1323,6 +1324,42 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
         { selection: 'relevance', annPickMs: expect.any(Number) },
         expect.anything()
       );
+    });
+
+    // `freshFrom`.. are stamped seconds ago (inside the mongot lag); the first 110 files get ANN hits,
+    // so hits alone fill the cap and the rest are ready files the ANN ranked outside its pool.
+    const withFreshFiles = (freshFrom: number) => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const files = lakeFiles.map((f, i) =>
+        i >= freshFrom ? { ...f, chunkEmbeddingModelStampedAt: new Date(Date.now() - 10_000) } : f
+      );
+      ctx.db.fabfiles.search = vi.fn((_u, _q, _f, page: { limit: number }) =>
+        Promise.resolve({ data: files.slice(0, page.limit), hasMore: files.length > page.limit, total: files.length })
+      );
+      annDb.vectorSearch.mockResolvedValue(
+        lakeFiles.slice(0, 110).map((f, i) => ({ id: `ch-${f.id}`, fabFileId: f.id, text: '', score: 0.9 - i / 1000 }))
+      );
+      return { ctx, warn };
+    };
+
+    it('with vector search, still scores a file embedded seconds ago when ANN hits fill the cap', async () => {
+      const { ctx } = withFreshFiles(TARGET_INDEX);
+      const { quest, content } = await run(ctx);
+      expect(content).toContain(targetHeading);
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect(scanned.has(TARGET)).toBe(true);
+      expect(scanned.size).toBe(100);
+      expect((quest.promptMeta as { retrievalCoverage?: unknown }).retrievalCoverage).toBeUndefined();
+    });
+
+    it('with vector search, says so when more recently embedded files than the reserve are cut', async () => {
+      const { ctx, warn } = withFreshFiles(130);
+      const { quest } = await run(ctx);
+      const coverage = (quest.promptMeta as { retrievalCoverage?: { partial: boolean; reasons: string[] } })
+        .retrievalCoverage;
+      expect(coverage?.partial).toBe(true);
+      expect(coverage?.reasons.join(' ')).toContain('10 recently added document(s) are still being indexed');
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
     });
 
     it('falls back to the alphabetical pick, and says so, when the ANN query fails', async () => {
