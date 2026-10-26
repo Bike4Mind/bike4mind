@@ -62,8 +62,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
     const updatedSettings = await agentOpsSettingsRepository.addMetaPromptVersion(
       DEFAULT_META_PROMPT,
-      'Initial PromptCrafter meta-prompt for agent system prompt generation',
-      req.user!.id
+      req.user!.id,
+      'Initial PromptCrafter meta-prompt for agent system prompt generation'
     );
 
     await agentOpsSettingsRepository.activateMetaPromptVersion(1);

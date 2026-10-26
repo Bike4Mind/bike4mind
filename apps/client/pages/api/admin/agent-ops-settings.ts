@@ -148,8 +148,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     const updatedSettings = await agentOpsSettingsRepository.addMetaPromptVersion(
       metaPrompt.trim(),
-      description?.trim() || '',
-      req.user!.id
+      req.user!.id,
+      description?.trim() || ''
     );
 
     const addedVersion = updatedSettings.currentVersionNumber;
