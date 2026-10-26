@@ -73,11 +73,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   });
 
   const result = ops.length > 0 ? await OverwatchUserFirstSeen.bulkWrite(ops, { ordered: false }) : null;
+  const changed = (result?.upsertedCount ?? 0) + (result?.modifiedCount ?? 0);
 
   await recordAdminActionFromRequest(req, {
     action: 'ops.overwatch.first_seen_backfilled',
     target: { kind: 'system', id: 'overwatch-first-seen-backfill', displayName: 'Overwatch first-seen backfill' },
-    summary: `backfilled first-seen dates for ${users.length - skipped} of ${users.length} users`,
+    summary: `backfilled first-seen dates for ${changed} of ${users.length} users`,
     details: {
       skip,
       processed: users.length,

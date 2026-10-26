@@ -121,9 +121,19 @@ describe('/api/admin/overwatch/backfill-first-seen', () => {
     expect(mockAudit.mock.calls[0][1]).toMatchObject({
       action: 'ops.overwatch.first_seen_backfilled',
       target: { kind: 'system', id: 'overwatch-first-seen-backfill' },
+      summary: 'backfilled first-seen dates for 2 of 2 users',
       details: { skip: 0, processed: 2, upserted: 2 },
     });
     expect(mockBulkWrite.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('counts only changed records in the audit headline', async () => {
+    usersBatch = [doc('a', new Date('2026-01-15T10:00:00Z')), doc('b', '2026-02-20T00:00:00Z')];
+    mockBulkWrite.mockResolvedValue({ upsertedCount: 0, modifiedCount: 1 });
+    const { req, res } = makeReq({ skip: 0 });
+    await (handler as any)._post(req, res);
+
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({ summary: 'backfilled first-seen dates for 1 of 2 users' });
   });
 
   it('does not audit an empty batch', async () => {
