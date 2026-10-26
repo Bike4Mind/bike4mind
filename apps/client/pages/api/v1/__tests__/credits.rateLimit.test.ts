@@ -47,7 +47,7 @@ describe('GET /api/v1/credits dedicated rate limit', () => {
   });
 
   it('takes its per-minute ceiling from the admin setting', async () => {
-    mockGetSettingsMap.mockResolvedValue({ apiCreditsRateLimitPerMin: '30' });
+    mockGetSettingsMap.mockResolvedValue({ apiRateLimitCreditsPerMin: '30' });
     expect(await captured.limiter!.limit()).toBe(30);
   });
 

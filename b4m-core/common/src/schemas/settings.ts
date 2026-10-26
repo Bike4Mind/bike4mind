@@ -600,7 +600,7 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitFreePerMin',
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
-  'apiCreditsRateLimitPerMin',
+  'apiRateLimitCreditsPerMin',
 
   // OVERWATCH ROLLUP CRON SETTINGS
   'overwatchRollupSync',
@@ -2115,7 +2115,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitFreePerMin', order: 1 },
       { key: 'apiRateLimitBasicPerMin', order: 2 },
       { key: 'apiRateLimitProPerMin', order: 3 },
-      { key: 'apiCreditsRateLimitPerMin', order: 4 },
+      { key: 'apiRateLimitCreditsPerMin', order: 4 },
     ],
   },
   API_KEY_TRUST: {
@@ -3012,8 +3012,8 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 3,
   }),
-  apiCreditsRateLimitPerMin: makeNumberSetting({
-    key: 'apiCreditsRateLimitPerMin',
+  apiRateLimitCreditsPerMin: makeNumberSetting({
+    key: 'apiRateLimitCreditsPerMin',
     name: 'API Rate Limit - Credit Balance Reads (requests/min per key)',
     defaultValue: 0,
     min: 0,

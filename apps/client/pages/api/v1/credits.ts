@@ -15,9 +15,9 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 async function creditReadsPerMinute(): Promise<number> {
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
-    { names: ['apiCreditsRateLimitPerMin'] }
+    { names: ['apiRateLimitCreditsPerMin'] }
   );
-  return getSettingsValue('apiCreditsRateLimitPerMin', settings, 0);
+  return getSettingsValue('apiRateLimitCreditsPerMin', settings, 0);
 }
 
 const handler = nextRouteForContract(getCreditBalanceContract, {
