@@ -274,6 +274,12 @@ jobs:
             pnpm sst shell --stage "$SST_STAGE" -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
           fi
 
+      - name: Scrub edge token from test output
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        env:
+          E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
+        run: python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
+
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were
         # found" warning that reads like the run lost its report.
