@@ -57,11 +57,39 @@ describe('archFromModelInfo', () => {
       'minimax-01.attention.key_length': 64,
       'minimax-01.attention.value_length': 64,
       'minimax-01.embedding_length': 512,
+      'minimax-01.full_attention_interval': 2,
     };
     expect(archFromModelInfo(info)).toMatchObject({
       full: dense(2, 8, 64),
       recurrent: { layers: 2, stateBytesPerSeq: 2 * 64 * 64 * 8 * 4 },
     });
+  });
+
+  const hybridInfo = (architecture: string): Record<string, unknown> => ({
+    'general.architecture': architecture,
+    [`${architecture}.block_count`]: 80,
+    [`${architecture}.context_length`]: 65536,
+    [`${architecture}.attention.head_count`]: 16,
+    [`${architecture}.attention.head_count_kv`]: 8,
+    [`${architecture}.attention.key_length`]: 64,
+    [`${architecture}.attention.value_length`]: 64,
+    [`${architecture}.embedding_length`]: 1024,
+    [`${architecture}.ssm.conv_kernel`]: 4,
+    [`${architecture}.ssm.inner_size`]: 512,
+    [`${architecture}.ssm.state_size`]: 64,
+    [`${architecture}.ssm.group_count`]: 2,
+  });
+
+  it('defaults minimax-01 to a full-attention interval of 8', () => {
+    const info = hybridInfo('minimax-01');
+    const arch = archFromModelInfo(info);
+    expect(arch?.full.layers).toBe(10);
+    expect(arch?.recurrent?.layers).toBe(70);
+    expect(archFromModelInfo({ ...info, 'minimax-01.full_attention_interval': 4 })?.full.layers).toBe(20);
+  });
+
+  it('returns null for qwen4exp, whose PLE and indexer caches are not modeled', () => {
+    expect(archFromModelInfo(hybridInfo('qwen4exp'))).toBeNull();
   });
 
   it('reads a dense model from the architecture-prefixed keys', () => {
@@ -125,7 +153,7 @@ describe('archFromModelInfo', () => {
     expect(archFromModelInfo(info)).toEqual(liveArch['qwen3.5:0.8b']);
   });
 
-  it.each(['qwen35', 'qwen35moe', 'qwen3next'])('uses the optional interval default for %s', architecture => {
+  it.each(['qwen35', 'qwen35moe', 'qwen3next', 'clef'])('uses the optional interval default for %s', architecture => {
     const info = Object.fromEntries(
       Object.entries(liveModelInfo['qwen3.5:0.8b']).map(([key, value]) => [
         key.replace('qwen35.', `${architecture}.`),
@@ -150,11 +178,11 @@ describe('archFromModelInfo', () => {
 
     it.each([
       ['gemma2', 26, undefined, 13, 4096],
-      ['gemma2', 26, 0, 0, undefined],
+      ['gemma2', 26, 0, 13, 0],
       ['gemma2', 26, 1024, 13, 1024],
       ['exaone4', 64, undefined, 48, 4096],
       ['exaone4', 64, 1024, 48, 1024],
-      ['exaone4', 64, 0, 0, undefined],
+      ['exaone4', 64, 0, 48, 0],
       ['exaone4', 30, undefined, 0, undefined],
       ['exaone4', 30, 1024, 0, undefined],
       ['llama4', 48, undefined, 36, 8192],

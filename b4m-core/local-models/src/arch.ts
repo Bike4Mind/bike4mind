@@ -41,6 +41,19 @@ const SWA_DEFAULTS: Record<string, SwaDefault> = {
 // llama.cpp hardcodes where gemma3n's KV-sharing layers start; gemma4 states it in `attention.shared_kv_layers`.
 const KV_LAYER_LIMIT: Record<string, number> = { gemma3n: 20 };
 const FIXED_SWA_WINDOW: Record<string, number> = { llama4: 8192, smallthinker: 4096 };
+// A window of 0 turns SWA off for these loaders; the rest keep the sliding layers with n_swa 0.
+const ZERO_WINDOW_DISABLES_SWA = new Set([
+  'afmoe',
+  'gemma3',
+  'laguna',
+  'lfm2',
+  'llama4',
+  'mellum',
+  'modern-bert',
+  'olmo2',
+  'plamo3',
+  'smallthinker',
+]);
 
 export function positiveInt(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
@@ -69,7 +82,14 @@ function perLayer(value: unknown, blockCount: number): number[] | undefined {
 // llama.cpp `llm_arch_is_recurrent`: every layer carries state and none has attention.
 const PURE_RECURRENT = new Set(['mamba', 'mamba2', 'rwkv6', 'rwkv6qwen2', 'rwkv7', 'arwkv7']);
 const NEMOTRON_H = new Set(['nemotron_h', 'nemotron_h_moe']);
-const DEFAULT_RECURRENT_INTERVAL = new Set(['qwen35', 'qwen35moe', 'qwen3next']);
+// Full-attention interval llama.cpp assumes when neither recurrent_layers nor full_attention_interval is set.
+const DEFAULT_RECURRENT_INTERVAL: Record<string, number> = {
+  qwen35: 4,
+  qwen35moe: 4,
+  qwen3next: 4,
+  clef: 4,
+  'minimax-01': 8,
+};
 
 /** Reads `ModelArch` from GGUF metadata as llama.cpp b11889 sizes its caches; null if a key is missing or blanked.
  * Verbose `/api/show` tensors, when given, decide which layers hold experts. */
@@ -77,6 +97,8 @@ export function archFromModelInfo(modelInfo: ModelInfo | null | undefined, tenso
   if (!modelInfo) return null;
   const arch = modelInfo['general.architecture'];
   if (typeof arch !== 'string' || !arch) return null;
+  // Its PLE conv history and QSA indexer KV caches are not modeled, so any estimate would undercount.
+  if (arch === 'qwen4exp') return null;
   const field = (key: string) => modelInfo[`${arch}.${key}`];
 
   const blockCount = positiveInt(field('block_count'));
@@ -155,7 +177,7 @@ export function archFromModelInfo(modelInfo: ModelInfo | null | undefined, tenso
     full: isMla ? group([], keyLength, valueLength) : group(fullKv, keyLength, valueLength),
     mtpLayers,
   };
-  if (!isMla && swaKv.length > 0 && sliding.window) {
+  if (!isMla && swaKv.length > 0 && sliding.window !== undefined) {
     result.swa = {
       ...group(
         swaKv,
@@ -194,7 +216,7 @@ function recurrentLayers(
   if (typeof rawFlags === 'boolean') return Array.from({ length: trunk }, () => rawFlags);
   const flags = boolArray(rawFlags, trunk);
   if (flags) return flags;
-  const every = positiveInt(field('full_attention_interval')) ?? (DEFAULT_RECURRENT_INTERVAL.has(arch) ? 4 : undefined);
+  const every = positiveInt(field('full_attention_interval')) ?? DEFAULT_RECURRENT_INTERVAL[arch];
   if (every) return Array.from({ length: trunk }, (_, i) => (i + 1) % every !== 0);
   // Nemotron-H also has FFN-only layers, with neither KV nor state.
   if (ffByLayer) return kvByLayer.slice(0, trunk).map((heads, i) => hasState && heads === 0 && ffByLayer[i] === 0);
@@ -241,10 +263,11 @@ function slidingLayers(
   const defaults = SWA_DEFAULTS[arch];
   const rawWindow = field('attention.sliding_window');
   const defaultWindow = arch === 'exaone4' ? 4096 : defaults?.window;
-  const configuredWindow = rawWindow === undefined ? defaultWindow : positiveInt(rawWindow);
+  const configuredWindow = rawWindow === undefined ? defaultWindow : nonNegativeInt(rawWindow);
+  if (configuredWindow === undefined) return none;
+  if (configuredWindow === 0 && (!defaults || ZERO_WINDOW_DISABLES_SWA.has(arch))) return none;
   // These loaders use the key as an enable switch and then set a fixed cache window.
-  const window = configuredWindow ? (FIXED_SWA_WINDOW[arch] ?? configuredWindow) : undefined;
-  if (!window) return none;
+  const window = FIXED_SWA_WINDOW[arch] ?? configuredWindow;
   const pattern = field('attention.sliding_window_pattern');
   if (Array.isArray(pattern) || pattern === null) {
     const flags = boolArray(pattern, trunk);
