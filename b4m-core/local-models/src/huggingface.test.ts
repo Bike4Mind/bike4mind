@@ -309,6 +309,25 @@ describe('HuggingFaceHub.getModel', () => {
     expect((await hub.search({ query: 'mixed' })).models[0]?.licenses).toEqual(['apache-2.0', 'gemma', 'llama3']);
   });
 
+  it('reports other when licenses past the cap are dropped or only a license_name is declared', async () => {
+    const permissive = ['mit', 'apache-2.0', 'bsd', 'bsd-2-clause', 'bsd-3-clause', 'isc', '0bsd', 'zlib', 'cc0-1.0'];
+    const many = [...permissive, 'unlicense', 'cc-by-nc-4.0'];
+    const sha = 'c'.repeat(40);
+    const capped = 'someone/Many-GGUF';
+    const named = 'someone/Named-GGUF';
+    const tags = ['gguf', ...many.map(id => `license:${id}`)];
+    const server = await serve({
+      ...repoRoutes(capped, sha, { id: capped, sha, cardData: { license: many } }, qwenTree),
+      ...repoRoutes(named, sha, { id: named, sha, cardData: { license_name: 'custom-terms' } }, qwenTree),
+      'GET /api/models': json([{ id: capped, tags }]),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+
+    expect((await hub.getModel(capped)).licenses).toEqual([...permissive, 'other']);
+    expect((await hub.search({ query: 'many' })).models[0]?.licenses).toEqual([...permissive, 'other']);
+    expect(await hub.getModel(named)).toMatchObject({ licenses: ['other'], licenseName: 'custom-terms' });
+  });
+
   it('flags missing shards and picks a tag no earlier file name ends with', async () => {
     const repo = 'someone/odd-GGUF';
     const sha = 'a'.repeat(40);

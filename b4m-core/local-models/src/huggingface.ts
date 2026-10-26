@@ -81,7 +81,8 @@ export interface HubModelSummary {
   private: boolean;
   /**
    * Every declared license id, lowercased and deduped, e.g. `['apache-2.0', 'gemma']`; empty when none is declared.
-   * A repo that lists several is bound by all of them. `other` means the card names it in `licenseName`.
+   * A repo that lists several is bound by all of them. `other` means the card names it in `licenseName`, or that
+   * more were declared than are kept; a card with only a `license_name` reports `['other']`.
    */
   licenses: string[];
   /** Repos the GGUF was converted from, whose card and license usually govern it. */
@@ -420,7 +421,9 @@ function strings(value: unknown, maxLength = 200): string[] {
 }
 
 function licenseIds(values: string[]): string[] {
-  return [...new Set(values.map(value => value.trim().toLowerCase()).filter(Boolean))].slice(0, MAX_LICENSES);
+  const ids = [...new Set(values.map(value => value.trim().toLowerCase()).filter(Boolean))];
+  // Past the cap, `other` stands in for what was dropped so consumers still classify the repo as restricted.
+  return ids.length > MAX_LICENSES ? [...new Set([...ids.slice(0, MAX_LICENSES - 1), 'other'])] : ids;
 }
 
 function toSummary(entry: ModelEntry): HubModelSummary {
@@ -647,12 +650,14 @@ export class HuggingFaceHub {
     const card = info.cardData ?? {};
     const cardBaseModels = strings(card.base_model).filter(isHubRepoId).slice(0, MAX_BASE_MODELS);
     const probe = builds[0]?.files[0] ?? projectors[0];
+    const licenses = licenseIds([...strings(card.license), ...summary.licenses]);
+    const licenseName = strings(card.license_name)[0] ?? null;
     return {
       ...summary,
-      licenses: licenseIds([...strings(card.license), ...summary.licenses]),
+      licenses: licenses.length === 0 && licenseName ? ['other'] : licenses,
       baseModels: cardBaseModels.length > 0 ? cardBaseModels : summary.baseModels,
       revision,
-      licenseName: strings(card.license_name)[0] ?? null,
+      licenseName,
       licenseLink: strings(card.license_link, 2048)[0] ?? null,
       gguf: toGgufInfo(info.gguf),
       builds,
