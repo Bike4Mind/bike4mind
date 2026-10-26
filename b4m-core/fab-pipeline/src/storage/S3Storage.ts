@@ -6,6 +6,7 @@ import {
   GetObjectCommand,
   GetObjectCommandOutput,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommandInput,
   ObjectCannedACL,
 } from '@aws-sdk/client-s3';
@@ -195,6 +196,32 @@ export class S3Storage extends BaseStorage {
   }
 
   /**
+   * Delete every object whose key starts with `prefix` and return how many there were. Meant for
+   * small per-entity prefixes: lists page by page and deletes one key at a time. The prefix must
+   * name a folder at least two levels deep (`a/b/`), so a bad caller cannot sweep a bucket, a
+   * top-level folder, or the siblings that share a name's leading characters.
+   */
+  async deletePrefix(prefix: string): Promise<number> {
+    if (!prefix.endsWith('/') || prefix.split('/').filter(Boolean).length < 2) {
+      throw new Error(`deletePrefix refuses the unscoped prefix "${prefix}"`);
+    }
+    let deleted = 0;
+    let ContinuationToken: string | undefined;
+    do {
+      const page = await this.s3.send(
+        new ListObjectsV2Command({ Bucket: this.bucketName, Prefix: prefix, ContinuationToken })
+      );
+      for (const { Key } of page.Contents ?? []) {
+        if (!Key?.startsWith(prefix)) continue;
+        await this.delete(Key);
+        deleted += 1;
+      }
+      ContinuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+    return deleted;
+  }
+
+  /**
    * Get a signed URL for a file in the storage bucket that expires after the specified time
    */
   async getSignedUrl(
@@ -208,6 +235,7 @@ export class S3Storage extends BaseStorage {
       ContentLength,
       ResponseContentType,
       ResponseContentDisposition,
+      signingDate,
     }: {
       expiresIn?: number;
       audience?: 'browser';
@@ -224,6 +252,12 @@ export class S3Storage extends BaseStorage {
        */
       ResponseContentType?: string;
       ResponseContentDisposition?: string;
+      /**
+       * Sign as of this instant instead of now; the link is valid from it for `expiresIn` seconds.
+       * Repeated calls with the same value (and credentials) return the identical URL, so a browser
+       * can cache what it points at.
+       */
+      signingDate?: Date;
     } = {}
   ): Promise<string> {
     const bindLength = method !== 'get' && ContentLength !== undefined;
@@ -245,6 +279,7 @@ export class S3Storage extends BaseStorage {
           }),
       {
         expiresIn,
+        ...(signingDate && { signingDate }),
         ...(bindLength && { signableHeaders: new Set(['content-length']) }),
       }
     );

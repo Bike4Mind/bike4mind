@@ -33,7 +33,7 @@ import {
   OpenAIImageService,
   resolveGptImageOutputOptions,
 } from './OpenAIImageService';
-import { downloadImageAsBuffer } from './imageProcessorUtils';
+import { downloadImageAsBuffer, invokeImageProcessor } from './imageProcessorUtils';
 
 // The helper only reads `code`, `status`, and `requestID` off the error, so a
 // minimal object cast to the APIError instance type is sufficient and avoids
@@ -828,5 +828,209 @@ describe('OpenAIImageService reference images (#2744)', () => {
     // No primary image means the text-to-image endpoint, which would 400 on an unknown key.
     expect(imagesGenerate).toHaveBeenCalledTimes(1);
     expect(imagesGenerate.mock.calls[0][0]).not.toHaveProperty('referenceImages');
+  });
+});
+
+describe('OpenAIImageService source images over the ImageProcessor payload cap', () => {
+  // Well past the ~4.4MB the synchronous ImageProcessor payload can carry, so any route
+  // through it would have thrown "Image too large" in production.
+  const LARGE_IMAGE_BYTES = 10 * 1024 * 1024;
+  const PNG_HEADER = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const JPEG_HEADER = [0xff, 0xd8, 0xff, 0xe0];
+
+  function largeImage(header: number[]): Buffer {
+    const buffer = Buffer.alloc(LARGE_IMAGE_BYTES);
+    Buffer.from(header).copy(buffer);
+    return buffer;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    imagesEdit.mockResolvedValue({ data: [{ b64_json: 'RURJVA==' }] });
+  });
+
+  async function generateEditImages(source: Buffer, model: string): Promise<File[]> {
+    vi.mocked(downloadImageAsBuffer).mockResolvedValue(source);
+    await makeService().generate('make it blue', { model, imagePrompt: 'https://example.com/previous-render.png' });
+    expect(imagesEdit).toHaveBeenCalledTimes(1);
+    return (imagesEdit.mock.calls[0][0] as { image: File[] }).image;
+  }
+
+  it('sends a >4.4MB PNG to a gpt-image edit as-is, without the ImageProcessor', async () => {
+    const [imageFile] = await generateEditImages(largeImage(PNG_HEADER), ImageModels.GPT_IMAGE_2_5_SUNBURST);
+
+    expect(invokeImageProcessor).not.toHaveBeenCalled();
+    expect(imageFile.size).toBe(LARGE_IMAGE_BYTES);
+    expect(imageFile.type).toBe('image/png');
+    expect(imageFile.name).toBe('image.png');
+  });
+
+  it('keeps a JPEG source as JPEG rather than relabelling it PNG', async () => {
+    const [imageFile] = await generateEditImages(largeImage(JPEG_HEADER), ImageModels.GPT_IMAGE_2);
+
+    expect(invokeImageProcessor).not.toHaveBeenCalled();
+    expect(imageFile.type).toBe('image/jpeg');
+    expect(imageFile.name).toBe('image.jpg');
+  });
+
+  it('still converts a format gpt-image does not accept through the ImageProcessor', async () => {
+    const [imageFile] = await generateEditImages(Buffer.from('GIF89a-not-accepted'), ImageModels.GPT_IMAGE_2);
+
+    expect(invokeImageProcessor).toHaveBeenCalledTimes(1);
+    expect(imageFile.type).toBe('image/png');
+  });
+
+  it('sends a >4.4MB source to edit() as-is for a gpt-image model', async () => {
+    const dataUrl = `data:image/png;base64,${largeImage(PNG_HEADER).toString('base64')}`;
+    await makeService().edit(dataUrl, 'make it blue', { model: ImageModels.GPT_IMAGE_2 });
+
+    const [imageFile] = (imagesEdit.mock.calls[0][0] as { image: File[] }).image;
+    expect(invokeImageProcessor).not.toHaveBeenCalled();
+    expect(imageFile.size).toBe(LARGE_IMAGE_BYTES);
+  });
+
+  it('passes >4.4MB reference images through for a gpt-image model', async () => {
+    vi.mocked(downloadImageAsBuffer).mockResolvedValue(largeImage(PNG_HEADER));
+    await makeService().generate('make it blue', {
+      model: ImageModels.GPT_IMAGE_2,
+      imagePrompt: 'https://example.com/previous-render.png',
+      referenceImages: ['https://example.com/anchor.png'],
+    });
+
+    const images = (imagesEdit.mock.calls[0][0] as { image: File[] }).image;
+    expect(invokeImageProcessor).not.toHaveBeenCalled();
+    expect(images.map(file => file.size)).toEqual([LARGE_IMAGE_BYTES, LARGE_IMAGE_BYTES]);
+    expect(images[1].name).toBe('reference-1.png');
+  });
+
+  it('passes the source through when edit() falls back from an unsupported model to gpt-image-2', async () => {
+    const dataUrl = `data:image/png;base64,${largeImage(PNG_HEADER).toString('base64')}`;
+    await makeService().edit(dataUrl, 'make it blue', { model: 'dall-e-3' });
+
+    expect(imagesEdit.mock.calls[0][0]).toMatchObject({ model: ImageModels.GPT_IMAGE_2 });
+    expect(invokeImageProcessor).not.toHaveBeenCalled();
+  });
+
+  it('converts a JPEG source to PNG when a mask is supplied, since OpenAI wants both in one format', async () => {
+    const dataUrl = `data:image/jpeg;base64,${largeImage(JPEG_HEADER).toString('base64')}`;
+    await makeService().edit(dataUrl, 'make it blue', { model: ImageModels.GPT_IMAGE_2, mask: PNG_DATA_URL });
+
+    const [imageFile] = (imagesEdit.mock.calls[0][0] as { image: File[] }).image;
+    expect(imageFile.type).toBe('image/png');
+    // Once for the source, once for the mask.
+    expect(invokeImageProcessor).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs the failure as flat string fields so the Slack alert does not print [object Object]', async () => {
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    vi.mocked(downloadImageAsBuffer).mockRejectedValue(new Error('Image too large (10.37MB).'));
+
+    await expect(
+      makeService().generate('make it blue', {
+        model: ImageModels.GPT_IMAGE_2,
+        imagePrompt: 'https://example.com/a.png',
+      })
+    ).rejects.toThrow('Image too large');
+
+    const [, metadata] = errorSpy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(Object.values(metadata).every(value => typeof value !== 'object')).toBe(true);
+    expect(metadata).toMatchObject({ errorName: 'Error', errorMessage: 'Image too large (10.37MB).' });
+  });
+
+  it('logs the OpenAI request id on an API error', async () => {
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    imagesGenerate.mockRejectedValue(
+      Object.assign(Object.create(OpenAI.APIError.prototype) as APIErrorLike, {
+        status: 500,
+        requestID: 'req_500',
+        message: '500 Server error',
+      })
+    );
+
+    await expect(makeService().generate('make it blue', { model: ImageModels.GPT_IMAGE_2 })).rejects.toThrow();
+
+    const [, metadata] = errorSpy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(metadata).toMatchObject({ requestId: 'req_500' });
+  });
+
+  it('passes a PNG source through when a mask is supplied, sending only the mask to the ImageProcessor', async () => {
+    const dataUrl = `data:image/png;base64,${largeImage(PNG_HEADER).toString('base64')}`;
+    await makeService().edit(dataUrl, 'make it blue', { model: ImageModels.GPT_IMAGE_2, mask: PNG_DATA_URL });
+
+    const [imageFile] = (imagesEdit.mock.calls[0][0] as { image: File[] }).image;
+    expect(invokeImageProcessor).toHaveBeenCalledTimes(1);
+    expect(imageFile.name).toBe('image.png');
+    expect(imageFile.size).toBe(LARGE_IMAGE_BYTES);
+  });
+
+  it('passes a WebP data URL through edit() as image/webp', async () => {
+    const webp = Buffer.alloc(64);
+    webp.write('RIFF', 0, 'ascii');
+    webp.write('WEBP', 8, 'ascii');
+    await makeService().edit(`data:image/webp;base64,${webp.toString('base64')}`, 'make it blue', {
+      model: ImageModels.GPT_IMAGE_2,
+    });
+
+    const [imageFile] = (imagesEdit.mock.calls[0][0] as { image: File[] }).image;
+    expect(invokeImageProcessor).not.toHaveBeenCalled();
+    expect(imageFile.type).toBe('image/webp');
+    expect(imageFile.name).toBe('image.webp');
+  });
+
+  it('passes edit() reference images through for a gpt-image model', async () => {
+    vi.mocked(downloadImageAsBuffer).mockResolvedValue(largeImage(PNG_HEADER));
+    const dataUrl = `data:image/png;base64,${largeImage(PNG_HEADER).toString('base64')}`;
+    await makeService().edit(dataUrl, 'make it blue', {
+      model: ImageModels.GPT_IMAGE_2,
+      referenceImages: ['https://example.com/anchor.png'],
+    });
+
+    const images = (imagesEdit.mock.calls[0][0] as { image: File[] }).image;
+    expect(invokeImageProcessor).not.toHaveBeenCalled();
+    expect(images[1].name).toBe('reference-1.png');
+    expect(images[1].size).toBe(LARGE_IMAGE_BYTES);
+  });
+
+  describe('without an ImageProcessor Lambda name', () => {
+    const makeBareService = () => new OpenAIImageService('test-key', new Logger());
+
+    it('still edits a gpt-image PNG source, which needs no processor', async () => {
+      const dataUrl = `data:image/png;base64,${largeImage(PNG_HEADER).toString('base64')}`;
+      await expect(
+        makeBareService().edit(dataUrl, 'make it blue', { model: ImageModels.GPT_IMAGE_2 })
+      ).resolves.toBeDefined();
+      expect(invokeImageProcessor).not.toHaveBeenCalled();
+    });
+
+    it('rejects a source that does need the processor', async () => {
+      const dataUrl = `data:image/gif;base64,${Buffer.from('GIF89a-not-accepted').toString('base64')}`;
+      await expect(makeBareService().edit(dataUrl, 'make it blue', { model: ImageModels.GPT_IMAGE_2 })).rejects.toThrow(
+        /ImageProcessor Lambda name is required/
+      );
+    });
+  });
+
+  it('passes a source of exactly 50MiB through and routes anything larger to the ImageProcessor', async () => {
+    const cap = 50 * 1024 * 1024;
+    const png = (size: number) => {
+      const buffer = Buffer.alloc(size);
+      Buffer.from(PNG_HEADER).copy(buffer);
+      return `data:image/png;base64,${buffer.toString('base64')}`;
+    };
+
+    // Assert on call counts, not the mock itself: a failing matcher would otherwise try to
+    // pretty-print the 50MB buffer argument and exhaust the worker's heap.
+    await makeService().edit(png(cap), 'make it blue', { model: ImageModels.GPT_IMAGE_2 });
+    expect(vi.mocked(invokeImageProcessor).mock.calls.length).toBe(0);
+
+    await makeService().edit(png(cap + 1), 'make it blue', { model: ImageModels.GPT_IMAGE_2 });
+    expect(vi.mocked(invokeImageProcessor).mock.calls.length).toBe(1);
+  });
+
+  it('keeps the PNG-under-4MB coercion for dall-e-2, which requires it', async () => {
+    const dataUrl = `data:image/png;base64,${largeImage(PNG_HEADER).toString('base64')}`;
+    await makeService().edit(dataUrl, 'make it blue', { model: ImageModels.DALL_E_2 });
+
+    expect(invokeImageProcessor).toHaveBeenCalledWith(expect.any(Buffer), 'image-processor-lambda', 4);
   });
 });

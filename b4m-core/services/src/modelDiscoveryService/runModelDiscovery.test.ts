@@ -736,6 +736,21 @@ describe('runModelDiscovery', () => {
         expect(result.absence.missed).toEqual(['gpt-6']);
       });
 
+      it('keeps the credits of the discovery row it graduates', async () => {
+        await missFor(bench, 3);
+
+        const [sighted, graduation] = bench.catalog.rows;
+        expect(sighted.contributors).toContainEqual({ group: 'identity', source: 'openai' });
+        // planPass hands planLifecycle the in-force credits; without them the graduation would
+        // blanket-credit discovery, and the read path interprets the availability credit.
+        expect(graduation.contributors).toEqual(
+          expect.arrayContaining([
+            { group: 'identity', source: 'openai' },
+            { group: 'limits', source: 'openai' },
+          ])
+        );
+      });
+
       it('plans the graduation but writes nothing in report mode', async () => {
         // Report mode never applies a miss, so the plan has to reach the same
         // verdict from the counters as they stood when the run started.
@@ -994,17 +1009,25 @@ describe('runModelDiscovery', () => {
             expected: [] as string[],
           },
           {
-            name: 'is written once the provider is not configured, so it cannot be reporting',
+            name: 'stays refused when the provider is not configured',
             openai: () => stubSource({ name: 'openai', kind: 'provider', configured: false }),
-            expected: [FUTURE],
+            expected: [] as string[],
           },
         ])('$name', async ({ openai, expected }) => {
           await firstPass(bench);
           bench.adapters.sources = [openai(), azure(), aggregator()];
 
-          await runModelDiscovery(bench.adapters, bench.options);
+          const result = await runModelDiscovery(bench.adapters, bench.options);
 
           expect(writtenDates(bench)).toEqual(expected);
+          expect(result.lifecycle.suggestions).toContainEqual(
+            expect.objectContaining({
+              modelId: 'gpt-6',
+              status: 'active',
+              deprecationDate: FUTURE,
+              source: 'models.dev',
+            })
+          );
         });
       });
 

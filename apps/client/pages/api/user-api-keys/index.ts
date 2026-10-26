@@ -10,6 +10,7 @@ import {
 } from '@server/entitlements/embedKeyEntitlement';
 import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
 import { logEventSafe } from '@server/utils/analyticsLog';
+import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
 import {
   ApiKeyScope,
   CreditHolderType,
@@ -19,8 +20,13 @@ import {
   UserApiKeyEvents,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { USER_API_KEY_SCOPE_VALUES, isApiKeyScopeOffered } from '@client/app/constants/apiKeyScopes';
+import {
+  USER_API_KEY_SCOPE_VALUES,
+  isApiKeyScopeOffered,
+  isKnownApiKeyScope,
+} from '@client/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
+import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {
@@ -146,15 +152,15 @@ const handler = baseApi()
     // other dedicated-flow scopes are intentionally absent from USER_API_KEY_SCOPE_VALUES
     // and must never be reachable here, regardless of what the request body contains.
     const requestedScopes = Array.isArray(scopes) ? scopes : [];
-    const invalidScopes = requestedScopes.filter(s => !USER_API_KEY_SCOPE_VALUES.includes(s as ApiKeyScope));
+    const invalidScopes = requestedScopes.filter(s => !USER_API_KEY_SCOPE_VALUES.includes(s));
     if (invalidScopes.length > 0) {
       throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
     }
 
-    // Product scopes (OptiHashi, Overwatch, Hearth) need the product too: the New-Key modal hides
+    // Product and contributed scopes need their product or entitlement too: the New-Key modal hides
     // them from users without it, and this keeps a hand-built request from minting one anyway.
     const scopeAccess = await resolveApiKeyScopeAccess(req);
-    const unentitledScopes = requestedScopes.filter(s => !isApiKeyScopeOffered(s as ApiKeyScope, scopeAccess));
+    const unentitledScopes = requestedScopes.filter(s => !isApiKeyScopeOffered(s, scopeAccess));
     if (unentitledScopes.length > 0) {
       throw new ForbiddenError(`Scope not available on your account: ${unentitledScopes.join(', ')}`);
     }
@@ -168,6 +174,14 @@ const handler = baseApi()
         throw new ForbiddenError('You do not have permission to mint API keys billed to this organization');
       }
     }
+
+    // The admin paid-only switch, after the org check so an unauthorized caller learns nothing
+    // about an org's plan. The same gate re-runs on every use of the key (apiKeyAuth).
+    await assertApiKeyAccessAllowed(
+      req.user,
+      organizationId ? { billingOwnerType: CreditHolderType.Organization, organizationId } : undefined,
+      req
+    );
 
     // Embed keys: apply the host-aware origin screen here (needs the runtime app
     // host). The service re-validates format/dedup/cap and enforces the agentId
@@ -197,6 +211,8 @@ const handler = baseApi()
       ? { userId, billingOwnerType: CreditHolderType.Organization, organizationId }
       : { userId, billingOwnerType: CreditHolderType.User };
     const screenedBranding = await gateEmbedBrandingWrite(brandingOwner, brandingCheck.value);
+    // Org-billed keys are not trust-gated, so skip the subscription reads the assessment may cost.
+    const trust = organizationId ? undefined : (await resolveApiKeyTrust(req.user, req)).assessment;
 
     const newApiKey = await userApiKeyService.createUserApiKey(
       userId,
@@ -227,6 +243,8 @@ const handler = baseApi()
         },
         callerScopes: req.apiKeyInfo ? (req.apiKeyInfo.scopes ?? []) : undefined,
         callerExpiresAt: req.apiKeyInfo?.expiresAt,
+        isKnownScope: isKnownApiKeyScope,
+        trust,
       }
     );
 

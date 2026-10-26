@@ -18,14 +18,12 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import { APP_DECISION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
-import { pseudonymize } from './pseudonymize';
+import { pseudonymize } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { stableEventId } from './signupEvents';
 import {
   emitEmailVerifiedFunnelEvents,
   emitFunnelEvent,
   emitSignupFunnelEvents,
-  isSyntheticIdentity,
-  parseDomainList,
   recordFirstChatValue,
   recordFirstValue,
   recordSignupAcquisition,
@@ -44,39 +42,6 @@ beforeEach(() => {
   mockLogEventSafe.mockResolvedValue(undefined);
   mockUserUpdate.mockResolvedValue(null);
   mockUpdateOne.mockResolvedValue({ modifiedCount: 1 });
-});
-
-describe('parseDomainList', () => {
-  it('splits on commas and whitespace, lower-cases, and drops a leading @', () => {
-    expect(parseDomainList(' Test.Example , @qa.example.org\nfoo.dev ')).toEqual([
-      'test.example',
-      'qa.example.org',
-      'foo.dev',
-    ]);
-  });
-
-  it.each([undefined, null, 3, ''])('reads %s as no domains', raw => {
-    expect(parseDomainList(raw)).toEqual([]);
-  });
-});
-
-describe('isSyntheticIdentity', () => {
-  it('flags the persona- username prefix regardless of domains', () => {
-    expect(isSyntheticIdentity({ username: 'persona-alice', email: 'a@real.com' }, [])).toBe(true);
-    expect(isSyntheticIdentity({ username: 'Persona-Bob' }, [])).toBe(true);
-  });
-
-  it('flags a configured domain and its subdomains, not look-alikes', () => {
-    const domains = ['test.example'];
-    expect(isSyntheticIdentity({ username: 'u', email: 'x@test.example' }, domains)).toBe(true);
-    expect(isSyntheticIdentity({ username: 'u', email: 'x@Sub.Test.Example' }, domains)).toBe(true);
-    expect(isSyntheticIdentity({ username: 'u', email: 'x@nottest.example' }, domains)).toBe(false);
-  });
-
-  it('flags nothing by default (empty domain list)', () => {
-    expect(isSyntheticIdentity({ username: 'alice', email: 'a@gmail.com' }, [])).toBe(false);
-    expect(isSyntheticIdentity({ username: 'alice', email: null }, [])).toBe(false);
-  });
 });
 
 describe('toUserAcquisition', () => {
@@ -144,6 +109,19 @@ describe('recordSignupAcquisition', () => {
       recordSignupAcquisition({ req: reqWith(`${APP_DECISION_COOKIE}=granted; ${TOUCH_COOKIES}`), user, method: 'otc' })
     ).resolves.toEqual({ isSynthetic: false });
   });
+
+  it('keeps a persona synthetic when the write fails, so it is not sent as a real signup', async () => {
+    mockUserUpdate.mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(
+      recordSignupAcquisition({
+        req: reqWith(''),
+        user: { id: 'u3', username: 'persona-qa', email: 'qa@real.example' },
+        method: 'otc',
+      })
+    ).resolves.toEqual({ isSynthetic: true });
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'u3', isSynthetic: true });
+  });
 });
 
 describe('recordSyntheticIdentity', () => {
@@ -151,7 +129,7 @@ describe('recordSyntheticIdentity', () => {
     [{ id: 'u1', username: 'persona-admin', email: 'a@real.example' }, ''],
     [{ id: 'u2', username: 'admin-seeded', email: 'a@test.example' }, 'test.example'],
   ])(
-    'persists a synthetic admin-created account and keeps every funnel emit out of Overwatch',
+    'persists a synthetic admin-created account and sends its funnel stages marked with the synthetic lane',
     async (user, domains) => {
       mockGetSetting.mockResolvedValue(domains);
 
@@ -165,7 +143,12 @@ describe('recordSyntheticIdentity', () => {
 
       expect(isSynthetic).toBe(true);
       expect(mockUserUpdate).toHaveBeenCalledWith({ id: user.id, isSynthetic: true });
-      expect(mockEmit).not.toHaveBeenCalled();
+      // Both marks travel: the lane says it is a persona, and the admin mark still keeps it out
+      // of DAU until its own first request.
+      expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+        ['credits_granted', { amount: 50, source: 'signup', method: 'admin', userAction: false, lane: 'synthetic' }],
+        ['signup_completed', { method: 'admin', userAction: false, lane: 'synthetic' }],
+      ]);
     }
   );
 });
@@ -188,9 +171,31 @@ describe('emitFunnelEvent', () => {
     });
   });
 
-  it('skips synthetic users', async () => {
-    expect(await emitFunnelEvent({ user: { id: 'u1', isSynthetic: true }, event: 'email_verified' })).toBe(false);
-    expect(mockEmit).not.toHaveBeenCalled();
+  it("sends a synthetic user's stage marked with the synthetic lane instead of skipping it", async () => {
+    expect(await emitFunnelEvent({ user: { id: 'u1', isSynthetic: true }, event: 'email_verified' })).toBe(true);
+    expect(mockEmit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'email_verified', userId: 'u1', metadata: { lane: 'synthetic' } })
+    );
+  });
+
+  it('lets no caller metadata unmark a synthetic user', async () => {
+    await emitFunnelEvent({
+      user: { id: 'u1', isSynthetic: true },
+      event: 'signup_completed',
+      metadata: { lane: 'real' },
+    });
+    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ lane: 'synthetic' });
+  });
+
+  it("leaves a real user's stage unmarked, and sends no empty metadata", async () => {
+    await emitFunnelEvent({ user: { id: 'u1', isSynthetic: false }, event: 'email_verified' });
+    await emitFunnelEvent({
+      user: { id: 'u2', isSynthetic: null },
+      event: 'signup_completed',
+      metadata: { method: 'otc' },
+    });
+    expect(mockEmit.mock.calls[0][0]).not.toHaveProperty('metadata');
+    expect(mockEmit.mock.calls[1][0].metadata).toEqual({ method: 'otc' });
   });
 
   it('never throws when the emitter rejects', async () => {
@@ -224,6 +229,18 @@ describe('emitSignupFunnelEvents', () => {
       ['signup_completed', { method: 'github' }],
     ]);
   });
+
+  it("marks an admin-created account's stages as no action of its user", async () => {
+    // Still a signup, but not a day the new user was active: Overwatch keeps them out of DAU,
+    // and out of its new users, until their own first request.
+    await emitSignupFunnelEvents({ user: { id: 'u1' }, method: 'admin', emailVerified: true, creditsGranted: 50 });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'admin', userAction: false }],
+      ['credits_granted', { amount: 50, source: 'signup', method: 'admin', userAction: false }],
+      ['signup_completed', { method: 'admin', userAction: false }],
+    ]);
+  });
 });
 
 describe('emitEmailVerifiedFunnelEvents', () => {
@@ -237,6 +254,19 @@ describe('emitEmailVerifiedFunnelEvents', () => {
     expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
       ['email_verified', { method: 'otc' }],
       ['credits_granted', { amount: 70, source: 'signup', method: 'otc' }],
+    ]);
+  });
+
+  it('marks an admin verifying the email as no action of its user', async () => {
+    await emitEmailVerifiedFunnelEvents({
+      user: { id: 'u1', createdAt: new Date('2026-10-11T00:00:00Z') },
+      method: 'admin',
+      creditsGranted: 120,
+    });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'admin', userAction: false }],
+      ['credits_granted', { amount: 120, source: 'signup', method: 'admin', userAction: false }],
     ]);
   });
 
@@ -282,10 +312,15 @@ describe('recordFirstValue', () => {
     expect(mockEmit).not.toHaveBeenCalled();
   });
 
-  it('records the stage but emits nothing for a synthetic user', async () => {
-    expect(await recordFirstValue({ user: { ...user, isSynthetic: true }, feature: 'chat', now })).toBe(false);
+  it('records the stage and emits first_value marked with the synthetic lane for a synthetic user', async () => {
+    expect(await recordFirstValue({ user: { ...user, isSynthetic: true }, feature: 'chat', now })).toBe(true);
     expect(mockUpdateOne).toHaveBeenCalledTimes(1);
-    expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockEmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'first_value',
+        metadata: { feature: 'chat', secondsSinceSignup: 100, lane: 'synthetic' },
+      })
+    );
   });
 
   it('never throws when the write fails', async () => {

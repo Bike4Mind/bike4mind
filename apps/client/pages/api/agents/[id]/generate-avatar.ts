@@ -6,6 +6,8 @@ import { agentRepository } from '@bike4mind/database';
 import { ImageModels, IAgent, ModelInfo } from '@bike4mind/common';
 import {
   BadRequestError,
+  ExpectedImageGenerationError,
+  logImageGenerationFailure,
   getSettingsByNames,
   getSettingsMap,
   getSettingsValue,
@@ -16,13 +18,14 @@ import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 
 import { KnowledgeType } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import axios from 'axios';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 // System prompt for creating visual prompts from agent descriptions
 const AGENT_AVATAR_PROMPT_SYSTEM = `You are an expert at translating rich personality descriptions and agent metadata into detailed visual prompts for AI image generation.
@@ -125,6 +128,7 @@ const downloadImageBuffer = async (imageUrl: string): Promise<Buffer> => {
 const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{ id: string }, AgentAvatarResponse, AgentAvatarRequest>
 >(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { id } = req.query;
   const userId = req.user!.id;
   const { imageModel: userImageModel } = req.body;
@@ -497,10 +501,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       generationPrompt: cleanPrompt,
     });
   } catch (error) {
-    imageLogger.error('Error generating agent avatar:', error, {
-      agentId: agent.id,
-      userId,
-    });
+    logImageGenerationFailure(imageLogger, 'Error generating agent avatar:', error, { agentId: agent.id, userId });
 
     // Let the shared error handler render this with its real status and message
     // (400 with a storage `code` and byte counts), same as every other upload door.
@@ -510,7 +511,11 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
 
     // Provide user-friendly error messages
     let errorMessage = 'Failed to generate avatar. Please try again.';
-    if (error instanceof ImageModerationBlockedError) {
+    // Two different moderation classes: this one is the provider refusing to generate (from
+    // @bike4mind/utils), the Rekognition one below is our own scan of the generated image.
+    if (error instanceof ExpectedImageGenerationError) {
+      errorMessage = error.message;
+    } else if (error instanceof ImageModerationBlockedError) {
       errorMessage = 'Generated avatar was flagged by content moderation and could not be saved. Please try again.';
     } else if (error instanceof Error) {
       if (error.message.includes('API key') || error.message.includes('model')) {

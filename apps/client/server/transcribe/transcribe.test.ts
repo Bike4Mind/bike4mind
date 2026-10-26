@@ -54,7 +54,7 @@ vi.mock('@aws-sdk/s3-presigned-post', () => ({
   createPresignedPost: (...a: unknown[]) => mockPresign(...a),
 }));
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'test-bucket' } } }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
   getEffectiveApiKeyByBackend: mockGetApiKey,
 }));
@@ -161,6 +161,23 @@ describe('transcribeUpload rejection kinds', () => {
     await expect(
       transcribeUpload({ user: { id: 'u1' }, fileKey: 'transcribe-uploads/u2/a.mp3', receivedAt: new Date(), logger })
     ).rejects.toMatchObject({ kind: 'invalid_key' });
+  });
+
+  it('refuses a moderated user before any credit, storage or provider work', async () => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+
+    await expect(
+      transcribeUpload({
+        user: { id: 'u1', isModerated: true } as never,
+        fileKey: 'transcribe-uploads/u1/a.mp3',
+        receivedAt: new Date(),
+        logger,
+      })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockAssertCredits).not.toHaveBeenCalled();
+    expect(mockHoldCredits).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockOpenAI).not.toHaveBeenCalled();
   });
 
   it('rethrows a credit pre-flight fault that is not a BadRequestError unchanged', async () => {

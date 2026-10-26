@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { execSync } from 'child_process';
+import net from 'net';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -89,6 +90,103 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
       }
     }
   );
+
+  it('allows loopback but no other IP when network is enabled through a proxy', async () => {
+    const proxy = net.createServer(socket => socket.destroy());
+    await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve));
+    const probe = (host: string, port: number) => `out=$(nc -z -w 2 ${host} ${port} 2>&1) && echo open || echo closed`;
+    const listenAndConnect = (host: string) =>
+      `node -e "const s=require('net').createServer(c=>c.end()).listen(0,'${host}',()=>require('net').connect(s.address().port,'${host}',()=>{console.log('loopback');process.exit(0)}))" 2>&1 || echo failed`;
+    const wrapped = runtime.wrapCommand({
+      command: [
+        probe('127.0.0.1', (proxy.address() as net.AddressInfo).port),
+        listenAndConnect('127.0.0.1'),
+        listenAndConnect('::1'),
+        `nc -v -z -w 2 127.0.0.2 9 2>&1 | grep -q 'not permitted' && echo denied || echo allowed`,
+      ].join('; '),
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled: true,
+      proxyPort: (proxy.address() as net.AddressInfo).port,
+    });
+
+    try {
+      const output = execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 15000 });
+      expect(output.trim().split('\n')).toEqual(['open', 'loopback', 'loopback', 'denied']);
+    } finally {
+      cleanupWrapped(wrapped.cleanupPaths);
+      proxy.close();
+    }
+  });
+
+  it.each([
+    [false, 'EPERM'],
+    [true, 'open'],
+  ])('connects to a container socket only when allowed (allow=%s)', async (allow, expected) => {
+    const runtimeDir = mkdtempSync(path.join(os.tmpdir(), 'b4m-xdg-'));
+    const socketPath = path.join(runtimeDir, 'docker.sock');
+    const server = net.createServer(socket => socket.end());
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, resolve);
+    });
+    const original = process.env.XDG_RUNTIME_DIR;
+    process.env.XDG_RUNTIME_DIR = runtimeDir;
+    const wrapped = runtime.wrapCommand({
+      command: `node -e "require('net').connect('${socketPath}').on('connect',()=>{console.log('open');process.exit(0)}).on('error',e=>{console.log(e.code);process.exit(0)})"`,
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled: false,
+      allowContainerSockets: allow,
+    });
+    if (original === undefined) delete process.env.XDG_RUNTIME_DIR;
+    else process.env.XDG_RUNTIME_DIR = original;
+
+    try {
+      const output = execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 10000 });
+      expect(output.trim()).toBe(expected);
+    } finally {
+      cleanupWrapped(wrapped.cleanupPaths);
+      server.close();
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a configured socket in /tmp from being renamed and reached', async () => {
+    const socketDir = mkdtempSync('/tmp/b4m-dh-');
+    const socketPath = path.join(socketDir, 'd.sock');
+    const server = net.createServer(socket => socket.end());
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, resolve);
+    });
+    const original = process.env.DOCKER_HOST;
+    process.env.DOCKER_HOST = `unix://${socketPath}`;
+    const connect = (target: string) =>
+      `node -e "require('net').connect('${target}').on('connect',()=>{console.log('open');process.exit(0)}).on('error',e=>{console.log(e.code);process.exit(0)})"`;
+    const wrapped = runtime.wrapCommand({
+      command: [
+        `mv ${socketPath} ${socketDir}/m.sock && echo moved || echo kept`,
+        `mv ${socketDir} ${socketDir}-m && echo moved || echo kept`,
+        connect(socketPath),
+      ].join('; '),
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled: false,
+    });
+    if (original === undefined) delete process.env.DOCKER_HOST;
+    else process.env.DOCKER_HOST = original;
+
+    try {
+      const output = execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' });
+      expect(output.trim().split('\n')).toEqual(['kept', 'kept', 'EPERM']);
+    } finally {
+      cleanupWrapped(wrapped.cleanupPaths);
+      server.close();
+      rmSync(socketDir, { recursive: true, force: true });
+      rmSync(`${socketDir}-m`, { recursive: true, force: true });
+    }
+  });
 
   it('allows writing to CWD', () => {
     const testFile = path.join(TEST_DIR, 'write-test.txt');

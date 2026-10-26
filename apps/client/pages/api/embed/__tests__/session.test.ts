@@ -8,7 +8,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 vi.mock('@server/middlewares/embedCors', () => ({ embedCors: () => () => {} }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 
@@ -116,6 +116,23 @@ describe('POST /api/embed/session', () => {
     const { status, json } = await mint({});
     expect(status).toBe(401);
     expect(json.error).toBe('unauthorized');
+  });
+
+  it('denies an opaque origin when the key restricts origins', async () => {
+    const { status, json } = await mint({}, { origin: 'null' });
+    expect(status).toBe(403);
+    expect(json.error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('mints for an opaque origin when the key has no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
+    const { status } = await mint({}, { origin: 'null' });
+    expect(status).toBe(200);
+  });
+
+  it('still mints for a request that carries no Origin header', async () => {
+    const { status } = await mint({});
+    expect(status).toBe(200);
   });
 
   it('refuses an identified mint from a browser, since it carries a client secret', async () => {

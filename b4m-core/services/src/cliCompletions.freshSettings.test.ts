@@ -18,7 +18,14 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   resolveOutputMaxTokens: vi.fn(
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
   ),
-  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
+  getAvailableModels: vi.fn().mockResolvedValue([
+    {
+      id: 'test-model',
+      type: 'text',
+      backend: 'anthropic',
+      pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
+    },
+  ]),
   isAdaptiveThinkingByDefault: vi.fn(() => false),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
@@ -89,9 +96,14 @@ describe('executeCompletion - admin settings are read fresh', () => {
     vi.clearAllMocks();
     shutdownSettingsCache();
   });
-  afterEach(() => shutdownSettingsCache());
+  afterEach(() => {
+    shutdownSettingsCache();
+    vi.unstubAllEnvs();
+  });
 
   it('honours an enforceCredits flip on the next completion, with no restart', async () => {
+    // Enforcement can only be switched off on self-host; hosted keeps it on whatever the row says.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     const adminSettings = buildSettingsStore('true');
     const { db, users } = buildDb(adminSettings);
 

@@ -133,6 +133,7 @@ userSchema.index({ organizationId: 1, createdAt: -1 });   // performance indexes
 - **MUI Joy** (`@mui/joy`) is the primary UI library; use `@mui/system` utilities (`styled`, `keyframes`) for advanced styling.
 - **Do not install or use `@emotion`.**
 - Styled components: `styled('div')(...)` with proper TypeScript types.
+- **Admin UI** (`apps/client/app/components/admin/**`) follows [`DESIGN_GUIDE.md`](./apps/client/app/components/admin/DESIGN_GUIDE.md): page anatomy, the action/save model, shared components and copy rules.
 
 ## Theme mode guidelines
 

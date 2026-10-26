@@ -2,7 +2,7 @@ import { Ability } from '@server/auth/ability';
 import {
   ApiKeyBillingOwnerType,
   ApiKeyCompletionSource,
-  ApiKeyScope,
+  ApiKeyScopeValue,
   IUserApiKeyRateLimit,
   IUserDocument,
 } from '@bike4mind/common';
@@ -15,7 +15,7 @@ declare global {
 
     interface ApiKeyInfo {
       keyId: string;
-      scopes: ApiKeyScope[];
+      scopes: ApiKeyScopeValue[];
       rateLimit: IUserApiKeyRateLimit;
       expiresAt?: Date;
       /** Overwatch product this key is bound to. Set only for OVERWATCH_INGEST_WRITE keys. */

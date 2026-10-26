@@ -1,14 +1,9 @@
 import { FabFile, releaseNoteRepository } from '@bike4mind/database';
-import {
-  getWhatsNewMediaContract,
-  isImageServeable,
-  NotFoundError,
-  RELEASE_NOTE_MEDIA_FIELDS,
-} from '@bike4mind/common';
+import { getWhatsNewMediaContract, isImageServeable, NotFoundError, releaseNoteMediaUrl } from '@bike4mind/common';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { findDeniedInNote, loadReleaseNotesConfig } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 import { ownModalMediaKey } from '@server/releaseNotes/publicMedia';
 
@@ -18,7 +13,8 @@ const SIGNED_URL_TTL_SECONDS = 3600;
 const CACHE_CONTROL = 'public, max-age=600, s-maxage=600';
 
 const handler = nextRouteForContract(getWhatsNewMediaContract, {
-  // A page of notes can load four files per note, so the budget is wider than the feed's.
+  // Up to four files per note (a still is fetched only for a note without a video), so the budget is wider
+  // than the feed's.
   rateLimit: rateLimit({ limit: 300, windowMs: 60_000, bucket: 'GET /api/v1/whats-new/media' }),
 }).get(async (req, res) => {
   const { id, asset } = req.validatedParams;
@@ -28,7 +24,7 @@ const handler = nextRouteForContract(getWhatsNewMediaContract, {
   const note = !malformed && config.enabled ? await releaseNoteRepository.findPublishedById(id, new Date()) : null;
   if (!note || findDeniedInNote(note, config.denylist)) throw new NotFoundError('Release note not found');
 
-  const url = note.video?.[RELEASE_NOTE_MEDIA_FIELDS[asset]];
+  const url = releaseNoteMediaUrl(note, asset);
   const key = url ? ownModalMediaKey(url, Resource.fabFileBucket.name) : null;
   if (!key) throw new NotFoundError('Release note media not found');
   // The moderation gate of /api/files/presigned-url: a held, blocked or deleted upload is never signed.

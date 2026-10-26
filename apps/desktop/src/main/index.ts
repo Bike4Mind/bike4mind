@@ -9,6 +9,7 @@ import { registerAccount } from './account';
 import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
 import { sessionScopeFor, sessionScopeKey } from './chat/sessionScope';
+import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
@@ -137,6 +138,7 @@ void app.whenReady().then(async () => {
     spareWorktrees,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
+    releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
   });
   fleet.setDirectoryResolver(async sessionId => {
@@ -243,6 +245,7 @@ void app.whenReady().then(async () => {
 
   createWindow();
   claudeImport.start();
+  onAuthStateChanged(closeBrowsersOnScopeChange(auth.getState(), () => browser.closeAll()));
   let importScope = sessionScopeKeyOf(auth.getState());
   onAuthStateChanged(state => {
     const next = sessionScopeKeyOf(state);

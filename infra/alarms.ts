@@ -144,6 +144,38 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: Billing Event Ingest Failures
+   *
+   * Fires when billing and account events (purchase, payment_failed, subscription_ended, ...)
+   * repeatedly fail to reach Overwatch's ingest endpoint: a network failure or timeout, a 5xx, or
+   * a 4xx or redirect, which means a bad key or OVERWATCH_INGEST_URL. Each failure is an event
+   * dropped for good, since the webhook or worker that sent it succeeds and is not retried, so
+   * revenue and churn reporting would otherwise go quietly short. Three in an hour, not one, so a
+   * single ingest blip stays quiet.
+   *
+   * Metric emitted by: apps/client/server/analytics/emitActiveEvent.ts (INGEST_FAILURE_METRIC)
+   * Namespace: Lumina5/Analytics / IngestEmitFailed
+   */
+  new aws.cloudwatch.MetricAlarm('billingEventIngestFailures', {
+    name: `${$app.name}-${$app.stage}-billing-event-ingest-failures`,
+    alarmDescription: 'Billing events are failing to reach Overwatch ingest and are being dropped',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'IngestEmitFailed',
+    namespace: 'Lumina5/Analytics',
+    dimensions: { Stage: $app.stage },
+    period: 3600, // 1 hour
+    statistic: 'Sum',
+    threshold: 3,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Analytics',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
    * Alarm: High Failure Count
    *
    * Triggers when more than 2 failures occur in a 5-minute period.
@@ -870,6 +902,42 @@ if (isMonitoredStage) {
         Severity: 'High',
       },
     });
+
+    new aws.cloudwatch.MetricAlarm('unavailableModelReferences', {
+      name: `${$app.name}-${$app.stage}-unavailable-model-references`,
+      alarmDescription:
+        'Model pins are unavailable; model-reference-audit logs name the model, configuration path and cause. See admin model-deprecation-status for the report.',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 2,
+      datapointsToAlarm: 2,
+      metricName: 'UnavailableModelReferences',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 1800,
+      statistic: 'Maximum',
+      threshold: 0,
+      treatMissingData: 'breaching',
+      dimensions: modelDiscoveryDimensions,
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'ModelDiscovery', Severity: 'High' },
+    });
+
+    for (const metricName of ['ModelsDeprecated', 'LifecycleDateChanges'] as const) {
+      new aws.cloudwatch.MetricAlarm(`modelDiscovery-${metricName}`, {
+        name: `${$app.name}-${$app.stage}-model-discovery-${metricName}`,
+        alarmDescription: `Model discovery reports ${metricName}; review the model lifecycle operator queue and discovery logs`,
+        comparisonOperator: 'GreaterThanThreshold',
+        evaluationPeriods: 1,
+        metricName,
+        namespace: 'Lumina5/ModelDiscovery',
+        period: 21600,
+        statistic: 'Maximum',
+        threshold: 0,
+        treatMissingData: 'notBreaching',
+        dimensions: modelDiscoveryDimensions,
+        alarmActions: [dlqAlarmTopic.arn],
+        tags: { Application: 'ModelDiscovery', Severity: 'Medium' },
+      });
+    }
 
     new aws.cloudwatch.MetricAlarm('modelDiscoveryStalenessCheckErrors', {
       name: `${$app.name}-${$app.stage}-model-discovery-staleness-check-errors`,

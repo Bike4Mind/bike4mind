@@ -70,7 +70,7 @@ jobs:
   # single-cell and all-specs dispatch modes — those use the dispatch-selected model.
   discover-models:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_full_matrix)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -288,7 +288,7 @@ jobs:
     # There is no run shape in which some cells skip and others do not.
     outputs:
       preview_skipped: ${{ steps.e2e.outputs.preview_skipped }}
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: '${{ matrix.spec_file }} — ${{ matrix.ai_model }}'
     timeout-minutes: 90
     permissions:
@@ -500,10 +500,18 @@ jobs:
           echo "Found pw-results.json candidates:"
           find . -type f -name 'pw-results.json' 2>/dev/null | head -20 || true
 
+      - name: Scrub E2E secrets from test output
+        id: scrub
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        env:
+          E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+        run: python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
+
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were
         # found" warning that reads like the run lost its report.
-        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        if: always() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v6
         with:
           name: ai-latency-${{ matrix.spec_file }}-${{ steps.sanitize.outputs.model_safe }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
@@ -644,12 +652,12 @@ jobs:
           MODEL_W=20
           QUAL_W=8
 
-          TABLE_HDR="$(printf "%-${SUITE_W}s %-${MODEL_W}s %-${QUAL_W}s %s" 'Suite' 'Model' 'Quality' 'Average Latency')"
+          TABLE_HDR="$(printf "%-${SUITE_W}s %-${MODEL_W}s %-${QUAL_W}s %s" 'Suite' 'Model' 'Quality' 'Median Latency (TTFT)')"
           TABLE_SEP="$(printf "%-${SUITE_W}s %-${MODEL_W}s %-${QUAL_W}s %s" \
             '--------------------------------' \
             '--------------------' \
             '--------' \
-            '---------------')"
+            '---------------------')"
           TABLE_ROWS=""
 
           for SPEC in "${SPEC_FILES[@]}"; do
@@ -685,7 +693,7 @@ jobs:
                 # Skip the latency gate test: its breach belongs to the Latency column below, and
                 # counting it here would read a slow-but-correct cell as a quality failure. The
                 # title must stay in sync with LATENCY_GATE_TITLE in ai-latency-suite-factory.ts.
-                UNEXPECTED="$(jq -r --arg gate 'average AI latency is within the threshold' \
+                UNEXPECTED="$(jq -r --arg gate 'median AI latency is within the threshold' \
                   '[.. | objects | select(has("specs")) | .specs[] | select(.title != $gate and .ok == false)] | length' \
                   "$PW_JSON" 2>/dev/null || echo 0)"
                 [ "$UNEXPECTED" -gt 0 ] && QUALITY="Fail" || QUALITY="Pass"
@@ -696,29 +704,39 @@ jobs:
               # Latency column
               if [ -n "$LATENCY_JSON" ]; then
                 THRESHOLD="$(jq -r '.thresholdSec // empty' "$LATENCY_JSON")"
-                AVG="$(jq -r '.averageResponseTimeSec // 0' "$LATENCY_JSON")"
-                # A prompt abandoned at its budget has no upper bound, so averaging it in understates
-                # the cell: two fast prompts drag the mean back under thresholdSec and the breach
-                # disappears into it. Count any abandoned gated prompt as a breach in its own right.
-                ABANDONED="$(jq -r '[.results[]? | select(.incomplete == true) | select(.measuresDeliverable != true)] | length' "$LATENCY_JSON")"
-                # An unflagged prompt that answered with an artifact is excluded from AVG; show it so the
-                # mode switch is noticed rather than hidden.
-                SWITCHED="$(jq -r '[.results[]? | select(.unexpectedArtifact == true)] | length' "$LATENCY_JSON")"
+                # Median over gated prompts, each on its slowest attempt (gatedMedianSec in
+                # ai-latency-budget.ts); TTFT is the median time to first answer token beside it.
+                MEDIAN="$(jq -r '.medianResponseTimeSec // 0' "$LATENCY_JSON")"
+                TTFT="$(jq -r '.medianFirstTokenSec // 0' "$LATENCY_JSON")"
+                # A prompt abandoned at its budget has no upper bound, so faster prompts can outvote it
+                # in the median and the breach disappears. Count a gated prompt whose LATEST attempt was
+                # abandoned as a breach in its own right; one a retry completed only feeds the median.
+                ABANDONED="$(jq -r '[.results[]? | select(.incomplete == true) | select(.measuresDeliverable != true) | select(.retried != true)] | length' "$LATENCY_JSON")"
+                # An unflagged prompt that answered with an artifact is excluded from the median; show it
+                # so the mode switch is noticed rather than hidden. Counted per prompt on its latest attempt
+                # (unexpectedArtifactIds in ai-latency-budget.ts): a retry that answered in chat is in the median.
+                SWITCHED="$(jq -r '[.results[]? | select(.unexpectedArtifact == true) | select(.retried != true) | .id] | unique | length' "$LATENCY_JSON")"
+                # Earlier attempts of a retried gated prompt are kept and can set its value in the median;
+                # say how many.
+                RETRIED="$(jq -r '[.results[]? | select(.retried == true) | select(.measuresDeliverable != true)] | length' "$LATENCY_JSON")"
+                LATENCY_VALUE="$(printf '%.2fs' "$MEDIAN")"
+                IS_TTFT="$(echo "$TTFT > 0" | bc -l 2>/dev/null || echo 0)"
+                [ "$IS_TTFT" = "1" ] && LATENCY_VALUE="${LATENCY_VALUE} (TTFT $(printf '%.2fs' "$TTFT"))"
 
                 if [ -z "$THRESHOLD" ] || [ "$THRESHOLD" = "null" ]; then
-                  LATENCY_STR="$(printf '%.2fs' "$AVG") / <=N/A FAIL"
+                  LATENCY_STR="${LATENCY_VALUE} / <=N/A FAIL"
                   LATENCY_EXCEEDED_COUNT=$((LATENCY_EXCEEDED_COUNT + 1))
                   EXCEEDED=true
                 else
-                  IS_ZERO="$(echo "$AVG == 0" | bc -l 2>/dev/null || echo 0)"
-                  IS_OVER="$(echo "$AVG > $THRESHOLD" | bc -l 2>/dev/null || echo 0)"
+                  IS_ZERO="$(echo "$MEDIAN == 0" | bc -l 2>/dev/null || echo 0)"
+                  IS_OVER="$(echo "$MEDIAN > $THRESHOLD" | bc -l 2>/dev/null || echo 0)"
                   if [ "$IS_ZERO" = "1" ]; then
                     LATENCY_STR="No Data"
                     [ "${SWITCHED:-0}" -gt 0 ] && LATENCY_STR="No Data (${SWITCHED} artifact-mode excluded)"
                     LATENCY_NO_DATA=$((LATENCY_NO_DATA + 1))
                     HAS_NO_DATA=true
                   elif [ "$IS_OVER" = "1" ] || [ "${ABANDONED:-0}" -gt 0 ]; then
-                    REASON="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s FAIL"
+                    REASON="${LATENCY_VALUE} / <=${THRESHOLD}s FAIL"
                     [ "${SWITCHED:-0}" -gt 0 ] && REASON="${REASON} (${SWITCHED} artifact-mode excluded)"
                     [ "${ABANDONED:-0}" -gt 0 ] && REASON="${REASON} (${ABANDONED} prompt(s) never finished)"
                     LATENCY_STR="$REASON"
@@ -726,10 +744,11 @@ jobs:
                     LATENCY_EXCEEDED_COUNT=$((LATENCY_EXCEEDED_COUNT + 1))
                     EXCEEDED=true
                   else
-                    LATENCY_STR="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s"
+                    LATENCY_STR="${LATENCY_VALUE} / <=${THRESHOLD}s"
                     LATENCY_WITHIN=$((LATENCY_WITHIN + 1))
                     [ "${SWITCHED:-0}" -gt 0 ] && LATENCY_STR="${LATENCY_STR} (${SWITCHED} artifact-mode excluded)"
                   fi
+                  [ "$IS_ZERO" != "1" ] && [ "${RETRIED:-0}" -gt 0 ] && LATENCY_STR="${LATENCY_STR} (${RETRIED} retried attempt(s) kept)"
                 fi
               else
                 LATENCY_STR="No Data"
@@ -742,7 +761,7 @@ jobs:
             done
           done
 
-          # Average latency exceeding threshold is a real failure - downgrade overall status, and
+          # Median latency exceeding threshold is a real failure - downgrade overall status, and
           # publish the verdict as ONE output. Never over a skip: no cell produced latency data, so
           # a breach could only be stale there and the skip is the honest verdict either way. Every
           # consumer (Slack page, run gate) reads latency_breach rather than re-deriving
@@ -870,7 +889,7 @@ jobs:
         # no longer silently retire the slowness signal.
         if: ${{ always() && steps.aggregate.outputs.latency_breach == 'true' }}
         run: |
-          echo "::error::Latency gate: a suite/model cell averaged over its declared threshold, or abandoned a prompt at the streaming cap. The summary table in the aggregate step says which cell and which cause."
+          echo "::error::Latency gate: a suite/model cell's median went over its declared threshold, or abandoned a prompt at the streaming cap. The summary table in the aggregate step says which cell and which cause."
           exit 1
 
       # Same run as the staging ingest above, posted to production's /status too. Last in the

@@ -9,7 +9,7 @@ import {
   handleUserSubscriptionInvoice,
   resolveSeatChangeFromInvoice,
 } from './serverUtils';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { Logger } from '@bike4mind/observability';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 

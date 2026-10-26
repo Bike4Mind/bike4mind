@@ -42,7 +42,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
       cb([h.edited]),
   }),
 }));
-vi.mock('@client/services/operationsModelService', () => ({ OperationsModelService: {} }));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: {} }));
 vi.mock('@server/billing/meterPlatformCompletion', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
@@ -155,6 +155,7 @@ describe('POST /api/fabfiles/[id]/edit (applyImmediately) storage accounting', (
       const [args] = h.commitContentRewrite.mock.calls[0];
       expect(args).toMatchObject({ fabFileId: 'ff1', newSize: 30, filter: { filePath: 'files/u1/doc' } });
       expect(args.set.filePath).toEqual(h.upload.mock.calls[0][1]);
+      expect(args.set).toMatchObject({ fileUrl: null, fileUrlExpireAt: null });
     });
 
     it('refuses growth past the quota before uploading the new version', async () => {

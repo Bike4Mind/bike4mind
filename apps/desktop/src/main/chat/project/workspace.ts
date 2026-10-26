@@ -1,10 +1,20 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { ChatProject } from '@shared/chat';
+import type { WorktreeRemoval } from '@shared/worktreeRemoval';
 import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
 import type { WorktreeEntry } from './git';
-import { branchExists, containerDirectory, fetchRemoteFor, git, listWorktrees, resolveBaseRef } from './git';
+import {
+  branchExists,
+  containerDirectory,
+  currentBranch,
+  fetchRemoteFor,
+  git,
+  listWorktrees,
+  resolveBaseRef,
+} from './git';
 
 /**
  * A branch's folder name under the app's worktree root.
@@ -149,18 +159,32 @@ export function sessionBranchName(name?: string): string {
 /**
  * What to cut a new branch from, given the branch the user picked.
  *
- * Prefers the base's remote-tracking ref, but only once it is proven to contain the local one.
- * A long-lived local `main` drifts hundreds of commits behind `origin/main` without anyone
- * noticing, and a branch cut from it starts life needing a merge nobody asked for; the ancestor
- * check is what keeps that from costing unpushed work on a branch the user has been committing
- * to. With no base picked this falls back to resolveBaseRef, matching the default in the user's
- * `worktree` command. A base that is itself one of that fallback's answers (`origin/main`,
- * `HEAD`), as a spawned session carries when its parent is on no branch, comes out unchanged:
- * `origin/origin/main` never resolves, and `HEAD` is checked here because `origin/HEAD` might.
+ * Main-based tasks use verified upstream history, never local-only main commits. Local main
+ * stays untouched. Explicit feature bases retain unpushed work and best-effort offline fetches.
  */
 async function baseRefFor(directory: string, base: string): Promise<string> {
+  const selected = base || (await resolveBaseRef(directory));
+  const defaultMain = !base && selected === 'HEAD' && (await currentBranch(directory)) === 'main';
+  if (selected === 'main' || selected === 'origin/main' || defaultMain) {
+    const remotes = (await git(directory, ['remote'])).trim().split('\n');
+    if (remotes.includes('origin')) {
+      try {
+        await fetchRemoteFor(directory, 'origin/main', true);
+      } catch (err) {
+        // The app's sandboxed git can fail where the user's terminal git works (repo-scoped
+        // credential helpers and ssh commands are dropped, see hostGitArgs.ts), so name the fix.
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Could not update origin/main, so this session cannot start from upstream main: ${reason}. ` +
+            'Check network access and credentials for this repository, or pick another base branch.'
+        );
+      }
+      await git(directory, ['rev-parse', '--verify', '--quiet', 'origin/main^{commit}']);
+      return 'origin/main';
+    }
+  }
   if (!base || base === 'HEAD') {
-    const fallback = base || (await resolveBaseRef(directory));
+    const fallback = selected;
     await fetchRemoteFor(directory, fallback);
     return fallback;
   }
@@ -372,6 +396,123 @@ async function removeWorktree(projectDirectory: string, path: string): Promise<v
     await git(projectDirectory, ['worktree', 'remove', path]);
   } catch {
     // Already gone, or held open; see above.
+  }
+}
+
+type InspectedWorktreeRemoval = WorktreeRemoval & { preservedRef?: string };
+
+function containsPath(directory: string, path: string): boolean {
+  const within = relative(directory, path);
+  return !isAbsolute(within) && within !== '..' && !within.startsWith(`..${sep}`);
+}
+
+/** Only a branch this app cut can have a removable worktree; a cheap gate before any sharing scan. */
+export function hasAppWorkspaceBranch(
+  project: ChatProject | undefined
+): project is ChatProject & { workspaceBranch: string } {
+  return !!project?.workspaceBranch?.startsWith(BRANCH_PREFIX);
+}
+
+/** Shared by the delete dialog and execution: uncertainty always keeps the checkout. */
+export async function inspectWorktreeRemoval(
+  project: ChatProject | undefined,
+  otherProjects: readonly (ChatProject | undefined)[]
+): Promise<InspectedWorktreeRemoval | null> {
+  if (!hasAppWorkspaceBranch(project)) return null;
+  const path = await canonical(project.workingDirectory);
+  if (!path) return null;
+  const container = await containerDirectory(project.directory);
+  const root = await canonical(appWorktreeRoot(container));
+  if (!root || root !== appWorktreeRoot(await realpath(container))) return null;
+  if (root === path || !containsPath(root, path)) return null;
+  const branch = project.workspaceBranch;
+  const entries = await listWorktrees(project.directory);
+  const entry = await registeredAt(entries, path);
+  if (entry?.branch !== branch || (await canonical(project.directory)) === path) return null;
+
+  const result = (reason: string | null): WorktreeRemoval => ({ path, branch, safe: reason === null, reason });
+  for (const other of entries) {
+    const otherPath = (await canonical(other.path)) ?? resolve(other.path);
+    if (otherPath !== path && containsPath(path, otherPath)) return result('Contains another worktree');
+  }
+  for (const other of otherProjects) {
+    if (!other) continue;
+    const otherPath = (await canonical(other.workingDirectory)) ?? resolve(other.workingDirectory);
+    const otherDirectory = (await canonical(other.directory)) ?? resolve(other.directory);
+    if (containsPath(path, otherPath) || containsPath(path, otherDirectory)) {
+      return result('Used by another conversation');
+    }
+    if (other.workspaceBranch !== branch && other.branch !== branch) continue;
+    // A matching branch name in another repository does not share this checkout.
+    if ((await canonical(await containerDirectory(other.directory))) === (await canonical(container))) {
+      return result('Used by another conversation');
+    }
+  }
+  const status = await git(path, ['status', '--porcelain', '-z', '--untracked-files=all']);
+  if (status) {
+    const records = status.split('\0');
+    let count = 0;
+    for (let index = 0; index < records.length - 1; index++) {
+      count++;
+      if (/^[RC]|^.[RC]/.test(records[index])) index++;
+    }
+    return result(`${count} uncommitted file${count === 1 ? '' : 's'}`);
+  }
+  const upstream = (await git(path, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim();
+  // `branch -d` judges a branch with an upstream against that upstream alone, and a command-local
+  // `-c branch.<name>.merge` only adds a second value rather than replacing it. So only the
+  // upstream can prove preservation, or `-d` would refuse after the checkout is already gone.
+  const references = upstream
+    ? [upstream]
+    : project.branch && project.branch !== branch
+      ? [`refs/heads/${project.branch}`, `refs/remotes/origin/${project.branch}`, `refs/remotes/${project.branch}`]
+      : [];
+  let localOnly: number | null = null;
+  for (const reference of references) {
+    try {
+      const count = Number((await git(path, ['rev-list', '--count', `${reference}..refs/heads/${branch}`])).trim());
+      if (count === 0) return { ...result(null), preservedRef: reference };
+      if (Number.isSafeInteger(count) && count > 0) localOnly = Math.min(localOnly ?? count, count);
+    } catch {
+      // A deleted upstream or base cannot prove that the commits were preserved.
+    }
+  }
+  return result(
+    localOnly === null
+      ? 'Cannot verify the upstream or base branch'
+      : `${localOnly} commit${localOnly === 1 ? '' : 's'} not pushed or merged`
+  );
+}
+
+export async function removeSessionWorktree(
+  project: ChatProject,
+  otherProjects: readonly (ChatProject | undefined)[]
+): Promise<void> {
+  const inspection = await inspectWorktreeRemoval(project, otherProjects);
+  if (!inspection?.safe || !inspection.preservedRef) {
+    throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
+  }
+  await git(project.directory, ['worktree', 'remove', inspection.path]);
+  try {
+    const upstream = (
+      await git(project.directory, ['for-each-ref', '--format=%(upstream)', `refs/heads/${inspection.branch}`])
+    ).trim();
+    // Without an upstream, use the proven base rather than this checkout's possibly stale HEAD.
+    // With one, the inspection already proved against that upstream, which is what `-d` checks.
+    // Command-local settings never persist.
+    const comparison = upstream
+      ? []
+      : [
+          '-c',
+          `branch.${inspection.branch}.remote=.`,
+          '-c',
+          `branch.${inspection.branch}.merge=${inspection.preservedRef}`,
+        ];
+    await git(project.directory, [...comparison, 'branch', '-d', '--', inspection.branch]);
+  } catch (err) {
+    throw new Error(
+      `Worktree removed, but branch ${inspection.branch} was kept: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 }
 

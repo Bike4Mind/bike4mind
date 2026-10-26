@@ -20,7 +20,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsValue: (key: string) => (key === 'githubMcpClientId' ? 'client-id' : 'client-secret'),
 }));
 
-vi.mock('@server/auth/oauthFlowCookie', () => ({
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
   readStateNonceHash: () => 'nonce-hash',
   clearStateNonce: vi.fn(),
 }));
@@ -31,7 +31,7 @@ vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
 
 const encryptEnvVariables = vi.hoisted(() => vi.fn(() => [{ key: 'GITHUB_ACCESS_TOKEN', value: 'encrypted' }]));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptEnvVariables,
 }));
 

@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { purgeMock, purgeBySourceMock, invalidateManyMock } = vi.hoisted(() => ({
+const { purgeMock, purgeBySourceMock, invalidateManyMock, deleteThumbnailsMock } = vi.hoisted(() => ({
   purgeMock: vi.fn(),
   purgeBySourceMock: vi.fn(),
   invalidateManyMock: vi.fn(),
+  deleteThumbnailsMock: vi.fn(),
+}));
+
+vi.mock('@bike4mind/server-utils/utils/publishThumbnails', () => ({
+  deletePublishThumbnails: deleteThumbnailsMock,
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -33,9 +38,32 @@ beforeEach(() => {
   purgeMock.mockReset();
   purgeBySourceMock.mockReset();
   invalidateManyMock.mockReset().mockResolvedValue(undefined);
+  deleteThumbnailsMock.mockReset().mockResolvedValue(0);
 });
 
 describe('purgeUserPublishedArtifacts', () => {
+  it('deletes the owner-only thumbnails of the removed bundles, not of replies or transferred org pages', async () => {
+    purgeMock.mockResolvedValue({
+      artifacts: [purged('pub', 'public'), purged('priv', 'private'), purged('rep', 'public', 'reply')],
+      transferred: [{ ...purged('org-pub', 'public'), ownerId: 'u2' }],
+      annotations: 0,
+      reports: 0,
+      viewAudits: 0,
+    });
+    const logger = { info: vi.fn(), warn: vi.fn() };
+
+    await purgeUserPublishedArtifacts('u1', { deletedBy: 'admin1', logger });
+
+    expect(deleteThumbnailsMock).toHaveBeenCalledTimes(1);
+    expect(deleteThumbnailsMock).toHaveBeenCalledWith(['pub', 'priv'], logger);
+  });
+
+  it('deletes no thumbnails when the database purge failed', async () => {
+    purgeMock.mockRejectedValue(new Error('db down'));
+    await expect(purgeUserPublishedArtifacts('u1', { deletedBy: 'admin1' })).rejects.toThrow('db down');
+    expect(deleteThumbnailsMock).not.toHaveBeenCalled();
+  });
+
   it('purges the owner and invalidates the CDN for the public artifacts only', async () => {
     purgeMock.mockResolvedValue({
       artifacts: [purged('pub', 'public'), purged('priv', 'private'), purged('rep', 'public', 'reply')],

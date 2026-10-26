@@ -1,0 +1,219 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ModelBackend, type ModelInfo } from '@bike4mind/common';
+
+const {
+  mockAdminSettings,
+  mockLogger,
+  mockGetAvailableModels,
+  mockGetLlmByModel,
+  mockGetEffectiveLLMApiKeys,
+  mockGetDefaultImageModel,
+} = vi.hoisted(() => ({
+  mockAdminSettings: {
+    findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+  },
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  mockGetAvailableModels: vi.fn(),
+  mockGetLlmByModel: vi.fn(),
+  mockGetEffectiveLLMApiKeys: vi.fn(),
+  mockGetDefaultImageModel: vi.fn(),
+}));
+
+vi.mock('@bike4mind/database', () => ({
+  AdminSettings: mockAdminSettings,
+  apiKeyRepository: {},
+  adminSettingsRepository: {},
+}));
+vi.mock('@bike4mind/services', () => ({
+  apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys, getEffectiveApiKey: vi.fn() },
+}));
+// buildApiKeyTable comes from the REAL module, not a stub: it is what decides
+// which providers this service can see, and a hand-rolled copy here would be free
+// to drift a provider behind exactly the way the literal it replaced did.
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
+  getAvailableModels: mockGetAvailableModels,
+  getLlmByModel: mockGetLlmByModel,
+}));
+vi.mock('@bike4mind/observability', () => ({
+  Logger: vi.fn(function () {
+    return mockLogger;
+  }),
+}));
+vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
+vi.mock('../utils/modelResolvers', () => ({
+  getDefaultImageModel: mockGetDefaultImageModel,
+  getApiKeyTypeFromBackend: vi.fn(),
+}));
+
+const { OperationsModelService } = await import('./operationsModelService');
+
+const model = (id: string, type: string, backend: ModelBackend): ModelInfo => ({ id, type, backend }) as ModelInfo;
+
+const IMAGE = model('flux-pro-1.1', 'image', ModelBackend.BFL);
+const IMAGE2 = model('gpt-image-2', 'image', ModelBackend.OpenAI);
+const BEDROCK_TEXT = model('claude-5-sonnet-bedrock', 'text', ModelBackend.Bedrock);
+const GPT_MINI = model('gpt-4o-mini', 'text', ModelBackend.OpenAI);
+const OLLAMA_CHAT = model('qwen2.5-coder:7b', 'text', ModelBackend.Ollama);
+const OLLAMA_OTHER = model('llama3:8b', 'text', ModelBackend.Ollama);
+
+const noCloudKeys = {
+  openai: null,
+  anthropic: null,
+  gemini: null,
+  bfl: null,
+  ollama: 'http://localhost:11434',
+  xai: null,
+};
+
+function primeDefaults(models: ModelInfo[]) {
+  // findOne(...).lean().exec() -> null forces getOperationsModel into getDefaultOperationsModel.
+  mockAdminSettings.findOne.mockReturnValue({ lean: () => ({ exec: () => Promise.resolve(null) }) });
+  mockAdminSettings.findOneAndUpdate.mockResolvedValue({});
+  mockGetAvailableModels.mockResolvedValue(models);
+  mockGetLlmByModel.mockReturnValue({ complete: vi.fn() });
+  mockGetDefaultImageModel.mockReturnValue(IMAGE);
+}
+
+describe('OperationsModelService self-host default text model', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.B4M_SELF_HOST;
+    delete process.env.OLLAMA_PULL_MODELS;
+  });
+  afterEach(() => {
+    delete process.env.B4M_SELF_HOST;
+    delete process.env.OLLAMA_PULL_MODELS;
+  });
+
+  it('picks the first OLLAMA_PULL_MODELS token when self-host with no cloud key', async () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_PULL_MODELS = 'qwen2.5-coder:7b nomic-embed-text';
+    mockGetEffectiveLLMApiKeys.mockResolvedValue(noCloudKeys);
+    // Bedrock enumerated first, ahead of Ollama, to prove we skip it.
+    primeDefaults([IMAGE, BEDROCK_TEXT, OLLAMA_CHAT, OLLAMA_OTHER]);
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('qwen2.5-coder:7b');
+    expect(result.modelInfo.backend).toBe(ModelBackend.Ollama);
+  });
+
+  it('falls back to the first Ollama text model when the pull token is not present', async () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_PULL_MODELS = 'not-pulled:latest nomic-embed-text';
+    mockGetEffectiveLLMApiKeys.mockResolvedValue(noCloudKeys);
+    primeDefaults([IMAGE, BEDROCK_TEXT, OLLAMA_OTHER, OLLAMA_CHAT]);
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('llama3:8b');
+    expect(result.modelInfo.backend).toBe(ModelBackend.Ollama);
+  });
+
+  it('does NOT prefer Ollama when a cloud text key is present', async () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_PULL_MODELS = 'qwen2.5-coder:7b';
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noCloudKeys, openai: 'sk-test' });
+    primeDefaults([IMAGE, GPT_MINI, OLLAMA_CHAT]);
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('gpt-4o-mini');
+  });
+
+  it('does NOT prefer Ollama when not in self-host mode', async () => {
+    // B4M_SELF_HOST unset
+    process.env.OLLAMA_PULL_MODELS = 'qwen2.5-coder:7b';
+    mockGetEffectiveLLMApiKeys.mockResolvedValue(noCloudKeys);
+    primeDefaults([IMAGE, GPT_MINI, OLLAMA_CHAT]);
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('gpt-4o-mini');
+  });
+});
+
+describe('OperationsModelService optional image model', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.B4M_SELF_HOST;
+    delete process.env.OLLAMA_PULL_MODELS;
+    mockGetEffectiveLLMApiKeys.mockResolvedValue(noCloudKeys);
+  });
+  afterEach(() => {
+    delete process.env.B4M_SELF_HOST;
+    delete process.env.OLLAMA_PULL_MODELS;
+  });
+
+  it('resolves with no image model, and the text model intact, when the catalog has none', async () => {
+    primeDefaults([GPT_MINI]);
+    mockGetDefaultImageModel.mockReturnValue(undefined);
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('gpt-4o-mini');
+    expect(result.imageModelId).toBeNull();
+    expect(result.imageModelInfo).toBeNull();
+    expect(result.imageLlm).toBeNull();
+  });
+
+  it('resolves with no image model, and the text model intact, when the image backend fails to construct', async () => {
+    primeDefaults([IMAGE, GPT_MINI]);
+    // IMAGE's backend fails to build (e.g. local-image server unreachable); the
+    // text model must still resolve.
+    mockGetLlmByModel.mockImplementation((_apiKeyTable: unknown, opts: { modelInfo: ModelInfo }) =>
+      opts.modelInfo.id === IMAGE.id ? null : { complete: vi.fn() }
+    );
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('gpt-4o-mini');
+    expect(result.imageModelId).toBeNull();
+    expect(result.imageModelInfo).toBeNull();
+    expect(result.imageLlm).toBeNull();
+  });
+
+  it('retries down the priority order and resolves the next candidate when the first fails to build', async () => {
+    primeDefaults([IMAGE, IMAGE2, GPT_MINI]);
+    // getDefaultImageModel is mocked; make it honor excludeIds like the real one does,
+    // so the retry loop actually exercises the exclusion path instead of looping on IMAGE.
+    mockGetDefaultImageModel.mockImplementation((models: ModelInfo[], excludeIds?: Set<string> | string[]) => {
+      const tried = excludeIds instanceof Set ? excludeIds : new Set(excludeIds ?? []);
+      return models.find(m => m.type === 'image' && !tried.has(m.id));
+    });
+    const imageLlm = { complete: vi.fn() };
+    mockGetLlmByModel.mockImplementation((_apiKeyTable: unknown, opts: { modelInfo: ModelInfo }) => {
+      if (opts.modelInfo.id === IMAGE.id) return null; // first candidate fails to build
+      if (opts.modelInfo.id === IMAGE2.id) return imageLlm;
+      return { complete: vi.fn() };
+    });
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('gpt-4o-mini');
+    expect(result.imageModelId).toBe(IMAGE2.id);
+    expect(result.imageLlm).toBe(imageLlm);
+  });
+
+  it('treats a throwing candidate (e.g. an expired key) as unusable and retries the next one', async () => {
+    primeDefaults([IMAGE, IMAGE2, GPT_MINI]);
+    mockGetDefaultImageModel.mockImplementation((models: ModelInfo[], excludeIds?: Set<string> | string[]) => {
+      const tried = excludeIds instanceof Set ? excludeIds : new Set(excludeIds ?? []);
+      return models.find(m => m.type === 'image' && !tried.has(m.id));
+    });
+    const imageLlm = { complete: vi.fn() };
+    mockGetLlmByModel.mockImplementation((_apiKeyTable: unknown, opts: { modelInfo: ModelInfo }) => {
+      if (opts.modelInfo.id === IMAGE.id) throw new Error('OpenAI API key is expired');
+      if (opts.modelInfo.id === IMAGE2.id) return imageLlm;
+      return { complete: vi.fn() };
+    });
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('gpt-4o-mini');
+    expect(result.imageModelId).toBe(IMAGE2.id);
+    expect(result.imageLlm).toBe(imageLlm);
+  });
+});

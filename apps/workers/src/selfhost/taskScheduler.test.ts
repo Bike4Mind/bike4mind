@@ -67,7 +67,7 @@ vi.mock('@bike4mind/services/llm/tools/implementation/webfetch', () => ({ create
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry', () => ({ scrapeWithRetry: vi.fn() }));
 vi.mock('@server/utils/researchTasks', () => ({ researchTaskJobs: {} }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsTextModel: async () => ({ modelId: 'test-model', llm: {} }) },
 }));
 

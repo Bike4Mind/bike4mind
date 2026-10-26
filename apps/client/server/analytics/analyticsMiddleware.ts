@@ -2,9 +2,9 @@ import type { Request, Response, NextFunction } from 'express';
 import { OVERWATCH_UNKNOWN_SESSION_ID } from '@bike4mind/common';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { isAnalyticsConfigured, emitActiveEvent, sanitizeReferrer } from './emitActiveEvent';
-import { readUtmCookie } from './cookies';
+import { readUtmCookie } from '@bike4mind/server-utils/analytics/cookies';
 import { readVisitId } from './visitSession';
-import { pseudonymizeUserId } from './pseudonymize';
+import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { resolveUserType } from './resolveUserType';
 
 function utcDate(): string {
@@ -78,7 +78,14 @@ export function analyticsMiddleware() {
     // 2s emit timeout to the first-request-of-day latency for every user. We accept that a Lambda
     // freeze may drop or delay a fraction of emits; OverwatchUserDay's idempotent upsert plus the
     // daily cadence absorb that loss.
-    void emitActiveEvent({ pseudoUserId, sessionId, userType, referrer, utm }).catch(() => {});
+    void emitActiveEvent({
+      pseudoUserId,
+      sessionId,
+      userType,
+      isSynthetic: req.user.isSynthetic === true,
+      referrer,
+      utm,
+    }).catch(() => {});
 
     next();
   };

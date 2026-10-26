@@ -16,6 +16,8 @@ export abstract class BaseStorage {
       ResponseContentType?: string;
       /** GET only: overrides the stored object's Content-Disposition on the signed response. */
       ResponseContentDisposition?: string;
+      /** Sign as of this instant instead of now, so repeated calls can return the identical URL. */
+      signingDate?: Date;
     }
   ): Promise<string>;
   abstract getPublicUrl(path: string): string;

@@ -384,7 +384,47 @@ describe('SandboxOrchestrator', () => {
 
       orchestrator.shouldSandbox('curl https://example.com', '/tmp');
 
-      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: true }));
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: true, proxyPort: 8888 }));
+    });
+
+    it('omits the proxy port when network is not granted', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), mockRuntime, createMockProxyManager(true, 8888));
+
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+
+      expect(wrapSpy.mock.calls[0][0]).not.toHaveProperty('proxyPort');
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
+    });
+
+    it('fails closed when a running proxy reports no port', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const config = enabledConfig({ network: { ...DEFAULT_SANDBOX_CONFIG.network, enabled: true } });
+      const orchestrator = new SandboxOrchestrator(config, mockRuntime, createMockProxyManager(true, null));
+
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+
+      expect(wrapSpy.mock.calls[0][0]).not.toHaveProperty('proxyPort');
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
+    });
+  });
+
+  describe('container sockets', () => {
+    it.each([
+      [undefined, false],
+      [false, false],
+      [true, true],
+    ])('passes allowContainerSockets=%s through as %s', (configured, expected) => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const config = enabledConfig();
+      if (configured === undefined) delete (config as Partial<SandboxConfig>).allowContainerSockets;
+      else config.allowContainerSockets = configured;
+      new SandboxOrchestrator(config, mockRuntime).shouldSandbox('ls', '/tmp');
+
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ allowContainerSockets: expected }));
     });
   });
 

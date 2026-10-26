@@ -16,6 +16,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, DISMISSABLE_STATUSES } from '@bike4mind/database';
 import { SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';
@@ -80,6 +81,14 @@ const handler = baseApi().post(
       fingerprint: doc.errorFingerprint,
       previousStatus: doc.status,
       reason: parsed.data.reason,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.sre.tracking_dismissed',
+      target: { kind: 'system', id, displayName: `SRE tracking ${doc.errorFingerprint}` },
+      summary: `dismissed SRE tracking ${doc.errorFingerprint}`,
+      reason: parsed.data.reason,
+      details: { previousStatus: doc.status, repoSlug: doc.repoSlug ?? SRE_DEFAULT_REPO_SLUG },
     });
 
     res.status(200).json({ success: true, fingerprint: doc.errorFingerprint });

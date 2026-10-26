@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel): the barrel's subtree
 // pulls in wakeHandler -> queueHandlers/utils -> the Lambda-runtime import graph,
 // which deadlocks module init under the Next dev server. Every other deep-agent
@@ -11,6 +11,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 // assembled inline from the clean modules instead of wakeHandler's
 // buildDefaultWakeDeps for the same reason.
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps } from '@bike4mind/agents';
+import '@server/deepAgent/contributedToolbelts';
 import { enrollDeepAgent } from '@bike4mind/server-utils/deepAgent/enroll';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
@@ -40,7 +41,8 @@ const SpinInput = z.object({
   agentId: z.string().min(1).optional(),
 });
 
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: process.env.NODE_ENV === 'development' ? 30 : 5, windowMs: 60 * 1000 }))
   .post(async (req: Request, res: Response) => {
     const hasAccess =

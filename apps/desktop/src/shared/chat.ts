@@ -819,6 +819,34 @@ export interface BackgroundProcessInfo {
  */
 export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessInfo } | { ok: false; message: string };
 
+export function localModelId(runtimeId: string, model: string): string {
+  return `local:${encodeURIComponent(runtimeId)}:${model}`;
+}
+
+/** `local:<encoded runtime>:<model>`; runtime ids can contain colons so they are URL-encoded, the model stays raw. */
+export function parseLocalModelId(id: string): { runtimeId: string; model: string } | null {
+  const match = /^local:([^:]+):(.+)$/s.exec(id);
+  if (!match) return null;
+  try {
+    return { runtimeId: decodeURIComponent(match[1]), model: match[2] };
+  } catch {
+    return null;
+  }
+}
+
+/** Fails closed: a malformed `local:` id still counts as local so it never falls onto the hosted path. */
+export function isLocalModel(id: string): boolean {
+  return id.startsWith('local:');
+}
+
+export function isLocalBackend(model: { backend?: string }): boolean {
+  return model.backend === 'ollama' || model.backend?.startsWith('local-') === true;
+}
+
+export function localBackend(runtimeId: string): string {
+  return `local-${runtimeId}`;
+}
+
 /**
  * One model this deployment offers, as the picker renders it.
  *
@@ -856,6 +884,8 @@ export interface ChatModelOption {
    * THINKING_OFF_SETTING (off).
    */
   thinkingToggle?: boolean;
+  /** Local models can remain useful without tool-call support. */
+  supportsTools?: boolean;
 }
 
 /** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
@@ -1077,6 +1107,8 @@ interface ChatSessionMeta {
    * which is what separates it from delete.
    */
   archived?: boolean;
+  /** Explicit consent to copy this session and its pages into the rebuildable local index. */
+  historyEnabled?: boolean;
 }
 
 /** A session without its messages - what the sidebar needs, so a long thread is not loaded to list it. */
@@ -1198,7 +1230,7 @@ export type ChatStreamEvent =
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
     }
-  | { type: 'error'; sessionId: string; messageId: string; message: string }
+  | { type: 'error'; sessionId: string; messageId: string; message: string; stopReason?: string }
   | {
       type: 'background-output';
       sessionId: string;
@@ -1322,6 +1354,8 @@ export type ChatQueueReturnReason =
   | 'stopped'
   /** That reply ended in an error. */
   | 'failed'
+  /** That reply was paused because the session expired. */
+  | 'session-expired'
   /** Its turn came and main refused it - signed out, or a model that cannot read its image. */
   | 'refused';
 
@@ -1674,4 +1708,20 @@ export interface ChatReplyRound {
  */
 export function isTurnBudgetStop(reason?: string): boolean {
   return reason === 'tool_turn_limit' || reason === 'turn_time_limit' || reason === 'tool_stall_limit';
+}
+
+/**
+ * The stop reason of a turn cut short because the session could not be renewed. The message
+ * also carries `error`, for readers that only know failed vs not; the thread shows it as a
+ * paused turn instead, under the one re-auth notice, rather than as a red line per message.
+ */
+export const SESSION_EXPIRED_STOP = 'session_expired';
+
+/**
+ * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at
+ * a request boundary - before any of that request streamed - so its transcript ends where a
+ * budget-stopped one does, or on the user's own prompt.
+ */
+export function isResumableStop(reason?: string): boolean {
+  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP;
 }

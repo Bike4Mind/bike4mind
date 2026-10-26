@@ -20,6 +20,7 @@ const FIELD_LABELS: Partial<Record<keyof IUserDocument, string>> = {
   isAdmin: 'Role',
   tags: 'Tags and product access',
   currentCredits: 'Credits',
+  storageLimitOverride: 'Storage override',
   storageLimit: 'Storage limit',
   numReferralsAvailable: 'Referrals available',
   subscribedUntil: 'Subscribed until',

@@ -1,5 +1,6 @@
 export * as referService from './referService';
 export * as userService from './userService';
+export * as abuseService from './abuseService';
 export * as authSessionService from './authSessionService';
 export * as userApiKeyService from './userApiKeyService';
 // Flat export: callers outside the service (the OAuth ai-token route) must recognize
@@ -45,6 +46,7 @@ export * from './billing';
 export * as spendReconciliationService from './spendReconciliation';
 export * from './soundCost';
 export * from './musicCost';
+export * from './providerCapacity';
 export * from './llm/agentToolMediaCost';
 export * as emailIngestionService from './emailIngestionService';
 export * as emailAnalysisService from './emailAnalysisService';

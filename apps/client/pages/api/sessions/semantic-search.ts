@@ -45,7 +45,8 @@ import {
 import { apiKeyService, assertOwnerHasCredits, creditService, meterCompletionBackend } from '@bike4mind/services';
 import { ReRankService } from '@bike4mind/services/llm/reranker';
 import { SmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 interface SemanticSearchRequest {
   query: string;
@@ -102,6 +103,7 @@ function meterSearchBackend(
 
 const handler = baseApi().post(
   asyncHandler(async (req: Request, res: Response) => {
+    assertAiAccessAllowed(req.user);
     const userId = req.user?.id;
 
     if (!userId) {

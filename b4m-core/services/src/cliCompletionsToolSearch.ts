@@ -66,17 +66,35 @@ function scanMessages(messages: IMessage[]): { referencedTools: unknown[]; echoe
 /** An assistant turn ending in a tool search result is one the provider accepts a change after; other server results are refused until verified. */
 function endsInToolSearchResult(message: IMessage): boolean {
   if (message.role !== 'assistant' || !Array.isArray(message.content)) return false;
-  const last = (message.content as ScannedBlock[])[message.content.length - 1];
+  const last = (message.content as ScannedBlock[]).findLast(block => !isBlankTextBlock(block));
   return last?.type === 'tool_search_tool_result';
+}
+
+function isBlankTextBlock(block: unknown): boolean {
+  if (typeof block !== 'object' || block === null || !('type' in block) || block.type !== 'text') return false;
+  return !('text' in block) || typeof block.text !== 'string' || block.text.trim() === '';
 }
 
 /** Must stay in sync with AnthropicBackend.sanitizeMessageContent, which drops these before sending. */
 function isBlankMessage(message: IMessage): boolean {
   if (typeof message.content === 'string') return message.content.trim() === '';
   if (!Array.isArray(message.content)) return false;
-  return (message.content as Array<{ type?: unknown; text?: unknown }>).every(
-    block => block?.type === 'text' && (typeof block.text !== 'string' || block.text.trim() === '')
-  );
+  return message.content.every(isBlankTextBlock);
+}
+
+/** Plain system prompts are hoisted and blank messages are dropped by the Claude adapter. */
+function isWireMessage(message: IMessage): boolean {
+  return (message.role !== 'system' || isToolChangeMessage(message)) && !isBlankMessage(message);
+}
+
+export function hasAssistantPrefill(messages: IMessage[]): boolean {
+  const lastMessage = messages.findLast(isWireMessage);
+  if (lastMessage?.role !== 'assistant') return false;
+  if (!Array.isArray(lastMessage.content)) return true;
+
+  const lastBlock = (lastMessage.content as ScannedBlock[]).findLast(block => !isBlankTextBlock(block));
+  // A paused server-tool turn is resumed verbatim, rather than continued from a text prefill.
+  return typeof lastBlock?.type !== 'string' || !TOOL_SEARCH_BLOCK_TYPES.has(lastBlock.type);
 }
 
 /**
@@ -113,7 +131,7 @@ function validateToolChanges(
     );
   }
 
-  const wire = messages.filter(m => (m.role !== 'system' || isToolChangeMessage(m)) && !isBlankMessage(m));
+  const wire = messages.filter(isWireMessage);
   wire.forEach((message, index) => {
     if (!isToolChangeMessage(message)) return;
     const parsed = ToolChangeMessageContentSchema.safeParse(message.content);

@@ -10,6 +10,19 @@ import type { ModelRecord } from './types/entities/ModelCatalogTypes';
 export const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 
 /**
+ * max_tokens floor for adaptive reasoning models (Claude 4.7+/Opus 5). These
+ * models self-manage extended thinking *within* max_tokens, which is a ceiling
+ * (they stop at end_turn), not a target - so a larger floor costs nothing on
+ * short replies but keeps reasoning from consuming the whole budget and leaving
+ * no room for the visible answer. Both paths that size an adaptive model's output
+ * budget read it (llm-adapters thinkingParams.ts): buildThinkingParams (thinking
+ * explicitly enabled) and resolveOutputMaxTokens (the default when a caller names no
+ * budget; an explicit budget below it is honored and only logged, see
+ * belowReasoningFloor). The client's Max output tokens slider warns below it.
+ */
+export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
+
+/**
  * Input headroom the chat path holds back on top of a request's reserved output.
  * safeInputWindow (ChatCompletionProcess) subtracts it, so a text entry whose output
  * reserve leaves less than this has no room for a prompt at all.
@@ -96,6 +109,17 @@ type MinimalModelRecord = Pick<RenderableModelRecord, 'id' | 'vendor' | 'backend
 export type ToModelInfoIsTotal = Expect<
   typeof toModelInfo extends (record: MinimalModelRecord) => ModelInfo ? true : false
 >;
+
+/**
+ * Every reason discovery writes on its own refusal starts with this prefix, so a reader can tell a
+ * disable discovery invented from one a provider reported ("not entitled in this AWS account").
+ * The discovery service's promotion.ts builds its verdicts from it; the catalog merge reads it to
+ * decide whether an unpromoted row's disable is a placeholder curation may reclaim.
+ */
+export const DISCOVERY_VERDICT_PREFIX = 'discovered, ';
+
+export const isDiscoveryVerdict = (reason: unknown): reason is string =>
+  typeof reason === 'string' && reason.startsWith(DISCOVERY_VERDICT_PREFIX);
 
 /**
  * The record -> ModelInfo adapter: one place where every ModelInfo field a

@@ -140,6 +140,7 @@ describe('untrusted text render sites', () => {
     'session/turnController.ts': ['sanitizeTerminalText(rawMessage)'],
     'session/lifecycle.ts': ['sanitizeTerminalText(selected.name)', 'sanitizeTerminalText(sessionForState.name)'],
     'bootstrap/buildSandbox.ts': ['sanitizeTerminalText(event.domain)'],
+    'bootstrap/startupTrustGates.ts': ['escapeTerminalControlChars(projectRoot)'],
     'tools/gateway/stages/sandbox.ts': ['sanitizeTerminalText(reason)'],
     'utils/handoff.ts': ['sanitizeTerminalText(formatHandoff(handoff', "sanitizeTerminalText(lines.join('\\n'))"],
     'index.tsx': [

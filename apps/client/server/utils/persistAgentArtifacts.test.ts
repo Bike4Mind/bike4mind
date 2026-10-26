@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { collectDagChildArtifactBlocks } from '@server/utils/agentDagArtifacts';
+import { collectDagChildArtifactBlocks } from '@bike4mind/server-utils/utils/agentDagArtifacts';
 import {
   MAX_AGENT_ARTIFACTS_PER_RUN,
   buildAgentArtifactPayloads,
@@ -147,6 +147,12 @@ describe('buildAgentArtifactPayloads', () => {
     expect(payload.metadata.questId).toBe(QUEST_ID);
     expect(payload.metadata.originalIdentifier).toBe('foo');
     expect(payload.sessionId).toBe(SESSION_ID);
+  });
+
+  it('stores the identifier as a field, so a later chat reply can version the row', () => {
+    const [payload] = build(reactArtifact('todo_app'));
+
+    expect(payload.identifier).toBe('todo_app');
   });
 
   it('promotes a fenced tsx block (the fallback path runs)', () => {

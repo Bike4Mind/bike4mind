@@ -5,6 +5,9 @@ import type { DecisionToolRequest } from '../implementation/decide/request';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
+import type { ProviderSlotStore } from '../../../providerCapacity';
+import type { OperationalBillingAdapters } from '../../../billing/recordOperationalUsage';
+import type { OperationalBillingCheck } from '../../../billing/isOperationalBillingEnabled';
 import {
   IChatHistoryItemDocument,
   IChatHistoryItemRepository,
@@ -127,6 +130,8 @@ export interface ToolContext {
     };
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
+    /** Concurrency slots for the shared ElevenLabs key (runElevenLabsWithCapacity); absent runs unslotted. */
+    caches?: ProviderSlotStore;
     /**
      * The image tools bump the session's imageCount through this (see recordGeneratedImages).
      * `findAllByIds` pairs with `quests` below for resolveOwnedGeneratedImageUrl.
@@ -209,6 +214,11 @@ export interface ToolContext {
      * where recording degrades to a no-op.
      */
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
+    /**
+     * Lets tool-internal operational spend (KB query embeddings, tool `llm.complete` calls) debit
+     * credits under the operational billing policy. Absent, that spend is recorded only.
+     */
+    operationalBilling?: OperationalBillingAdapters;
     /**
      * Owner lookup for usage attribution (`findById`) plus the org-membership resolution the
      * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
@@ -407,6 +417,12 @@ export interface ToolContext {
   llm: Pick<ICompletionBackend, 'complete'>;
   model?: string; // User's selected model for the current quest
   /**
+   * Per-turn mutable reference to the model actually serving the turn. The completion loop
+   * reassigns `.current` on every fallback hop while tools stay built, so read it at call time
+   * and never capture it at build time. Absent on hosts that do not run the fallback loop.
+   */
+  servingModel?: { current: ModelInfo };
+  /**
    * Model catalog for the current request, used to resolve provider + COGS pricing when a
    * tool records its own operational llm.complete spend (see recordToolOperationalUsage).
    * Present on the chat/agent path (from precomputed models); absent on lean harnesses,
@@ -427,6 +443,8 @@ export interface ToolContext {
    * write. Keep implementations pure arithmetic (see agentExecutor's addToolUsage).
    */
   onToolLlmUsage?: (usage: ToolLlmUsage) => void;
+  /** Turn-scoped memo of the operational billing decision, set alongside `db.operationalBilling`. */
+  operationalBillingCheck?: OperationalBillingCheck;
   /**
    * Runs one typed decision through the host's shared runner, so a `decide` call bills, retries
    * and normalizes exactly as POST /api/v1/decisions does. Injected because that runner's credit

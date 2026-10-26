@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   findByUserCode: vi.fn(),
   findOneAndUpdate: vi.fn(async () => ({ id: 'auth-1' })), // non-null = transition fired
   decrementCounter: vi.fn().mockResolvedValue(0),
+  isApiKeyAccessAllowed: vi.fn(async (_user: unknown) => true),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -22,7 +23,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@server/utils/apiKeyAccessGate', () => ({
+  CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',
+  SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
+  isApiKeyAccessAllowed: h.isApiKeyAccessAllowed,
+}));
 vi.mock('@server/utils/oauth/deviceAuthHelpers', () => ({
   LIVE_PENDING_COUNTER_KEY: 'device-auth:live-pending-count',
 }));
@@ -148,5 +154,40 @@ describe('POST /api/oauth/device/verify live-pending counter decrement', () => {
 
     expect(res.statusCode).toBe(404);
     expect(h.decrementCounter).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/device/verify paid-only access switch', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const callWith = (action: 'approve' | 'deny') => {
+    const res = mockRes();
+    const req = { body: { user_code: 'WXYZ-1234', action }, user: { id: 'u1' } };
+    return (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)(req, res).then(() => res);
+  };
+
+  it('refuses to approve a CLI login when the setting denies the user, leaving the code pending', async () => {
+    (h.findByUserCode as Mock).mockResolvedValue(pendingFor('b4m-cli'));
+    h.isApiKeyAccessAllowed.mockResolvedValueOnce(false);
+
+    const res = await callWith('approve');
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({
+      error: 'subscription_required',
+      error_description: 'The CLI and desktop app require an active paid subscription',
+    });
+    expect(h.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still lets the user deny the request', async () => {
+    (h.findByUserCode as Mock).mockResolvedValue(pendingFor('b4m-cli'));
+    h.isApiKeyAccessAllowed.mockResolvedValue(false);
+
+    const res = await callWith('deny');
+
+    expect(res.statusCode).toBe(200);
+    expect(h.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    h.isApiKeyAccessAllowed.mockResolvedValue(true);
   });
 });

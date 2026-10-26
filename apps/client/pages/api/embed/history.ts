@@ -12,11 +12,11 @@
  */
 
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
 import type { EmbedSessionContext } from '@server/embed/embedSessionToken';
-import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
+import { resolveEmbedOriginDecision } from '@server/embed/firstPartyOrigin';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { authInfraFailureHeaders, isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
@@ -56,8 +56,7 @@ async function resolveIdentifiedSession(
   }
   const { claims, info } = resolved;
 
-  const origin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-  if (origin && !isEmbedOriginAllowed(origin, info.allowedOrigins, headers.host)) {
+  if (!resolveEmbedOriginDecision(headers.origin, info.allowedOrigins, headers.host)) {
     return { status: 403, body: { error: 'forbidden', error_description: 'Origin not allowed for this embed key' } };
   }
 

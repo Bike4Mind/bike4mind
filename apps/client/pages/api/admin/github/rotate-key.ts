@@ -21,7 +21,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { validatePrivateKeyFormat } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const logger = new Logger({ metadata: { component: 'admin-github-rotate-key' } });

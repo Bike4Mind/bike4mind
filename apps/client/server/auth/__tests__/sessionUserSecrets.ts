@@ -18,6 +18,8 @@ export function secretUserFields() {
     oauthCredentials: { github: SECRET_VALUE },
     securityQuestions: [{ question: 'first pet', answer: SECRET_VALUE }],
     loginRecords: [{ ip: SECRET_VALUE }],
+    signupMeta: { ip: SECRET_VALUE },
+    freeCreditClaimEmail: SECRET_VALUE,
     authProviders: [
       {
         id: 'goog-sub-1',

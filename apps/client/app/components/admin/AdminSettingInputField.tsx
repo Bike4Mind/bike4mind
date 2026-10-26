@@ -94,12 +94,15 @@ const AdminSettingInputField = ({
   index,
   defaultValue,
   subSettings,
+  lockedNote,
 }: {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
   // null is a clearDeletesRow setting whose platform row is absent: unset, not the declared default.
   defaultValue: string | number | boolean | object | undefined | null;
   index: number;
   subSettings?: SubSetting[];
+  /** Locks a boolean setting: the switch and Save are disabled and this replaces the description. */
+  lockedNote?: string;
 }) => {
   const [value, setValue] = useState<string | number | boolean | null>(() => {
     if (typeof defaultValue === 'object') return null;
@@ -209,6 +212,8 @@ const AdminSettingInputField = ({
                   sx={{ alignSelf: 'baseline' }}
                   checked={typeof value === 'string' ? value === 'true' : (value as boolean)}
                   onChange={e => setValue(e.target.checked)}
+                  disabled={Boolean(lockedNote)}
+                  slotProps={{ input: { 'data-testid': `admin-setting-${setting.key}-switch` } }}
                 />
               ) : setting.type === 'number' ? (
                 <Input
@@ -278,7 +283,7 @@ const AdminSettingInputField = ({
                 {/* The floor warning outranks a stale save error: `saveValue` sends the confirm flag
                     whenever `floorWarning` is truthy, so the warning must be the line the admin sees
                     before that save, not one hidden behind a previous failure's message. */}
-                {rangeError ?? floorWarning ?? saveError ?? setting.description}
+                {rangeError ?? floorWarning ?? saveError ?? lockedNote ?? setting.description}
               </FormHelperText>
             </FormControl>
           </Grid>
@@ -292,7 +297,7 @@ const AdminSettingInputField = ({
                 type="button"
                 loading={updateSettings.isPending}
                 onClick={handleSaveSetting}
-                disabled={!isDirty || Boolean(rangeError)}
+                disabled={!isDirty || Boolean(rangeError) || Boolean(lockedNote)}
               >
                 <SaveIcon sx={{ marginX: 1 }} />
               </Button>

@@ -73,14 +73,10 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   /**
-   * Extra gpt-image "style anchor" images, as fabFile ids. They ride alongside the primary
-   * input image (the first image-type entry in `fabFileIds`) rather than replacing it, and
-   * OpenAI receives them in this order - which matters, because a mask always applies to the
-   * first image in the array. fabFile ids rather than URLs so the existing access +
-   * moderation gates (findAccessibleInIds, isImageServeable) still apply. gpt-image only: the
-   * public endpoints reject them for any other model (assertReferenceImagesSupported) and the
-   * services drop them as a backstop. Repeated ids collapse to one anchor, and each unique one is
-   * billed as an input image (see MAX_REFERENCE_IMAGES).
+   * Extra reference images, as access- and moderation-checked fabFile ids. GPT-image accepts
+   * up to 15 alongside its primary image; FLUX.2 accepts up to 8 total inputs (4 for Klein),
+   * including all images attached through fabFileIds. Repeated ids collapse to one input.
+   * Other models reject these on public endpoints and drop them in the service backstop.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),

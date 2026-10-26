@@ -22,6 +22,7 @@ import { lambdaVpc } from './vpc';
 import { appUrlForLambdaEnv } from './router';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { websocketApi } from './websocket';
+import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -60,6 +61,7 @@ const userActivityReportFunction = new sst.aws.Function('userActivityReportFunct
   link: [...allSecrets],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
   },
   dev: false,
 });
@@ -106,6 +108,36 @@ const signupBaselineReport = runsScheduledJobs
       },
     })
   : undefined;
+
+const youngAccountSpendAlert =
+  runsScheduledJobs && youngAccountSpendAlertDeadLetter
+    ? new sst.aws.Cron('youngAccountSpendAlert', {
+        schedule: 'rate(1 hour)',
+        enabled: $app.stage === 'production',
+        function: {
+          vpc: lambdaVpc,
+          handler: 'apps/workers/src/cron/youngAccountSpendAlert.handler',
+          runtime: 'nodejs24.x',
+          timeout: '2 minutes',
+          link: [...allSecrets],
+          environment: {
+            ...DEFAULT_LAMBDA_ENVIRONMENT,
+            YOUNG_ACCOUNT_SPEND_ALERT_CREDITS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_CREDITS || '',
+            YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS || '',
+          },
+          permissions: [youngAccountSpendAlertDeadLetter.sendPermission],
+          transform: youngAccountSpendAlertDeadLetter.functionTarget,
+          logging: {
+            retention: '1 week',
+          },
+        },
+        transform: youngAccountSpendAlertDeadLetter.ruleTarget,
+      })
+    : undefined;
+
+if (youngAccountSpendAlert && youngAccountSpendAlertDeadLetter) {
+  youngAccountSpendAlertDeadLetter.allowRules([$util.output(youngAccountSpendAlert)]);
+}
 
 const secretRotationNotifierCron = runsScheduledJobs
   ? new sst.aws.Cron('secretRotationNotifier', {
@@ -161,39 +193,6 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
 });
 
 /**
- * What's New Sync Cron
- * Fetches latest What's New modal from production S3 and imports to local DB.
- *
- * CRITICAL: Only enabled for non-production environments (dev, staging, forks)
- * - production: DISABLED - production is the source the others import from
- * - dev/staging/forks: ENABLED - imports modals from production
- *
- * Schedule: Daily at 9am UTC (3am CST)
- * Checks autoSyncEnabled config before importing.
- */
-const whatsNewSyncCron = new sst.aws.Cron('whatsNewSyncCron', {
-  schedule: 'cron(0 9 * * ? *)', // 9am UTC daily (3am CST)
-  function: {
-    handler: 'apps/workers/src/cron/whatsNewSync.handler',
-    vpc: lambdaVpc,
-    link: [...allSecrets],
-    timeout: '2 minutes',
-    runtime: 'nodejs24.x',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-    ],
-  },
-  // CRITICAL: Only enabled for non-production stages
-  enabled: $app.stage !== 'production',
-});
-
-/**
  * LiveOps Triage Dispatcher (Multi-Config)
  * Dispatches triage jobs to SQS for each enabled LiveOpsTriageConfig.
  *
@@ -240,6 +239,22 @@ const telemetryCleanupCron = runsScheduledJobs
       function: {
         vpc: lambdaVpc,
         handler: 'apps/workers/src/cron/telemetryCleanup.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
+// Signup IP retention - truncates User.signupMeta.ip to its /24 (IPv4) or /48 (IPv6) prefix once
+// the signup is older than the AuthEvent TTL (90 days)
+const signupIpRetentionCron = runsScheduledJobs
+  ? new sst.aws.Cron('signupIpRetention', {
+      schedule: 'cron(30 3 * * ? *)', // Daily at 3:30am UTC
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupIpRetention.handler',
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
         link: [...allSecrets],
@@ -1170,12 +1185,12 @@ export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
   signupBaselineReport,
+  youngAccountSpendAlert,
   secretRotationNotifierCron,
   scheduleTaskCron,
   apiKeyBaselineCalculation,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
-  whatsNewSyncCron,
   liveopsTriageDispatcherCron,
   cloudSecurityScanCron,
   integrationHealthCheckCron,
@@ -1183,6 +1198,7 @@ export {
   deepAgentWakeCron,
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
+  signupIpRetentionCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,

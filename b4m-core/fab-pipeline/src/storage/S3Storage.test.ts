@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { Readable } from 'stream';
 import { describe, it, expect, vi } from 'vitest';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { S3Storage } from './S3Storage';
 
 /**
@@ -139,5 +139,49 @@ describe('S3Storage upload input handling', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('S3Storage.deletePrefix', () => {
+  const setup = () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    return { storage, send: vi.spyOn(client, 'send') };
+  };
+
+  it('lists every page under the prefix and deletes each key, returning the count', async () => {
+    const { storage, send } = setup();
+    send.mockImplementation(async (command: unknown) => {
+      if (command instanceof ListObjectsV2Command) {
+        return command.input.ContinuationToken
+          ? { Contents: [{ Key: 'thumbs/a1/c.webp' }], IsTruncated: false }
+          : {
+              Contents: [{ Key: 'thumbs/a1/a.webp' }, { Key: 'thumbs/a1/b.webp' }],
+              IsTruncated: true,
+              NextContinuationToken: 't2',
+            };
+      }
+      return {};
+    });
+
+    await expect(storage.deletePrefix('thumbs/a1/')).resolves.toBe(3);
+
+    const lists = send.mock.calls
+      .map(([c]) => c)
+      .filter(c => c instanceof ListObjectsV2Command) as ListObjectsV2Command[];
+    expect(lists.map(c => c.input)).toEqual([
+      { Bucket: 'test-bucket', Prefix: 'thumbs/a1/', ContinuationToken: undefined },
+      { Bucket: 'test-bucket', Prefix: 'thumbs/a1/', ContinuationToken: 't2' },
+    ]);
+    const deletes = send.mock.calls
+      .map(([c]) => c)
+      .filter(c => c instanceof DeleteObjectCommand) as DeleteObjectCommand[];
+    expect(deletes.map(c => c.input.Key)).toEqual(['thumbs/a1/a.webp', 'thumbs/a1/b.webp', 'thumbs/a1/c.webp']);
+  });
+
+  it.each(['', '/', 'thumbs/', 'thumbs', 'thumbs/a1', '//a1/'])('refuses the unscoped prefix %j', async prefix => {
+    const { storage, send } = setup();
+    await expect(storage.deletePrefix(prefix)).rejects.toThrow('unscoped prefix');
+    expect(send).not.toHaveBeenCalled();
   });
 });

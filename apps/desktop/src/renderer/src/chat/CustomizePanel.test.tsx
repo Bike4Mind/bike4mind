@@ -143,12 +143,99 @@ describe('the Customize screen', () => {
     ];
   });
 
-  it('orders Skills before MCP and selects Skills by default', () => {
+  it('orders Skills, MCP and Plugins and selects Skills by default', () => {
     renderScreen();
     const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')];
-    expect(tabs.map(tab => tab.textContent)).toEqual(['Skills', 'MCP']);
+    expect(tabs.map(tab => tab.textContent)).toEqual(['Skills', 'MCP', 'Plugins']);
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
+    expect(container.querySelector('h1')?.textContent).toBe('Customize');
     expect(isVisible(byTestId('skills-settings'))).toBe(true);
+    expect(isVisible(byTestId('customize-plugins-grid'))).toBe(false);
+  });
+
+  it('removes the extra tab-row border while retaining the selected tab', () => {
+    renderScreen();
+    const row = byTestId('customize-tab-row');
+    expect(row).not.toBeNull();
+    const style = getComputedStyle(row!);
+    expect(['', 'none']).toContain(style.borderBottomStyle);
+    const tab = byTestId('customize-skills-tab');
+    expect(tab?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('selects Plugins and shows exactly four unavailable, inert cards', () => {
+    const onClose = vi.fn();
+    const onOpenSkillMarket = vi.fn();
+    renderNode(<CustomizeScreen onClose={onClose} onOpenSkillMarket={onOpenSkillMarket} />);
+    const pluginsTab = byTestId('customize-plugins-tab')!;
+    expect(pluginsTab.hasAttribute('disabled')).toBe(false);
+    act(() => pluginsTab.click());
+    expect(pluginsTab.getAttribute('aria-selected')).toBe('true');
+    expect(isVisible(byTestId('customize-plugins-grid'))).toBe(true);
+    expect(isVisible(byTestId('skills-settings'))).toBe(false);
+    expect(isVisible(byTestId('mcp-settings'))).toBe(false);
+
+    const cards = allByTestId('customize-plugin-card');
+    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(['DataLake', 'QuestMaster', 'Tavern', 'Studio']);
+    act(() => pluginsTab.focus());
+    for (const card of cards) {
+      expect(card.tagName).toBe('ARTICLE');
+      expect(card.querySelector('h2')?.textContent).toBe(card.getAttribute('aria-label'));
+      expect(getComputedStyle(card).borderTopStyle).toBe('dashed');
+      const addButton = card.querySelector<HTMLButtonElement>('[data-testid="customize-plugin-add-btn"]')!;
+      expect(addButton.disabled).toBe(true);
+      expect(addButton.textContent?.trim()).toBe('+');
+      expect(addButton.getAttribute('aria-label')).toBe(`Add ${card.getAttribute('aria-label')}`);
+      expect(card.querySelectorAll('button')).toHaveLength(1);
+      expect(card.querySelector('a, input, select, textarea, [tabindex="0"], [role="button"]')).toBeNull();
+      const status = card.querySelector('[data-testid="customize-plugin-status"]')!;
+      expect(status.querySelector('[aria-hidden="true"]')?.textContent).toBe('\uD83D\uDEA7');
+      expect(status.lastChild?.textContent?.trim()).toBe('Under construction');
+      const grid = byTestId('customize-plugins-grid')!;
+      const onClick = vi.fn();
+      grid.addEventListener('click', onClick, true);
+      try {
+        act(() => addButton.click());
+        expect(onClick).not.toHaveBeenCalled();
+      } finally {
+        grid.removeEventListener('click', onClick, true);
+      }
+      act(() => {
+        addButton.focus();
+        card.click();
+        card.focus();
+        card.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        card.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+      });
+      expect(document.activeElement).toBe(pluginsTab);
+    }
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onOpenSkillMarket).not.toHaveBeenCalled();
+    expect(pluginsTab.getAttribute('aria-selected')).toBe('true');
+
+    act(() => byTestId('customize-skills-tab')?.click());
+    expect(isVisible(byTestId('skills-settings'))).toBe(true);
+    expect(isVisible(byTestId('customize-plugins-grid'))).toBe(false);
+  });
+
+  it('keeps arrow-key navigation through all three enabled tabs', () => {
+    renderScreen();
+    const skillsTab = byTestId('customize-skills-tab')!;
+    const mcpTab = byTestId('customize-mcp-tab')!;
+    const pluginsTab = byTestId('customize-plugins-tab')!;
+    act(() => skillsTab.focus());
+    const arrow = (key: string) =>
+      act(() => document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })));
+    arrow('ArrowRight');
+    expect(document.activeElement).toBe(mcpTab);
+    arrow('ArrowRight');
+    expect(document.activeElement).toBe(pluginsTab);
+    act(() => pluginsTab.click());
+    expect(isVisible(byTestId('customize-plugins-grid'))).toBe(true);
+    arrow('ArrowRight');
+    expect(document.activeElement).toBe(skillsTab);
+    arrow('ArrowLeft');
+    expect(document.activeElement).toBe(pluginsTab);
   });
 
   it('groups global skills by their top-level ~/.claude/skills scope, a lone skill as a plain row', () => {

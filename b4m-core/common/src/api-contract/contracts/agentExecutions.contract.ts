@@ -62,7 +62,8 @@ export const startAgentExecutionContract = defineEndpoint({
     403: {
       description:
         'The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key ' +
-        `names any organization but its own (\`errorCode: ${BILLING_ORGANIZATION_MISMATCH_ERROR_CODE}\`).`,
+        `names any organization but its own (\`errorCode: ${BILLING_ORGANIZATION_MISMATCH_ERROR_CODE}\`), ` +
+        'or a non-admin caller sent `confidence_overrides`.',
       schema: BillingOrganizationForbiddenErrorSchema,
     },
     404: {

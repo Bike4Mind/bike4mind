@@ -21,7 +21,7 @@ import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { isAxiosError } from 'axios';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 import type { IApiKeyScopePreflightRow } from '@bike4mind/common';
 import { useApiKeyScopePreflight, type ScopePreflightParams } from '@client/app/hooks/data/apiKeyScopePreflight';
 
@@ -79,7 +79,7 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
 
   const { data, isFetching, error, refetch } = useApiKeyScopePreflight(submitted);
 
-  const scopeOptions = useMemo(() => Object.values(ApiKeyScope), []);
+  const scopeOptions = useMemo(() => [...ALL_KNOWN_API_KEY_SCOPE_VALUES], []);
   const canRun = endpointPrefix.trim().startsWith('/') && selectedScopes.length > 0;
 
   const counts = useMemo(() => {

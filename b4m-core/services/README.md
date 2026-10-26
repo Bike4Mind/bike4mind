@@ -13,6 +13,35 @@ contributions. Omitting the table is a configuration error rather than an opt-ou
 
 `createSession` keeps this adapter optional for existing workspace-specific callers.
 
+## Signup assessment foundation
+
+`userService.evaluateSignupRisk` is a pure, server-owned evaluator exported from
+`@bike4mind/services`. It has no runtime signup caller or default enabled policy.
+For example, explicit disablement preserves a caller's validated entitlement:
+
+```typescript
+import { userService } from '@bike4mind/services';
+
+const decision = userService.evaluateSignupRisk({ enabled: false }, {}, signupCredits);
+```
+
+`userService.assessSignupGrant` takes policy, observation, atomic-commit, and
+band-telemetry adapters. The commit adapter must persist the assessment and grant
+changes atomically and return the stored winner on retries. Callers remain
+responsible for existing-account, paid, and staff exemptions; this helper does
+not implement them. Registration and grant integration remain separate work.
+
+If a grant is held with `status: 'unavailable'`, check for the `[signup-risk]`
+assessment warning and inspect policy validity and observation collection.
+Missing required observations instead appear in the decision's `missing` array.
+Telemetry failures warn after commit and do not fail the grant. Diagnostics
+contain no raw policy, network observations, or collector error contents.
+
+`authEventRepository.recentDistinctSignups` in `@bike4mind/database` only accepts
+windows within the retained history and ending no later than the current time.
+Unavailable network metadata and saturated scans return `null`, not a clean zero;
+query failures propagate so the collector can treat them as unavailable.
+
 ## Directory Structure
 
 ```
@@ -114,8 +143,8 @@ describe('serviceModule - operation', () => {
   // 4. Test cases using Arrange-Act-Assert (AAA) pattern
   it('should handle successful operation', async () => {
     // Arrange
-    const params = { /* valid parameters */ };
-    const expectedResult = { /* expected outcome */ };
+    const params = {/* valid parameters */};
+    const expectedResult = {/* expected outcome */};
     // Configure mock return values: (mockRepo.someMethod as Mock).mockResolvedValueOnce(expectedResult);
 
     // Act
@@ -128,11 +157,12 @@ describe('serviceModule - operation', () => {
 
   it('should handle validation errors', async () => {
     // Arrange
-    const invalidParams = { /* invalid parameters */ };
+    const invalidParams = {/* invalid parameters */};
 
     // Act & Assert
-    await expect(operation(userId, invalidParams, adapters))
-      .rejects.toThrow(/* Optional: Specific error type or message */);
+    await expect(operation(userId, invalidParams, adapters)).rejects.toThrow(
+      /* Optional: Specific error type or message */
+    );
   });
 
   // Add more tests for other scenarios (error handling, edge cases, access control)
@@ -237,16 +267,12 @@ import { someOperation } from '@b4m-core/services';
 import { Repository } from 'models';
 
 router.post('/endpoint', async (req, res) => {
-  const result = await someOperation(
-    req.user.id,
-    req.body,
-    {
-      db: {
-        repository: Repository
-      }
-    }
-  );
-  
+  const result = await someOperation(req.user.id, req.body, {
+    db: {
+      repository: Repository,
+    },
+  });
+
   res.json(result);
 });
 ```

@@ -9,6 +9,7 @@ const {
   revokeAtlassianMock,
   flagConnectionsMock,
   withdrawListingsMock,
+  deleteAuthEventsMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
   deleteRequestsMock: vi.fn(),
@@ -18,10 +19,12 @@ const {
   revokeAtlassianMock: vi.fn(),
   flagConnectionsMock: vi.fn(),
   withdrawListingsMock: vi.fn(),
+  deleteAuthEventsMock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   User: {},
+  authEventRepository: { deleteAllForUser: deleteAuthEventsMock },
   embedConversationRepository: { deleteAllForUser: deleteEmbedMock },
   integrationRequestRepository: { deleteAllForUser: deleteRequestsMock },
   hideDeletedAuthorAnnotations: hideAnnotationsMock,
@@ -49,6 +52,7 @@ beforeEach(() => {
   purgePublishedMock.mockReset().mockResolvedValue(undefined);
   hideAnnotationsMock.mockReset().mockResolvedValue(0);
   withdrawListingsMock.mockReset().mockResolvedValue(0);
+  deleteAuthEventsMock.mockReset().mockResolvedValue(0);
   revokeDriveMock.mockReset().mockResolvedValue('revoked');
   revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
   flagConnectionsMock.mockReset().mockResolvedValue({ affectedOrgConnections: 0, affectedPersonalConnections: 0 });
@@ -64,7 +68,18 @@ describe('purgeDeletedUserData', () => {
     expect(purgePublishedMock).toHaveBeenCalledWith('u1', { deletedBy: 'admin1', logger });
     expect(hideAnnotationsMock).toHaveBeenCalledWith('u1');
     expect(withdrawListingsMock).toHaveBeenCalledWith('u1');
+    expect(deleteAuthEventsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs instead of throwing when deleting auth events fails', async () => {
+    deleteAuthEventsMock.mockRejectedValue(new Error('auth events down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('delete auth events'));
   });
 
   it('still hides annotations when withdrawing Skill Market listings fails, and never throws', async () => {
@@ -167,6 +182,7 @@ describe('purgeDeletedUserData', () => {
         expect(deleteRequestsMock).toHaveBeenCalled();
         expect(purgePublishedMock).toHaveBeenCalled();
         expect(hideAnnotationsMock).toHaveBeenCalled();
+        expect(deleteAuthEventsMock).toHaveBeenCalled();
         return 'revoked';
       });
 

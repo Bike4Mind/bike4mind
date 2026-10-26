@@ -12,7 +12,9 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: any, _res: any, next: any) => next?.(),
+}));
 
 // Database: only User + authFailLogRepository + authSessionRepository are touched by the handler.
 const mockFindOne = vi.fn();
@@ -63,7 +65,9 @@ vi.mock('@server/utils/auth/oauthSourceTag', () => ({
 
 // State token verification.
 const mockVerifyState = vi.fn();
-vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) => mockVerifyState(...a) }));
+vi.mock('@bike4mind/server-utils/auth/jwtStateStore', () => ({
+  verifyStateToken: (...a: any[]) => mockVerifyState(...a),
+}));
 
 // Remaining leaf collaborators. Mock the session helper directly (rather than @bike4mind/services)
 // so the test never pulls the real services barrel -- the callback mints via issueBrowserSession,
@@ -113,6 +117,10 @@ vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
 }));
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   applyEmailVerifiedGrants: (...a: unknown[]) => mockApplyEmailVerifiedGrants(...a),
+}));
+const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: (...a: unknown[]) => mockRecordSignupNetwork(...a),
 }));
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
@@ -730,6 +738,9 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
       userInfo: { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' },
     });
     expect(mockStampSourceTag).toHaveBeenCalledWith('new-user', 'b4m_sat_0123abcd');
+    expect(mockRecordSignupNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'new-user', method: AuthStrategy.Okta })
+    );
   });
 
   it('never stamps an existing account that signs in through a client', async () => {
@@ -745,6 +756,7 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
       userInfo: { sub: 'okta-sub-default', email: 'old@example.com', email_verified: true, name: 'Old User' },
     });
     expect(mockStampSourceTag).not.toHaveBeenCalled();
+    expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
   });
 });
 

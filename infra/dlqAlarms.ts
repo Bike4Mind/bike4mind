@@ -36,6 +36,7 @@ import {
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
   questExportQueueDLQ,
+  publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
@@ -75,6 +76,7 @@ import {
   buildDlqAlarmSpecs,
 } from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
+import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -84,6 +86,9 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
  * Subscribe once to receive alerts from all 28 DLQs.
  */
 export const dlqAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('DlqAlarmTopic') : undefined;
+
+/** Email-only topic (OPS_ALERT_EMAIL) that does not depend on the Slack forwarding Lambda. */
+export const oobAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('OobAlarmTopic') : undefined;
 
 /**
  * Wire DLQ alarm SNS topic → Slack.
@@ -135,7 +140,6 @@ if (isMonitoredStage) {
   // Routes to a dedicated SNS topic with a direct email subscription instead.
   // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
   // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
-  const oobAlarmTopic = new sst.aws.SnsTopic('OobAlarmTopic');
   if (process.env.OPS_ALERT_EMAIL) {
     // retainOnDelete: the AWS provider cannot destroy a PendingConfirmation subscription.
     // If OPS_ALERT_EMAIL is unset on a later deploy before the confirmation link is clicked,
@@ -146,7 +150,7 @@ if (isMonitoredStage) {
     new aws.sns.TopicSubscription(
       'OobAlarmTopicEmailSub',
       {
-        topic: oobAlarmTopic.arn,
+        topic: oobAlarmTopic!.arn,
         protocol: 'email',
         endpoint: process.env.OPS_ALERT_EMAIL,
       },
@@ -176,7 +180,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'ignore',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-    alarmActions: [oobAlarmTopic.arn],
+    alarmActions: [oobAlarmTopic!.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
   });
 
@@ -193,7 +197,7 @@ if (isMonitoredStage) {
     // Same IF(visible > 0, age, 0) metric math as the fleet age alarms; see
     // b4m-core/infra/src/dlqAlarmSpecs.ts for why and its residuals.
     metricQueries: buildDlqAgeMetricQueries(60, { QueueName: dlqAlarmHandlerDlq.name }),
-    alarmActions: [oobAlarmTopic.arn],
+    alarmActions: [oobAlarmTopic!.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
   });
 }
@@ -376,6 +380,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: githubLakeRevokeQueueDLQ,
   },
   {
+    label: 'publish-thumbnail',
+    displayName: 'Published Artifact Thumbnail',
+    application: 'PublishedArtifacts',
+    sourceQueue: 'publishThumbnailQueue',
+    queue: publishThumbnailQueueDLQ,
+  },
+  {
     label: 'generation-job',
     displayName: 'Generation Job',
     application: 'GenerationJob',
@@ -525,6 +536,15 @@ function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
 if (isMonitoredStage) {
   for (const dlq of DLQ_DESCRIPTORS) {
     createDlqAlarms(dlq);
+  }
+
+  if (youngAccountSpendAlertDeadLetter) {
+    createDlqAlarms({
+      label: 'young-account-spend-alert',
+      displayName: 'Young Account Spend Alert',
+      application: 'Signup',
+      queue: youngAccountSpendAlertDeadLetter.queue,
+    });
   }
 
   // FabFile Moderation DLQ — deliberately NOT added to DLQ_DESCRIPTORS above.

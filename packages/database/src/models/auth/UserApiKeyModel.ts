@@ -4,7 +4,7 @@ import {
   ApiKeyCapPool,
   ApiKeyStoredSecret,
   ApiKeyStatus,
-  ApiKeyScope,
+  isWellFormedApiKeyScope,
   CreditHolderType,
   IEmbedBranding,
   IUserApiKeyDocument,
@@ -165,6 +165,8 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       status: ApiKeyStatus.ACTIVE,
       $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
       'metadata.createdFrom': pool === 'oauth-exchange' ? 'oauth-exchange' : { $ne: 'oauth-exchange' },
+      // `$ne` keeps legacy rows with no billingOwnerType (user-billed by default) in the pool.
+      ...(pool === 'personal' && { billingOwnerType: { $ne: CreditHolderType.Organization } }),
     };
   }
 
@@ -279,7 +281,15 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     keyHash: { type: String },
     keyDigest: { type: String },
     keyPrefix: { type: String, required: true, unique: true },
-    scopes: [{ type: String, enum: Object.values(ApiKeyScope), required: true }],
+    // Shape only: which values are offered is the app's merged catalog, which a cron or other process
+    // without contributions loaded cannot see, and an enum here would fail its re-save of a stored key.
+    scopes: [
+      {
+        type: String,
+        required: true,
+        validate: { validator: isWellFormedApiKeyScope, message: 'Malformed API key scope: {VALUE}' },
+      },
+    ],
     status: { type: String, enum: Object.values(ApiKeyStatus), default: ApiKeyStatus.ACTIVE },
     expiresAt: { type: Date },
     lastUsedAt: { type: Date },
@@ -396,6 +406,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
 UserApiKeySchema.index({ userId: 1, status: 1 });
 UserApiKeySchema.index({ keyPrefix: 1, status: 1 });
 UserApiKeySchema.index({ expiresAt: 1 });
+UserApiKeySchema.index({ createdAt: 1 });
 UserApiKeySchema.index({ productId: 1, status: 1 }, { sparse: true });
 UserApiKeySchema.index({ organizationId: 1, status: 1 }, { sparse: true });
 UserApiKeySchema.index({ agentId: 1, status: 1 }, { sparse: true });

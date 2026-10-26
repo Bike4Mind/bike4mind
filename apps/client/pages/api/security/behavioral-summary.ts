@@ -8,12 +8,16 @@ import {
   cacheRepository,
 } from '@bike4mind/database';
 import { z } from 'zod';
-import { OperationsModelService, getEffectiveApiKeyByBackend } from '@client/services/operationsModelService';
+import {
+  OperationsModelService,
+  getEffectiveApiKeyByBackend,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const SecurityBehavioralSummarySchema = z.object({
   summary: z.string(),
@@ -258,6 +262,7 @@ const handler = baseApi()
       if (!user || !user.username || !user.id) {
         return res.status(401).json({ error: 'User not authenticated' });
       }
+      assertAiAccessAllowed(user);
 
       try {
         const safeUser = {

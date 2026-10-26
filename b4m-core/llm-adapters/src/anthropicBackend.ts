@@ -24,6 +24,8 @@ import {
   type ToolSearchServerTool,
   type TurnUsage,
 } from '@bike4mind/common';
+import { federatedAnthropicCredentials } from './anthropicFederation';
+import { selectedWifTokenSource } from './wifTokenSource';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
@@ -80,7 +82,7 @@ import {
 } from './llmTimeoutErrors';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
-import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 import {
   appendSystemText,
   buildStructuredOutputFormat,
@@ -120,12 +122,13 @@ const TEMPERATURE_ONLY_MODELS = [
 
 // Timeout constants for detecting streaming hangs (known anthropic-sdk streaming-hang bug)
 /**
- * Key-table value meaning "authenticate through Anthropic workload identity federation": the
+ * Trusted constructor sentinel meaning "authenticate through Anthropic workload identity federation": the
  * client is built with no key, so the SDK resolves ANTHROPIC_FEDERATION_RULE_ID,
  * ANTHROPIC_ORGANIZATION_ID and ANTHROPIC_IDENTITY_TOKEN_FILE from the environment. An
- * ANTHROPIC_API_KEY left in the environment still wins, so CI must not set both.
+ * ANTHROPIC_API_KEY left in the environment still wins, so CI must not set both. With
+ * PROVIDER_WIF_TOKEN_SOURCE=aws-sts the credentials come from federatedAnthropicCredentials instead.
  */
-export const ANTHROPIC_FEDERATED_KEY = 'federated';
+export const ANTHROPIC_FEDERATED_KEY = Symbol('ANTHROPIC_FEDERATED_KEY');
 
 const INITIAL_TIMEOUT_MS = 30000; // 30s to first event
 const DEFAULT_IDLE_TIMEOUT_MS = 90000; // 90s between events for standard models
@@ -229,7 +232,7 @@ export class AnthropicBackend implements ICompletionBackend {
     this._dispatch.set(info);
   }
 
-  constructor(apiKey: string, logger?: Logger, endUserId?: string) {
+  constructor(apiKey: string | typeof ANTHROPIC_FEDERATED_KEY, logger?: Logger, endUserId?: string) {
     // Increase maxRetries from default (2) to 5 for better rate limit handling.
     // The SDK has built-in exponential backoff (500ms initial, 8s max, 25% jitter)
     // and respects Retry-After headers from 429 responses.
@@ -254,8 +257,12 @@ export class AnthropicBackend implements ICompletionBackend {
       }
       throw new TypeError('terminated');
     };
+    const federated = apiKey === ANTHROPIC_FEDERATED_KEY;
     this._api = new Anthropic({
-      apiKey: apiKey === ANTHROPIC_FEDERATED_KEY ? undefined : apiKey,
+      // null, not undefined, so an ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in the env cannot win.
+      ...(federated && selectedWifTokenSource() === 'aws-sts'
+        ? { apiKey: null, authToken: null, credentials: federatedAnthropicCredentials() }
+        : { apiKey: federated ? undefined : apiKey }),
       maxRetries: 5,
       fetch: retryFetch,
     });
@@ -1037,9 +1044,10 @@ export class AnthropicBackend implements ICompletionBackend {
     // append the model-identity reminder as a separate uncached block to keep
     // the cached prefix stable across requests (otherwise the suffix would
     // bust the cache key on every model identifier change).
-    // Omitted for callers whose contract is a bare completion (API promptMode raw) -
-    // with no system messages left either, the request then carries no system at all.
-    const identityReminder = options.omitIdentityReminder
+    // Omitted for a bare completion (API promptMode raw) or while current_model_details is on the
+    // request (see shouldOmitIdentityReminder) - with no system messages left either, the request
+    // then carries no system at all.
+    const identityReminder = shouldOmitIdentityReminder(options)
       ? null
       : buildIdentityReminder(model, options.modelDisplayName);
     let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;

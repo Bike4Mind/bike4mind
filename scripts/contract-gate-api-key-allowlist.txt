@@ -234,18 +234,8 @@ apps/client/pages/api/admin/voice-agents/index.ts
 apps/client/pages/api/admin/webhook-logs/[deliveryId].ts
 apps/client/pages/api/admin/webhook-logs/index.ts
 apps/client/pages/api/admin/webhook-logs/stats.ts
-apps/client/pages/api/admin/whats-new-backfill.ts
-apps/client/pages/api/admin/whats-new-config.ts
-apps/client/pages/api/admin/whats-new-config/history.ts
-apps/client/pages/api/admin/whats-new-config/preview.ts
-apps/client/pages/api/admin/whats-new-config/restore.ts
-apps/client/pages/api/admin/whats-new-generation-status.ts
 apps/client/pages/api/admin/whats-new-highlights-config.ts
 apps/client/pages/api/admin/whats-new-highlights-preview.ts
-apps/client/pages/api/admin/whats-new/available.ts
-apps/client/pages/api/admin/whats-new/config.ts
-apps/client/pages/api/admin/whats-new/import.ts
-apps/client/pages/api/admin/whats-new/sync.ts
 apps/client/pages/api/agent-executions/[id]/index.ts
 apps/client/pages/api/agent-executions/index.ts
 apps/client/pages/api/agent-quest/manifest.ts
@@ -259,7 +249,6 @@ apps/client/pages/api/agents/[id]/missions.ts
 apps/client/pages/api/agents/[id]/transfer-credits.ts
 apps/client/pages/api/agents/create-from-context.ts
 apps/client/pages/api/agents/index.ts
-apps/client/pages/api/ai/barkeep-chat.ts
 apps/client/pages/api/ai/classify-intent.ts
 apps/client/pages/api/ai/context-dry-run.ts
 apps/client/pages/api/ai/edit-image.ts
@@ -267,11 +256,7 @@ apps/client/pages/api/ai/generate-image.ts
 apps/client/pages/api/ai/generate-video.ts
 apps/client/pages/api/ai/llm.ts
 apps/client/pages/api/ai/music.ts
-apps/client/pages/api/ai/optimize-input.ts
-apps/client/pages/api/ai/rapid-reply.ts
-apps/client/pages/api/ai/refineText.ts
 apps/client/pages/api/ai/sound-effects.ts
-apps/client/pages/api/ai/tavern-conversation.ts
 apps/client/pages/api/ai/test-realtime-voice.ts
 apps/client/pages/api/ai/transcribe/index.ts
 apps/client/pages/api/ai/transcribe/init.ts
@@ -403,8 +388,6 @@ apps/client/pages/api/data-lakes/transitional.ts
 apps/client/pages/api/deep-agent/agents/[agentId].ts
 apps/client/pages/api/deep-agent/agents/index.ts
 apps/client/pages/api/deep-agent/mission-counts.ts
-apps/client/pages/api/deep-agent/review.ts
-apps/client/pages/api/deep-agent/spin.ts
 apps/client/pages/api/documentation/docusaurus-meta.ts
 apps/client/pages/api/elabs/ready.ts
 apps/client/pages/api/elabs/voice/[id]/index.ts
