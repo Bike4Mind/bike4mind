@@ -72,6 +72,17 @@ async function setup(
   return { root, home, store, service, sent, deleted, pick: (path: string | null) => (picked = path) };
 }
 
+/**
+ * Drops an export into the watched folder after the watch began. Linux stamps mtimes from a coarse
+ * clock that can trail Date.now() by a millisecond or so, so a file written moments after
+ * setChatWatchFolder could read as older than the watch and be skipped; stamp it clearly after.
+ */
+async function writeWatchedExport(path: string, data: string | Buffer): Promise<void> {
+  await writeFile(path, data);
+  const arrived = new Date(Date.now() + 1000);
+  await utimes(path, arrived, arrived);
+}
+
 describe('ClaudeImportService', () => {
   it('syncs the default folder, counts what it found, and tells the sidebar once', async () => {
     const { service, store, sent } = await setup();
@@ -285,7 +296,7 @@ describe('ClaudeImportService', () => {
     await service.setChatWatchFolder(false);
     const fixture = JSON.parse(await readFile(join(FIXTURES, 'conversations.json'), 'utf8')) as unknown[];
     const path = join(folder, 'export.zip');
-    await writeFile(
+    await writeWatchedExport(
       path,
       buildZip([
         { name: 'users.json', data: Buffer.from('[]') },
@@ -312,7 +323,7 @@ describe('ClaudeImportService', () => {
     await service.setChatWatchFolder(false);
     const fixture = JSON.parse(await readFile(join(FIXTURES, 'conversations.json'), 'utf8')) as unknown[];
     const path = join(folder, 'export.zip');
-    await writeFile(
+    await writeWatchedExport(
       path,
       buildZip([
         { name: 'users.json', data: Buffer.from('[]') },
@@ -336,7 +347,7 @@ describe('ClaudeImportService', () => {
     pick(folder);
     await service.setChatWatchFolder(false);
     const path = join(folder, 'export.zip');
-    await writeFile(path, 'not a complete zip archive yet');
+    await writeWatchedExport(path, 'not a complete zip archive yet');
     const original = await stat(path);
     service.start();
     await vi.advanceTimersByTimeAsync(5000);
@@ -364,7 +375,7 @@ describe('ClaudeImportService', () => {
     await mkdir(folder);
     pick(folder);
     await service.setChatWatchFolder(false);
-    await writeFile(join(folder, 'export.zip'), 'recognition is stubbed');
+    await writeWatchedExport(join(folder, 'export.zip'), 'recognition is stubbed');
     const recognition = vi.spyOn(chatImport, 'looksLikeClaudeExport').mockImplementationOnce(async () => {
       scope = null;
       return true;
