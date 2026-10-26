@@ -93,7 +93,8 @@ const handler = nextRouteForContract(chatContract, {
         req,
       })
     : NO_COMPLETION_QUOTA;
-  // Freed when the turn ends, not on disconnect: a blocking turn keeps running after the client goes.
+  // Freed when the handler returns, not on disconnect: a blocking turn keeps running after the client goes.
+  // A turn still running past the wait deadline's wind-down (`stuck`) frees its slot early.
   try {
     return await handleChat(req, res);
   } finally {
