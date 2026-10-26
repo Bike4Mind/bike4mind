@@ -180,6 +180,31 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
     expect(res._getJSONData()).toMatchObject({ blockedDomain: 'kashre.com' });
   });
 
+  it('refuses before actioning any user when the domain block fails', async () => {
+    const target = { kind: 'domain', domain: 'kashre.com' } as const;
+    mockAddBlockedDomain.mockRejectedValueOnce(new Error('tx'));
+
+    await expect(
+      call(
+        validBody({
+          target,
+          previewToken: signBulkAbusePreviewToken(ADMIN.id, fingerprintFor(target, [USER_ID]), BOUND),
+        })
+      )
+    ).rejects.toThrow('tx');
+
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it.each(['github.io', 'co.uk'])('refuses the public suffix %s as a domain target', async domain => {
+    const target = { kind: 'domain', domain };
+    await expect(call(validBody({ target }))).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockResolve).not.toHaveBeenCalled();
+    expect(mockAddBlockedDomain).not.toHaveBeenCalled();
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
   it('does not touch the blocklist for a domain target without the ban action', async () => {
     const target = { kind: 'domain', domain: 'kashre.com' } as const;
     const actions = { ...ALL_ACTIONS, ban: false };

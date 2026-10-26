@@ -7,9 +7,9 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 import { CreditHolderType, type BulkAbuseActions, type IUser } from '@bike4mind/common';
-import { CreditTransaction, User, userRepository } from '@bike4mind/database';
+import { AdminAuditLogModel, CreditTransaction, User, userRepository } from '@bike4mind/database';
 import { abuseService } from '@bike4mind/services';
-import { bulkAbuseExecuteAdapters } from './adapters';
+import { bulkAbuseCohortAdapters, bulkAbuseExecuteAdapters } from './adapters';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -71,6 +71,13 @@ const adapters = (audit: () => Promise<unknown> = async () => null) => ({
   audit,
 });
 
+const fakeReq = {
+  user: { id: ACTOR_ID, username: 'admin', name: 'Admin', email: 'admin@example.com', isAdmin: true },
+  headers: {},
+  url: '/api/admin/abuse/bulk-execute',
+  requestId: 'req-1',
+} as unknown as Parameters<typeof bulkAbuseExecuteAdapters>[0];
+
 const clawbackRows = (userId: string) =>
   CreditTransaction.countDocuments({
     ownerId: userId,
@@ -116,5 +123,74 @@ describe('executeBulkAbuse on a real replica set', () => {
     expect((await User.findById(user.id).lean())?.isBanned).toBeFalsy();
     expect(await clawbackRows(user.id)).toBe(0);
     expect(await balance(user.id)).toBe(80);
+  });
+
+  it('writes a per-user audit entry with the admin reason, and rolls it back with the user step', async () => {
+    const user = await seedGrantedUser();
+    const banOnly: BulkAbuseActions = {
+      ban: true,
+      revokeApiKeys: false,
+      revokeSessions: false,
+      clawbackFreeCredits: false,
+    };
+
+    const [banned] = await abuseService.executeBulkAbuse(
+      [user],
+      banOnly,
+      ACTOR_ID,
+      bulkAbuseExecuteAdapters(fakeReq, 'bot farm')
+    );
+
+    expect(banned.steps.ban).toBe('applied');
+    const rows = await AdminAuditLogModel.find({ action: 'abuse.bulk.ban' }).lean();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].target.id).toBe(user.id);
+    expect(rows[0].reason).toBe('bot farm');
+
+    // A later step throwing after the ban's entry was written takes that entry back with the ban.
+    const other = await seedGrantedUser();
+    const real = bulkAbuseExecuteAdapters(fakeReq, 'bot farm');
+    const failingKeys = {
+      ...real,
+      db: {
+        ...real.db,
+        userApiKeys: { ...real.db.userApiKeys, count: () => Promise.reject(new Error('keys unavailable')) },
+      },
+    };
+    const [failed] = await abuseService.executeBulkAbuse(
+      [other],
+      { ...banOnly, revokeApiKeys: true },
+      ACTOR_ID,
+      failingKeys
+    );
+
+    expect(failed.status).toBe('failed');
+    expect((await User.findById(other.id).lean())?.isBanned).toBeFalsy();
+    expect(await AdminAuditLogModel.countDocuments({ 'target.id': other.id })).toBe(0);
+  });
+});
+
+describe('resolveBulkAbuseCohort on a real replica set', () => {
+  const seed = (email: string) =>
+    User.create({
+      name: 'Bot',
+      username: `bot-${Math.random().toString(36).slice(2, 10)}`,
+      email,
+      password: null,
+      hasUsablePassword: false,
+    });
+
+  it('matches the domain and its subdomains case-insensitively and nothing else', async () => {
+    const apex = await seed('a@BURNER-EXAMPLE.com');
+    const sub = await seed('b@np.burner-example.com');
+    await seed('c@notburner-example.com');
+
+    const cohort = await abuseService.resolveBulkAbuseCohort(
+      { kind: 'domain', domain: 'burner-example.com' },
+      ACTOR_ID,
+      bulkAbuseCohortAdapters
+    );
+
+    expect(cohort.included.map(user => user.id).sort()).toEqual([apex.id, sub.id].sort());
   });
 });

@@ -107,6 +107,13 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
     expect(res._getJSONData().blocksDomain).toBeNull();
   });
 
+  it.each(['github.io', 'co.uk'])('refuses the public suffix %s as a domain target', async domain => {
+    await expect(call({ target: { kind: 'domain', domain }, actions: ALL_ACTIONS })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(mockResolve).not.toHaveBeenCalled();
+  });
+
   it('writes no audit entry', async () => {
     await call({ target: { kind: 'users', userIds: [USER_ID] }, actions: ALL_ACTIONS });
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
