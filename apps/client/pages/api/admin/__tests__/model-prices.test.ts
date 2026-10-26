@@ -601,6 +601,20 @@ describe('POST /api/admin/model-prices admin audit', () => {
     });
   });
 
+  it('does not append or audit a revert-to-seed when the row in force already is the seed', async () => {
+    const seedRow = { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'adapter-seed' };
+    mockRowsInForce.mockResolvedValue([seedRow]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' },
+    });
+    await run();
+
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+    expect(res._getJSONData().row).toMatchObject(seedRow);
+  });
+
   it.each(
     (['per_token', 'per_image', 'per_minute'] as const).flatMap(unit =>
       (['reprice', 'revert-to-seed'] as const).flatMap(action =>

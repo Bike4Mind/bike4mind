@@ -215,6 +215,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         const inForce = (await modelPriceRepository.rowsInForce(FAR_FUTURE)).find(
           r => r.modelId === modelId && r.unit === unit
         );
+        // Already seed-managed at the seed's rates: same no-op as an identical reprice resubmit.
+        if (
+          inForce &&
+          inForce.note === SEED_NOTE &&
+          normalizePricing(inForce.pricing) === normalizePricing(entry.pricing)
+        ) {
+          return inForce;
+        }
         const appended = await modelPriceRepository.append({
           modelId,
           unit,
