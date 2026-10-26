@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assessSignupGrant, evaluateSignupRisk, signupRiskPolicySchema, type SignupRiskAdapters } from './signupRisk';
 
 const policy = {
@@ -43,14 +43,30 @@ describe('evaluateSignupRisk', () => {
     expect(evaluateSignupRisk(policy, { ipSignups: value }, 10).band).toBe('review');
   });
 
-  it('accepts only boolean observations for boolean signals', () => {
-    const booleanPolicy = {
+  it.each(['datacenter', 'canonicalEmailCollision', 'disposableDomain', 'blockedDomain', 'challengeVerified'] as const)(
+    'accepts only boolean observations for %s',
+    signal => {
+      const booleanPolicy = {
+        ...policy,
+        rules: [{ ...policy.rules[0], signal, comparison: 'eq', threshold: 1 }],
+      };
+      expect(evaluateSignupRisk(booleanPolicy, { [signal]: false }, 10).band).toBe('full');
+      expect(evaluateSignupRisk(booleanPolicy, { [signal]: true }, 10).band).toBe('reduced');
+      expect(evaluateSignupRisk(booleanPolicy, { [signal]: 0 }, 10).band).toBe('review');
+    }
+  );
+
+  it('accumulates independent signals before choosing the review band', () => {
+    const combinedPolicy = {
       ...policy,
-      rules: [{ ...policy.rules[0], signal: 'datacenter', comparison: 'eq', threshold: 1 }],
+      rules: [...policy.rules, { ...policy.rules[0], signal: 'asnSignups' }],
     };
-    expect(evaluateSignupRisk(booleanPolicy, { datacenter: false }, 10).band).toBe('full');
-    expect(evaluateSignupRisk(booleanPolicy, { datacenter: true }, 10).band).toBe('reduced');
-    expect(evaluateSignupRisk(booleanPolicy, { datacenter: 0 }, 10).band).toBe('review');
+    expect(evaluateSignupRisk(combinedPolicy, { ipSignups: 3, asnSignups: 3 }, 11)).toMatchObject({
+      band: 'review',
+      credits: 0,
+      score: 8,
+      reasons: ['ipSignups', 'asnSignups'],
+    });
   });
 
   it('can match a known false boolean without treating missing as false', () => {
@@ -106,6 +122,10 @@ describe('evaluateSignupRisk', () => {
 });
 
 describe('assessSignupGrant', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const adaptersFor = (): SignupRiskAdapters => ({
     readPolicy: vi.fn(async () => policy),
     collectSignals: vi.fn(async () => ({ ipSignups: 3 })),
@@ -116,14 +136,25 @@ describe('assessSignupGrant', () => {
   it('passes only the bounded decision to the atomic owner and emits only the band', async () => {
     const adapters = adaptersFor();
     expect(await assessSignupGrant(11, adapters)).toMatchObject({ decision: { credits: 5 }, applied: true });
-    expect(adapters.commit).toHaveBeenCalledTimes(1);
+    expect(adapters.commit).toHaveBeenCalledExactlyOnceWith(evaluateSignupRisk(policy, { ipSignups: 3 }, 11));
     expect(adapters.emitBand).toHaveBeenCalledExactlyOnceWith('reduced');
   });
 
   it.each(['readPolicy', 'collectSignals'] as const)('holds on %s failures', async method => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const adapters = adaptersFor();
     vi.mocked(adapters[method]).mockRejectedValue(new Error('unavailable'));
     expect(await assessSignupGrant(11, adapters)).toMatchObject({ decision: { credits: 0, status: 'unavailable' } });
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[signup-risk] Assessment unavailable; holding signup grant');
+  });
+
+  it('reports invalid policy and skips collection without logging policy contents', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const adapters = adaptersFor();
+    vi.mocked(adapters.readPolicy).mockResolvedValue({ enabled: true, version: 'invalid' });
+    await expect(assessSignupGrant(11, adapters)).resolves.toMatchObject({ decision: { credits: 0 } });
+    expect(adapters.collectSignals).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[signup-risk] Assessment unavailable; holding signup grant');
   });
 
   it('does not collect signals when explicitly disabled', async () => {
@@ -142,11 +173,23 @@ describe('assessSignupGrant', () => {
   });
 
   it('propagates atomic commit failures without emitting, but ignores metric failure after commit', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const adapters = adaptersFor();
     vi.mocked(adapters.commit).mockRejectedValueOnce(new Error('commit failed'));
     await expect(assessSignupGrant(11, adapters)).rejects.toThrow('commit failed');
     expect(adapters.emitBand).not.toHaveBeenCalled();
     vi.mocked(adapters.emitBand).mockRejectedValue(new Error('metric failed'));
     await expect(assessSignupGrant(11, adapters)).resolves.toMatchObject({ applied: true });
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[signup-risk] Band telemetry failed after grant commit');
+  });
+
+  it('keeps a committed grant successful when the telemetry adapter throws synchronously', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const adapters = adaptersFor();
+    vi.mocked(adapters.emitBand).mockImplementation(() => {
+      throw new Error('synchronous telemetry failure');
+    });
+    await expect(assessSignupGrant(11, adapters)).resolves.toMatchObject({ applied: true });
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[signup-risk] Band telemetry failed after grant commit');
   });
 });

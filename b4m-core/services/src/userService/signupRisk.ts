@@ -149,10 +149,18 @@ export async function assessSignupGrant(
   } catch {
     policy = undefined;
   }
-  const result = await adapters.commit(evaluateSignupRisk(policy, signals, signupCredits));
+  const decision = evaluateSignupRisk(policy, signals, signupCredits);
+  if (decision.status === 'unavailable') {
+    console.warn('[signup-risk] Assessment unavailable; holding signup grant');
+  }
+  const result = await adapters.commit(decision);
   if (result.applied) {
     // Telemetry must not turn a committed grant into an authentication failure.
-    await adapters.emitBand(result.decision.band).catch(() => undefined);
+    try {
+      await adapters.emitBand(result.decision.band);
+    } catch {
+      console.warn('[signup-risk] Band telemetry failed after grant commit');
+    }
   }
   return result;
 }

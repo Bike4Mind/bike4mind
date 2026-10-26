@@ -1,4 +1,5 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
+import { isIP } from 'node:net';
 import BaseRepository from '@bike4mind/db-core';
 import type { INetworkMeta } from '@bike4mind/common';
 import { NETWORK_META_FIELDS } from './networkMetaFields';
@@ -83,11 +84,13 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
     maxRows: number;
   }): Promise<{ ipSignups: number | null; asnSignups: number | null; prefixSignups: number | null }> {
     const { since, until, maxRows } = input;
+    const now = Date.now();
     if (
       !Number.isFinite(since.getTime()) ||
       !Number.isFinite(until.getTime()) ||
       since >= until ||
-      until.getTime() - since.getTime() > AUTH_EVENT_RETENTION_SECONDS * 1000 ||
+      since.getTime() < now - AUTH_EVENT_RETENTION_SECONDS * 1000 ||
+      until.getTime() > now ||
       !Number.isInteger(maxRows) ||
       maxRows < 1 ||
       maxRows > 10_000
@@ -96,19 +99,18 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
 
     const count = async (network: Record<string, unknown>): Promise<number | null> => {
       const rows = await this.model
-        .find({ ...network, type: 'signup', createdAt: { $gte: since, $lt: until } })
+        .find({ ...network, type: 'signup', userId: { $ne: input.userId }, createdAt: { $gte: since, $lt: until } })
         .select({ userId: 1, _id: 0 })
         .limit(maxRows + 1)
         .maxTimeMS(2000)
         .lean();
       if (rows.length > maxRows) return null;
-      return new Set(rows.map(row => row.userId).filter(id => id !== input.userId)).size;
+      return new Set(rows.map(row => row.userId)).size;
     };
-    const ipv4 = input.ip?.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    const validIp = ipv4 && ipv4.slice(1).every(octet => Number(octet) <= 255);
-    const prefix = validIp ? `${ipv4[1]}.${ipv4[2]}.${ipv4[3]}.` : null;
+    const ipVersion = input.ip === null ? 0 : isIP(input.ip);
+    const prefix = input.ip !== null && ipVersion === 4 ? input.ip.slice(0, input.ip.lastIndexOf('.') + 1) : null;
     const [ipSignups, asnSignups, prefixSignups] = await Promise.all([
-      input.ip ? count({ ip: input.ip }) : null,
+      ipVersion ? count({ ip: input.ip }) : null,
       Number.isSafeInteger(input.asn) && input.asn !== null && input.asn > 0 ? count({ asn: input.asn }) : null,
       prefix ? count({ ip: { $gte: prefix, $lt: `${prefix}~` } }) : null,
     ]);

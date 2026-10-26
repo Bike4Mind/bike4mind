@@ -73,12 +73,44 @@ describe('recentDistinctSignups', () => {
     });
   });
 
+  it.each(['', 'unknown', 'not-an-ip', '999.0.2.1', '192.000.2.1', ' 192.0.2.1'])(
+    'keeps invalid IP %s unknown instead of reporting a clean network',
+    async ip => {
+      expect(await authEventRepository.recentDistinctSignups({ ...input, ip })).toEqual({
+        ipSignups: null,
+        asnSignups: 0,
+        prefixSignups: null,
+      });
+    }
+  );
+
+  it('excludes the current account before applying the scan limit', async () => {
+    await AuthEventModel.collection.insertMany([row('current'), row('current'), row('other')]);
+    expect(await authEventRepository.recentDistinctSignups({ ...input, maxRows: 1 })).toEqual({
+      ipSignups: 1,
+      asnSignups: 1,
+      prefixSignups: 1,
+    });
+  });
+
+  it('rejects short windows whose observations have already expired', async () => {
+    const expiredUntil = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000);
+    await expect(
+      authEventRepository.recentDistinctSignups({
+        ...input,
+        since: new Date(expiredUntil.getTime() - 60 * 60 * 1000),
+        until: expiredUntil,
+      })
+    ).rejects.toThrow('Invalid signup window');
+  });
+
   it('rejects unbounded or invalid windows', async () => {
     for (const patch of [
       { maxRows: 0 },
       { maxRows: 10001 },
       { since: until },
       { since: new Date(NaN) },
+      { until: new Date(Date.now() + 60 * 60 * 1000) },
       { until: new Date(until.getTime() + 365 * 24 * 60 * 60 * 1000) },
     ]) {
       await expect(authEventRepository.recentDistinctSignups({ ...input, ...patch })).rejects.toThrow(
