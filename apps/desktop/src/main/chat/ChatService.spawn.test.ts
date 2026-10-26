@@ -137,7 +137,7 @@ describe('ChatService spawn caps', () => {
     return latest?.type === 'spawn-suggestions' ? latest.suggestions.filter(entry => entry.status === 'pending') : [];
   }
 
-  function titles(prefix: string, count: number): string[] {
+  function spawnTitles(prefix: string, count: number): string[] {
     return Array.from({ length: count }, (_unused, index) => `${prefix}-${index}`);
   }
 
@@ -184,7 +184,7 @@ describe('ChatService spawn caps', () => {
 
     // Every start at once, so the cap is tested against the parallel path: a check that read
     // the count before awaiting the create would let every one of them through.
-    const results = await startSuggested(parent.id, titles('fan', MAX_CONCURRENT_SPAWNED + 1));
+    const results = await startSuggested(parent.id, spawnTitles('fan', MAX_CONCURRENT_SPAWNED + 1));
     const refused = results.filter(result => !result.ok);
     expect(results.filter(result => result.ok)).toHaveLength(MAX_CONCURRENT_SPAWNED);
     expect(refused).toHaveLength(1);
@@ -199,7 +199,7 @@ describe('ChatService spawn caps', () => {
     await service.send(parent.id, 'fill the slots');
     await awaitStream(0);
     requestSpawns(streams[0], MAX_CONCURRENT_SPAWNED, 'fill');
-    const filled = await startSuggested(parent.id, titles('fill', MAX_CONCURRENT_SPAWNED));
+    const filled = await startSuggested(parent.id, spawnTitles('fill', MAX_CONCURRENT_SPAWNED));
     expect(filled.every(result => result.ok)).toBe(true);
 
     // One more while all of them are still replying is refused: the cap counts runs in flight.
