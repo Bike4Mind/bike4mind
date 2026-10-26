@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockFindUserById, mockFindOrgById, mockBillingEnabled, mockGetOperationsModel } = vi.hoisted(() => ({
-  mockFindUserById: vi.fn(),
-  mockFindOrgById: vi.fn(),
-  mockBillingEnabled: vi.fn(async () => false),
-  mockGetOperationsModel: vi.fn(),
-}));
+const { mockFindUserById, mockFindOrgById, mockBillingEnabled, mockCreditsEnforced, mockGetOperationsModel } =
+  vi.hoisted(() => ({
+    mockFindUserById: vi.fn(),
+    mockFindOrgById: vi.fn(),
+    mockBillingEnabled: vi.fn(async () => false),
+    mockCreditsEnforced: vi.fn(async () => true),
+    mockGetOperationsModel: vi.fn(),
+  }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -18,9 +20,12 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services')>()),
   isOperationalBillingEnabled: mockBillingEnabled,
+  areCreditsEnforced: mockCreditsEnforced,
 }));
 // Reached only on a would-be refusal, and mocked rather than imported for real because the
 // service resolves system API keys and builds the whole model catalog.
+const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
+vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
 }));
@@ -55,14 +60,57 @@ describe('checkSessionOperationalCredits', () => {
     mockFindOrgById.mockResolvedValue(null);
   });
 
-  // The gap this gate closes is latent: operational billing defaults OFF, so a deployment that
-  // records-but-never-bills must keep queueing this work. A pre-flight stricter than the
-  // settlement would take a working feature away from every deploy that never pays for it.
-  it('allows, and reads no billing state, when operational billing is off', async () => {
+  // A holder the settlement would never bill must keep queueing this work: a pre-flight stricter
+  // than the settlement would take a working feature away from every account that never pays for it.
+  it('allows a broke holder when operational billing does not apply to them', async () => {
     mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
 
     await expect(preflight()).resolves.toEqual({ allowed: true });
+  });
+
+  // Same holder and plan resolver recordSessionOperationalUsage settles with, so the free-tier
+  // carve-out cannot make the gate and the charge disagree.
+  it('asks the shared billing helper about the holder that would pay', async () => {
+    const user = { id: USER_ID, currentCredits: 0, organizationId: ORG_ID };
+    const org = { id: ORG_ID, currentCredits: 0, userDetails: [] };
+    mockFindUserById.mockResolvedValue(user);
+    mockFindOrgById.mockResolvedValue(org);
+
+    await preflight();
+
+    expect(mockBillingEnabled).toHaveBeenCalledWith(expect.anything(), undefined, {
+      user,
+      organization: org,
+      activePlans: { hasActivePlan: expect.any(Function) },
+    });
+  });
+
+  // Self-host does not meter credits, so it pays for no holder reads at all.
+  it('allows without reading the holder when credits are not enforced', async () => {
+    mockCreditsEnforced.mockResolvedValueOnce(false);
+
+    await expect(preflight()).resolves.toEqual({ allowed: true });
     expect(mockFindUserById).not.toHaveBeenCalled();
+    expect(mockBillingEnabled).not.toHaveBeenCalled();
+  });
+
+  it('names the plan read as the failed read when that is what threw', async () => {
+    mockBillingEnabled.mockImplementationOnce(
+      async (
+        _db: unknown,
+        _logger: unknown,
+        holder: { activePlans: { hasActivePlan(id: string): Promise<boolean> } }
+      ) => holder.activePlans.hasActivePlan(USER_ID)
+    );
+    activePlanResolver.hasActivePlan.mockRejectedValueOnce(new Error('subscriptions down'));
+    const logger = { warn: vi.fn(), error: vi.fn() };
+
+    await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
+    expect(logger.error).toHaveBeenCalledWith(
+      '[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings',
+      expect.any(Error),
+      { failedRead: 'activePlan' }
+    );
   });
 
   // The settings read is inside the same fail-open boundary as the user/org reads.
@@ -75,10 +123,22 @@ describe('checkSessionOperationalCredits', () => {
     const logger = { warn: vi.fn(), error: vi.fn() };
 
     await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
-    expect(mockFindUserById).not.toHaveBeenCalled();
     // The level is the alarm channel, so it is asserted, not incidental: a silent fail-open is
     // indistinguishable from the ungated behavior this gate replaced.
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error));
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error), {
+      failedRead: 'settings',
+    });
+  });
+
+  it('allows when the enforceCredits read throws, and says so at error level', async () => {
+    mockCreditsEnforced.mockRejectedValueOnce(new Error('mongo down'));
+    const logger = { warn: vi.fn(), error: vi.fn() };
+
+    await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
+    expect(mockFindUserById).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error), {
+      failedRead: 'settings',
+    });
   });
 
   it('allows a funded holder when billing is on', async () => {
@@ -350,6 +410,7 @@ describe('filterSessionIdsByOperationalCredits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetOperationsModel.mockResolvedValue(PRICED_OPERATIONS_MODEL);
+    mockFindUserById.mockResolvedValue({ id: PAYER_ID, currentCredits: 1000 });
     mockFindOrgById.mockResolvedValue(null);
   });
 
@@ -380,11 +441,10 @@ describe('filterSessionIdsByOperationalCredits', () => {
 
     expect(allowed).toEqual(new Set(['s1', 's2', 's3']));
     expect(mockBillingEnabled).toHaveBeenCalledTimes(1);
-    expect(mockFindUserById).not.toHaveBeenCalled();
-    expect(mockFindOrgById).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledExactlyOnceWith(
       '[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings',
-      error
+      error,
+      { failedRead: 'settings' }
     );
   });
 

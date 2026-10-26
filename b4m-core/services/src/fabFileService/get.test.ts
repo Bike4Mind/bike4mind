@@ -65,7 +65,7 @@ describe('generateSignedUrl - request-local signing', () => {
     const serverAdapter = adapters();
     const server = await generateSignedUrl(original, serverAdapter);
     expect(server.fileUrl).toBe(privateUrl);
-    expect(fetchMock).toHaveBeenCalledWith(privateUrl, { method: 'GET' });
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(serverAdapter.storage.generateSignedUrl).not.toHaveBeenCalled();
   });
 
@@ -96,5 +96,50 @@ describe('generateSignedUrl - request-local signing', () => {
     expect(held.fileUrl).toBeUndefined();
     expect(browser.storage.generateSignedUrl).not.toHaveBeenCalled();
     expect(browser.db.fabFiles.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateSignedUrl - cached URL reuse', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const cachedUrl = 'https://cached.example.invalid/file';
+  const freshUrl = 'https://fresh.example.invalid/file';
+  const minutesFromNow = (minutes: number) => new Date(Date.now() + minutes * 60 * 1000);
+  const signingAdapter = () => {
+    const adapter = adapters();
+    adapter.db.fabFiles.update = vi.fn();
+    vi.mocked(adapter.storage.generateSignedUrl).mockResolvedValue(freshUrl);
+    return adapter;
+  };
+
+  // 6 min here and 4 min below sit either side of the 5-minute refresh margin, pinning it.
+  it('reuses an unexpired cached URL without fetching the object', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = signingAdapter();
+    const result = await generateSignedUrl(
+      fabFile({ filePath: 'owned/file.txt', fileUrl: cachedUrl, fileUrlExpireAt: minutesFromNow(6) }),
+      adapter
+    );
+    expect(result.fileUrl).toBe(cachedUrl);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(adapter.storage.generateSignedUrl).not.toHaveBeenCalled();
+    expect(adapter.db.fabFiles.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['expired', -1],
+    ['about to expire', 4],
+  ])('re-signs a cached URL that is %s', async (_label, minutes) => {
+    const adapter = signingAdapter();
+    const result = await generateSignedUrl(
+      fabFile({ filePath: 'owned/file.txt', fileUrl: cachedUrl, fileUrlExpireAt: minutesFromNow(minutes) }),
+      adapter
+    );
+    expect(result.fileUrl).toBe(freshUrl);
+    expect(adapter.db.fabFiles.update).toHaveBeenCalledWith(
+      { id: 'f1', fileUrl: freshUrl, fileUrlExpireAt: expect.any(Date) },
+      { timestamps: false }
+    );
   });
 });

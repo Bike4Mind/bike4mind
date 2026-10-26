@@ -201,6 +201,12 @@ export interface ICompletionOptions {
    */
   omitIdentityReminder?: boolean;
   /**
+   * The current_model_details tool carries the model identity for this call, so the identity line
+   * is left out while `tools` is non-empty. Separate from `omitIdentityReminder` because adapter
+   * recursions that drop `tools` must bring the line back, whereas a raw turn never gets it.
+   */
+  identityViaTool?: boolean;
+  /**
    * Registry display name (ModelInfo.name) of the model serving THIS call, used in the identity
    * reminder. Set per hop so a fallback names the fallback model; unset keeps the raw-id wording.
    */

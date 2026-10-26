@@ -1,7 +1,12 @@
 import { userApiKeyService, userService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { User } from '@bike4mind/database';
-import { ApiKeyScopeValue, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ApiKeyScopeValue,
+  resolveApiCompletionSource,
+  type ScopeForbiddenErrorSchema,
+} from '@bike4mind/common';
 import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -200,26 +205,29 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       // detection-evasion vector.
       const ipAddress = getClientIp(req);
 
-      // Log API key usage to analytics (fire and forget)
+      // Log API key usage to analytics (fire and forget). Ingest keys are machine telemetry at
+      // thousands of POSTs per hour, not user activity; ApiKeyUsageLog below still records them.
       // Note: keyPrefix is named for type compatibility but contains a hash for security
-      const responseTime = Date.now() - startTime;
-      logEvent(
-        {
-          userId: validation.userId,
-          type: UserApiKeyEvents.USED,
-          metadata: {
-            keyId: validation.keyId!,
-            keyPrefix: hashApiKeyForLogging(apiKey), // Hash instead of prefix for security
-            endpoint: endpointPath,
-            method: req.method,
-            responseTime,
-            statusCode: 200, // Will be updated by response middleware if needed
+      if (!validation.scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE)) {
+        const responseTime = Date.now() - startTime;
+        logEvent(
+          {
+            userId: validation.userId,
+            type: UserApiKeyEvents.USED,
+            metadata: {
+              keyId: validation.keyId!,
+              keyPrefix: hashApiKeyForLogging(apiKey), // Hash instead of prefix for security
+              endpoint: endpointPath,
+              method: req.method,
+              responseTime,
+              statusCode: 200, // Will be updated by response middleware if needed
+            },
           },
-        },
-        { ability: req.ability }
-      ).catch(err => {
-        req.logger?.warn('Failed to log API key usage to analytics', err);
-      });
+          { ability: req.ability }
+        ).catch(err => {
+          req.logger?.warn('Failed to log API key usage to analytics', err);
+        });
+      }
 
       // Store API key info for detailed logging after response
       const userId = validation.userId ?? user?.id;

@@ -39,7 +39,7 @@ import {
   resolveAnthropicEffort,
 } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
-import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
 
 enum ClaudeChunkTypes {
   MESSAGE_START = 'message_start',
@@ -953,9 +953,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       .filter(block => block.text.trim() !== '');
 
     // Append model identity so the model correctly identifies itself when asked.
-    // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
-    // with the same flag in anthropicBackend.
-    const identityReminder = options.omitIdentityReminder
+    // Skipped for raw or while current_model_details is on the request (see
+    // shouldOmitIdentityReminder) - must stay in sync with anthropicBackend.
+    const identityReminder = shouldOmitIdentityReminder(options)
       ? null
       : buildIdentityReminder(model, options.modelDisplayName);
 

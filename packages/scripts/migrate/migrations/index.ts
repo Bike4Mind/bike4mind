@@ -216,6 +216,8 @@ import EnsureAuthEventIndexes from './20260921235972_ensure-authevent-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureSignupFingerprintWindowIndex from './20260921235939_ensure-signup-fingerprint-window-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureUserSignupMetaCapturedAtIndex from './20260921235973_ensure-user-signupmeta-capturedat-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureAdminAuditLogIndexes from './20260921235940_ensure-adminauditlog-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import BackfillAdminAuditLog from './20260921235941_backfill-admin-audit-log';
@@ -229,6 +231,8 @@ import EnsureUserApiKeyAuditLogActorIndex from './20260921235944_ensure-userapik
 import ClearSuspensionMirroredIsModerated from './20260921235945_clear-suspension-mirrored-ismoderated';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organization-manager-into-admin-user-ids';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-claim-email';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -383,6 +387,7 @@ const coreMigrations: MigrationFile[] = [
   SetSlackAuditLogRetention,
   SetLiveopsTriageConfigAuditLogRetention,
   FoldOrganizationManagerIntoAdminUserIds,
+  BackfillFreeCreditClaimEmail,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
   EnsureAdminAuditLogReadIndexes,
@@ -396,6 +401,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureArtifactSessionIdentifierIndex,
   EnsureAuthEventIndexes,
   EnsureSignupFingerprintWindowIndex,
+  EnsureUserSignupMetaCapturedAtIndex,
   BackfillStorageLimitOverrides,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,

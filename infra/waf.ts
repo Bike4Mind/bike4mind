@@ -1,14 +1,15 @@
 /**
- * SST-managed WAF.
+ * WAF for the Router CloudFront distribution, controlled by the ENABLE_WAF environment variable
+ * (default: false).
  *
- * Creates a CloudFront-scope WAFv2 WebACL in us-east-1 and exposes its ARN for
- * association to the Router CloudFront distribution.
- *
- * Controlled by ENABLE_WAF environment variable (default: false).
- * For PR testing, temporarily set ENABLE_WAF=true (don't forget to unset before merging).
+ * A stage with WAF_WEB_ACL_NAME set looks up an externally managed WebACL by name (see
+ * wafAssociation.ts); otherwise non-production stages create their own CloudFront-scope WebACL in
+ * us-east-1. Production always uses the external ACL and also creates the alert delivery resources
+ * below.
  */
 
-import { buildDevWafRuleJson, getDevWafMeta, getWafRateLimitAlarmRules, parseWafBlockedIps } from './wafPolicy';
+import { buildDevWafRuleJson, getDevWafMeta, parseWafBlockedIps } from './wafPolicy';
+import { resolveExternalWafAssociation, resolveWafLogDestination } from './wafAssociation';
 import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
@@ -17,6 +18,15 @@ import { parseAlarmThreshold, SIGNUP_EDGE_SIGNAL_DEFAULT } from './signupAlarmTh
 // WAF is disabled by default. Enable via ENABLE_WAF=true environment variable.
 // For production and dev, set ENABLE_WAF=true in GitHub Variables.
 const isWafEnabled = process.env.ENABLE_WAF === 'true';
+
+const externalWaf = resolveExternalWafAssociation({
+  stage: $app.stage,
+  enableWaf: process.env.ENABLE_WAF,
+  webAclName: process.env.WAF_WEB_ACL_NAME,
+});
+
+// The alert delivery resources and the topics they use exist for production only.
+const productionAlerts = $app.stage === 'production' ? externalWaf : undefined;
 
 // CloudFront-scope WAF resources must be created in us-east-1.
 const wafProviderUsEast1 = isWafEnabled
@@ -31,27 +41,50 @@ const wafProviderUsEast1 = isWafEnabled
  * WAF_BLOCKED_IPS (comma-separated IPv4 or CIDR) only seeds the set on first create; runtime edits are the source of truth.
  * WAF requires at least one address, so an empty list falls back to a TEST-NET placeholder that never appears in real traffic.
  */
-export const wafEmergencyIpSet = isWafEnabled
-  ? new aws.wafv2.IpSet(
-      'WafEmergencyIpBlockSet',
-      {
-        // Use stage-specific naming for ALL stages to avoid conflicts
-        name: $app.stage === 'production' ? 'emergency-ip-block-prod' : `emergency-ip-block-${$app.stage}`,
-        // WAF description regex does not allow parentheses.
-        description: `Emergency IP block list - ${$app.stage}`,
-        scope: 'CLOUDFRONT',
-        ipAddressVersion: 'IPV4',
-        addresses: parseWafBlockedIps(process.env.WAF_BLOCKED_IPS),
-      },
-      {
-        provider: wafProviderUsEast1,
-        // Retain IPSet for permanent stages only — PR stages are torn down and recreated,
-        // so retaining would orphan the resource and cause WAFDuplicateItemException on redeploy.
-        retainOnDelete: ['production', 'dev'].includes($app.stage),
-        ignoreChanges: ['addresses', 'lockToken'],
-      }
-    )
-  : undefined;
+export const wafEmergencyIpSet =
+  isWafEnabled && !externalWaf
+    ? new aws.wafv2.IpSet(
+        'WafEmergencyIpBlockSet',
+        {
+          name: `emergency-ip-block-${$app.stage}`,
+          // WAF description regex does not allow parentheses.
+          description: `Emergency IP block list - ${$app.stage}`,
+          scope: 'CLOUDFRONT',
+          ipAddressVersion: 'IPV4',
+          addresses: parseWafBlockedIps(process.env.WAF_BLOCKED_IPS),
+        },
+        {
+          provider: wafProviderUsEast1,
+          // Retain IPSet for the permanent stage only; PR stages are torn down and recreated,
+          // so retaining would orphan the resource and cause WAFDuplicateItemException on redeploy.
+          retainOnDelete: $app.stage === 'dev',
+          ignoreChanges: ['addresses', 'lockToken'],
+        }
+      )
+    : undefined;
+
+/**
+ * IPs the path-scoped rate rules do not count (our own and allowlisted addresses). Addresses come
+ * from the WAF_RATE_EXEMPT_IPS deploy variable, same format and placeholder as the emergency set.
+ * It only narrows what rate rules count; it never allows a request past any other rule.
+ */
+export const wafRateExemptIpSet =
+  isWafEnabled && !externalWaf
+    ? new aws.wafv2.IpSet(
+        'WafRateExemptIpSet',
+        {
+          name: $app.stage === 'production' ? 'rate-exempt-ip-prod' : `rate-exempt-ip-${$app.stage}`,
+          description: `Rate rule exempt IP list - ${$app.stage}`,
+          scope: 'CLOUDFRONT',
+          ipAddressVersion: 'IPV4',
+          addresses: parseWafBlockedIps(process.env.WAF_RATE_EXEMPT_IPS, 'WAF_RATE_EXEMPT_IPS'),
+        },
+        {
+          provider: wafProviderUsEast1,
+          retainOnDelete: ['production', 'dev'].includes($app.stage),
+        }
+      )
+    : undefined;
 
 /**
  * CloudWatch Logs group for WAF traffic logs.
@@ -67,60 +100,101 @@ export const wafEmergencyIpSet = isWafEnabled
  * - action, terminatingRuleId, terminatingRuleType (Graph 4: Terminated Requests)
  * - @timestamp (all time-series graphs)
  *
- * Retention strategy:
- * - Production: 90 days (compliance, audit trails, long-term incident investigation)
- * - Dev/PR: 30 days (cost optimization, sufficient for debugging and testing)
+ * Retention: 30 days (cost optimization, sufficient for debugging and testing).
  */
-export const wafLogGroup = isWafEnabled
-  ? new aws.cloudwatch.LogGroup(
-      'WafLogGroup',
-      {
-        // CRITICAL: MUST start with 'aws-waf-logs-' (see comment above)
-        name: `aws-waf-logs-bike4mind-${$app.stage}`,
-        // Retention: 90 days for production, 30 days for dev/PR stages
-        retentionInDays: $app.stage === 'production' ? 90 : 30,
-      },
-      {
-        // MUST be us-east-1 for CloudFront-scope WAF
-        provider: wafProviderUsEast1,
-        // Retain logs for dev/production stages (safety net), auto-delete for PR stages (cleanup)
-        retainOnDelete: $app.stage === 'dev' || $app.stage === 'production',
-      }
-    )
-  : undefined;
+export const wafLogGroup =
+  isWafEnabled && !externalWaf
+    ? new aws.cloudwatch.LogGroup(
+        'WafLogGroup',
+        {
+          // CRITICAL: MUST start with 'aws-waf-logs-' (see comment above)
+          name: `aws-waf-logs-bike4mind-${$app.stage}`,
+          retentionInDays: 30,
+        },
+        {
+          // MUST be us-east-1 for CloudFront-scope WAF
+          provider: wafProviderUsEast1,
+          // Retain logs for dev (safety net), auto-delete for PR stages (cleanup)
+          retainOnDelete: $app.stage === 'dev',
+        }
+      )
+    : undefined;
 
 /**
  * WebACL built from the exported policy.
  */
-export const wafWebAcl = isWafEnabled
-  ? new aws.wafv2.WebAcl(
-      'WafWebAcl',
-      (() => {
-        // Use stage-specific suffix for ALL stages (not just production)
-        // This ensures each stage gets its own WebACL (e.g., bike4mind-api-protection-pr6391)
-        const stageSuffix = $app.stage === 'production' ? 'prod' : $app.stage;
-        const policy = getDevWafMeta({ nameSuffix: stageSuffix, stage: $app.stage });
+export const wafStageWebAcl =
+  isWafEnabled && !externalWaf
+    ? new aws.wafv2.WebAcl(
+        'WafWebAcl',
+        (() => {
+          // Each stage gets its own WebACL (e.g., bike4mind-api-protection-pr6391)
+          const policy = getDevWafMeta({ nameSuffix: $app.stage, stage: $app.stage });
 
-        const ruleJson = wafEmergencyIpSet!.arn.apply(arn =>
-          buildDevWafRuleJson({ emergencyIpSetArn: arn, stage: $app.stage })
-        );
+          const ruleJson = $util
+            .all([wafEmergencyIpSet!.arn, wafRateExemptIpSet!.arn])
+            .apply(([emergencyIpSetArn, rateExemptIpSetArn]) =>
+              buildDevWafRuleJson({ emergencyIpSetArn, rateExemptIpSetArn, stage: $app.stage })
+            );
 
-        return {
-          name: policy.name,
-          description: policy.description,
-          scope: policy.scope,
-          defaultAction: policy.defaultAction,
-          ruleJson,
-          visibilityConfig: policy.visibilityConfig,
-        };
-      })(),
-      {
-        provider: wafProviderUsEast1,
-        // Retain WebACL for permanent stages only — same reasoning as IPSet above.
-        retainOnDelete: ['production', 'dev'].includes($app.stage),
-      }
-    )
+          return {
+            name: policy.name,
+            description: policy.description,
+            scope: policy.scope,
+            defaultAction: policy.defaultAction,
+            ruleJson,
+            visibilityConfig: policy.visibilityConfig,
+          };
+        })(),
+        {
+          provider: wafProviderUsEast1,
+          // Retain WebACL for the permanent stage only, same reasoning as IPSet above.
+          retainOnDelete: $app.stage === 'dev',
+        }
+      )
+    : undefined;
+
+/**
+ * The externally managed WebACL, looked up by name.
+ */
+const externalWebAcl = externalWaf
+  ? aws.wafv2.getWebAclOutput({ name: externalWaf.webAclName, scope: 'CLOUDFRONT' }, { provider: wafProviderUsEast1 })
   : undefined;
+
+/** ARN of the WebACL attached to the CDN: the looked-up one when WAF_WEB_ACL_NAME is set, the stage-owned one otherwise. */
+export const wafWebAcl = externalWebAcl ?? wafStageWebAcl;
+const wafWebAclArnValue = wafWebAcl?.arn;
+
+// Read the external owner's configuration without taking ownership of it.
+const externalLoggingConfig = externalWebAcl
+  ? aws.wafv2.WebAclLoggingConfiguration.get('ExternalWafLoggingConfiguration', externalWebAcl.arn, undefined, {
+      provider: wafProviderUsEast1,
+    })
+  : undefined;
+const externalLogDestination = externalLoggingConfig?.logDestinationConfigs.apply(resolveWafLogDestination);
+
+export const wafLogGroupArn = externalLogDestination
+  ? externalLogDestination.apply(destination => `${destination.arn}:*`)
+  : wafLogGroup?.arn.apply(arn => `${arn.replace(/:\*$/, '')}:*`);
+const wafLogGroupName = externalLogDestination
+  ? externalLogDestination.apply(destination => destination.name)
+  : wafLogGroup?.name;
+
+// Personal stages can use the shared dev router even without a local WAF resource.
+const partition = aws.getPartitionOutput().partition;
+const queryWebAclArn =
+  wafWebAcl?.arn ??
+  $interpolate`arn:${partition}:wafv2:us-east-1:${aws.getCallerIdentityOutput().accountId}:global/webacl/bike4mind-api-protection-*`;
+const queryLogGroupArn =
+  wafLogGroupArn ??
+  $interpolate`arn:${partition}:logs:us-east-1:${aws.getCallerIdentityOutput().accountId}:log-group:aws-waf-logs-bike4mind-*`;
+
+export const wafReadPermissions = [
+  { actions: ['logs:StartQuery', 'logs:GetQueryResults'], resources: [queryLogGroupArn] },
+  // StopQuery does not support resource-level permissions.
+  { actions: ['logs:StopQuery'], resources: ['*'] },
+  { actions: ['wafv2:GetLoggingConfiguration'], resources: [queryWebAclArn] },
+];
 
 /**
  * WAF Logging Configuration - connects WebACL to CloudWatch Logs.
@@ -150,21 +224,21 @@ export const wafWebAcl = isWafEnabled
  * The explicit wafv2:GetLoggingConfiguration permission in infra/web.ts already grants
  * the runtime access needed.
  */
-export const wafWebAclArn = wafWebAcl
+export const wafWebAclArn = wafWebAclArnValue
   ? new sst.Linkable('WafWebAclArn', {
       properties: {
-        arn: wafWebAcl.arn,
+        arn: wafWebAclArnValue,
       },
     })
   : undefined;
 
 export const wafLoggingConfig =
-  isWafEnabled && wafWebAcl && wafLogGroup
+  wafStageWebAcl && wafLogGroup
     ? new aws.wafv2.WebAclLoggingConfiguration(
         'WafLoggingConfiguration',
         {
           // WebACL to enable logging for
-          resourceArn: wafWebAcl.arn,
+          resourceArn: wafStageWebAcl.arn,
           // CloudWatch log group destination (AWS requires :* suffix)
           logDestinationConfigs: [wafLogGroup.arn.apply(arn => `${arn}:*`)],
           // Values are replaced with 'REDACTED' in logs while keeping field names visible.
@@ -182,64 +256,45 @@ export const wafLoggingConfig =
     : undefined;
 
 /**
- * SNS topic for WAF rate-limit block alerts (production only).
- *
- * Subscribe the on-call channel to receive pages when an enforcing rate rule
- * blocks more than 50 requests in a 5-minute window.
- *
- * Emergency rollback if a rule is misfiring:
- *   Fast path: change the rule's Block action to {"Count": {}} in
- *   the deployment's production policy and redeploy. The rule stays active
- *   but stops blocking; CloudWatch metrics keep accumulating so you can observe impact.
- *   Hard rollback: remove the rule from the JSON and redeploy.
+ * ARN of the externally managed rate-limit alarm topic (production only). Looked up rather than
+ * constructed so a missing topic fails the deploy instead of leaving a dangling subscription.
  */
-export const wafAiRateLimitAlarmTopic =
-  isWafEnabled && $app.stage === 'production'
-    ? new aws.sns.Topic(
-        'WafAiRateLimitAlarmTopic',
-        { name: `${$app.name}-${$app.stage}-waf-ai-rate-limit-alarm` },
-        // Retained so subscriptions added outside this stack keep a stable topic ARN
-        { provider: wafProviderUsEast1, retainOnDelete: $app.stage === 'production' }
-      )
-    : undefined;
+const wafAiRateLimitAlarmTopicArn = productionAlerts
+  ? aws.sns.getTopicOutput(
+      { name: `${$app.name}-${$app.stage}-waf-ai-rate-limit-alarm` },
+      { provider: wafProviderUsEast1 }
+    ).arn
+  : undefined;
 
 /**
  * Email-only us-east-1 topic (OPS_ALERT_EMAIL subscription below); delivery does not depend on
  * the Slack forwarding Lambda. Separate from the OobAlarmTopic in dlqAlarms.ts because
  * CloudWatch alarm actions must be in the alarm's region, and the WAF alarms live in us-east-1.
  */
-export const wafOobAlarmTopic =
-  isWafEnabled && $app.stage === 'production'
-    ? new aws.sns.Topic(
-        'WafOobAlarmTopic',
-        { name: `${$app.name}-${$app.stage}-waf-oob-alarm` },
-        // Retained for the same reason as wafAiRateLimitAlarmTopic
-        { provider: wafProviderUsEast1, retainOnDelete: $app.stage === 'production' }
-      )
-    : undefined;
+export const wafOobAlarmTopic = productionAlerts
+  ? new aws.sns.Topic(
+      'WafOobAlarmTopic',
+      { name: `${$app.name}-${$app.stage}-waf-oob-alarm` },
+      // Retained so subscriptions added outside this stack keep a stable topic ARN
+      { provider: wafProviderUsEast1, retainOnDelete: true }
+    )
+  : undefined;
 
 /**
  * Lambda handler that forwards WAF alarm notifications to Slack.
  * Created in the default region; SNS cross-region invocation carries the
  * alarm payload from us-east-1 to the handler.
  */
-export const wafAlarmSlackHandler =
-  isWafEnabled && $app.stage === 'production'
-    ? new sst.aws.Function('WafAlarmSlackHandler', {
-        handler: 'apps/workers/src/events/wafAlarmToSlack.handler',
-        link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
-        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-        logging: { retention: '1 month' },
-      })
-    : undefined;
+export const wafAlarmSlackHandler = productionAlerts
+  ? new sst.aws.Function('WafAlarmSlackHandler', {
+      handler: 'apps/workers/src/events/wafAlarmToSlack.handler',
+      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      logging: { retention: '1 month' },
+    })
+  : undefined;
 
-if (
-  isWafEnabled &&
-  $app.stage === 'production' &&
-  wafAiRateLimitAlarmTopic &&
-  wafOobAlarmTopic &&
-  wafAlarmSlackHandler
-) {
+if (productionAlerts && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic && wafAlarmSlackHandler) {
   // Allow the us-east-1 SNS topic to invoke the Lambda handler.
   // Captured in a variable so the subscription can declare a dependsOn — without it
   // Pulumi creates both resources in parallel and SNS may attempt subscription
@@ -248,7 +303,7 @@ if (
     action: 'lambda:InvokeFunction',
     function: wafAlarmSlackHandler.arn,
     principal: 'sns.amazonaws.com',
-    sourceArn: wafAiRateLimitAlarmTopic.arn,
+    sourceArn: wafAiRateLimitAlarmTopicArn,
   });
 
   // DLQ for failed SNS→Lambda invocations. Must live in us-east-1 to match the SNS topic region.
@@ -262,7 +317,7 @@ if (
     'WafAlarmSlackHandlerDlqPolicy',
     {
       queueUrl: wafAlarmDlq.url,
-      policy: $util.all([wafAlarmDlq.arn, wafAiRateLimitAlarmTopic.arn]).apply(([dlqArn, topicArn]) =>
+      policy: $util.all([wafAlarmDlq.arn, wafAiRateLimitAlarmTopicArn]).apply(([dlqArn, topicArn]) =>
         JSON.stringify({
           Version: '2012-10-17',
           Statement: [
@@ -284,7 +339,7 @@ if (
   new aws.sns.TopicSubscription(
     'WafAlarmSlackHandlerSubscription',
     {
-      topic: wafAiRateLimitAlarmTopic.arn,
+      topic: wafAiRateLimitAlarmTopicArn,
       protocol: 'lambda',
       endpoint: wafAlarmSlackHandler.arn,
       redrivePolicy: wafAlarmDlq.arn.apply(arn => JSON.stringify({ deadLetterTargetArn: arn })),
@@ -293,7 +348,7 @@ if (
   );
 
   // Out-of-band alarm for WafAlarmSlackHandlerDlq itself routes to wafOobAlarmTopic.
-  // Cannot route to wafAiRateLimitAlarmTopic -- that would loop into the same failing Lambda.
+  // Cannot route to the rate-limit alarm topic -- that would loop into the same failing Lambda.
   // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
   // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
   if (process.env.OPS_ALERT_EMAIL) {
@@ -368,43 +423,6 @@ if (
   );
 }
 
-if (isWafEnabled && $app.stage === 'production' && wafWebAcl && wafAiRateLimitAlarmTopic) {
-  // CloudFront-scope WAF publishes metrics to us-east-1 without a Region dimension.
-  // The alarm must be created in us-east-1 via wafProviderUsEast1.
-  for (const { name: rule, metricName } of getWafRateLimitAlarmRules($app.stage)) {
-    // The ai-route alarm keeps its original names so the existing resource is not replaced.
-    const isAiRoute = rule === 'ai-route-rate-limit';
-    const logicalName = isAiRoute ? 'wafAiRateLimitBlocks' : `waf-${rule}-blocks`;
-    new aws.cloudwatch.MetricAlarm(
-      logicalName,
-      {
-        name: isAiRoute
-          ? `${$app.name}-${$app.stage}-waf-ai-rate-limit-blocks`
-          : `${$app.name}-${$app.stage}-waf-${rule}-blocks`,
-        alarmDescription: `WAF ${rule} blocked >50 req/5min in production. Fast rollback: set Action to Count for this rule in the deployment's policy and redeploy.`,
-        comparisonOperator: 'GreaterThanThreshold',
-        evaluationPeriods: 1,
-        metricName: 'BlockedRequests',
-        namespace: 'AWS/WAFV2',
-        period: 300,
-        statistic: 'Sum',
-        threshold: 50,
-        treatMissingData: 'notBreaching',
-        dimensions: {
-          Rule: metricName,
-          WebACL: wafWebAcl.visibilityConfig.metricName,
-        },
-        alarmActions: [wafAiRateLimitAlarmTopic.arn],
-        tags: {
-          Application: 'WAF',
-          Severity: 'High',
-        },
-      },
-      { provider: wafProviderUsEast1 }
-    );
-  }
-}
-
 /**
  * Sign-in code requests that the managed rule groups label as hosting-provider or bot-control
  * traffic. The labels are attached whether the rule blocks or only counts, so this alarms on
@@ -415,21 +433,21 @@ export const WAF_OTC_EDGE_SIGNAL_FILTER_PATTERN =
   '($.labels[*].name = "awswaf:managed:aws:anonymous-ip-list:HostingProviderIPList" || ' +
   '$.labels[*].name = "awswaf:managed:aws:bot-control:signal:*") }';
 
-if (isWafEnabled && $app.stage === 'production' && wafLogGroup && wafAiRateLimitAlarmTopic && wafOobAlarmTopic) {
+if (productionAlerts && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic) {
   const edgeSignalThreshold = parseAlarmThreshold(
     'SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN',
     process.env.SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN,
     SIGNUP_EDGE_SIGNAL_DEFAULT
   );
   const signupNamespace = `${$app.name}/${$app.stage}/Signup`;
-  const actions = [wafAiRateLimitAlarmTopic.arn, wafOobAlarmTopic.arn];
+  const actions = [wafAiRateLimitAlarmTopicArn, wafOobAlarmTopic.arn];
 
-  // The filter, its metric and the alarm all live in the log group's region (us-east-1).
+  // Follow the selected ACL's logging destination, including externally chosen group names.
   new aws.cloudwatch.LogMetricFilter(
     'wafOtcEdgeSignalFilter',
     {
       name: `${$app.name}-${$app.stage}-waf-otc-edge-signals`,
-      logGroupName: wafLogGroup.name,
+      logGroupName: wafLogGroupName!,
       pattern: WAF_OTC_EDGE_SIGNAL_FILTER_PATTERN,
       metricTransformation: {
         name: 'OtcEdgeSignalRequests',

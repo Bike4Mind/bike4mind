@@ -190,3 +190,7 @@ datalake-prefix-only-census-*.json
 # Same belt for the stale-organization-pointers repair report (production user ids, os.tmpdir() by
 # default but --report can point anywhere).
 stale-organization-pointers-*.json
+
+# Python bytecode from local test runs (the selfhost charts have Python tests).
+__pycache__/
+*.pyc

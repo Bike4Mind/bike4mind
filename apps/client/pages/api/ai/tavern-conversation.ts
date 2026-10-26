@@ -115,7 +115,8 @@ Return ONLY valid JSON (no markdown fences):
 }
 
 // Handler
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 60 : 30,

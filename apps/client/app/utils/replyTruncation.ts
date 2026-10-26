@@ -91,5 +91,5 @@ export function repairTruncatedArtifact(content: string): string {
   // Opening tag truncated mid-attribute - nothing renderable. Log the dropped
   // length so mid-attribute truncations are observable if they occur in prod.
   console.warn(`[Artifacts] Dropping truncated artifact with incomplete opening tag (${tail.length} chars)`);
-  return artifactIndex === -1 ? content : content.substring(0, artifactIndex).trim();
+  return artifactIndex === -1 ? content : content.substring(0, artifactIndex).trimEnd();
 }
