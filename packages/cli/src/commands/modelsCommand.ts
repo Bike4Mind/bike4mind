@@ -7,31 +7,41 @@
 import { createInterface } from 'readline';
 import {
   HUGGING_FACE_SSH_KEYS_URL,
-  HubAccessError,
   HuggingFaceHub,
-  ModelNotFoundError,
-  OllamaRuntime,
-  detectRuntimes,
   isAbliteratedModel,
   isHubRepoId,
-  type DetectedRuntime,
   type HubGated,
-  type HubGgufBuild,
-  type HubModelDetail,
-  type HubModelSummary,
-  type LocalRuntime,
-  type OllamaRefIssue,
 } from '@bike4mind/local-models';
 import { ConfigStore } from '../storage/ConfigStore.js';
-import { withDefaultOllamaPort } from '../utils/ollamaHost.js';
-import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import {
-  OLLAMA_REGISTRY_HOSTS,
-  classifyLicenses,
-  parseOllamaName,
-  readOllamaManifest,
-  type OllamaManifestInfo,
-} from './ollamaRegistry.js';
+  CancelledError,
+  NOT_RECOMMENDED_LABEL,
+  NO_LICENSE,
+  REF_ISSUES,
+  abortable,
+  clean,
+  formatBytes,
+  gatedMessage,
+  hiddenAbliteratedMessage,
+  hubAccessMessage,
+  licenseFor,
+  listInstalled,
+  pickBuild,
+  planPull,
+  rankSearchHits,
+  removeInstalled,
+  requireRemovable,
+  requireUnchangedLicenses,
+  requireUnchangedManifest,
+  resolveRuntimeTarget,
+  runtimeLabel,
+  shortDigest,
+  type HubClient,
+  type LicenseInfo,
+  type ModelSourceDeps,
+  type RuntimeTarget,
+} from '../models/localModels.js';
+import { readOllamaManifest } from './ollamaRegistry.js';
 
 interface ModelsCommandArgs {
   _: (string | number)[];
@@ -47,34 +57,19 @@ interface ModelsCommandArgs {
   [key: string]: unknown;
 }
 
-export type HubClient = Pick<HuggingFaceHub, 'endpoint' | 'search' | 'getModel' | 'verifyOllamaRef'>;
-
-export type RuntimeSource = 'flag' | 'env' | 'config' | 'detected';
-
-export interface RuntimeTarget {
-  runtime: LocalRuntime;
-  source: RuntimeSource;
-}
-
 export interface ModelsConfig {
   defaultModel: string | undefined;
   ollamaHost: string | undefined;
   save(patch: { defaultModel?: string; ollamaHost?: string; localDefaultModel?: string }): Promise<void>;
 }
 
-export interface ModelsDeps {
-  hub: () => HubClient;
-  /** Size and license texts of an Ollama registry model, read before pulling it. */
-  ollamaRegistry: (name: string, signal: AbortSignal) => Promise<OllamaManifestInfo>;
-  resolveRuntime: () => Promise<RuntimeTarget>;
+export interface ModelsDeps extends ModelSourceDeps {
   config: ModelsConfig;
   confirm: (question: string) => Promise<boolean>;
   isTTY: boolean;
   log: (line: string) => void;
   /** Rewrites one terminal line; only used when `isTTY`. */
   progress: { update: (line: string) => void; end: () => void };
-  /** Aborted on Ctrl-C. */
-  signal: AbortSignal;
 }
 
 export interface ModelsOptions {
@@ -84,88 +79,13 @@ export interface ModelsOptions {
   includeAbliterated: boolean;
 }
 
-export type PullTarget = { kind: 'hub'; repo: string; tag: string | null } | { kind: 'ollama'; name: string };
-
 export type PullResult = 'pulled' | 'declined' | 'cancelled';
 
 /** Exit code for a run stopped by Ctrl-C (128 + SIGINT). */
 export const EXIT_CANCELLED = 130;
 
-/** Ctrl-C at a prompt or while waiting on the runtime. */
-export class CancelledError extends Error {
-  constructor() {
-    super('Cancelled.');
-    this.name = 'CancelledError';
-  }
-}
-
-/** Settles with `promise`, or rejects with `CancelledError` as soon as `signal` aborts. */
-export function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(new CancelledError());
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(new CancelledError());
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      value => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      }
-    );
-  });
-}
-
-const DEFAULT_QUANT = 'Q4_K_M';
-const NO_LICENSE = 'none declared';
-const HF_HOSTS: ReadonlySet<string> = new Set(['hf.co', 'huggingface.co']);
 const SEARCH_LIMIT = 20;
 const PROGRESS_INTERVAL_MS = 100;
-
-const PERMISSIVE_LICENSES = new Set([
-  '0bsd',
-  'apache-2.0',
-  'bsd',
-  'bsd-2-clause',
-  'bsd-3-clause',
-  'bsd-3-clause-clear',
-  'bsl-1.0',
-  'cc0-1.0',
-  'isc',
-  'mit',
-  'unlicense',
-  'zlib',
-]);
-
-const REF_ISSUES: Record<OllamaRefIssue, string> = {
-  split: 'split into shards, which Ollama cannot pull',
-  incomplete: 'some shards are missing',
-  'no-quant-label': 'the file name has no quant label',
-  'unsupported-name': 'Ollama does not accept this repo or file name',
-  'pinned-revision': 'not on the main branch',
-  ambiguous: 'an earlier file answers the same tag; pull asks the registry',
-};
-
-// `ambiguous` builds can still pull: verifyOllamaRef asks the registry which file the tag serves.
-const UNPULLABLE: ReadonlySet<OllamaRefIssue> = new Set([
-  'split',
-  'incomplete',
-  'no-quant-label',
-  'unsupported-name',
-  'pinned-revision',
-]);
-
-const clean = (text: string | null | undefined): string => sanitizeTerminalText(text ?? '');
-
-export function formatBytes(bytes: number | null): string {
-  if (bytes === null) return '-';
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
-  if (bytes >= 1e3) return `${Math.round(bytes / 1e3)} KB`;
-  return `${bytes} B`;
-}
 
 function formatCount(count: number | null): string {
   if (count === null) return '-';
@@ -190,115 +110,10 @@ function table(rows: string[][]): string[] {
   );
 }
 
-function runtimeLabel({ runtime, source }: RuntimeTarget): string {
-  const name = runtime.kind === 'ollama' ? 'Ollama' : 'OpenAI-compatible server';
-  return `${name} at ${runtime.baseUrl}${source === 'detected' ? ' (detected)' : ''}`;
-}
-
-/** Permissive only when at least one license is declared and every one is. */
-export function licenseFor(
-  detail: Pick<HubModelDetail, 'id' | 'licenses' | 'licenseName' | 'licenseLink'>,
-  endpoint: string
-): { label: string; link: string; restricted: boolean; plural: boolean } {
-  const ids = detail.licenses.map(license => license.toLowerCase());
-  const names = ids.map(id => (id === 'other' ? (detail.licenseName ?? id) : id));
-  const label = names.length > 0 ? names.join(', ') : NO_LICENSE;
-  const raw = detail.licenseLink;
-  const link = !raw
-    ? `${endpoint}/${detail.id}`
-    : /^https?:\/\//i.test(raw)
-      ? raw
-      : `${endpoint}/${detail.id}/blob/main/${raw.replace(/^\.?\//, '')}`;
-  return {
-    label: clean(label),
-    link: clean(link),
-    restricted: ids.length === 0 || !ids.every(id => PERMISSIVE_LICENSES.has(id)),
-    plural: ids.length > 1,
-  };
-}
-
-function gatedMessage(repo: string, endpoint: string): string {
-  return [
-    `${repo} is gated: the Hugging Face account must be granted access before anything can be downloaded.`,
-    `  1. Request access at ${endpoint}/${repo}`,
-    '  2. Set HF_TOKEN to a token of that account',
-    `  3. Add your Ollama public key (~/.ollama/id_ed25519.pub) at ${HUGGING_FACE_SSH_KEYS_URL}, so Ollama's own download is allowed`,
-  ].join('\n');
-}
-
-/** `www.`, a port and a trailing dot do not change which registry a host names. */
-function registryHost(authority: string): string | null {
-  const match = /^([^@:]+)(?::\d+)?$/.exec(authority);
-  if (!match) return null;
-  const host = match[1].toLowerCase();
-  return host.replace(/\.+$/, '').replace(/^www\./, '');
-}
-
-/**
- * `owner/repo[:tag]` and Hugging Face URLs (any of its host spellings) are Hugging Face repos; `model[:tag]` and
- * names on Ollama's own registry are Ollama names. Any other host is refused, so no spelling skips the checks.
- */
-export function parsePullTarget(input: string): PullTarget {
-  const trimmed = input.trim();
-  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(trimmed);
-  if (scheme && !/^https?$/i.test(scheme[1])) throw new Error(`Unsupported model ref: ${input}`);
-  const afterScheme = scheme ? trimmed.slice(scheme[0].length) : trimmed;
-  const slash = afterScheme.indexOf('/');
-  const first = slash === -1 ? afterScheme : afterScheme.slice(0, slash);
-  const namesHost = scheme !== null || (slash !== -1 && /[.:@]/.test(first));
-  const host = namesHost ? registryHost(first) : null;
-  if (namesHost && !host) throw new Error(`Unsupported model ref: ${input}`);
-  const rest = host ? (slash === -1 ? '' : afterScheme.slice(slash + 1)) : afterScheme;
-
-  if (host && OLLAMA_REGISTRY_HOSTS.has(host)) {
-    // Ollama lists `library/x` pulls as `x`, so the name printed after the pull must be that one.
-    const name = rest.replace(/^library\//i, '');
-    if (!name) throw new Error(`Not an Ollama model name: ${input}`);
-    return { kind: 'ollama', name };
-  }
-  if (host && !HF_HOSTS.has(host)) {
-    throw new Error(
-      `Unsupported registry ${host} in ${input}. Pull from Hugging Face (owner/repo[:quant]) or Ollama (model[:tag]).`
-    );
-  }
-  const colon = rest.lastIndexOf(':');
-  const hasTag = colon > rest.lastIndexOf('/');
-  const path = hasTag ? rest.slice(0, colon) : rest;
-  const tag = hasTag ? rest.slice(colon + 1) : null;
-  const segments = path.split('/');
-  if (!host && segments.length === 1) return { kind: 'ollama', name: rest };
-  if (!isHubRepoId(path) || tag === '') {
-    throw new Error(`Not a Hugging Face repo: ${input} (expected owner/name[:quant])`);
-  }
-  return { kind: 'hub', repo: path, tag };
-}
-
-/** Matches the tag against each build's planned ref, then its quant label; no tag or `latest` means Q4_K_M. */
-export function pickBuild(builds: HubGgufBuild[], tag: string | null): HubGgufBuild | undefined {
-  // Ollama tags an untagged hf.co pull `latest`, so users copy that form back.
-  const wanted = (tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT).toUpperCase();
-  return (
-    builds.find(build => build.ollamaRef?.slice(build.ollamaRef.lastIndexOf(':') + 1).toUpperCase() === wanted) ??
-    builds.find(build => build.quant === wanted)
-  );
-}
-
 export async function listModels(deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
   const target = await abortable(deps.resolveRuntime(), deps.signal);
   const { runtime } = target;
-  const [models, loaded] = await abortable(
-    Promise.all([
-      runtime.list(),
-      runtime.capabilities.reportsLoaded ? runtime.loaded().catch(() => []) : Promise.resolve([]),
-    ]),
-    deps.signal
-  );
-  const loadedNames = new Set(loaded.map(model => model.name));
-  const rows = models.map(model => ({
-    ...model,
-    loaded: loadedNames.has(model.name),
-    default: model.name === deps.config.defaultModel,
-  }));
+  const rows = await listInstalled(runtime, deps.config.defaultModel, deps.signal);
 
   if (opts.json) {
     deps.log(
@@ -330,28 +145,6 @@ export async function listModels(deps: ModelsDeps, opts: ModelsOptions): Promise
   ]);
   for (const line of lines) deps.log(line);
   return 0;
-}
-
-export const NOT_RECOMMENDED_LABEL = 'abliterated or uncensored build';
-
-export function hiddenAbliteratedMessage(count: number): string {
-  return `${count} abliterated or uncensored ${count === 1 ? 'build was' : 'builds were'} left out.`;
-}
-
-/** Drops abliterated builds unless asked for; the ones kept go after every other hit and are flagged. */
-export function rankSearchHits<T extends Pick<HubModelSummary, 'id' | 'tags' | 'baseModels'>>(
-  models: T[],
-  includeAbliterated: boolean
-): { hits: Array<T & { notRecommended?: string }>; hidden: number } {
-  const flagged = models.filter(isAbliteratedModel);
-  const plain = models.filter(model => !isAbliteratedModel(model));
-  return {
-    hits: [
-      ...plain,
-      ...(includeAbliterated ? flagged.map(model => ({ ...model, notRecommended: NOT_RECOMMENDED_LABEL })) : []),
-    ],
-    hidden: includeAbliterated ? 0 : flagged.length,
-  };
 }
 
 export async function searchModels(query: string, deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
@@ -508,18 +301,8 @@ async function pullWithProgress(target: RuntimeTarget, ref: string, deps: Models
   return 'pulled';
 }
 
-async function requirePullable(deps: ModelsDeps): Promise<RuntimeTarget> {
-  const target = await abortable(deps.resolveRuntime(), deps.signal);
-  if (!target.runtime.capabilities.canPull) throw new Error(`${runtimeLabel(target)} cannot download models.`);
-  return target;
-}
-
 /** Restricted or undeclared licenses need a yes at the prompt or `--accept-license`. */
-async function acceptLicense(
-  license: { label: string; link: string; restricted: boolean; plural?: boolean },
-  deps: ModelsDeps,
-  opts: ModelsOptions
-): Promise<boolean> {
+async function acceptLicense(license: LicenseInfo, deps: ModelsDeps, opts: ModelsOptions): Promise<boolean> {
   if (!license.restricted) return true;
   const declared = license.label !== NO_LICENSE;
   const noun = license.plural ? 'licenses' : 'license';
@@ -535,106 +318,22 @@ async function acceptLicense(
   return deps.confirm(declared ? `Do you accept the ${license.label} ${noun}? [y/N] ` : 'Download it anyway? [y/N] ');
 }
 
-type RegistryReader = Pick<ModelsDeps, 'ollamaRegistry' | 'signal'>;
-
-async function readRegistry(name: string, deps: RegistryReader): Promise<OllamaManifestInfo> {
-  try {
-    return await abortable(deps.ollamaRegistry(name, deps.signal), deps.signal);
-  } catch (error) {
-    if (error instanceof CancelledError || deps.signal.aborted) throw new CancelledError();
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Could not read ${name} from the Ollama registry, so nothing was downloaded: ${reason}`);
-  }
-}
-
-/** The first 12 hex digits, the length Ollama shows digests at. */
-export function shortDigest(digest: string): string {
-  return digest.replace(/^sha256:/, '').slice(0, 12);
-}
-
-function changedSinceReview(subject: string, what: string): Error {
-  return new Error(
-    `${subject} changed since you reviewed it (${what}), so nothing was downloaded. Pull it again to review the new version.`
-  );
-}
-
-const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((entry, index) => entry === b[index]);
-
-/**
- * Re-reads the manifest after the user approved it, because Ollama then pulls by tag and a tag can move.
- * Refuses when the license texts or layers differ from the ones shown.
- */
-export async function requireUnchangedManifest(
-  name: string,
-  shown: OllamaManifestInfo,
-  deps: RegistryReader
-): Promise<void> {
-  const now = await readRegistry(name, deps);
-  if (!sameList(now.licenses, shown.licenses)) throw changedSinceReview(clean(name), 'its license text changed');
-  if (!sameList(now.layers, shown.layers)) {
-    throw changedSinceReview(clean(name), `the registry now serves ${shortDigest(now.digest)}`);
-  }
-}
-
-/** Re-reads the repo after the user approved it and refuses when its declared licenses differ from the ones shown. */
-export async function requireUnchangedLicenses(
-  hub: HubClient,
-  detail: HubModelDetail,
-  shown: { label: string; link: string },
-  signal: AbortSignal
-): Promise<void> {
-  const now = licenseFor(await hub.getModel(detail.id, { signal }), hub.endpoint);
-  if (now.label !== shown.label || now.link !== shown.link) {
-    throw changedSinceReview(clean(detail.id), `its license is now ${now.label}`);
-  }
-}
-
-async function pullFromOllamaRegistry(name: string, deps: ModelsDeps, opts: ModelsOptions): Promise<PullResult> {
-  const { page } = parseOllamaName(name);
-  const target = await requirePullable(deps);
-  const manifest = await readRegistry(name, deps);
-  const license = classifyLicenses(manifest.licenses);
-  deps.log(`Model:    ${clean(name)} (Ollama registry)`);
-  deps.log(`Digest:   ${shortDigest(manifest.digest)}`);
-  deps.log(`Size:     ${formatBytes(manifest.sizeBytes)}`);
-  deps.log(`License:  ${clean(license.title)}`);
-  deps.log(`Runtime:  ${runtimeLabel(target)}`);
-  const accepted = await acceptLicense(
-    { label: clean(license.title), link: page, restricted: !license.permissive },
-    deps,
-    opts
-  );
-  if (!accepted) return 'declined';
-  if (!(await confirmDownload(`Download ${formatBytes(manifest.sizeBytes)}? [y/N] `, deps, opts))) return 'declined';
-  await requireUnchangedManifest(name, manifest, deps);
-  return pullWithProgress(target, name, deps);
-}
-
 export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOptions): Promise<PullResult> {
-  const parsed = parsePullTarget(input);
-  if (parsed.kind === 'ollama') return pullFromOllamaRegistry(parsed.name, deps, opts);
-
-  const hub = deps.hub();
-  const detail = await hub.getModel(parsed.repo, { signal: deps.signal });
-  const id = clean(detail.id);
-  if (detail.gated && detail.canDownload !== true) throw new Error(gatedMessage(id, hub.endpoint));
-
-  const build = pickBuild(detail.builds, parsed.tag);
-  if (!build) {
-    const quants = [...new Set(detail.builds.map(entry => entry.quant).filter(Boolean))].map(clean);
-    throw new Error(
-      quants.length === 0
-        ? `${id} has no GGUF builds.`
-        : `${id} has no ${clean(parsed.tag ?? DEFAULT_QUANT)} build. Pick one of: ${quants.join(', ')} (b4m models pull ${id}:<QUANT>)`
-    );
-  }
-  if (build.ollamaRefIssue && UNPULLABLE.has(build.ollamaRefIssue)) {
-    throw new Error(`Ollama cannot pull ${id} ${clean(build.quant)}: ${REF_ISSUES[build.ollamaRefIssue]}.`);
+  const plan = await planPull(input, deps);
+  if (plan.kind === 'ollama') {
+    const { name, manifest, license, target } = plan;
+    deps.log(`Model:    ${clean(name)} (Ollama registry)`);
+    deps.log(`Digest:   ${shortDigest(manifest.digest)}`);
+    deps.log(`Size:     ${formatBytes(manifest.sizeBytes)}`);
+    deps.log(`License:  ${license.label}`);
+    deps.log(`Runtime:  ${runtimeLabel(target)}`);
+    if (!(await acceptLicense(license, deps, opts))) return 'declined';
+    if (!(await confirmDownload(`Download ${formatBytes(manifest.sizeBytes)}? [y/N] `, deps, opts))) return 'declined';
+    await requireUnchangedManifest(name, manifest, deps);
+    return pullWithProgress(target, name, deps);
   }
 
-  const target = await requirePullable(deps);
-  const license = licenseFor(detail, hub.endpoint);
-  const projector = Math.max(0, ...detail.projectors.map(entry => entry.sizeBytes));
+  const { hub, detail, build, id, target, license, projectorBytes: projector } = plan;
   deps.log(`Model:    ${id} (${clean(build.quant)})`);
   deps.log(`File:     ${build.files.map(file => clean(file.path)).join(', ')}`);
   deps.log(
@@ -675,7 +374,7 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
 
 export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
   const target = await abortable(deps.resolveRuntime(), deps.signal);
-  if (!target.runtime.capabilities.canRemove) throw new Error(`${runtimeLabel(target)} cannot remove models.`);
+  requireRemovable(target);
   if (!opts.yes) {
     if (!deps.isTTY) throw new Error('Re-run with --yes to remove without a prompt.');
     if (!(await deps.confirm(`Remove ${clean(name)} from ${runtimeLabel(target)}? [y/N] `))) {
@@ -683,13 +382,7 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
       return 0;
     }
   }
-  try {
-    await abortable(target.runtime.remove(name), deps.signal);
-  } catch (error) {
-    if (error instanceof ModelNotFoundError)
-      throw new Error(`No model named ${clean(name)} on ${runtimeLabel(target)}.`);
-    throw error;
-  }
+  await removeInstalled(target, name, deps.signal);
   deps.log(`Removed ${clean(name)}.`);
   if (deps.config.defaultModel === name) {
     deps.log('It was your default model; pick another with: b4m models use <name>');
@@ -717,34 +410,6 @@ export async function useModel(name: string, deps: ModelsDeps): Promise<number> 
   deps.log(`Default model: ${clean(model.name)} on Ollama at ${runtime.baseUrl}`);
   deps.log('Start chatting with: b4m');
   return 0;
-}
-
-export async function resolveRuntimeTarget(
-  hosts: { flag?: string; env?: string; config?: string },
-  detect: () => Promise<DetectedRuntime[]> = () => detectRuntimes(),
-  createOllama: (baseUrl: string) => LocalRuntime = baseUrl => new OllamaRuntime({ baseUrl })
-): Promise<RuntimeTarget> {
-  const configured: [RuntimeSource, string | undefined][] = [
-    ['flag', hosts.flag],
-    ['env', hosts.env],
-    ['config', hosts.config],
-  ];
-  const chosen = configured.find(([, host]) => host);
-  if (chosen?.[1]) {
-    const runtime = createOllama(withDefaultOllamaPort(chosen[1]));
-    const health = await runtime.health();
-    if (!health.ok) throw new Error(`Ollama at ${runtime.baseUrl} is unreachable: ${health.error}`);
-    return { runtime, source: chosen[0] };
-  }
-  const detected = (await detect()).filter(entry => entry.health.ok);
-  const pick = detected.find(entry => entry.runtime.kind === 'ollama') ?? detected[0];
-  if (!pick) {
-    throw new Error(
-      'No local model runtime found. Start Ollama (https://ollama.com/download), or point the CLI at one with: ' +
-        'b4m models ls --ollama-host http://<host>:11434'
-    );
-  }
-  return { runtime: pick.runtime, source: 'detected' };
 }
 
 function positional(value: string | string[] | undefined, usage: string): string {
@@ -791,12 +456,8 @@ export async function runModelsCommand(
       deps.log('Cancelled.');
       return EXIT_CANCELLED;
     }
-    if (error instanceof HubAccessError && error.reason === 'gated') {
-      throw new Error(gatedMessage(clean(error.repo), deps.hub().endpoint));
-    }
-    if (error instanceof HubAccessError) {
-      throw new Error(`Hugging Face refused ${clean(error.repo)}: check that HF_TOKEN is valid and can read it.`);
-    }
+    const refused = hubAccessMessage(error, () => deps.hub().endpoint);
+    if (refused) throw new Error(refused);
     throw new Error(clean(error instanceof Error ? error.message : String(error)));
   }
 }
