@@ -180,6 +180,8 @@ import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note
 import EnsureFabFileOwnedKeysetIndex from './20260921235994_ensure-fabfile-owned-keyset-index';
 import EnsureFabFileFilePathIndex from './20260921235981_ensure-fabfile-filepath-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureFabFileDerivedFromIndex from './20260921235976_ensure-fabfile-derived-from-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-stored-default-forced-retrieval-floor';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureArtifactOwnedKeysetIndex from './20260921235993_ensure-artifact-owned-keyset-index';
@@ -225,6 +227,8 @@ import EnsureUserApiKeyAuditLogActorIndex from './20260921235944_ensure-userapik
 import ClearSuspensionMirroredIsModerated from './20260921235945_clear-suspension-mirrored-ismoderated';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organization-manager-into-admin-user-ids';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-claim-email';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -364,6 +368,7 @@ const coreMigrations: MigrationFile[] = [
   ReplaceReleaseNoteStatusIndex,
   EnsureFabFileOwnedKeysetIndex,
   EnsureFabFileFilePathIndex,
+  EnsureFabFileDerivedFromIndex,
   UnsetStoredDefaultForcedRetrievalFloor,
   EnsureArtifactOwnedKeysetIndex,
   EnsureSkillListingIndexes,
@@ -378,6 +383,7 @@ const coreMigrations: MigrationFile[] = [
   SetSlackAuditLogRetention,
   SetLiveopsTriageConfigAuditLogRetention,
   FoldOrganizationManagerIntoAdminUserIds,
+  BackfillFreeCreditClaimEmail,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
   EnsureAdminAuditLogReadIndexes,

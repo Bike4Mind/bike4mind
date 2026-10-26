@@ -74,6 +74,7 @@ import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE }
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
+import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
 import { createModelAdmission, loadModelConfigurations } from './llm/modelAdmission';
 import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
@@ -1017,6 +1018,17 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   if (modelInfo) {
     finalUsdCost = settledUsdCost(modelInfo);
     finalCredits = usdToCreditsStochastic(finalUsdCost);
+    logLlmUsageSettled({
+      backend: modelInfo.backend,
+      model: modelInfo.id,
+      inputTokens: finalInputTokens,
+      outputTokens: finalOutputTokens,
+      cacheReadTokens: finalCacheReadTokens,
+      cacheWriteTokens: finalCacheCreationTokens,
+      usd: finalUsdCost,
+      source,
+      accountCreatedAt: storedActor?.createdAt,
+    });
 
     logger?.info?.(
       `[CLI_CREDITS] Sending final credits to client: ${finalCredits} credits (${finalInputTokens} input + ${finalOutputTokens} output tokens` +

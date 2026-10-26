@@ -12,6 +12,10 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
+
 // Mock the middlewares
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {

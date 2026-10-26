@@ -1374,7 +1374,13 @@ describe('ARTIFACT_EMISSION_PROMPT multi-file wording', () => {
     expect(ARTIFACT_EMISSION_PROMPT).toContain('REACT MULTI-FILE');
     expect(ARTIFACT_EMISSION_PROMPT).toContain('SAME reply');
     expect(ARTIFACT_EMISSION_PROMPT).toContain("each sibling's identifier must equal its import basename exactly");
-    expect(ARTIFACT_EMISSION_PROMPT).toContain('must still be a single file');
+  });
+
+  it('lets a split React app publish when every file is in the same reply', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).toContain(
+      'A split React app can be published/shared as one page as long as every file is in the same reply.'
+    );
+    expect(ARTIFACT_EMISSION_PROMPT).not.toContain('must still be a single file');
   });
 
   it('ties export default to the entry file so the React rules do not contradict the split', () => {

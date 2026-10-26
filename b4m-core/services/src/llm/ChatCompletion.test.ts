@@ -1,4 +1,7 @@
+import { logLlmUsageSettled } from './llmUsageSettledLog';
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
+
+vi.mock('./llmUsageSettledLog', () => ({ logLlmUsageSettled: vi.fn() }));
 import {
   ChatCompletionProcess,
   addPairedTool,
@@ -275,6 +278,7 @@ describe('ChatCompletionProcess', () => {
   let mockSession: any;
 
   beforeEach(() => {
+    vi.mocked(logLlmUsageSettled).mockClear();
     mockQuest = {
       id: 'quest1',
       status: 'running',
@@ -4786,9 +4790,40 @@ describe('ChatCompletionProcess', () => {
           ([, row]: [string, { credits: number }]) => Math.abs(row.credits)
         );
         expect(rows).toHaveLength(2);
+        expect(logLlmUsageSettled).toHaveBeenCalledTimes(2);
+        expect(logLlmUsageSettled).toHaveBeenCalledWith(
+          expect.objectContaining({ model: ChatModels.GPT4, inputTokens: 10, outputTokens: 1000, source: 'chat' })
+        );
         const charged = rows.reduce((sum: number, credits: number) => sum + credits, 0);
         expect(charged).toBeGreaterThanOrEqual(2 * settledCredits(1000));
         expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', twoConfigHold - charged);
+      });
+
+      it('meters each research configuration with credit enforcement disabled', async () => {
+        const { complete } = reservationOrgSetup();
+        complete.mockImplementation(
+          async (
+            _model: string,
+            _messages: unknown,
+            _opts: unknown,
+            callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+          ) => {
+            await callback(['Answer'], { inputTokens: 10, outputTokens: 1000 });
+          }
+        );
+        const previous = mockedGetSettingsValue.getMockImplementation();
+        mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+          key === 'enforceCredits' ? false : previous?.(key as never, settings)) as typeof getSettingsValue);
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+
+        await service.process({ body: researchReservationBody() as never, logger: mockLogger });
+
+        expect(logLlmUsageSettled).toHaveBeenCalledTimes(2);
+        expect(logLlmUsageSettled).toHaveBeenCalledWith(
+          expect.objectContaining({ inputTokens: 10, outputTokens: 1000, source: 'chat' })
+        );
+        expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
       });
 
       it('refunds the hold when the research settlement fails', async () => {
@@ -4851,6 +4886,10 @@ describe('ChatCompletionProcess', () => {
       expect(refund).toBeGreaterThanOrEqual(0);
       expect(refund).toBeLessThan(expectedHold);
       expect(usageEventsRecord).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+      expect(logLlmUsageSettled).toHaveBeenCalledTimes(1);
+      expect(logLlmUsageSettled).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'chat', model: ChatModels.GPT4 })
+      );
     });
 
     it('bills the provider-reported output of a thrown abort when it exceeds what streamed', async () => {
@@ -6197,6 +6236,17 @@ describe('ChatCompletionProcess', () => {
       it('stamps the literal source and no row id for an adapter-priced model', async () => {
         const event = await settle({ inputTokens: 100, outputTokens: 50 });
         expect(event.priceSource).toBe('literal');
+        expect(logLlmUsageSettled).toHaveBeenCalledTimes(1);
+        expect(logLlmUsageSettled).toHaveBeenCalledWith(
+          expect.objectContaining({
+            backend: ModelBackend.OpenAI,
+            model: ChatModels.GPT4,
+            inputTokens: 100,
+            outputTokens: 50,
+            usd: event.costUsd,
+            source: 'chat',
+          })
+        );
         expect(event).not.toHaveProperty('priceRowId');
         expect(event.rates).toMatchObject(LOW);
       });

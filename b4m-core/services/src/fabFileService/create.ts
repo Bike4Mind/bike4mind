@@ -22,7 +22,7 @@ import {
   resolveSupportedMimeType,
   secureParameters,
 } from '@bike4mind/utils';
-import { GENERATED_AUDIO_OFFLOAD_PREFIX } from '@bike4mind/common';
+import { GENERATED_AUDIO_OFFLOAD_PREFIX, type GeneratedAssetLineageEntry } from '@bike4mind/common';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
@@ -121,6 +121,8 @@ export interface CreateFabFileAdapters {
   provenance?: {
     sourceType: FabFileSourceType;
     sourceMetadata?: Record<string, unknown>;
+    /** Lineage of a generated file; see IFabFile.derivedFrom. Server-built only, for the same reason as the rest. */
+    derivedFrom?: GeneratedAssetLineageEntry[];
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -240,6 +242,7 @@ export const prepareFabFile = async (
     ...(provenance && {
       sourceType: provenance.sourceType,
       ...(provenance.sourceMetadata && { sourceMetadata: provenance.sourceMetadata }),
+      ...(provenance.derivedFrom?.length && { derivedFrom: provenance.derivedFrom }),
     }),
     mimeType,
     filePath,
