@@ -121,6 +121,23 @@ describe('getUserEntitlements', () => {
       }
     );
 
+    // The fixture ladder price stands in for the Team price; the real mapping is lib/userSubscriptions/utils.test.ts.
+    it('is granted to a seat member through an org-owned Team subscription row', async () => {
+      findActive.mockResolvedValue([]);
+      findPlanHolderOrgIds.mockResolvedValue(['org1']);
+      findActiveByOwners.mockResolvedValue([
+        { priceId: 'price_ladder_pro', ownerType: 'Organization', ownerId: 'org1' },
+      ]);
+
+      await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
+    });
+
+    it('is granted for an admin_grant subscription row', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_ladder_pro', source: 'admin_grant' }]);
+
+      await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
+    });
+
     it('is not granted without a subscription', async () => {
       findActive.mockResolvedValue([]);
 

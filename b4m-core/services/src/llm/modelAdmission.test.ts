@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ChatModels,
+  ModelBackend,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   PAID_PLAN_ENTITLEMENT_KEY,
   ServiceUnavailableError,
   type LLMModelConfig,
   type ModelInfo,
 } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, getLlmWithFallback } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import {
   createModelAdmission,
@@ -217,6 +218,39 @@ describe('free-tier model gate', () => {
     const getEntitlements = vi.fn(() => Promise.reject(new Error('db down')));
     await expect(freeUser(getEntitlements).admits('priced')).resolves.toBe(true);
     expect(getEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('lands a free user on an allowlisted fallback when the primary is paid-only', async () => {
+    const text = (id: string) =>
+      ({
+        id,
+        name: id,
+        type: 'text',
+        backend: ModelBackend.Anthropic,
+        pricing: { 200_000: { input: 1e-6, output: 2e-6 } },
+      }) as unknown as ModelInfo;
+    const paidOnly = text('paid-only');
+    const otherPaid = text('other-paid');
+    const allowlisted = text('allowlisted');
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
+    const admission = createModelAdmission({
+      user: { tags: [] },
+      configs: [],
+      models: [paidOnly, otherPaid, allowlisted],
+      freeTierAllowedModels: new Set(['allowlisted']),
+      getEntitlements: async () => ['base'],
+    });
+
+    const result = await getLlmWithFallback(
+      paidOnly,
+      undefined,
+      [paidOnly, otherPaid, allowlisted],
+      { anthropic: 'valid-key' } as Record<string, string>,
+      logger,
+      { forceSwitch: true, isAdmitted: admission.admits }
+    );
+
+    expect(result?.model.id).toBe('allowlisted');
   });
 
   it('admits every model while the gate is off', async () => {
