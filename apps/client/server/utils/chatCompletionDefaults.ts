@@ -52,6 +52,7 @@ import { getSettingsByNames, ITokenizer, TiktokenTokenizer } from '@bike4mind/ut
 import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
+import { operationalBillingAdapters } from '@server/billing/operationalBilling';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
@@ -153,6 +154,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       mcpServers: mcpServerRepository,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
+      operationalBilling: operationalBillingAdapters,
       agents: agentRepository,
       skills: skillRepository,
       prompts: promptRepository,

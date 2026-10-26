@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   ARTIFACT_EMISSION_PROMPT,
   settingsMap,
@@ -21,6 +21,7 @@ import {
   SEARCH_BUDGET_SETTING_KEYS,
   FORCED_RETRIEVAL_SETTING_KEYS,
   isBlankSettingValue,
+  isEnforceCreditsLocked,
   type SettingKey,
 } from './settings';
 import {
@@ -1374,7 +1375,13 @@ describe('ARTIFACT_EMISSION_PROMPT multi-file wording', () => {
     expect(ARTIFACT_EMISSION_PROMPT).toContain('REACT MULTI-FILE');
     expect(ARTIFACT_EMISSION_PROMPT).toContain('SAME reply');
     expect(ARTIFACT_EMISSION_PROMPT).toContain("each sibling's identifier must equal its import basename exactly");
-    expect(ARTIFACT_EMISSION_PROMPT).toContain('must still be a single file');
+  });
+
+  it('lets a split React app publish when every file is in the same reply', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).toContain(
+      'A split React app can be published/shared as one page as long as every file is in the same reply.'
+    );
+    expect(ARTIFACT_EMISSION_PROMPT).not.toContain('must still be a single file');
   });
 
   it('ties export default to the entry file so the React rules do not contradict the split', () => {
@@ -1384,5 +1391,26 @@ describe('ARTIFACT_EMISSION_PROMPT multi-file wording', () => {
 
   it('no longer claims the publish transpiler rejects TypeScript', () => {
     expect(ARTIFACT_EMISSION_PROMPT).not.toContain('has no TS preset');
+  });
+});
+
+describe('isEnforceCreditsLocked', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('is locked when B4M_SELF_HOST is unset (hosted)', () => {
+    vi.stubEnv('B4M_SELF_HOST', undefined);
+    expect(isEnforceCreditsLocked()).toBe(true);
+  });
+
+  it('is unlocked on a self-host deployment', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    expect(isEnforceCreditsLocked()).toBe(false);
+  });
+
+  it('stays locked for any value other than the literal "true"', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    expect(isEnforceCreditsLocked()).toBe(true);
   });
 });

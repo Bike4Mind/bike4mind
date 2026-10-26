@@ -101,7 +101,7 @@
   },
   "apps/client/pages/api/admin/model-prices.ts": {
     "b4m/no-raw-entity-response": {
-      "count": 2
+      "count": 1
     }
   },
   "apps/client/pages/api/admin/partner-signup-rules/[id].ts": {

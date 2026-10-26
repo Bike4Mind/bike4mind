@@ -323,6 +323,7 @@ describe('audio_generation tool', () => {
         provider: expect.any(String),
         modelId: expect.any(String),
         prompt: 'hello world',
+        request: expect.objectContaining({ text: 'hello world', provider: expect.any(String) }),
       },
       generatedCopyKey: 'stored-key.mp3',
     });
@@ -335,7 +336,13 @@ describe('audio_generation tool', () => {
     expect(mockSaveAsset).toHaveBeenCalledWith(context, {
       bytes: Buffer.from('fake-sfx'),
       contentType: 'audio/mpeg',
-      generation: { generator: 'sound_effect', provider: 'elevenlabs', prompt: 'dog barking', durationSeconds: 5 },
+      generation: {
+        generator: 'sound_effect',
+        provider: 'elevenlabs',
+        prompt: 'dog barking',
+        durationSeconds: 5,
+        request: expect.objectContaining({ text: 'dog barking', durationSeconds: 5 }),
+      },
       generatedCopyKey: 'stored-key.mp3',
     });
   });

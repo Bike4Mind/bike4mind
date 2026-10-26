@@ -278,6 +278,24 @@ describe('processExecution tool deps', () => {
     expect(deps.sessionIncludeLibraryFiles).toBe(false);
   });
 
+  describe('admin role behind a key without the admin scope', () => {
+    async function depsUserFor(doc: Record<string, unknown>) {
+      const { agentExecutionRepository, User } = await import('@bike4mind/database');
+      vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100, isAdmin: true } as never);
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      const deps = await runWithSession(baseSession);
+      return deps.user as { isAdmin?: boolean };
+    }
+
+    it('withholds the owner admin role when the run was started that way', async () => {
+      expect((await depsUserFor({ ...execDoc, apiKeyId: 'key-1', adminRoleWithheld: true })).isAdmin).toBe(false);
+    });
+
+    it('keeps the owner admin role for a run that does not withhold it', async () => {
+      expect((await depsUserFor({ ...execDoc, apiKeyId: 'key-1' })).isAdmin).toBe(true);
+    });
+  });
+
   describe('video_generation wiring', () => {
     const videoExecDoc = {
       ...execDoc,

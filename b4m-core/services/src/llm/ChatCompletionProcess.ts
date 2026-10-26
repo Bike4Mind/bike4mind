@@ -173,6 +173,7 @@ import {
   ELISION_NAME_MAX,
 } from './elisionStamp';
 import { buildEarlyStopStamp, buildIncompleteAnswerNotice, usageEventStatusForFinish } from './earlyStopStamp';
+import { logLlmUsageSettled } from './llmUsageSettledLog';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -838,6 +839,7 @@ export const AUTO_ADDED_TOOL_NAMES = [
  * holder has and the rest is reported as writtenOffCredits: uncollected revenue
  * the usage event must surface so margin reporting doesn't count a phantom
  * collection. Best effort: the balance snapshot predates concurrent spend.
+ * Applied to organizations only; see computeHolderSettlement.
  */
 export function computeSettlementDelta(
   reservedCredits: number,
@@ -850,6 +852,44 @@ export function computeSettlementDelta(
   if (-delta <= available) return { delta, writtenOffCredits: 0 };
   // `available > 0 ? ...` avoids returning -0 when the balance is empty.
   return { delta: available > 0 ? -available : 0, writtenOffCredits: -delta - available };
+}
+
+/**
+ * The settlement a holder gets. Only a personal account is charged into debt; any other holder keeps
+ * computeSettlementDelta's zero floor (an organization's balance is a hard stop by design, #1238).
+ * A personal account is charged the shortfall in full,
+ * with one atomic $inc that may take the balance below zero: nothing is written off, turns settling
+ * concurrently each debit the live balance so the debt is exact however many were in flight, and
+ * the pre-flight hold ($inc, then reject below zero) refuses every later turn until a top-up clears
+ * it. Same contract as cliCompletions.ts, which never clamped.
+ */
+export function computeHolderSettlement(
+  ownerType: CreditHolderType,
+  reservedCredits: number,
+  totalCreditsUsed: number,
+  availableCredits: number
+): { delta: number; writtenOffCredits: number } {
+  if (ownerType !== CreditHolderType.User) {
+    return computeSettlementDelta(reservedCredits, totalCreditsUsed, availableCredits);
+  }
+  return { delta: reservedCredits - totalCreditsUsed, writtenOffCredits: 0 };
+}
+
+/**
+ * Warns when a shortfall settlement left the holder owing credits (see computeHolderSettlement). A
+ * refund that lands on a balance a sibling turn already took negative adds no debt and stays quiet.
+ */
+export function warnOnSettlementDebt(
+  logger: Logger,
+  holder: Pick<ICreditHolder, 'currentCredits'> | null,
+  context: { questId: string; ownerId: string; ownerType: CreditHolderType; reserved: number; used: number }
+): void {
+  if (!holder || holder.currentCredits >= 0 || context.used <= context.reserved) return;
+  logger.warn('[BILLING_SHORTFALL_DEBT] Settlement exceeded the balance; holder owes credits until topped up', {
+    ...context,
+    shortfall: context.used - context.reserved,
+    balanceAfter: holder.currentCredits,
+  });
 }
 
 /** One model's share of a turn's usage, priced against the turn's credit reservation. */
@@ -1802,8 +1842,8 @@ export class ChatCompletionProcess {
     if (amount <= 0 || !ownerId) return;
     this.reservedCredits = 0;
     // Bump the holder in the same synchronous step as the claim, before the refund awaits: a run
-    // that later reaches settlement reads this snapshot, and a stale one (still holding the
-    // reservation-reduced balance) would floor the whole debit at zero. Kept, not nulled, so the
+    // that later reaches settlement reads this snapshot, and on an org holder a stale one (still
+    // holding the reservation-reduced balance) would floor the whole debit at zero. Kept, not nulled, so the
     // settlement can charge against the restored balance.
     if (this.reservedCreditHolder) this.reservedCreditHolder.currentCredits += amount;
     try {
@@ -4459,7 +4499,9 @@ export class ChatCompletionProcess {
           await reservationMethods.incrementCredits(reservationOwnerId, requiredCredits);
           const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + requiredCredits;
           const errorMessage = buildInsufficientCreditsMessage({
-            available: actualBalance,
+            // Only a balance that was already negative before this hold is debt; otherwise a
+            // sibling hold still in flight is what pushed it below zero.
+            available: reservationUserCredits < 0 ? actualBalance : Math.max(0, actualBalance),
             required: requiredCredits,
             organizationName: organization?.name,
           });
@@ -4797,6 +4839,20 @@ export class ChatCompletionProcess {
           );
           // A no-op once settled; a settlement that failed before moving the balance refunds the hold.
           await this.releaseReservedCredits(questId, logger);
+        }
+
+        if (!adminSettingsEnforceCredits) {
+          for (const usage of researchModeUsages(researchResults, models, inputTokens)) {
+            logLlmUsageSettled({
+              backend: usage.modelInfo.backend,
+              model: usage.modelInfo.id,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              usd: getTextModelCost(usage.modelInfo, usage.inputTokens, usage.outputTokens),
+              source: 'chat',
+              accountCreatedAt: this.user.createdAt,
+            });
+          }
         }
 
         // This early return skips the normal-path cleanup below, so drop the controller entry
@@ -6013,6 +6069,17 @@ export class ChatCompletionProcess {
           estimatedCost,
           creditsUsed: textCreditsUsed,
         };
+        logLlmUsageSettled({
+          backend: currentModel.backend,
+          model: currentModel.id,
+          inputTokens: settledInputTokens,
+          outputTokens: settledOutputTokens,
+          cacheReadTokens: cacheReadInputTokens,
+          cacheWriteTokens: cacheCreationInputTokens,
+          usd: estimatedCost,
+          source: 'chat',
+          accountCreatedAt: this.user.createdAt,
+        });
 
         // Drift detection: log when our tokenizer diverges substantially from what
         // the provider reports. With provider-basis settlement this no longer
@@ -6154,7 +6221,8 @@ export class ChatCompletionProcess {
           this.reservedCredits = 0;
           this.reservationBasis = null;
           const { delta: settlementDelta, writtenOffCredits } = this.reservedCreditsOwnerId
-            ? computeSettlementDelta(
+            ? computeHolderSettlement(
+                this.reservedCreditsOwnerType,
                 reservedAtSettlement,
                 totalCreditsUsed,
                 this.reservedCreditHolder?.currentCredits ?? 0
@@ -6223,8 +6291,8 @@ export class ChatCompletionProcess {
             });
 
           try {
-            // Reconcile on the pre-computed, zero-floored delta (see
-            // computeSettlementDelta for the clamp semantics).
+            // Reconcile on the pre-computed delta (see computeHolderSettlement for which
+            // holders are floored at zero and which are charged into debt).
             const delta = settlementDelta;
             let reconciledHolder: ICreditHolder | null = this.reservedCreditHolder;
 
@@ -6237,6 +6305,13 @@ export class ChatCompletionProcess {
               logger.info(
                 `Credits reconciled for quest ${quest.id}: reserved=${reservedAtSettlement}, actual=${totalCreditsUsed}, delta=${delta}`
               );
+              warnOnSettlementDebt(logger, reconciledHolder, {
+                questId: quest.id,
+                ownerId: this.reservedCreditsOwnerId,
+                ownerType: this.reservedCreditsOwnerType,
+                reserved: reservedAtSettlement,
+                used: totalCreditsUsed,
+              });
             }
 
             // Record audit-trail transactions with skipBalanceUpdate (balance already settled)
@@ -6945,8 +7020,8 @@ export class ChatCompletionProcess {
   /**
    * Settle the turn's credit reservation against `usages` (plus `toolCredits`, the tool charges the
    * turn reserved) outside the normal completion path (a Research-mode turn, or one ended by a thrown
-   * abort): the balance moves by the reservation's difference from the usage, floored at zero like
-   * the main settlement (computeSettlementDelta), and each usage gets its ledger row and usage event.
+   * abort): the balance moves by the reservation's difference from the usage, settled like the main
+   * settlement (computeHolderSettlement), and each usage gets its ledger row and usage event.
    * The reservation is claimed before the first await, like the main settlement, so a caller's
    * releaseReservedCredits cannot refund it as well; a hold that was already released settles at
    * the full actual. A failed balance update restores the claim for the caller's rollback to refund.
@@ -6977,7 +7052,8 @@ export class ChatCompletionProcess {
       return { ...usage, costUsd, credits: usdToCreditsStochastic(costUsd) };
     });
     const totalCredits = priced.reduce((sum, usage) => sum + usage.credits, 0) + toolCredits;
-    const { delta, writtenOffCredits } = computeSettlementDelta(
+    const { delta, writtenOffCredits } = computeHolderSettlement(
+      ownerType,
       reserved,
       totalCredits,
       this.reservedCreditHolder?.currentCredits ?? 0
@@ -6994,10 +7070,22 @@ export class ChatCompletionProcess {
       }
     }
     logger.info(`Credits settled for quest ${quest.id}: reserved=${reserved}, actual=${totalCredits}, delta=${delta}`);
+    warnOnSettlementDebt(logger, holder, { questId: quest.id, ownerId, ownerType, reserved, used: totalCredits });
     this.reservedCreditHolder = null;
     quest.creditsUsed = totalCredits;
 
     for (const usage of priced) {
+      logLlmUsageSettled({
+        backend: usage.modelInfo.backend,
+        model: usage.modelInfo.id,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadInputTokens,
+        cacheWriteTokens: usage.cacheCreationInputTokens,
+        usd: usage.costUsd,
+        source: 'chat',
+        accountCreatedAt: this.user.createdAt,
+      });
       this.db.usageEvents
         ?.record({
           requestId: quest.id,
@@ -7337,7 +7425,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     } catch (error) {
       logger.warn(`Background admin settings fetch failed after ${Date.now() - adminSettingsStartTime}ms:`, error);
       // A stale-but-real map beats fabricated defaults here: getDefaultAdminSettings() hardcodes
-      // enforceCredits 'true', which would charge a deployment whose admin turned metering off.
+      // enforceCredits 'true', which would charge a self-host deployment whose admin turned metering off.
       // Fall back to the cached map, and to the defaults only when there is no cached map either.
       try {
         return await getSettingsMap(this.db, { logger });

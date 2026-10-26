@@ -182,6 +182,13 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
               prompt: text,
               ...(durationSeconds !== undefined && { durationSeconds }),
               ...(promptInfluence !== undefined && { promptInfluence }),
+              request: {
+                provider,
+                text,
+                ...(durationSeconds !== undefined && { durationSeconds }),
+                ...(promptInfluence !== undefined && { promptInfluence }),
+                ...(format !== undefined && { format }),
+              },
             },
           },
           req.logger

@@ -178,7 +178,21 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
             userId,
             bytes: audio,
             contentType,
-            generation: { generator: 'music', provider, modelId, prompt, durationSeconds: lengthMs / 1000 },
+            generation: {
+              generator: 'music',
+              provider,
+              modelId,
+              prompt,
+              durationSeconds: lengthMs / 1000,
+              request: {
+                provider,
+                prompt,
+                lengthMs,
+                ...(forceInstrumental !== undefined && { forceInstrumental }),
+                ...(modelId !== undefined && { modelId }),
+                ...(format !== undefined && { format }),
+              },
+            },
           },
           req.logger
         )
