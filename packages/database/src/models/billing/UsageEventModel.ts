@@ -700,6 +700,21 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     ]);
     return result?.usd ?? 0;
   }
+
+  async findDailySpendByUser(userId: string, since: Date): Promise<number> {
+    // Existing { userId: 1, createdAt: -1 } index covers this query.
+    const [result] = await this.model.aggregate<{ total: number }>([
+      { $match: { userId, createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+        },
+      },
+      { $project: { _id: 0, total: 1 } },
+    ]);
+    return result?.total ?? 0;
+  }
 }
 
 export const UsageEvent =

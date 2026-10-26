@@ -73,6 +73,7 @@ import {
 } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -332,6 +333,9 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
   });
   logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
+
+  // Daily spend cap before the LLM call; fail this quest early if the user has hit their cap.
+  await checkFreeTierDailySpendCap({ user, usageEventRepository, logger });
 
   const timeToProcess = Date.now() - handlerStartTime;
   logger.debug('Calling chatCompletion.process', { durationMs: timeToProcess });

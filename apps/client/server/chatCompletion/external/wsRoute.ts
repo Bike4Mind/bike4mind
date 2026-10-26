@@ -1,4 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
@@ -220,6 +221,12 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             if (key) {
               apiKeyInfoForCompletion = { keyId: key.id, keyName: key.name };
             }
+          }
+
+          // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+          const capUser = await userRepository.findById(userId);
+          if (capUser) {
+            await checkFreeTierDailySpendCap({ user: capUser, usageEventRepository, logger });
           }
 
           // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays

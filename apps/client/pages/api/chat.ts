@@ -30,6 +30,7 @@ import {
   projectRepository,
   questRepository,
   sessionRepository,
+  usageEventRepository,
   User,
   Session,
 } from '@bike4mind/database';
@@ -55,6 +56,7 @@ import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
 import {
   TIMED_OUT_RUN,
@@ -203,6 +205,9 @@ const handler = nextRouteForContract(chatContract, {
       await dispatchQuest(params, req.logger);
     },
   };
+
+  // Daily spend cap: check before quest creation so a capped request never creates a quest.
+  await checkFreeTierDailySpendCap({ user: req.user, usageEventRepository, logger: req.logger });
 
   // Create the quest (this is immediate)
   apiTimer.phase('invoke');

@@ -703,4 +703,11 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Lifetime USD COGS of research spend attributed to one data lake (feature: 'operations'). */
   lakeResearchLifetimeUsd(dataLakeId: string): Promise<number>;
+
+  /**
+   * Total credits a user spent in the UTC calendar day starting at `since`
+   * (pass UTC midnight for today). Counts creditsCharged plus writtenOffCredits.
+   * Non-atomic under burst concurrency - bounded overshoot is acceptable here.
+   */
+  findDailySpendByUser(userId: string, since: Date): Promise<number>;
 }

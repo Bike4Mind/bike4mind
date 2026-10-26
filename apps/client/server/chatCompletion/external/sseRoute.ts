@@ -1,4 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
@@ -307,6 +308,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let finalTurnUsage: TurnUsage[] | undefined;
       let finalCreditsUsed: number | undefined;
       let hasToolCalls = false;
+
+      // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+      const capUser = await userRepository.findById(userId!);
+      if (capUser) {
+        await checkFreeTierDailySpendCap({ user: capUser, usageEventRepository, logger });
+      }
 
       timing?.phase('completionStarted');
       await executeCompletion({
