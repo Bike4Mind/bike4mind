@@ -9,9 +9,10 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
+import { DESKTOP_PROJECT_RULES_LABEL, DESKTOP_USER_RULES_LABEL } from './permissions/PermissionService';
 import { revokeSessionCapability } from './capabilities/approvalCapabilities';
 import type { ApprovalLogEntry } from './permissions/ApprovalLog';
-import { PermissionRuleSet, compileRule, parseRule, type CompiledRule } from './permissions/rules';
+import { PermissionRuleSet, compileRule, parseRule, type CompiledRule, type RuleSource } from './permissions/rules';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { bashExecute } from './tools/shellTools';
@@ -20,18 +21,18 @@ function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
 
-function ruleSet(lists: Partial<Record<PermissionList, string[]>>): PermissionRuleSet {
+const CLAUDE_CODE_USER: RuleSource = { id: 'cc-user', label: 'Claude Code user', path: '/x/settings.json' };
+
+function ruleSet(
+  lists: Partial<Record<PermissionList, string[]>>,
+  source: RuleSource = CLAUDE_CODE_USER
+): PermissionRuleSet {
   const compiled: CompiledRule[] = [];
   for (const [list, texts] of Object.entries(lists) as [PermissionList, string[]][]) {
     for (const text of texts) {
       const parsed = parseRule(text, { native: true });
       if (!parsed.ok) throw new Error(parsed.reason);
-      const rule = compileRule(
-        parsed.rule,
-        list,
-        { id: 'cc-user', label: 'Claude Code user', path: '/x/settings.json' },
-        { home: '/nowhere', root: null, cwd: null }
-      );
+      const rule = compileRule(parsed.rule, list, source, { home: '/nowhere', root: null, cwd: null });
       if (rule) compiled.push(rule);
     }
   }
@@ -216,8 +217,8 @@ describe('ChatService approval record', () => {
     expect(uses.every(event => event.grantId === grants[0].id)).toBe(true);
   });
 
-  it('links a use allowed by a saved rule to that rule grant', async () => {
-    rules = ruleSet({ allow: ['Bash(touch:*)'] });
+  it('links a use allowed by a saved desktop rule to that rule grant', async () => {
+    rules = ruleSet({ allow: ['Bash(touch:*)'] }, { id: 'desktop-user', label: DESKTOP_USER_RULES_LABEL });
     const grant = await capabilities.grant({
       subject: { kind: 'desktop-user' },
       capability: 'tool',
@@ -228,6 +229,45 @@ describe('ChatService approval record', () => {
     await awaitCall('c1', 'done');
     const uses = (await capabilities.state()).audit.filter(event => event.type === 'use');
     expect(uses).toMatchObject([{ grantId: grant.id }]);
+  });
+
+  it('does not link a use allowed by a Claude Code rule to a desktop grant with the same text', async () => {
+    rules = ruleSet({ allow: ['Bash(touch:*)'] });
+    await capabilities.grant({
+      subject: { kind: 'desktop-user' },
+      capability: 'tool',
+      scope: { kind: 'permission-rule', value: 'Bash(touch:*)' },
+      source: 'permission-rule',
+    });
+    await run('ask', 'touch made.txt');
+    await awaitCall('c1', 'done');
+    const [use] = (await capabilities.state()).audit.filter(event => event.type === 'use');
+    expect(use).toBeDefined();
+    expect(use).not.toHaveProperty('grantId');
+  });
+
+  it("does not link a use allowed by a project rule to another project's grant", async () => {
+    rules = ruleSet(
+      { allow: ['Bash(touch:*)'] },
+      { id: 'desktop-project:/elsewhere', label: DESKTOP_PROJECT_RULES_LABEL, path: '/elsewhere' }
+    );
+    await capabilities.grant({
+      subject: { kind: 'project', directory: '/elsewhere' },
+      capability: 'tool',
+      scope: { kind: 'permission-rule', value: 'Bash(touch:*)' },
+      source: 'permission-rule',
+    });
+    await capabilities.grant({
+      subject: { kind: 'desktop-user' },
+      capability: 'tool',
+      scope: { kind: 'permission-rule', value: 'Bash(touch:*)' },
+      source: 'permission-rule',
+    });
+    await run('ask', 'touch made.txt');
+    await awaitCall('c1', 'done');
+    const [use] = (await capabilities.state()).audit.filter(event => event.type === 'use');
+    expect(use).toBeDefined();
+    expect(use).not.toHaveProperty('grantId');
   });
 
   it('revokes the exact shell allowance recorded by the live approval path', async () => {

@@ -30,10 +30,13 @@ export interface PermissionServiceOptions {
   logger: { warn(message: string): void };
 }
 
-const DESKTOP_USER: RuleSource = { id: 'desktop-user', label: 'Desktop rules' };
+export const DESKTOP_USER_RULES_LABEL = 'Desktop rules';
+export const DESKTOP_PROJECT_RULES_LABEL = 'Desktop project rules';
+
+const DESKTOP_USER: RuleSource = { id: 'desktop-user', label: DESKTOP_USER_RULES_LABEL };
 
 function desktopProject(directory: string): RuleSource {
-  return { id: `desktop-project:${directory}`, label: 'Desktop project rules', path: directory };
+  return { id: `desktop-project:${directory}`, label: DESKTOP_PROJECT_RULES_LABEL, path: directory };
 }
 
 function views(lists: PermissionRuleLists, native: boolean): PermissionRuleView[] {

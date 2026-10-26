@@ -131,6 +131,7 @@ import { OllamaLocal } from './OllamaLocal';
 import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
+import type { CapabilitySubject } from '@shared/capabilities';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
@@ -180,7 +181,12 @@ import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimit
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
 import { alwaysOverridesTaint, spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
 import { MCP_TOOL_PREFIX } from './mcp/names';
-import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
+import {
+  DESKTOP_PROJECT_RULES_LABEL,
+  DESKTOP_USER_RULES_LABEL,
+  type PermissionScopeKey,
+  type PermissionService,
+} from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
 import { summarizeToolInput, type ApprovalLog } from './permissions/ApprovalLog';
 import { resolveSubject } from './permissions/resolveSubject';
@@ -3588,7 +3594,7 @@ export class ChatService {
 
         if (this.deps.capabilities) {
           const capabilities = this.deps.capabilities;
-          await this.authorizingGrant(sessionId, call.approval?.decidedBy, context.approvedKey)
+          await this.authorizingGrant(sessionId, call.approval?.decidedBy, context.approvedKey, scope.permissions)
             .then(grantId =>
               capabilities.use(
                 capabilityFor(call.name, context.approvedKey),
@@ -4601,34 +4607,6 @@ export class ChatService {
    * tool_result rather than as an aborted turn, so it can say what it wanted to do instead of the
    * conversation stopping dead.
    */
-  /** The ledger grant that let a call through, when one is identifiable. */
-  private async authorizingGrant(
-    sessionId: string,
-    decidedBy: ChatApprovalDecidedBy | undefined,
-    approvedKey: string | undefined
-  ): Promise<string | undefined> {
-    const capabilities = this.deps.capabilities;
-    if (!capabilities || !decidedBy) return undefined;
-    if (decidedBy.kind === 'rule') {
-      const grant = await capabilities.findActive(
-        grant =>
-          grant.subject.kind !== 'session' &&
-          grant.scope.kind === 'permission-rule' &&
-          grant.scope.value === decidedBy.rule
-      );
-      return grant?.id;
-    }
-    const standing =
-      decidedBy.kind === 'chat-allowance' || (decidedBy.kind === 'user' && decidedBy.answer === 'always');
-    if (!standing || !approvedKey) return undefined;
-    // A shell call covered by patterns another key allowed has no grant of its own to name.
-    const grant = await capabilities.findActive(
-      grant =>
-        grant.subject.kind === 'session' && grant.subject.sessionId === sessionId && grant.approvalKey === approvedKey
-    );
-    return grant?.id;
-  }
-
   private async awaitApproval(
     tool: ToolDefinition,
     call: ChatToolCall,
@@ -4960,6 +4938,42 @@ export class ChatService {
       approval: approvalRecord('allowed', decidedBy, card),
       mode,
     };
+  }
+
+  /** The ledger grant that let a call through, when one is identifiable. */
+  private async authorizingGrant(
+    sessionId: string,
+    decidedBy: ChatApprovalDecidedBy | undefined,
+    approvedKey: string | undefined,
+    permissionScope: PermissionScopeKey | undefined
+  ): Promise<string | undefined> {
+    const capabilities = this.deps.capabilities;
+    if (!capabilities || !decidedBy) return undefined;
+    if (decidedBy.kind === 'rule') {
+      // Only desktop rules have grants; a Claude Code settings rule with the same text is not one.
+      const project = permissionScope?.project ? resolve(permissionScope.project) : null;
+      const subjectFits =
+        decidedBy.source === DESKTOP_USER_RULES_LABEL
+          ? (subject: CapabilitySubject) => subject.kind === 'desktop-user'
+          : decidedBy.source === DESKTOP_PROJECT_RULES_LABEL && project
+            ? (subject: CapabilitySubject) => subject.kind === 'project' && subject.directory === project
+            : null;
+      if (!subjectFits) return undefined;
+      const grant = await capabilities.findActive(
+        grant =>
+          subjectFits(grant.subject) && grant.scope.kind === 'permission-rule' && grant.scope.value === decidedBy.rule
+      );
+      return grant?.id;
+    }
+    const standing =
+      decidedBy.kind === 'chat-allowance' || (decidedBy.kind === 'user' && decidedBy.answer === 'always');
+    if (!standing || !approvedKey) return undefined;
+    // A shell call covered by patterns another key allowed has no grant of its own to name.
+    const grant = await capabilities.findActive(
+      grant =>
+        grant.subject.kind === 'session' && grant.subject.sessionId === sessionId && grant.approvalKey === approvedKey
+    );
+    return grant?.id;
   }
 
   /**
