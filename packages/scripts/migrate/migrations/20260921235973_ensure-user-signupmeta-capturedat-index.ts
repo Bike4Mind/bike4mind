@@ -12,15 +12,19 @@ import { type MigrationFile } from './index';
  * 20260918010000_ensure-user-organizationid-index: prod runs DocumentDB, where an index build on
  * users takes a foreground collection lock, so the build should run at a chosen moment.
  *
- * Idempotent: createIndexes is a no-op for indexes that already exist. The name matches the schema
- * declaration byte-for-byte, so this build and autoIndex cannot produce an IndexKeySpecsConflict.
+ * Builds only this index, not every missing User index, so no unrelated build takes the lock.
+ * Idempotent: createIndex is a no-op when the index exists. Key, name and options must match the
+ * UserModel.ts declaration byte-for-byte, or this build and autoIndex hit an IndexKeySpecsConflict.
  */
 const migration: MigrationFile = {
   id: 20260921235973,
   name: 'ensure user signupMeta capturedAt index',
 
   up: async () => {
-    await User.createIndexes();
+    await User.collection.createIndex(
+      { 'signupMeta.capturedAt': 1 },
+      { name: 'user_signupMeta_capturedAt', sparse: true }
+    );
   },
 
   down: async () => {
