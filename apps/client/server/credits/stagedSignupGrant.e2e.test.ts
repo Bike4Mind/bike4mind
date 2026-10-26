@@ -15,7 +15,7 @@ import {
   createMongoReplSet,
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
-} from '../../../../../packages/database/src/__test__/createMongoServer';
+} from '../../../../packages/database/src/__test__/createMongoServer';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

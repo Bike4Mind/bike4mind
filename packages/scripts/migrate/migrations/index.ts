@@ -11,7 +11,8 @@
  */
 
 // 2. Import the file here:
-import SeedStagedSignupSettings from './20261026000000_seed-staged-signup-settings';
+// Backdated below the fail-closed OAuth backfill; $setOnInsert makes an old-id rerun safe.
+import SeedStagedSignupSettings from './20260921235965_seed-staged-signup-settings';
 import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
 import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';

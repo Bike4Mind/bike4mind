@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ findOne: vi.fn(), updateOne: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ AdminSettings: h }));
-import migration from './20261026000000_seed-staged-signup-settings';
+import migration from './20260921235965_seed-staged-signup-settings';
 
 describe('staged signup setting migration', () => {
   beforeEach(() => vi.clearAllMocks());
