@@ -4,6 +4,7 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/serve
 import mailer from '@server/utils/mailer';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { ApiKeyScope } from '@bike4mind/common';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
@@ -62,15 +63,22 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).pos
     if (result === false) {
       throw new Error('Email service returned failure');
     }
-
-    return res.json({
-      success: true,
-      message: `Test email sent to ${email}`,
-      subject,
-    });
   } catch (error: any) {
     throw new BadRequestError(`Failed to send test email: ${error.message}`);
   }
+
+  await recordAdminActionFromRequest(req, {
+    action: 'email.template.test_sent',
+    target: { kind: 'settings', id, displayName: template.name },
+    summary: `sent test of email template ${template.name}`,
+    details: { recipientCount: 1 },
+  });
+
+  return res.json({
+    success: true,
+    message: `Test email sent to ${email}`,
+    subject,
+  });
 });
 
 export const config = {

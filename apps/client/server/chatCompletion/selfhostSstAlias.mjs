@@ -16,7 +16,12 @@
  * `require()`, so the ESM `module.register` resolve hook alone does NOT catch `sst`:
  *   - CJS: monkeypatch `Module._resolveFilename` (what tsx's compiled `require('sst')` hits).
  *   - ESM: register a resolve hook (for any genuinely ESM importer).
+ *
+ * It also installs esmWorkspacePackages.mjs first, so every self-host tsx process that loads this
+ * shim (chatCompletion, worker, agent executor) gets one instance per `@bike4mind/*` package, and
+ * the aliased `sst` resolves to the shim's ESM build like every other workspace package.
  */
+import './esmWorkspacePackages.mjs';
 import Module from 'node:module';
 import { register } from 'node:module';
 

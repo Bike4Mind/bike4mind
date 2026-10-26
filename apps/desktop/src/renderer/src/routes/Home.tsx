@@ -1,8 +1,12 @@
+import { useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import Card from '@mui/joy/Card';
 import CircularProgress from '@mui/joy/CircularProgress';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import { useNavigate } from '@tanstack/react-router';
+import { ReauthNotice } from '../auth/ReauthNotice';
 import { SignInCard } from '../auth/SignInCard';
 import { SignedInPanel } from '../auth/SignedInPanel';
 import { useAuthState } from '../auth/useAuthState';
@@ -11,12 +15,42 @@ import { AppUpdateNotice } from '../chat/UpdateNotice';
 
 export function Home() {
   const state = useAuthState();
+  const navigate = useNavigate();
+  const [localChat, setLocalChat] = useState(false);
+  const chatScope = useRef('device-local');
+  if (state && state.status !== 'initializing' && !state.reauthRequired) {
+    chatScope.current = `${state.environment.url}:${state.user?.id ?? 'device-local'}`;
+  }
 
-  // Signed in, the window belongs to the conversation; identity moves to the sidebar footer.
-  if (state?.status === 'signed-in') {
+  // Signed in, the window belongs to the conversation; identity moves to the sidebar footer. A
+  // session that expired under the user keeps it too, mounted in the same place so nothing in it
+  // (the composer's draft above all) is torn down while they sign in again.
+  if (state?.status === 'signed-in' || state?.reauthRequired || localChat) {
     return (
       <>
-        <ChatShell auth={state} account={status => <SignedInPanel state={state} status={status} />} />
+        <ChatShell
+          key={chatScope.current}
+          auth={state}
+          account={status =>
+            state?.status === 'signed-in' || state?.reauthRequired ? (
+              <SignedInPanel state={state} status={status} />
+            ) : (
+              <Stack spacing={1} sx={{ p: 1.5 }}>
+                <Button
+                  variant="plain"
+                  onClick={() => void navigate({ to: '/settings' })}
+                  data-testid="local-chat-settings-btn"
+                >
+                  Settings
+                </Button>
+                <Button onClick={() => setLocalChat(false)} data-testid="local-chat-signin-btn">
+                  Sign in
+                </Button>
+              </Stack>
+            )
+          }
+        />
+        {state?.reauthRequired && <ReauthNotice state={state} />}
         <AppUpdateNotice />
       </>
     );
@@ -34,6 +68,11 @@ export function Home() {
           </Stack>
         ) : (
           <SignInCard state={state} />
+        )}
+        {(state?.status === 'signed-out' || state?.status === 'unconfigured') && (
+          <Button variant="outlined" onClick={() => setLocalChat(true)} data-testid="auth-local-chat-btn">
+            Use local models
+          </Button>
         )}
       </Card>
       <AppUpdateNotice />

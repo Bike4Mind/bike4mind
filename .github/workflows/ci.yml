@@ -229,6 +229,9 @@ jobs:
         env:
           B4M_PREFLIGHT_COMPOSE_TESTS: '1'
 
+      - name: Test Playwright install recovery
+        run: python3 -m unittest discover -s scripts -p 'test_install_playwright_chromium.py' -v
+
       - name: Check for account-tied IDs in shippable code (open-core)
         run: bash scripts/check-no-account-ids.sh
         env:

@@ -299,8 +299,8 @@ export async function apiLoginStandingUser(
 
 /**
  * Pull the refresh token out of a Set-Cookie response header. Playwright joins multiple
- * Set-Cookie headers with newlines, so scan line by line. Mirrors REFRESH_COOKIE_NAME in
- * packages/server-utils/src/auth/refreshCookie.ts - keep in sync.
+ * Set-Cookie headers with newlines, so scan line by line. Mirrors sessionCookieName in
+ * packages/server-utils/src/auth/refreshCookie.ts (prefixed on https, bare on http) - keep in sync.
  */
 export function refreshTokenFromSetCookie(setCookieHeader: string | undefined): string | null {
   if (!setCookieHeader) return null;
@@ -308,7 +308,8 @@ export function refreshTokenFromSetCookie(setCookieHeader: string | undefined): 
     const [pair] = line.split(';');
     const eq = pair.indexOf('=');
     if (eq === -1) continue;
-    if (pair.slice(0, eq).trim() === 'b4m_rt') {
+    const name = pair.slice(0, eq).trim();
+    if (name === '__Host-b4m_rt' || name === 'b4m_rt') {
       const value = pair.slice(eq + 1).trim();
       return value.length > 0 ? value : null;
     }
@@ -790,5 +791,99 @@ export async function apiDeleteAllSkills(request: APIRequestContext, token: stri
   const skills = await apiListSkills(request, token);
   for (const skill of skills.filter(s => s.userId === ownerId)) {
     await apiDeleteSkill(request, token, skill.id);
+  }
+}
+
+/**
+ * POST /api/admin/organizations/grant - a Team owned by `ownerEmail` with an admin-granted (non-Stripe)
+ * subscription. The only way to seed a team with seats on an env whose self-serve path is Stripe
+ * checkout, and the only kind the admin panel's "Adjust seats" action is offered for.
+ */
+export async function apiGrantTeam(
+  request: APIRequestContext,
+  adminToken: string,
+  params: { name: string; ownerEmail: string; seats: number }
+): Promise<string> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.post(`${baseURL}/api/admin/organizations/grant`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    data: { ...params, initialCredits: 0, reason: 'E2E teams suite seed' },
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Grant team failed: ${response.status()} ${await response.text()}`);
+  }
+
+  const body: { organizationId: string } = await response.json();
+  return body.organizationId;
+}
+
+/** POST /api/organizations/:id/members - adds an accepted member directly, skipping the invite. */
+export async function apiAddTeamMember(
+  request: APIRequestContext,
+  token: string,
+  organizationId: string,
+  userId: string
+): Promise<void> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.post(`${baseURL}/api/organizations/${organizationId}/members`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { userId },
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Add team member failed: ${response.status()} ${await response.text()}`);
+  }
+}
+
+/** GET /api/organizations/:id - null when the caller cannot see it or it is gone. */
+export async function apiGetTeam(
+  request: APIRequestContext,
+  token: string,
+  organizationId: string
+): Promise<{ id: string; name: string; seats: number; adminUserIds?: string[] } | null> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/organizations/${organizationId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (response.status() === 404) return null;
+  if (!response.ok()) {
+    throw new Error(`Get team failed: ${response.status()} ${await response.text()}`);
+  }
+  return response.json();
+}
+
+/**
+ * POST /api/admin/organizations/:id/revoke - cancels the team's admin grant. A team cannot be deleted
+ * while it holds an active subscription (DELETE /api/organizations/:id), so this comes first.
+ */
+export async function apiRevokeTeamGrant(
+  request: APIRequestContext,
+  adminToken: string,
+  organizationId: string
+): Promise<APIResponse> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  return request.post(`${baseURL}/api/admin/organizations/${organizationId}/revoke`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    data: { reason: 'E2E teams suite' },
+  });
+}
+
+/**
+ * Teardown for a seeded team: revoke the admin grant (so no active subscription row outlives the
+ * org), then delete the org. Best-effort on purpose - a test may already have deleted it.
+ */
+export async function apiDeleteGrantedTeam(
+  request: APIRequestContext,
+  adminToken: string,
+  organizationId: string
+): Promise<void> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  await apiRevokeTeamGrant(request, adminToken, organizationId);
+  const res = await request.delete(`${baseURL}/api/organizations/${organizationId}`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  if (!res.ok() && res.status() !== 404) {
+    console.warn(`Team ${organizationId} was not deleted (${res.status()}): ${await res.text()}`);
   }
 }

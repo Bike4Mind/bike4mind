@@ -63,6 +63,7 @@ import {
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
 import { RetrievalFloorBanner } from './RetrievalFloorBanner';
+import { LowOutputBudgetBanner, useLowOutputBudget } from './LowOutputBudgetBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -73,6 +74,7 @@ import {
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
 } from '@client/app/utils/artifactParser';
+import { groupReactArtifacts } from '@client/app/utils/reactArtifactGroup';
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -1385,6 +1387,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       }),
     [cleanReply, completed, promptMeta?.finishReason]
   );
+  // An empty reply sent with a budget below the model's default gets the actionable notice instead.
+  const lowOutputBudget = useLowOutputBudget(promptMeta?.model?.name, promptMeta?.model?.parameters?.maxTokens);
 
   const { artifacts, processedContent } = useMemo(() => {
     if (!cleanReply) return { artifacts: [], processedContent: '' };
@@ -1430,6 +1434,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const chessArtifacts = useMemo(() => artifacts.filter(a => a.type === 'chess'), [artifacts]);
   const nonChessArtifacts = useMemo(() => artifacts.filter(a => a.type !== 'chess'), [artifacts]);
+  const reactArtifactGroups = useMemo(() => groupReactArtifacts(nonChessArtifacts), [nonChessArtifacts]);
 
   // Resolved ahead of render so an unparseable board yields null rather than an empty
   // artifact Stack (which would still contribute its margins as a phantom gap).
@@ -1583,7 +1588,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {/* Truncation that landed before any artifact tag was emitted. Without this the
           bubble renders blank (or stops mid-sentence) with no explanation at all. */}
-      {(truncationNotice === 'reply-empty' ||
+      {truncationNotice === 'reply-empty' && lowOutputBudget && <LowOutputBudgetBanner {...lowOutputBudget} />}
+      {((truncationNotice === 'reply-empty' && !lowOutputBudget) ||
         truncationNotice === 'reply-partial' ||
         truncationNotice === 'reply-degenerate') && (
         <Alert
@@ -1910,9 +1916,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
             <ArtifactRenderer
               key={`${artifact.type}_${artifact.identifier}_${index}`}
               artifact={artifact}
-              index={index}
+              // The full parse's index, chess included, which is what persistence numbers ids by.
+              index={artifacts.indexOf(artifact)}
               messageId={messageId ?? 'unknown'}
               sessionId={currentSessionId ?? undefined}
+              reactGroup={reactArtifactGroups.get(artifact)}
             />
           ))}
         </Stack>

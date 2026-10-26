@@ -1,6 +1,7 @@
 import { accessibleBy } from '@casl/mongoose';
 import { Permission } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Session } from '@bike4mind/database/auth';
 import { SessionEvents } from '@server/utils/eventBus';
@@ -18,6 +19,8 @@ const handler = baseApi().post(
         })
       : null;
     if (!session) throw new Error('Cannot update session');
+
+    assertAiAccessAllowed(req.user);
 
     // Queueing the tag IS the spend, so a refusal is the answer to this request (#1852).
     // Billed to whoever asked (payerId below), never the owner on a sharee's behalf.

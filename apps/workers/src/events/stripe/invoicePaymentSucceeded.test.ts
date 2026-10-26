@@ -168,6 +168,7 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
             value: 29.99,
             currency: 'USD',
             billingReason,
+            userAction: false,
           },
         ],
         [

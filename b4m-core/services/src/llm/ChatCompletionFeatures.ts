@@ -2557,15 +2557,26 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * A relevance pick ranks them with one ANN query (see rankCandidateFilesByRelevance); anything
    * that stops it - index not queryable, no index-ready file, an error, or the deadline - falls
    * back to the prefix of the given order, which reportCoverage then flags as the by-name cut it is.
-   * A scope over the cap also publishes how it was cut (recordForcedRetrievalCutMetrics).
+   * A scope over the cap also publishes how it was cut (recordForcedRetrievalCutMetrics), and so
+   * does a listing the query already cut at the cap (`listingCutAtCap`): a by-name cut with no
+   * relevance pick to try, so it is recorded as one even though every listed file is kept.
    */
   private async selectForcedRetrievalCandidates<T extends ForcedRetrievalCandidateFile>(
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel,
-    relevanceSelectionAvailable: boolean
+    relevanceSelectionAvailable: boolean,
+    listingCutAtCap: boolean
   ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection }> {
-    if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) return { files, selection: 'all' };
+    if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) {
+      if (listingCutAtCap) {
+        await recordForcedRetrievalCutMetrics(
+          { selection: 'fileName', reason: 'relevance-unavailable', annPickMs: null },
+          this.logger
+        );
+      }
+      return { files, selection: 'all' };
+    }
     const pick: AnnCandidatePick<T> = relevanceSelectionAvailable
       ? await this.rankCandidatesByAnn(files, queryVector, embeddingModel)
       : { ranked: null, reason: 'relevance-unavailable', annPickMs: null };
@@ -3398,7 +3409,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         spansSeveralLakes ? fairByName(collapse.servable) : collapse.servable,
         queryVector,
         embeddingModel,
-        relevanceSelectionAvailable
+        relevanceSelectionAvailable,
+        // Only a single lake without relevance lists at the cap; the wider listings record their
+        // cut in the over-cap branch, so no turn is recorded twice. A wider listing that overflowed
+        // with <= cap servable files records nothing (see the forcedRetrievalByNameCut alarm doc).
+        fileResults.hasMore === true && listingLimit <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES
       );
       const supersession = buildSupersessionReport(collapse.superseded);
       // The audit value, resolved once here and used by every write site below. Deliberately NOT

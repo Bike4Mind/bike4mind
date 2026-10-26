@@ -113,6 +113,8 @@ export function registerAuth(): AuthService {
   ipcMain.handle(IPC_CHANNELS.authSetEnvironment, (_event, selection: EnvironmentSelection) =>
     service.setEnvironment(selection)
   );
+  // A sign-in in another instance sharing the vault is picked up when the user comes back here.
+  app.on('browser-window-focus', () => void service.adoptStoredSession());
   ipcMain.handle(IPC_CHANNELS.authOpenAccountPage, (_event, page: AccountPage) => service.openAccountPage(page));
 
   return service;

@@ -65,6 +65,14 @@ describe('moderateUploadedFile', () => {
     expect(d.downloadBytes).not.toHaveBeenCalled();
   });
 
+  it('resolves an empty (0-byte) non-image upload clean on the declared mimeType', async () => {
+    const d = deps({ mimeType: 'text/x-python', downloadPartialBytes: vi.fn(async () => Buffer.alloc(0)) });
+    const result = await moderateUploadedFile(d);
+    expect(result).toEqual({ moderationStatus: 'clean', correctedMimeType: undefined });
+    expect(d.downloadBytes).not.toHaveBeenCalled();
+    expect(d.moderateImageOrThrow).not.toHaveBeenCalled();
+  });
+
   it('keeps a declared OOXML mimeType when a partial read only sniffs the generic zip container', async () => {
     // xlsx/docx/pptx are ZIP containers; a partial sniff sees `application/zip`. That generic
     // type must NOT clobber the declared OOXML subtype (else viewers / AI-editing break).

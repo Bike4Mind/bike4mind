@@ -8,6 +8,7 @@ import {
 import {
   adminSettingsRepository,
   apiKeyRepository,
+  cacheRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileChunkRepository,
@@ -112,6 +113,8 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
         ...lakeWriteToolDb,
+        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
+        caches: cacheRepository,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),

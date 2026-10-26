@@ -19,7 +19,7 @@ import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { brandAlpha } from '@client/app/utils/themes/colors';
 import { DISPLAY_DATE_REGEX } from '@client/app/utils/dateUtils';
 import WhatsNewSlideVideo from './WhatsNewSlideVideo';
-import { pickSlideVideo, videoUrlsOf } from './whatsNewSlideMedia';
+import { pickSlideStill, pickSlideVideo, stillUrlsOf, videoUrlsOf } from './whatsNewSlideMedia';
 import { useSignedMediaUrls } from './useSignedMediaUrls';
 
 /** Parse subtitle field into display date and subtitle (admin stores "DATE" or "DATE · SUBTITLE" or "SUBTITLE") */
@@ -75,7 +75,15 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
   const isMobile = useMediaQuery('(max-width:768px)');
   const { mutate: getPresignedUrls, isPending } = useGetPresignedUrl();
   const { resetTrigger } = useModalTrigger();
-  const slideVideoUrls = useMemo(() => activeModalList.flatMap(modal => videoUrlsOf(modal.video)), [activeModalList]);
+  // A still is only shown, so only signed, for a slide without a video file
+  const slideVideoUrls = useMemo(
+    () =>
+      activeModalList.flatMap(modal => [
+        ...videoUrlsOf(modal.video),
+        ...(pickSlideVideo(modal.video, isMobile) ? [] : stillUrlsOf(modal.stillImage)),
+      ]),
+    [activeModalList, isMobile]
+  );
   const { resolved: videoUrls, refresh: refreshVideoUrl } = useSignedMediaUrls(slideVideoUrls);
   const [failedVideos, setFailedVideos] = useState<ReadonlySet<string>>(new Set());
   const handleVideoError = useCallback(
@@ -582,12 +590,32 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
   const videoPoster = (pickedVideo?.poster && videoUrls[pickedVideo.poster]) || undefined;
   const videoUnplayable = !!pickedVideo && (videoUrls[pickedVideo.src] === null || failedVideos.has(pickedVideo.src));
   const slideVideo = pickedVideo && !(videoUnplayable && (currentModal.imageUrl || !videoPoster)) ? pickedVideo : null;
-  const showImage = !slideVideo && !!currentModal.imageUrl;
-  const isLandscapeVideo = slideVideo?.orientation === 'landscape';
-  // Video above the text: always on mobile, and for 16:9 on desktop where a side slot is too small
-  const stackVideo = !!slideVideo && (isMobile || isLandscapeVideo);
+  // A slide without a video file shows its still in the same slot, and drops the slot if the still fails
+  const pickedStill = pickedVideo ? null : pickSlideStill(currentModal.stillImage, isMobile);
+  const slideStill =
+    pickedStill && videoUrls[pickedStill.src] !== null && !failedVideos.has(pickedStill.src) ? pickedStill : null;
+  const slideMedia = slideVideo ?? slideStill;
+  const showImage = !slideMedia && !!currentModal.imageUrl;
+  const isLandscapeVideo = slideMedia?.orientation === 'landscape';
+  // Media above the text: always on mobile, and for 16:9 on desktop where a side slot is too small
+  const stackVideo = !!slideMedia && (isMobile || isLandscapeVideo);
 
   const renderVideo = () => {
+    if (slideStill) {
+      const stillSrc = videoUrls[slideStill.src];
+      if (!stillSrc) return <CircularProgress size="lg" />;
+      return (
+        <Box
+          component="img"
+          key={`${currentModal._id}:${slideStill.src}`}
+          src={stillSrc}
+          alt={currentTitle}
+          data-testid="whats-new-slide-still"
+          onError={() => handleVideoError(slideStill.src)}
+          sx={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '12px' }}
+        />
+      );
+    }
     if (!slideVideo) return null;
     if (videoUnplayable) {
       return videoPoster ? (
@@ -746,7 +774,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
           {/* Content Section */}
           <Box
             sx={{
-              width: isMobile || stackVideo ? '100%' : slideVideo || showImage ? '400px' : '100%',
+              width: isMobile || stackVideo ? '100%' : slideMedia || showImage ? '400px' : '100%',
               padding: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -949,7 +977,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
             </Box>
           </Box>
 
-          {!stackVideo && slideVideo && (
+          {!stackVideo && slideMedia && (
             <Box
               data-testid="whats-new-slide-video-slot"
               sx={{

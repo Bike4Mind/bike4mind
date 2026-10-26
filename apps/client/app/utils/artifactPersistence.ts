@@ -3,6 +3,8 @@ import { isQuotaExceededError } from './localStorageUtils';
 
 // Track only active persistence operations
 const activePersistenceOps = new Map<string, Promise<void>>();
+// Whole persistArtifacts calls, including blocks still queued behind an earlier one.
+const activePersistenceBatches = new Set<Promise<unknown>>();
 
 // LocalStorage keys
 const ARTIFACT_STORAGE_KEY = 'artifacts';
@@ -41,19 +43,34 @@ export async function checkArtifactExists(artifactId: string): Promise<boolean> 
   }
 }
 
+interface PersistableArtifact {
+  id: string;
+  type: string;
+  title: string;
+  content: string;
+  /** The reply's `<artifact identifier=...>`, stored on the row and used to find it again. */
+  identifier?: string;
+  metadata?: any;
+}
+
+/**
+ * The newest session row of `type` carrying `identifier`, or null. The server also matches rows
+ * written before `identifier` was a field through their `metadata.originalIdentifier`.
+ */
+async function findArtifactIdByIdentifier(type: string, identifier: string, sessionId: string): Promise<string | null> {
+  const response = await api.get(`/api/artifacts`, {
+    params: { sessionId, type, identifier, sortBy: 'createdAt', sortOrder: 'desc', limit: 1 },
+  });
+  return response.data?.artifacts?.[0]?.id ?? null;
+}
+
 /**
  * Persists an AI-generated artifact to the database
- * For React artifacts: creates v2+ versions when a new React artifact is generated in the same session
- * For other artifact types: always creates a new v1 artifact
+ * For React artifacts: a new version of the session's React row with the same identifier, if any
+ * For everything else (and React without an identifier): always creates a new v1 artifact
  */
 export async function persistArtifact(
-  artifact: {
-    id: string;
-    type: string;
-    title: string;
-    content: string;
-    metadata?: any;
-  },
+  artifact: PersistableArtifact,
   sessionId?: string,
   skipExistenceCheck = false
 ): Promise<void> {
@@ -73,24 +90,13 @@ export async function persistArtifact(
         }
       }
 
-      // Check for existing React artifacts in the session to create versions
-      // Only do this for React artifacts since they are typically iterated on
+      // Only React artifacts are iterated on as versions, and only under the same identifier: any
+      // other React artifact in the session is a different component, not an earlier version.
       let existingArtifactId: string | null = null;
-      if (sessionId && artifact.type === 'react') {
+      if (sessionId && artifact.type === 'react' && artifact.identifier) {
         try {
-          const response = await api.get(`/api/artifacts`, {
-            params: {
-              sessionId,
-              type: 'react',
-              sortBy: 'createdAt',
-              sortOrder: 'desc',
-              limit: 1, // Get the most recent React artifact
-            },
-          });
-
-          const existingArtifacts = response.data?.artifacts || [];
-          if (existingArtifacts.length > 0) {
-            existingArtifactId = existingArtifacts[0].id;
+          existingArtifactId = await findExistingArtifactId('react', artifact.identifier, sessionId);
+          if (existingArtifactId) {
             console.log(`📦 [ARTIFACTS] Found existing React artifact in session: ${existingArtifactId}`);
           }
         } catch (error) {
@@ -152,6 +158,7 @@ export async function persistArtifact(
         tags: ['ai-generated'],
         sessionId: sessionId,
         ...(sourceQuestId ? { sourceQuestId } : {}),
+        ...(artifact.identifier ? { identifier: artifact.identifier } : {}),
         metadata: {
           ...artifact.metadata,
           aiGenerated: true,
@@ -174,26 +181,40 @@ export async function persistArtifact(
 }
 
 /**
- * Persists multiple artifacts from an AI response
+ * Persists multiple artifacts from an AI response, given in document order.
+ *
+ * Artifacts sharing an identifier persist one after another, in that order, so a later block
+ * versions the row an earlier one created instead of racing it to the lookup. The rest run in
+ * parallel.
  */
 export async function persistArtifacts(
-  artifacts: Array<{
-    id: string;
-    type: string;
-    title: string;
-    content: string;
-    metadata?: any;
-  }>,
+  artifacts: PersistableArtifact[],
   sessionId?: string,
   skipExistenceCheck = true
 ): Promise<void> {
-  const persistPromises = artifacts.map(artifact => persistArtifact(artifact, sessionId, skipExistenceCheck));
-  await Promise.allSettled(persistPromises);
+  const chains = new Map<string, Promise<void>>();
+  const persistPromises = artifacts.map(artifact => {
+    const persist = () => persistArtifact(artifact, sessionId, skipExistenceCheck);
+    if (!artifact.identifier) {
+      return persist();
+    }
+    const previous = chains.get(artifact.identifier) ?? Promise.resolve();
+    // Runs even when the earlier block failed; it then creates the row itself.
+    const next = previous.then(persist, persist);
+    chains.set(artifact.identifier, next);
+    return next;
+  });
+  const batch = Promise.allSettled(persistPromises);
+  activePersistenceBatches.add(batch);
+  try {
+    await batch;
+  } finally {
+    activePersistenceBatches.delete(batch);
+  }
 }
 
 /**
- * Find existing artifact by querying the session's artifacts
- * This searches the database for artifacts matching the type and identifier
+ * Find the session's artifact for a reply's `type` + `identifier`, newest first.
  */
 export async function findExistingArtifactId(
   type: string,
@@ -201,11 +222,17 @@ export async function findExistingArtifactId(
   sessionId?: string
 ): Promise<string | null> {
   try {
-    // Query artifacts by session and type
-    if (!sessionId) {
+    if (!sessionId || !identifier) {
       return null;
     }
 
+    const byIdentifier = await findArtifactIdByIdentifier(type, identifier, sessionId);
+    if (byIdentifier) {
+      return byIdentifier;
+    }
+
+    // A legacy row with neither the field nor metadata.originalIdentifier carries the identifier
+    // only as an id segment.
     const response = await api.get(`/api/artifacts`, {
       params: {
         sessionId,
@@ -216,18 +243,28 @@ export async function findExistingArtifactId(
       },
     });
 
-    const artifacts = response.data?.artifacts || [];
+    const artifacts: unknown[] = Array.isArray(response.data?.artifacts) ? response.data.artifacts : [];
 
     // Find the artifact that matches our identifier
     // The identifier is embedded in the artifact ID: artifact_{type}_{identifier}_{timestamp}_{index}
-    const matchingArtifact = artifacts.find((artifact: any) => {
-      const idParts = artifact.id.split('_');
-      // artifact ID format: artifact_{type}_{identifier}_{timestamp}_{index}
-      if (idParts.length >= 3) {
-        const artifactIdentifier = idParts[2];
-        return artifactIdentifier === identifier;
+    const matchingArtifact = artifacts.find((artifact): artifact is { id: string } => {
+      if (typeof artifact !== 'object' || artifact === null || !('id' in artifact) || typeof artifact.id !== 'string') {
+        return false;
       }
-      return false;
+      if ('identifier' in artifact && artifact.identifier !== undefined) return false;
+      const metadata = 'metadata' in artifact ? artifact.metadata : undefined;
+      if (
+        typeof metadata === 'object' &&
+        metadata !== null &&
+        'originalIdentifier' in metadata &&
+        metadata.originalIdentifier !== undefined
+      ) {
+        return false;
+      }
+      const prefix = `artifact_${type}_`;
+      if (!artifact.id.startsWith(prefix)) return false;
+      const artifactIdentifier = /^(.+)_\d+_\d+$/.exec(artifact.id.slice(prefix.length))?.[1];
+      return artifactIdentifier === identifier;
     });
 
     return matchingArtifact?.id || null;
@@ -235,6 +272,31 @@ export async function findExistingArtifactId(
     console.warn('Error finding existing artifact:', error);
     return null;
   }
+}
+
+/**
+ * The row a save of `artifactId` belongs on after a PUT to that id found nothing, or null when
+ * the session has none and the caller should create it. A card's id can name no row: it was
+ * minted before the reply was saved, or restored from a stale layout. Its identifier still names
+ * the session's row, and creating one under the dead id would leave a duplicate beside it.
+ */
+export async function findArtifactSaveTarget(
+  artifactId: string,
+  type: string,
+  sessionId?: string
+): Promise<string | null> {
+  // A save right after a reply finishes can beat that reply's own persist to the server.
+  const inFlight = [...activePersistenceBatches, ...activePersistenceOps.values()];
+  if (inFlight.length > 0) {
+    await Promise.allSettled(inFlight);
+    if (await checkArtifactExists(artifactId)) return artifactId;
+  }
+  // Minted as artifact_{type}_{identifier}_{timestamp}_{index}; the identifier may itself hold `_`.
+  const prefix = `artifact_${type}_`;
+  const identifier = artifactId.startsWith(prefix)
+    ? /^(.+)_\d+_\d+$/.exec(artifactId.slice(prefix.length))?.[1]
+    : undefined;
+  return identifier ? findExistingArtifactId(type, identifier, sessionId) : null;
 }
 
 // LocalStorage functions

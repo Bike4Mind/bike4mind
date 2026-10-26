@@ -8,6 +8,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = baseApi()
   .use((req, res, next) => {
@@ -18,6 +19,7 @@ const handler = baseApi()
   })
   .post(
     asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
+      assertAiAccessAllowed(req.user);
       const { user } = req;
       const { id } = req.query;
 

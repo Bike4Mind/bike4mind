@@ -27,6 +27,7 @@ import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrg
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { toPublicMusicGeneration } from '@server/musicGenerations/toPublicMusicGeneration';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const CURSOR_SCOPE = 'v1.music-generations';
 
@@ -56,6 +57,7 @@ const toHttpError = (refusal: Extract<CreateMusicJobResult, { ok: false }>) => {
 const createRouter = nextRouteForContract(createMusicGenerationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/music-generations'),
 }).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
   const request = toDomainRequest(req.validated);
   // As in video-generations: 'studio' is any first-party session, and idempotency keys are scoped per source.

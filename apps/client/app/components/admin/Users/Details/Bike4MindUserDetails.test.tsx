@@ -105,3 +105,29 @@ describe('Bike4MindUserDetails - storage usage', () => {
     expect(progress.className).toContain('MuiLinearProgress-colorDanger');
   });
 });
+
+describe('Bike4MindUserDetails - storage override controls', () => {
+  it('marks legacy custom quotas as overrides and stages an explicit reset', () => {
+    const onFieldChange = vi.fn();
+    renderDetails({ onFieldChange });
+    expect(screen.getByTestId('admin-user-storage-source')).toHaveTextContent('Source: override');
+    fireEvent.click(screen.getByTestId('admin-user-storage-override-reset'));
+    expect(onFieldChange).toHaveBeenCalledWith('storageLimitOverride', null);
+  });
+
+  it('shows the plan quota after an override is cleared', () => {
+    renderDetails({ user: { ...(user as object), storageLimitOverride: null, planStorageLimit: 5000 } });
+    expect(screen.getByTestId('admin-user-storage-source')).toHaveTextContent('Source: plan');
+    expect(screen.getByTestId('admin-user-storage-label')).toHaveTextContent('5 GB');
+    expect(screen.queryByTestId('admin-user-storage-override-reset')).not.toBeInTheDocument();
+  });
+
+  it('stages fractional MB as an override', () => {
+    const onFieldChange = vi.fn();
+    renderDetails({ onFieldChange });
+    fireEvent.change(screen.getByTestId('admin-user-storage-override-input').querySelector('input')!, {
+      target: { value: '250.5' },
+    });
+    expect(onFieldChange).toHaveBeenCalledWith('storageLimitOverride', 250.5);
+  });
+});

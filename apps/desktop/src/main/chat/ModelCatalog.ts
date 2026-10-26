@@ -3,6 +3,7 @@ import type { VideoModel } from '@bike4mind/common';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
 import { parseVideoModels } from './media/videoModels';
 import { supportsReasoningEffort } from './reasoningEffort';
+import { OllamaLocal } from './OllamaLocal';
 
 /**
  * The model list is per-DEPLOYMENT and per-ACCOUNT, never a constant in this client.
@@ -68,20 +69,28 @@ export interface ModelCatalogDeps {
 export class ModelCatalog {
   private cache: { environmentUrl: string; models: ChatModelOption[]; expiresAt: number } | null = null;
 
+  private localCache: { models: ChatModelOption[]; expiresAt: number } | null = null;
+
   /** Separate from `cache` because the two views are read on different paths; see listImageModels. */
   private imageCache: { environmentUrl: string; models: string[]; expiresAt: number } | null = null;
 
   private videoCache: { environmentUrl: string; models: VideoModel[]; expiresAt: number } | null = null;
 
-  constructor(private readonly deps: ModelCatalogDeps) {}
+  constructor(
+    private readonly deps: ModelCatalogDeps,
+    private readonly local = new OllamaLocal()
+  ) {}
 
   /** Cached models for the current environment, without a round trip. Null when nothing is cached. */
   cached(): ChatModelOption[] | null {
     const entry = this.cache;
+    if (!this.deps.getApiClient()) {
+      return this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : null;
+    }
     if (!entry) return null;
     if (entry.environmentUrl !== this.deps.getEnvironmentUrl()) return null;
     if (Date.now() >= entry.expiresAt) return null;
-    return entry.models;
+    return this.mergeLocal(entry.models);
   }
 
   /** Retain a known thinking preference through a failed refresh, without offering stale models. */
@@ -92,13 +101,14 @@ export class ModelCatalog {
   }
 
   async list(force = false): Promise<ChatModelCatalog> {
-    if (!force) {
+    const local = await this.listLocal(force);
+    if (!force && this.deps.getApiClient()) {
       const hit = this.cached();
       if (hit) return { models: hit };
     }
 
     const api = this.deps.getApiClient();
-    if (!api) return { models: [], error: 'Sign in to see the models this server offers.' };
+    if (!api) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
 
     let models: ChatModelOption[];
     try {
@@ -107,13 +117,15 @@ export class ModelCatalog {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`CHAT: model list lookup failed: ${message}`);
-      return { models: [], error: 'Could not load the model list from this server.' };
+      return local.length
+        ? { models: local }
+        : { models: [], error: 'Could not load the model list from this server.' };
     }
 
     if (models.length === 0) {
       this.cache = null;
       this.deps.logger.warn('CHAT: server returned no tool-capable text models');
-      return { models: [] };
+      return { models: local };
     }
 
     this.cache = {
@@ -122,7 +134,20 @@ export class ModelCatalog {
       expiresAt: Date.now() + CACHE_TTL_MS,
     };
     this.deps.logger.debug(`CHAT: ${models.length} model(s) available`);
-    return { models };
+    return { models: this.mergeLocal(models) };
+  }
+
+  /** Device discovery never depends on the configured server or account. */
+  async listLocal(force = false): Promise<ChatModelOption[]> {
+    if (force || !this.localCache || Date.now() >= this.localCache.expiresAt) {
+      this.localCache = { models: await this.local.models(), expiresAt: Date.now() + 5_000 };
+    }
+    return this.localCache.models;
+  }
+
+  private mergeLocal(hosted: ChatModelOption[]): ChatModelOption[] {
+    const local = this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : [];
+    return [...hosted.filter(model => !local.some(candidate => candidate.id === model.id)), ...local];
   }
 
   /**
@@ -221,6 +246,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       // Decided here rather than read off the wire: the catalog does not report it, and the
       // renderer has to disable the effort picker on a model that would ignore the field.
       supportsReasoningEffort: supportsReasoningEffort(model.id as string),
+      supportsTools: true,
       ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
     }));
 }

@@ -28,6 +28,7 @@ import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrg
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const CURSOR_SCOPE = 'v1.video-generations';
 
@@ -76,6 +77,7 @@ const toHttpError = (refusal: Extract<CreateVideoJobResult, { ok: false }>) =>
 const createRouter = nextRouteForContract(createVideoGenerationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/video-generations'),
 }).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
   const request = toDomainRequest(req.validated);
   // 'studio' means any first-party session (the SPA), not only the Studio page; an API key is the public API.

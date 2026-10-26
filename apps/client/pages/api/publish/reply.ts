@@ -127,6 +127,7 @@ const handler = baseApi().post(async (req, res) => {
   const settled = await settlePublication({
     ownerId: userId,
     isAdmin: req.user.isAdmin,
+    ownerCreatedAt: req.user.createdAt,
     source: { kind: 'reply', sessionId: body.sessionId, messageId: body.messageId },
     tier,
     scopeId,

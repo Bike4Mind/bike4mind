@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { registerUser, registerViaOTC, RegisterUserParameters } from './register';
 import { BadRequestError } from '@bike4mind/utils';
-import { CURRENT_POLICY_VERSION, RegInviteStatusType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import {
+  CURRENT_POLICY_VERSION,
+  RegInviteStatusType,
+  PENDING_FREE_CREDITS_TAG,
+  RESERVED_USERNAME_MESSAGE,
+} from '@bike4mind/common';
 import * as creditService from '../creditService';
 
 const baseParams: RegisterUserParameters = {
@@ -79,6 +84,28 @@ describe('registerUser', () => {
     };
   });
 
+  it.each([
+    [null, 1000, null],
+    [1000, 1000, null],
+    [2500, 2500, 2500],
+  ])('resolves invite quota %s through the shared allocator', async (startingStorage, limit, override) => {
+    mockInvite.startingStorage = startingStorage;
+    const result = await registerUser(baseParams, mockAdapters);
+    expect(result.storageLimit).toBe(limit);
+    expect(result.storageLimitOverride).toBe(override);
+  });
+
+  it('keeps matched subscriber priority over an invite allocation', async () => {
+    mockInvite.email = baseParams.email;
+    mockInvite.startingStorage = 2500;
+    mockAdapters.db.subscribers = {
+      findByEmail: vi.fn().mockResolvedValue({ inviteCode: baseParams.inviteCode, startingStorage: null }),
+    };
+    const result = await registerUser(baseParams, mockAdapters);
+    expect(result.storageLimit).toBe(1000);
+    expect(result.storageLimitOverride).toBeNull();
+  });
+
   it('registers a new user with valid data and invite, deferring credits until email is proven', async () => {
     const result = await registerUser(baseParams, mockAdapters);
     expect(result).toMatchObject({ username: baseParams.username, email: baseParams.email, name: baseParams.name });
@@ -108,27 +135,79 @@ describe('registerUser', () => {
     expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
   });
 
+  describe('reserved username prefix', () => {
+    const withSyntheticDomains = (domains: string) => {
+      const base = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation((name: string) =>
+        name === 'syntheticUserEmailDomains' ? Promise.resolve({ settingValue: domains }) : base(name)
+      );
+    };
+
+    it.each([
+      'persona-alice',
+      'Persona-Alice',
+      '  PERSONA-alice',
+      '\u0440\u0435rs\u043ena-alice',
+      '\uff50ersona-alice',
+    ])('rejects %j for an ordinary signup with the reserved-name message', async username => {
+      const error = await registerUser({ ...baseParams, username }, mockAdapters).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect((error as Error).message).toBe(RESERVED_USERNAME_MESSAGE);
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects it when the email is on a domain that is not configured as synthetic', async () => {
+      withSyntheticDomains('test.example');
+      await expect(
+        registerUser({ ...baseParams, username: 'persona-alice', email: 'alice@example.com' }, mockAdapters)
+      ).rejects.toThrow(RESERVED_USERNAME_MESSAGE);
+    });
+
+    it('allows it when the proven email is on a configured synthetic test domain', async () => {
+      withSyntheticDomains('@Test.Example, qa.example.org');
+      const result = await registerUser(
+        { ...baseParams, username: 'persona-alice', email: 'alice@sub.test.example' },
+        mockAdapters
+      );
+      expect(result.username).toBe('persona-alice');
+    });
+
+    it('rejects it when the settings read fails', async () => {
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation((name: string) =>
+        name === 'syntheticUserEmailDomains' ? Promise.reject(new Error('db down')) : Promise.resolve(null)
+      );
+      await expect(
+        registerUser({ ...baseParams, username: 'persona-alice', email: 'alice@test.example' }, mockAdapters)
+      ).rejects.toThrow(RESERVED_USERNAME_MESSAGE);
+    });
+
+    it('leaves names that only contain the word alone', async () => {
+      const result = await registerUser({ ...baseParams, username: 'personal-site' }, mockAdapters);
+      expect(result.username).toBe('personal-site');
+    });
+  });
+
   // --- disposable-email blocking ---
   describe('disposable-email blocking', () => {
     it('rejects registration with a disposable-domain email', async () => {
       const params = { ...baseParams, email: 'burner@mailinator.com' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
       expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
     });
 
     it('rejects a subdomain of a disposable domain', async () => {
       const params = { ...baseParams, email: 'burner@anything.mailinator.com' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
     });
 
     it('rejects disposable domains regardless of email casing', async () => {
       const params = { ...baseParams, email: 'Burner@MAILINATOR.COM' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
     });
 
     it('rejects the fully-qualified (trailing-dot) disposable form', async () => {
       const params = { ...baseParams, email: 'burner@mailinator.com.' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
     });
 
     it('allows a disposable email when blockDisposableEmails is switched OFF', async () => {
@@ -140,6 +219,17 @@ describe('registerUser', () => {
       });
       const params = { ...baseParams, email: 'burner@mailinator.com' };
       await expect(registerUser(params, mockAdapters)).resolves.toBeDefined();
+    });
+
+    it('rejects an email on an admin-blocked domain even with blockDisposableEmails OFF', async () => {
+      mockAdapters.db.adminSettings.findBySettingName = vi.fn().mockImplementation((name: string) => {
+        if (name === 'blockedEmailDomains') return Promise.resolve({ settingValue: ['kashre.com'] });
+        if (name === 'blockDisposableEmails') return Promise.resolve({ settingValue: 'false' });
+        return Promise.resolve(null);
+      });
+      const params = { ...baseParams, email: 'x@np.kashre.com' };
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
     });
 
     it('rejects a malformed email address', async () => {
@@ -419,7 +509,7 @@ describe('registerUser', () => {
       expect(result).toMatchObject({ email: noInviteParams.email });
     });
 
-    it('allows registration when invite check is skipped (OTC — email already proven)', async () => {
+    it('allows registration when invite check is skipped (OTC \u2014 email already proven)', async () => {
       setAllowOpenRegistration('false');
       const result = await registerUser(noInviteParams, { ...mockAdapters, skipInviteCheck: true });
       expect(result).toMatchObject({ email: noInviteParams.email });

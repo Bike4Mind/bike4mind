@@ -32,6 +32,14 @@ function escapeSeatbeltPath(p: string): string {
   return p.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+const MDNS_RESPONDER_SOCKET = '/private/var/run/mDNSResponder';
+
+function assertPort(port: number): void {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid sandbox proxy port: ${port}`);
+  }
+}
+
 export class SeatbeltRuntime implements SandboxRuntime {
   readonly platform: SandboxPlatform = 'darwin';
   readonly name = 'seatbelt';
@@ -70,14 +78,21 @@ export class SeatbeltRuntime implements SandboxRuntime {
     // unix-socket re-allows below run AFTER it (Seatbelt is last-match-wins), so the
     // NET effect is an IP-only denial. This matches Linux, whose --unshare-net
     // isolates IP but not AF_UNIX.
-    if (!options.networkEnabled) {
-      lines.push('; Deny all network, then re-allow local unix sockets (net: IP-only denial)');
-      lines.push('(deny network*)');
-      lines.push('(allow network-outbound (remote unix-socket))');
-      lines.push('(allow network-inbound (local unix-socket))');
-      lines.push('(allow network-bind (local unix-socket))');
-      lines.push('');
+    lines.push('; Deny all network, then re-allow local unix sockets (net: IP-only denial)');
+    lines.push('(deny network*)');
+    lines.push('(allow network-outbound (remote unix-socket))');
+    lines.push('(allow network-inbound (local unix-socket))');
+    lines.push('(allow network-bind (local unix-socket))');
+    if (options.networkEnabled && options.proxyPort !== undefined) {
+      assertPort(options.proxyPort);
+      // The proxy resolves hostnames, so clients need no local DNS.
+      lines.push('; Allow loopback only (reaches the filtering proxy); no local DNS resolution');
+      lines.push('(allow network-bind (local ip "localhost:*"))');
+      lines.push('(allow network-inbound (local ip "localhost:*"))');
+      lines.push('(allow network-outbound (remote ip "localhost:*"))');
+      lines.push(`(deny network-outbound (remote unix-socket (path-literal "${MDNS_RESPONDER_SOCKET}")))`);
     }
+    lines.push('');
 
     // Filesystem write restrictions
     if (filesystemConfig.writeOnlyToWorkingDir) {

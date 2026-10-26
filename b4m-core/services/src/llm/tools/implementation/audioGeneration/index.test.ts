@@ -23,12 +23,21 @@ vi.mock('../../../../apiKeyService', async importOriginal => {
   return { ...actual, getEffectiveApiKey: mockGetEffectiveApiKey };
 });
 
+// Pass-through capacity gate by default; the gate itself is covered in providerCapacity's own tests.
+const mockRunWithCapacity = vi.fn();
+vi.mock('../../../../providerCapacity', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../providerCapacity')>();
+  return { ...actual, runElevenLabsWithCapacity: mockRunWithCapacity };
+});
+
 vi.mock('../../helpers/persistGeneratedFile', () => ({
   saveGeneratedAssetFromTool: mockSaveAsset,
 }));
 
 // Imported after the mocks so the tool picks up the mocked dependencies.
 const { audioGenerationTool } = await import('./index');
+const { aiSoundService } = await import('@bike4mind/utils');
+const { ProviderBusyError } = await import('../../../../providerCapacity');
 
 function createFakeContext(): ToolContext & {
   onStart: ReturnType<typeof vi.fn>;
@@ -64,6 +73,11 @@ describe('audio_generation tool', () => {
     mockGenerate.mockReset();
     mockGetEffectiveApiKey.mockReset();
     mockSaveAsset.mockClear();
+    mockRunWithCapacity
+      .mockReset()
+      .mockImplementation((_args: unknown, attempt: (call: { timeoutMs: number }) => unknown) =>
+        attempt({ timeoutMs: 45_000 })
+      );
     mockSynthesize.mockResolvedValue({
       audio: Buffer.from('fake-mp3'),
       contentType: 'audio/mpeg',
@@ -127,6 +141,32 @@ describe('audio_generation tool', () => {
       paths: ['stored-key.mp3'],
     });
     expect(result).toBe('Successfully generated sound effect');
+    expect(mockRunWithCapacity).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'sound', db: context.db }),
+      expect.any(Function)
+    );
+  });
+
+  it('forwards the capacity-granted timeout into the sound generator factory', async () => {
+    mockRunWithCapacity.mockImplementation((_args: unknown, attempt: (call: { timeoutMs: number }) => unknown) =>
+      attempt({ timeoutMs: 12_345 })
+    );
+    const context = createFakeContext();
+
+    await run(context, { kind: 'sound_effect', text: 'dog barking' });
+
+    expect(aiSoundService).toHaveBeenCalledWith('elevenlabs', 'provider-key', context.logger, { timeoutMs: 12_345 });
+  });
+
+  it('tells the model to retry later, without billing, when the sound-effects provider is at capacity', async () => {
+    mockRunWithCapacity.mockRejectedValue(new ProviderBusyError('elevenlabs', 'slots_exhausted', 5));
+    const context = createFakeContext();
+
+    const result = await run(context, { kind: 'sound_effect', text: 'dog barking' });
+
+    expect(result).toBe('Error: the elevenlabs sound-effects service is busy right now. Try again in about 5 seconds.');
+    expect(mockGenerate).not.toHaveBeenCalled();
+    expect(context.onFinish).not.toHaveBeenCalled();
   });
 
   it('rejects empty text without gating credits or calling a provider', async () => {

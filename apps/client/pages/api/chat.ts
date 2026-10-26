@@ -15,6 +15,7 @@ import {
 import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import {
   getDefaultChatCompletionOptions,
@@ -214,6 +215,7 @@ const handler = nextRouteForContract(chatContract, {
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...turnAuth,
+      adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
     });
   } catch (error) {
     // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it

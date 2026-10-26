@@ -1,5 +1,6 @@
-import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyScopeValue, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 
 /**
  * Env var naming the scopes whose route gates are still being rolled out, e.g.
@@ -51,17 +52,19 @@ const UNSTAGEABLE_SCOPES: ReadonlySet<string> = new Set<string>([ApiKeyScope.ADM
  * A key with no scopes at all is not confined - that is a legacy broad key, and
  * narrowing it here would be a silent revocation rather than a gate.
  */
-function isConfinedKey(heldScopes: ApiKeyScope[] | undefined): boolean {
+function isConfinedKey(heldScopes: readonly ApiKeyScopeValue[] | undefined): boolean {
   return !!heldScopes?.some(scope => CONFINED_SCOPES.has(scope));
 }
 
-const ALL_SCOPE_VALUES: ReadonlySet<string> = new Set<string>(Object.values(ApiKeyScope));
+// Built-in plus contributed values. A contributed scope is never confined or unstageable: both sets
+// above are built from built-in values only.
+const ALL_SCOPE_VALUES: ReadonlySet<string> = ALL_KNOWN_API_KEY_SCOPE_VALUES;
 
 export type ScopeGateDecision =
   /** The key holds a required scope, or the route declares none and the key is not confined. */
   | { outcome: 'allow' }
   /** No required scope held, and every one of them is staged - let it through, but say so. */
-  | { outcome: 'stagedAllow'; stagedScopes: ApiKeyScope[] }
+  | { outcome: 'stagedAllow'; stagedScopes: ApiKeyScopeValue[] }
   /** No required scope held. */
   | { outcome: 'deny' };
 
@@ -120,10 +123,10 @@ export function parseStagedScopes(raw: string | undefined): {
  * rollout window cannot admit one to a route it has no business on.
  */
 export function decideScopeGate(
-  requiredScopes: ApiKeyScope[] | undefined,
-  heldScopes: ApiKeyScope[] | undefined,
+  requiredScopes: ApiKeyScopeValue[] | undefined,
+  heldScopes: readonly ApiKeyScopeValue[] | undefined,
   staged: ReadonlySet<string>,
-  alsoRequiredScopes?: ApiKeyScope[]
+  alsoRequiredScopes?: ApiKeyScopeValue[]
 ): ScopeGateDecision {
   if (alsoRequiredScopes?.some(scope => !heldScopes?.includes(scope))) {
     return { outcome: 'deny' };
@@ -142,7 +145,7 @@ export function decideScopeGate(
 }
 
 export type ScopedRequest = {
-  apiKeyInfo?: { scopes?: ApiKeyScope[] };
+  apiKeyInfo?: { scopes?: ApiKeyScopeValue[] };
 };
 
 /**
@@ -158,13 +161,13 @@ export type ScopedRequest = {
  * still has `apiKeyInfo` set, and letting a missing array through would fail open for exactly
  * the caller this gate exists to check.
  */
-export function holdsApiKeyScope(req: ScopedRequest, required: ApiKeyScope[]): boolean {
+export function holdsApiKeyScope(req: ScopedRequest, required: ApiKeyScopeValue[]): boolean {
   if (!req.apiKeyInfo) return true;
   const held = req.apiKeyInfo.scopes ?? [];
   const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
   return decideScopeGate(required, held, staged).outcome !== 'deny';
 }
 
-export function assertApiKeyScope(req: ScopedRequest, required: ApiKeyScope[], message: string): void {
+export function assertApiKeyScope(req: ScopedRequest, required: ApiKeyScopeValue[], message: string): void {
   if (!holdsApiKeyScope(req, required)) throw new ForbiddenError(message);
 }

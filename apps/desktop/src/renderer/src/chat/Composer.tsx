@@ -612,8 +612,9 @@ export function Composer({
         />
       </Box>
 
-      {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses. */}
-      <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, py: 1, gap: 1 }}>
+      {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses.
+          The window's last row, so a wider gap below than above. */}
+      <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, pt: 1, pb: 2, gap: 1 }}>
         {/* No correction of its own: its box goes on the content edge like every other control
             in the column, and the '+' rides inside it. Pulling the box left so the glyph alone
             sat on the line is what used to send its hover surface outside the column. */}

@@ -11,7 +11,13 @@
  * Auth mode, scopes and body validation all come from `startAgentExecutionContract`.
  */
 
-import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, BadGatewayError } from '@bike4mind/server-utils/utils/errors';
+import {
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  BadGatewayError,
+} from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, startAgentExecutionContract } from '@bike4mind/common';
@@ -21,6 +27,7 @@ import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(startAgentExecutionContract, {
   rateLimit: rateLimit({
@@ -28,6 +35,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const body = req.validated;
 
   // Same model-resolution ladder as POST /api/chat: an explicit model wins, else the

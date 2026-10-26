@@ -13,6 +13,7 @@ import { ForbiddenError, BadRequestError, getSettingsByNames } from '@bike4mind/
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { assertSystemPromptGenerationAllowed } from '@client/server/agents/systemPromptRateLimit';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 interface GenerateSystemPromptResponse {
   success: boolean;
@@ -93,6 +94,7 @@ const createAgentMetadataForPrompt = (agent: IAgent): string => {
 const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{ id: string }, GenerateSystemPromptResponse, {}>
 >(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { id } = req.query;
   const userId = req.user!.id;
 

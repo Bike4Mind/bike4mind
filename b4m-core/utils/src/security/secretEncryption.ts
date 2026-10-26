@@ -100,6 +100,9 @@ export function decryptSecret(encrypted: string, key: string, context?: string):
   return decrypted;
 }
 
+/** Regex source (case-insensitive) matching the at-rest ciphertext format. */
+export const ciphertextPatternSource = `^(?:${ciphertextVersionPrefix})?[a-f0-9]{32}:[a-f0-9]{32}:[a-f0-9]+$`;
+
 /**
  * Checks if a string appears to be in encrypted format.
  *
@@ -112,7 +115,7 @@ export function isEncrypted(value: string): boolean {
   }
 
   // Check if value matches encrypted format: iv(32 hex):authTag(32 hex):data(hex)
-  const pattern = new RegExp(`^(?:${ciphertextVersionPrefix})?[a-f0-9]{32}:[a-f0-9]{32}:[a-f0-9]+$`, 'i');
+  const pattern = new RegExp(ciphertextPatternSource, 'i');
   return pattern.test(value);
 }
 

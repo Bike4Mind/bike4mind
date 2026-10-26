@@ -32,6 +32,7 @@ import {
 } from '@bike4mind/voice';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
@@ -127,8 +128,9 @@ async function runFullPipeline(
   // the pipeline so it offers them to the model and we can echo the calls back.
   clientTools: Record<string, ToolDefinition>
 ): Promise<string> {
-  const user = await userRepository.findById(sessionCtx.userId);
-  if (!user) throw new Error(`Voice v2: user not found for id ${sessionCtx.userId}`);
+  const storedUser = await userRepository.findById(sessionCtx.userId);
+  if (!storedUser) throw new Error(`Voice v2: user not found for id ${sessionCtx.userId}`);
+  const user = sessionCtx.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },

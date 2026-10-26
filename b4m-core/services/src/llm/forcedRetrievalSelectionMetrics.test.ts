@@ -18,6 +18,7 @@ import {
   FORCED_RETRIEVAL_BY_NAME_CUT_METRIC,
   recordForcedRetrievalCutMetrics,
 } from './forcedRetrievalSelectionMetrics';
+import { DATA_LAKE_RETRIEVAL_NAMESPACE } from '../dataLakeService/scanTruncationMetrics';
 
 type Datum = { MetricName: string; Value: number; Unit: string; Dimensions: { Name: string; Value: string }[] };
 const sentData = (): Datum[] => send.mock.calls[0][0].input.MetricData;
@@ -37,6 +38,23 @@ describe('forcedRetrievalSelectionMetrics literals', () => {
       expect(dashboard).toContain(`'${name}'`);
     }
   );
+
+  // An alarm on a name nobody publishes sits in INSUFFICIENT_DATA and never fires.
+  it('infra/alarms.ts alarms on the by-name share for the Stage-only set', () => {
+    const alarms = readFileSync(new URL('../../../../infra/alarms.ts', import.meta.url), 'utf8');
+    const start = alarms.indexOf('-forced-retrieval-by-name-cut`');
+    expect(start).toBeGreaterThan(-1);
+    const end = alarms.indexOf('new aws.cloudwatch', start);
+    const block = alarms.slice(start, end === -1 ? undefined : end);
+
+    expect(block).toContain(`metricName: '${FORCED_RETRIEVAL_BY_NAME_CUT_METRIC}'`);
+    expect(block).toContain(`namespace: '${DATA_LAKE_RETRIEVAL_NAMESPACE}'`);
+    expect(block).toContain('dimensions: { Stage: $app.stage }');
+    expect(block).not.toMatch(/Reason\s*:/);
+    expect(block).toContain("expression: 'IF(turns >= 2, byName / turns, 0)'");
+    expect(block).toContain('threshold: 0.5');
+    expect(block).toContain('alarmActions: [dlqAlarmTopic.arn]');
+  });
 });
 
 describe('recordForcedRetrievalCutMetrics', () => {

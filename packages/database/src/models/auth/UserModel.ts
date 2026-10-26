@@ -22,6 +22,7 @@ import { CountersSchema } from '../infra/ops/CounterModel';
 import BaseRepository from '@bike4mind/db-core';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
+import { NETWORK_META_FIELDS } from './networkMetaFields';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -764,9 +765,9 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
-   * Transition a user's moderation escalation state. When moving to `suspended`,
-   * also mirrors `isModerated: true` so legacy admin surfaces reflect the suspension; any
-   * non-suspended status clears that mirror. `throttledUntil` is set only for `throttled`.
+   * Transition a user's moderation escalation state. `throttledUntil` is set only for `throttled`.
+   * Never touches `isModerated`: that is the admin's independent AI-only block, and a status change
+   * (a throttle, a lifted suspension) must not silently undo it.
    */
   async setModerationStatus(
     userId: string,
@@ -780,7 +781,6 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'moderation.status': status,
           'moderation.statusChangedAt': new Date(),
           'moderation.throttledUntil': status === 'throttled' ? (options?.throttledUntil ?? null) : null,
-          isModerated: status === 'suspended',
         },
       },
       { new: true }
@@ -834,6 +834,14 @@ const UserAcquisitionSchema = new Schema(
   { _id: false }
 );
 
+const SignupMetaSchema = new Schema(
+  {
+    ...NETWORK_META_FIELDS,
+    capturedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 export const UserSchema = new Schema<IUserDocument, IUserModel>(
   {
     username: { type: String, required: true, unique: true },
@@ -850,7 +858,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     hasUsablePassword: { type: Boolean, default: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
-    storageLimit: { type: Number, default: 1000 }, // MBs
+    storageLimit: { type: Number, default: 1000 }, // Decimal MB
+    storageLimitOverride: { type: Number },
+    planStorageLimit: { type: Number },
     currentStorageSize: { type: Number, default: 0 }, // Bytes
     currentCredits: { type: Number, default: 0 },
     // Invite-resolved credits awaiting proof of email ownership; paired with
@@ -1097,6 +1107,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
 
     // Written once at signup, consent-gated - see IUser.acquisition.
     acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
+    // Written once at signup - see IUser.signupMeta.
+    signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },

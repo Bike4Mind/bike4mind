@@ -151,6 +151,7 @@ re-deciding per endpoint:
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
 | Model id unknown or not available to the caller | `400` | `unknown_model` |
+| Assistant prefill sent for a model that does not support it | `400` | `assistant_prefill_unsupported` |
 | Tool search server tool, `tool_reference` or tool search block sent for a model that cannot serve it on this route | `400` | `tool_search_unsupported` |
 | Every tool is `defer_loading: true` and no tool search server tool is sent (native tool search models only) | `400` | `all_tools_deferred` |
 | A deferred tool also carries `cache_control` (native tool search models only) | `400` | `deferred_tool_cache_control` |

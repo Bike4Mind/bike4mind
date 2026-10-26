@@ -4,7 +4,7 @@ import {
   ApiKeyCapPool,
   ApiKeyStoredSecret,
   ApiKeyStatus,
-  ApiKeyScope,
+  isWellFormedApiKeyScope,
   CreditHolderType,
   IEmbedBranding,
   IUserApiKeyDocument,
@@ -279,7 +279,15 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     keyHash: { type: String },
     keyDigest: { type: String },
     keyPrefix: { type: String, required: true, unique: true },
-    scopes: [{ type: String, enum: Object.values(ApiKeyScope), required: true }],
+    // Shape only: which values are offered is the app's merged catalog, which a cron or other process
+    // without contributions loaded cannot see, and an enum here would fail its re-save of a stored key.
+    scopes: [
+      {
+        type: String,
+        required: true,
+        validate: { validator: isWellFormedApiKeyScope, message: 'Malformed API key scope: {VALUE}' },
+      },
+    ],
     status: { type: String, enum: Object.values(ApiKeyStatus), default: ApiKeyStatus.ACTIVE },
     expiresAt: { type: Date },
     lastUsedAt: { type: Date },
