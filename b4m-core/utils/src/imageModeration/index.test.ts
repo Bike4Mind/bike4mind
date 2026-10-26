@@ -299,7 +299,7 @@ describe('RekognitionImageModerationService.checkImage', () => {
   describe('images over the provider dimension limit', () => {
     it('downscales a byte-small image taller than 10000px before scanning it', async () => {
       const { Jimp } = await import('jimp');
-      // Solid color: a few KB on disk, far under the byte budget, 21.8 MP so under the bomb guard.
+      // Solid color: about 100 KB on disk, far under the byte budget, 21.8 MP so under the bomb guard.
       const tall = Buffer.from(
         await new Jimp({ width: 1960, height: 11139, color: 0xff0000ff }).getBuffer('image/png')
       );
@@ -335,10 +335,10 @@ describe('RekognitionImageModerationService.checkImage', () => {
   });
 
   describe('pixel-bomb guard', () => {
-    // A valid PNG header declaring width x height, padded past the inline threshold so
-    // fitForInlineDetection reaches the decode branch. image-size reads the IHDR without
+    // A valid PNG header declaring width x height, padded past the inline threshold (unless pad is
+    // false) so fitForInlineDetection reaches the decode branch. image-size reads the IHDR without
     // decoding, standing in for a compressible file that declares a huge canvas.
-    function oversizedHugeDimsPng(width: number, height: number): Buffer {
+    function oversizedHugeDimsPng(width: number, height: number, pad = true): Buffer {
       const head = Buffer.alloc(33);
       head.write('89504e470d0a1a0a', 0, 'hex');
       head.writeUInt32BE(13, 8);
@@ -347,7 +347,7 @@ describe('RekognitionImageModerationService.checkImage', () => {
       head.writeUInt32BE(height, 20);
       head.writeUInt8(8, 24);
       head.writeUInt8(6, 25);
-      return Buffer.concat([head, Buffer.alloc(MAX_INLINE_IMAGE_BYTES + 1024 - head.length)]);
+      return pad ? Buffer.concat([head, Buffer.alloc(MAX_INLINE_IMAGE_BYTES + 1024 - head.length)]) : head;
     }
 
     it('fails closed on an oversized image declaring more pixels than the decode budget, before any Rekognition call', async () => {
@@ -356,6 +356,15 @@ describe('RekognitionImageModerationService.checkImage', () => {
       const bomb = oversizedHugeDimsPng(20000, 20000); // 4e8 px, well over the 60 MP budget
       await expect(svc.checkImage(bomb, 'image/png')).rejects.toBeInstanceOf(UnsupportedImageFormatError);
       expect(client.send).not.toHaveBeenCalled(); // rejected before the bitmap is materialized
+    });
+
+    it('fails closed on a byte-small image that reaches the decode branch only via the dimension trigger', async () => {
+      const client = fakeClient(async () => ({ ModerationLabels: [] }));
+      const svc = new RekognitionImageModerationService(Logger.globalInstance, client);
+      const bomb = oversizedHugeDimsPng(7000, 12000, false); // 84 MP, tall, header-only so under the byte budget
+      expect(bomb.length).toBeLessThan(MAX_INLINE_IMAGE_BYTES);
+      await expect(svc.checkImage(bomb, 'image/png')).rejects.toBeInstanceOf(UnsupportedImageFormatError);
+      expect(client.send).not.toHaveBeenCalled();
     });
   });
 });
