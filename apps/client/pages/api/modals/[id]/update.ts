@@ -79,6 +79,7 @@ const handler = baseApi().put(
       updateData.images = await cacheExternalImages(updateData.images);
     }
 
+    const before = modal.toObject() as unknown as Record<string, unknown>;
     const updatedModal = await ModalModel.findOneAndUpdate(
       { _id: id },
       { $set: updateData },
@@ -93,7 +94,9 @@ const handler = baseApi().put(
           kind: 'updated',
           id: String(updatedModal._id),
           title: modalAuditTitle(updatedModal),
-          fields: definedKeys(updateData),
+          fields: definedKeys(updateData).filter(
+            key => JSON.stringify(updateData[key as keyof typeof updateData]) !== JSON.stringify(before[key])
+          ),
         },
       ],
       'admin-modals'

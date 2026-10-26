@@ -82,6 +82,7 @@ describe('/api/admin/team-members admin audit', () => {
       details: { fields: ['phone'] },
     });
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('+15550199');
+    expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('+15550100');
   });
 
   it('DELETE records team_member.deleted after the delete', async () => {

@@ -84,6 +84,7 @@ const handler = baseApi().post(
       let created = 0;
       let updated = 0;
       let errors = 0;
+      let categoriesCreated = 0;
 
       for (const row of parsedRows) {
         try {
@@ -106,6 +107,7 @@ const handler = baseApi().post(
                   name: row.categoryName,
                   description: row.categoryDescription || row.categoryName,
                 });
+                categoriesCreated++;
               }
 
               categoryId = category._id.toString();
@@ -143,7 +145,7 @@ const handler = baseApi().post(
         action: 'settings.business_link.imported',
         target: { kind: 'settings', id: 'business-links-import', displayName: 'business links CSV import' },
         summary: `imported business links from CSV (${created} created, ${updated} updated, ${errors} failed)`,
-        details: { created, updated, errors, total: parsedRows.length },
+        details: { created, updated, errors, categoriesCreated, total: parsedRows.length },
       });
 
       return res.json({

@@ -170,4 +170,18 @@ describe('/api/admin/voice-agents admin audit', () => {
       promotedDefaultId: 'agent-2',
     });
   });
+
+  it('DELETE records the removal when promoting the next default agent fails', async () => {
+    h.listAllVoiceAgents.mockResolvedValue([{ id: 'agent-2' }]);
+    h.setDefaultVoiceAgent.mockRejectedValueOnce(new Error('promotion failed'));
+
+    await expect(run(itemHandler, 'DELETE', { query: { id: 'agent-1' } })).rejects.toThrow('promotion failed');
+
+    expect(h.remove).toHaveBeenCalledWith('agent-1');
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.voice_agent.deleted',
+      details: { wasDefault: true },
+    });
+  });
 });

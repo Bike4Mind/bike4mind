@@ -106,6 +106,15 @@ describe('PUT /api/modals/[id] - video', () => {
     expect(audit.mock.calls[0][1].details).toEqual({ via: 'admin-modals', fields: ['video', 'enabled'] });
   });
 
+  it('audits only the fields that changed when the body includes unchanged fields', async () => {
+    mockRefs.modal = { ...mockRefs.modal, enabled: true };
+    const { req, res } = mocks({ title: 'Demo', enabled: false });
+
+    await mockRefs.putHandler!(req, res);
+
+    expect(audit.mock.calls[0][1].details).toEqual({ via: 'admin-modals', fields: ['enabled'] });
+  });
+
   it.each(['database failure', 'concurrent deletion', 'missing modal', 'permission denied'])(
     'records nothing after %s',
     async failure => {
