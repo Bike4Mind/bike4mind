@@ -50,6 +50,7 @@ export const USER_SECRET_FIELDS = [
   'loginRecords',
   'signupMeta',
   'riskScore',
+  'freeCreditClaimEmail',
   'userNotes',
   'stripeCustomerId',
 ] as const;
