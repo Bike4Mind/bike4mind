@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { LocalRuntimeError, ModelNotFoundError, RuntimeUnsupportedError } from './errors';
+import { LocalRuntimeError, ModelNotFoundError, RuntimeConnectionError, RuntimeUnsupportedError } from './errors';
 import { OpenAICompatibleRuntime } from './openaiCompatible';
 import { OllamaRuntime } from './ollama';
 import { closedPort, json, sendJson, startFakeServer, type FakeServer } from './__test__/fakeServer';
@@ -167,6 +167,21 @@ describe('OpenAICompatibleRuntime', () => {
 
   it('throws LocalRuntimeError for an unusable base url', () => {
     expect(() => new OpenAICompatibleRuntime({ baseUrl: 'not a url' })).toThrow(LocalRuntimeError);
+  });
+
+  it('rejects list() when /v1/models answers with an error status', async () => {
+    server = await startFakeServer({ 'GET /v1/models': json({ error: 'nope' }, 401) });
+    await expect(new OpenAICompatibleRuntime({ baseUrl: server.baseUrl }).list()).rejects.toMatchObject({
+      name: 'RuntimeHttpError',
+      status: 401,
+    });
+  });
+
+  it('rejects list() when the port is closed', async () => {
+    const port = await closedPort();
+    await expect(new OpenAICompatibleRuntime({ baseUrl: `http://127.0.0.1:${port}` }).list()).rejects.toBeInstanceOf(
+      RuntimeConnectionError
+    );
   });
 
   it('reports health from /v1/models without throwing', async () => {

@@ -114,7 +114,7 @@ describe('archFromModelInfo', () => {
   it('takes the widest layer of a per-layer head_count, ignoring the zeros of recurrent layers', () => {
     const { modelInfo } = ggufModels['jamba-reasoning-3b'];
     const heads = modelInfo['jamba.attention.head_count_kv'].map(kv => (kv > 0 ? 20 : 0));
-    const info = { ...modelInfo, 'jamba.attention.head_count': heads, 'jamba.attention.key_length': 128 };
+    const info = { ...modelInfo, 'jamba.attention.head_count': heads, 'jamba.attention.key_length': undefined };
     expect(archFromModelInfo(info)?.headCount).toBe(20);
   });
 

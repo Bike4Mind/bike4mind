@@ -454,12 +454,31 @@ describe('OllamaRuntime.pull', () => {
         response.writeHead(200, { 'content-type': 'application/x-ndjson' });
         for (let index = 0; index < 4; index++) {
           response.write(ndjson([{ status: 'verifying sha256 digest' }]));
-          await delay(30);
+          await delay(20);
         }
         response.end(ndjson([{ status: 'success' }]));
       },
     });
-    await expect(runtimeFor(server).pull('qwen3:8b', { idleTimeoutMs: 80 })).resolves.toBeUndefined();
+    await expect(runtimeFor(server).pull('qwen3:8b', { idleTimeoutMs: 500 })).resolves.toBeUndefined();
+  });
+
+  it('treats an infinite idle timeout as no watchdog', async () => {
+    server = await startFakeServer({
+      'POST /api/pull': async (_request, response) => {
+        response.writeHead(200, { 'content-type': 'application/x-ndjson' });
+        response.write(ndjson([{ status: 'pulling manifest' }]));
+        await delay(50);
+        response.end(ndjson([{ status: 'success' }]));
+      },
+    });
+    await expect(runtimeFor(server).pull('qwen3:8b', { idleTimeoutMs: Infinity })).resolves.toBeUndefined();
+  });
+
+  it('rejects with RuntimeProtocolError on a frame that is not JSON', async () => {
+    server = await startFakeServer({
+      'POST /api/pull': (_request, response) => response.end(ndjson([{ status: 'pulling manifest' }]) + '<html>\n'),
+    });
+    await expect(runtimeFor(server).pull('qwen3:8b')).rejects.toBeInstanceOf(RuntimeProtocolError);
   });
 
   it('rejects immediately when the signal is already aborted', async () => {

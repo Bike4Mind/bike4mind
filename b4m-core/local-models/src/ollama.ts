@@ -32,6 +32,7 @@ export const OLLAMA_SHOW_CONCURRENCY = 4;
 
 /** Digest verification of a large blob can be silent for minutes. */
 export const DEFAULT_PULL_IDLE_TIMEOUT_MS = 5 * 60_000;
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 export interface OllamaRuntimeOptions {
   baseUrl?: string;
@@ -252,7 +253,9 @@ export class OllamaRuntime implements LocalRuntime {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const arm = () => {
       clearTimeout(timer);
-      timer = setTimeout(() => idle.abort(idleError), idleTimeoutMs);
+      // Infinity (or a delay past 2^31-1) would otherwise fire after 1ms; treat it as "no watchdog".
+      if (Number.isFinite(idleTimeoutMs))
+        timer = setTimeout(() => idle.abort(idleError), Math.min(idleTimeoutMs, MAX_TIMER_MS));
     };
     const signal = opts.signal ? AbortSignal.any([opts.signal, idle.signal]) : idle.signal;
 
