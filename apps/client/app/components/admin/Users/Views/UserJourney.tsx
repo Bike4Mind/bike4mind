@@ -10,7 +10,7 @@ import CountersDetailsModal from '../Details/CountersDetails';
 import LoginsView from '../LoginsView';
 import MFAStatusBadge from '../MFAStatusBadge';
 import MigrateAgain from '../MigrateAgain';
-import { useFullUserViewModal } from '@client/app/components/admin/Users/Views/FullUserViewModal';
+import { useOpenUserProfile } from '@client/app/components/admin/Users/Profile/useOpenUserProfile';
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
 
 interface UserJourneyProps {
@@ -19,7 +19,7 @@ interface UserJourneyProps {
 }
 
 const UserJourney: React.FC<UserJourneyProps> = ({ user, index }) => {
-  const { setUserId: setFullUserViewUserId } = useFullUserViewModal();
+  const openUserProfile = useOpenUserProfile();
   const counters = useGetUserActivityCounters(user.id);
   const isCreated = !!user.createdAt;
 
@@ -143,7 +143,7 @@ const UserJourney: React.FC<UserJourneyProps> = ({ user, index }) => {
               <MFAStatusBadge user={user} />
             </Stack>
             <Stack direction="row" sx={{ pt: 0.5, flexWrap: 'wrap', gap: 0.5 }}>
-              <Button size="sm" onClick={() => setFullUserViewUserId(user.id)}>
+              <Button size="sm" onClick={() => openUserProfile(user.id)}>
                 Admin
               </Button>
               <AdminProfile userId={user.id} size="sm" />
@@ -212,7 +212,7 @@ const UserJourney: React.FC<UserJourneyProps> = ({ user, index }) => {
           </Grid>
           {/* Action Buttons Group */}
           <Grid xs={3} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Button size="sm" onClick={() => setFullUserViewUserId(user.id)}>
+            <Button size="sm" onClick={() => openUserProfile(user.id)}>
               Admin
             </Button>
             <AdminProfile userId={user.id} size="sm" />

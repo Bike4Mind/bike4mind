@@ -415,10 +415,11 @@ export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
  * Which per-user active-key cap a key counts against. Federated-exchange keys
  * (`createdFrom === 'oauth-exchange'`) are short-lived, at most one per (user, client),
  * and minted by a relying party rather than the user, so they get their own pool
- * instead of eating the user's dashboard/admin key slots. Caps live in
- * b4m-core/services/src/userApiKeyService/create.ts.
+ * instead of eating the user's dashboard/admin key slots. `personal` is the user-billed subset
+ * of `standard`, which the API key trust gate caps for untrusted owners (org-billed keys are not
+ * limited by trust). Caps live in b4m-core/services/src/userApiKeyService/create.ts.
  */
-export type ApiKeyCapPool = 'standard' | 'oauth-exchange';
+export type ApiKeyCapPool = 'standard' | 'personal' | 'oauth-exchange';
 
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;

@@ -102,7 +102,12 @@ async function moderateToolImage(
 export async function processAndStoreImages(
   images: string[],
   context: ToolContext,
-  { model, provider, prompt }: { model: string; provider: string; prompt: string }
+  {
+    model,
+    provider,
+    prompt,
+    request,
+  }: { model: string; provider: string; prompt: string; request: Record<string, unknown> }
 ): Promise<string[]> {
   await context.statusUpdate({}, 'Storing images...');
   // Unique file names for an n>1 batch, which would otherwise share the Date.now() suffix.
@@ -128,7 +133,7 @@ export async function processAndStoreImages(
       await saveGeneratedAssetFromTool(context, {
         bytes: buffer,
         contentType: mimeType,
-        generation: { generator: 'image', provider, modelId: model, jobId: `${batchId}-${index}`, prompt },
+        generation: { generator: 'image', provider, modelId: model, jobId: `${batchId}-${index}`, prompt, request },
       });
 
       return path;
@@ -240,6 +245,23 @@ export const imageGenerationTool: ToolDefinition = {
               ? 'local-image'
               : 'openai';
 
+      // The arguments this call ran with, so a later take can reload them.
+      const request = {
+        model,
+        prompt,
+        n,
+        ...(size && { size }),
+        ...(quality && { quality }),
+        ...(width !== undefined && { width }),
+        ...(height !== undefined && { height }),
+        ...(aspect_ratio && { aspect_ratio }),
+        ...(seed != null && { seed }),
+        ...(safety_tolerance !== undefined && { safety_tolerance }),
+        ...(prompt_upsampling !== undefined && { prompt_upsampling }),
+        ...(output_format && { output_format }),
+        ...(background && { background }),
+      };
+
       // onStart only gates affordability; the charge waits for onFinish.
       const costInput: ImageToolCostInput = { model, n, size, quality };
       await context.onStart?.('image_generation', { ...costInput, prompt });
@@ -257,7 +279,7 @@ export const imageGenerationTool: ToolDefinition = {
           safety_tolerance,
         });
 
-        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt, request });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else if (isBFLModel) {
@@ -283,7 +305,7 @@ export const imageGenerationTool: ToolDefinition = {
             safety_tolerance: safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT,
           });
 
-          const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
+          const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt, request });
 
           return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
         } catch (bflError) {
@@ -334,7 +356,7 @@ export const imageGenerationTool: ToolDefinition = {
           seed: seed,
         });
 
-        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt, request });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else if (isLocalImageModel) {
@@ -361,7 +383,7 @@ export const imageGenerationTool: ToolDefinition = {
           ...resolveImageDimensions({ width, height, size }),
         });
 
-        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt, request });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else {
@@ -397,7 +419,7 @@ export const imageGenerationTool: ToolDefinition = {
           return `Error: ${message}`;
         }
 
-        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt, request });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       }

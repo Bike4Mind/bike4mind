@@ -19,6 +19,7 @@ import {
   type LakeSupersession,
   DocumentDateSource,
   FabFileSourceType,
+  GENERATED_ASSET_LINEAGE_ROLES,
   KnowledgeType,
   countTagPathsByTagSet,
   normalizeTagPrefix,
@@ -4043,6 +4044,20 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
     sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
     sourceMetadata: { type: Schema.Types.Mixed, required: false },
+    // Generated-asset lineage, see IFabFile.derivedFrom. `default: undefined` so files without it store nothing.
+    derivedFrom: {
+      type: [
+        new Schema(
+          {
+            fileId: { type: String, required: true },
+            jobId: { type: String },
+            role: { type: String, enum: GENERATED_ASSET_LINEAGE_ROLES, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     // The document's own vintage plus where it came from (#3048) - see IFabFile's field docs. Both
     // stay unset unless a source actually offered one; there is deliberately no createdAt fallback.
     documentDate: { type: Date },
@@ -4198,6 +4213,13 @@ FabFileSchema.index({ batchId: 1 });
 // findToolGeneratedBySessionId. Partial so only tool-generated rows carry an entry.
 FabFileSchema.index(
   { 'sourceMetadata.sessionId': 1, deletedAt: 1 },
+  { partialFilterExpression: { sourceType: FabFileSourceType.TOOL_GENERATED } }
+);
+
+// Reverse lineage lookup ("what was made from this file"). Partial like the sessionId index above.
+// Pre-built by 20260921235976_ensure-fabfile-derived-from-index.
+FabFileSchema.index(
+  { 'derivedFrom.fileId': 1, deletedAt: 1 },
   { partialFilterExpression: { sourceType: FabFileSourceType.TOOL_GENERATED } }
 );
 

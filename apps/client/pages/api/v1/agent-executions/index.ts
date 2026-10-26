@@ -91,6 +91,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       enableMementos: body.enable_mementos,
       enableLattice: body.enable_lattice,
       enableArtifacts: body.enable_artifacts,
+      confidenceOverrides: body.confidence_overrides,
       // No `routingSource`: that field records which UI signal routed a send to the
       // agent pipeline, and a REST caller chose the pipeline outright. Its enum has no
       // value for "the API asked", and inventing one would be rejected by the Quest
@@ -113,6 +114,8 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
         throw new ForbiddenError(result.message, { errorCode: BILLING_ORGANIZATION_MISMATCH_ERROR_CODE });
       case 'billing_key_stale':
         throw new BadRequestError(result.message);
+      case 'confidence_overrides_forbidden':
+        throw new ForbiddenError(result.message);
       case 'concurrent_limit':
         throw new ConflictError(result.message);
       case 'dispatch_failed':

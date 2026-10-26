@@ -15,6 +15,9 @@ const { mockValidate, mockFindUser, mockRateLimit, mockListByQuest } = vi.hoiste
   mockListByQuest: vi.fn(),
 }));
 
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+}));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
