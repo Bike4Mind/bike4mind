@@ -66,11 +66,11 @@ describe('UsageEventRepository.findDailySpendByUser', () => {
     expect(result).toBe(150);
   });
 
-  it('includes writtenOffCredits in the total', async () => {
+  it('does not add writtenOffCredits on top of creditsCharged', async () => {
     await seed('user-a', 100, 20);
     await seed('user-a', 50);
     const result = await usageEventRepository.findDailySpendByUser('user-a', today());
-    expect(result).toBe(170); // 100+20 + 50
+    expect(result).toBe(150); // 100 + 50; the write-off is part of the 100
   });
 
   it('excludes events before the since date', async () => {

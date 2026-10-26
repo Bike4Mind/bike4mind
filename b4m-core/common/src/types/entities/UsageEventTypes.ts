@@ -706,7 +706,8 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /**
    * Total credits a user spent in the UTC calendar day starting at `since`
-   * (pass UTC midnight for today). Counts creditsCharged plus writtenOffCredits.
+   * (pass UTC midnight for today). Sums creditsCharged only: writtenOffCredits is
+   * the uncollected part of creditsCharged, so adding it would double count.
    * Non-atomic under burst concurrency - bounded overshoot is acceptable here.
    */
   findDailySpendByUser(userId: string, since: Date): Promise<number>;

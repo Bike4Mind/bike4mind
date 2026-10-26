@@ -708,7 +708,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       {
         $group: {
           _id: null,
-          total: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+          total: { $sum: '$creditsCharged' },
         },
       },
       { $project: { _id: 0, total: 1 } },
