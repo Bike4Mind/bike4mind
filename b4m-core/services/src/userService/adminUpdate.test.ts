@@ -329,13 +329,17 @@ describe('adminUpdateUser - signed creditDelta path', () => {
     expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -30);
   });
 
-  it('neither inverts nor deepens a negative balance on a deduction', async () => {
-    const { adapters, createTransaction, incrementCredits } = makeAdapters(-100);
+  it('rejects a deduction from a non-positive balance without writing anything', async () => {
+    const { adapters, createTransaction, incrementCredits, update, target } = makeAdapters(-100);
 
-    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -50 }, adapters);
+    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -50 }, adapters)).rejects.toThrow(
+      'Balance is already at or below zero; nothing to deduct'
+    );
 
     expect(createTransaction).not.toHaveBeenCalled();
     expect(incrementCredits).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(target.currentCredits).toBe(-100);
   });
 
   it('rejects negative absolute and oversized credit values', () => {

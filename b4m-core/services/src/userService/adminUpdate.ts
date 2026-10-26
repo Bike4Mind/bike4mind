@@ -187,8 +187,11 @@ export async function adminUpdateUser(
       : params.currentCredits !== undefined && params.currentCredits !== previousBalance
         ? params.currentCredits - previousBalance
         : 0;
-  // A deduction never drives the balance further down than zero; from an already-negative
-  // balance it becomes a no-op rather than deepening the debt.
+  // A deduction never drives the balance further down than zero, and is rejected outright when
+  // there is nothing to deduct so the caller does not see a silent success.
+  if (rawDelta < 0 && previousBalance <= 0) {
+    throw new BadRequestError('Balance is already at or below zero; nothing to deduct');
+  }
   const creditDelta = rawDelta < 0 ? Math.max(rawDelta, -Math.max(previousBalance, 0)) : rawDelta;
   const note = creditReason?.trim() || undefined;
 
