@@ -59,6 +59,7 @@ function stripComments(source: string): string {
 
 const DLQ_ALARMS = stripComments(read('infra/dlqAlarms.ts'));
 const WAF = stripComments(read('infra/waf.ts'));
+const ACCOUNT_CREATION = stripComments(read('infra/accountCreationAlarms.ts'));
 
 /**
  * One `new aws.cloudwatch.MetricAlarm(...)` call, from its opening paren to the balanced closing
@@ -147,7 +148,7 @@ describe('out-of-band DLQ alarms', () => {
 });
 
 describe('every AWS/SQS alarm in the out-of-band files', () => {
-  const sqsAlarms = [...alarmBlocks(DLQ_ALARMS), ...alarmBlocks(WAF)].filter(block =>
+  const sqsAlarms = [...alarmBlocks(DLQ_ALARMS), ...alarmBlocks(WAF), ...alarmBlocks(ACCOUNT_CREATION)].filter(block =>
     /namespace: 'AWS\/SQS'|buildDlqAgeMetricQueries\(/.test(block)
   );
   const idOf = (block: string) => block.match(/MetricAlarm\(\s*'([^']+)'/)?.[1] ?? '<unnamed>';
