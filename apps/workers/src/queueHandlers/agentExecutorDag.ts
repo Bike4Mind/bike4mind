@@ -60,6 +60,8 @@ export function makeDagDispatcher(args: {
     apiKeyId?: string;
     /** The parent's credential-scope tool denials, inherited so a node cannot regain a tool the key was denied. */
     scopeDeniedTools?: string[];
+    /** The parent's withheld admin role, inherited so a node cannot regain admin access the key lacks. */
+    adminRoleWithheld?: boolean;
     /**
      * The parent's permission lists, copied onto each node at creation: a node cannot pause for
      * approval, so `processSubagentDispatch` refuses any tool call these lists do not allow.
@@ -107,6 +109,7 @@ export function makeDagDispatcher(args: {
         authOrigin: nodeDefaults.authOrigin,
         ...(nodeDefaults.apiKeyId && { apiKeyId: nodeDefaults.apiKeyId }),
         ...(nodeDefaults.scopeDeniedTools?.length && { scopeDeniedTools: nodeDefaults.scopeDeniedTools }),
+        ...(nodeDefaults.adminRoleWithheld && { adminRoleWithheld: true }),
         model: resolveDeprecatedModelId(model, 'agentExecutorDag'),
         query: node.description,
         status: 'pending' as AgentExecutionStatus,

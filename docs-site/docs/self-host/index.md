@@ -53,7 +53,7 @@ openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 ```
 
 :::warning
-**Never change `SECRET_ENCRYPTION_KEY` after first boot.** It encrypts other secrets stored in the database - rotating it makes existing encrypted data unreadable.
+**Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts secrets stored in the database. If you change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext remains readable; rotation is not automated.
 :::
 
 :::note Formatting
@@ -68,7 +68,7 @@ Compose reads `.env.selfhost` values verbatim - don't add comments on the same l
 B4M_BOOTSTRAP_ADMIN_EMAIL=you@example.com
 ```
 
-**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Settings > API Keys.
+**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Profile menu -> More -> API Keys.
 
 ```bash
 ANTHROPIC_API_KEY=      # Claude
@@ -108,7 +108,7 @@ For production use, point the `MAIL_*` variables at a real SMTP provider instead
 
 Everything you can do in the UI is also available over the HTTP API, authenticated with a scoped API key.
 
-1. **Create an API key**: in the app, open **Settings > API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
+1. **Create an API key**: in the app, open **Profile menu -> More -> API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
 
 2. **Send a chat message**:
 
@@ -121,16 +121,16 @@ curl -X POST http://localhost:3000/api/chat \
 
 `wait: true` processes the message synchronously and returns the reply in the response; omit it to get a `sessionId`/`questId` back immediately and let processing continue in the background. The model defaults to the admin `DefaultAPIModel` setting; pass `"model": "..."` to pick any model from `/api/models` (only providers you configured a key for are available).
 
-The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
+The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Profile menu -> More -> API Keys.
 
 ## Troubleshooting
 
 - **App can't reach Mongo / "no primary" errors** - MongoDB must run as a replica set (`--replSet rs0`) for transactions; the bundled `mongo` service is configured for this. Give it a few seconds to elect a primary on first boot.
 - **No sign-in email arrives** - check Mailpit at `http://localhost:8025`; if it's empty, check `docker compose -f compose.selfhost.yaml logs app` for mail errors and verify the `MAIL_*` values.
 - **A model returns "unauthorized"** - that provider's API key is missing or wrong in `.env.selfhost`. Only the providers you set keys for are available.
-- **The model picker is empty / "no models" warning** - no provider key is configured. Set at least one provider key in `.env.selfhost` and restart (`docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`), or add a key in the app under Settings > API Keys.
-- **Chat replies only appear after a refresh** - expected for now: the realtime websocket gateway is not part of the compose stack yet, so live streaming updates degrade to fetch-on-refresh.
-- **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - restore the original key; it cannot be rotated in place.
+- **The model picker is empty / "no models" warning** - no provider key is configured. Set at least one provider key in `.env.selfhost` and restart (`docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`), or add a key in the app under Profile menu -> More -> API Keys.
+- **Chat replies only appear after a refresh** - check that the bundled `ws` and `subscriber-fanout` services are running and that `WEBSOCKET_URL` and `WEBSOCKET_MANAGEMENT_ENDPOINT` point at the gateway. Inspect `docker compose -f compose.selfhost.yaml logs ws` and the subscriber-fanout logs for connection failures.
+- **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - restore the original key, or set `SECRET_ENCRYPTION_KEY_PREVIOUS` to it and keep it configured permanently. Recreate the services to load the environment changes. Dropping the previous key makes data still encrypted under it unreadable.
 
 ## Security notes
 
@@ -138,12 +138,12 @@ The stack is configured for **local, single-host use**: the backing services (Mo
 
 ## What you get (and don't)
 
-Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Quest Master, the knowledge engine, and artifacts. Credit metering is **off by default** on self-host (the admin can turn it on) - no Stripe, no billing. Bedrock-backed models are hidden on self-host; only providers with a configured key appear.
+Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Quest Master, the knowledge engine, and artifacts. Credit metering is **off by default** on self-host (the admin can turn it on) - no Stripe, no billing. Bedrock-backed models are hidden on self-host unless `BEDROCK_AWS_ACCESS_KEY_ID` and `BEDROCK_AWS_SECRET_ACCESS_KEY` are set; only providers with a configured key appear.
 
-Known gaps today:
+Runtime services and hosted-only gaps:
 
-- **Realtime streaming** - the websocket gateway is not in the stack yet; chat replies and live updates appear on refresh.
-- **Background enrichment** - features that ride the hosted event bus (notebook auto-naming, summaries, tagging) are inert in self-host for now.
+- **Realtime streaming** - the bundled `ws` gateway and `subscriber-fanout` service support streamed replies and live document updates. Both must be running with the matching connection settings.
+- **Background enrichment** - the bundled `worker` consumes `SELF_HOST_EVENT_QUEUE` for mementos, session auto-naming, summaries and tagging. Check the worker and queue configuration if these features do not run.
 - **Hosted-service features** - billing, entitlements, and premium overlays are not part of the open core; see the [open/closed boundary](https://github.com/bike4mind/bike4mind/blob/main/CONTRIBUTING.md#the-openclosed-boundary).
 
 Need help? Ask in [Discussions](https://github.com/bike4mind/bike4mind/discussions).

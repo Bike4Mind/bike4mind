@@ -102,9 +102,14 @@ describe('executeCompletion - admin settings are read fresh', () => {
     vi.clearAllMocks();
     shutdownSettingsCache();
   });
-  afterEach(() => shutdownSettingsCache());
+  afterEach(() => {
+    shutdownSettingsCache();
+    vi.unstubAllEnvs();
+  });
 
   it('honours an enforceCredits flip on the next completion, with no restart', async () => {
+    // Enforcement can only be switched off on self-host; hosted keeps it on whatever the row says.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     const adminSettings = buildSettingsStore('true');
     const { db, users } = buildDb(adminSettings);
 
