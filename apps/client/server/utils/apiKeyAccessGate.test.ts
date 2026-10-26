@@ -9,6 +9,7 @@ const { getSettingsMapMock, resolveUserRateTierMock, findActiveSubscriptionsByOw
     ladderRateTierMock: vi.fn(),
   }));
 
+vi.unmock('@server/utils/apiKeyAccessGate');
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: (...args: unknown[]) => getSettingsMapMock(...args),
@@ -22,7 +23,11 @@ vi.mock('@server/utils/userRateTier', () => ({
   ladderRateTier: ladderRateTierMock,
 }));
 
-import { assertApiKeyAccessAllowed, isApiKeyAccessAllowed, API_KEY_ACCESS_DENIED_MESSAGE } from './apiKeyAccessGate';
+import {
+  assertApiKeyAccessAllowed,
+  isApiKeyAccessAllowed,
+  API_KEY_ACCESS_DENIED_MESSAGE,
+} from '@server/utils/apiKeyAccessGate';
 
 const USER = { id: 'user-1', isAdmin: false, tags: [] };
 const ADMIN = { id: 'admin-1', isAdmin: true, tags: [] };
