@@ -1,3 +1,4 @@
+import { PassThrough } from 'stream';
 import { describe, it, expect, vi } from 'vitest';
 import {
   HubAccessError,
@@ -10,7 +11,10 @@ import {
   type PullOptions,
 } from '@bike4mind/local-models';
 import {
+  CancelledError,
   EXIT_CANCELLED,
+  abortable,
+  confirmOnTerminal,
   licenseFor,
   parsePullTarget,
   pickBuild,
@@ -69,6 +73,9 @@ function detail(overrides: Partial<HubModelDetail> = {}): HubModelDetail {
     ...overrides,
   };
 }
+
+const APACHE = 'Apache License\nVersion 2.0, January 2004\nhttp://www.apache.org/licenses/\n';
+const GEMMA = 'Gemma Terms of Use\n\nLast modified: February 21, 2024\n...Prohibited Use Policy...';
 
 function installed(name: string, extra: Partial<InstalledModel> = {}): InstalledModel {
   return {
@@ -158,6 +165,7 @@ interface Harness {
   saved: Array<{ defaultModel?: string; ollamaHost?: string }>;
   runtime: LocalRuntime;
   hub: HubClient;
+  registry: ReturnType<typeof vi.fn<ModelsDeps['ollamaRegistry']>>;
   controller: AbortController;
 }
 
@@ -165,6 +173,9 @@ function harness(
   options: {
     runtime?: LocalRuntime;
     hub?: HubClient;
+    registry?: ModelsDeps['ollamaRegistry'];
+    resolveRuntime?: ModelsDeps['resolveRuntime'];
+    confirm?: ModelsDeps['confirm'];
     answers?: boolean[];
     isTTY?: boolean;
     source?: RuntimeTarget['source'];
@@ -179,9 +190,13 @@ function harness(
   const hub = options.hub ?? fakeHub();
   const answers = [...(options.answers ?? [])];
   const controller = new AbortController();
+  const registry = vi.fn<ModelsDeps['ollamaRegistry']>(
+    options.registry ?? (async () => ({ sizeBytes: 270_800_000, licenses: [APACHE] }))
+  );
   const deps: ModelsDeps = {
     hub: () => hub,
-    resolveRuntime: async () => ({ runtime, source: options.source ?? 'config' }),
+    ollamaRegistry: registry,
+    resolveRuntime: options.resolveRuntime ?? (async () => ({ runtime, source: options.source ?? 'config' })),
     config: {
       defaultModel: options.config?.defaultModel,
       ollamaHost: options.config?.ollamaHost,
@@ -189,16 +204,18 @@ function harness(
         saved.push(patch);
       },
     },
-    confirm: async question => {
-      questions.push(question);
-      return answers.shift() ?? false;
-    },
+    confirm:
+      options.confirm ??
+      (async question => {
+        questions.push(question);
+        return answers.shift() ?? false;
+      }),
     isTTY: options.isTTY ?? true,
     log: line => lines.push(line),
     progress: { update: line => progress.push(line), end: () => progress.push('<end>') },
     signal: controller.signal,
   };
-  return { deps, lines, questions, progress, saved, runtime, hub, controller };
+  return { deps, lines, questions, progress, saved, runtime, hub, registry, controller };
 }
 
 const OPTS: ModelsOptions = { json: false, yes: false, acceptLicense: false };
@@ -210,17 +227,43 @@ describe('parsePullTarget', () => {
     expect(parsePullTarget(`${REPO}:q8_0`)).toEqual({ kind: 'hub', repo: REPO, tag: 'q8_0' });
   });
 
-  it('treats single names and other registries as Ollama names', () => {
+  it.each([
+    `hf.co:443/${REPO}:Q8_0`,
+    `https://hf.co:443/${REPO}:Q8_0`,
+    `www.huggingface.co/${REPO}:Q8_0`,
+    `https://www.huggingface.co/${REPO}:Q8_0`,
+    `huggingface.co:443/${REPO}:Q8_0`,
+    `hf.co./${REPO}:Q8_0`,
+    `HF.CO/${REPO}:Q8_0`,
+  ])('reads %s as the Hugging Face repo', ref => {
+    expect(parsePullTarget(ref)).toEqual({ kind: 'hub', repo: REPO, tag: 'Q8_0' });
+  });
+
+  it('treats single names and Ollama registry names as Ollama names', () => {
     expect(parsePullTarget('qwen2.5:0.5b')).toEqual({ kind: 'ollama', name: 'qwen2.5:0.5b' });
     expect(parsePullTarget('registry.ollama.ai/library/smollm2:135m')).toEqual({
       kind: 'ollama',
-      name: 'registry.ollama.ai/library/smollm2:135m',
+      name: 'library/smollm2:135m',
     });
+    expect(parsePullTarget('https://ollama.com/library/gemma3:270m')).toEqual({
+      kind: 'ollama',
+      name: 'library/gemma3:270m',
+    });
+  });
+
+  it('refuses other registries, credentials and schemes instead of passing them to Ollama', () => {
+    expect(() => parsePullTarget('example.com/owner/model:Q4_K_M')).toThrow(/Unsupported registry example\.com/);
+    expect(() => parsePullTarget('https://example.com/owner/model')).toThrow(/Unsupported registry/);
+    expect(() => parsePullTarget(`user@hf.co/${REPO}`)).toThrow(/Unsupported model ref/);
+    expect(() => parsePullTarget(`ftp://hf.co/${REPO}`)).toThrow(/Unsupported model ref/);
+    expect(() => parsePullTarget('localhost:5000/model')).toThrow(/Unsupported registry localhost/);
   });
 
   it('rejects malformed repo ids', () => {
     expect(() => parsePullTarget('hf.co/not a repo')).toThrow(/Not a Hugging Face repo/);
     expect(() => parsePullTarget(`${REPO}:`)).toThrow(/Not a Hugging Face repo/);
+    expect(() => parsePullTarget('a/b/c')).toThrow(/Not a Hugging Face repo/);
+    expect(() => parsePullTarget('https://hf.co')).toThrow(/Not a Hugging Face repo/);
   });
 });
 
@@ -231,6 +274,11 @@ describe('pickBuild', () => {
     expect(pickBuild(builds, 'q8_0')?.quant).toBe('Q8_0');
     expect(pickBuild(builds, 'F16')?.split).toBe(true);
     expect(pickBuild(builds, 'IQ2_XS')).toBeUndefined();
+  });
+
+  it('reads latest, the tag Ollama gives an untagged hf.co pull, as the default build', () => {
+    expect(pickBuild(detail().builds, 'latest')?.quant).toBe('Q4_K_M');
+    expect(pickBuild(detail().builds, 'LATEST')?.quant).toBe('Q4_K_M');
   });
 });
 
@@ -451,16 +499,153 @@ describe('models pull (Hugging Face)', () => {
     expect(h.progress).toEqual(['pulling abc123  12%  50 B / 400 B', '<end>']);
     expect(h.lines[h.lines.length - 1]).toMatch(/^Pull cancelled\. Nothing was installed/);
   });
+
+  it('checks the license of a repo spelled with another Hugging Face host form', async () => {
+    const gemma = detail({ licenses: ['gemma'] });
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(gemma) }), isTTY: false });
+    await expect(pullModel(`hf.co:443/${REPO}:Q8_0`, h.deps, { ...OPTS, yes: true })).rejects.toThrow(
+      /--accept-license/
+    );
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+    expect(h.hub.getModel).toHaveBeenCalledWith(REPO, expect.anything());
+  });
+
+  it('pulls the default build for hf.co/<repo>:latest', async () => {
+    const h = harness({ isTTY: false });
+    expect(await pullModel(`hf.co/${REPO}:latest`, h.deps, { ...OPTS, yes: true })).toBe('pulled');
+    expect(h.runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
+  });
+
+  it('reminds that Ollama needs its SSH key on Hugging Face for a gated repo with access', async () => {
+    const gated = detail({ gated: 'auto', canDownload: true, ollamaNeedsSshKey: true });
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(gated) }), answers: [true] });
+    expect(await pullModel(REPO, h.deps, OPTS)).toBe('pulled');
+    expect(h.lines.join('\n')).toMatch(/gated repos with its own key[\s\S]*https:\/\/huggingface\.co\/settings\/keys/);
+  });
+
+  it('points a gated repo without access at the SSH key settings page', async () => {
+    const gated = detail({ gated: 'manual', canDownload: false, ollamaNeedsSshKey: true });
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(gated) }) });
+    await expect(pullModel(REPO, h.deps, OPTS)).rejects.toThrow(/https:\/\/huggingface\.co\/settings\/keys/);
+  });
+});
+
+describe('cancelling', () => {
+  it('exits 130 when Ctrl-C answers a prompt', async () => {
+    const h = harness({
+      confirm: async () => {
+        throw new CancelledError();
+      },
+    });
+    expect(await runModelsCommand('pull', { _: [], ref: REPO }, h.deps)).toBe(EXIT_CANCELLED);
+    expect(h.lines[h.lines.length - 1]).toBe('Cancelled.');
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('stops waiting on the runtime as soon as Ctrl-C arrives', async () => {
+    const h = harness({ resolveRuntime: () => new Promise(() => undefined) });
+    const run = runModelsCommand('ls', { _: [] }, h.deps);
+    h.controller.abort();
+    expect(await run).toBe(EXIT_CANCELLED);
+    expect(h.lines).toEqual(['Cancelled.']);
+  });
+
+  it('stops waiting on a removal as soon as Ctrl-C arrives', async () => {
+    const runtime = fakeRuntime({ remove: vi.fn(() => new Promise<void>(() => undefined)) });
+    const h = harness({ runtime });
+    const run = runModelsCommand('rm', { _: [], name: 'qwen2.5:0.5b', yes: true }, h.deps);
+    await vi.waitFor(() => expect(runtime.remove).toHaveBeenCalled());
+    h.controller.abort();
+    expect(await run).toBe(EXIT_CANCELLED);
+  });
+
+  it('abortable passes values and errors through until the signal aborts', async () => {
+    const controller = new AbortController();
+    await expect(abortable(Promise.resolve(1), controller.signal)).resolves.toBe(1);
+    await expect(abortable(Promise.reject(new Error('boom')), controller.signal)).rejects.toThrow('boom');
+    controller.abort();
+    await expect(abortable(Promise.resolve(1), controller.signal)).rejects.toBeInstanceOf(CancelledError);
+  });
+});
+
+describe('confirmOnTerminal', () => {
+  const streams = () => ({ input: new PassThrough(), output: new PassThrough() });
+
+  it('reads yes and no', async () => {
+    const yes = streams();
+    const answer = confirmOnTerminal('Go? ', new AbortController().signal, yes);
+    yes.input.write('y\n');
+    expect(await answer).toBe(true);
+
+    const no = streams();
+    const declined = confirmOnTerminal('Go? ', new AbortController().signal, no);
+    no.input.write('\n');
+    expect(await declined).toBe(false);
+  });
+
+  it('rejects with CancelledError when the run is aborted at the prompt', async () => {
+    const controller = new AbortController();
+    const answer = confirmOnTerminal('Go? ', controller.signal, streams());
+    controller.abort();
+    await expect(answer).rejects.toBeInstanceOf(CancelledError);
+  });
 });
 
 describe('models pull (Ollama library)', () => {
-  it('asks, then pulls the name as given', async () => {
+  it('shows the registry size and license, asks, then pulls the name as given', async () => {
     const h = harness({ answers: [true] });
     expect(await runModelsCommand('pull', { _: [], ref: 'smollm2:135m' }, h.deps)).toBe(0);
-    expect(h.lines).toContain('Size and license: https://ollama.com/library/smollm2');
-    expect(h.questions).toEqual(['Download smollm2:135m? [y/N] ']);
+    expect(h.registry).toHaveBeenCalledWith('smollm2:135m', h.deps.signal);
+    expect(h.lines).toEqual(
+      expect.arrayContaining([
+        'Size:     271 MB',
+        'License:  Apache License',
+        'Model:    smollm2:135m (Ollama registry)',
+      ])
+    );
+    expect(h.questions).toEqual(['Download 271 MB? [y/N] ']);
     expect(h.hub.getModel).not.toHaveBeenCalled();
     expect(h.runtime.pull).toHaveBeenCalledWith('smollm2:135m', expect.anything());
+  });
+
+  it('requires accepting a restricted license, even with --yes', async () => {
+    const registry = async () => ({ sizeBytes: 291_500_000, licenses: [GEMMA] });
+    const noTty = harness({ registry, isTTY: false });
+    await expect(pullModel('gemma3:270m', noTty.deps, { ...OPTS, yes: true })).rejects.toThrow(/--accept-license/);
+    expect(noTty.lines).toEqual(
+      expect.arrayContaining([
+        'License:  Gemma Terms of Use',
+        'Read it before downloading: https://ollama.com/library/gemma3',
+      ])
+    );
+    expect(noTty.runtime.pull).not.toHaveBeenCalled();
+    expect(await pullModel('gemma3:270m', noTty.deps, { ...OPTS, yes: true, acceptLicense: true })).toBe('pulled');
+
+    const tty = harness({ registry, answers: [false] });
+    expect(await pullModel('gemma3:270m', tty.deps, OPTS)).toBe('declined');
+    expect(tty.questions).toEqual(['Do you accept the Gemma Terms of Use license? [y/N] ']);
+  });
+
+  it('treats a model without a license layer as restricted', async () => {
+    const h = harness({ registry: async () => ({ sizeBytes: 1000, licenses: [] }), answers: [false] });
+    expect(await pullModel('ollama.com/someone/model', h.deps, OPTS)).toBe('declined');
+    expect(h.lines).toContain('This model does not declare a license.');
+    expect(h.lines).toContain('Read its page before downloading: https://ollama.com/someone/model');
+    expect(h.questions).toEqual(['Download it anyway? [y/N] ']);
+  });
+
+  it('downloads nothing when the registry cannot be read', async () => {
+    const h = harness({
+      registry: async () => {
+        throw new Error('The Ollama registry has no model named nope:1b.');
+      },
+      answers: [true],
+    });
+    await expect(runModelsCommand('pull', { _: [], ref: 'nope:1b' }, h.deps)).rejects.toThrow(
+      /Could not read nope:1b from the Ollama registry, so nothing was downloaded: .*no model named/
+    );
+    expect(h.questions).toEqual([]);
+    expect(h.runtime.pull).not.toHaveBeenCalled();
   });
 
   it('logs status changes instead of a progress line without a terminal', async () => {
@@ -540,11 +725,20 @@ describe('resolveRuntimeTarget', () => {
   it('uses the flag, then the environment, then the saved host', async () => {
     const create = vi.fn((baseUrl: string) => fakeRuntime({ baseUrl }));
     const detect = vi.fn();
+    const all = { flag: 'http://flag:3', env: 'http://env:1', config: 'http://saved:2' };
+    expect((await resolveRuntimeTarget(all, detect, create)).source).toBe('flag');
+    expect(create).toHaveBeenLastCalledWith('http://flag:3');
     const target = await resolveRuntimeTarget({ env: 'http://env:1', config: 'http://saved:2' }, detect, create);
     expect(target.source).toBe('env');
-    expect(create).toHaveBeenCalledWith('http://env:1');
+    expect(create).toHaveBeenLastCalledWith('http://env:1');
     expect((await resolveRuntimeTarget({ config: 'http://saved:2' }, detect, create)).source).toBe('config');
     expect(detect).not.toHaveBeenCalled();
+  });
+
+  it("gives a bare host Ollama's default port", async () => {
+    const create = vi.fn((baseUrl: string) => fakeRuntime({ baseUrl }));
+    await resolveRuntimeTarget({ flag: 'gpu-box' }, vi.fn(), create);
+    expect(create).toHaveBeenCalledWith('http://gpu-box:11434');
   });
 
   it('fails when the configured host is down', async () => {

@@ -151,16 +151,16 @@ b4m models ls | search | show | pull | rm | use   # Find, download and use local
 `b4m models` manages models on a local Ollama and finds GGUF builds on Hugging Face.
 
 ```bash
-b4m models ls --ollama-host http://127.0.0.1:11434   # list installed models; the host is saved for later runs
+b4m models ls --ollama-host http://127.0.0.1:11434   # list installed models; a host that answers is saved
 b4m models search qwen2.5 0.5b                       # Hugging Face GGUF repos: downloads, likes, license, gated
 b4m models show Qwen/Qwen2.5-0.5B-Instruct-GGUF      # builds with size, quant and Ollama ref, license, gating
 b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
-b4m models pull qwen2.5:0.5b                         # Ollama library names pull directly
+b4m models pull qwen2.5:0.5b                         # Ollama registry names (model[:tag], ollama.com/owner/model)
 b4m models use hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M   # default model for chat
 b4m models rm qwen2.5:0.5b
 ```
 
-Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar) is named with a link and must be accepted at a prompt or with `--accept-license`. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added to the account. Ctrl-C cancels a pull without installing anything; pulling again resumes. Without a saved host, `b4m models` uses the first local runtime it detects; `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search` and `show` as JSON.
+Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar), or no declared license, is named with a link and must be accepted at a prompt or with `--accept-license`. For Ollama registry models the license is read from the model's own license text. Refs naming any other registry are refused. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added at https://huggingface.co/settings/keys. Ctrl-C cancels a pull without installing anything; pulling again resumes. Without a saved host, `b4m models` uses the first local runtime it detects; a host without a port uses 11434, and `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search` and `show` as JSON. With a saved host, `b4m -p` uses the default model from Ollama and fails instead of switching to another model when it is not available.
 
 ### Pushing a local skill
 
