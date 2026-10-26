@@ -275,6 +275,7 @@ jobs:
           fi
 
       - name: Scrub edge token from test output
+        id: scrub
         if: always() && steps.e2e.outputs.preview_skipped != 'true'
         env:
           E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
@@ -283,7 +284,7 @@ jobs:
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were
         # found" warning that reads like the run lost its report.
-        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        if: always() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v6
         with:
           name: playwright-report${{ inputs.artifact_suffix && format('-{0}', inputs.artifact_suffix) || '' }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
@@ -392,7 +393,7 @@ jobs:
       # on the same two states Notify Slack treats specially: a cancelled (superseded)
       # run would store zeros as an infra error, and a preview skip ran nothing.
       - name: Ingest QA run (shadow)
-        if: ${{ !cancelled() && steps.e2e.outputs.preview_skipped != 'true' }}
+        if: ${{ !cancelled() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 10
         env:
@@ -598,7 +599,7 @@ jobs:
       # hung prod must not hold up the Slack post or the promotion stamp above. No --counts-out:
       # the Slack comparison reads the staging ingest's counts.
       - name: Ingest QA run to production
-        if: ${{ !cancelled() && steps.e2e.outputs.preview_skipped != 'true' && vars.QA_INGEST_URL_PROD != '' }}
+        if: ${{ !cancelled() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success' && vars.QA_INGEST_URL_PROD != '' }}
         continue-on-error: true
         timeout-minutes: 10
         env:
