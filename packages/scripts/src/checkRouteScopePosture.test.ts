@@ -31,6 +31,13 @@ describe('classifyScopePosture', () => {
     expect(classifyScopePosture(analysis({ auth: ['handler'] }), ONE_ROUTER).kind).toBe('no-key');
   });
 
+  it('treats a direct apiKeyAuth() shim as key-accepting', () => {
+    const shim = 'const keyShim = apiKeyAuth();\nexport default baseApi({ auth: false }).get(h);';
+    expect(classifyScopePosture(analysis({ auth: ['handler'] }), shim).kind).toBe('unscoped');
+    const importOnly = "import { apiKeyAuthFailure } from 'x'; // apiKeyAuth is not called here";
+    expect(classifyScopePosture(analysis({ auth: ['handler'] }), importOnly).kind).toBe('no-key');
+  });
+
   it('treats a contracted verb without scopes as unscoped', () => {
     const methodScopes = [
       { methods: ['GET' as const], scopes: ['a:read'] },

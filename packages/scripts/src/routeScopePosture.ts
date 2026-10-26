@@ -19,6 +19,8 @@ export const UNCLASSIFIED_REASONS = {
 } as const;
 
 const BASE_API_CALL = /\bbaseApi\s*\(/g;
+/** A route can install the API-key shim itself (e.g. under `auth: false`); its scope argument is not read. */
+const DIRECT_KEY_SHIM = /\bapiKeyAuth\s*\(/;
 
 /**
  * `optional` counts as key-accepting: optionalAuth installs the API-key shim with no scopes, and the
@@ -26,7 +28,9 @@ const BASE_API_CALL = /\bbaseApi\s*\(/g;
  */
 export function classifyScopePosture(analysis: RouteAnalysis, source: string): ScopePosture {
   if (analysis.auth.includes('unknown')) return { kind: 'unclassified', reason: UNCLASSIFIED_REASONS.dynamicAuth };
-  if (!analysis.auth.some(mode => mode === 'jwt+key' || mode === 'optional')) return { kind: 'no-key' };
+  const acceptsKey =
+    analysis.auth.some(mode => mode === 'jwt+key' || mode === 'optional') || DIRECT_KEY_SHIM.test(source);
+  if (!acceptsKey) return { kind: 'no-key' };
   if (analysis.scopes.length === 0) return { kind: 'unscoped' };
   const verbs = analysis.methodScopes?.filter(group => group.scopes.length === 0).flatMap(group => group.methods);
   if (verbs?.length) return { kind: 'unscoped', verbs };
