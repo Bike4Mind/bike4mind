@@ -52,7 +52,7 @@ async function ipsOf(ids: mongoose.Types.ObjectId[]) {
 describe('signupIpRetention (real DB)', () => {
   it('truncates IPs past the window and keeps the full IP inside it', async () => {
     const ids = await seed([
-      { signupMeta: { ip: '203.0.113.42', country: 'US', capturedAt: OLD } },
+      { signupMeta: { ip: '203.0.113.42', country: 'US', capturedAt: OLD }, updatedAt: OLD },
       { signupMeta: { ip: '2001:db8:abcd:12:34:56:78:9a', capturedAt: OLD } },
       { signupMeta: { ip: '2001:db8:abcd::1', capturedAt: OLD } },
       { signupMeta: { ip: '::ffff:198.51.100.9', capturedAt: OLD } },
@@ -61,6 +61,7 @@ describe('signupIpRetention (real DB)', () => {
       {},
     ]);
 
+    const before = await User.collection.findOne({ _id: ids[0] });
     const result = await runSignupIpRetention({ now: NOW });
 
     expect(await ipsOf(ids)).toEqual([
@@ -75,6 +76,7 @@ describe('signupIpRetention (real DB)', () => {
     expect(result.truncatedCount).toBe(4);
     const untouched = await User.collection.findOne({ _id: ids[0] });
     expect(untouched?.signupMeta).toMatchObject({ country: 'US', capturedAt: OLD });
+    expect(untouched?.updatedAt).toEqual(before?.updatedAt);
   });
 
   it('is a no-op on re-run', async () => {

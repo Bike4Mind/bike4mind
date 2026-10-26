@@ -1,6 +1,7 @@
 import { Context } from 'aws-lambda';
 import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
+import { isIP } from 'net';
 import { AUTH_EVENT_RETENTION_SECONDS, connectDB, User } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { truncateIp } from '@bike4mind/server-utils/utils/ip';
@@ -75,13 +76,15 @@ export async function runSignupIpRetention(options: { logger?: Logger; batchSize
     if (!ip) continue;
     const truncatedIp = truncateIp(ip);
     if (truncatedIp === ip) {
-      if (!hasIpShape(ip)) unshortenableCount++;
+      if (isIP(ip) === 0) unshortenableCount++;
       continue;
     }
     pending.push({
       updateOne: {
         filter: { _id: user._id, 'signupMeta.ip': ip },
         update: { $set: { 'signupMeta.ip': truncatedIp } },
+        // A retention rewrite is not a user change, so it must not bump updatedAt.
+        timestamps: false,
       },
     });
     if (pending.length >= batchSize) await flush();
@@ -95,10 +98,4 @@ export async function runSignupIpRetention(options: { logger?: Logger; batchSize
     `[SignupIpRetention] Truncated ${truncatedCount} signup IPs in ${batches} batches (cutoff: ${cutoff.toISOString()})`
   );
   return { truncatedCount, batches, cutoff: cutoff.toISOString() };
-}
-
-// The shapes truncateIp parses (any IPv6, dotted-quad IPv4). Anything else keeps its full value
-// forever, so it is counted and warned about rather than skipped silently.
-function hasIpShape(ip: string): boolean {
-  return ip.includes(':') || ip.split('.').length === 4;
 }
