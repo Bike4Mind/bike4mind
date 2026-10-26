@@ -37,7 +37,8 @@ const OPTI_RAPID_SYSTEM_PROMPT =
  * This endpoint only saves to the database. The main quest processor
  * handles WebSocket notifications when it detects the rapid reply result.
  */
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 200 : 50,
