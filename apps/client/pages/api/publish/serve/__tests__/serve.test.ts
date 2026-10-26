@@ -3314,7 +3314,7 @@ describe('GET /api/publish/serve - gated bundle inline budget and overflow media
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
     expect(Buffer.byteLength(data)).toBeLessThan(6_000_000);
-    expect(data.match(/\?ot=/g)?.length).toBeGreaterThan(0);
+    expect(data.match(/\?ot=/g)?.length).toBe(8);
     expect(data).toContain('/p/u/scope123/my-slug/img13.png?ot=');
     expect(res.getHeader('X-Publish-Dropped-Assets')).toBeUndefined();
   });
@@ -3406,7 +3406,7 @@ describe('GET /api/publish/serve - gated bundle inline budget and overflow media
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
     expect(Buffer.byteLength(data)).toBeLessThan(6_000_000);
-    // The small-index case overflows 4 images (see above); here most of them must.
+    // The small-index case overflows 8 images (see above); here most of them must.
     expect(data.match(/\?ot=/g)?.length).toBeGreaterThan(10);
   });
 

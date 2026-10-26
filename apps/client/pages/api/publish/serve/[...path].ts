@@ -491,7 +491,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // navigations that carry no Authorization header, so the same token-recovery works. The
     // reply/fabfile `?raw=1` render carries its own `script-src 'none'` meta (renderViewerPage),
     // so it stays script-free even inside the shell's allow-scripts iframe. NOT for: bundle
-    // ASSETS (gated bundles inline their assets, so the opaque iframe never requests them),
+    // ASSETS (gated bundles inline their assets, so the opaque iframe never requests them;
+    // the one exception is overflow media over the inline budget, which loads via a signed
+    // `?ot=` URL that authorizes that single asset, and any other credential-less asset
+    // request must hard-fail since a shell there would be served in place of the bytes),
     // `?raw=1` (the loader's own fetch - a shell there would loop), or `?format=raw` (a
     // plain-text API surface - an HTML shell would violate the caller's Accept expectation,
     // and format=raw is public-only anyway, so it falls through to the hard status).
