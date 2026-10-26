@@ -20,7 +20,13 @@ const OrganizationProfileModal: React.FC<{ onClosed: () => void }> = ({ onClosed
   if (!orgId && openedOrganization) setOpenedOrganization(null);
   // Wait for the fetch to settle: a closed org's cached query is invalidated without being refetched,
   // so reopening it serves stale data first, and saving the profile would write that back.
-  if (orgId && !organization.isFetching && organization.data?.id === orgId && openedOrganization?.id !== orgId) {
+  if (
+    orgId &&
+    !organization.isFetching &&
+    !organization.error &&
+    organization.data?.id === orgId &&
+    openedOrganization?.id !== orgId
+  ) {
     setOpenedOrganization(organization.data);
   }
   const shownOrganization = openedOrganization?.id === orgId ? openedOrganization : null;
@@ -52,7 +58,7 @@ const OrganizationProfileModal: React.FC<{ onClosed: () => void }> = ({ onClosed
           <OrganizationProfileUpdated org={shownOrganization} onClose={close} activeDays={30} />
         ) : failedToLoad ? (
           <Stack spacing={1.5} alignItems="flex-start">
-            <Typography color="danger" data-testid="admin-organization-profile-error">
+            <Typography role="alert" color="danger" data-testid="admin-organization-profile-error">
               This organization could not be loaded.
             </Typography>
             <Button

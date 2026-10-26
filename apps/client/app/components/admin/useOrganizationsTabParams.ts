@@ -1,5 +1,5 @@
 import { ADMIN_TAB_PARAM } from '@bike4mind/common';
-import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
@@ -51,6 +51,7 @@ export const useOrganizationsParams = (): readonly [
   (patch: Partial<OrganizationsTabParams>) => void,
 ] => {
   const [storedParams, setStoredParams] = useOrganizationsTab(useShallow(state => [state.params, state.setParams]));
+  const router = useRouter();
   const search = useSearch({ strict: false }) as SearchRecord;
   const navigate = useNavigate();
   const urlView = useMemo(() => organizationsViewFromSearch(search), [search]);
@@ -61,11 +62,14 @@ export const useOrganizationsParams = (): readonly [
     (patch: Partial<OrganizationsTabParams>) => {
       setStoredParams(patch);
       if (!touchesView(patch)) return;
+      // SearchBar's debounced callback can fire after the tab unmounts, and it must never navigate back to /admin or write onto another tab.
+      const { pathname, search } = router.state.location;
+      if (pathname !== ADMIN_PATH || (search as SearchRecord)[ADMIN_TAB_PARAM] !== ADMIN_ORGANIZATIONS_TAB_SLUG) return;
       // Written from the store, which useOrganizationsTabUrlSync keeps level with the URL and which
       // already holds this patch merged into the full view, so the URL always carries a complete view.
       navigate({ to: ADMIN_PATH, search: writeStoredViewToUrl, replace: true });
     },
-    [navigate, setStoredParams]
+    [navigate, router, setStoredParams]
   );
 
   return [params, setParams] as const;

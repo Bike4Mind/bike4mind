@@ -103,6 +103,30 @@ describe('Organizations tab URL precedence', () => {
     expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
     expect(result.current[0].search).toBe('Globex');
   });
+
+  it('keeps a late search callback from writing onto another tab', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'organizations', orgsPage: 3 }));
+    const { result } = renderOrganizationsTab();
+
+    act(() => fakeAdminRouter.reset({ tab: 'users' }));
+    act(() => result.current[1]({ search: 'Globex', page: 1 }));
+
+    expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
+    expect(fakeAdminRouter.search).toEqual({ tab: 'users' });
+    expect(useOrganizationsTab.getState().params.search).toBe('Globex');
+  });
+
+  it('keeps a late search callback from navigating back to admin', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'organizations', orgsPage: 3 }));
+    const { result } = renderOrganizationsTab();
+
+    act(() => fakeAdminRouter.reset({}, '/chat'));
+    act(() => result.current[1]({ search: 'Globex', page: 1 }));
+
+    expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
+    expect(fakeAdminRouter.search).toEqual({});
+    expect(useOrganizationsTab.getState().params.search).toBe('Globex');
+  });
 });
 
 describe('useOpenOrganizationId', () => {

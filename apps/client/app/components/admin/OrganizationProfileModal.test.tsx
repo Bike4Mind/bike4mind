@@ -107,6 +107,22 @@ describe('OrganizationProfileModal', () => {
     expect(fakeAdminRouter.search).toMatchObject({ orgId: ORG_ID });
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(screen.getByTestId('admin-organization-profile-error')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toBe('This organization could not be loaded.');
+  });
+
+  it('shows the load error, not cached data, when a reopened organization fails to refetch', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'organizations', orgId: ORG_ID }));
+    useGetOrganizationMock.mockReturnValue({
+      data: { id: ORG_ID, name: 'Acme' },
+      isFetching: false,
+      error: httpError(500),
+      refetch: vi.fn(),
+    });
+    renderModal();
+
+    expect(screen.getByTestId('admin-organization-profile-error')).toBeTruthy();
+    expect(screen.getByTestId('admin-organization-profile-retry-btn')).toBeTruthy();
+    expect(screen.queryByTestId('org-profile-close-btn')).toBeNull();
   });
 
   it('retries the load from the error state', () => {
