@@ -10,8 +10,8 @@ const usEast1 = expect.objectContaining({ provider: expect.objectContaining({ re
 const temporaryDirectories: string[] = [];
 
 const resources = vi.hoisted(() => {
-  function output<T>(value: T): { apply: <Result>(callback: (input: T) => Result) => Result } {
-    return { apply: callback => callback(value) };
+  function output<T>(value: T): { value: T; apply: <Result>(callback: (input: T) => Result) => Result } {
+    return { value, apply: callback => callback(value) };
   }
   const resource = vi.fn(function (name: string, args: Record<string, unknown>) {
     return {
@@ -82,13 +82,16 @@ function useProductionPolicy(rules: FixtureRule[]): void {
   vi.stubEnv('WAF_POLICY_DIR', directory);
 }
 
-async function loadWafResources(): Promise<void> {
+async function loadWafResources(rateExemptIps = ''): Promise<void> {
   vi.resetModules();
   vi.stubEnv('ENABLE_WAF', 'true');
   vi.stubEnv('WAF_BLOCKED_IPS', '');
+  vi.stubEnv('WAF_RATE_EXEMPT_IPS', rateExemptIps);
   vi.stubEnv('OPS_ALERT_EMAIL', 'ops@example.com');
   vi.stubGlobal('$app', { name: 'test-app', stage: 'production' });
-  vi.stubGlobal('$util', { all: resources.output });
+  vi.stubGlobal('$util', {
+    all: (values: { value: unknown }[]) => resources.output(values.map(output => output.value)),
+  });
   vi.stubGlobal('aws', {
     Provider: resources.resource,
     wafv2: {
@@ -175,6 +178,30 @@ describe('getWafRateLimitAlarmRules', () => {
 });
 
 describe('WAF rate-limit alarm wiring', () => {
+  it('wires the exempt addresses and ARN without changing the emergency block set', async () => {
+    vi.stubEnv('WAF_POLICY_DIR', '');
+    await loadWafResources('192.0.2.1, 198.51.100.0/24');
+
+    expect(resources.resource).toHaveBeenCalledWith(
+      'WafRateExemptIpSet',
+      expect.objectContaining({ addresses: ['192.0.2.1/32', '198.51.100.0/24'], ipAddressVersion: 'IPV4' }),
+      expect.objectContaining({ provider: expect.objectContaining({ region: 'us-east-1' }) })
+    );
+    const webAcl = resources.resource.mock.calls.find(([name]) => name === 'WafWebAcl');
+    expect(webAcl).toBeDefined();
+    const ruleJson = webAcl![1].ruleJson;
+    expect(typeof ruleJson).toBe('string');
+    if (typeof ruleJson !== 'string') throw new Error('Expected serialized WAF rules');
+    expect(ruleJson).not.toContain('PLACEHOLDER_');
+    const rules = JSON.parse(ruleJson) as { Name: string; Statement: Record<string, unknown> }[];
+    expect(rules.find(rule => rule.Name === 'emergency-ip-block')!.Statement).toEqual({
+      IPSetReferenceStatement: { ARN: 'WafEmergencyIpBlockSet-arn' },
+    });
+    for (const name of ['otc-send-rate-limit', 'credits-read-rate-limit', 'otc-send-asn-rate-limit']) {
+      expect(JSON.stringify(rules.find(rule => rule.Name === name))).toContain('WafRateExemptIpSet-arn');
+    }
+  });
+
   it('creates six CloudFront rate alarms and preserves the original AI alarm resource names', async () => {
     vi.stubEnv('WAF_POLICY_DIR', '');
     await loadWafResources();
