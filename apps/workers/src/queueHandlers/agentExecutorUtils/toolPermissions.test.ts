@@ -427,7 +427,10 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
 
     expect(outcome).toEqual({ proceed: true });
     expect(callOrder).toEqual(['executeGatedToolCall', 'takeIterationConfidence']);
-    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec_1', 0.9, { belowThreshold: false, recordTelemetry: true });
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec_1', 0.9, {
+      belowThreshold: false,
+      recordTelemetry: true,
+    });
   });
 
   it('stops without reading confidence when the replay itself errors', async () => {
@@ -582,7 +585,10 @@ describe('gateReplayConfidence', () => {
       deps
     );
     expect(outcome).toEqual({ status: 'proceed' });
-    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.7, { belowThreshold: false, recordTelemetry: true });
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.7, {
+      belowThreshold: false,
+      recordTelemetry: true,
+    });
     expect(deps.setPendingGate).not.toHaveBeenCalled();
   });
 
@@ -593,7 +599,10 @@ describe('gateReplayConfidence', () => {
       deps
     );
     expect(outcome).toEqual({ status: 'proceed' });
-    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.1, { belowThreshold: true, recordTelemetry: true });
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.1, {
+      belowThreshold: true,
+      recordTelemetry: true,
+    });
     expect(deps.setPendingGate).not.toHaveBeenCalled();
   });
 
@@ -624,7 +633,10 @@ describe('gateReplayConfidence', () => {
       deps
     );
     expect(outcome).toEqual({ status: 'proceed' });
-    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.1, { belowThreshold: false, recordTelemetry: true });
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.1, {
+      belowThreshold: false,
+      recordTelemetry: true,
+    });
     expect(deps.setPendingGate).not.toHaveBeenCalled();
   });
 
