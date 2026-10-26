@@ -322,6 +322,17 @@ describe('registerUser', () => {
       expect(createdUser().numReferralsAvailable).toBe(3);
     });
 
+    it.each([-1, 2.5, 'abc', 5000])('falls back to 3 invites when ReferralInvitesPerUser is %s', async configured => {
+      const findBySettingName = mockAdapters.db.adminSettings.findBySettingName;
+      mockAdapters.db.adminSettings.findBySettingName = vi
+        .fn()
+        .mockImplementation((name: string) =>
+          name === 'ReferralInvitesPerUser' ? Promise.resolve({ settingValue: configured }) : findBySettingName(name)
+        );
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().numReferralsAvailable).toBe(3);
+    });
+
     it('starts a new user with the configured number of invites, including 0', async () => {
       const findBySettingName = mockAdapters.db.adminSettings.findBySettingName;
       for (const configured of [7, 0]) {
