@@ -846,6 +846,31 @@ describe('/api/otc/verify - new accounts per email domain', () => {
     );
   });
 
+  it('does not cap a partner domain, even with the budget spent', async () => {
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      ruleId: 'rule-1',
+      domain: 'burner.example',
+      entitlements: new Set(),
+      signupCredits: 0,
+      organizationId: null,
+      tags: [],
+      subscription: null,
+    });
+    const { req, res } = makeReqRes(BURNER);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).toHaveBeenCalledTimes(1);
+    expect(mockTryIncrement).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^otc-limit:register-domain/),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mockDomainEstablished).not.toHaveBeenCalled();
+  });
+
   it('does not cap a self-host install', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'true');
     try {

@@ -86,6 +86,13 @@ describe('UserModel.existsVerifiedUserOnEmailDomain', () => {
     expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.exampl.', weekAgo)).toBe(false);
   });
 
+  it('treats the dots of the domain literally', async () => {
+    await verified('someone@acmexco.uk');
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.co.uk', weekAgo)).toBe(false);
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acmexco.uk', weekAgo)).toBe(true);
+  });
+
   it('counts a legacy verified row with no verification date', async () => {
     await verified('a@acme.example', { emailVerifiedAt: null });
 
@@ -102,9 +109,12 @@ describe('UserModel.existsVerifiedUserOnEmailDomain', () => {
     expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.example', weekAgo)).toBe(false);
   });
 
-  it('returns false for a blank domain', async () => {
+  it('returns false for a blank domain, even when a stored email ends in a bare separator', async () => {
     await verified('a@acme.example');
+    await verified('weird@');
+    await verified('x@host.');
 
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('', weekAgo)).toBe(false);
     expect(await userRepository.existsVerifiedUserOnEmailDomain('  ', weekAgo)).toBe(false);
   });
 });

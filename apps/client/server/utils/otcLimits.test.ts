@@ -371,6 +371,86 @@ describe('admin-lowered limits', () => {
     );
     expect(mocks.tryIncrement).toHaveBeenCalledWith('otc-limit:send-ip-total:203.0.113.7', 2, perIpTotal.windowMs);
   });
+
+  const ip = '203.0.113.7';
+  const counter = (bucket: string, window: (typeof windows)[number]) => () =>
+    otcCounterLimit({ bucket, window, subject: ipSubject })(makeReq('a@b.co'), makeRes(), vi.fn());
+  const reserveSend = () => reserveOtcEmailBudget('a@b.co', ip, OTC_SEND_EMAIL_BUDGETS);
+  const loweredCases = [
+    ['send.perEmailPerIp', OTC_LIMITS.send.perEmailPerIp, 'otc-limit:send-email-ip:', reserveSend],
+    ['send.perEmailPerIpDaily', OTC_LIMITS.send.perEmailPerIpDaily, 'otc-limit:send-email-ip-daily:', reserveSend],
+    ['send.perEmail', OTC_LIMITS.send.perEmail, 'otc-limit:send-email:', reserveSend],
+    [
+      'send.perIpDistinctEmails',
+      OTC_LIMITS.send.perIpDistinctEmails,
+      'otc-limit:ip-distinct:',
+      () => otcDistinctEmailsPerIpLimit()(makeReq('a@b.co'), makeRes(), vi.fn()),
+    ],
+    [
+      'send.perIpTotal',
+      OTC_LIMITS.send.perIpTotal,
+      'otc-limit:send-ip-total:',
+      counter('send-ip-total', OTC_LIMITS.send.perIpTotal),
+    ],
+    [
+      'send.perIpDaily',
+      OTC_LIMITS.send.perIpDaily,
+      'otc-limit:send-ip-daily:',
+      counter('send-ip-daily', OTC_LIMITS.send.perIpDaily),
+    ],
+    [
+      'verify.perEmailPerIp',
+      OTC_LIMITS.verify.perEmailPerIp,
+      'otc-limit:verify-email-ip:',
+      () => reserveOtcEmailBudget('a@b.co', ip, OTC_VERIFY_EMAIL_BUDGETS),
+    ],
+    ['verify.perIp', OTC_LIMITS.verify.perIp, 'otc-limit:verify-ip:', counter('verify-ip', OTC_LIMITS.verify.perIp)],
+    [
+      'register.perDomainHourly',
+      OTC_LIMITS.register.perDomainHourly,
+      'otc-limit:register-domain-hourly:',
+      () => reserveOtcRegistrationDomainBudget('x@new.example'),
+    ],
+    [
+      'register.perDomainDaily',
+      OTC_LIMITS.register.perDomainDaily,
+      'otc-limit:register-domain-daily:',
+      () => reserveOtcRegistrationDomainBudget('x@new.example'),
+    ],
+  ] as const;
+
+  it('covers every window with a lowered-limit case', () => {
+    expect(new Set(loweredCases.map(([, window]) => window.setting))).toEqual(new Set(windows.map(w => w.setting)));
+  });
+
+  it.each(loweredCases)('counts %s against its lowered limit', async (_name, window, keyPrefix, exercise) => {
+    mocks.tryAdd.mockResolvedValue({ success: true, count: 0, expiresAt: new Date(Date.now() + 60_000) });
+    mocks.settings = { [window.setting]: '1' };
+    await exercise();
+
+    const call = mocks.tryIncrement.mock.calls.find(([key]) => key.startsWith(keyPrefix));
+    expect(call?.[1]).toBe(1);
+    expect(window.limit).toBeGreaterThan(1);
+  });
+
+  it.each([
+    ['send.perEmailPerIp', OTC_SEND_EMAIL_BUDGETS, OTC_LIMITS.send.perEmailPerIp, 'otc-limit:send-email-ip:'],
+    [
+      'send.perEmailPerIpDaily',
+      OTC_SEND_EMAIL_BUDGETS,
+      OTC_LIMITS.send.perEmailPerIpDaily,
+      'otc-limit:send-email-ip-daily:',
+    ],
+    ['send.perEmail', OTC_SEND_EMAIL_BUDGETS, OTC_LIMITS.send.perEmail, 'otc-limit:send-email:'],
+    ['verify.perEmailPerIp', OTC_VERIFY_EMAIL_BUDGETS, OTC_LIMITS.verify.perEmailPerIp, 'otc-limit:verify-email-ip:'],
+  ] as const)('checks %s against its lowered limit without spending', async (_name, budgets, window, keyPrefix) => {
+    mocks.tryAdd.mockResolvedValue({ success: true, count: 0, expiresAt: new Date(Date.now() + 60_000) });
+    mocks.settings = { [window.setting]: '1' };
+    await otcEmailBudgetRetryAfter('a@b.co', ip, budgets);
+
+    const call = mocks.tryAdd.mock.calls.find(([key]) => key.startsWith(keyPrefix));
+    expect(call?.[2]).toBe(1);
+  });
 });
 
 describe('otcLimitDomain', () => {
@@ -432,6 +512,49 @@ describe('reserveOtcRegistrationDomainBudget', () => {
     expect(mocks.createOrUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ key: `otc-domain-established:${otcEmailKey('new.example')}`, result: false })
     );
+  });
+
+  it('pins the registration windows to 5 per hour and 20 per day', async () => {
+    await reserveOtcRegistrationDomainBudget('x@new.example');
+
+    expect(mocks.tryIncrement).toHaveBeenCalledTimes(2);
+    expect(mocks.tryIncrement).toHaveBeenCalledWith(hourlyKey, 5, 3_600_000);
+    expect(mocks.tryIncrement).toHaveBeenCalledWith(
+      `otc-limit:register-domain-daily:${otcEmailKey('new.example')}`,
+      20,
+      86_400_000
+    );
+  });
+
+  it('treats a domain as established only for accounts verified at least 7 days ago', async () => {
+    vi.useFakeTimers({ now: new Date('2026-03-10T12:00:00.000Z') });
+    try {
+      mocks.tryIncrement.mockResolvedValue(spent);
+      await reserveOtcRegistrationDomainBudget('x@new.example');
+
+      const [, verifiedBefore] = mocks.existsVerifiedUserOnEmailDomain.mock.calls[0];
+      expect(verifiedBefore.getTime()).toBe(Date.now() - 7 * 86_400_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['established', true, 86_400_000],
+    ['not established', false, 3_600_000],
+  ])('caches the %s verdict for the matching time', async (_name, established, ttlMs) => {
+    vi.useFakeTimers({ now: new Date('2026-03-10T12:00:00.000Z') });
+    try {
+      mocks.tryIncrement.mockResolvedValue(spent);
+      mocks.existsVerifiedUserOnEmailDomain.mockResolvedValue(established);
+      await reserveOtcRegistrationDomainBudget('x@new.example');
+
+      const [entry] = mocks.createOrUpdate.mock.calls[0];
+      expect(entry.result).toBe(established);
+      expect(entry.expiresAt.getTime()).toBe(Date.now() + ttlMs);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('admits an established domain past a spent budget', async () => {
