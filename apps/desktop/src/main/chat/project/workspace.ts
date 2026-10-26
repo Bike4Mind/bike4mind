@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { ChatProject } from '@shared/chat';
+import type { WorktreeRemoval } from '@shared/worktreeRemoval';
 import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
 import type { WorktreeEntry } from './git';
@@ -372,6 +374,123 @@ async function removeWorktree(projectDirectory: string, path: string): Promise<v
     await git(projectDirectory, ['worktree', 'remove', path]);
   } catch {
     // Already gone, or held open; see above.
+  }
+}
+
+type InspectedWorktreeRemoval = WorktreeRemoval & { preservedRef?: string };
+
+function containsPath(directory: string, path: string): boolean {
+  const within = relative(directory, path);
+  return !isAbsolute(within) && within !== '..' && !within.startsWith(`..${sep}`);
+}
+
+/** Only a branch this app cut can have a removable worktree; a cheap gate before any sharing scan. */
+export function hasAppWorkspaceBranch(
+  project: ChatProject | undefined
+): project is ChatProject & { workspaceBranch: string } {
+  return !!project?.workspaceBranch?.startsWith(BRANCH_PREFIX);
+}
+
+/** Shared by the delete dialog and execution: uncertainty always keeps the checkout. */
+export async function inspectWorktreeRemoval(
+  project: ChatProject | undefined,
+  otherProjects: readonly (ChatProject | undefined)[]
+): Promise<InspectedWorktreeRemoval | null> {
+  if (!hasAppWorkspaceBranch(project)) return null;
+  const path = await canonical(project.workingDirectory);
+  if (!path) return null;
+  const container = await containerDirectory(project.directory);
+  const root = await canonical(appWorktreeRoot(container));
+  if (!root || root !== appWorktreeRoot(await realpath(container))) return null;
+  if (root === path || !containsPath(root, path)) return null;
+  const branch = project.workspaceBranch;
+  const entries = await listWorktrees(project.directory);
+  const entry = await registeredAt(entries, path);
+  if (entry?.branch !== branch || (await canonical(project.directory)) === path) return null;
+
+  const result = (reason: string | null): WorktreeRemoval => ({ path, branch, safe: reason === null, reason });
+  for (const other of entries) {
+    const otherPath = (await canonical(other.path)) ?? resolve(other.path);
+    if (otherPath !== path && containsPath(path, otherPath)) return result('Contains another worktree');
+  }
+  for (const other of otherProjects) {
+    if (!other) continue;
+    const otherPath = (await canonical(other.workingDirectory)) ?? resolve(other.workingDirectory);
+    const otherDirectory = (await canonical(other.directory)) ?? resolve(other.directory);
+    if (containsPath(path, otherPath) || containsPath(path, otherDirectory)) {
+      return result('Used by another conversation');
+    }
+    if (other.workspaceBranch !== branch && other.branch !== branch) continue;
+    // A matching branch name in another repository does not share this checkout.
+    if ((await canonical(await containerDirectory(other.directory))) === (await canonical(container))) {
+      return result('Used by another conversation');
+    }
+  }
+  const status = await git(path, ['status', '--porcelain', '-z', '--untracked-files=all']);
+  if (status) {
+    const records = status.split('\0');
+    let count = 0;
+    for (let index = 0; index < records.length - 1; index++) {
+      count++;
+      if (/^[RC]|^.[RC]/.test(records[index])) index++;
+    }
+    return result(`${count} uncommitted file${count === 1 ? '' : 's'}`);
+  }
+  const upstream = (await git(path, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim();
+  // `branch -d` judges a branch with an upstream against that upstream alone, and a command-local
+  // `-c branch.<name>.merge` only adds a second value rather than replacing it. So only the
+  // upstream can prove preservation, or `-d` would refuse after the checkout is already gone.
+  const references = upstream
+    ? [upstream]
+    : project.branch && project.branch !== branch
+      ? [`refs/heads/${project.branch}`, `refs/remotes/origin/${project.branch}`, `refs/remotes/${project.branch}`]
+      : [];
+  let localOnly: number | null = null;
+  for (const reference of references) {
+    try {
+      const count = Number((await git(path, ['rev-list', '--count', `${reference}..refs/heads/${branch}`])).trim());
+      if (count === 0) return { ...result(null), preservedRef: reference };
+      if (Number.isSafeInteger(count) && count > 0) localOnly = Math.min(localOnly ?? count, count);
+    } catch {
+      // A deleted upstream or base cannot prove that the commits were preserved.
+    }
+  }
+  return result(
+    localOnly === null
+      ? 'Cannot verify the upstream or base branch'
+      : `${localOnly} commit${localOnly === 1 ? '' : 's'} not pushed or merged`
+  );
+}
+
+export async function removeSessionWorktree(
+  project: ChatProject,
+  otherProjects: readonly (ChatProject | undefined)[]
+): Promise<void> {
+  const inspection = await inspectWorktreeRemoval(project, otherProjects);
+  if (!inspection?.safe || !inspection.preservedRef) {
+    throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
+  }
+  await git(project.directory, ['worktree', 'remove', inspection.path]);
+  try {
+    const upstream = (
+      await git(project.directory, ['for-each-ref', '--format=%(upstream)', `refs/heads/${inspection.branch}`])
+    ).trim();
+    // Without an upstream, use the proven base rather than this checkout's possibly stale HEAD.
+    // With one, the inspection already proved against that upstream, which is what `-d` checks.
+    // Command-local settings never persist.
+    const comparison = upstream
+      ? []
+      : [
+          '-c',
+          `branch.${inspection.branch}.remote=.`,
+          '-c',
+          `branch.${inspection.branch}.merge=${inspection.preservedRef}`,
+        ];
+    await git(project.directory, [...comparison, 'branch', '-d', '--', inspection.branch]);
+  } catch (err) {
+    throw new Error(
+      `Worktree removed, but branch ${inspection.branch} was kept: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 }
 

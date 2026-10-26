@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const axiosGet = vi.hoisted(() => vi.fn());
 vi.mock('axios', () => ({ default: { get: axiosGet } }));
 
+import { BadRequestError, UrlBlockedError } from '@bike4mind/common';
 import { ssrfSafeDownload } from './ssrfSafeDownload';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent } from './ssrfProtection';
 
@@ -56,6 +57,12 @@ describe('ssrfSafeDownload', () => {
   it('refuses a private target before any request is made', async () => {
     await expect(ssrfSafeDownload(METADATA_URL, OPTIONS)).rejects.toThrow(/blocked for security reasons/);
     expect(axiosGet).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a blocked URL as a BadRequestError so it answers 400, not 500', async () => {
+    const err = await ssrfSafeDownload(METADATA_URL, OPTIONS).catch(e => e);
+    expect(err).toBeInstanceOf(UrlBlockedError);
+    expect(err).toBeInstanceOf(BadRequestError);
   });
 
   it('refuses a redirect into a private address without fetching it', async () => {

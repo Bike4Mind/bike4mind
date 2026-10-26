@@ -268,3 +268,19 @@ The model id is the one the conversation is set to, for example `claude-opus-5`.
 The tool category is one of `shell`, `editor`, `browser`, `mcp`, `agent` or `other`; a tool's name, its input and its output are never sent. Messages, prompts, model output, file contents, commands and paths are never sent. Unsent events wait in `fleet-activity-queue.json` (mode 0600) under the app's data folder and keep their event ids, so a retried batch is counted once.
 
 Repository identity uses the last two components of a supported network remote. The host and any earlier namespace components are omitted: a GitLab `group/subgroup/project` is reported as `subgroup/project`, and matching owner/name pairs on different hosts are combined. This is an activity label, not a globally unique repository identifier.
+
+## Model availability monitoring
+
+Hosted model monitoring publishes aggregate counts to CloudWatch. The
+`UnavailableModelReferences` count covers unavailable configured model pins and
+fallback references. `LifecycleSuggestions` counts unresolved operator review
+items, and `LifecycleDateChanges` counts lifecycle date changes observed by model
+discovery. The metrics use deployment stage and runtime host dimensions; they
+contain no user, session, prompt, reply, or provider credential fields.
+
+Diagnostic logs identify the affected model, its configuration reference path or
+fallback surface, and the availability problem. Audit failures record an error
+message. You use these records to identify broken model references and review
+lifecycle changes. Metrics follow CloudWatch retention, and logs follow the
+deployment's configured log retention. This operational monitoring does not send
+product usage events to third-party analytics services.
