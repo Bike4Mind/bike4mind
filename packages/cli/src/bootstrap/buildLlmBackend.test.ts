@@ -146,6 +146,20 @@ describe('buildLlmBackend — Ollama multiplexing', () => {
     expect(res.modelInfo.id).toBe('m1');
   });
 
+  it('uses the host saved by `b4m models` when no flag or env names one', async () => {
+    vi.stubEnv('B4M_OLLAMA_HOST', '');
+    try {
+      const { deps } = makeDeps();
+      const config = createMockConfig({ defaultModel: 'ollama1', ollamaHost: 'http://127.0.0.1:11500' });
+      const res = await buildLlmBackend(makeInput({ config, apiClient: fakeApiClient({}) }), deps);
+
+      expect(deps.createOllamaBackend).toHaveBeenCalledWith('http://127.0.0.1:11500');
+      expect(res.modelInfo.id).toBe('ollama1');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   const downOllama = () =>
     ({
       currentModel: 'none',

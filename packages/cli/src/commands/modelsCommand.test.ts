@@ -1,0 +1,567 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  HubAccessError,
+  ModelNotFoundError,
+  type DetectedRuntime,
+  type HubGgufBuild,
+  type HubModelDetail,
+  type InstalledModel,
+  type LocalRuntime,
+  type PullOptions,
+} from '@bike4mind/local-models';
+import {
+  EXIT_CANCELLED,
+  licenseFor,
+  parsePullTarget,
+  pickBuild,
+  pullModel,
+  resolveRuntimeTarget,
+  runModelsCommand,
+  type HubClient,
+  type ModelsDeps,
+  type ModelsOptions,
+  type RuntimeTarget,
+} from './modelsCommand.js';
+
+const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
+const ENDPOINT = 'https://huggingface.co';
+
+function build(quant: string, sizeBytes: number, extra: Partial<HubGgufBuild> = {}): HubGgufBuild {
+  const path = `qwen2.5-0.5b-instruct-${quant.toLowerCase()}.gguf`;
+  return {
+    id: path.replace(/\.gguf$/, ''),
+    quant,
+    files: [{ path, sizeBytes, sha256: 'a'.repeat(64), url: `${ENDPOINT}/${REPO}/resolve/main/${path}` }],
+    sizeBytes,
+    split: false,
+    complete: true,
+    ollamaRef: `hf.co/${REPO}:${quant}`,
+    ollamaRefIssue: null,
+    ...extra,
+  };
+}
+
+function detail(overrides: Partial<HubModelDetail> = {}): HubModelDetail {
+  return {
+    id: REPO,
+    author: 'Qwen',
+    downloads: 123456,
+    likes: 200,
+    updatedAt: null,
+    pipelineTag: 'text-generation',
+    gated: false,
+    private: false,
+    licenses: ['apache-2.0'],
+    baseModels: ['Qwen/Qwen2.5-0.5B-Instruct'],
+    tags: [],
+    revision: 'b'.repeat(40),
+    licenseName: null,
+    licenseLink: null,
+    gguf: { architecture: 'qwen2', contextLength: 32768, parameterCount: 494032768 },
+    builds: [
+      build('Q4_K_M', 491_400_032),
+      build('Q8_0', 675_710_816),
+      build('F16', 1_200_000_000, { split: true, ollamaRef: null, ollamaRefIssue: 'split' }),
+    ],
+    projectors: [],
+    canDownload: true,
+    ollamaNeedsSshKey: false,
+    ...overrides,
+  };
+}
+
+function installed(name: string, extra: Partial<InstalledModel> = {}): InstalledModel {
+  return {
+    name,
+    sizeBytes: 397_821_319,
+    quantization: 'Q4_K_M',
+    family: 'qwen2',
+    parameterSize: '494M',
+    modifiedAt: null,
+    capabilities: { tools: true, vision: false, thinking: false, embeddings: false, completion: true },
+    ...extra,
+  };
+}
+
+function fakeRuntime(overrides: Partial<LocalRuntime> = {}): LocalRuntime {
+  return {
+    id: 'ollama:127.0.0.1:11500',
+    kind: 'ollama',
+    baseUrl: 'http://127.0.0.1:11500',
+    capabilities: { canPull: true, canRemove: true, canInspect: true, reportsLoaded: true },
+    health: vi.fn().mockResolvedValue({ ok: true, version: '0.40.11', error: null }),
+    list: vi.fn().mockResolvedValue([
+      installed('qwen2.5:0.5b'),
+      installed('smollm2:135m', {
+        capabilities: { tools: false, vision: false, thinking: false, embeddings: false, completion: true },
+      }),
+    ]),
+    inspect: vi.fn(),
+    pull: vi.fn(async (_ref: string, opts?: PullOptions) => {
+      opts?.onProgress?.({ status: 'pulling manifest', completedBytes: 0, totalBytes: null });
+      opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 100, totalBytes: 400 });
+      opts?.onProgress?.({ status: 'success', completedBytes: 400, totalBytes: 400 });
+    }),
+    remove: vi.fn().mockResolvedValue(undefined),
+    loaded: vi
+      .fn()
+      .mockResolvedValue([{ name: 'qwen2.5:0.5b', sizeBytes: 1, vramBytes: 0, contextLength: 4096, expiresAt: null }]),
+    ...overrides,
+  };
+}
+
+function fakeHub(overrides: Partial<HubClient> = {}): HubClient {
+  return {
+    endpoint: ENDPOINT,
+    search: vi.fn().mockResolvedValue({
+      models: [
+        {
+          id: REPO,
+          author: 'Qwen',
+          downloads: 123456,
+          likes: 200,
+          updatedAt: null,
+          pipelineTag: 'text-generation',
+          gated: false,
+          private: false,
+          licenses: ['apache-2.0'],
+          baseModels: [],
+          tags: [],
+        },
+        {
+          id: 'meta-llama/Llama-3.2-1B-GGUF',
+          author: 'meta-llama',
+          downloads: 900,
+          likes: 3,
+          updatedAt: null,
+          pipelineTag: null,
+          gated: 'manual',
+          private: false,
+          licenses: ['llama3.2'],
+          baseModels: [],
+          tags: [],
+        },
+      ],
+      nextCursor: null,
+    }),
+    getModel: vi.fn().mockResolvedValue(detail()),
+    verifyOllamaRef: vi.fn(async (d: Pick<HubModelDetail, 'id'>, b: HubGgufBuild) => `hf.co/${d.id}:${b.quant}`),
+    ...overrides,
+  };
+}
+
+interface Harness {
+  deps: ModelsDeps;
+  lines: string[];
+  questions: string[];
+  progress: string[];
+  saved: Array<{ defaultModel?: string; ollamaHost?: string }>;
+  runtime: LocalRuntime;
+  hub: HubClient;
+  controller: AbortController;
+}
+
+function harness(
+  options: {
+    runtime?: LocalRuntime;
+    hub?: HubClient;
+    answers?: boolean[];
+    isTTY?: boolean;
+    source?: RuntimeTarget['source'];
+    config?: { defaultModel?: string; ollamaHost?: string };
+  } = {}
+): Harness {
+  const lines: string[] = [];
+  const questions: string[] = [];
+  const progress: string[] = [];
+  const saved: Harness['saved'] = [];
+  const runtime = options.runtime ?? fakeRuntime();
+  const hub = options.hub ?? fakeHub();
+  const answers = [...(options.answers ?? [])];
+  const controller = new AbortController();
+  const deps: ModelsDeps = {
+    hub: () => hub,
+    resolveRuntime: async () => ({ runtime, source: options.source ?? 'config' }),
+    config: {
+      defaultModel: options.config?.defaultModel,
+      ollamaHost: options.config?.ollamaHost,
+      save: async patch => {
+        saved.push(patch);
+      },
+    },
+    confirm: async question => {
+      questions.push(question);
+      return answers.shift() ?? false;
+    },
+    isTTY: options.isTTY ?? true,
+    log: line => lines.push(line),
+    progress: { update: line => progress.push(line), end: () => progress.push('<end>') },
+    signal: controller.signal,
+  };
+  return { deps, lines, questions, progress, saved, runtime, hub, controller };
+}
+
+const OPTS: ModelsOptions = { json: false, yes: false, acceptLicense: false };
+
+describe('parsePullTarget', () => {
+  it('reads Hugging Face repos with and without a host or quant', () => {
+    expect(parsePullTarget(`hf.co/${REPO}:Q4_K_M`)).toEqual({ kind: 'hub', repo: REPO, tag: 'Q4_K_M' });
+    expect(parsePullTarget(`https://huggingface.co/${REPO}`)).toEqual({ kind: 'hub', repo: REPO, tag: null });
+    expect(parsePullTarget(`${REPO}:q8_0`)).toEqual({ kind: 'hub', repo: REPO, tag: 'q8_0' });
+  });
+
+  it('treats single names and other registries as Ollama names', () => {
+    expect(parsePullTarget('qwen2.5:0.5b')).toEqual({ kind: 'ollama', name: 'qwen2.5:0.5b' });
+    expect(parsePullTarget('registry.ollama.ai/library/smollm2:135m')).toEqual({
+      kind: 'ollama',
+      name: 'registry.ollama.ai/library/smollm2:135m',
+    });
+  });
+
+  it('rejects malformed repo ids', () => {
+    expect(() => parsePullTarget('hf.co/not a repo')).toThrow(/Not a Hugging Face repo/);
+    expect(() => parsePullTarget(`${REPO}:`)).toThrow(/Not a Hugging Face repo/);
+  });
+});
+
+describe('pickBuild', () => {
+  it('defaults to Q4_K_M and matches tags case-insensitively', () => {
+    const builds = detail().builds;
+    expect(pickBuild(builds, null)?.quant).toBe('Q4_K_M');
+    expect(pickBuild(builds, 'q8_0')?.quant).toBe('Q8_0');
+    expect(pickBuild(builds, 'F16')?.split).toBe(true);
+    expect(pickBuild(builds, 'IQ2_XS')).toBeUndefined();
+  });
+});
+
+describe('licenseFor', () => {
+  it('treats permissive OSI licenses as unrestricted', () => {
+    expect(licenseFor(detail(), ENDPOINT)).toEqual({
+      label: 'apache-2.0',
+      link: `${ENDPOINT}/${REPO}`,
+      restricted: false,
+    });
+  });
+
+  it('names a custom license and resolves a relative link against the repo', () => {
+    const info = licenseFor(
+      detail({ licenses: ['other'], licenseName: 'qwen-research', licenseLink: 'LICENSE' }),
+      ENDPOINT
+    );
+    expect(info).toEqual({ label: 'qwen-research', link: `${ENDPOINT}/${REPO}/blob/main/LICENSE`, restricted: true });
+  });
+
+  it('treats a missing license as restricted', () => {
+    expect(licenseFor(detail({ licenses: [] }), ENDPOINT)).toMatchObject({ label: 'none declared', restricted: true });
+  });
+});
+
+describe('models ls', () => {
+  it('lists installed models with size, quant, capabilities and markers', async () => {
+    const h = harness({ config: { defaultModel: 'smollm2:135m' } });
+    expect(await runModelsCommand('ls', { _: [] }, h.deps)).toBe(0);
+    expect(h.lines[0]).toBe('Ollama at http://127.0.0.1:11500');
+    expect(h.lines[1]).toMatch(/^NAME\s+SIZE\s+QUANT\s+CAPABILITIES$/);
+    expect(h.lines[2]).toMatch(/^qwen2\.5:0\.5b\s+398 MB\s+Q4_K_M\s+tools, completion\s+loaded$/);
+    expect(h.lines[3]).toMatch(/^smollm2:135m\s+398 MB\s+Q4_K_M\s+completion\s+default$/);
+  });
+
+  it('prints JSON with --output-format json', async () => {
+    const h = harness({ source: 'detected' });
+    await runModelsCommand('ls', { _: [], 'output-format': 'json' }, h.deps);
+    const parsed = JSON.parse(h.lines.join('\n'));
+    expect(parsed.runtime).toEqual({ kind: 'ollama', baseUrl: 'http://127.0.0.1:11500', source: 'detected' });
+    expect(parsed.models[0]).toMatchObject({ name: 'qwen2.5:0.5b', loaded: true, default: false });
+  });
+
+  it('points at search when nothing is installed', async () => {
+    const h = harness({ runtime: fakeRuntime({ list: vi.fn().mockResolvedValue([]) }) });
+    await runModelsCommand('list', { _: [] }, h.deps);
+    expect(h.lines[1]).toMatch(/No models installed/);
+  });
+});
+
+describe('models search', () => {
+  it('shows downloads, likes, license and gated status', async () => {
+    const h = harness();
+    await runModelsCommand('search', { _: [], query: ['qwen2.5', '0.5b'] }, h.deps);
+    expect(h.hub.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'qwen2.5 0.5b', limit: 20 }));
+    expect(h.lines[0]).toMatch(/^REPO\s+DOWNLOADS\s+LIKES\s+LICENSE\s+GATED$/);
+    expect(h.lines[1]).toMatch(/^Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF\s+123\.5k\s+200\s+apache-2\.0\s+no$/);
+    expect(h.lines[2]).toMatch(/llama3\.2\s+yes \(manual approval\)$/);
+  });
+
+  it('prints the page as JSON', async () => {
+    const h = harness();
+    await runModelsCommand('search', { _: [], query: 'qwen', 'output-format': 'json' }, h.deps);
+    expect(JSON.parse(h.lines.join('\n')).models).toHaveLength(2);
+  });
+
+  it('requires a query', async () => {
+    await expect(runModelsCommand('search', { _: [], query: [] }, harness().deps)).rejects.toThrow(/Usage/);
+  });
+});
+
+describe('models show', () => {
+  it('lists builds with refs or the reason there is none', async () => {
+    const h = harness();
+    await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+    const text = h.lines.join('\n');
+    expect(text).toMatch(/License: {3}apache-2\.0\n/);
+    expect(text).toMatch(/Gated: {5}no/);
+    expect(text).toMatch(/Q4_K_M\s+491 MB\s+hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
+    expect(text).toMatch(/F16\s+1\.2 GB\s+none: split into shards/);
+    expect(text).toMatch(/Pull one with: b4m models pull Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
+  });
+
+  it('explains how to get access to a gated repo', async () => {
+    const hub = fakeHub({ getModel: vi.fn().mockResolvedValue(detail({ gated: 'manual', canDownload: false })) });
+    const h = harness({ hub });
+    await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+    const text = h.lines.join('\n');
+    expect(text).toMatch(/is gated/);
+    expect(text).toMatch(/Request access at https:\/\/huggingface\.co\/Qwen/);
+    expect(text).toMatch(/HF_TOKEN/);
+  });
+
+  it('shows the license link for a restricted license', async () => {
+    const hub = fakeHub({
+      getModel: vi
+        .fn()
+        .mockResolvedValue(detail({ licenses: ['llama3.2'], licenseLink: 'https://example.com/license' })),
+    });
+    const h = harness({ hub });
+    await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+    expect(h.lines).toContain('  License:   llama3.2 (https://example.com/license)');
+  });
+});
+
+describe('models pull (Hugging Face)', () => {
+  it('shows size and license, asks, verifies the ref, then pulls with progress', async () => {
+    const h = harness({ answers: [true] });
+    expect(await runModelsCommand('pull', { _: [], ref: REPO }, h.deps)).toBe(0);
+    expect(h.lines).toContain('Size:     491 MB');
+    expect(h.lines).toContain('License:  apache-2.0');
+    expect(h.questions).toEqual(['Download 491 MB? [y/N] ']);
+    expect(h.hub.verifyOllamaRef).toHaveBeenCalledTimes(1);
+    expect(h.runtime.pull).toHaveBeenCalledWith(
+      `hf.co/${REPO}:Q4_K_M`,
+      expect.objectContaining({ signal: h.deps.signal })
+    );
+    const verifyOrder = vi.mocked(h.hub.verifyOllamaRef).mock.invocationCallOrder[0];
+    const pullOrder = vi.mocked(h.runtime.pull).mock.invocationCallOrder[0];
+    expect(verifyOrder).toBeLessThan(pullOrder);
+    expect(h.progress).toEqual(['pulling manifest', 'pulling abc123  25%  100 B / 400 B', 'success', '<end>']);
+    expect(h.lines[h.lines.length - 1]).toMatch(/^Pulled hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M\./);
+  });
+
+  it('downloads nothing when the confirmation is declined', async () => {
+    const h = harness({ answers: [false] });
+    expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q8_0` }, h.deps)).toBe(0);
+    expect(h.questions).toEqual(['Download 676 MB? [y/N] ']);
+    expect(h.hub.verifyOllamaRef).not.toHaveBeenCalled();
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+    expect(h.lines[h.lines.length - 1]).toBe('Aborted');
+  });
+
+  it('skips the prompt with --yes and refuses to guess without a terminal', async () => {
+    const yes = harness({ isTTY: false });
+    await runModelsCommand('pull', { _: [], ref: REPO, yes: true }, yes.deps);
+    expect(yes.questions).toEqual([]);
+    expect(yes.runtime.pull).toHaveBeenCalled();
+
+    const noTty = harness({ isTTY: false });
+    await expect(runModelsCommand('pull', { _: [], ref: REPO }, noTty.deps)).rejects.toThrow(/--yes/);
+    expect(noTty.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('requires acknowledging a restricted license, even with --yes', async () => {
+    const restricted = detail({ licenses: ['other'], licenseName: 'qwen-research', licenseLink: 'LICENSE' });
+    const declined = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(restricted) }), answers: [false] });
+    expect(await pullModel(REPO, declined.deps, { ...OPTS, yes: true })).toBe('declined');
+    expect(declined.lines).toContain(`Read it before downloading: ${ENDPOINT}/${REPO}/blob/main/LICENSE`);
+    expect(declined.questions).toEqual(['Do you accept the qwen-research license? [y/N] ']);
+    expect(declined.runtime.pull).not.toHaveBeenCalled();
+
+    const accepted = harness({
+      hub: fakeHub({ getModel: vi.fn().mockResolvedValue(restricted) }),
+      answers: [true, true],
+    });
+    expect(await pullModel(REPO, accepted.deps, OPTS)).toBe('pulled');
+    expect(accepted.questions).toEqual(['Do you accept the qwen-research license? [y/N] ', 'Download 491 MB? [y/N] ']);
+
+    const flagged = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(restricted) }), isTTY: false });
+    await expect(pullModel(REPO, flagged.deps, { ...OPTS, yes: true })).rejects.toThrow(/--accept-license/);
+    expect(await pullModel(REPO, flagged.deps, { ...OPTS, yes: true, acceptLicense: true })).toBe('pulled');
+  });
+
+  it('explains gating before asking anything', async () => {
+    const hub = fakeHub({ getModel: vi.fn().mockResolvedValue(detail({ gated: 'auto', canDownload: false })) });
+    const h = harness({ hub, answers: [true] });
+    await expect(runModelsCommand('pull', { _: [], ref: REPO }, h.deps)).rejects.toThrow(
+      /is gated[\s\S]*Request access/
+    );
+    expect(h.questions).toEqual([]);
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('maps a gated refusal from the Hub to the same explanation', async () => {
+    const hub = fakeHub({
+      verifyOllamaRef: vi.fn().mockRejectedValue(new HubAccessError('gated', 'huggingface', 403, REPO, 'gated')),
+    });
+    const h = harness({ hub, answers: [true] });
+    await expect(runModelsCommand('pull', { _: [], ref: REPO }, h.deps)).rejects.toThrow(/is gated/);
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('stops when the registry does not serve the exact file', async () => {
+    const h = harness({ hub: fakeHub({ verifyOllamaRef: vi.fn().mockResolvedValue(null) }), answers: [true] });
+    await expect(runModelsCommand('pull', { _: [], ref: REPO }, h.deps)).rejects.toThrow(
+      /does not serve this exact Q4_K_M file[\s\S]*nothing was downloaded/
+    );
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('refuses builds Ollama cannot pull before asking', async () => {
+    const h = harness({ answers: [true] });
+    await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:F16` }, h.deps)).rejects.toThrow(/split into shards/);
+    expect(h.questions).toEqual([]);
+  });
+
+  it('lists the available quants when the requested one is missing', async () => {
+    const h = harness();
+    await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:IQ2_XS` }, h.deps)).rejects.toThrow(
+      /no IQ2_XS build\. Pick one of: Q4_K_M, Q8_0, F16/
+    );
+  });
+
+  it('aborts cleanly when Ctrl-C arrives mid-pull', async () => {
+    const runtime = fakeRuntime({
+      pull: vi.fn(
+        (_ref: string, opts?: PullOptions) =>
+          new Promise<void>((_resolve, reject) => {
+            opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 50, totalBytes: 400 });
+            opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+            h.controller.abort();
+          })
+      ),
+    });
+    const h = harness({ runtime, answers: [true] });
+    expect(await runModelsCommand('pull', { _: [], ref: REPO }, h.deps)).toBe(EXIT_CANCELLED);
+    expect(h.progress).toEqual(['pulling abc123  12%  50 B / 400 B', '<end>']);
+    expect(h.lines[h.lines.length - 1]).toMatch(/^Pull cancelled\. Nothing was installed/);
+  });
+});
+
+describe('models pull (Ollama library)', () => {
+  it('asks, then pulls the name as given', async () => {
+    const h = harness({ answers: [true] });
+    expect(await runModelsCommand('pull', { _: [], ref: 'smollm2:135m' }, h.deps)).toBe(0);
+    expect(h.lines).toContain('Size and license: https://ollama.com/library/smollm2');
+    expect(h.questions).toEqual(['Download smollm2:135m? [y/N] ']);
+    expect(h.hub.getModel).not.toHaveBeenCalled();
+    expect(h.runtime.pull).toHaveBeenCalledWith('smollm2:135m', expect.anything());
+  });
+
+  it('logs status changes instead of a progress line without a terminal', async () => {
+    const h = harness({ isTTY: false });
+    await runModelsCommand('pull', { _: [], ref: 'smollm2:135m', yes: true }, h.deps);
+    expect(h.progress).toEqual([]);
+    expect(h.lines).toEqual(expect.arrayContaining(['pulling manifest', 'pulling abc123', 'success']));
+  });
+
+  it('refuses a runtime that cannot pull', async () => {
+    const runtime = fakeRuntime({
+      kind: 'openai-compatible',
+      capabilities: { canPull: false, canRemove: false, canInspect: false, reportsLoaded: false },
+    });
+    await expect(runModelsCommand('pull', { _: [], ref: 'smollm2:135m' }, harness({ runtime }).deps)).rejects.toThrow(
+      /cannot download models/
+    );
+  });
+});
+
+describe('models rm', () => {
+  it('removes only after confirmation', async () => {
+    const declined = harness({ answers: [false] });
+    await runModelsCommand('rm', { _: [], name: 'qwen2.5:0.5b' }, declined.deps);
+    expect(declined.questions).toEqual(['Remove qwen2.5:0.5b from Ollama at http://127.0.0.1:11500? [y/N] ']);
+    expect(declined.runtime.remove).not.toHaveBeenCalled();
+    expect(declined.lines).toEqual(['Aborted']);
+
+    const confirmed = harness({ answers: [true], config: { defaultModel: 'qwen2.5:0.5b' } });
+    await runModelsCommand('remove', { _: [], name: 'qwen2.5:0.5b' }, confirmed.deps);
+    expect(confirmed.runtime.remove).toHaveBeenCalledWith('qwen2.5:0.5b');
+    expect(confirmed.lines).toEqual(['Removed qwen2.5:0.5b.', expect.stringMatching(/It was your default model/)]);
+  });
+
+  it('reports a missing model', async () => {
+    const runtime = fakeRuntime({ remove: vi.fn().mockRejectedValue(new ModelNotFoundError('ollama', 'nope')) });
+    await expect(runModelsCommand('rm', { _: [], name: 'nope', yes: true }, harness({ runtime }).deps)).rejects.toThrow(
+      /No model named nope/
+    );
+  });
+});
+
+describe('models use', () => {
+  it('saves the model and the host it lives on', async () => {
+    const h = harness({ source: 'detected' });
+    expect(await runModelsCommand('use', { _: [], name: 'qwen2.5:0.5b' }, h.deps)).toBe(0);
+    expect(h.saved).toEqual([{ defaultModel: 'qwen2.5:0.5b', ollamaHost: 'http://127.0.0.1:11500' }]);
+    expect(h.lines[0]).toBe('Default model: qwen2.5:0.5b on Ollama at http://127.0.0.1:11500');
+  });
+
+  it('keeps an already saved host and accepts a name without :latest', async () => {
+    const runtime = fakeRuntime({ list: vi.fn().mockResolvedValue([installed('llama3:latest')]) });
+    const h = harness({ runtime, config: { ollamaHost: 'http://127.0.0.1:11500' } });
+    await runModelsCommand('use', { _: [], name: 'llama3' }, h.deps);
+    expect(h.saved).toEqual([{ defaultModel: 'llama3:latest' }]);
+  });
+
+  it('rejects unknown models and non-Ollama runtimes', async () => {
+    await expect(runModelsCommand('use', { _: [], name: 'nope' }, harness().deps)).rejects.toThrow(
+      /No model named nope/
+    );
+    const runtime = fakeRuntime({ kind: 'openai-compatible' });
+    await expect(runModelsCommand('use', { _: [], name: 'qwen2.5:0.5b' }, harness({ runtime }).deps)).rejects.toThrow(
+      /is not Ollama/
+    );
+  });
+});
+
+describe('resolveRuntimeTarget', () => {
+  const detected = (runtime: LocalRuntime, ok = true): DetectedRuntime => ({
+    runtime,
+    health: { ok, version: null, error: ok ? null : 'unauthorized' },
+    product: null,
+    configured: false,
+  });
+
+  it('uses the flag, then the environment, then the saved host', async () => {
+    const create = vi.fn((baseUrl: string) => fakeRuntime({ baseUrl }));
+    const detect = vi.fn();
+    const target = await resolveRuntimeTarget({ env: 'http://env:1', config: 'http://saved:2' }, detect, create);
+    expect(target.source).toBe('env');
+    expect(create).toHaveBeenCalledWith('http://env:1');
+    expect((await resolveRuntimeTarget({ config: 'http://saved:2' }, detect, create)).source).toBe('config');
+    expect(detect).not.toHaveBeenCalled();
+  });
+
+  it('fails when the configured host is down', async () => {
+    const create = () =>
+      fakeRuntime({ health: vi.fn().mockResolvedValue({ ok: false, version: null, error: 'refused' }) });
+    await expect(resolveRuntimeTarget({ config: 'http://saved:2' }, vi.fn(), create)).rejects.toThrow(
+      /unreachable: refused/
+    );
+  });
+
+  it('falls back to detected runtimes, preferring a healthy Ollama', async () => {
+    const lmStudio = fakeRuntime({ kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:1234' });
+    const ollama = fakeRuntime();
+    const target = await resolveRuntimeTarget({}, async () => [detected(lmStudio), detected(ollama)]);
+    expect(target).toEqual({ runtime: ollama, source: 'detected' });
+    await expect(resolveRuntimeTarget({}, async () => [detected(ollama, false)])).rejects.toThrow(
+      /No local model runtime/
+    );
+  });
+});

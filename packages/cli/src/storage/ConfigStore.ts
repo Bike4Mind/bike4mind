@@ -320,6 +320,7 @@ const CliConfigSchema = z.object({
   sandbox: SandboxConfigSchema.optional(),
   additionalDirectories: z.array(z.string()).prefault([]),
   fallbackModels: z.array(z.string()).optional(),
+  ollamaHost: z.string().optional(),
 });
 
 /**
