@@ -1253,6 +1253,10 @@ UserSchema.index({ groups: 1 }, { name: 'user_groups' });
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
+// Serves the signupIpRetention cron's range scan for signups past the retention window. Sparse:
+// accounts created before signup network capture carry no signupMeta. Explicit name so migration
+// 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
+UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
