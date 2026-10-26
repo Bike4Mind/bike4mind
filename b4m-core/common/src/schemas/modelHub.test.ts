@@ -451,6 +451,21 @@ describe('HubEntrySchema cross-field rules', () => {
       'builds.0.tensorStats: tensorStats needs arch.moe',
     ],
     [
+      'moe-35b',
+      'tensorStats larger than the weight files',
+      e => (e.builds[0].tensorStats = { expertBytesPerLayer: 1e9, nonExpertBytes: 2e9 }),
+      'builds.0.tensorStats: tensorStats exceed the weight files',
+    ],
+    [
+      'hybrid-27b',
+      'a fixed quantized KV preset on a kvProbe arch',
+      e => {
+        e.arch = { ...e.arch, kvProbe: kvProbe('b11889') };
+        e.builds[0].preset = { kv: { k: 'q8_0', v: 'f16' } };
+      },
+      'builds.0.preset.kv: a kvProbe arch is sized at f16 KV only',
+    ],
+    [
       'hybrid-27b',
       'layer groups beyond blockCount',
       e => (e.arch = { ...e.arch, blockCount: 32 }),

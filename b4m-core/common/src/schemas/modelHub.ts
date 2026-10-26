@@ -137,7 +137,8 @@ export const ModelArchSchema = z.object({
       moeLayers: LayerCountSchema.positive(),
     })
     .optional(),
-  // Sparse-attention families are not modelled by hand; their KV size comes from a runtime probe.
+  // Sparse-attention families are not modelled by hand; their KV size comes from a runtime probe at the default
+  // f16 cache, so it overstates a quantized one.
   kvProbe: z
     .object({
       bytesPerToken: z
@@ -466,6 +467,14 @@ function buildIssues(entry: EntryHeader, build: HubBuild, b: number): EntryIssue
     issue(at('ollama'), 'routing to Ollama needs an Ollama source');
   }
   if (build.tensorStats && !arch.moe) issue(at('tensorStats'), 'tensorStats needs arch.moe');
+  if (build.tensorStats && arch.moe) {
+    const { expertBytesPerLayer, nonExpertBytes } = build.tensorStats;
+    const weightBytes = build.weights.reduce((sum, w) => sum + w.sizeBytes, 0);
+    // An inflated expert size would let the fit estimator offload too few layers.
+    if (expertBytesPerLayer * arch.moe.moeLayers + nonExpertBytes > weightBytes) {
+      issue(at('tensorStats'), 'tensorStats exceed the weight files');
+    }
+  }
   const { nCpuMoe } = build.preset;
   if (typeof nCpuMoe === 'number' && nCpuMoe > (arch.moe?.moeLayers ?? 0)) {
     issue(at('preset', 'nCpuMoe'), 'nCpuMoe exceeds the MoE layer count');
@@ -484,6 +493,9 @@ function buildIssues(entry: EntryHeader, build: HubBuild, b: number): EntryIssue
   const kv = build.preset.kv;
   if (kv !== 'auto' && kv.v !== 'f16' && build.preset.flashAttn !== 'on') {
     issue(at('preset', 'kv'), "a quantized V cache requires flashAttn 'on'");
+  }
+  if (kv !== 'auto' && arch.kvProbe && (kv.k !== 'f16' || kv.v !== 'f16')) {
+    issue(at('preset', 'kv'), 'a kvProbe arch is sized at f16 KV only');
   }
 
   const ownDigests = new Set(build.weights.map(w => w.sha256));
