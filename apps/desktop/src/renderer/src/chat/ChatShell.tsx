@@ -5,7 +5,6 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
-import Switch from '@mui/joy/Switch';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
@@ -313,6 +312,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     setBrowserOpen(true);
     writeBrowserPaneOpen(true);
   }, []);
+  const setHistory = conversation.setHistory;
+  const onHistory = useCallback((enabled: boolean) => void setHistory(enabled), [setHistory]);
   const openInBrowserPane = useCallback(
     (url: string) => openInSessionBrowser(url, activeId, showBrowserPane),
     [activeId, showBrowserPane]
@@ -701,16 +702,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   >
                     <PanelRightIcon />
                   </IconButton>
-                </Tooltip>
-              )}
-              {!opening && conversation.session && (
-                <Tooltip title="Keep this conversation and its visited pages in the local search index.">
-                  <Switch
-                    size="sm"
-                    checked={conversation.session.historyEnabled === true}
-                    onChange={event => void conversation.setHistory(event.target.checked)}
-                    slotProps={{ input: { 'aria-label': 'Local history', 'data-testid': 'chat-history-switch' } }}
-                  />
                 </Tooltip>
               )}
               {/* Inside the reading column, not out at the window edge: a tooltip opening from
@@ -1104,7 +1095,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         page floating over them would be unreachable - and it is told to stand down while the
         drop overlay is up, which is drawn in the React tree and so would be behind it. */}
       {browserOpen && browserAvailable && screen === 'conversation' && (
-        <BrowserPane sessionId={activeId} suspended={drop.over} conversation={conversationColumn} />
+        <BrowserPane
+          sessionId={activeId}
+          suspended={drop.over}
+          conversation={conversationColumn}
+          historyEnabled={!opening && conversation.session ? conversation.session.historyEnabled === true : null}
+          onHistory={onHistory}
+        />
       )}
     </Box>
   );

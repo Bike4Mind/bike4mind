@@ -9,10 +9,11 @@ const CLOSED_REASON: Record<Exclude<ChatApprovalSystemReason, 'error'>, string> 
 };
 
 /**
- * The one line under a settled call saying who let it run or stopped it. A system close is
- * worded as "not run" rather than as a refusal, because nobody refused it.
+ * The one line under a settled call saying who let it run or stopped it, or null when a saved
+ * rule or the approval mode let it through: that is routine and would sit under most calls. A
+ * system close is worded as "not run" rather than as a refusal, because nobody refused it.
  */
-export function describeApproval(approval: ChatToolApproval): string {
+export function describeApproval(approval: ChatToolApproval): string | null {
   const { decidedBy, outcome } = approval;
   switch (decidedBy.kind) {
     case 'user': {
@@ -25,12 +26,13 @@ export function describeApproval(approval: ChatToolApproval): string {
       return `Approved by you${option}`;
     }
     case 'rule':
-      return `${outcome === 'allowed' ? 'Allowed' : 'Denied'} by rule ${decidedBy.rule}`;
+      return outcome === 'allowed' ? null : `Denied by rule ${decidedBy.rule}`;
     case 'chat-allowance':
       return outcome === 'allowed' ? 'Allowed in this chat' : 'Denied in this chat';
     case 'mode': {
+      if (outcome === 'allowed') return null;
       const label = APPROVAL_MODE_OPTIONS.find(option => option.mode === decidedBy.mode)?.label ?? decidedBy.mode;
-      return `Auto-approved - ${label}`;
+      return `Denied - ${label}`;
     }
     case 'system':
       return decidedBy.reason === 'error'

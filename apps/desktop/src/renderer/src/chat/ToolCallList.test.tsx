@@ -54,8 +54,7 @@ describe('ToolCallList', () => {
     });
 
     it.each([
-      [{ kind: 'mode', mode: 'auto' } as const, 'allowed' as const, 'Auto-approved - Approve for me'],
-      [{ kind: 'rule', rule: 'Bash(git commit:*)' } as const, 'allowed' as const, 'Allowed by rule Bash(git commit:*)'],
+      [{ kind: 'rule', rule: 'Bash(rm:*)' } as const, 'denied' as const, 'Denied by rule Bash(rm:*)'],
       [{ kind: 'chat-allowance' } as const, 'allowed' as const, 'Allowed in this chat'],
       [{ kind: 'user', answer: 'always' } as const, 'allowed' as const, 'Approved by you - always in this chat'],
       [{ kind: 'user', answer: 'deny' } as const, 'denied' as const, 'Declined by you'],
@@ -76,15 +75,42 @@ describe('ToolCallList', () => {
       expect(attribution(html)).toEqual([text]);
     });
 
-    it('says it once for a group answered the same way, and nothing for an ungated call', () => {
-      const auto = { outcome: 'allowed', decidedBy: { kind: 'mode', mode: 'auto' }, asked: false, decidedAt } as const;
+    it.each([
+      [{ kind: 'mode', mode: 'auto' } as const],
+      [{ kind: 'rule', rule: 'Bash(git commit:*)', source: 'Claude Code settings' } as const],
+    ])('draws nothing for a call %o let through', decidedBy => {
       const html = markup([
-        bash({ id: 'a', status: 'done', approval: auto }),
-        bash({ id: 'b', status: 'done', approval: auto }),
+        bash({ status: 'done', approval: { outcome: 'allowed', decidedBy, asked: false, decidedAt } }),
+      ]);
+      expect(html).not.toContain('tool-call-approval-attribution');
+      expect(html).not.toContain('Claude Code settings');
+    });
+
+    it('says it once for a group answered the same way, and nothing for an ungated call', () => {
+      const once = { outcome: 'allowed', decidedBy: { kind: 'user', answer: 'once' }, asked: true, decidedAt } as const;
+      const html = markup([
+        bash({ id: 'a', status: 'done', approval: once }),
+        bash({ id: 'b', status: 'done', approval: once }),
         bash({ id: 'c', status: 'done' }),
       ]);
-      expect(attribution(html)).toEqual(['Auto-approved - Approve for me']);
+      expect(attribution(html)).toEqual(['Approved by you']);
       expect(attribution(markup([bash({ status: 'done' })]))).toEqual([]);
+    });
+
+    it('keeps only the decisions worth reading in a group that mixes them with routine allows', () => {
+      const allowed = (decidedBy: NonNullable<ChatToolCall['approval']>['decidedBy']) =>
+        ({ outcome: 'allowed', decidedBy, asked: false, decidedAt }) as const;
+      const html = markup([
+        bash({ id: 'a', status: 'done', approval: allowed({ kind: 'mode', mode: 'auto' }) }),
+        bash({ id: 'b', status: 'done', approval: allowed({ kind: 'user', answer: 'once' }) }),
+        bash({ id: 'c', status: 'done', approval: allowed({ kind: 'rule', rule: 'Bash(git commit:*)' }) }),
+        bash({
+          id: 'd',
+          status: 'denied',
+          approval: { outcome: 'denied', decidedBy: { kind: 'user', answer: 'deny' }, asked: true, decidedAt },
+        }),
+      ]);
+      expect(attribution(html)).toEqual(['Approved by you', 'Declined by you']);
     });
   });
 

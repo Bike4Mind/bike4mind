@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type SyntheticEvent } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -18,6 +18,7 @@ import ModalDialog from '@mui/joy/ModalDialog';
 import Option from '@mui/joy/Option';
 import Select from '@mui/joy/Select';
 import Stack from '@mui/joy/Stack';
+import Switch from '@mui/joy/Switch';
 import Typography from '@mui/joy/Typography';
 import {
   MAX_IMPORT_SITES,
@@ -55,9 +56,14 @@ function skipLabel(reason: string): string {
 export function BrowserCookiesMenu({
   state,
   onState,
+  historyEnabled,
+  onHistory,
 }: {
   state: CookieImportState;
   onState: (state: CookieImportState) => void;
+  /** The open conversation's local-history flag; null while none is open, which hides the row. */
+  historyEnabled: boolean | null;
+  onHistory: (enabled: boolean) => void;
 }) {
   const [step, setStep] = useState<Step>('closed');
   const [managing, setManaging] = useState(false);
@@ -154,6 +160,12 @@ export function BrowserCookiesMenu({
             <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, py: 0.75, maxWidth: 280 }}>
               {state.unsupported}
             </Typography>
+          )}
+          {historyEnabled !== null && (
+            <>
+              <Divider />
+              <LocalHistoryItem enabled={historyEnabled} onChange={onHistory} />
+            </>
           )}
         </Menu>
       </Dropdown>
@@ -306,6 +318,42 @@ export function BrowserCookiesMenu({
 
       <ManageSitesDialog open={managing} state={state} onClose={() => setManaging(false)} onState={onState} />
     </>
+  );
+}
+
+/** Joy closes a Dropdown on any MenuItem click unless the click says otherwise. */
+const keepMenuOpen = (event: SyntheticEvent) => {
+  (event as SyntheticEvent & { defaultMuiPrevented?: boolean }).defaultMuiPrevented = true;
+};
+
+/**
+ * The open conversation's switch for the local search index. The row is the control, so the
+ * Switch inside it is only a picture of the state and stays out of the tab order and the
+ * accessibility tree.
+ */
+function LocalHistoryItem({ enabled, onChange }: { enabled: boolean; onChange: (enabled: boolean) => void }) {
+  return (
+    <MenuItem
+      role="menuitemcheckbox"
+      aria-checked={enabled}
+      aria-describedby="chat-browser-history-help"
+      onClick={event => {
+        keepMenuOpen(event);
+        onChange(!enabled);
+      }}
+      sx={{ alignItems: 'flex-start', gap: 1.5 }}
+      data-testid="chat-browser-history-toggle"
+    >
+      <Stack sx={{ flex: 1, minWidth: 0 }}>
+        <Typography level="body-sm">Local history</Typography>
+        <Typography id="chat-browser-history-help" level="body-xs" textColor="text.tertiary">
+          Keep this conversation&apos;s messages and the pages it visits in the local search index.
+        </Typography>
+      </Stack>
+      <Box component="span" aria-hidden sx={{ display: 'inline-flex', pt: 0.25, pointerEvents: 'none' }}>
+        <Switch size="sm" checked={enabled} slotProps={{ input: { tabIndex: -1, readOnly: true } }} />
+      </Box>
+    </MenuItem>
   );
 }
 
