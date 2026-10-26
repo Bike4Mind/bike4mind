@@ -52,7 +52,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         action: 'settings.rapid_reply.test_run',
         target: { kind: 'settings', id: auditModelId, displayName: `Rapid reply test for ${auditModelId}` },
         summary: `ran rapid reply test for ${auditModelId}`,
-        details: { mainModelId: auditModelId, success, simulateLatencyMs: simulateLatency },
+        details: {
+          mainModelId: auditModelId,
+          success,
+          simulateLatencyMs: Number.isFinite(simulateLatency) ? simulateLatency : undefined,
+        },
       });
     const recordFailedRunAndRethrow = async (error: unknown): Promise<never> => {
       await recordTestRun(false);

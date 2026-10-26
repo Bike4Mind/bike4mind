@@ -13,6 +13,8 @@ interface BulkOperation {
 
 // Keeps the admin audit document well under Mongo's size limit however large the request.
 const MAX_AUDITED_OPERATIONS = 100;
+// changedFields are keys of the unvalidated `data` object, so cap their count too.
+const MAX_AUDITED_CHANGED_FIELDS = 50;
 // id/action are echoed from an unvalidated body, so they may be any shape or length.
 const toAuditText = (value: unknown) =>
   value === undefined || value === null ? undefined : String(value).slice(0, 200);
@@ -114,7 +116,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       });
 
       if (action === 'update') {
-        changedFieldsByIndex.set(index, Object.keys(auditChanges));
+        changedFieldsByIndex.set(
+          index,
+          Object.keys(auditChanges)
+            .slice(0, MAX_AUDITED_CHANGED_FIELDS)
+            .map(key => key.slice(0, 200))
+        );
       }
 
       // Add to audit log if there were changes
