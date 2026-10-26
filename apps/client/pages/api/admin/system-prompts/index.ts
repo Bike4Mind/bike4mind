@@ -181,7 +181,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         action: 'settings.system_prompt.created',
         target: { kind: 'settings', id: promptData.promptId, displayName: promptData.name },
         summary: `created system prompt ${promptData.promptId}`,
-        details: { category: promptData.category, enabled: promptData.enabled, version: 1 },
+        details: { category: newPrompt.category, enabled: newPrompt.enabled, version: 1 },
       });
 
       return res.status(201).json({

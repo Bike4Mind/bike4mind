@@ -73,7 +73,7 @@ beforeEach(() => {
 describe('system prompt admin audit', () => {
   it('POST index records created', async () => {
     h.repo.findOne.mockResolvedValue(null);
-    h.repo.create.mockResolvedValue({ promptId: 'p1' });
+    h.repo.create.mockResolvedValue({ promptId: 'p1', category: 'system', enabled: true });
     const res = await call(indexHandler, 'POST', {
       promptId: 'p1',
       name: 'Prompt One',
@@ -88,6 +88,7 @@ describe('system prompt admin audit', () => {
       expect.objectContaining({
         action: 'settings.system_prompt.created',
         target: { kind: 'settings', id: 'p1', displayName: 'Prompt One' },
+        details: { category: 'system', enabled: true, version: 1 },
       })
     );
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('secret prompt text');
@@ -236,6 +237,14 @@ describe('system prompt admin audit', () => {
       target: { kind: 'settings', id: 'p1' },
       changes: [{ field: 'activeVersion', before: 2, after: 1 }],
     });
+  });
+
+  it('switch-version does not audit a switch to the already-active version', async () => {
+    h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 2, version: 3 });
+    h.repo.switchVersion.mockResolvedValue({ ok: true });
+    const res = await call(switchVersion, 'POST', { targetVersion: 2 });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).not.toHaveBeenCalled();
   });
 
   it('reset records reset', async () => {
