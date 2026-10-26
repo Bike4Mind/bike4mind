@@ -1,4 +1,7 @@
+import { logLlmUsageSettled } from './llmUsageSettledLog';
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
+
+vi.mock('./llmUsageSettledLog', () => ({ logLlmUsageSettled: vi.fn() }));
 import {
   ChatCompletionProcess,
   addPairedTool,
@@ -275,6 +278,7 @@ describe('ChatCompletionProcess', () => {
   let mockSession: any;
 
   beforeEach(() => {
+    vi.mocked(logLlmUsageSettled).mockClear();
     mockQuest = {
       id: 'quest1',
       status: 'running',
@@ -401,7 +405,7 @@ describe('ChatCompletionProcess', () => {
 
       const settings = await settingsLoader().loadAdminSettingsAsync(mockLogger, 0);
 
-      // The fabricated default is 'true'; using it would charge a deployment that disabled metering.
+      // The fabricated default is 'true'; using it would charge a self-host deployment that disabled metering.
       expect(settings.enforceCredits).toBe('false');
       expect(mockedGetSettingsMap).toHaveBeenNthCalledWith(1, mockDb, { logger: mockLogger, skipCache: true });
       expect(mockedGetSettingsMap).toHaveBeenNthCalledWith(2, mockDb, { logger: mockLogger });
@@ -4442,6 +4446,50 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.organizations.incrementCredits.mock.calls[0][1]).toBeLessThan(0);
     });
 
+    // The row is read through the real getSettingsValue, so this proves the hosted lock reaches the
+    // reservation gate rather than a mock that already says "on".
+    describe('with a stored enforceCredits=false row', () => {
+      afterEach(() => {
+        vi.unstubAllEnvs();
+      });
+
+      const arrangeStoredFalse = async () => {
+        const { complete } = capOrgSetup();
+        const actual = await vi.importActual<typeof import('@bike4mind/utils')>('@bike4mind/utils');
+        mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+          key === 'enforceCredits' ? actual.getSettingsValue(key, settings) : undefined) as typeof getSettingsValue);
+        vi.mocked((service as any).loadAdminSettingsAsync).mockResolvedValue({ enforceCredits: 'false' });
+        (service as any).user = { ...mockUser, currentCredits: 0 };
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: -5 });
+        mockDb.users = { update: vi.fn(), incrementCredits };
+        mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+        return { complete, incrementCredits };
+      };
+      const personalBody = () => ({ ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined });
+
+      it('refuses a zero-balance user before the model runs on a hosted deployment', async () => {
+        vi.stubEnv('B4M_SELF_HOST', undefined);
+        const { complete, incrementCredits } = await arrangeStoredFalse();
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(mockQuest.errorCode).toBe('insufficient_credits');
+        expect(mockQuest.reply).toMatch(/out of credits/);
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(complete).not.toHaveBeenCalled();
+      });
+
+      it('skips reservation on a self-host deployment', async () => {
+        vi.stubEnv('B4M_SELF_HOST', 'true');
+        const { incrementCredits } = await arrangeStoredFalse();
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(mockQuest.errorCode).not.toBe('insufficient_credits');
+        expect(incrementCredits).not.toHaveBeenCalled();
+      });
+    });
+
     it('lets an in-cap org member through the cap guard to the org-pool debit', async () => {
       capOrgSetup();
       // Well under a large cap, so the cap guard must pass. Force the org pool to read
@@ -4709,9 +4757,40 @@ describe('ChatCompletionProcess', () => {
           ([, row]: [string, { credits: number }]) => Math.abs(row.credits)
         );
         expect(rows).toHaveLength(2);
+        expect(logLlmUsageSettled).toHaveBeenCalledTimes(2);
+        expect(logLlmUsageSettled).toHaveBeenCalledWith(
+          expect.objectContaining({ model: ChatModels.GPT4, inputTokens: 10, outputTokens: 1000, source: 'chat' })
+        );
         const charged = rows.reduce((sum: number, credits: number) => sum + credits, 0);
         expect(charged).toBeGreaterThanOrEqual(2 * settledCredits(1000));
         expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', twoConfigHold - charged);
+      });
+
+      it('meters each research configuration with credit enforcement disabled', async () => {
+        const { complete } = reservationOrgSetup();
+        complete.mockImplementation(
+          async (
+            _model: string,
+            _messages: unknown,
+            _opts: unknown,
+            callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+          ) => {
+            await callback(['Answer'], { inputTokens: 10, outputTokens: 1000 });
+          }
+        );
+        const previous = mockedGetSettingsValue.getMockImplementation();
+        mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+          key === 'enforceCredits' ? false : previous?.(key as never, settings)) as typeof getSettingsValue);
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+
+        await service.process({ body: researchReservationBody() as never, logger: mockLogger });
+
+        expect(logLlmUsageSettled).toHaveBeenCalledTimes(2);
+        expect(logLlmUsageSettled).toHaveBeenCalledWith(
+          expect.objectContaining({ inputTokens: 10, outputTokens: 1000, source: 'chat' })
+        );
+        expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
       });
 
       it('refunds the hold when the research settlement fails', async () => {
@@ -4774,6 +4853,10 @@ describe('ChatCompletionProcess', () => {
       expect(refund).toBeGreaterThanOrEqual(0);
       expect(refund).toBeLessThan(expectedHold);
       expect(usageEventsRecord).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+      expect(logLlmUsageSettled).toHaveBeenCalledTimes(1);
+      expect(logLlmUsageSettled).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'chat', model: ChatModels.GPT4 })
+      );
     });
 
     it('bills the provider-reported output of a thrown abort when it exceeds what streamed', async () => {
@@ -6120,6 +6203,17 @@ describe('ChatCompletionProcess', () => {
       it('stamps the literal source and no row id for an adapter-priced model', async () => {
         const event = await settle({ inputTokens: 100, outputTokens: 50 });
         expect(event.priceSource).toBe('literal');
+        expect(logLlmUsageSettled).toHaveBeenCalledTimes(1);
+        expect(logLlmUsageSettled).toHaveBeenCalledWith(
+          expect.objectContaining({
+            backend: ModelBackend.OpenAI,
+            model: ChatModels.GPT4,
+            inputTokens: 100,
+            outputTokens: 50,
+            usd: event.costUsd,
+            source: 'chat',
+          })
+        );
         expect(event).not.toHaveProperty('priceRowId');
         expect(event.rates).toMatchObject(LOW);
       });

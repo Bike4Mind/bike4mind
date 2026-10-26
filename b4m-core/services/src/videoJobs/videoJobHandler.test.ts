@@ -834,9 +834,84 @@ describe('video job end to end with the test provider', () => {
         jobId: created.job.id,
         prompt: 'a cat',
         durationSeconds: 4,
+        request: expect.objectContaining({ model: 'test-video', prompt: 'a cat', durationSeconds: 4 }),
       },
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it('records a legacy file input image as a first_frame lineage edge', async () => {
+    const fileId = 'a'.repeat(24);
+    const t = setup();
+    await createVideoJob(
+      { user, request: { ...request(), mode: 'image_to_video', inputImageFileId: fileId }, source: 'studio' },
+      t.deps
+    );
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ derivedFrom: [{ fileId, role: 'first_frame' }] })
+    );
+  });
+
+  it('records an uppercase-hex file input under its canonical lowercase id', async () => {
+    const t = setup();
+    const inputs: VideoInput[] = [{ role: 'first_frame', fileId: 'A'.repeat(24) }];
+    await createVideoJob({ user, request: { ...request(), mode: 'image_to_video', inputs }, source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ derivedFrom: [{ fileId: 'a'.repeat(24), role: 'first_frame' }] })
+    );
+  });
+
+  it('records a lineage edge per role-tagged file input, and none for a generated key', async () => {
+    const [first, last, reference, style] = ['a', 'b', 'c', 'd'].map(c => c.repeat(24));
+    const t = setup();
+    const inputs: VideoInput[] = [
+      { role: 'first_frame', fileId: first },
+      { role: 'last_frame', fileId: last },
+      { role: 'reference', fileId: reference },
+      { role: 'reference', generatedImageKey: 'k.png' },
+      { role: 'style', fileId: style },
+    ];
+    await createVideoJob({ user, request: { ...request(), mode: 'image_to_video', inputs }, source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        derivedFrom: [
+          { fileId: first, role: 'first_frame' },
+          { fileId: last, role: 'last_frame' },
+          { fileId: reference, role: 'reference' },
+          { fileId: style, role: 'style' },
+        ],
+      })
+    );
+  });
+
+  it('records no lineage when every input is a generated key, or there are none', async () => {
+    const generatedOnly = setup();
+    await createVideoJob(
+      {
+        user,
+        request: {
+          ...request(),
+          mode: 'image_to_video',
+          inputs: [{ role: 'first_frame', generatedImageKey: 'k.png' }],
+        },
+        source: 'studio',
+      },
+      generatedOnly.deps
+    );
+    await generatedOnly.runToCompletion();
+    expect(generatedOnly.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.not.objectContaining({ derivedFrom: expect.anything() })
+    );
+
+    const plain = setup();
+    await createVideoJob({ user, request: request(), source: 'studio' }, plain.deps);
+    await plain.runToCompletion();
+    expect(plain.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.not.objectContaining({ derivedFrom: expect.anything() })
+    );
   });
 
   it("passes a chat job's quest so the saved clip joins that notebook", async () => {

@@ -97,6 +97,8 @@ vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
     },
   ],
 }));
+const resolveApiKeyTrust = vi.hoisted(() => vi.fn().mockResolvedValue({ assessment: { status: 'trusted' } }));
+vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
 import { CreditHolderType } from '@bike4mind/common';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
@@ -707,5 +709,43 @@ describe('POST /api/user-api-keys - contributed scopes', () => {
     const { req, res } = post({ name: 'k', scopes });
     await mockRefs.postHandler!(req, res);
     expect(createUserApiKey).toHaveBeenCalledWith('u1', expect.objectContaining({ scopes }), expect.anything());
+  });
+});
+
+describe('POST /api/user-api-keys - trust gate', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    resolveApiKeyTrust.mockClear();
+    findIdsAdministeredBy.mockResolvedValue([]);
+  });
+
+  it("hands the caller's trust assessment to the service, which enforces it", async () => {
+    const assessment = { status: 'untrusted', reason: 'email_unverified' };
+    resolveApiKeyTrust.mockResolvedValueOnce({ assessment });
+    const { req, res } = post({ name: 'k', scopes: ['ai:chat'] });
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(resolveApiKeyTrust).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }), expect.anything());
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ trust: assessment })
+    );
+  });
+
+  it('skips the trust assessment for an org-billed mint and passes trust undefined', async () => {
+    findIdsAdministeredBy.mockResolvedValue(['org-1']);
+    const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', organizationId: 'org-1' });
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(resolveApiKeyTrust).not.toHaveBeenCalled();
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ trust: undefined })
+    );
   });
 });

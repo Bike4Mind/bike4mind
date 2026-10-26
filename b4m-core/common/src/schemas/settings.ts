@@ -135,7 +135,7 @@ CHARTS: in a text/html artifact, chart.js@4 (the blessed path above, data baked 
 
 SINGLE-FILE RULE (every artifact type): one deliverable = ONE <artifact> = ONE file, and that is the strong default. For every type except React, NEVER use a relative/sibling import (./ or ../) in any form (import-from, side-effect import, export-from, require) - the sandbox detects and hard-rejects them before rendering. Inline every sub-component, hook, context, helper, dataset, and asset. If the user asks to "split into files/modules," honor the SPIRIT - keep one file, separate concerns with commented sections and well-named functions - and note artifacts are single-file by design. React is the one exception, below.
 
-REACT MULTI-FILE (exception to the single-file rule): prefer ONE self-contained file. Split a React app across several <artifact> tags ONLY when the user explicitly asks for multiple files/modules or the app is genuinely too large for one file. Then: emit every file in the SAME reply; each sibling's identifier must equal its import basename exactly (\`import Chronosphere from "./Chronosphere"\` -> \`identifier="Chronosphere"\`); exactly ONE entry file, the one nothing else imports, has \`export default\`; siblings may use named and/or default exports; use flat names (no directories) and no import cycles; the same npm allowlist applies. A published/shared React app must still be a single file.
+REACT MULTI-FILE (exception to the single-file rule): prefer ONE self-contained file. Split a React app across several <artifact> tags ONLY when the user explicitly asks for multiple files/modules or the app is genuinely too large for one file. Then: emit every file in the SAME reply; each sibling's identifier must equal its import basename exactly (\`import Chronosphere from "./Chronosphere"\` -> \`identifier="Chronosphere"\`); exactly ONE entry file, the one nothing else imports, has \`export default\`; siblings may use named and/or default exports; use flat names (no directories) and no import cycles; the same npm allowlist applies. A split React app can be published/shared as one page as long as every file is in the same reply.
 
 REACT ARTIFACTS: the entry file (the only file, unless split as above) has ONE \`export default\`. Do NOT import React or its hooks - React, useState, useEffect, useRef, useMemo, useCallback, useReducer, useContext, createContext are pre-injected globals; reference them bare. The ONLY importable packages are: lucide-react, recharts, mathjs, lodash, d3, papaparse, xlsx - use one clean import line each (\`import X from 'pkg'\` or single-line \`import { a, b } from 'pkg'\`), never mixed \`import React, { useState }\`. Nothing else resolves (no react-router/next/zustand/framer-motion/three/p5/howler/styled-components) - for multiple screens use a \`view\` useState + conditional render; hand-roll WebGL/Canvas2D/physics/noise.
 
@@ -429,12 +429,20 @@ export const SettingKeySchema = z.enum([
   'allowOpenRegistration',
   'blockDisposableEmails',
   'blockedEmailDomains',
+  'apiKeyTrustGateEnabled',
+  'apiKeyMinAccountAgeDays',
+  'maxActiveKeysUntrusted',
+  'apiKeyUntrustedRateLimitPerMin',
   'defaultFreeCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
   'lowCreditsThreshold',
   'syntheticUserEmailDomains',
+  'turnstileEnabled',
+  'turnstileFailClosed',
+  'turnstileSiteKey',
+  'signupRiskScoring',
 
   // WEATHER SERVICE SETTINGS
   'EnableWeatherService',
@@ -1177,6 +1185,47 @@ export enum ServerStatusEnum {
 
 /** Platform cap on custom MCP connections per user (design #4845). */
 export const CUSTOM_MCP_MAX_CONNECTIONS_PER_USER = 20;
+
+export const SIGNUP_RISK_SIGNALS = [
+  'riskyDomain',
+  'burstCohort',
+  'datacenterNetwork',
+  'quickApiKey',
+  'fastSpend',
+  'generatedLocalPart',
+] as const;
+export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
+
+const signupRiskWeight = (defaultValue: number) => z.number().min(0).max(100).prefault(defaultValue);
+
+/**
+ * Weights and thresholds for `scoreSignupRisk` (b4m-core/services/src/userService/signupRiskScore.ts).
+ * The defaults are generic placeholders: a deployment tunes the real values in admin settings.
+ * Both levels are strict so a mistyped signal or field name is refused on save instead of silently ignored.
+ */
+export const SignupRiskScoringSchema = z
+  .object({
+    weights: z
+      .object({
+        riskyDomain: signupRiskWeight(25),
+        burstCohort: signupRiskWeight(30),
+        datacenterNetwork: signupRiskWeight(15),
+        quickApiKey: signupRiskWeight(15),
+        fastSpend: signupRiskWeight(20),
+        generatedLocalPart: signupRiskWeight(10),
+      })
+      .strict()
+      .prefault({}),
+    /** A first API key minted within this many minutes of signup counts as quick. */
+    quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(60),
+    /** Credits spent in the first 24h at which fastSpend reaches its full weight; less scales linearly. */
+    fastSpendCredits: z.number().positive().prefault(1000),
+    /** A score at or above this needs review. */
+    reviewThreshold: z.number().min(1).max(100).prefault(50),
+  })
+  .strict();
+
+export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
 
 export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
 export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
@@ -1998,6 +2047,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
       { key: 'syntheticUserEmailDomains', order: 4 },
+      { key: 'turnstileEnabled', order: 5 },
+      { key: 'turnstileFailClosed', order: 6 },
+      { key: 'turnstileSiteKey', order: 7 },
+      { key: 'signupRiskScoring', order: 8 },
     ],
   },
   KNOWLEDGE: {
@@ -2103,6 +2156,18 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitProPerMin', order: 3 },
     ],
   },
+  API_KEY_TRUST: {
+    id: 'apiKeyTrustService',
+    name: 'API Key Trust Gate',
+    description: 'Who may mint personal API keys, and how hard keys of untrusted accounts are throttled',
+    icon: 'Security',
+    settings: [
+      { key: 'apiKeyTrustGateEnabled', order: 1 },
+      { key: 'apiKeyMinAccountAgeDays', order: 2 },
+      { key: 'maxActiveKeysUntrusted', order: 3 },
+      { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
+    ],
+  },
   DATA_LAKE_AUDIT: {
     id: 'dataLakeAuditService',
     name: 'Data Lake Audit',
@@ -2126,6 +2191,9 @@ export const API_SERVICE_GROUPS = {
     settings: { key: SettingKey; order: number }[];
   };
 };
+
+/** Hosted deployments always meter credits (self-host may turn it off); read per call so tests can flip the env. */
+export const isEnforceCreditsLocked = (): boolean => process.env.B4M_SELF_HOST !== 'true';
 
 export const settingsMap = {
   DefaultAPIModel: makeStringSetting({
@@ -3347,12 +3415,12 @@ export const settingsMap = {
   billOperationalUsage: makeBooleanSetting({
     key: 'billOperationalUsage',
     name: 'Bill Operational Usage',
-    // Default OFF: operational-model and embedding spend (auto-naming, summarization,
-    // tagging, context summarization, KB query embeddings) is recorded as platform COGS
-    // but not deducted from the user/org. Turn ON to also debit credits for that spend.
+    // Default OFF on hosted and self-host alike: free-tier accounts are billed for this spend
+    // whenever Enforce Credits is on (isOperationalBillingEnabled), so the toggle only decides
+    // whether paying accounts are billed for it too, and turning it on is a pricing change.
     defaultValue: false,
     description:
-      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings) is billed to the user/org. Off = recorded as platform cost only.',
+      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings, file indexing) is billed to every user/org. Off = billed only to free-tier users paying for themselves (no credit purchase or active plan) and recorded as platform cost for everyone else. Requires Enforce Credits.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -3372,6 +3440,60 @@ export const settingsMap = {
     description:
       'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the Default Free Credits grant is then applied after they verify their email (anti-spam — see Default Free Credits). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
     category: 'Users',
+  }),
+  // Personal API key trust gate. A trusted account has a verified email AND one of: a
+  // purchase or active plan, an account older than apiKeyMinAccountAgeDays, or admin
+  // approval (user.apiKeyTrustApproved). See userApiKeyService/trust.ts.
+  apiKeyTrustGateEnabled: makeBooleanSetting({
+    key: 'apiKeyTrustGateEnabled',
+    name: 'API Key Trust Gate',
+    defaultValue: true,
+    description:
+      'Restricts personal API key creation for untrusted accounts: an unverified email cannot mint keys, and a verified account that has not purchased, is younger than the minimum age and is not admin-approved is limited to the untrusted key cap. Off restores unrestricted minting and lifts the untrusted rate limit. Changes reach running servers within about 5 minutes (settings cache).',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 1,
+  }),
+  apiKeyMinAccountAgeDays: makeNumberSetting({
+    key: 'apiKeyMinAccountAgeDays',
+    name: 'API Key Trust: Minimum Account Age (days)',
+    defaultValue: 7,
+    min: 0,
+    max: 365,
+    int: true,
+    description: 'Account age, in days, after which a verified account is trusted for API keys without a purchase.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 2,
+    dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  maxActiveKeysUntrusted: makeNumberSetting({
+    key: 'maxActiveKeysUntrusted',
+    name: 'API Key Trust: Max Active Keys (untrusted)',
+    defaultValue: 1,
+    min: 0,
+    max: 10,
+    int: true,
+    description:
+      'Active personal API keys a verified but untrusted account may hold. 0 blocks untrusted accounts from minting entirely. Org-billed keys are not limited by this.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 3,
+    dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  apiKeyUntrustedRateLimitPerMin: makeNumberSetting({
+    key: 'apiKeyUntrustedRateLimitPerMin',
+    name: 'API Key Trust: Untrusted Rate Limit (requests/min)',
+    defaultValue: 20,
+    min: 1,
+    max: 10000,
+    int: true,
+    description:
+      "Per-minute ceiling applied at request time to personal API keys whose owner is untrusted, including keys minted before the gate existed. A key's own lower limit still wins.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 4,
+    dependsOn: 'apiKeyTrustGateEnabled',
   }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',
@@ -3463,6 +3585,47 @@ export const settingsMap = {
       'Comma-separated email domains whose new signups are flagged synthetic (test personas) and excluded from funnel analytics. Accounts whose username starts with "persona-" are always flagged, so that prefix is reserved: only admins, and accounts with a verified email on one of these domains, can choose it. Flagging applies at signup only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
+  }),
+  turnstileEnabled: makeBooleanSetting({
+    key: 'turnstileEnabled',
+    name: 'Require Turnstile on Email Sign-in',
+    defaultValue: false,
+    description:
+      'Require a Cloudflare Turnstile challenge before a sign-in code is emailed. Takes effect only when the Turnstile secret is provisioned on this stage and a site key is set below; otherwise the check is skipped.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  turnstileFailClosed: makeBooleanSetting({
+    key: 'turnstileFailClosed',
+    name: 'Turnstile Fail Closed',
+    defaultValue: false,
+    description:
+      'When Cloudflare verification cannot be reached, refuse the request instead of letting it through. Off keeps sign-in available during a Cloudflare outage.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    dependsOn: 'turnstileEnabled',
+  }),
+  turnstileSiteKey: makeStringSetting({
+    key: 'turnstileSiteKey',
+    name: 'Turnstile Site Key',
+    defaultValue: '',
+    description:
+      'The public Cloudflare Turnstile site key shown to the sign-in form. The secret key is never stored here.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    dependsOn: 'turnstileEnabled',
+  }),
+  signupRiskScoring: makeObjectSetting({
+    key: 'signupRiskScoring',
+    name: 'Signup Risk Scoring',
+    defaultValue: SignupRiskScoringSchema.parse({}),
+    description:
+      "Weights (0-100 each) for the signals that make up a new account's 0-100 risk score, the minutes " +
+      'and credits that set off the quick-API-key and fast-spend signals, and the score at which an account ' +
+      'needs review. The score is capped at 100.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    schema: SignupRiskScoringSchema,
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',

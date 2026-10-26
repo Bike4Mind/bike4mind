@@ -60,3 +60,6 @@ export const CURRENT_POLICY_VERSION = 'v1';
  * 18+ attestation, so `ageAttestedAdult` is intentionally left absent for them.
  */
 export const GRANDFATHERED_POLICY_VERSION = 'grandfathered';
+
+/** Shared challenge action for requesting an email login code. */
+export const TURNSTILE_ACTION_OTC_SEND = 'otc-send';

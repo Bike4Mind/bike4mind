@@ -1647,6 +1647,7 @@ describe('ImageGenerationService quest partial writes', () => {
   // Drops any queued enforceCredits value that process() did not consume, so it cannot leak.
   afterEach(() => {
     vi.mocked(getSettingsMap).mockReset().mockResolvedValue({});
+    vi.unstubAllEnvs();
   });
 
   // The promptMeta invoke() builds for the `a cat` FLUX_PRO_1_1 body below.
@@ -1820,6 +1821,8 @@ describe('ImageGenerationService quest partial writes', () => {
     // A quest that already carries a pre-flight figure: without the enforcement term the
     // settlement would draw and debit it even though billing is off.
     quest.creditsUsed = 7;
+    // Enforcement can only be off on self-host; hosted resolves it on regardless of the stored row.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     settlementDraw.mockClear();
     vi.mocked(deductCreditsWithOrgSupport).mockClear();
     // The credit gate, then moderation; enforcement off means no validateUserCredits call.
@@ -1875,6 +1878,36 @@ describe('ImageGenerationService quest partial writes', () => {
       });
 
     const twoImages = ['data:image/png;base64,ONE', 'data:image/png;base64,TWO'];
+
+    it('records edit_source and reference lineage plus the request', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service } = arrange(save);
+      // Reference images only ride on gpt-image models.
+      vi.mocked(getAvailableModels).mockResolvedValue([{ ...geminiModelInfo, id: ImageModels.GPT_IMAGE_2 } as never]);
+      mockGeminiGenerate.mockReset();
+      mockGeminiGenerate.mockResolvedValue(twoImages.slice(0, 1));
+      mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: twoImages[0] });
+      await service.process({
+        body: {
+          generationId: 'gen-1',
+          sessionId: 'session1',
+          questId: 'quest1',
+          userId: 'user1',
+          prompt: 'make it blue',
+          model: ImageModels.GPT_IMAGE_2,
+          fabFileIds: ['f1'],
+          referenceImageFabFileIds: ['f1'],
+        } as never,
+        logger: silentLogger,
+      });
+
+      const saved = save.mock.calls[0][0];
+      expect(saved.derivedFrom).toEqual([
+        { fileId: 'f1', role: 'edit_source' },
+        { fileId: 'f1', role: 'reference' },
+      ]);
+      expect(saved.generation.request).toMatchObject({ model: ImageModels.GPT_IMAGE_2, prompt: 'make it blue' });
+    });
 
     it('saves each of two images with its own index-suffixed jobId', async () => {
       const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);

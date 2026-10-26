@@ -401,7 +401,7 @@ export interface paths {
     put?: never;
     /**
      * Refine text
-     * @description Rewrites `text` to be more concise, clear and detailed while keeping its intent. `context` is optional background that steers the rewrite. `text` is at most 10000 characters and `context` at most 10000. Output is capped at about 800 tokens, and identical requests are served from a cache for about five minutes. Not billed in credits. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
+     * @description Rewrites `text` to be more concise, clear and detailed while keeping its intent. `context` is optional background that steers the rewrite. `text` is at most 10000 characters and `context` at most 10000. Output is capped at about 800 tokens, and identical requests are served from a cache for about five minutes. A refinement the model runs is billed in credits for the tokens it used; a cached answer is free. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
      */
     post: operations['createTextRefinement'];
     delete?: never;
@@ -1460,6 +1460,8 @@ export interface components {
       enable_mementos?: boolean;
       enable_lattice?: boolean;
       enable_artifacts?: boolean;
+      /** @description Admin only. Scripted per-iteration confidence scores (0 to 1) that replace the real score at the confidence gate: entry i scores iteration i + 1, and iterations past the end use the real score. The gate pauses the run for review on a streak of consecutive evaluated iterations below its threshold (currently 2), so script one low entry per iteration you want in the streak. Only iterations that ran tools are evaluated, scripted or not, and a finished run never pauses. A non-admin caller gets 403. */
+      confidence_overrides?: number[];
     };
     getAgentExecutionResponse200: {
       id: string;
@@ -3077,6 +3079,17 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?: 'provider_not_configured' | 'provider_rejected';
+    };
+    createTextRefinementResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     createTextRefinementResponse503: {
       error: string;
@@ -5731,7 +5744,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -9323,6 +9336,29 @@ export interface operations {
           'application/json': components['schemas']['createTextRefinementResponse200'];
         };
       };
+      /** @description The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description Missing/invalid credentials, or the text-refinement provider refused the configured key (`errorCode: "provider_rejected"`). */
       401: {
         headers: {
@@ -9382,7 +9418,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request failed validation. */
+      /** @description Request body failed validation, or the caller cannot afford the refinement - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -9402,7 +9438,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['createTextRefinementResponse422'];
         };
       };
       /** @description Per-key rate limit exceeded. */

@@ -173,6 +173,7 @@ import {
   ELISION_NAME_MAX,
 } from './elisionStamp';
 import { buildEarlyStopStamp, buildIncompleteAnswerNotice, usageEventStatusForFinish } from './earlyStopStamp';
+import { logLlmUsageSettled } from './llmUsageSettledLog';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -4799,6 +4800,20 @@ export class ChatCompletionProcess {
           await this.releaseReservedCredits(questId, logger);
         }
 
+        if (!adminSettingsEnforceCredits) {
+          for (const usage of researchModeUsages(researchResults, models, inputTokens)) {
+            logLlmUsageSettled({
+              backend: usage.modelInfo.backend,
+              model: usage.modelInfo.id,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              usd: getTextModelCost(usage.modelInfo, usage.inputTokens, usage.outputTokens),
+              source: 'chat',
+              accountCreatedAt: this.user.createdAt,
+            });
+          }
+        }
+
         // This early return skips the normal-path cleanup below, so drop the controller entry
         // and the watcher here; the outer finally only clears the interval.
         cleanupAbortController();
@@ -6013,6 +6028,17 @@ export class ChatCompletionProcess {
           estimatedCost,
           creditsUsed: textCreditsUsed,
         };
+        logLlmUsageSettled({
+          backend: currentModel.backend,
+          model: currentModel.id,
+          inputTokens: settledInputTokens,
+          outputTokens: settledOutputTokens,
+          cacheReadTokens: cacheReadInputTokens,
+          cacheWriteTokens: cacheCreationInputTokens,
+          usd: estimatedCost,
+          source: 'chat',
+          accountCreatedAt: this.user.createdAt,
+        });
 
         // Drift detection: log when our tokenizer diverges substantially from what
         // the provider reports. With provider-basis settlement this no longer
@@ -6998,6 +7024,17 @@ export class ChatCompletionProcess {
     quest.creditsUsed = totalCredits;
 
     for (const usage of priced) {
+      logLlmUsageSettled({
+        backend: usage.modelInfo.backend,
+        model: usage.modelInfo.id,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadInputTokens,
+        cacheWriteTokens: usage.cacheCreationInputTokens,
+        usd: usage.costUsd,
+        source: 'chat',
+        accountCreatedAt: this.user.createdAt,
+      });
       this.db.usageEvents
         ?.record({
           requestId: quest.id,
@@ -7337,7 +7374,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     } catch (error) {
       logger.warn(`Background admin settings fetch failed after ${Date.now() - adminSettingsStartTime}ms:`, error);
       // A stale-but-real map beats fabricated defaults here: getDefaultAdminSettings() hardcodes
-      // enforceCredits 'true', which would charge a deployment whose admin turned metering off.
+      // enforceCredits 'true', which would charge a self-host deployment whose admin turned metering off.
       // Fall back to the cached map, and to the defaults only when there is no cached map either.
       try {
         return await getSettingsMap(this.db, { logger });

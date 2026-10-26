@@ -13,7 +13,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 /** saveGeneratedAsset wired to the FabFile bucket and repositories, for server routes and job handlers. */
 export function saveGeneratedAssetToFiles(
   params: SaveGeneratedAssetParams,
-  logger: Pick<Logger, 'info' | 'error'>
+  logger: Pick<Logger, 'info' | 'warn' | 'error'>
 ): Promise<SaveGeneratedAssetResult> {
   const { contentType, signal } = params;
   return saveGeneratedAsset(params, {

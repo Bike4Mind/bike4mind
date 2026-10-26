@@ -184,6 +184,16 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
                 // A voice names a voice of the requested provider, so it is meaningless once another stood in.
                 ...(voice && !fallbackFrom && { voice }),
                 ...(languageCode && { languageCode }),
+                request: {
+                  provider: vendor,
+                  text,
+                  ...(model !== undefined && { model }),
+                  ...(voice !== undefined && { voice }),
+                  ...(format !== undefined && { format }),
+                  ...(stability !== undefined && { stability }),
+                  ...(similarityBoost !== undefined && { similarityBoost }),
+                  ...(languageCode !== undefined && { languageCode }),
+                },
               },
             },
             req.logger
