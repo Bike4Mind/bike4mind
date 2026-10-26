@@ -27,7 +27,6 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { subtractCreditsWithLedgerRow } from '../creditService/subtractCredits';
 import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
-import { revokeUserSessions } from '../userService/revokeSessions';
 
 export const ABUSE_CLAWBACK_REASON = 'abuse_clawback';
 
@@ -81,6 +80,9 @@ function escapeRegExp(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// A dot, or the ideographic and fullwidth stops emailDomainOf reads as dots.
+const DOT_CLASS = '[.\u3002\uff0e\uff61]';
+
 function exclusionFor(user: IUser, actorId: string): BulkAbuseExclusionReason | null {
   if (user.id === actorId) return 'self';
   if (user.isAdmin) return 'admin';
@@ -110,8 +112,11 @@ async function findTargetUsers(
   const domain = normalizeEmailDomain(target.domain);
   if (!domain) throw new Error(`Not a valid domain: ${target.domain}`);
   // The domain itself or any subdomain: `@kashre.com` and `@np.kashre.com`, never `@notkashre.com`.
+  // The unanchored, case-insensitive regex cannot use an index and scans users; a stored normalized
+  // emailDomain field with an index would fix that. The JS re-check below is the exact filter.
+  const domainPattern = escapeRegExp(domain).replaceAll('\\.', DOT_CLASS);
   const filter: Record<string, unknown> = {
-    email: { $regex: `@(?:[^@]+\\.)?${escapeRegExp(domain)}$`, $options: 'i' },
+    email: { $regex: `@(?:[^@]+${DOT_CLASS})?${domainPattern}${DOT_CLASS}*$`, $options: 'i' },
     deletedAt: null,
     _id: target.afterUserId ? { $gt: target.afterUserId, $lte: upToUserId } : { $lte: upToUserId },
   };
@@ -353,15 +358,17 @@ async function revokeKeysStep(user: IUser, { db, audit }: BulkAbuseExecuteAdapte
   return { outcome: 'applied', revokedApiKeys: live };
 }
 
-async function revokeSessionsStep(user: IUser, adapters: BulkAbuseExecuteAdapters): Promise<StepResult> {
-  const { db, audit, logger } = adapters;
-  await revokeUserSessions(user.id, { db, logger });
+async function revokeSessionsStep(user: IUser, { db, audit }: BulkAbuseExecuteAdapters): Promise<StepResult> {
+  const revokedSessions = await db.authSessions.revokeAllByUserId(user.id);
   const trustedDevices = await db.trustedDevices.revokeAllForUser(user.id);
+  if (revokedSessions === 0 && trustedDevices === 0) return { outcome: 'skipped' };
+  // Both the bump and the session revoke are needed; see revokeUserSessions.
+  await db.users.incrementTokenVersion(user.id);
   await audit({
     action: 'abuse.bulk.revoke_sessions',
     user,
     summary: 'revoked all sessions in a bulk abuse response',
-    details: { trustedDevicesRevoked: trustedDevices },
+    details: { sessionsRevoked: revokedSessions, trustedDevicesRevoked: trustedDevices },
   });
   return { outcome: 'applied' };
 }
@@ -403,12 +410,19 @@ async function clawbackStep(user: IUser, actorId: string, adapters: BulkAbuseExe
 
 const NOT_REQUESTED: StepResult = { outcome: 'not_requested' };
 
+/** A ban always revokes API keys too, so lifting it later never re-enables old keys. */
+const withBanImpliedKeyRevoke = (actions: BulkAbuseActions): BulkAbuseActions => ({
+  ...actions,
+  revokeApiKeys: actions.revokeApiKeys || actions.ban,
+});
+
 async function executeForUser(
   user: IUser,
-  actions: BulkAbuseActions,
+  requested: BulkAbuseActions,
   actorId: string,
   adapters: BulkAbuseExecuteAdapters
 ): Promise<BulkAbuseUserResult> {
+  const actions = withBanImpliedKeyRevoke(requested);
   try {
     const steps = await adapters.withTransaction(async () => {
       const ban = actions.ban ? await banStep(user, adapters) : NOT_REQUESTED;
@@ -419,12 +433,16 @@ async function executeForUser(
         : NOT_REQUESTED;
       return { ban, revokeApiKeys, revokeSessions, clawbackFreeCredits } satisfies Record<BulkAbuseAction, StepResult>;
     });
-    // A banned account's sockets, and any opened with a now-revoked key, end now rather than at their
-    // next auth check. DB-only and never throws, and its writes do not join a transaction, so it runs
-    // after the commit. See endRealtimeConnections.ts.
-    if (steps.ban.outcome === 'applied' || steps.revokeApiKeys.outcome === 'applied') {
-      await endRealtimeConnections({ userId: user.id }, { db: adapters.db, logger: adapters.logger });
-    }
+    // Sockets end now rather than at their next auth check: all of them for a ban or revoked key,
+    // the session-authenticated ones for revoked sessions. Runs after the commit so a rollback never
+    // ends sockets for a revoke that did not stick. See endRealtimeConnections.ts.
+    const endFilter =
+      steps.ban.outcome === 'applied' || steps.revokeApiKeys.outcome === 'applied'
+        ? { userId: user.id }
+        : steps.revokeSessions.outcome === 'applied'
+          ? { userId: user.id, sessionsOnly: true }
+          : null;
+    if (endFilter) await endRealtimeConnections(endFilter, { db: adapters.db, logger: adapters.logger });
     return {
       userId: user.id,
       email: user.email,

@@ -114,9 +114,20 @@ describe('resolveBulkAbuseCohort', () => {
 
     expect(cohort.included.map(user => user.id)).toEqual([id(1), id(2)]);
     const [filter, options] = find.mock.calls[0];
-    expect(filter.email).toEqual({ $regex: '@(?:[^@]+\\.)?kashre\\.com$', $options: 'i' });
+    expect(filter.email).toEqual({ $regex: '@(?:[^@]+[.\u3002\uff0e\uff61])?kashre[.\u3002\uff0e\uff61]com[.\u3002\uff0e\uff61]*$', $options: 'i' });
     expect(new RegExp(String((filter.email as { $regex: string }).$regex), 'i').test('x@notkashre.com')).toBe(false);
     expect(options).toEqual({ sort: { _id: 1 }, limit: MAX_BULK_ABUSE_BATCH + 1 });
+  });
+
+  it('matches a trailing dot and fullwidth dots in the stored email', async () => {
+    const { adapters, find } = cohortAdapters({ users: [makeUser(1)] });
+    await resolveBulkAbuseCohort({ kind: 'domain', domain: 'kashre.com' }, ACTOR_ID, adapters);
+
+    const regex = new RegExp(String((find.mock.calls[0][0].email as { $regex: string }).$regex), 'i');
+    expect(regex.test('bot@kashre.com.')).toBe(true);
+    expect(regex.test('bot@kashre\uff0ecom')).toBe(true);
+    expect(regex.test('bot@np\u3002kashre.com')).toBe(true);
+    expect(regex.test('bot@notkashre.com.')).toBe(false);
   });
 
   it('excludes the actor, admins, system, paid accounts, purchasers and org owners with reasons', async () => {
@@ -331,6 +342,48 @@ describe('executeBulkAbuse', () => {
     await executeBulkAbuse([user], ONLY('revokeApiKeys'), ACTOR_ID, adapters);
 
     expect(adapters.db.realtimeConnections.endConnections).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats ban as implying an API key revoke, so unbanning never re-enables old keys', async () => {
+    const user = makeUser(1);
+    const { adapters, audit } = executeAdapters([user], [], { [id(1)]: 2 });
+
+    const [result] = await executeBulkAbuse([user], ONLY('ban'), ACTOR_ID, adapters);
+
+    expect(result.steps).toMatchObject({ ban: 'applied', revokeApiKeys: 'applied' });
+    expect(result.revokedApiKeys).toBe(2);
+    expect(adapters.db.userApiKeys.deactivateAllByUserId).toHaveBeenCalledWith(id(1));
+    expect(audit.mock.calls.map(([entry]) => (entry as { action: string }).action)).toEqual([
+      'abuse.bulk.ban',
+      'abuse.bulk.revoke_keys',
+    ]);
+  });
+
+  it('skips session revocation, its audit row and the token bump when nothing was left to revoke', async () => {
+    const user = makeUser(1);
+    const { adapters, audit } = executeAdapters([user], []);
+    await executeBulkAbuse([user], ONLY('revokeSessions'), ACTOR_ID, adapters);
+    vi.mocked(adapters.db.authSessions.revokeAllByUserId).mockResolvedValue(0);
+    vi.mocked(audit).mockClear();
+    vi.mocked(adapters.db.users.incrementTokenVersion).mockClear();
+    vi.mocked(adapters.db.realtimeConnections.endConnections).mockClear();
+
+    const [rerun] = await executeBulkAbuse([user], ONLY('revokeSessions'), ACTOR_ID, adapters);
+
+    expect(rerun.steps.revokeSessions).toBe('skipped');
+    expect(audit).not.toHaveBeenCalled();
+    expect(adapters.db.users.incrementTokenVersion).not.toHaveBeenCalled();
+    expect(adapters.db.realtimeConnections.endConnections).not.toHaveBeenCalled();
+  });
+
+  it('ends session sockets after the commit when sessions were revoked', async () => {
+    const user = makeUser(1);
+    const { adapters } = executeAdapters([user], []);
+
+    await executeBulkAbuse([user], ONLY('revokeSessions'), ACTOR_ID, adapters);
+
+    expect(adapters.db.users.incrementTokenVersion).toHaveBeenCalledWith(id(1));
+    expect(adapters.db.realtimeConnections.endConnections).toHaveBeenCalledWith({ userId: id(1), sessionsOnly: true });
   });
 
   it('leaves realtime connections alone when nothing was revoked or banned', async () => {
