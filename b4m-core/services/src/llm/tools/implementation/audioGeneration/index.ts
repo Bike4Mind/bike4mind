@@ -144,6 +144,12 @@ export const audioGenerationTool: ToolDefinition = {
           provider: SFX_PROVIDER,
           prompt: text,
           ...(durationSeconds !== undefined && { durationSeconds }),
+          request: {
+            provider: SFX_PROVIDER,
+            text,
+            ...(durationSeconds !== undefined && { durationSeconds }),
+            ...(audioConfig.promptInfluence !== undefined && { promptInfluence: audioConfig.promptInfluence }),
+          },
         });
 
         await context.onFinish?.('audio_generation', {
@@ -238,6 +244,14 @@ export const audioGenerationTool: ToolDefinition = {
         provider,
         modelId: resolvedModel,
         prompt: text,
+        request: {
+          provider,
+          text,
+          model: resolvedModel,
+          ...(voice && { voice }),
+          ...(format && { format }),
+          ...(provider === 'elevenlabs' && audioConfig.languageCode && { languageCode: audioConfig.languageCode }),
+        },
       });
 
       // Settle on the ACTUAL billed model + character count so the tool charge matches

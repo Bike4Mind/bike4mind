@@ -1778,6 +1778,36 @@ describe('ImageGenerationService quest partial writes', () => {
 
     const twoImages = ['data:image/png;base64,ONE', 'data:image/png;base64,TWO'];
 
+    it('records edit_source and reference lineage plus the request', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service } = arrange(save);
+      // Reference images only ride on gpt-image models.
+      vi.mocked(getAvailableModels).mockResolvedValue([{ ...geminiModelInfo, id: ImageModels.GPT_IMAGE_2 } as never]);
+      mockGeminiGenerate.mockReset();
+      mockGeminiGenerate.mockResolvedValue(twoImages.slice(0, 1));
+      mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: twoImages[0] });
+      await service.process({
+        body: {
+          generationId: 'gen-1',
+          sessionId: 'session1',
+          questId: 'quest1',
+          userId: 'user1',
+          prompt: 'make it blue',
+          model: ImageModels.GPT_IMAGE_2,
+          fabFileIds: ['f1'],
+          referenceImageFabFileIds: ['f1'],
+        } as never,
+        logger: silentLogger,
+      });
+
+      const saved = save.mock.calls[0][0];
+      expect(saved.derivedFrom).toEqual([
+        { fileId: 'f1', role: 'edit_source' },
+        { fileId: 'f1', role: 'reference' },
+      ]);
+      expect(saved.generation.request).toMatchObject({ model: ImageModels.GPT_IMAGE_2, prompt: 'make it blue' });
+    });
+
     it('saves each of two images with its own index-suffixed jobId', async () => {
       const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
       const { service } = arrange(save);

@@ -251,6 +251,11 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
         durationSeconds: payload.reportedDurationSeconds ?? payload.request.durationSeconds,
       };
 
+      // Generated-key inputs (chat images in quest.images) are not Files, so they carry no lineage. The file id is
+      // the caller's raw string, and the input lookup accepts uppercase hex, so canonicalize it for the lineage guard.
+      const derivedFrom = videoRequestInputs(payload.request).flatMap(input =>
+        'fileId' in input ? [{ fileId: input.fileId.toLowerCase(), role: input.role }] : []
+      );
       const files = await deps.saveToFiles({
         userId: job.requestedBy,
         bytes,
@@ -262,7 +267,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
           jobId: job.id,
           prompt: payload.request.prompt,
           durationSeconds: common.durationSeconds,
+          request: payload.request,
         },
+        ...(derivedFrom.length > 0 && { derivedFrom }),
         ...(job.questId && { questId: job.questId }),
         signal: context.signal,
       });
