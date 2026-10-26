@@ -41,7 +41,7 @@ jobs:
   # action. Fails open on all three.
   changes:
     # Root of the whole DAG.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     outputs:
@@ -65,7 +65,7 @@ jobs:
   core-build:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Core Build
     timeout-minutes: 15
     permissions:
@@ -143,7 +143,7 @@ jobs:
   repo-guards:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Repo Guards
     timeout-minutes: 10
     permissions:
@@ -253,7 +253,7 @@ jobs:
     # Standard runner: tsgo (native TS) is fast and low-memory and runs against
     # the prebuilt core artifact, so this leg is I/O-bound, not CPU/memory-bound.
     # Keeping it off the capped ubuntu-latest-m pool frees a slot per PR.
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Type Check
     timeout-minutes: 15
     permissions:
@@ -329,7 +329,7 @@ jobs:
     needs: core-build
     # Standard runner: ESLint is I/O-bound, not CPU/memory-bound. Off the capped
     # ubuntu-latest-m pool to free a slot per PR.
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Lint
     timeout-minutes: 15
     permissions:
@@ -401,7 +401,7 @@ jobs:
   openapi:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: OpenAPI Spec
     timeout-minutes: 10
     permissions:
@@ -488,8 +488,10 @@ jobs:
     # does not drag the test-shard fan-out onto the larger, pricier runner. MEDIUM is the
     # 4-core tier shared by every job that builds core or runs a test suite; the plain
     # RUNNER_LABEL default is the 2-core tier for API, guard and shell-only jobs. Size
-    # worker budgets for 4 cores.
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    # worker budgets for 4 cores. On merge_group events every job prefers the matching
+    # *_QUEUE variable, a separately capped pool so PR traffic cannot starve the queue;
+    # an unset *_QUEUE variable falls through to the PR label.
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Run Tests (${{ matrix.shard.name }})
     # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
     # job is to kill a genuine hang. It was 20, which the client shard's own runtime drifted
@@ -834,7 +836,7 @@ jobs:
     # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator.
     if: |
       !cancelled() && needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     steps:
@@ -862,7 +864,7 @@ jobs:
     needs: core-build
     # Standard runner: builds the CLI and runs the bundle-baseline harness — a
     # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -967,7 +969,7 @@ jobs:
       !cancelled() &&
       needs.changes.outputs.docs-changed == 'true' &&
       needs.core-build.result != 'failure'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1036,7 +1038,7 @@ jobs:
     name: Published Declarations
     needs: [changes, core-build]
     if: needs.changes.outputs.published-changed == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -1114,7 +1116,7 @@ jobs:
     name: Docs Sensitive Scan
     needs: changes
     if: needs.changes.outputs.docs-changed == 'true' && github.event_name == 'pull_request'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -1184,7 +1186,7 @@ jobs:
       - docs-scan-gate
       - published-dts
     if: ${{ !cancelled() }}
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - name: Report CI result
         env:
