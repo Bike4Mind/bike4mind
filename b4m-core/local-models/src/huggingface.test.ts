@@ -1,0 +1,537 @@
+import type { ServerResponse } from 'node:http';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  HubAccessError,
+  HubRateLimitError,
+  LocalRuntimeError,
+  ModelNotFoundError,
+  RuntimeConnectionError,
+  RuntimeHttpError,
+  RuntimeProtocolError,
+} from './errors';
+import { HuggingFaceHub, ggufQuantLabel, hubResolveUrl, type HubModelDetail } from './huggingface';
+import { closedPort, hang, json, startFakeServer, type FakeServer, type Handler } from './__test__/fakeServer';
+import {
+  gatedInfo,
+  gatedMessage,
+  gatedSha,
+  gatedTree,
+  qwenInfo,
+  qwenSha,
+  qwenTree,
+  searchCursor,
+  searchPage,
+  vlInfo,
+  vlSha,
+  vlTreePages,
+} from './__test__/huggingFaceFixtures';
+
+const TOKEN = 'hf_TestTokenThatMustNeverLeak0123456789';
+
+const servers: FakeServer[] = [];
+
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(server => server.close()));
+});
+
+async function serve(routes: Record<string, Handler>): Promise<FakeServer> {
+  const server = await startFakeServer(routes);
+  servers.push(server);
+  return server;
+}
+
+function reply(response: ServerResponse, status: number, headers: Record<string, string>, body = ''): void {
+  response.writeHead(status, headers);
+  response.end(body);
+}
+
+const withHeaders =
+  (body: unknown, headers: Record<string, string>, status = 200): Handler =>
+  (_request, response) =>
+    reply(response, status, { 'content-type': 'application/json', ...headers }, JSON.stringify(body));
+
+const query = (path: string) => new URL(path, 'http://x').searchParams;
+
+const repoRoutes = (repo: string, sha: string, info: unknown, tree: unknown): Record<string, Handler> => ({
+  [`GET /api/models/${repo}/revision/main`]: json(info),
+  [`GET /api/models/${repo}/revision/${sha}`]: json(info),
+  [`GET /api/models/${repo}/tree/${sha}`]: json(tree),
+});
+
+async function caught(promise: Promise<unknown>): Promise<Error> {
+  const error: unknown = await promise.then(
+    () => undefined,
+    (reason: unknown) => reason
+  );
+  expect(error).toBeInstanceOf(Error);
+  return error as Error;
+}
+
+function expectNoToken(error: Error): void {
+  const text = `${error.message} ${String(error.cause)} ${JSON.stringify(error)}`;
+  expect(text).not.toContain(TOKEN);
+  expect(text).not.toMatch(/Bearer hf_/);
+}
+
+describe('ggufQuantLabel', () => {
+  it.each([
+    ['qwen2.5-0.5b-instruct-q4_k_m.gguf', 'Q4_K_M'],
+    ['SmolLM2-135M-Instruct-f16.gguf', 'F16'],
+    ['qwen2.5-0.5b-instruct-fp16.gguf', null],
+    ['SmolLM2-135M-Instruct-Q4_K_L.gguf', null],
+    ['SmolLM2-135M-Instruct-Q2_K_L.gguf', 'Q2_K_L'],
+    ['SmolLM2-135M-Instruct-Q4_0.gguf', 'Q4_0'],
+    ['SmolLM2-135M-Instruct-Q4_0_4_4.gguf', 'Q4_0_4_4'],
+    ['SmolLM2-135M-Instruct-Q3_K_XL.gguf', 'Q3_K_XL'],
+    ['SmolLM2-135M-Instruct-IQ2_XXS.gguf', 'IQ2_XXS'],
+    ['gemma-3-27b-it-UD-Q4_K_XL.gguf', 'UD-Q4_K_XL'],
+    ['gpt-oss-20b-MXFP4.gguf', 'MXFP4'],
+    ['gpt-oss-20b-MXFP4_MOE.gguf', 'MXFP4_MOE'],
+    ['BF16/Qwen2.5-VL-72B-Instruct-BF16-00002-of-00003.gguf', 'BF16'],
+    ['Q8_0/model-F16-imported-Q8_0.gguf', 'Q8_0'],
+  ])('labels %s as %s', (name, label) => {
+    expect(ggufQuantLabel(name)).toBe(label);
+  });
+});
+
+describe('hubResolveUrl', () => {
+  it('encodes each path segment and the revision', () => {
+    expect(hubResolveUrl('unsloth/gemma-3-27b-it-GGUF', vlSha, 'BF16/a b#1.gguf')).toBe(
+      `https://huggingface.co/unsloth/gemma-3-27b-it-GGUF/resolve/${vlSha}/BF16/a%20b%231.gguf`
+    );
+    expect(hubResolveUrl('a/b', 'refs/pr/1', 'x.gguf', 'http://127.0.0.1:9/hf/')).toBe(
+      'http://127.0.0.1:9/hf/a/b/resolve/refs%2Fpr%2F1/x.gguf'
+    );
+  });
+
+  it.each([
+    ['../etc', 'main', 'x.gguf'],
+    ['a/b/c', 'main', 'x.gguf'],
+    ['a/b', '../main', 'x.gguf'],
+    ['a/b', 'main', '../x.gguf'],
+    ['a/b', 'main', ''],
+  ])('rejects repo %s revision %s path %s', (repo, revision, path) => {
+    expect(() => hubResolveUrl(repo, revision, path)).toThrow(LocalRuntimeError);
+  });
+
+  it('rejects an endpoint with credentials without echoing them', () => {
+    expect(() => new HuggingFaceHub({ endpoint: 'https://user:secret@huggingface.co' })).toThrow(
+      /^Invalid Hugging Face endpoint$/
+    );
+  });
+});
+
+describe('HuggingFaceHub.search', () => {
+  it('asks for GGUF repos with the summary fields and follows the Link cursor', async () => {
+    const server = await serve({
+      'GET /api/models': withHeaders(searchPage, {
+        link: `<https://huggingface.co/api/models?search=qwen2.5+0.5b&filter=gguf&cursor=${searchCursor}>; rel="next"`,
+      }),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const page = await hub.search({ query: '  qwen2.5 0.5b ', sort: 'trending', limit: 2 });
+
+    const params = query(server.requests[0]?.path ?? '');
+    expect(params.get('search')).toBe('qwen2.5 0.5b');
+    expect(params.get('filter')).toBe('gguf');
+    expect(params.get('sort')).toBe('trendingScore');
+    expect(params.get('limit')).toBe('2');
+    expect(params.getAll('expand[]')).toEqual(expect.arrayContaining(['gated', 'lastModified', 'tags', 'author']));
+    expect(server.requests[0]?.headers.authorization).toBeUndefined();
+    expect(page.nextCursor).toBe(searchCursor);
+    expect(page.models).toEqual([
+      {
+        id: 'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
+        author: 'Qwen',
+        downloads: 325006,
+        likes: 157,
+        updatedAt: '2024-09-20T06:20:24.000Z',
+        pipelineTag: 'text-generation',
+        gated: false,
+        private: false,
+        license: 'apache-2.0',
+        baseModels: ['Qwen/Qwen2.5-0.5B-Instruct'],
+        tags: ['gguf', 'chat', 'text-generation', 'en', 'conversational'],
+      },
+      expect.objectContaining({ id: 'bartowski/Qwen2.5-0.5B-Instruct-GGUF', author: 'bartowski', updatedAt: null }),
+    ]);
+
+    await hub.search({ query: 'qwen2.5 0.5b', sort: 'trending', limit: 2, cursor: page.nextCursor ?? '' });
+    expect(query(server.requests[1]?.path ?? '').get('cursor')).toBe(searchCursor);
+  });
+
+  it('maps every sort, clamps the limit, and drops entries it cannot read', async () => {
+    const server = await serve({
+      'GET /api/models': json([{ id: 'no-owner' }, { downloads: 3 }, 'junk', ...searchPage, ...searchPage]),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const sorts = { downloads: 'downloads', likes: 'likes', trending: 'trendingScore', updated: 'lastModified' };
+    for (const [sort, param] of Object.entries(sorts)) {
+      await hub.search({ sort: sort as keyof typeof sorts, limit: 1000 });
+      const params = query(server.requests.at(-1)?.path ?? '');
+      expect([params.get('sort'), params.get('limit'), params.has('search')]).toEqual([param, '100', false]);
+    }
+    const page = await hub.search({ limit: 0 });
+    expect(query(server.requests.at(-1)?.path ?? '').get('limit')).toBe('1');
+    expect(page).toEqual({ models: [], nextCursor: null });
+    expect((await hub.search({ limit: 5 })).models.map(model => model.id)).toEqual([
+      'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
+      'bartowski/Qwen2.5-0.5B-Instruct-GGUF',
+    ]);
+  });
+});
+
+describe('HuggingFaceHub.getModel', () => {
+  it('pins the commit and lists each quant with its size, sha256, resolve URL and Ollama ref', async () => {
+    const server = await serve(repoRoutes('Qwen/Qwen2.5-0.5B-Instruct-GGUF', qwenSha, qwenInfo, qwenTree));
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const detail = await hub.getModel('Qwen/Qwen2.5-0.5B-Instruct-GGUF');
+
+    expect(server.requests.map(request => request.path.split('?')[0])).toEqual([
+      '/api/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/revision/main',
+      `/api/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/tree/${qwenSha}`,
+    ]);
+    expect(query(server.requests[1]?.path ?? '').get('recursive')).toBe('true');
+    expect(detail).toMatchObject({
+      id: 'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
+      revision: qwenSha,
+      license: 'apache-2.0',
+      licenseName: null,
+      licenseLink: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/main/LICENSE',
+      baseModels: ['Qwen/Qwen2.5-0.5B-Instruct'],
+      gguf: { architecture: 'qwen2', contextLength: 8192, parameterCount: 630167424 },
+      projectors: [],
+      canDownload: true,
+    });
+    expect(detail.builds.map(build => [build.quant, build.ollamaRef, build.ollamaRefIssue])).toEqual([
+      ['Q2_K', 'hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q2_K', null],
+      ['Q4_K_M', 'hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M', null],
+      ['Q8_0', 'hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q8_0', null],
+      [null, null, 'no-quant-label'],
+    ]);
+    expect(detail.builds[1]).toEqual({
+      id: 'qwen2.5-0.5b-instruct-q4_k_m',
+      quant: 'Q4_K_M',
+      files: [
+        {
+          path: 'qwen2.5-0.5b-instruct-q4_k_m.gguf',
+          sizeBytes: 491400032,
+          sha256: '74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db',
+          url: `${server.baseUrl}/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/${qwenSha}/qwen2.5-0.5b-instruct-q4_k_m.gguf`,
+        },
+      ],
+      sizeBytes: 491400032,
+      split: false,
+      complete: true,
+      ollamaRef: 'hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M',
+      ollamaRefIssue: null,
+    });
+  });
+
+  it('rejects an answer for a different commit than the one asked for', async () => {
+    const server = await serve(repoRoutes('Qwen/Qwen2.5-0.5B-Instruct-GGUF', vlSha, qwenInfo, qwenTree));
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await expect(hub.getModel('Qwen/Qwen2.5-0.5B-Instruct-GGUF', { revision: vlSha })).rejects.toBeInstanceOf(
+      RuntimeProtocolError
+    );
+  });
+
+  it('pages the tree, groups split and foldered quants, and keeps projectors apart', async () => {
+    const repo = 'unsloth/Qwen2.5-VL-72B-Instruct-GGUF';
+    const server = await serve({
+      [`GET /api/models/${repo}/revision/main`]: json(vlInfo),
+      [`GET /api/models/${repo}/tree/${vlSha}`]: (request, response) => {
+        const second = query(request.path).get('cursor') === 'page2';
+        const link = `<https://huggingface.co/api/models/${repo}/tree/main?recursive=true&cursor=page2>; rel="next"`;
+        reply(
+          response,
+          200,
+          { 'content-type': 'application/json', ...(second ? {} : { link }) },
+          JSON.stringify(vlTreePages[second ? 1 : 0])
+        );
+      },
+    });
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+
+    expect(server.requests.filter(request => request.path.includes('/tree/'))).toHaveLength(2);
+    expect(detail).toMatchObject({
+      license: 'other',
+      licenseName: 'qwen',
+      baseModels: ['Qwen/Qwen2.5-VL-72B-Instruct'],
+    });
+    const byId = Object.fromEntries(detail.builds.map(build => [build.id, build]));
+    expect(byId['BF16/Qwen2.5-VL-72B-Instruct-BF16']).toMatchObject({
+      quant: 'BF16',
+      sizeBytes: 49893814848 + 49938328960 + 45590528544,
+      split: true,
+      complete: true,
+      ollamaRef: null,
+      ollamaRefIssue: 'split',
+    });
+    expect(byId['BF16/Qwen2.5-VL-72B-Instruct-BF16']?.files.map(file => file.path)).toEqual([
+      'BF16/Qwen2.5-VL-72B-Instruct-BF16-00001-of-00003.gguf',
+      'BF16/Qwen2.5-VL-72B-Instruct-BF16-00002-of-00003.gguf',
+      'BF16/Qwen2.5-VL-72B-Instruct-BF16-00003-of-00003.gguf',
+    ]);
+    expect(byId['Q5_K_M/Qwen2.5-VL-72B-Instruct-Q5_K_M']).toMatchObject({
+      quant: 'Q5_K_M',
+      sizeBytes: 49941713184 + 4505751872,
+      ollamaRefIssue: 'split',
+    });
+    expect(
+      detail.builds.filter(build => !build.split).map(build => [build.quant, build.sizeBytes, build.ollamaRef])
+    ).toEqual([
+      ['Q2_K', 29811761568, `hf.co/${repo}:Q2_K`],
+      ['Q2_K_L', 30103724448, `hf.co/${repo}:Q2_K_L`],
+      ['UD-Q4_K_XL', 47321080224, `hf.co/${repo}:UD-Q4_K_XL`],
+      ['Q4_K_M', 47415714208, `hf.co/${repo}:Q4_K_M`],
+    ]);
+    expect(detail.projectors.map(projector => [projector.path, projector.quant, projector.sizeBytes])).toEqual([
+      ['mmproj-BF16.gguf', 'BF16', 1410223552],
+      ['mmproj-F16.gguf', 'F16', 1410223552],
+      ['mmproj-F32.gguf', 'F32', 2815315392],
+    ]);
+  });
+
+  it('flags missing shards and quant labels Ollama could resolve to two builds', async () => {
+    const repo = 'someone/odd-GGUF';
+    const sha = 'a'.repeat(40);
+    const file = (path: string, size: number) => ({ type: 'file', path, size, lfs: { oid: 'b'.repeat(64), size } });
+    const server = await serve(
+      repoRoutes(repo, sha, { id: repo, sha }, [
+        file('odd-Q8_0-00001-of-00003.gguf', 3),
+        file('odd-Q8_0-00003-of-00003.gguf', 3),
+        file('odd-Q4_K_M.gguf', 2),
+        file('odd-128k-Q4_K_M.gguf', 2),
+        file('odd-Q4_K_XL.gguf', 1),
+        file('odd-UD-Q4_K_XL.gguf', 1),
+        file('odd-Q6_K.gguf', 4),
+        file('vision/odd.mmproj-q8_0.gguf', 5),
+        file('../escape-Q5_0.gguf', 7),
+        { type: 'file', path: 'odd.imatrix', size: 9 },
+      ])
+    );
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(detail.builds.map(build => [build.id, build.ollamaRefIssue])).toEqual([
+      ['odd-Q4_K_XL', 'ambiguous'],
+      ['odd-UD-Q4_K_XL', 'ambiguous'],
+      ['odd-128k-Q4_K_M', 'ambiguous'],
+      ['odd-Q4_K_M', 'ambiguous'],
+      ['odd-Q6_K', null],
+      ['odd-Q8_0', 'incomplete'],
+    ]);
+    expect(detail.builds.at(-1)).toMatchObject({ split: true, complete: false, sizeBytes: 6 });
+    expect(detail.projectors.map(projector => [projector.path, projector.quant])).toEqual([
+      ['vision/odd.mmproj-q8_0.gguf', 'Q8_0'],
+    ]);
+    expect(detail).toMatchObject({ license: null, gguf: null, gated: false, author: 'someone' });
+  });
+
+  it('follows a same-origin redirect for a renamed repo and uses the new id', async () => {
+    const server = await serve({
+      'GET /api/models/old/name-GGUF/revision/main': (request, response) =>
+        reply(response, 307, { location: request.path.replace('old/name-GGUF', 'Qwen/Qwen2.5-0.5B-Instruct-GGUF') }),
+      ...repoRoutes('Qwen/Qwen2.5-0.5B-Instruct-GGUF', qwenSha, qwenInfo, qwenTree),
+    });
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).getModel('old/name-GGUF');
+    expect(detail.id).toBe('Qwen/Qwen2.5-0.5B-Instruct-GGUF');
+    expect(detail.builds[0]?.ollamaRef).toBe('hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q2_K');
+    expect(server.requests.every(request => request.headers.authorization === `Bearer ${TOKEN}`)).toBe(true);
+  });
+
+  it('refuses a redirect to another origin without sending it the token', async () => {
+    const elsewhere = await serve({});
+    const server = await serve({
+      'GET /api/models/a/b/revision/main': (_request, response) =>
+        reply(response, 302, { location: `${elsewhere.baseUrl}/steal` }),
+    });
+    const error = await caught(new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).getModel('a/b'));
+    expect(error).toBeInstanceOf(RuntimeProtocolError);
+    expect(elsewhere.requests).toEqual([]);
+  });
+});
+
+describe('HuggingFaceHub gated repos', () => {
+  const repo = 'google/gemma-3-1b-it-qat-q4_0-gguf';
+  const headPath = `HEAD /${repo}/resolve/${gatedSha}/gemma-3-1b-it-q4_0.gguf`;
+
+  it('reports a gated repo as not downloadable without a token, and does not probe it', async () => {
+    const server = await serve(repoRoutes(repo, gatedSha, gatedInfo, gatedTree));
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(detail).toMatchObject({ gated: 'manual', canDownload: false, license: 'gemma' });
+    expect(detail.builds).toEqual([
+      expect.objectContaining({
+        quant: 'Q4_0',
+        sizeBytes: 1003541152,
+        files: [expect.objectContaining({ sha256: null })],
+        ollamaRef: `hf.co/${repo}:Q4_0`,
+      }),
+    ]);
+    expect(server.requests.map(request => request.method)).toEqual(['GET', 'GET']);
+  });
+
+  it('reports no access when the token holder has not been approved', async () => {
+    const server = await serve({
+      ...repoRoutes(repo, gatedSha, gatedInfo, gatedTree),
+      [headPath]: (_request, response) =>
+        reply(response, 403, { 'x-error-code': 'GatedRepo', 'x-error-message': gatedMessage }),
+    });
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).getModel(repo);
+    expect(detail.canDownload).toBe(false);
+    const head = server.requests.find(request => request.method === 'HEAD');
+    expect(head?.headers.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('reports access from a resolve redirect without following it', async () => {
+    const cdn = await serve({});
+    const server = await serve({
+      ...repoRoutes(repo, gatedSha, gatedInfo, gatedTree),
+      [headPath]: (_request, response) => reply(response, 302, { location: `${cdn.baseUrl}/blob` }),
+    });
+    const detail: HubModelDetail = await new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).getModel(repo);
+    expect(detail.canDownload).toBe(true);
+    expect(cdn.requests).toEqual([]);
+  });
+
+  it('maps a gated 401 on a file to HubAccessError', async () => {
+    const server = await serve({
+      [`GET /api/models/${repo}/revision/main`]: (_request, response) =>
+        reply(
+          response,
+          401,
+          { 'content-type': 'text/plain', 'x-error-code': 'GatedRepo', 'x-error-message': gatedMessage },
+          'denied'
+        ),
+    });
+    const error = await caught(new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo));
+    expect(error).toBeInstanceOf(HubAccessError);
+    expect(error).toMatchObject({ status: 401, reason: 'gated', repo });
+  });
+});
+
+describe('HuggingFaceHub errors', () => {
+  const infoPath = 'GET /api/models/a/b/revision/main';
+
+  it('maps an anonymous 401 to ModelNotFoundError, since the Hub hides private repos that way', async () => {
+    const server = await serve({ [infoPath]: json({ error: 'Invalid username or password.' }, 401) });
+    const error = await caught(new HuggingFaceHub({ endpoint: server.baseUrl }).getModel('a/b'));
+    expect(error).toBeInstanceOf(ModelNotFoundError);
+    expect(error).toMatchObject({ model: 'a/b', runtimeId: 'huggingface:' + server.baseUrl.slice(7) });
+  });
+
+  it('maps a 401 or 403 with a token to HubAccessError', async () => {
+    for (const status of [401, 403]) {
+      const server = await serve({
+        [infoPath]: json({ error: 'Invalid credentials in Authorization header' }, status),
+      });
+      const error = await caught(new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).getModel('a/b'));
+      expect(error).toBeInstanceOf(HubAccessError);
+      expect(error).toMatchObject({ status, reason: 'unauthorized', repo: 'a/b' });
+    }
+  });
+
+  it('maps a missing revision and a missing repo to ModelNotFoundError', async () => {
+    const server = await serve({
+      'GET /api/models/a/b/revision/nope': (_request, response) =>
+        reply(response, 404, { 'x-error-code': 'RevisionNotFound', 'x-error-message': 'Invalid rev id: nope' }),
+      'GET /api/models/a/c/revision/main': json({ error: 'Repository not found' }, 404),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN });
+    expect(await caught(hub.getModel('a/b', { revision: 'nope' }))).toMatchObject({
+      name: 'ModelNotFoundError',
+      model: 'a/b@nope',
+    });
+    expect(await caught(hub.getModel('a/c'))).toMatchObject({ name: 'ModelNotFoundError', model: 'a/c' });
+  });
+
+  it('maps 429 to HubRateLimitError with Retry-After or the RateLimit reset', async () => {
+    const server = await serve({
+      'GET /api/models': withHeaders({ error: 'Too many requests' }, { 'retry-after': '30' }, 429),
+      [infoPath]: withHeaders({ error: 'slow down' }, { ratelimit: '"api";r=0;t=53' }, 429),
+      'GET /api/models/a/c/revision/main': json({ error: 'slow down' }, 429),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const search = await caught(hub.search());
+    expect(search).toBeInstanceOf(HubRateLimitError);
+    expect(search).toBeInstanceOf(RuntimeHttpError);
+    expect(search).toMatchObject({ status: 429, retryAfterMs: 30_000 });
+    expect(search.message).toContain('Too many requests');
+    expect(await caught(hub.getModel('a/b'))).toMatchObject({ retryAfterMs: 53_000 });
+    expect(await caught(hub.getModel('a/c'))).toMatchObject({ retryAfterMs: null });
+  });
+
+  it('rejects malformed JSON and unexpected shapes with RuntimeProtocolError', async () => {
+    const server = await serve({
+      'GET /api/models': json('{"oops":'),
+      [infoPath]: json({ id: 'a/b', sha: 'not-a-sha' }),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    expect(await caught(hub.search())).toBeInstanceOf(RuntimeProtocolError);
+    expect(await caught(hub.getModel('a/b'))).toBeInstanceOf(RuntimeProtocolError);
+  });
+
+  it('rejects a body over the size bound', async () => {
+    const server = await serve({
+      'GET /api/models': (_request, response) =>
+        reply(response, 200, { 'content-type': 'application/json', 'content-length': String(64 * 1024 * 1024) }),
+    });
+    expect(await caught(new HuggingFaceHub({ endpoint: server.baseUrl }).search())).toBeInstanceOf(
+      RuntimeProtocolError
+    );
+  });
+
+  it('never puts the token in an error, even when the server echoes it', async () => {
+    const echo: Handler = (request, response) =>
+      reply(
+        response,
+        Number(query(request.path).get('status') ?? 500),
+        {
+          'content-type': 'application/json',
+          'x-error-message': `bad header ${request.headers.authorization ?? ''}`,
+        },
+        JSON.stringify({ error: `got ${request.headers.authorization ?? ''}` })
+      );
+    const server = await serve({ 'GET /api/models': echo, [infoPath]: echo });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN });
+    for (const error of [await caught(hub.search()), await caught(hub.getModel('a/b'))]) {
+      expect(error).toBeInstanceOf(RuntimeHttpError);
+      expect(error.message).toContain('[redacted]');
+      expectNoToken(error);
+    }
+    const refused = await caught(
+      new HuggingFaceHub({ endpoint: `http://127.0.0.1:${await closedPort()}`, token: TOKEN }).search()
+    );
+    expect(refused).toBeInstanceOf(RuntimeConnectionError);
+    expectNoToken(refused);
+    const thrown = await caught(
+      new HuggingFaceHub({
+        token: TOKEN,
+        fetch: async (_url, init) => {
+          throw new Error(`proxy said ${JSON.stringify(init?.headers)}`);
+        },
+      }).search()
+    );
+    expect(thrown).toBeInstanceOf(RuntimeConnectionError);
+    expect(thrown.message).not.toContain(TOKEN);
+  });
+
+  it('times out with RuntimeConnectionError and passes a caller abort through', async () => {
+    const server = await serve({ 'GET /api/models': hang });
+    const timedOut = await caught(new HuggingFaceHub({ endpoint: server.baseUrl, requestTimeoutMs: 50 }).search());
+    expect(timedOut).toBeInstanceOf(RuntimeConnectionError);
+    expect(timedOut.message).toContain('timed out after 50ms');
+
+    const controller = new AbortController();
+    const pending = new HuggingFaceHub({ endpoint: server.baseUrl }).search({ signal: controller.signal });
+    controller.abort();
+    expect(await caught(pending)).toMatchObject({ name: 'AbortError' });
+  });
+
+  it('rejects an invalid repo id or revision before any request', async () => {
+    const server = await serve({});
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await expect(hub.getModel('gpt2')).rejects.toBeInstanceOf(LocalRuntimeError);
+    await expect(hub.getModel('a/b', { revision: '../x' })).rejects.toBeInstanceOf(LocalRuntimeError);
+    expect(server.requests).toEqual([]);
+  });
+});
