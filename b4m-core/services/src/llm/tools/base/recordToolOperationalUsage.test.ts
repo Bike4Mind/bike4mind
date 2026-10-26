@@ -148,10 +148,11 @@ describe('recordToolOperationalUsage', () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
-  it('resolves and attributes to the organization when the user belongs to one', async () => {
+  it('resolves and attributes to the active organization instead of the selected-org pointer', async () => {
     const findById = vi.fn().mockResolvedValue({ id: 'org1' });
     const context = makeContext({
-      user: { id: 'u1', organizationId: 'org1' } as never,
+      user: { id: 'u1', organizationId: 'old-org' } as never,
+      organizationId: 'org1',
       db: { usageEvents: { record: vi.fn() }, adminSettings: {} as never, organizations: { findById } } as never,
     });
 
@@ -159,6 +160,31 @@ describe('recordToolOperationalUsage', () => {
 
     expect(findById).toHaveBeenCalledWith('org1');
     expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({ organization: { id: 'org1' } });
+  });
+
+  it('keeps a personal turn personal when the user has a selected organization', async () => {
+    const findById = vi.fn();
+    const context = makeContext({
+      user: { id: 'u1', organizationId: 'old-org' } as never,
+      db: { usageEvents: { record: vi.fn() }, adminSettings: {}, organizations: { findById } } as never,
+    });
+
+    await recordToolOperationalUsage(context, { model: 'gpt-4o-mini', completionInfo, startTime: Date.now() });
+
+    expect(findById).not.toHaveBeenCalled();
+    expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({ organization: null });
+  });
+
+  it('skips billing when the active organization cannot be resolved', async () => {
+    const context = makeContext({
+      organizationId: 'missing-org',
+      db: { adminSettings: {}, organizations: { findById: vi.fn().mockResolvedValue(null) } } as never,
+    });
+
+    await recordToolOperationalUsage(context, { model: 'gpt-4o-mini', completionInfo, startTime: Date.now() });
+
+    expect(recordOperationalUsageMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
   });
 
   it('passes the host billing repos through so the spend can debit', async () => {

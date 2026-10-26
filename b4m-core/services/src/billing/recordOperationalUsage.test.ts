@@ -249,14 +249,14 @@ describe('recordOperationalUsage', () => {
     expect(deductMock).toHaveBeenCalledTimes(1);
   });
 
-  it('records caller-settled credits without debiting again', async () => {
+  it.each([0, 7])('records %s caller-settled credits without debiting again', async settledCredits => {
     setToggles({ bill: true, enforce: true });
     const record = vi.fn().mockResolvedValue(null);
 
-    await recordOperationalUsage({ ...baseParams, settledCredits: 7 }, { db: fullBillingDb(record), logger });
+    await recordOperationalUsage({ ...baseParams, settledCredits }, { db: fullBillingDb(record), logger });
 
     expect(deductMock).not.toHaveBeenCalled();
-    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 7 });
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: settledCredits });
   });
 
   it('is a no-op-safe when no usageEvents repo is wired', async () => {

@@ -2,6 +2,7 @@ import { buildUsagePriceStamp, getTextModelCost, getTurnsCost } from '@bike4mind
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordOperationalUsage } from '../../../billing';
 import type { ToolContext } from './types';
+import { resolveToolBillingOrganization } from './resolveToolBillingOrganization';
 
 export type RecordToolOperationalUsageArgs = {
   /** Exact model id passed to the llm.complete call being measured. */
@@ -44,10 +45,7 @@ export async function recordToolOperationalUsage(
   }
 
   try {
-    const organization =
-      context.user.organizationId && context.db.organizations
-        ? await context.db.organizations.findById(context.user.organizationId)
-        : null;
+    const organization = await resolveToolBillingOrganization(context);
 
     const modelInfo = context.availableModels?.find(m => m.id === model);
     // Cost needs the model's pricing map; if the id isn't in this request's catalog we
