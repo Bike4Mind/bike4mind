@@ -449,6 +449,21 @@ describe('organizationService - delete', () => {
       expect(find('lakeC', 'formerMember')?.expiresAt).toBeNull();
     });
 
+    it('leaves a lake alone when its off-roster creator still holds their seeded owner grant', async () => {
+      lakes.push(lake('lakeC', 'org1', 'formerMember'));
+      grants.push(grant('lakeC', 'formerMember', 'owner'));
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(find('lakeC', 'user1')).toBeUndefined();
+      expect(find('lakeC', 'formerMember')).toEqual(expect.objectContaining({ role: 'owner', expiresAt: null }));
+      // Only lakeB (roster creator, roster owner) is succeeded.
+      const successions = mockAdapters.db.lakeConfigChangeEvents.record.mock.calls.filter(
+        ([event]: [{ action: string }]) => event.action === 'membership-succession'
+      );
+      expect(successions).toHaveLength(1);
+    });
+
     it("reads the org's grants once for both phases", async () => {
       await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
 

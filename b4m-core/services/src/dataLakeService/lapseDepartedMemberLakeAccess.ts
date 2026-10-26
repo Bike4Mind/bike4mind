@@ -152,13 +152,27 @@ export async function lapseDissolvedOrganizationLakeAccess(
 
   const lapsed = new Set(lapsing);
   const stillActive = active.filter(grant => !lapsed.has(grant));
+  // An off-roster creator can still hold the owner grant `createDataLake` seeds; phase 1 left it alone,
+  // so they remain the owner and there is nothing to succeed. Handing off would add a co-owner and
+  // audit a succession that never removed them.
+  const stillCreatorOwned = new Set(
+    stillActive
+      .filter(
+        grant =>
+          grant.principalType === 'user' &&
+          grant.role === 'owner' &&
+          orgLakesById.get(grant.dataLakeId)?.createdByUserId === grant.principalId
+      )
+      .map(grant => grant.dataLakeId)
+  );
+  const handOffCandidates = orgLakes.filter(lake => !stillCreatorOwned.has(lake.id));
   const succeededLakeIds: string[] = [];
   for (const creatorUserId of creators) {
     succeededLakeIds.push(
       ...(await passOnCreatedLakes(
         creatorUserId,
         organization,
-        orgLakes,
+        handOffCandidates,
         db,
         audit,
         triggeredBy,
