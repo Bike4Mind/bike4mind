@@ -118,7 +118,8 @@ export const ModelArchSchema = z.object({
   // Query heads of the attention layers, the largest if they vary; only prices flash attention off.
   headCount: z.number().int().positive().max(4096).optional(),
   full: AttnGroupSchema,
-  swa: AttnGroupSchema.extend({ window: ContextSchema }).optional(),
+  // llama.cpp reports n_swa 0 for some families (gemma2, gpt-oss, cohere2) and still keeps ubatch cells per layer.
+  swa: AttnGroupSchema.extend({ window: z.number().int().nonnegative().max(MAX_CONTEXT) }).optional(),
   mla: z
     .object({
       layers: LayerCountSchema.positive(),

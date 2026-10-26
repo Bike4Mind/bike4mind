@@ -92,6 +92,18 @@ function fit(over: Partial<FitInput> & { weightsGiB?: number; arch?: ModelArch }
 }
 
 describe('kvCacheBytes', () => {
+  it('keeps ubatch cells per sliding layer when the window is 0, as llama.cpp pads min(size, 0 + n_ubatch)', () => {
+    const gemma2 = arch({
+      contextMax: 8192,
+      blockCount: 42,
+      full: { layers: 21, kvHeads: 8, keyLength: 256, valueLength: 256 },
+      swa: { layers: 21, kvHeads: 8, keyLength: 256, valueLength: 256, window: 0 },
+    });
+    const perCell = 21 * 8 * 256 * 2 * 2;
+    expect(kvCacheBytes(gemma2, 8192, F16, 1, 512)).toBe(perCell * 8192 + perCell * 512);
+    expect(kvCacheBytes(gemma2, 256, F16, 1, 512)).toBe(perCell * 256 * 2);
+  });
+
   it('uses ggml block sizes for quantized caches', () => {
     expect(KV_BYTES_PER_ELEMENT).toEqual({ f16: 2, q8_0: 1.0625, q4_0: 0.5625 });
     expect(kvCacheBytes(ARCH_64K, 4096, Q8)).toBe(4096 * 64 * 1024 * 0.53125);

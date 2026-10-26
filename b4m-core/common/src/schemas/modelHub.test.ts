@@ -503,6 +503,21 @@ describe('HubEntrySchema cross-field rules', () => {
 });
 
 describe('ModelArchSchema', () => {
+  it.each([
+    [0, true],
+    [4096, true],
+    [-1, false],
+    [0.5, false],
+  ])('sliding window %s accepted: %s', (window, ok) => {
+    const result = ModelArchSchema.safeParse({
+      contextMax: 8192,
+      blockCount: 2,
+      full: { layers: 1, kvHeads: 1, keyLength: 1, valueLength: 1 },
+      swa: { layers: 1, kvHeads: 1, keyLength: 1, valueLength: 1, window },
+    });
+    expect(result.success).toBe(ok);
+  });
+
   it('accepts the shapes local-models extracts', () => {
     expect(
       ModelArchSchema.parse({
