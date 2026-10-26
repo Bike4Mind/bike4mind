@@ -327,8 +327,9 @@ jobs:
 
   lint:
     needs: core-build
-    # Standard runner: ESLint is I/O-bound, not CPU/memory-bound. Off the capped
-    # ubuntu-latest-m pool to free a slot per PR.
+    # MEDIUM, not the 2-core tier: typed linting (b4m/no-raw-entity-response) holds the client
+    # TypeScript program, so ESLint needs 3-4 GB of heap - past Node's RAM-derived default on a
+    # 2-core runner. The heap is pinned in the root lint:* scripts, not inherited from the runner.
     runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Lint
     timeout-minutes: 15
@@ -390,7 +391,7 @@ jobs:
       # Uncached on purpose: ESLint's cache keys on the linted file, not the core types the type-aware
       # b4m/no-raw-entity-response rule reads, and node_modules (cache dir included) is restored above.
       - name: Lint (errors only)
-        run: pnpm exec eslint . --quiet
+        run: pnpm lint:ci
 
   # OpenAPI contract gate: the spec is generated from the same Zod schemas that
   # validate requests at runtime, so it cannot drift silently - UNLESS a schema
