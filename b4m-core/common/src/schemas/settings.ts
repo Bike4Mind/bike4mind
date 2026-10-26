@@ -2192,6 +2192,9 @@ export const API_SERVICE_GROUPS = {
   };
 };
 
+/** Hosted deployments always meter credits (self-host may turn it off); read per call so tests can flip the env. */
+export const isEnforceCreditsLocked = (): boolean => process.env.B4M_SELF_HOST !== 'true';
+
 export const settingsMap = {
   DefaultAPIModel: makeStringSetting({
     key: 'DefaultAPIModel',
