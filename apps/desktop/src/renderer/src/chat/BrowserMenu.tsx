@@ -54,7 +54,7 @@ function skipLabel(reason: string): string {
  * the clear - no decryption and no Keychain prompt. Only the second step asks macOS to unlock
  * the key, by which time the user has already seen exactly which sites it will be used on.
  */
-export function BrowserCookiesMenu({
+export function BrowserMenu({
   state,
   onState,
   historyEnabled,

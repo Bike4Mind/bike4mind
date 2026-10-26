@@ -94,7 +94,7 @@ export function BrowserPane({
   sessionId: string | null;
   suspended: boolean;
   conversation: RefObject<HTMLElement | null>;
-  /** See BrowserCookiesMenu. */
+  /** See BrowserMenu. */
   historyEnabled: boolean | null;
   onHistory: (enabled: boolean) => void;
 }) {

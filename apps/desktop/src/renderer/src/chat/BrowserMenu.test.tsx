@@ -5,7 +5,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import type { CookieImportState } from '@shared/browserCookies';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
-import { BrowserCookiesMenu } from './BrowserCookiesMenu';
+import { BrowserMenu } from './BrowserMenu';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -41,7 +41,7 @@ async function openMenu(historyEnabled: boolean | null, onHistory = vi.fn()) {
   const render = (enabled: boolean | null) =>
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <BrowserCookiesMenu state={COOKIES} onState={() => undefined} historyEnabled={enabled} onHistory={onHistory} />
+        <BrowserMenu state={COOKIES} onState={() => undefined} historyEnabled={enabled} onHistory={onHistory} />
       </CssVarsProvider>
     );
   await act(async () => render(historyEnabled));

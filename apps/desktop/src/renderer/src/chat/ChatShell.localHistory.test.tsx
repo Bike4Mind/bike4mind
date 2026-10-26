@@ -17,7 +17,7 @@ vi.mock('./TerminalPanel', () => ({
   TerminalPanel: ({ sessionId }: { sessionId: string }) => <div data-testid="terminal-panel">{sessionId}</div>,
 }));
 
-// The menu row itself is BrowserCookiesMenu.test.tsx's; here the pane only reports what it was handed.
+// The menu row itself is BrowserMenu.test.tsx's; here the pane only reports what it was handed.
 vi.mock('./BrowserPane', () => ({
   BrowserPane: ({
     historyEnabled,
