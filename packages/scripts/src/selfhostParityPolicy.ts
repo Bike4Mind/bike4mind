@@ -45,7 +45,17 @@ const wired = (
 
 // Reviewed snapshots, never automatically refreshed by CI. Portable means wiring only.
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
-  gap('event:infra/eventBus.ts:email-send', '9e9896c54aca5fc6d07c90f6f7ae27992f6807c779ec4c4fd7fe416bbb1e4558'),
+  hostedOnly(
+    'eventRule:infra/accountCreationAlarms.ts:AccountCreationMetricsSchedule',
+    'f98be6da991e62a71cd993fb1407a083fe40374dc0762e9a5e367013de5e71a3',
+    'Opt-in hosted CloudWatch account census; no local notification destination is configured.',
+    ['cloudwatch:PutMetricData', 'cloudwatch:namespace', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  broker(
+    'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
+    'e73f19162f881d395539f1f644327e7e37f8818c6ec50be485b7e84ec75e00ab'
+  ),
+  gap('event:infra/eventBus.ts:email-send', 'aaba28ff39ac5c43a28a31fd685a7dc27a77d23dd3567ba2eb1d02f42a5f65b0'),
   gap(
     'event:infra/eventBus.ts:notebook-curation-complete-analytics',
     '1d997f1177639b3d10a09609145a4a49177153f36011f3de8b56415f1a5e1738'
