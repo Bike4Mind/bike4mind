@@ -300,14 +300,14 @@ describe('OllamaLocal', () => {
       vi.fn(async () => Response.json({ error: "model 'hf.co/a/b:Q4_K_M' not found" }, { status: 404 }))
     );
     await expect(
-      new OllamaLocal().stream({ model: `${LOCAL_MODEL_PREFIX}hf.co/a/b:Q4_K_M`, messages: [] }, () => undefined)
+      new OllamaLocal().stream({ model: 'local:ollama:hf.co/a/b:Q4_K_M', messages: [] }, () => undefined)
     ).rejects.toThrow('This model was removed from Ollama. Pick another model.');
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response('404 page not found', { status: 404 }))
     );
     await expect(
-      new OllamaLocal().stream({ model: `${LOCAL_MODEL_PREFIX}llama`, messages: [] }, () => undefined)
+      new OllamaLocal().stream({ model: 'local:ollama:llama', messages: [] }, () => undefined)
     ).rejects.toThrow('Ollama returned HTTP 404.');
   });
 });
