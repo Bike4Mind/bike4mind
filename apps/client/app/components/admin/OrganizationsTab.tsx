@@ -52,7 +52,7 @@ import { useGetPendingOrganizationUsers } from '@client/app/hooks/data/user';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { openInNewTab } from '@client/app/utils/externalLinks';
-import { ORGS_PAGE_LIMIT_OPTIONS } from './organizationsTabSearch';
+import { ORGS_PAGE_LIMIT_OPTIONS, organizationsPageToClampTo } from './organizationsTabSearch';
 import { useOpenOrganizationId, useOrganizationsParams, useOrganizationsTabUrlSync } from './useOrganizationsTabParams';
 
 /**
@@ -172,11 +172,11 @@ const OrganizationsTab: React.FC = () => {
     setTotalOrganizations(curr => data?.totalOrganizations ?? curr);
   }, [data?.totalOrganizations]);
 
-  // A linked or restored page can be past the end of the list; clamp only once the result for the
-  // current params has settled. A failed search reports zero pages and is left alone.
+  // A linked or restored page can be past the end of the list.
   const totalPages = data?.totalPages ?? 0;
   useEffect(() => {
-    if (!isFetching && totalPages > 0 && params.page > totalPages) setParams({ page: totalPages });
+    const page = organizationsPageToClampTo({ page: params.page, totalPages, isFetching });
+    if (page !== undefined) setParams({ page });
   }, [isFetching, totalPages, params.page, setParams]);
 
   const createOrganizationMutation = useCreateOrganization();

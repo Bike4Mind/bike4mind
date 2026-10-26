@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_ORGANIZATIONS_PARAMS,
   ORGS_SEARCH_PARSERS,
+  organizationsPageToClampTo,
   organizationsViewFromSearch,
   organizationsViewToSearch,
 } from './organizationsTabSearch';
@@ -65,5 +66,23 @@ describe('organizationsViewToSearch', () => {
   it('round-trips a non-default view', () => {
     const view = { page: 4, limit: 20, sortBy: 'updatedAt', sortDirection: 'desc', personal: true } as const;
     expect(organizationsViewFromSearch(organizationsViewToSearch(view))).toEqual(view);
+  });
+});
+
+describe('organizationsPageToClampTo', () => {
+  it('moves a page past the end to the last page once the search has settled', () => {
+    expect(organizationsPageToClampTo({ page: 9, totalPages: 3, isFetching: false })).toBe(3);
+  });
+
+  it('waits while the search is fetching', () => {
+    expect(organizationsPageToClampTo({ page: 9, totalPages: 3, isFetching: true })).toBeUndefined();
+  });
+
+  it('leaves the page alone when there are no pages', () => {
+    expect(organizationsPageToClampTo({ page: 4, totalPages: 0, isFetching: false })).toBeUndefined();
+  });
+
+  it('leaves an in-range page alone', () => {
+    expect(organizationsPageToClampTo({ page: 3, totalPages: 3, isFetching: false })).toBeUndefined();
   });
 });

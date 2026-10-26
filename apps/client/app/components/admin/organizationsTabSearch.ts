@@ -1,12 +1,8 @@
 import { oneOf, parsePage, toNumber } from './adminSearchValues';
 
-/**
- * The Organizations tab's `/admin` search params and their coercion. Pure and React-free:
- * adminTabParams.ts (and through it router.tsx's eager import) reads it. The free-text search box is
- * deliberately absent - it matches organization names, and these URLs get shared and copied into
- * login redirects. The list params carry an `orgs` prefix because Users already owns the bare
- * `page`/`limit`/`sort`/`order`.
- */
+// Kept React-free: router.tsx imports it eagerly through adminTabParams.ts. The free-text search is
+// left out because these URLs get shared and copied into login redirects; the `orgs` prefix is
+// because Users already owns the bare `page`/`limit`/`sort`/`order`.
 
 export const ORGS_PAGE_PARAM = 'orgsPage';
 export const ORGS_LIMIT_PARAM = 'orgsLimit';
@@ -94,11 +90,9 @@ export const ORGS_SEARCH_PARSERS: {
 };
 
 /**
- * The list view a URL describes, or undefined when it carries none of the view params (a bare
- * `?tab=organizations`, which restores the last view from localStorage). When any view param is
- * present the URL describes the whole view and a missing one means its default, so a shared link
- * never picks up the recipient's saved page, sort or type filter. The saved free-text search still
- * applies, as it does on the Users tab, since it never enters the URL.
+ * The list view a URL describes, or undefined for a bare `?tab=organizations` (restore the saved
+ * view). Any view param means a whole view with defaults for the rest, so a shared link never picks
+ * up the recipient's saved page, sort or type filter.
  */
 export function organizationsViewFromSearch(search: Record<string, unknown>): OrganizationsView | undefined {
   const parsed = {
@@ -118,11 +112,7 @@ export function organizationsViewFromSearch(search: Record<string, unknown>): Or
   };
 }
 
-/**
- * The view params to write for `view`. Defaults are left out to keep links short, except the page,
- * which is always written so every Organizations URL carries a view param and reads back as a whole
- * view (see organizationsViewFromSearch) rather than as "restore from localStorage".
- */
+/** Defaults are left out, except the page, so the URL always reads back as a whole view. */
 export function organizationsViewToSearch(
   view: OrganizationsView
 ): Omit<OrganizationsSearch, typeof ORGS_ORG_ID_PARAM> {
@@ -151,4 +141,20 @@ export function isSameOrganizationsView(a: OrganizationsView, b: OrganizationsVi
     a.sortDirection === b.sortDirection &&
     a.personal === b.personal
   );
+}
+
+/**
+ * The last page to move to when `page` is past the end, or undefined to stay. Waits for the current
+ * search to settle; zero pages (a failed search reports that too) is left alone.
+ */
+export function organizationsPageToClampTo({
+  page,
+  totalPages,
+  isFetching,
+}: {
+  page: number;
+  totalPages: number;
+  isFetching: boolean;
+}): number | undefined {
+  return !isFetching && totalPages > 0 && page > totalPages ? totalPages : undefined;
 }
