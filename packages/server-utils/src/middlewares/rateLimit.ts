@@ -43,11 +43,11 @@ export const rateLimit =
     // Only Infinity skips enforcement (admins/developers, local dev server).
     if (resolvedLimit === Infinity) return next();
 
-    // Fail closed before touching the bucket: 0, negative and NaN all block.
+    // Fail closed before touching the bucket: 0, negative and NaN all block. Retry-After stays
+    // for clients that honor it, but the message must not promise a retry window that never opens.
     if (!(resolvedLimit > 0)) {
-      const retryAfterSeconds = Math.max(1, Math.ceil(windowMs / 1000));
-      res.setHeader('Retry-After', retryAfterSeconds);
-      return next(new TooManyRequestsError(`Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`));
+      res.setHeader('Retry-After', Math.max(1, Math.ceil(windowMs / 1000)));
+      return next(new TooManyRequestsError('Requests to this endpoint are currently blocked for your account.'));
     }
 
     // Extract pathname from URL, excluding query params to prevent bypass.

@@ -52,6 +52,35 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
     expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', { kind: 'delta', delta: 100 }, 'Compensation for outage');
   });
 
+  it('disables the actions while a request is in flight so a double click submits once', async () => {
+    let finish: () => void = () => {};
+    const onCreditAdjustment = vi.fn(() => new Promise<void>(resolve => (finish = resolve)));
+    const onClose = vi.fn();
+    render(
+      <TestWrapper>
+        <CreditAdjustmentModal
+          open
+          onClose={onClose}
+          selectedUser={selectedUser}
+          onCreditAdjustment={onCreditAdjustment}
+        />
+      </TestWrapper>
+    );
+
+    fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Goodwill credit' } });
+    const addButton = screen.getByTestId('credit-adjust-add-btn');
+    fireEvent.click(addButton);
+    fireEvent.click(addButton);
+
+    expect(onCreditAdjustment).toHaveBeenCalledTimes(1);
+    expect(addButton).toBeDisabled();
+    expect(screen.getByTestId('credit-adjust-remove-btn')).toBeDisabled();
+
+    expect(onClose).not.toHaveBeenCalled();
+    finish();
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
   it('blocks add and remove until the reason is at least 5 characters', () => {
     const onCreditAdjustment = vi.fn().mockResolvedValue(undefined);
     render(

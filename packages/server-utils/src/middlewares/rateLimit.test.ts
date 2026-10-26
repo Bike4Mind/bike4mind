@@ -87,6 +87,7 @@ describe('rateLimit middleware', () => {
 
     expect(tryIncrementMock).not.toHaveBeenCalled();
     expect(next.mock.calls[0][0]).toBeInstanceOf(TooManyRequestsError);
+    expect(next.mock.calls[0][0].message).toBe('Requests to this endpoint are currently blocked for your account.');
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', 60);
   });
 

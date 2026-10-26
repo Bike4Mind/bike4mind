@@ -47,6 +47,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
   const [creditAmount, setCreditAmount] = useState(100);
   const [targetBalance, setTargetBalance] = useState<number | null>(0);
   const [creditNote, setCreditNote] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: adjustments, isLoading: adjustmentsLoading } = useUserCreditAdjustments(selectedUser?.id, open);
@@ -65,11 +66,17 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
     onClose();
   };
 
+  // A second click while the first request is in flight would apply a delta twice.
   const submit = async (change: CreditChange) => {
-    if (!selectedUser) return;
-    await onCreditAdjustment(selectedUser.id, change, creditNote.trim());
-    queryClient.invalidateQueries({ queryKey: userCreditAdjustmentsKey(selectedUser.id) });
-    handleClose();
+    if (!selectedUser || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onCreditAdjustment(selectedUser.id, change, creditNote.trim());
+      queryClient.invalidateQueries({ queryKey: userCreditAdjustmentsKey(selectedUser.id) });
+      handleClose();
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleCreditAdjustment = async (isAdd: boolean) => {
@@ -132,7 +139,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                   />
                 </FormControl>
               ) : (
-                <FormControl sx={{ mb: 1 }} error={targetBalance !== null && !canSet && setDelta === 0}>
+                <FormControl sx={{ mb: 1 }} error={targetBalance !== null && setDelta === 0}>
                   <FormLabel>New balance</FormLabel>
                   <Input
                     type="number"
@@ -229,7 +236,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                     startDecorator={<AddIcon />}
                     onClick={() => handleCreditAdjustment(true)}
                     data-testid="credit-adjust-add-btn"
-                    disabled={creditAmount < 10 || !isReasonValid}
+                    disabled={creditAmount < 10 || !isReasonValid || isSubmitting}
                   >
                     Add Credits
                   </Button>
@@ -239,7 +246,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                     startDecorator={<RemoveIcon />}
                     onClick={() => handleCreditAdjustment(false)}
                     data-testid="credit-adjust-remove-btn"
-                    disabled={creditAmount < 10 || !isReasonValid}
+                    disabled={creditAmount < 10 || !isReasonValid || isSubmitting}
                   >
                     Remove Credits
                   </Button>
@@ -251,7 +258,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                   startDecorator={<SaveIcon />}
                   onClick={handleSetBalance}
                   data-testid="credit-adjust-set-btn"
-                  disabled={!canSet}
+                  disabled={!canSet || isSubmitting}
                 >
                   Set Balance
                 </Button>

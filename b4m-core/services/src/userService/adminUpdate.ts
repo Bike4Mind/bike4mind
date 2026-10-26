@@ -42,7 +42,7 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   organizationId: z.string().optional().nullable(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).optional(),
   storageLimitOverride: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
-  currentCredits: z.number().finite().min(0).max(MAX_CREDIT_VALUE).optional(),
+  currentCredits: z.number().int().min(0).max(MAX_CREDIT_VALUE).optional(),
   isBanned: z.boolean().optional(),
   isModerated: z.boolean().optional(),
   subscribedUntil: z.string().optional().nullable(),
@@ -67,7 +67,7 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   // this write is never refunded (the failure mode of sending a frozen client snapshot
   // as an absolute `currentCredits`). Not a user-doc field: stripped from the doc write
   // and routed to addCredits/subtractCredits. Takes precedence over `currentCredits`.
-  creditDelta: z.number().finite().min(-MAX_CREDIT_VALUE).max(MAX_CREDIT_VALUE).optional(),
+  creditDelta: z.number().int().min(-MAX_CREDIT_VALUE).max(MAX_CREDIT_VALUE).optional(),
   // Why the admin role is being granted or revoked. Not a user-doc field: the route records it on
   // the audit entry, and it is stripped from the doc write here.
   roleChangeReason: z.string().max(500).optional(),
