@@ -1,0 +1,40 @@
+import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
+import { getSettingsMap, getSettingsValue, TooManyRequestsError } from '@bike4mind/utils';
+import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { ipBucket } from '@bike4mind/server-utils/utils/ipBucket';
+import type { RequestHandler } from 'express';
+
+/**
+ * Fixed-window per-IP cap on OAuth initiation and callback, sized by admin settings. Initiation and
+ * callback count separately so a normal sign-in (one of each) spends one unit of each. Deliberately
+ * per IP and never global: a global cap would let an attacker exhaust it and refuse real sign-ups.
+ */
+export const oauthIpRateLimit =
+  (bucket: 'oauth-init' | 'oauth-callback'): RequestHandler =>
+  async (req, res, next) => {
+    // isE2EEnabled is hard-false on production; CI draws every sign-in from one shared IP.
+    if (isE2EEnabled()) return next();
+
+    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    const limit = getSettingsValue('oauthRateLimitPerIp', settings, 40);
+    const windowMs = getSettingsValue('oauthRateLimitWindowMinutes', settings, 10) * 60_000;
+
+    const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      `oauth-limit:${bucket}:${ipBucket(getClientIp(req))}`,
+      limit,
+      windowMs
+    );
+    if (success) return next();
+
+    const timeLeftMs = expiresAt.getTime() - Date.now();
+    const seconds = Math.max(1, Math.ceil((timeLeftMs > 0 ? timeLeftMs : windowMs) / 1000));
+    res.setHeader('Retry-After', seconds);
+
+    // Same navigation/JSON split as checkBlockedIP: a browser mid sign-in gets the login page.
+    const path = req.path || (req.url ? req.url.split('?')[0] : '');
+    if (path.startsWith('/api/') && req.headers.accept?.includes('application/json')) {
+      return next(new TooManyRequestsError(`Rate limit exceeded. Try again in ${seconds} seconds.`));
+    }
+    return res.redirect(`/login?error=${encodeURIComponent('Too many sign-in attempts. Please try again later.')}`);
+  };

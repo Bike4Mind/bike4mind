@@ -11,6 +11,7 @@ import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecond
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { oauthIpRateLimit } from '@server/middlewares/oauthIpRateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import passport from 'passport';
@@ -50,6 +51,7 @@ const handler = baseApi({ auth: false })
   })
   .use(checkBlockedIP())
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }))
+  .use(oauthIpRateLimit('oauth-callback'))
   .get(async (req: Request<{}, unknown, unknown, { strategy: AuthStrategy; state: string }>, res, next) => {
     const { strategy } = req.query;
 
@@ -105,6 +107,9 @@ const handler = baseApi({ auth: false })
               : resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
           const logFailure = reason === 'internal' ? console.error : console.warn;
           logFailure('Passport Authenticate User Not Found Info:', info);
+          // Counted by the OAuthSignupsRefused metric filter in infra/authAbuseAlarms.ts; keep the
+          // message in sync with its pattern.
+          if (reason === 'registration_closed') req.logger?.info('oauth-signup-refused');
           try {
             await authFailLogRepository.create({
               strategy,
