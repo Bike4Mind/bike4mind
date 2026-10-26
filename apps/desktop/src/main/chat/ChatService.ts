@@ -418,7 +418,7 @@ export interface ChatServiceDeps {
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
     Partial<Pick<PermissionService, 'dispose'>>;
-  capabilities?: Pick<CapabilityLedger, 'grant' | 'use' | 'revokeMatching'>;
+  capabilities?: Pick<CapabilityLedger, 'grant' | 'use' | 'revokeMatching' | 'findActive'>;
   /** Where each approval decision is appended, across sessions. Absent in tests that do not read it. */
   approvalLog?: Pick<ApprovalLog, 'append'>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
@@ -3587,8 +3587,15 @@ export class ChatService {
         if (gated.approval) call.approval = gated.approval;
 
         if (this.deps.capabilities) {
-          await this.deps.capabilities
-            .use(capabilityFor(call.name, context.approvedKey), capabilityScope(call.name, context.approvedKey))
+          const capabilities = this.deps.capabilities;
+          await this.authorizingGrant(sessionId, call.approval?.decidedBy, context.approvedKey)
+            .then(grantId =>
+              capabilities.use(
+                capabilityFor(call.name, context.approvedKey),
+                capabilityScope(call.name, context.approvedKey),
+                grantId
+              )
+            )
             .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit use: ${String(error)}`));
         }
 
@@ -4594,6 +4601,34 @@ export class ChatService {
    * tool_result rather than as an aborted turn, so it can say what it wanted to do instead of the
    * conversation stopping dead.
    */
+  /** The ledger grant that let a call through, when one is identifiable. */
+  private async authorizingGrant(
+    sessionId: string,
+    decidedBy: ChatApprovalDecidedBy | undefined,
+    approvedKey: string | undefined
+  ): Promise<string | undefined> {
+    const capabilities = this.deps.capabilities;
+    if (!capabilities || !decidedBy) return undefined;
+    if (decidedBy.kind === 'rule') {
+      const grant = await capabilities.findActive(
+        grant =>
+          grant.subject.kind !== 'session' &&
+          grant.scope.kind === 'permission-rule' &&
+          grant.scope.value === decidedBy.rule
+      );
+      return grant?.id;
+    }
+    const standing =
+      decidedBy.kind === 'chat-allowance' || (decidedBy.kind === 'user' && decidedBy.answer === 'always');
+    if (!standing || !approvedKey) return undefined;
+    // A shell call covered by patterns another key allowed has no grant of its own to name.
+    const grant = await capabilities.findActive(
+      grant =>
+        grant.subject.kind === 'session' && grant.subject.sessionId === sessionId && grant.approvalKey === approvedKey
+    );
+    return grant?.id;
+  }
+
   private async awaitApproval(
     tool: ToolDefinition,
     call: ChatToolCall,

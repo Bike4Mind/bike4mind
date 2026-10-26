@@ -155,6 +155,12 @@ export class CapabilityLedger {
     };
   }
 
+  findActive(match: (grant: CapabilityGrant) => boolean): Promise<CapabilityGrant | undefined> {
+    return this.serialize(async () =>
+      (await this.currentState()).grants.find(grant => !grant.revokedAt && match(grant))
+    );
+  }
+
   async use(capability: Capability, scope: CapabilityScope, grantId?: string): Promise<void> {
     await this.serialize(() =>
       this.append({

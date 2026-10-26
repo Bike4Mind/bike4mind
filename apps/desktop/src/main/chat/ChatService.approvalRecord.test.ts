@@ -201,6 +201,35 @@ describe('ChatService approval record', () => {
     expect(second.approval).toMatchObject({ outcome: 'allowed', decidedBy: { kind: 'chat-allowance' }, asked: false });
   });
 
+  it('links each use of a standing allowance to the grant that authorized it', async () => {
+    await run('ask', 'touch made.txt');
+    const asked = await awaitCall('c1', 'awaiting-approval');
+    approvals.resolve(asked.approvalId!, { decision: 'always' });
+    await awaitCall('c1', 'done');
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+    useTool(streams[1], 'c2', 'touch made.txt');
+    await awaitCall('c2', 'done');
+
+    const { grants, audit } = await capabilities.state();
+    const uses = audit.filter(event => event.type === 'use');
+    expect(uses).toHaveLength(2);
+    expect(uses.every(event => event.grantId === grants[0].id)).toBe(true);
+  });
+
+  it('links a use allowed by a saved rule to that rule grant', async () => {
+    rules = ruleSet({ allow: ['Bash(touch:*)'] });
+    const grant = await capabilities.grant({
+      subject: { kind: 'desktop-user' },
+      capability: 'tool',
+      scope: { kind: 'permission-rule', value: 'Bash(touch:*)' },
+      source: 'permission-rule',
+    });
+    await run('ask', 'touch made.txt');
+    await awaitCall('c1', 'done');
+    const uses = (await capabilities.state()).audit.filter(event => event.type === 'use');
+    expect(uses).toMatchObject([{ grantId: grant.id }]);
+  });
+
   it('revokes the exact shell allowance recorded by the live approval path', async () => {
     const sessionId = await run('ask', 'touch made.txt');
     const asked = await awaitCall('c1', 'awaiting-approval');

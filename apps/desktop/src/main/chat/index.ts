@@ -597,6 +597,10 @@ export function registerChat(
         await capabilitiesReady;
         return capabilityLedger.revokeMatching(match);
       },
+      findActive: async match => {
+        await capabilitiesReady;
+        return capabilityLedger.findActive(match);
+      },
     },
     // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
     approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
