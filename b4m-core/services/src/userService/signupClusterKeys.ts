@@ -122,9 +122,12 @@ const hostSet = (hosts: readonly string[] | undefined, ignored: readonly string[
 };
 
 // Two grids offset by half a bucket: times less than half a bucket apart share a bucket on at least one.
-const timeBuckets = (time: number, bucketMs: number): string[] => [
-  `a${Math.floor(time / bucketMs)}`,
-  `b${Math.floor(time / bucketMs + 0.5)}`,
+const timeBuckets = (time: number, bucketMs: number): { id: string; start: string }[] => [
+  { id: `a${Math.floor(time / bucketMs)}`, start: new Date(Math.floor(time / bucketMs) * bucketMs).toISOString() },
+  {
+    id: `b${Math.floor(time / bucketMs + 0.5)}`,
+    start: new Date((Math.floor(time / bucketMs + 0.5) - 0.5) * bucketMs).toISOString(),
+  },
 ];
 
 /** Keys from the domain's infrastructure: MX host set, nameserver set, registrar + registration-date bucket. */
@@ -145,8 +148,8 @@ export function domainClusterKeys(
     for (const bucket of timeBuckets(registeredAt, days * DAY_MS)) {
       keys.push({
         kind: 'registration',
-        value: `${registrar}|${bucket}`,
-        label: `registrar ${registrar} with registration dates in the same ${days}-day bucket`,
+        value: `${registrar}|${bucket.id}`,
+        label: `registrar ${registrar} with registration dates in the ${days}-day window from ${bucket.start}`,
       });
     }
   }
@@ -170,7 +173,11 @@ export function signupClusterKeys(
   if (createdAt !== undefined && !Number.isNaN(createdAt)) {
     const hours = options.signupBucketHours;
     for (const bucket of timeBuckets(createdAt, hours * HOUR_MS)) {
-      keys.push({ kind: 'signupWindow', value: bucket, label: `signup times in the same ${hours}-hour bucket` });
+      keys.push({
+        kind: 'signupWindow',
+        value: bucket.id,
+        label: `signup times in the ${hours}-hour window from ${bucket.start}`,
+      });
     }
   }
   return keys;

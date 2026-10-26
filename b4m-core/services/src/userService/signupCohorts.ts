@@ -18,6 +18,8 @@ export type CohortOptions = ClusterKeyOptions & {
   minDomains: number;
   /** A broad user key (ASN, signup bucket) on more domains than this is reported as common, not linked on. */
   maxDomainsPerKey: number;
+  /** MX, nameserver, registrar and shape keys on more domains than this are reported as common; bounds pair enumeration. */
+  maxDomainsPerInfraKey: number;
   /** Larger cohorts are reported as too broad for review instead of as one group. */
   maxCohortDomains: number;
   /** A per-user key describes a domain once this share of its users carry it. */
@@ -31,12 +33,13 @@ export const DEFAULT_COHORT_OPTIONS: CohortOptions = {
   minSharedKeyKinds: 2,
   minDomains: 2,
   maxDomainsPerKey: 50,
+  maxDomainsPerInfraKey: 500,
   maxCohortDomains: 20,
   minUserKeyShare: 0.5,
   sharedMailboxDomains: [],
 };
 
-const CAPPED_KINDS: ReadonlySet<ClusterKeyKind> = new Set(['asn', 'signupWindow']);
+const BROAD_KINDS: ReadonlySet<ClusterKeyKind> = new Set(['asn', 'signupWindow']);
 
 export type DomainProfile = { domain: string; members: SignupRecord[]; keys: ClusterKey[] };
 
@@ -142,11 +145,12 @@ export function groupDomainProfiles(
       domainsByKey.set(keyId(key), entry);
     }
   }
-  const commonByLabel = new Map<string, number>();
+  const commonKeyList: CommonKey[] = [];
   const linkingKeys = [...domainsByKey.values()].filter(({ key, domains }) => {
     if (domains.length < 2) return false;
-    if (CAPPED_KINDS.has(key.kind) && domains.length > options.maxDomainsPerKey) {
-      commonByLabel.set(key.label, Math.max(commonByLabel.get(key.label) ?? 0, domains.length));
+    const cap = BROAD_KINDS.has(key.kind) ? options.maxDomainsPerKey : options.maxDomainsPerInfraKey;
+    if (domains.length > cap) {
+      commonKeyList.push({ label: key.label, domainCount: domains.length });
       return false;
     }
     return true;
@@ -166,11 +170,15 @@ export function groupDomainProfiles(
   }
 
   const parent = new Map<string, string>();
+  // Iterative: a long chain of pairs builds a parent chain as deep as the domain count.
   const find = (domain: string): string => {
-    const up = parent.get(domain) ?? domain;
-    if (up === domain) return domain;
-    const root = find(up);
-    parent.set(domain, root);
+    let root = domain;
+    while (parent.has(root) && parent.get(root) !== root) root = parent.get(root)!;
+    for (let node = domain; node !== root;) {
+      const next = parent.get(node)!;
+      parent.set(node, root);
+      node = next;
+    }
     return root;
   };
   const edges: { edge: CohortEdge; keys: ClusterKey[] }[] = [];
@@ -209,12 +217,12 @@ export function groupDomainProfiles(
           group.edges.map(({ edge }) => edge)
         );
 
-    const domainsByLabel = new Map<string, Set<string>>();
+    const domainsByKeyId = new Map<string, { label: string; domains: Set<string> }>();
     for (const { edge, keys } of group.edges) {
       for (const key of keys) {
-        const set = domainsByLabel.get(key.label) ?? new Set<string>();
-        edge.domains.forEach(domain => set.add(domain));
-        domainsByLabel.set(key.label, set);
+        const entry = domainsByKeyId.get(keyId(key)) ?? { label: key.label, domains: new Set<string>() };
+        edge.domains.forEach(domain => entry.domains.add(domain));
+        domainsByKeyId.set(keyId(key), entry);
       }
     }
     cohorts.push({
@@ -232,8 +240,8 @@ export function groupDomainProfiles(
           ? `too broad: ${domains.length} domains exceeds ${options.maxCohortDomains}, review edges`
           : `cohort of ${domains.length} domains, ${members.length} users`,
         ...(bridgeDomains.length ? [`connectivity depends on ${bridgeDomains.join(', ')}`] : []),
-        ...[...domainsByLabel]
-          .map(([label, set]) => [label, set.size] as const)
+        ...[...domainsByKeyId.values()]
+          .map(({ label, domains: shared }) => [label, shared.size] as const)
           .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
           .map(([label, count]) => `${count} domains share ${label}`),
       ],
@@ -241,9 +249,7 @@ export function groupDomainProfiles(
   }
   return {
     cohorts: cohorts.sort((a, b) => b.members.length - a.members.length || a.domains[0].localeCompare(b.domains[0])),
-    commonKeys: [...commonByLabel]
-      .map(([label, domainCount]) => ({ label, domainCount }))
-      .sort((a, b) => b.domainCount - a.domainCount || a.label.localeCompare(b.label)),
+    commonKeys: commonKeyList.sort((a, b) => b.domainCount - a.domainCount || a.label.localeCompare(b.label)),
   };
 }
 

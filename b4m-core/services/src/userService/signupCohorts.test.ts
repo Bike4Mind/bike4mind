@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { cachedFailOpenLookup, toSignupRecord, type DomainFacts, type SignupFootprint } from './signupClusterKeys';
-import { DEFAULT_COHORT_OPTIONS, findCandidateCohorts, type CohortOptions } from './signupCohorts';
+import { DEFAULT_COHORT_OPTIONS, findCandidateCohorts, groupDomainProfiles, type CohortOptions } from './signupCohorts';
 
 const OPTIONS: CohortOptions = { ...DEFAULT_COHORT_OPTIONS, localPartShapes: ['alpha+digits'] };
 const SHARED_MX = { mxHosts: ['mx.shared-mail.example'] };
@@ -65,8 +65,53 @@ describe('findCandidateCohorts', () => {
     expect(cohorts).toEqual([]);
     expect(commonKeys).toEqual([
       { label: 'signup ASN 64500', domainCount: 3 },
-      { label: 'signup times in the same 24-hour bucket', domainCount: 3 },
+      { label: 'signup times in the 24-hour window from 2026-03-09T12:00:00.000Z', domainCount: 3 },
+      { label: 'signup times in the 24-hour window from 2026-03-10T00:00:00.000Z', domainCount: 3 },
     ]);
+  });
+
+  it('reports an infrastructure key over its cap as common without enumerating pairs', async () => {
+    const records = ['a', 'b', 'c', 'd'].map(name => record(`sam2041@${name}.example`));
+    const facts = Object.fromEntries(records.map(r => [r.domain!, { ...SHARED_MX, ...SHARED_NS }]));
+    const { cohorts, commonKeys } = await findCandidateCohorts(records, lookupFrom(facts), {
+      ...OPTIONS,
+      maxDomainsPerInfraKey: 3,
+    });
+    expect(cohorts).toEqual([]);
+    expect(commonKeys.map(key => key.label)).toEqual(
+      expect.arrayContaining(['MX hosts mx.shared-mail.example', 'nameservers ns.shared-dns.example'])
+    );
+  });
+
+  it('groups a long chain of linked domains without overflowing the stack', async () => {
+    const count = 20000;
+    const profiles = Array.from({ length: count }, (_, i) => ({
+      domain: `d${i}.example`,
+      members: [],
+      keys: [
+        { kind: 'mx' as const, value: `mx${i}`, label: `MX hosts mx${i}` },
+        { kind: 'ns' as const, value: `ns${i}`, label: `nameservers ns${i}` },
+        { kind: 'mx' as const, value: `mx${i + 1}`, label: `MX hosts mx${i + 1}` },
+        { kind: 'ns' as const, value: `ns${i + 1}`, label: `nameservers ns${i + 1}` },
+      ],
+    }));
+    const { cohorts } = groupDomainProfiles(profiles, OPTIONS);
+    expect(cohorts).toHaveLength(1);
+    expect(cohorts[0].tooBroad).toBe(true);
+  });
+
+  it('keeps different signup windows in one cohort as separate reasons', () => {
+    const at = (iso: string) => ({ kind: 'signupWindow' as const, value: iso, label: 'same-looking window' });
+    const mx = { kind: 'mx' as const, value: 'm', label: 'MX hosts m' };
+    const profiles = [
+      { domain: 'a.example', members: [], keys: [at('1'), mx] },
+      { domain: 'b.example', members: [], keys: [at('1'), mx] },
+      { domain: 'c.example', members: [], keys: [at('2'), mx] },
+      { domain: 'd.example', members: [], keys: [at('2'), mx] },
+      { domain: 'e.example', members: [], keys: [at('1'), at('2'), mx] },
+    ];
+    const { cohorts } = groupDomainProfiles(profiles, { ...OPTIONS, minSharedKeyKinds: 2 });
+    expect(cohorts[0].reasons.filter(reason => reason === '3 domains share same-looking window')).toHaveLength(2);
   });
 
   it('links on stored signup data alone when no domain facts are supplied', async () => {
@@ -77,7 +122,9 @@ describe('findCandidateCohorts', () => {
     expect(cohorts[0].domains).toHaveLength(3);
     expect(cohorts[0].datacenterSignups).toBe(5);
     expect(cohorts[0].reasons).toContain('3 domains share signup ASN 64500');
-    expect(cohorts[0].reasons).toContain('3 domains share signup times in the same 24-hour bucket');
+    expect(cohorts[0].reasons).toContain(
+      '3 domains share signup times in the 24-hour window from 2026-03-10T00:00:00.000Z'
+    );
   });
 
   it('records edges and marks a domain the cohort depends on', async () => {
