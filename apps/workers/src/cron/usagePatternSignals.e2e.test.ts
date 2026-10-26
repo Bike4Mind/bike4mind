@@ -137,6 +137,15 @@ describe('runUsagePatternSignals', () => {
 
   it('flags a high-signal free-tier account and not a typical one', async () => {
     const highSignal = await seedHighSignalUser();
+    await UsageEvent.collection.insertMany([
+      {
+        userId: highSignal,
+        feature: 'operations',
+        requestId: 'session-1',
+        ownerType: CreditHolderType.User,
+        createdAt: new Date(now.getTime() - MINUTE),
+      },
+    ]);
     const typical = await seedUser();
     const gapsMinutes = [3, 47, 1, 220, 9, 15, 600, 2, 75, 30, 4, 180, 12, 6, 95, 1, 40, 8, 300, 20, 5];
     let at = now.getTime();

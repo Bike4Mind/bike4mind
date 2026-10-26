@@ -211,11 +211,17 @@ describe('computeUsagePatternSignals', () => {
   it('adds nothing for a zero-weight signal and caps the score at 100', () => {
     const zeroed = UsagePatternSignalsConfigSchema.parse({
       ...config,
-      weights: { ...config.weights, quickApiKey: 0, apiOnlyUsage: 100 },
+      weights: { ...config.weights, quickApiKey: 0 },
     });
     const result = computeUsagePatternSignals(highSignalFacts, zeroed);
     expect(result.signals.find(s => s.id === 'quickApiKey')).toMatchObject({ triggered: true, weight: 0 });
-    expect(result.score).toBe(100);
+    expect(result.score).toBe(70);
+
+    const capped = UsagePatternSignalsConfigSchema.parse({
+      ...config,
+      weights: { ...config.weights, apiOnlyUsage: 100 },
+    });
+    expect(computeUsagePatternSignals(highSignalFacts, capped).score).toBe(100);
   });
 });
 
