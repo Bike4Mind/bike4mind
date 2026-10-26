@@ -826,7 +826,28 @@ export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessI
  * provider keys - so this is genuinely per-deployment and per-account, and the desktop client
  * never ships a list of its own.
  */
-export const LOCAL_MODEL_PREFIX = 'local:ollama:';
+export function localModelId(runtimeId: string, model: string): string {
+  return `local:${runtimeId}:${model}`;
+}
+
+/** `local:<runtime>:<model>`; the model may itself contain colons. */
+export function parseLocalModelId(id: string): { runtimeId: string; model: string } | null {
+  const match = /^local:([^:]+):(.+)$/s.exec(id);
+  return match ? { runtimeId: match[1], model: match[2] } : null;
+}
+
+/** Fails closed: a malformed `local:` id still counts as local so it never falls onto the hosted path. */
+export function isLocalModel(id: string): boolean {
+  return id.startsWith('local:');
+}
+
+export function isLocalBackend(model: { backend?: string }): boolean {
+  return model.backend === 'ollama' || model.backend?.startsWith('local-') === true;
+}
+
+export function localBackend(runtimeId: string): string {
+  return `local-${runtimeId}`;
+}
 
 export interface ChatModelOption {
   id: string;

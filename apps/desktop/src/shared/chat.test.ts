@@ -1,5 +1,50 @@
 import { describe, expect, it } from 'vitest';
-import { isTurnBudgetStop, lastBoundaryIndex, messagesSinceBoundary, type ChatMessage } from './chat';
+import {
+  isLocalBackend,
+  isLocalModel,
+  isTurnBudgetStop,
+  lastBoundaryIndex,
+  localBackend,
+  localModelId,
+  messagesSinceBoundary,
+  parseLocalModelId,
+  type ChatMessage,
+} from './chat';
+
+describe('local model ids', () => {
+  it('round-trips a runtime and a model containing colons', () => {
+    const id = localModelId('ollama', 'qwen3:8b');
+    expect(id).toBe('local:ollama:qwen3:8b');
+    expect(parseLocalModelId(id)).toEqual({ runtimeId: 'ollama', model: 'qwen3:8b' });
+    expect(parseLocalModelId('local:lmstudio:org/model:q4')).toEqual({ runtimeId: 'lmstudio', model: 'org/model:q4' });
+  });
+
+  it('recognizes any runtime and rejects hosted and malformed ids', () => {
+    expect(isLocalModel('local:lmstudio:some-model')).toBe(true);
+    for (const id of ['claude-sonnet', 'locally:ollama:x', 'local']) {
+      expect(isLocalModel(id)).toBe(false);
+      expect(parseLocalModelId(id)).toBeNull();
+    }
+  });
+
+  it('fails closed on malformed local ids while refusing to parse them', () => {
+    for (const id of ['local:', 'local:ollama', 'local:ollama:', 'local::x']) {
+      expect(isLocalModel(id)).toBe(true);
+      expect(parseLocalModelId(id)).toBeNull();
+    }
+  });
+
+  it('treats ollama and local-* backends as local', () => {
+    expect(isLocalBackend({ backend: 'ollama' })).toBe(true);
+    expect(isLocalBackend({ backend: 'local-lmstudio' })).toBe(true);
+    expect(isLocalBackend({ backend: 'anthropic' })).toBe(false);
+    expect(isLocalBackend({})).toBe(false);
+  });
+
+  it('derives the backend label from the runtime', () => {
+    expect(localBackend('ollama')).toBe('local-ollama');
+  });
+});
 
 describe('isTurnBudgetStop', () => {
   it('covers every budget the agent loop enforces', () => {

@@ -11,7 +11,7 @@ import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { LOCAL_MODEL_PREFIX, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { effectiveContextLimit } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
@@ -1016,7 +1016,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             blockedReason={blockedReason}
             // Blocked rather than refused: a refused send has already cleared the box.
             notReady={
-              auth?.reauthRequired && !conversation.session?.model.startsWith(LOCAL_MODEL_PREFIX)
+              auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
                 ? 'Sign in'
                 : unbound
                   ? 'No folder'

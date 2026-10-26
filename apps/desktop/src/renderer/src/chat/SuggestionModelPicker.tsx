@@ -4,7 +4,7 @@ import Option from '@mui/joy/Option';
 import Select from '@mui/joy/Select';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatModelOption } from '@shared/chat';
+import { isLocalBackend, type ChatModelOption } from '@shared/chat';
 import { usePromptSuggestionModel } from './promptSuggestions';
 
 /** Joy's Select cannot hold null as an option value, so automatic needs a stand-in. */
@@ -30,7 +30,7 @@ export function suggestionPickerRows(
   saved: string | null
 ): SuggestionPickerRow[] {
   const choices = (offered ?? []).map(model => {
-    const local = model.backend === 'ollama';
+    const local = isLocalBackend(model);
     return { id: model.id, label: local ? `${model.name} (Ollama)` : model.name, local, unavailable: false };
   });
   if (saved && !choices.some(choice => choice.id === saved)) {
