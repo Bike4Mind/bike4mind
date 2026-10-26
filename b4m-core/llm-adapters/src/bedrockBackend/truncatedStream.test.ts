@@ -146,6 +146,7 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     expect(message).toMatch(/EMPTY response/i);
     expect(message).toMatch(/stream timeout/);
     expect(message).toContain('without a terminal event');
+    expect(message).toContain('If every call on this model is empty');
   });
 
   /**
@@ -163,6 +164,7 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     expect(message).toMatch(/EMPTY response/i);
     expect(message).not.toMatch(/stream timeout/i);
     expect(message).not.toContain('without a terminal event');
+    expect(message).toContain('If every call on this model is empty');
   });
 
   it('keeps a real Anthropic empty message (message_start + message_stop) out of the retry classification', async () => {
