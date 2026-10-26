@@ -39,7 +39,7 @@ const user = {
 } as unknown as AdminUserListItem;
 
 describe('UserDetails - MFA reset reason', () => {
-  it('requires a valid reason and sends it with the reset request', () => {
+  it('requires a valid reason and sends it with the reset request', async () => {
     render(<UserDetails user={user} editedFields={{}} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByRole('button', { name: /reset mfa/i }));
@@ -50,7 +50,7 @@ describe('UserDetails - MFA reset reason', () => {
     expect(confirmButton).toBeEnabled();
     fireEvent.click(confirmButton);
 
-    expect(h.resetMutate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(h.resetMutate).toHaveBeenCalledTimes(1));
     expect(h.resetMutate.mock.calls[0][0]).toEqual({ userId: 'u1', reason: 'Lost phone, verified by ID' });
   });
 });
