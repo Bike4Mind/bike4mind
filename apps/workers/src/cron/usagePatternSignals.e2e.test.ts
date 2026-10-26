@@ -189,6 +189,41 @@ describe('runUsagePatternSignals', () => {
     expect(await User.collection.findOne({ _id: new mongoose.Types.ObjectId(highSignal) })).toEqual(before);
   });
 
+  it('measures credit polling over the span actually read when the row cap truncates usage', async () => {
+    // 0.5 polls per completion, spread evenly: 100 completions 10 minutes apart, 50 polls 20 apart.
+    const poller = await seedUser();
+    await seedUsage(
+      poller,
+      Array.from({ length: 100 }, (_, i) => new Date(now.getTime() - (i + 1) * 10 * MINUTE)),
+      { apiKeyId: 'k', source: 'api' }
+    );
+    await ApiKeyUsageLog.collection.insertMany(
+      Array.from({ length: 50 }, (_, i) => ({
+        keyId: 'k',
+        userId: poller,
+        timestamp: new Date(now.getTime() - (i + 1) * 20 * MINUTE + MINUTE),
+        endpoint: CREDIT_BALANCE_ENDPOINT,
+        method: 'GET',
+        ipAddress: '192.0.2.1',
+        responseTime: 10,
+        statusCode: 200,
+      }))
+    );
+    const polling = async (maxEventsPerUser: number) => {
+      h.getSettingsMap.mockResolvedValue({
+        usagePatternSignalsEnabled: 'true',
+        usagePatternSignalsConfig: JSON.stringify({ ...sampleConfig, creditPollMinCount: 1, maxEventsPerUser }),
+      });
+      await runUsagePatternSignals({ now });
+      return (await userUsagePatternSignalsRepository.findByUserId(poller))?.signals.find(
+        s => s.id === 'creditPolling'
+      );
+    };
+
+    expect(await polling(5000)).toMatchObject({ value: 0.5, triggered: false });
+    expect(await polling(20)).toMatchObject({ value: 0.5, triggered: false });
+  });
+
   it('counts signed-in CLI usage as session usage, not API usage', async () => {
     const cliUser = await seedUser();
     const times = Array.from({ length: 30 }, (_, i) => new Date(now.getTime() - (i + 1) * 7 * MINUTE));

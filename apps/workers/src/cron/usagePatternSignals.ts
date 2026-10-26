@@ -101,10 +101,10 @@ async function gatherFacts(
   const windowStart = daysAgo(config.lookbackDays);
   const readStart = daysAgo(Math.max(config.lookbackDays, config.apiOnlyLookbackDays));
   const apiOnlyStart = daysAgo(config.apiOnlyLookbackDays);
-  const [requests, creditPolls, firstKey] = await Promise.all([
+  const [requests, firstKey] = await Promise.all([
     // The newest maxEventsPerUser rows via the { userId, createdAt } index, folded to one row per
     // request (a completion can settle several UsageEvent rows).
-    UsageEvent.aggregate<{ at: Date; api: number }>([
+    UsageEvent.aggregate<{ at: Date; api: number; rows: number }>([
       { $match: { userId, createdAt: { $gte: readStart } } },
       { $sort: { createdAt: -1 } },
       { $limit: config.maxEventsPerUser },
@@ -113,15 +113,10 @@ async function gatherFacts(
           _id: '$requestId',
           at: { $min: '$createdAt' },
           api: { $max: { $cond: [{ $gt: ['$apiKeyId', null] }, 1, 0] } },
+          rows: { $sum: 1 },
         },
       },
     ]),
-    ApiKeyUsageLog.countDocuments({
-      userId,
-      timestamp: { $gte: windowStart },
-      endpoint: CREDIT_BALANCE_ENDPOINT,
-      method: 'GET',
-    }),
     // Personal keys only: org-billed, agent and product keys and keys minted by a first-party
     // sign-in exchange are not the user's own mint.
     UserApiKey.findOne(
@@ -137,6 +132,17 @@ async function gatherFacts(
       .sort({ createdAt: 1 })
       .lean<{ createdAt?: Date }>(),
   ]);
+  // When the row cap truncated the read, count polls only over the span actually read, so the
+  // polls-per-completion ratio compares like with like.
+  const truncated = requests.reduce((n, r) => n + r.rows, 0) >= config.maxEventsPerUser;
+  const oldestRead = Math.min(...requests.map(r => r.at.getTime()));
+  const pollStart = truncated ? new Date(Math.max(windowStart.getTime(), oldestRead)) : windowStart;
+  const creditPolls = await ApiKeyUsageLog.countDocuments({
+    userId,
+    timestamp: { $gte: pollStart },
+    endpoint: CREDIT_BALANCE_ENDPOINT,
+    method: 'GET',
+  });
   const apiOnlyRows = requests.filter(r => r.at >= apiOnlyStart);
   const apiKeyRequests = apiOnlyRows.filter(r => r.api === 1).length;
   const windowRows = requests.filter(r => r.at >= windowStart).sort((a, b) => b.at.getTime() - a.at.getTime());
