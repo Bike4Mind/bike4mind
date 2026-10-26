@@ -8,6 +8,12 @@ import { getAvailableModels, resetReplacedByOverlay, updateReplacedByOverlay } f
 // for the rejected-caller test, and used as a downstream sentinel (the "no model
 // found" BadRequestError) proving the owner/sharee cases got PAST the access check
 // rather than asserting the whole multi-step invoke() pipeline.
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: vi.fn(),

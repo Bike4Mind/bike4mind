@@ -5,6 +5,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * shared modelAdmission rule before any backend is built: an entitlement-gated model is a 403 for a
  * caller without the entitlement, and runs for one who has it.
  */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
