@@ -4,8 +4,7 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 
-import { resolveUserRateTier } from '@server/utils/userRateTier';
-
+/** 24 hours in milliseconds. */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function utcMidnight(now: Date): Date {
@@ -42,6 +41,7 @@ export async function checkFreeTierDailySpendCap({
     const enforceCredits = getSettingsValue('enforceCredits', settings) === true;
     if (!enforceCredits) return;
 
+    const { resolveUserRateTier } = await import('@server/utils/userRateTier');
     const tier = await resolveUserRateTier(user);
     if (tier !== 'free') return;
 

@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   creditTransactionRepository: {},
   usageEventRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   userApiKeyRepository: { findById: vi.fn() },
   organizationRepository: {},
 }));
