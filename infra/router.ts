@@ -195,6 +195,22 @@ $transform(aws.cloudfront.Function, (args, _opts, name) => {
   args.code = $output(args.code).apply(minifyRouterFunction);
 });
 
+// SST hard-codes Managed-AllViewerExceptHostHeader, which forwards no CloudFront-generated header,
+// so the viewer address, ASN and country read in packages/server-utils/src/utils/trustedClientIpHeaders.ts
+// never reached the app. No policy can say "all viewer headers except Host" plus CloudFront
+// headers, so this one also forwards the viewer Host.
+const viewerNetworkOriginRequestPolicy = shouldUseSharedRouter
+  ? undefined
+  : new aws.cloudfront.OriginRequestPolicy('RouterViewerNetworkOriginRequestPolicy', {
+      comment: 'All viewer headers, cookies and query strings plus the viewer address, ASN and country',
+      headersConfig: {
+        headerBehavior: 'allViewerAndWhitelistCloudFront',
+        headers: { items: ['CloudFront-Viewer-Address', 'CloudFront-Viewer-ASN', 'CloudFront-Viewer-Country'] },
+      },
+      cookiesConfig: { cookieBehavior: 'all' },
+      queryStringsConfig: { queryStringBehavior: 'all' },
+    });
+
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
   : new sst.aws.Router('Router', {
@@ -259,10 +275,11 @@ const routerInstance = shouldUseSharedRouter
             }
           : undefined,
         cdn: args => {
-          if (cachePolicyId && args.defaultCacheBehavior) {
+          if (args.defaultCacheBehavior) {
             args.defaultCacheBehavior = {
               ...args.defaultCacheBehavior,
-              cachePolicyId: cachePolicyId,
+              ...(cachePolicyId && { cachePolicyId }),
+              ...(viewerNetworkOriginRequestPolicy && { originRequestPolicyId: viewerNetworkOriginRequestPolicy.id }),
             };
           }
 
