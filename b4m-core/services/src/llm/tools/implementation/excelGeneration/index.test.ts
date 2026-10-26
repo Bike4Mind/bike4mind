@@ -575,6 +575,29 @@ describe('excel_generation', () => {
     });
   });
 
+  describe('content disposition', () => {
+    const run = async (filename: string) => {
+      await toolFn({ filename, sheets: [{ name: 'Sheet1', data: [{ row: 1, col: 1, value: 'x' }] }] });
+      return mockContext.imageGenerateStorage.upload.mock.calls[0][2].ContentDisposition as string;
+    };
+
+    it('keeps the plain header for ASCII names', async () => {
+      expect(await run('Quarterly')).toBe('attachment; filename="Quarterly.xlsx"');
+    });
+
+    it('emits an ASCII fallback plus filename* for CJK names', async () => {
+      const header = await run('\u5831\u544a');
+      expect(header).toMatch(/^[\x20-\x7e]+$/);
+      expect(header).toContain("filename*=UTF-8''%E5%A0%B1%E5%91%8A.xlsx");
+    });
+
+    it('does not split an emoji at the truncation boundary', async () => {
+      const header = await run('a'.repeat(99) + '\u{1F600}'.repeat(3));
+      expect(header).toContain('%F0%9F%98%80');
+      expect(header).not.toContain('%ED');
+    });
+  });
+
   describe('filename sanitization', () => {
     it('should sanitize dangerous characters in filename', async () => {
       const params = {
