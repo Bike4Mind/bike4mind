@@ -589,7 +589,6 @@ export class ImageEditService {
       const providerApiKey = apiKeyTable[provider];
       if (!providerApiKey) throw new NotFoundError(`API Key not found for ${provider}`);
 
-      // Validate credits before proceeding
       let usageCostUsd = 0;
       if (adminSettingsEnforceCredits && model && this.db.creditTransactions) {
         const { requiredCredits, usdCost } = await this.estimateCredits(userId, model, {
