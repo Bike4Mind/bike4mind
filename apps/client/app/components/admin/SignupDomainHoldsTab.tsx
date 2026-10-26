@@ -49,8 +49,8 @@ export default function SignupDomainHoldsTab() {
       )}
       {decision.data?.status === 'released' && (
         <Alert color="success">
-          Released {decision.data.creditsReleased} credits.
-          {decision.data.remaining} pending grants remain; use Retry pending grants to continue or retry failures.
+          Released {decision.data.creditsReleased} credits. {decision.data.remaining} pending grants remain; use Retry
+          pending grants to continue or retry failures.
         </Alert>
       )}
       <Stack direction="row" spacing={1}>

@@ -2049,14 +2049,14 @@ export const API_SERVICE_GROUPS = {
       { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
-      { key: 'signupBurstThreshold', order: 5 },
-      { key: 'signupBurstWindowHours', order: 6 },
-      { key: 'signupBurstAutoHold', order: 7 },
       { key: 'syntheticUserEmailDomains', order: 4 },
       { key: 'turnstileEnabled', order: 5 },
       { key: 'turnstileFailClosed', order: 6 },
       { key: 'turnstileSiteKey', order: 7 },
-      { key: 'signupRiskScoring', order: 8 },
+      { key: 'signupBurstThreshold', order: 8 },
+      { key: 'signupBurstWindowHours', order: 9 },
+      { key: 'signupBurstAutoHold', order: 10 },
+      { key: 'signupRiskScoring', order: 11 },
     ],
   },
   KNOWLEDGE: {
@@ -5654,7 +5654,8 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
   'forcedRetrievalSpreadFloorPct',
 ] as const satisfies readonly SettingKey[];
 
-// =====================================================================// Public settings projection - the security boundary for the unauthenticated
+// ============================================================================
+// Public settings projection - the security boundary for the unauthenticated
 // CDN config artifact (docs/perf/mobile-startup-latency.md, M2.5).
 //
 // SINGLE source of truth for what may be served without authentication. The
@@ -5662,7 +5663,8 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
 // public if explicitly tagged. `isSensitive` is a separate (opt-out) boundary
 // used by the authenticated /api/settings/fetch admin path and is NOT sufficient
 // for public exposure (e.g. sreAgentConfig is !isSensitive but operational).
-// =====================================================================
+// ============================================================================
+
 /** Minimal shape of a stored admin setting document (Mongo/ORM-agnostic). */
 export interface AdminSettingDoc {
   settingName: string;
