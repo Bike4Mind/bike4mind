@@ -70,9 +70,10 @@ async function main() {
 
   const { userService } = await import('@bike4mind/services');
   const defaults = userService.DEFAULT_COHORT_OPTIONS;
-  const options = buildSweepOptions(values, defaults);
+  const { help: _help, ...flags } = values;
+  const options = buildSweepOptions(flags, defaults);
   const facts = values.facts ? parseDomainFactsFile(JSON.parse(readFileSync(values.facts, 'utf8'))) : null;
-  const selection = parseSignupSelection(values);
+  const selection = parseSignupSelection(flags);
 
   const { connectDB } = await import('@bike4mind/db-core');
   const { User } = await import('@bike4mind/database');
