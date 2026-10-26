@@ -439,6 +439,9 @@ export const SettingKeySchema = z.enum([
   'teamPlanCreditsPerSeat',
   'lowCreditsThreshold',
   'syntheticUserEmailDomains',
+  'turnstileEnabled',
+  'turnstileFailClosed',
+  'turnstileSiteKey',
 
   // WEATHER SERVICE SETTINGS
   'EnableWeatherService',
@@ -2002,6 +2005,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
       { key: 'syntheticUserEmailDomains', order: 4 },
+      { key: 'turnstileEnabled', order: 5 },
+      { key: 'turnstileFailClosed', order: 6 },
+      { key: 'turnstileSiteKey', order: 7 },
     ],
   },
   KNOWLEDGE: {
@@ -3533,6 +3539,35 @@ export const settingsMap = {
       'Comma-separated email domains whose new signups are flagged synthetic (test personas) and excluded from funnel analytics. Accounts whose username starts with "persona-" are always flagged, so that prefix is reserved: only admins, and accounts with a verified email on one of these domains, can choose it. Flagging applies at signup only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
+  }),
+  turnstileEnabled: makeBooleanSetting({
+    key: 'turnstileEnabled',
+    name: 'Require Turnstile on Email Sign-in',
+    defaultValue: false,
+    description:
+      'Require a Cloudflare Turnstile challenge before a sign-in code is emailed. Takes effect only when the Turnstile secret is provisioned on this stage and a site key is set below; otherwise the check is skipped.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  turnstileFailClosed: makeBooleanSetting({
+    key: 'turnstileFailClosed',
+    name: 'Turnstile Fail Closed',
+    defaultValue: false,
+    description:
+      'When Cloudflare verification cannot be reached, refuse the request instead of letting it through. Off keeps sign-in available during a Cloudflare outage.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    dependsOn: 'turnstileEnabled',
+  }),
+  turnstileSiteKey: makeStringSetting({
+    key: 'turnstileSiteKey',
+    name: 'Turnstile Site Key',
+    defaultValue: '',
+    description:
+      'The public Cloudflare Turnstile site key shown to the sign-in form. The secret key is never stored here.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    dependsOn: 'turnstileEnabled',
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',
