@@ -112,6 +112,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           req.user?.name || 'Admin'
         );
 
+        if (!updated) {
+          return res.status(404).json({
+            error: 'Prompt not found',
+            message: `System prompt with ID "${promptId}" not found`,
+          });
+        }
+
         if (validated.enabled !== undefined && validated.enabled !== updated?.enabled) {
           await systemPromptRepository.toggleEnabled(promptId, validated.enabled);
         }

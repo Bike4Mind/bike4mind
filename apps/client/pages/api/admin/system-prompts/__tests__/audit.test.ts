@@ -113,6 +113,15 @@ describe('system prompt admin audit', () => {
     expect(JSON.stringify(input)).not.toContain(longContent);
   });
 
+  it('PUT returns 404 and does not audit when the row is deleted concurrently', async () => {
+    const existing = { name: 'Old', description: 'a long description', content: 'old', category: 'system', version: 1 };
+    h.repo.findByPromptId.mockResolvedValue(existing);
+    h.repo.updatePrompt.mockResolvedValue(null);
+    const res = await call(promptHandler, 'PUT', { name: 'New', content: longContent });
+    expect(res._getStatusCode()).toBe(404);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it('PUT records before/after for enabled and category changes', async () => {
     const existing = {
       name: 'P',

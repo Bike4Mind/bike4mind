@@ -180,17 +180,28 @@ describe('agent ops admin audit', () => {
   });
 
   it('activate records version_activated', async () => {
+    h.repo.getSettings.mockResolvedValue({ currentVersionNumber: 2 });
     h.repo.activateMetaPromptVersion.mockResolvedValue({});
     const res = await call(activate, 'POST', undefined, { version: '3' });
     expect(res._getStatusCode()).toBe(200);
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'settings.agent_ops.version_activated',
       target,
+      changes: [{ field: 'currentVersionNumber', before: 2, after: 3 }],
       details: { version: 3 },
     });
   });
 
+  it('activate does not audit when the version is already active', async () => {
+    h.repo.getSettings.mockResolvedValue({ currentVersionNumber: 3 });
+    h.repo.activateMetaPromptVersion.mockResolvedValue({});
+    const res = await call(activate, 'POST', undefined, { version: '3' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it('activate does not audit when the version is not found', async () => {
+    h.repo.getSettings.mockResolvedValue({ currentVersionNumber: 2 });
     h.repo.activateMetaPromptVersion.mockRejectedValue(new Error('Version 9 not found'));
     await expect(call(activate, 'POST', undefined, { version: '9' })).rejects.toThrow('not found');
     expect(h.audit).not.toHaveBeenCalled();
