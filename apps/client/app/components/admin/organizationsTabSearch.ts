@@ -79,7 +79,7 @@ const parsePersonal = (value: unknown): boolean | undefined => {
 
 // The id is interpolated into `/api/organizations/<id>`, so only an ObjectId may come in from a link.
 const parseOrgId = (value: unknown): string | undefined =>
-  typeof value === 'string' && /^[0-9a-f]{24}$/.test(value) ? value : undefined;
+  typeof value === 'string' && /^[0-9a-f]{24}$/i.test(value) ? value.toLowerCase() : undefined;
 
 // A view param that fails to parse still asked for a view. Keeping the default page stops
 // `validateSearch` from reducing `?orgsSort=credits` to a bare visit that restores the saved view.

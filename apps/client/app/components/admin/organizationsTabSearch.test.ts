@@ -30,6 +30,10 @@ describe('ORGS_SEARCH_PARSERS', () => {
     expect(ORGS_SEARCH_PARSERS.orgId(ORG_ID)).toBe(ORG_ID);
     expect(ORGS_SEARCH_PARSERS.orgId('../users')).toBeUndefined();
   });
+
+  it('accepts a hand-pasted uppercase ObjectId as the lowercase id', () => {
+    expect(ORGS_SEARCH_PARSERS.orgId(ORG_ID.toUpperCase())).toBe(ORG_ID);
+  });
 });
 
 describe('organizationsViewFromSearch', () => {
