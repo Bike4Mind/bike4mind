@@ -43,10 +43,8 @@ const writeStoredViewToUrl = (previous: SearchRecord): SearchRecord => ({
 });
 
 /**
- * The Organizations tab's list params. The URL owns the view (page, limit, sort, type filter) when
- * it carries one; the persisted store holds the free-text search, which never enters the URL, and a
- * copy of the view so a bare `?tab=organizations` restores the last one. Every write goes to both,
- * with `replace`.
+ * The URL owns the list view when it carries one; the persisted store holds the free-text search and
+ * a copy of the view for a bare `?tab=organizations`. Every write goes to both.
  */
 export const useOrganizationsParams = (): readonly [
   OrganizationsTabParams,
@@ -74,10 +72,8 @@ export const useOrganizationsParams = (): readonly [
 };
 
 /**
- * Reconciles the URL and the persisted store while the Organizations tab is mounted. A URL that
- * describes a view wins and is copied into the store (so the next bare visit restores it); a URL
- * with no view gets the stored one written in. Leaving the tab needs no cleanup: the tab-sync
- * rebuild in useAdminTabUrlSync drops these keys through the param registry.
+ * A URL view wins and is copied into the store; a URL without one gets the stored view written in.
+ * Leaving the tab needs no cleanup: useAdminTabUrlSync drops these keys through the param registry.
  */
 export const useOrganizationsTabUrlSync = (): void => {
   const search = useSearch({ strict: false }) as SearchRecord;
@@ -111,6 +107,7 @@ export const useOpenOrganizationId = () => {
       navigate({
         to: ADMIN_PATH,
         search: (previous: SearchRecord) => ({ ...previous, [ORGS_ORG_ID_PARAM]: id ?? undefined }),
+        // No history entry, like the Users tab's `userId`: Back leaves /admin rather than closing.
         replace: true,
       }),
     [navigate]

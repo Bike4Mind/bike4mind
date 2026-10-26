@@ -8,13 +8,9 @@ import OrganizationProfileUpdated from './OrganizationProfileUpdated';
 import { useOpenOrganizationId } from './useOrganizationsTabParams';
 
 /**
- * The profile of the organization named by `?orgId=`, fetched by id so a refresh or a shared link
- * reopens it. A settled 404 (unknown id, or one this admin cannot see) closes the modal rather than
- * leaving a dead pane; a cached error that is refetching, or a 5xx, must not close it.
- *
- * The profile gets the org as it was when opened, not the live query: OrganizationProfileUpdated
- * resets its unsaved edits whenever `org` changes, and every org mutation (a group-type save inside
- * this same modal included) invalidates `['organizations']` and would hand it a new object.
+ * The profile of the organization named by `?orgId=`. Only a settled 404 closes it. It shows the org
+ * as opened, not the live query: OrganizationProfileUpdated resets unsaved edits whenever `org`
+ * changes, and every org mutation invalidates `['organizations']`.
  */
 const OrganizationProfileModal: React.FC<{ onClosed: () => void }> = ({ onClosed }) => {
   const { orgId, setOrgId } = useOpenOrganizationId();
