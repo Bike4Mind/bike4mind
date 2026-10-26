@@ -9,9 +9,9 @@ interface IUserRepository {
 }
 
 type CapCheckInput =
-  // Caller already holds the resolved user (e.g. request middleware) — no extra DB read.
+  // Caller already holds the resolved user (e.g. request middleware) - no extra DB read.
   | { user: IUserDocument; userId?: never; userRepository?: never }
-  // Caller only has a user ID — the lookup is deferred until after the enforceCredits gate.
+  // Caller only has a user ID - the lookup is deferred until after the enforceCredits gate.
   | { userId: string; userRepository: IUserRepository; user?: never };
 
 /** 24 hours in milliseconds. */
