@@ -127,6 +127,9 @@ let server: MongoMemoryServer;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+  // The seeded user has no paid plan and test-model is not on the free-tier allowlist.
+  const { AdminSettings } = await import('@bike4mind/database');
+  await AdminSettings.create({ settingName: 'freeTierModelGateEnabled', settingValue: 'false' });
 });
 
 afterAll(async () => {
