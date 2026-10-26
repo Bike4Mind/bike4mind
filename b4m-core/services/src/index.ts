@@ -48,6 +48,7 @@ export * from './soundCost';
 export * from './musicCost';
 export * from './providerCapacity';
 export * from './llm/agentToolMediaCost';
+export * from './thinkingVisibility';
 export * as emailIngestionService from './emailIngestionService';
 export * as emailAnalysisService from './emailAnalysisService';
 export * as mementoService from './mementoService';

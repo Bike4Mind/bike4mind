@@ -321,12 +321,9 @@ export interface ICompletionOptions {
      * level calls `flush()`. Internal - do not set manually.
      */
     artifactGuard?: {
-      // info is `any` here (matching LooseCompletionCallback in toolStreamingHelper.ts) because
-      // the four backends' own completion-callback types differ in whether info is required
-      // (Anthropic, Gemini, OpenAI) or optional (Bedrock) - structurally incompatible with each
-      // other in both directions, so a single shared field type has to accept every one of them.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
-      callback: (text: (string | null | undefined)[], info: any) => Promise<void>;
+      // Method signature on purpose: bivariant params let a backend callback with required or
+      // optional `info` fit here and back (LooseCompletionCallback in toolStreamingHelper.ts reuses it).
+      callback(text: (string | null | undefined)[], info?: CompletionInfo): Promise<void>;
       emitArtifact: (results: string[], info: CompletionInfo) => Promise<void>;
       markDelivered: (markup: string) => void;
       flush: () => Promise<void>;

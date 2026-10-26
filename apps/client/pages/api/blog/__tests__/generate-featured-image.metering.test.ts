@@ -57,7 +57,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
     { id: 'mystery-image-model', type: 'image' },
   ],
 }));
-vi.mock('@client/services/operationsModelService', () => ({ OperationsModelService: {} }));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: {} }));
 vi.mock('@bike4mind/server-utils/utils/imageLogger', () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));

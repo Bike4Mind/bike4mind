@@ -1,4 +1,5 @@
 import type { INetworkMeta } from '@bike4mind/common';
+import { JA4_PATTERN } from '@bike4mind/common';
 
 /**
  * The INetworkMeta fields as Mongoose paths, shared by User.signupMeta and AuthEvent. The
@@ -12,4 +13,10 @@ export const NETWORK_META_FIELDS = {
   asnOrg: { type: String, default: null },
   country: { type: String, default: null },
   isDatacenter: { type: Boolean, default: null },
+  ja4: {
+    type: String,
+    default: null,
+    maxlength: 36,
+    validate: (value: string | null) => value === null || JA4_PATTERN.test(value),
+  },
 } satisfies Record<keyof INetworkMeta, unknown>;

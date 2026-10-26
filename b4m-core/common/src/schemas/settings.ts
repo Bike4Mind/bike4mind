@@ -38,6 +38,7 @@ import {
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
+import { THINKING_VISIBILITY_LEVELS } from '../utils/streamVisibility';
 import {
   ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
   ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
@@ -433,6 +434,8 @@ export const SettingKeySchema = z.enum([
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
+  'thinkingVisibilityFree',
+  'thinkingVisibilityPaid',
   'defaultFreeCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
@@ -947,8 +950,7 @@ export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting,
   key: K;
   dependsOn?: [K] extends [SettingKey] ? SettingKey : string;
   type: 'string' | 'number' | 'boolean' | 'array' | 'object';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  schema: z.ZodType<any, any, any>;
+  schema: z.ZodType;
   defaultValue?: string | number | boolean | object | undefined;
   options?: string[];
 };
@@ -2182,6 +2184,16 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'freeTierModelGateEnabled', order: 1 },
       { key: 'freeTierAllowedModels', order: 2 },
+    ],
+  },
+  THINKING_VISIBILITY: {
+    id: 'thinkingVisibilityService',
+    name: 'Model Thinking Visibility',
+    description: 'How much model reasoning each account tier is shown, on every chat, API, CLI and agent surface',
+    icon: 'Psychology',
+    settings: [
+      { key: 'thinkingVisibilityFree', order: 1 },
+      { key: 'thinkingVisibilityPaid', order: 2 },
     ],
   },
   DATA_LAKE_AUDIT: {
@@ -3559,6 +3571,30 @@ export const settingsMap = {
     order: 2,
     dependsOn: 'freeTierModelGateEnabled',
     schema: z.array(z.string()),
+  }),
+  // Tiers resolve in b4m-core/services/src/thinkingVisibility.ts. Multi-turn tool replay is
+  // unaffected: provider thinking blocks still go back to the provider whatever the level.
+  thinkingVisibilityFree: makeStringSetting({
+    key: 'thinkingVisibilityFree',
+    name: 'Thinking Visibility: Free Accounts',
+    defaultValue: 'summary',
+    description:
+      'Model reasoning shown to accounts with no purchase, active plan or admin approval. "raw" shows it as the provider sent it. "summary" shows it only from models whose provider returns a summary instead of the raw trace (Claude 4 and later) and hides the rest; for other models the completions API does not request reasoning at all. "none" hides all reasoning text, but completions API callers that run tools themselves still receive the provider\'s summarized thinking blocks on Claude 4 and later, because those blocks must be echoed back on the next turn. Changes reach running servers within about 5 minutes (settings cache).',
+    options: [...THINKING_VISIBILITY_LEVELS],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
+    order: 1,
+  }),
+  thinkingVisibilityPaid: makeStringSetting({
+    key: 'thinkingVisibilityPaid',
+    name: 'Thinking Visibility: Paid Accounts',
+    defaultValue: 'raw',
+    description:
+      'Model reasoning shown to admins and to accounts with a credit purchase, admin approval, or an active plan (own or org seat; only subscriptions in the active status count, so trialing, past-due and canceled plans do not). Same levels as the free-account setting.',
+    options: [...THINKING_VISIBILITY_LEVELS],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
+    order: 2,
   }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',

@@ -10,7 +10,7 @@ import { Logger } from '@bike4mind/observability';
 import { Context } from 'aws-lambda';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { connectDB } from '@bike4mind/database';
-import { contextToLogs } from '@server/utils/logger';
+import { contextToLogs } from '@bike4mind/server-utils/utils/logger';
 import { JsonWebTokenError } from 'jsonwebtoken';
 import { ForbiddenError, HTTPError, UnauthorizedError } from '@bike4mind/common';
 import { isConnectionLostError } from '@bike4mind/db-core';

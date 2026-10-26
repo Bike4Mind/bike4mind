@@ -4,7 +4,7 @@ import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/err
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
-import { handler as runWafScan } from '@server/security/wafScan';
+import { handler as runWafScan } from '@bike4mind/server-utils/security/wafScan';
 import { ApiKeyScope } from '@bike4mind/common';
 
 const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })

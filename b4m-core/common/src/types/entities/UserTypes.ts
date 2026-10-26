@@ -44,6 +44,7 @@ export interface INetworkMeta {
   country: string | null;
   /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
   isDatacenter: boolean | null;
+  ja4?: string | null;
 }
 
 export interface ISignupMeta extends INetworkMeta {

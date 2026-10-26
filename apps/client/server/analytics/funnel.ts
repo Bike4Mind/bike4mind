@@ -10,7 +10,7 @@ import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptio
 import { readConsentedAcquisitionTouches } from './acquisition';
 import { emitProductEvent, HOST_PRODUCT_ID } from './emitActiveEvent';
 import { laneMetadata } from './lane';
-import { pseudonymizeUserId } from './pseudonymize';
+import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { stableEventId } from './signupEvents';
 import { logEventSafe } from '@server/utils/analyticsLog';
 

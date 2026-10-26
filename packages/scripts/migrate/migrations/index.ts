@@ -214,6 +214,9 @@ import EnsureOverwatchRawEventExplorerIndex from './20260921235977_ensure-overwa
 import EnsureOverwatchUserDaySyntheticLaneIndex from './20260921235978_ensure-overwatch-user-day-synthetic-lane-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureAuthEventIndexes from './20260921235972_ensure-authevent-indexes';
+import EnsureAccountCreationIndexes from './20260921235974_ensure-account-creation-indexes';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureSignupFingerprintWindowIndex from './20260921235939_ensure-signup-fingerprint-window-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureUserSignupMetaCapturedAtIndex from './20260921235973_ensure-user-signupmeta-capturedat-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
@@ -247,6 +250,7 @@ export type { MigrationFile };
 
 // 3. Reference the imported variable here:
 const coreMigrations: MigrationFile[] = [
+  EnsureAccountCreationIndexes,
   AddMementosToUsers,
   DemoToPaid,
   CreateAndPopulateQuests,
@@ -400,6 +404,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureOverwatchUserDaySyntheticLaneIndex,
   EnsureArtifactSessionIdentifierIndex,
   EnsureAuthEventIndexes,
+  EnsureSignupFingerprintWindowIndex,
   EnsureUserSignupMetaCapturedAtIndex,
   BackfillStorageLimitOverrides,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.

@@ -36,7 +36,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return api;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/database', async () => ({
@@ -72,7 +72,7 @@ vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () =
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
 
 const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   getEffectiveApiKeyByBackend: async () => 'sk-test',
   OperationsModelService: {
     getOperationsModel: async () => ({ modelId: MODEL.id, modelInfo: MODEL, llm: { complete: m.complete } }),

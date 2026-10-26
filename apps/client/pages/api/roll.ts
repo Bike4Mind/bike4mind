@@ -1,8 +1,8 @@
 import { Quest } from '@bike4mind/database';
 import { rollDice } from '@server/managers/dice';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { assertSessionAccess } from '@server/utils/sessionAccess';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
 import { z } from 'zod';
 
 const RollRequestSchema = z.object({

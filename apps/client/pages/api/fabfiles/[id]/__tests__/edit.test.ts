@@ -42,7 +42,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
       cb([h.edited]),
   }),
 }));
-vi.mock('@client/services/operationsModelService', () => ({ OperationsModelService: {} }));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: {} }));
 vi.mock('@server/billing/meterPlatformCompletion', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),

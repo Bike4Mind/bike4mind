@@ -13,7 +13,7 @@ vi.mock('./emitActiveEvent', async importOriginal => {
     isAnalyticsConfigured: vi.fn(() => true),
   };
 });
-vi.mock('./pseudonymize', () => ({
+vi.mock('@bike4mind/server-utils/analytics/pseudonymize', () => ({
   pseudonymizeUserId: vi.fn((id: string) => `pseudo:${id}`),
 }));
 vi.mock('./resolveUserType', () => ({

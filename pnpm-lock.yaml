@@ -1538,6 +1538,22 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@25.9.6)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@25.9.6)(typescript@5.9.3))(vite@8.3.4(@types/node@25.9.6)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
+  b4m-core/local-models:
+    dependencies:
+      zod:
+        specifier: ^4.6.6
+        version: 4.6.6
+    devDependencies:
+      tsdown:
+        specifier: ^0.22.3
+        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@25.9.6)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@25.9.6)(typescript@5.9.3))(vite@8.3.4(@types/node@25.9.6)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+
   b4m-core/mcp:
     dependencies:
       '@anthropic-ai/sdk':
@@ -2559,10 +2575,22 @@ importers:
       '@aws-sdk/client-cloudfront':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-cloudtrail':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-cloudwatch':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-ec2':
+        specifier: ^3.1150.0
+        version: 3.1151.0
+      '@aws-sdk/client-iam':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-s3':
+        specifier: ^3.1150.0
+        version: 3.1151.0
+      '@aws-sdk/client-secrets-manager':
         specifier: ^3.1150.0
         version: 3.1151.0
       '@aws-sdk/client-sqs':
@@ -2589,6 +2617,9 @@ importers:
       '@bike4mind/llm-adapters':
         specifier: workspace:*
         version: link:../../b4m-core/llm-adapters
+      '@bike4mind/mcp':
+        specifier: workspace:*
+        version: link:../../b4m-core/mcp
       '@bike4mind/memory':
         specifier: workspace:*
         version: link:../../b4m-core/memory
@@ -2628,6 +2659,12 @@ importers:
       handlebars:
         specifier: ^4.7.10
         version: 4.7.10
+      jsonrepair:
+        specifier: ^3.15.0
+        version: 3.15.0
+      jsonwebtoken:
+        specifier: ^9.0.3
+        version: 9.0.3
       mongoose:
         specifier: ^8.24.1
         version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
@@ -2656,6 +2693,9 @@ importers:
       '@types/express':
         specifier: ^4.17.17
         version: 4.17.23
+      '@types/jsonwebtoken':
+        specifier: ^9.0.4
+        version: 9.0.10
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.3
@@ -18883,7 +18923,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@7.3.7(@types/node@24.12.3)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
   '@vitest/expect@4.1.11':
     dependencies:
@@ -18948,7 +18988,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@7.3.7(@types/node@24.12.3)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
   '@vitest/utils@4.1.11':
     dependencies:

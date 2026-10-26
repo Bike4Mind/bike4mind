@@ -51,6 +51,7 @@ import {
   MAX_FULL_TOOL_RESULT_CHARS,
   ResponsesStreamTruncatedError,
   createAnthropicStreamTimeoutError,
+  bedrockEmptyResponseMessage,
   type ICompletionBackend,
   federatedSharedKeyProviders,
 } from '@bike4mind/llm-adapters';
@@ -2599,6 +2600,83 @@ describe('ChatCompletionProcess', () => {
         expect(typeof telemetry.performance.firstChunkTimeMs).toBe('number');
         // A short turn sits under the elapsed bound; the builder tests pin the firing case.
         expect(telemetry.anomalies.slowFirstToken).toBe(false);
+      });
+    });
+
+    describe('thinking visibility', () => {
+      // An inline-reasoning model row, so the answer is parsed for the markers its adapter wraps around reasoning.
+      const streamReasoningTurn = () => {
+        const body = wireMinimalTurn();
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'Inline reasoner',
+            backend: ModelBackend.DeepSeek,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ] as any); // any: minimal model shape, as elsewhere in this file
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['<think>'], { channel: 'reasoning' });
+            await cb(['tagged trace'], { channel: 'reasoning' });
+            await cb(['</think>'], { channel: 'reasoning' });
+            await cb(['<think>inline trace</think>Visible answer.']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+        return body;
+      };
+      const storedText = () => `${(mockQuest.replies ?? []).join('')}|${mockQuest.reply ?? ''}`;
+      const capturePushes = () => {
+        const pushed: string[] = [];
+        vi.spyOn(service, 'sendStatusUpdate').mockImplementation(async quest => {
+          pushed.push((quest.replies ?? []).join(''));
+        });
+        return pushed;
+      };
+      const runAs = async (resolve: () => Promise<string>) => {
+        (service as any).getThinkingVisibility = vi.fn(resolve);
+        const pushed = capturePushes();
+        await service.process({ body: streamReasoningTurn(), logger: mockLogger });
+        return pushed;
+      };
+
+      it('keeps raw reasoning out of the push and stored reply of a free caller at the default summary level', async () => {
+        const pushed = await runAs(async () => 'summary');
+
+        expect(storedText()).toContain('Visible answer.');
+        expect(storedText()).not.toMatch(/trace|<think>/);
+        expect(pushed.join('')).toContain('Visible answer.');
+        expect(pushed.join('')).not.toMatch(/trace|<think>/);
+      });
+
+      it('withholds everything at none', async () => {
+        const pushed = await runAs(async () => 'none');
+
+        expect(storedText()).not.toMatch(/trace|<think>/);
+        expect(pushed.join('')).not.toMatch(/trace/);
+      });
+
+      it('leaves a paid caller at raw unchanged', async () => {
+        const pushed = await runAs(async () => 'raw');
+
+        expect(storedText()).toContain('<think>tagged trace</think>');
+        expect(storedText()).toContain('Visible answer.');
+        expect(pushed.join('')).toContain('tagged trace');
+      });
+
+      it('falls back to the free level when the resolution fails', async () => {
+        await runAs(async () => {
+          throw new Error('subscription read failed');
+        });
+
+        expect(storedText()).not.toMatch(/trace/);
       });
     });
 
@@ -11717,6 +11795,50 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({ replies: ['Hello from fallback'], status: 'done', type: 'message' })
       );
+    });
+
+    it('retries a stalled-empty Bedrock stream once on the same model, then falls back', async () => {
+      setupStreamIdleTimeoutMocks();
+      mockQuest.promptMeta.model = { name: ChatModels.CLAUDE_5_SONNET_BEDROCK, backend: ModelBackend.Bedrock };
+      const primaryComplete = vi
+        .fn()
+        .mockRejectedValue(
+          new Error(bedrockEmptyResponseMessage(ChatModels.CLAUDE_5_SONNET_BEDROCK, 'us-east-1', true))
+        );
+      mockedGetLlmByModel.mockReturnValue({
+        complete: primaryComplete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      });
+      const fallbackModel = {
+        id: 'claude-sonnet-4-8',
+        type: 'text' as const,
+        name: 'Claude Sonnet 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: {},
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['Hello from fallback']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-sonnet-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(primaryComplete).toHaveBeenCalledTimes(2);
+      expect(fallbackBackend.complete).toHaveBeenCalledTimes(1);
     });
 
     describe('preview stall marker', () => {
