@@ -56,7 +56,7 @@ export interface RuntimeTarget {
 export interface ModelsConfig {
   defaultModel: string | undefined;
   ollamaHost: string | undefined;
-  save(patch: { defaultModel?: string; ollamaHost?: string }): Promise<void>;
+  save(patch: { defaultModel?: string; ollamaHost?: string; localDefaultModel?: string }): Promise<void>;
 }
 
 export interface ModelsDeps {
@@ -240,8 +240,10 @@ export function parsePullTarget(input: string): PullTarget {
   const rest = host ? (slash === -1 ? '' : afterScheme.slice(slash + 1)) : afterScheme;
 
   if (host && OLLAMA_REGISTRY_HOSTS.has(host)) {
-    if (!rest) throw new Error(`Not an Ollama model name: ${input}`);
-    return { kind: 'ollama', name: rest };
+    // Ollama lists `library/x` pulls as `x`, so the name printed after the pull must be that one.
+    const name = rest.replace(/^library\//i, '');
+    if (!name) throw new Error(`Not an Ollama model name: ${input}`);
+    return { kind: 'ollama', name };
   }
   if (host && !HF_HOSTS.has(host)) {
     throw new Error(
@@ -597,10 +599,14 @@ export async function useModel(name: string, deps: ModelsDeps): Promise<number> 
   if (runtime.kind !== 'ollama')
     throw new Error(`The CLI chats with local models through Ollama; ${runtimeLabel(target)} is not Ollama.`);
   const models = await abortable(runtime.list(), deps.signal);
-  const model = models.find(entry => entry.name === name) ?? models.find(entry => entry.name === `${name}:latest`);
+  const wanted = name.replace(/^library\//i, '');
+  const model =
+    models.find(entry => entry.name === name || entry.name === wanted) ??
+    models.find(entry => entry.name === `${wanted}:latest`);
   if (!model) throw new Error(`No model named ${clean(name)} on ${runtimeLabel(target)}. See: b4m models ls`);
   await deps.config.save({
     defaultModel: model.name,
+    localDefaultModel: model.name,
     ...(deps.config.ollamaHost !== runtime.baseUrl && { ollamaHost: runtime.baseUrl }),
   });
   deps.log(`Default model: ${clean(model.name)} on Ollama at ${runtime.baseUrl}`);

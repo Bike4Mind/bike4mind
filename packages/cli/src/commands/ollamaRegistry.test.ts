@@ -1,10 +1,33 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { describe, expect, it, vi } from 'vitest';
 import { classifyLicenses, parseOllamaName, readOllamaManifest, type FetchLike } from './ollamaRegistry';
 
 const digest = (char: string) => `sha256:${char.repeat(64)}`;
-const APACHE = 'Apache License\n                           Version 2.0, January 2004\n';
-const MIT =
-  'MIT License\n\nCopyright (c) 2024\n\nPermission is hereby granted, free of charge, to any person obtaining a copy';
+const APACHE = readFileSync(join(__dirname, '__fixtures__', 'apache-2.0.txt'), 'utf-8');
+const MIT_BODY = [
+  'Permission is hereby granted, free of charge, to any person obtaining a copy',
+  'of this software and associated documentation files (the "Software"), to deal',
+  'in the Software without restriction, including without limitation the rights',
+  'to use, copy, modify, merge, publish, distribute, sublicense, and/or sell',
+  'copies of the Software, and to permit persons to whom the Software is',
+  'furnished to do so, subject to the following conditions:',
+  '',
+  'The above copyright notice and this permission notice shall be included in all',
+  'copies or substantial portions of the Software.',
+  '',
+  'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR',
+  'IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,',
+  'FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE',
+  'AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER',
+  'LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,',
+  'OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE',
+  'SOFTWARE.',
+].join('\n');
+const MIT = `MIT License\n\nCopyright (c) 2023 DeepSeek\n\n${MIT_BODY}\n`;
+const ADDENDUM =
+  'ACME MODEL LICENSE ADDENDUM\nCommercial use requires a separate paid agreement with ACME. ' +
+  'You may not use the Model or its outputs to train other models or for military purposes.';
 
 describe('parseOllamaName', () => {
   it('fills in the library namespace and the latest tag', () => {
@@ -54,6 +77,17 @@ describe('readOllamaManifest', () => {
     );
   });
 
+  it('fetches a license layer the manifest repeats once', async () => {
+    const license = manifest.layers[1];
+    const repeated = { layers: [...manifest.layers, license, license] };
+    const fetchImpl = vi.fn<FetchLike>(async url =>
+      url.includes('/manifests/') ? Response.json(repeated) : new Response('LLAMA 4 COMMUNITY LICENSE AGREEMENT')
+    );
+    const info = await readOllamaManifest('llama4', new AbortController().signal, fetchImpl);
+    expect(info.licenses).toEqual(['LLAMA 4 COMMUNITY LICENSE AGREEMENT']);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('reports a missing model and refuses a manifest with an odd digest', async () => {
     const signal = new AbortController().signal;
     await expect(readOllamaManifest('nope', signal, async () => new Response('', { status: 404 }))).rejects.toThrow(
@@ -67,19 +101,49 @@ describe('readOllamaManifest', () => {
 });
 
 describe('classifyLicenses', () => {
-  it('counts only the standard permissive texts as permissive', () => {
-    expect(classifyLicenses([APACHE])).toEqual({ title: 'Apache License', permissive: true });
-    expect(classifyLicenses([MIT, APACHE])).toEqual({ title: 'MIT License + Apache License', permissive: true });
+  it('counts the Apache-2.0 and MIT templates as permissive, with a filled-in copyright line', () => {
+    expect(classifyLicenses([APACHE])).toEqual({ title: 'Apache-2.0', permissive: true });
+    const filled = APACHE.replace('Copyright [yyyy] [name of copyright owner]', 'Copyright 2024 Alibaba Cloud');
+    expect(classifyLicenses([filled]).permissive).toBe(true);
+    expect(classifyLicenses([APACHE.slice(0, APACHE.indexOf('APPENDIX'))]).permissive).toBe(true);
+    expect(classifyLicenses([MIT, APACHE])).toEqual({ title: 'MIT + Apache-2.0', permissive: true });
   });
 
-  it('treats custom terms, extra use restrictions and a missing license as restricted', () => {
+  it('accepts the MIT name and copyright lines, and markdown quoting', () => {
+    const phi = `Microsoft.\nCopyright (c) Microsoft Corporation.\n\nMIT License\n\n${MIT_BODY.replace('"AS IS"', '*AS IS*')}`;
+    expect(classifyLicenses([phi])).toEqual({ title: 'MIT', permissive: true });
+  });
+
+  it('treats a template with added terms as restricted', () => {
+    expect(classifyLicenses([`${APACHE}\n\n${ADDENDUM}`]).permissive).toBe(false);
+    expect(classifyLicenses([`${ADDENDUM}\n\n${APACHE}`]).permissive).toBe(false);
+    const inserted = APACHE.replace('END OF TERMS', 'No military use.\n\nEND OF TERMS');
+    expect(classifyLicenses([inserted]).permissive).toBe(false);
+    expect(classifyLicenses([`${MIT}\n${ADDENDUM}`]).permissive).toBe(false);
+    expect(classifyLicenses([`Not for military use.\n\n${MIT}`]).permissive).toBe(false);
+    const sneaky = APACHE.replace('[yyyy] [name of copyright owner]', '2024 Acme. Commercial use requires a fee');
+    expect(classifyLicenses([sneaky]).permissive).toBe(false);
+    expect(classifyLicenses(['Apache License\n  Version 2.0, January 2004\n']).permissive).toBe(false);
+  });
+
+  it('treats custom terms and a missing license as restricted and names them by their title line', () => {
     expect(classifyLicenses(['LLAMA 3.2 COMMUNITY LICENSE AGREEMENT\n...'])).toEqual({
       title: 'LLAMA 3.2 COMMUNITY LICENSE AGREEMENT',
       permissive: false,
     });
-    expect(classifyLicenses([`${APACHE}\nSee the Acceptable Use Policy.`]).permissive).toBe(false);
+    expect(classifyLicenses(['**Llama 3.2** **Acceptable Use Policy**\n...']).title).toBe(
+      'Llama 3.2 Acceptable Use Policy'
+    );
+    expect(classifyLicenses(['# Mistral AI Non-Production License\n']).title).toBe('Mistral AI Non-Production License');
     expect(classifyLicenses([MIT, 'Gemma Terms of Use']).permissive).toBe(false);
     expect(classifyLicenses([])).toEqual({ title: 'none declared', permissive: false });
     expect(classifyLicenses([''])).toEqual({ title: 'license text not shown', permissive: false });
+  });
+
+  it('lists a repeated license once', () => {
+    expect(classifyLicenses(['Gemma Terms of Use', 'Gemma Terms of Use'])).toEqual({
+      title: 'Gemma Terms of Use',
+      permissive: false,
+    });
   });
 });

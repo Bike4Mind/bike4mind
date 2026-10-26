@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { PassThrough } from 'stream';
 import { describe, it, expect, vi } from 'vitest';
 import {
@@ -74,7 +76,7 @@ function detail(overrides: Partial<HubModelDetail> = {}): HubModelDetail {
   };
 }
 
-const APACHE = 'Apache License\nVersion 2.0, January 2004\nhttp://www.apache.org/licenses/\n';
+const APACHE = readFileSync(join(__dirname, '__fixtures__', 'apache-2.0.txt'), 'utf-8');
 const GEMMA = 'Gemma Terms of Use\n\nLast modified: February 21, 2024\n...Prohibited Use Policy...';
 
 function installed(name: string, extra: Partial<InstalledModel> = {}): InstalledModel {
@@ -162,7 +164,7 @@ interface Harness {
   lines: string[];
   questions: string[];
   progress: string[];
-  saved: Array<{ defaultModel?: string; ollamaHost?: string }>;
+  saved: Array<{ defaultModel?: string; ollamaHost?: string; localDefaultModel?: string }>;
   runtime: LocalRuntime;
   hub: HubClient;
   registry: ReturnType<typeof vi.fn<ModelsDeps['ollamaRegistry']>>;
@@ -243,11 +245,15 @@ describe('parsePullTarget', () => {
     expect(parsePullTarget('qwen2.5:0.5b')).toEqual({ kind: 'ollama', name: 'qwen2.5:0.5b' });
     expect(parsePullTarget('registry.ollama.ai/library/smollm2:135m')).toEqual({
       kind: 'ollama',
-      name: 'library/smollm2:135m',
+      name: 'smollm2:135m',
     });
     expect(parsePullTarget('https://ollama.com/library/gemma3:270m')).toEqual({
       kind: 'ollama',
-      name: 'library/gemma3:270m',
+      name: 'gemma3:270m',
+    });
+    expect(parsePullTarget('ollama.com/someone/model')).toEqual({
+      kind: 'ollama',
+      name: 'someone/model',
     });
   });
 
@@ -597,11 +603,7 @@ describe('models pull (Ollama library)', () => {
     expect(await runModelsCommand('pull', { _: [], ref: 'smollm2:135m' }, h.deps)).toBe(0);
     expect(h.registry).toHaveBeenCalledWith('smollm2:135m', h.deps.signal);
     expect(h.lines).toEqual(
-      expect.arrayContaining([
-        'Size:     271 MB',
-        'License:  Apache License',
-        'Model:    smollm2:135m (Ollama registry)',
-      ])
+      expect.arrayContaining(['Size:     271 MB', 'License:  Apache-2.0', 'Model:    smollm2:135m (Ollama registry)'])
     );
     expect(h.questions).toEqual(['Download 271 MB? [y/N] ']);
     expect(h.hub.getModel).not.toHaveBeenCalled();
@@ -624,6 +626,31 @@ describe('models pull (Ollama library)', () => {
     const tty = harness({ registry, answers: [false] });
     expect(await pullModel('gemma3:270m', tty.deps, OPTS)).toBe('declined');
     expect(tty.questions).toEqual(['Do you accept the Gemma Terms of Use license? [y/N] ']);
+  });
+
+  it('requires accepting Apache-2.0 text with added terms, even with --yes', async () => {
+    const addendum = 'ACME ADDENDUM\nCommercial use requires a separate paid agreement with ACME.';
+    const licenses = [`${APACHE}\n${addendum}`];
+    const h = harness({ registry: async () => ({ sizeBytes: 1000, licenses }), isTTY: false });
+    await expect(pullModel('ollama.com/acme/model:1b', h.deps, { ...OPTS, yes: true })).rejects.toThrow(
+      /--accept-license/
+    );
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('suggests a name `use` finds after pulling through a registry host', async () => {
+    const onRuntime: InstalledModel[] = [];
+    const runtime = fakeRuntime({
+      list: vi.fn(async () => onRuntime),
+      pull: vi.fn(async (ref: string) => void onRuntime.push(installed(ref))),
+    });
+    const h = harness({ runtime, isTTY: false, config: { ollamaHost: 'http://127.0.0.1:11500' } });
+    expect(await pullModel('registry.ollama.ai/library/smollm2:135m', h.deps, { ...OPTS, yes: true })).toBe('pulled');
+    expect(runtime.pull).toHaveBeenCalledWith('smollm2:135m', expect.anything());
+    const hint = h.lines.find(line => line.includes('b4m models use '));
+    expect(hint).toMatch(/b4m models use smollm2:135m$/);
+    expect(await runModelsCommand('use', { _: [], name: 'library/smollm2:135m' }, h.deps)).toBe(0);
+    expect(h.saved).toEqual([{ defaultModel: 'smollm2:135m', localDefaultModel: 'smollm2:135m' }]);
   });
 
   it('treats a model without a license layer as restricted', async () => {
@@ -692,7 +719,9 @@ describe('models use', () => {
   it('saves the model and the host it lives on', async () => {
     const h = harness({ source: 'detected' });
     expect(await runModelsCommand('use', { _: [], name: 'qwen2.5:0.5b' }, h.deps)).toBe(0);
-    expect(h.saved).toEqual([{ defaultModel: 'qwen2.5:0.5b', ollamaHost: 'http://127.0.0.1:11500' }]);
+    expect(h.saved).toEqual([
+      { defaultModel: 'qwen2.5:0.5b', localDefaultModel: 'qwen2.5:0.5b', ollamaHost: 'http://127.0.0.1:11500' },
+    ]);
     expect(h.lines[0]).toBe('Default model: qwen2.5:0.5b on Ollama at http://127.0.0.1:11500');
   });
 
@@ -700,7 +729,7 @@ describe('models use', () => {
     const runtime = fakeRuntime({ list: vi.fn().mockResolvedValue([installed('llama3:latest')]) });
     const h = harness({ runtime, config: { ollamaHost: 'http://127.0.0.1:11500' } });
     await runModelsCommand('use', { _: [], name: 'llama3' }, h.deps);
-    expect(h.saved).toEqual([{ defaultModel: 'llama3:latest' }]);
+    expect(h.saved).toEqual([{ defaultModel: 'llama3:latest', localDefaultModel: 'llama3:latest' }]);
   });
 
   it('rejects unknown models and non-Ollama runtimes', async () => {
