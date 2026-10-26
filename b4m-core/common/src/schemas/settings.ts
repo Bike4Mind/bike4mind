@@ -1183,35 +1183,39 @@ export function makeContributedBooleanSetting(
  * (b4m-core/services/src/userService/usagePatternSignals.ts). The defaults are generic
  * placeholders; a deployment tunes the real values in admin settings.
  */
-export const UsagePatternSignalsConfigSchema = z
-  .object({
-    /** Users with usage in this many recent hours are recomputed on each run. */
-    activeWindowHours: z.number().int().min(1).max(720).prefault(24),
-    maxUsersPerRun: z.number().int().min(1).max(10_000).prefault(500),
-    /** Window for the cadence and credit-polling signals. */
-    lookbackDays: z.number().int().min(1).max(90).prefault(7),
-    weights: z
-      .object({
-        apiOnlyUsage: z.number().min(0).max(100).prefault(25),
-        regularCadence: z.number().min(0).max(100).prefault(25),
-        creditPolling: z.number().min(0).max(100).prefault(25),
-        quickApiKey: z.number().min(0).max(100).prefault(25),
-      })
-      .strict()
-      .prefault({}),
-    reviewThreshold: z.number().min(1).max(100).prefault(50),
-    apiOnlyMinRequests: z.number().int().min(1).prefault(20),
-    /** Share (0-1) of usage made with an API key at which apiOnlyUsage triggers. */
-    apiOnlyMinShare: z.number().min(0).max(1).prefault(1),
-    /** Requests whose inter-request gaps are measured. */
-    cadenceSampleSize: z.number().int().min(3).max(1000).prefault(30),
-    /** Coefficient of variation of the gaps at or below which regularCadence triggers. */
-    cadenceMaxVariation: z.number().min(0).prefault(0.2),
-    creditPollMinCount: z.number().int().min(1).prefault(20),
-    creditPollMinPerCompletion: z.number().positive().prefault(2),
-    quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(30),
-  })
-  .strict();
+export const UsagePatternSignalsConfigSchema = z.object({
+  /** Users with usage in this many recent hours are candidates; keep it near the hourly job cadence. */
+  activeWindowHours: z.number().int().min(1).max(720).prefault(2),
+  /** Free-tier users scored per run; the least recently scored go first. */
+  maxUsersPerRun: z.number().int().min(1).max(10_000).prefault(500),
+  /** Window for the cadence and credit-polling signals. */
+  lookbackDays: z.number().int().min(1).max(90).prefault(7),
+  /** Window for the API-only signal. */
+  apiOnlyLookbackDays: z.number().int().min(1).max(365).prefault(30),
+  /** Most recent UsageEvent rows read per user, bounding each user's read. */
+  maxEventsPerUser: z.number().int().min(10).max(50_000).prefault(5000),
+  weights: z
+    .object({
+      apiOnlyUsage: z.number().min(0).max(100).prefault(25),
+      regularCadence: z.number().min(0).max(100).prefault(25),
+      creditPolling: z.number().min(0).max(100).prefault(25),
+      quickApiKey: z.number().min(0).max(100).prefault(25),
+    })
+    .prefault({}),
+  reviewThreshold: z.number().min(1).max(100).prefault(50),
+  apiOnlyMinRequests: z.number().int().min(1).prefault(20),
+  /** Share (0-1) of usage made with an API key at which apiOnlyUsage triggers. */
+  apiOnlyMinShare: z.number().min(0).max(1).prefault(1),
+  /** Requests whose inter-request gaps are measured. */
+  cadenceSampleSize: z.number().int().min(3).max(1000).prefault(30),
+  /** Coefficient of variation of the gaps at or below which regularCadence triggers. */
+  cadenceMaxVariation: z.number().min(0).prefault(0.2),
+  creditPollMinCount: z.number().int().min(1).prefault(20),
+  creditPollMinPerCompletion: z.number().positive().prefault(2),
+  quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(30),
+  /** A first key created up to this many days before verification also triggers quickApiKey. */
+  quickApiKeyMaxDaysBeforeVerification: z.number().int().min(0).max(365).prefault(1),
+});
 
 export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
 
@@ -3513,7 +3517,7 @@ export const settingsMap = {
     name: 'Usage Pattern Signals: Thresholds and Weights',
     defaultValue: UsagePatternSignalsConfigSchema.parse({}),
     description:
-      'Which accounts are analyzed (activeWindowHours, maxUsersPerRun), the window for cadence and polling (lookbackDays), the weight (0-100) of each signal, the score at which an account needs review, and the per-signal thresholds. Unknown fields are refused on save.',
+      'Which accounts are analyzed (activeWindowHours, maxUsersPerRun, maxEventsPerUser), the windows for the API-only signal (apiOnlyLookbackDays) and for cadence and polling (lookbackDays), the weight (0-100) of each signal, the score at which an account needs review, and the per-signal thresholds. Unknown fields are ignored.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
     order: 2,

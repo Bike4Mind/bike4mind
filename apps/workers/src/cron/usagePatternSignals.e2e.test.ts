@@ -86,8 +86,8 @@ async function seedCreditPolls(userId: string, count: number) {
   );
 }
 
-/** Synthetic scripted-looking account: steady API-only calls, heavy polling, key minted right after verification. */
-async function seedScriptedUser(fields: Record<string, unknown> = {}) {
+/** Synthetic high-signal account: steady API-only calls, heavy polling, key minted right after verification. */
+async function seedHighSignalUser(fields: Record<string, unknown> = {}) {
   const userId = await seedUser(fields);
   const verifiedAt = (await User.collection.findOne({ _id: new mongoose.Types.ObjectId(userId) }))!.emailVerifiedAt;
   await UserApiKey.collection.insertOne({
@@ -129,14 +129,14 @@ beforeEach(async () => {
 describe('runUsagePatternSignals', () => {
   it('does nothing while the switch is off (the default)', async () => {
     h.getSettingsMap.mockResolvedValue({});
-    await seedScriptedUser();
+    await seedHighSignalUser();
 
     expect(await runUsagePatternSignals({ now })).toMatchObject({ status: 'disabled', analyzed: 0 });
     expect(await UserUsagePatternSignals.countDocuments()).toBe(0);
   });
 
-  it('flags a scripted-looking free-tier account and not a typical one', async () => {
-    const scripted = await seedScriptedUser();
+  it('flags a high-signal free-tier account and not a typical one', async () => {
+    const highSignal = await seedHighSignalUser();
     const typical = await seedUser();
     const gapsMinutes = [3, 47, 1, 220, 9, 15, 600, 2, 75, 30, 4, 180, 12, 6, 95, 1, 40, 8, 300, 20, 5];
     let at = now.getTime();
@@ -149,7 +149,7 @@ describe('runUsagePatternSignals', () => {
     const result = await runUsagePatternSignals({ now });
 
     expect(result).toMatchObject({ status: 'success', analyzed: 2, needsReview: 1, errors: 0 });
-    const flagged = await userUsagePatternSignalsRepository.findByUserId(scripted);
+    const flagged = await userUsagePatternSignalsRepository.findByUserId(highSignal);
     expect(flagged).toMatchObject({ score: 100, needsReview: true, computedAt: now });
     expect(flagged?.signals.map(s => [s.id, s.triggered])).toEqual([
       ['apiOnlyUsage', true],
@@ -162,10 +162,10 @@ describe('runUsagePatternSignals', () => {
   });
 
   it('skips paid, admin, approved and inactive accounts', async () => {
-    const paid = await seedScriptedUser();
-    await seedScriptedUser({ isAdmin: true });
-    await seedScriptedUser({ apiKeyTrustApproved: true });
-    await seedScriptedUser({ lastCreditsPurchasedAt: new Date('2025-12-01T00:00:00Z') });
+    const paid = await seedHighSignalUser();
+    await seedHighSignalUser({ isAdmin: true });
+    await seedHighSignalUser({ apiKeyTrustApproved: true });
+    await seedHighSignalUser({ lastCreditsPurchasedAt: new Date('2025-12-01T00:00:00Z') });
     const quiet = await seedUser();
     await seedUsage(quiet, [new Date(now.getTime() - 5 * 24 * 60 * MINUTE)], { apiKeyId: 'k', source: 'api' });
     h.getActiveSubscriptionsForUser.mockImplementation(async (userId: string) => (userId === paid ? [{}] : []));
@@ -177,13 +177,61 @@ describe('runUsagePatternSignals', () => {
   });
 
   it('keeps one result per user across runs and leaves the account untouched', async () => {
-    const scripted = await seedScriptedUser();
-    const before = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(scripted) });
+    const highSignal = await seedHighSignalUser();
+    const before = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(highSignal) });
 
     await runUsagePatternSignals({ now });
     await runUsagePatternSignals({ now: new Date(now.getTime() + 60 * MINUTE) });
 
-    expect(await UserUsagePatternSignals.countDocuments({ userId: scripted })).toBe(1);
-    expect(await User.collection.findOne({ _id: new mongoose.Types.ObjectId(scripted) })).toEqual(before);
+    expect(await UserUsagePatternSignals.countDocuments({ userId: highSignal })).toBe(1);
+    expect(await User.collection.findOne({ _id: new mongoose.Types.ObjectId(highSignal) })).toEqual(before);
+  });
+
+  it('counts signed-in CLI usage as session usage, not API usage', async () => {
+    const cliUser = await seedUser();
+    const times = Array.from({ length: 30 }, (_, i) => new Date(now.getTime() - (i + 1) * 7 * MINUTE));
+    await seedUsage(cliUser, times, { source: 'cli' });
+
+    await runUsagePatternSignals({ now });
+
+    const stored = await userUsagePatternSignalsRepository.findByUserId(cliUser);
+    expect(stored?.signals.find(s => s.id === 'apiOnlyUsage')).toMatchObject({ value: 0, triggered: false });
+  });
+
+  it('rotates through candidates when there are more than the per-run cap, without spending the cap on paid users', async () => {
+    const paid = await seedUser();
+    await seedUsage(paid, [new Date(now.getTime() - MINUTE)], {});
+    const free = [await seedUser(), await seedUser(), await seedUser()];
+    for (const userId of free) await seedUsage(userId, [new Date(now.getTime() - MINUTE)], {});
+    h.getActiveSubscriptionsForUser.mockImplementation(async (userId: string) => (userId === paid ? [{}] : []));
+    h.getSettingsMap.mockResolvedValue({
+      usagePatternSignalsEnabled: 'true',
+      usagePatternSignalsConfig: JSON.stringify({ ...sampleConfig, maxUsersPerRun: 2 }),
+    });
+
+    expect(await runUsagePatternSignals({ now })).toMatchObject({ analyzed: 2, skippedPaid: 1 });
+    const firstRun = (await UserUsagePatternSignals.find().lean()).map(r => r.userId);
+    await runUsagePatternSignals({ now: new Date(now.getTime() + MINUTE) });
+
+    const missed = free.find(id => !firstRun.includes(id));
+    expect(missed).toBeDefined();
+    expect(await userUsagePatternSignalsRepository.findByUserId(missed!)).toMatchObject({
+      computedAt: new Date(now.getTime() + MINUTE),
+    });
+    expect((await UserUsagePatternSignals.find().lean()).map(r => r.userId).sort()).toEqual([...free].sort());
+  });
+
+  it('stops early when out of time and picks up the missed users on the next run', async () => {
+    const users = [await seedUser(), await seedUser()];
+    for (const userId of users) await seedUsage(userId, [new Date(now.getTime() - MINUTE)], {});
+    let checks = 0;
+
+    const stopped = await runUsagePatternSignals({ now, shouldStop: () => checks++ >= 1 });
+
+    expect(stopped).toMatchObject({ status: 'stopped', analyzed: 1 });
+    await runUsagePatternSignals({ now: new Date(now.getTime() + MINUTE), shouldStop: () => false });
+    const missed = await UserUsagePatternSignals.findOne({ computedAt: new Date(now.getTime() + MINUTE) }).lean();
+    expect(users).toContain(missed?.userId);
+    expect(await UserUsagePatternSignals.countDocuments()).toBe(2);
   });
 });

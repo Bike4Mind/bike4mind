@@ -9,10 +9,10 @@ const MS_PER_MINUTE = 60_000;
 
 /** Stored per-user usage data the signals are computed from. */
 export interface UsagePatternFacts {
-  /** Lifetime usage rows made with an API key. */
+  /** Distinct requests in the API-only lookback made with an API key. */
   apiKeyRequests: number;
-  /** Lifetime usage rows made from the web app. */
-  interactiveRequests: number;
+  /** Distinct requests in the same lookback made from a signed-in session (web, CLI or desktop). */
+  sessionRequests: number;
   /** Start times of the most recent distinct requests in the lookback window, any order. */
   requestTimes: Date[];
   /** Credit balance reads in the lookback window. */
@@ -49,18 +49,19 @@ function formatDuration(ms: number): string {
 }
 
 export function apiOnlyUsageSignal(
-  facts: Pick<UsagePatternFacts, 'apiKeyRequests' | 'interactiveRequests'>,
+  facts: Pick<UsagePatternFacts, 'apiKeyRequests' | 'sessionRequests'>,
   config: UsagePatternSignalsConfig
 ): UsagePatternSignal {
-  const { apiKeyRequests, interactiveRequests } = facts;
-  const total = apiKeyRequests + interactiveRequests;
-  if (total === 0) return signal('apiOnlyUsage', config, null, false, 'No completions recorded for this account');
+  const { apiKeyRequests, sessionRequests } = facts;
+  const total = apiKeyRequests + sessionRequests;
+  const period = `in the last ${config.apiOnlyLookbackDays} days`;
+  if (total === 0) return signal('apiOnlyUsage', config, null, false, `No completions ${period}`);
   const share = apiKeyRequests / total;
   const triggered = apiKeyRequests >= config.apiOnlyMinRequests && share >= config.apiOnlyMinShare;
   const explanation =
-    interactiveRequests === 0
-      ? `All ${total} completions were made with an API key, none from the web app`
-      : `${percent(share)} of ${total} completions were made with an API key`;
+    sessionRequests === 0
+      ? `All ${total} completions ${period} were made with an API key, none from a signed-in session`
+      : `${percent(share)} of ${total} completions ${period} were made with an API key`;
   return signal('apiOnlyUsage', config, share, triggered, explanation);
 }
 
@@ -116,13 +117,15 @@ export function quickApiKeySignal(
   const minutes = (firstApiKeyAt.getTime() - emailVerifiedAt.getTime()) / MS_PER_MINUTE;
   const explanation =
     minutes < 0
-      ? 'First API key created before email verification'
+      ? `First API key created ${Math.round(-minutes)} minutes before email verification`
       : `First API key created ${Math.round(minutes)} minutes after email verification`;
+  // An early key counts only within a bounded window, so long-standing accounts verified late do not trigger.
+  const earliest = -config.quickApiKeyMaxDaysBeforeVerification * 24 * 60;
   return signal(
     'quickApiKey',
     config,
     Math.round(minutes * 10) / 10,
-    minutes <= config.quickApiKeyMinutes,
+    minutes >= earliest && minutes <= config.quickApiKeyMinutes,
     explanation
   );
 }

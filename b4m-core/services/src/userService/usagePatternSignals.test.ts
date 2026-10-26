@@ -31,10 +31,10 @@ const series = (gapsMs: number[]) => {
   return out;
 };
 
-// Synthetic: steady 60s gaps with small jitter, only API-key usage, a key right after verification.
-const scriptedFacts: UsagePatternFacts = {
+// Synthetic high-signal account: steady 60s gaps, API-key usage only, a key right after verification.
+const highSignalFacts: UsagePatternFacts = {
   apiKeyRequests: 120,
-  interactiveRequests: 0,
+  sessionRequests: 0,
   requestTimes: series(Array.from({ length: 30 }, (_, i) => 60_000 + (i % 3) * 1000)),
   creditPolls: 150,
   completions: 120,
@@ -45,7 +45,7 @@ const scriptedFacts: UsagePatternFacts = {
 // Synthetic: mostly web usage at irregular times, an occasional balance check, a key days later.
 const typicalFacts: UsagePatternFacts = {
   apiKeyRequests: 4,
-  interactiveRequests: 60,
+  sessionRequests: 60,
   requestTimes: series([
     30_000,
     minutes(12),
@@ -79,23 +79,25 @@ describe('coefficientOfVariation', () => {
 
 describe('apiOnlyUsageSignal', () => {
   it('triggers when enough usage is all through API keys', () => {
-    const s = apiOnlyUsageSignal({ apiKeyRequests: 10, interactiveRequests: 0 }, config);
+    const s = apiOnlyUsageSignal({ apiKeyRequests: 10, sessionRequests: 0 }, config);
     expect(s).toMatchObject({ id: 'apiOnlyUsage', value: 1, triggered: true, weight: 20 });
-    expect(s.explanation).toBe('All 10 completions were made with an API key, none from the web app');
+    expect(s.explanation).toBe(
+      'All 10 completions in the last 30 days were made with an API key, none from a signed-in session'
+    );
   });
 
   it('does not trigger below the minimum request count', () => {
-    expect(apiOnlyUsageSignal({ apiKeyRequests: 9, interactiveRequests: 0 }, config).triggered).toBe(false);
+    expect(apiOnlyUsageSignal({ apiKeyRequests: 9, sessionRequests: 0 }, config).triggered).toBe(false);
   });
 
   it('does not trigger below the minimum API share', () => {
-    const s = apiOnlyUsageSignal({ apiKeyRequests: 90, interactiveRequests: 10 }, config);
+    const s = apiOnlyUsageSignal({ apiKeyRequests: 90, sessionRequests: 10 }, config);
     expect(s).toMatchObject({ value: 0.9, triggered: false });
-    expect(s.explanation).toBe('90% of 100 completions were made with an API key');
+    expect(s.explanation).toBe('90% of 100 completions in the last 30 days were made with an API key');
   });
 
   it('reports no value without usage', () => {
-    expect(apiOnlyUsageSignal({ apiKeyRequests: 0, interactiveRequests: 0 }, config)).toMatchObject({
+    expect(apiOnlyUsageSignal({ apiKeyRequests: 0, sessionRequests: 0 }, config)).toMatchObject({
       value: null,
       triggered: false,
     });
@@ -163,9 +165,17 @@ describe('quickApiKeySignal', () => {
     ).toBe(false);
   });
 
-  it('triggers for a key created before verification', () => {
+  it('triggers for a key created shortly before verification', () => {
     const s = quickApiKeySignal({ emailVerifiedAt: new Date(t0), firstApiKeyAt: new Date(t0 - minutes(5)) }, config);
-    expect(s).toMatchObject({ triggered: true, explanation: 'First API key created before email verification' });
+    expect(s).toMatchObject({
+      triggered: true,
+      explanation: 'First API key created 5 minutes before email verification',
+    });
+  });
+
+  it('does not trigger for a key created long before a late verification', () => {
+    const lateVerification = { emailVerifiedAt: new Date(t0), firstApiKeyAt: new Date(t0 - minutes(60 * 24 * 2)) };
+    expect(quickApiKeySignal(lateVerification, config).triggered).toBe(false);
   });
 
   it('reports no value without a key or a verification time', () => {
@@ -181,8 +191,8 @@ describe('quickApiKeySignal', () => {
 });
 
 describe('computeUsagePatternSignals', () => {
-  it('scores a scripted-looking synthetic account above the review threshold', () => {
-    const result = computeUsagePatternSignals(scriptedFacts, config);
+  it('scores a high-signal synthetic account above the review threshold', () => {
+    const result = computeUsagePatternSignals(highSignalFacts, config);
     expect(result.signals.map(s => [s.id, s.triggered])).toEqual([
       ['apiOnlyUsage', true],
       ['regularCadence', true],
@@ -203,7 +213,7 @@ describe('computeUsagePatternSignals', () => {
       ...config,
       weights: { ...config.weights, quickApiKey: 0, apiOnlyUsage: 100 },
     });
-    const result = computeUsagePatternSignals(scriptedFacts, zeroed);
+    const result = computeUsagePatternSignals(highSignalFacts, zeroed);
     expect(result.signals.find(s => s.id === 'quickApiKey')).toMatchObject({ triggered: true, weight: 0 });
     expect(result.score).toBe(100);
   });
@@ -216,8 +226,18 @@ describe('UsagePatternSignalsConfigSchema', () => {
     expect(parsed.reviewThreshold).toBe(50);
   });
 
-  it('refuses unknown fields and out-of-range values', () => {
-    expect(UsagePatternSignalsConfigSchema.safeParse({ weights: { apiOnly: 10 } }).success).toBe(false);
+  it('ignores unknown fields so tuned values survive a renamed field', () => {
+    const parsed = UsagePatternSignalsConfigSchema.parse({
+      reviewThreshold: 70,
+      weights: { apiOnly: 10 },
+      oldField: 1,
+    });
+    expect(parsed.reviewThreshold).toBe(70);
+    expect(parsed.weights).not.toHaveProperty('apiOnly');
+    expect(parsed).not.toHaveProperty('oldField');
+  });
+
+  it('refuses out-of-range values', () => {
     expect(UsagePatternSignalsConfigSchema.safeParse({ reviewThreshold: 0 }).success).toBe(false);
     expect(UsagePatternSignalsConfigSchema.safeParse({ apiOnlyMinShare: 1.5 }).success).toBe(false);
   });

@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import type { Context } from 'aws-lambda';
 import mongoose from 'mongoose';
 import { Resource } from 'sst';
-import { CreditHolderType, settingsMap } from '@bike4mind/common';
+import { CreditHolderType, settingsMap, type UsagePatternSignalsConfig } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   ApiKeyUsageLog,
@@ -10,6 +10,7 @@ import {
   UsageEvent,
   User,
   UserApiKey,
+  UserUsagePatternSignals,
   userUsagePatternSignalsRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -19,6 +20,8 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
 
 const MS_PER_HOUR = 60 * 60 * 1000;
+/** Stop starting new users this long before the Lambda timeout. */
+const STOP_MARGIN_MS = 60_000;
 /** Route template ApiKeyUsageLog stores for the credit balance read (apps/client/pages/api/v1/credits.ts). */
 export const CREDIT_BALANCE_ENDPOINT = '/api/v1/credits';
 
@@ -27,10 +30,12 @@ export interface UsagePatternSignalsRunOptions {
   now?: Date;
   /** Same paid test as the API key trust gate: any active own or org-seat subscription. */
   hasActivePlan?: (userId: string) => Promise<boolean>;
+  /** Checked before each user; true ends the run, and the next run starts with the users it missed. */
+  shouldStop?: () => boolean;
 }
 
 export interface UsagePatternSignalsRunResult {
-  status: 'disabled' | 'success';
+  status: 'disabled' | 'success' | 'stopped';
   analyzed: number;
   needsReview: number;
   skippedPaid: number;
@@ -52,59 +57,64 @@ async function loadSettings() {
   };
 }
 
-/** Recently active accounts that pay nothing: no admin, ban, purchase or admin trust approval. */
-async function findFreeTierCandidates(since: Date, limit: number) {
+type Candidate = { _id: mongoose.Types.ObjectId; emailVerifiedAt?: Date | null };
+
+/**
+ * Recently active accounts that pay nothing (no admin, ban, purchase or admin trust approval),
+ * never-scored first and then least recently scored, so a capped run does not starve anyone.
+ * The two distincts range-scan the existing createdAt / timestamp indexes over a short window.
+ */
+async function findFreeTierCandidates(since: Date): Promise<Candidate[]> {
   const [spenders, apiCallers] = await Promise.all([
     UsageEvent.distinct('userId', { createdAt: { $gte: since }, ownerType: CreditHolderType.User }),
     ApiKeyUsageLog.distinct('userId', { timestamp: { $gte: since } }),
   ]);
   const ids = Array.from(new Set<string>([...spenders, ...apiCallers])).filter(id => mongoose.isValidObjectId(id));
-  return User.find(
-    {
-      _id: { $in: ids },
-      isAdmin: { $ne: true },
-      isBanned: { $ne: true },
-      apiKeyTrustApproved: { $ne: true },
-      lastCreditsPurchasedAt: null,
-    },
-    { emailVerifiedAt: 1 }
-  )
-    .limit(limit)
-    .lean<{ _id: mongoose.Types.ObjectId; emailVerifiedAt?: Date | null }[]>();
+  if (ids.length === 0) return [];
+  const [users, scored] = await Promise.all([
+    User.find(
+      {
+        _id: { $in: ids },
+        isAdmin: { $ne: true },
+        isBanned: { $ne: true },
+        apiKeyTrustApproved: { $ne: true },
+        lastCreditsPurchasedAt: null,
+      },
+      { emailVerifiedAt: 1 }
+    ).lean<Candidate[]>(),
+    UserUsagePatternSignals.find({ userId: { $in: ids } }, { userId: 1, computedAt: 1 }).lean<
+      { userId: string; computedAt: Date }[]
+    >(),
+  ]);
+  const lastScored = new Map(scored.map(r => [r.userId, r.computedAt.getTime()]));
+  const rank = (u: Candidate) => lastScored.get(String(u._id)) ?? -Infinity;
+  return users.sort((a, b) => rank(a) - rank(b) || String(a._id).localeCompare(String(b._id)));
 }
 
 async function gatherFacts(
   userId: string,
   emailVerifiedAt: Date | null,
-  windowStart: Date,
-  sampleSize: number
+  now: Date,
+  config: UsagePatternSignalsConfig
 ): Promise<userService.UsagePatternFacts> {
-  // One row per request: a single completion can settle several UsageEvent rows.
-  const byRequest = {
-    $group: { _id: '$requestId', api: { $max: '$apiKeyId' }, web: { $max: { $eq: ['$source', 'web'] } } },
-  };
-  const [lifetime, windowCount, recent, creditPolls, firstKey] = await Promise.all([
-    UsageEvent.aggregate<{ api: number; web: number }>([
-      { $match: { userId } },
-      byRequest,
+  const daysAgo = (days: number) => new Date(now.getTime() - days * 24 * MS_PER_HOUR);
+  const windowStart = daysAgo(config.lookbackDays);
+  const readStart = daysAgo(Math.max(config.lookbackDays, config.apiOnlyLookbackDays));
+  const apiOnlyStart = daysAgo(config.apiOnlyLookbackDays);
+  const [requests, creditPolls, firstKey] = await Promise.all([
+    // The newest maxEventsPerUser rows via the { userId, createdAt } index, folded to one row per
+    // request (a completion can settle several UsageEvent rows).
+    UsageEvent.aggregate<{ at: Date; api: number }>([
+      { $match: { userId, createdAt: { $gte: readStart } } },
+      { $sort: { createdAt: -1 } },
+      { $limit: config.maxEventsPerUser },
       {
         $group: {
-          _id: null,
-          api: { $sum: { $cond: [{ $gt: ['$api', null] }, 1, 0] } },
-          web: { $sum: { $cond: ['$web', 1, 0] } },
+          _id: '$requestId',
+          at: { $min: '$createdAt' },
+          api: { $max: { $cond: [{ $gt: ['$apiKeyId', null] }, 1, 0] } },
         },
       },
-    ]),
-    UsageEvent.aggregate<{ n: number }>([
-      { $match: { userId, createdAt: { $gte: windowStart } } },
-      { $group: { _id: '$requestId' } },
-      { $count: 'n' },
-    ]),
-    UsageEvent.aggregate<{ at: Date }>([
-      { $match: { userId, createdAt: { $gte: windowStart } } },
-      { $group: { _id: '$requestId', at: { $min: '$createdAt' } } },
-      { $sort: { at: -1 } },
-      { $limit: sampleSize },
     ]),
     ApiKeyUsageLog.countDocuments({
       userId,
@@ -112,14 +122,30 @@ async function gatherFacts(
       endpoint: CREDIT_BALANCE_ENDPOINT,
       method: 'GET',
     }),
-    UserApiKey.findOne({ userId }, { createdAt: 1 }).sort({ createdAt: 1 }).lean<{ createdAt?: Date }>(),
+    // Personal keys only: org-billed, agent and product keys and keys minted by a first-party
+    // sign-in exchange are not the user's own mint.
+    UserApiKey.findOne(
+      {
+        userId,
+        billingOwnerType: { $ne: CreditHolderType.Organization },
+        agentId: null,
+        productId: null,
+        'metadata.createdFrom': { $ne: 'oauth-exchange' },
+      },
+      { createdAt: 1 }
+    )
+      .sort({ createdAt: 1 })
+      .lean<{ createdAt?: Date }>(),
   ]);
+  const apiOnlyRows = requests.filter(r => r.at >= apiOnlyStart);
+  const apiKeyRequests = apiOnlyRows.filter(r => r.api === 1).length;
+  const windowRows = requests.filter(r => r.at >= windowStart).sort((a, b) => b.at.getTime() - a.at.getTime());
   return {
-    apiKeyRequests: lifetime[0]?.api ?? 0,
-    interactiveRequests: lifetime[0]?.web ?? 0,
-    requestTimes: recent.map(r => r.at),
+    apiKeyRequests,
+    sessionRequests: apiOnlyRows.length - apiKeyRequests,
+    requestTimes: windowRows.slice(0, config.cadenceSampleSize).map(r => r.at),
     creditPolls,
-    completions: windowCount[0]?.n ?? 0,
+    completions: windowRows.length,
     emailVerifiedAt,
     firstApiKeyAt: firstKey?.createdAt ?? null,
   };
@@ -136,6 +162,7 @@ export async function runUsagePatternSignals(
     logger = new Logger(),
     now = new Date(),
     hasActivePlan = async (userId: string) => (await getActiveSubscriptionsForUser(userId)).length > 0,
+    shouldStop = () => false,
   } = options;
   const result: UsagePatternSignalsRunResult = {
     status: 'success',
@@ -148,20 +175,21 @@ export async function runUsagePatternSignals(
   const { enabled, config } = await loadSettings();
   if (!enabled) return { ...result, status: 'disabled' };
 
-  const candidates = await findFreeTierCandidates(
-    new Date(now.getTime() - config.activeWindowHours * MS_PER_HOUR),
-    config.maxUsersPerRun
-  );
-  const windowStart = new Date(now.getTime() - config.lookbackDays * 24 * MS_PER_HOUR);
+  const candidates = await findFreeTierCandidates(new Date(now.getTime() - config.activeWindowHours * MS_PER_HOUR));
 
   for (const user of candidates) {
+    if (result.analyzed >= config.maxUsersPerRun) break;
+    if (shouldStop()) {
+      result.status = 'stopped';
+      break;
+    }
     const userId = String(user._id);
     try {
       if (await hasActivePlan(userId)) {
         result.skippedPaid++;
         continue;
       }
-      const facts = await gatherFacts(userId, user.emailVerifiedAt ?? null, windowStart, config.cadenceSampleSize);
+      const facts = await gatherFacts(userId, user.emailVerifiedAt ?? null, now, config);
       const signals = userService.computeUsagePatternSignals(facts, config);
       await userUsagePatternSignalsRepository.upsertLatest(userId, signals, now);
       result.analyzed++;
@@ -186,5 +214,8 @@ export async function handler(_event: never, context: Context) {
     stage: Resource.App.stage,
   });
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
-  return runUsagePatternSignals({ logger });
+  return runUsagePatternSignals({
+    logger,
+    shouldStop: () => context.getRemainingTimeInMillis() < STOP_MARGIN_MS,
+  });
 }
