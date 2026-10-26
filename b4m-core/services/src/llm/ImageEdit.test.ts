@@ -157,7 +157,8 @@ describe('ImageEditService.process model dispatch', () => {
   const makeService = (
     dbExtra: Record<string, unknown> = {},
     // In production this enqueues; pass one that calls process() to drive invoke() end to end.
-    startImageEditProcess: (body: ImageEditBody) => Promise<void> = vi.fn()
+    startImageEditProcess: (body: ImageEditBody) => Promise<void> = vi.fn(),
+    settledCredits?: number
   ) => {
     const quest = {
       id: 'quest1',
@@ -169,6 +170,7 @@ describe('ImageEditService.process model dispatch', () => {
       images: [],
     };
     const creditHolds = makeCreditHolds();
+    if (settledCredits !== undefined) creditHolds.settle.mockResolvedValueOnce(settledCredits);
     const service = new ImageEditService({
       creditHolds,
       db: {
@@ -205,8 +207,13 @@ describe('ImageEditService.process model dispatch', () => {
     return { service, quest, creditHolds };
   };
 
-  const run = async (model: string, bodyOverride: Record<string, unknown> = {}, dbExtra?: Record<string, unknown>) => {
-    const { service, quest, creditHolds } = makeService(dbExtra);
+  const run = async (
+    model: string,
+    bodyOverride: Record<string, unknown> = {},
+    dbExtra?: Record<string, unknown>,
+    settledCredits?: number
+  ) => {
+    const { service, quest, creditHolds } = makeService(dbExtra, undefined, settledCredits);
     await service.process({
       body: {
         sessionId: 'session1',
@@ -437,8 +444,13 @@ describe('ImageEditService.process model dispatch', () => {
   });
 
   describe('usage event on a charged edit', () => {
-    const runCharged = (record: ReturnType<typeof vi.fn>) =>
-      run(ImageModels.GPT_IMAGE_1_5, {}, { creditTransactions: { create: vi.fn() }, usageEvents: { record } });
+    const runCharged = (record: ReturnType<typeof vi.fn>, settledCredits?: number) =>
+      run(
+        ImageModels.GPT_IMAGE_1_5,
+        {},
+        { creditTransactions: { create: vi.fn() }, usageEvents: { record } },
+        settledCredits
+      );
 
     beforeEach(() => {
       vi.mocked(getAvailableModels).mockResolvedValue([gptImage]);
@@ -479,6 +491,16 @@ describe('ImageEditService.process model dispatch', () => {
         })
       );
       expect(landed).toBe(true);
+    });
+
+    it('records the confirmed charge, not the draw, when settle confirms less (the sweep already refunded)', async () => {
+      const record = vi.fn(async () => undefined);
+
+      const quest = await runCharged(record, 0);
+
+      expect(quest.status).toBe('done');
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+      expect(quest.creditHolds.release).not.toHaveBeenCalled();
     });
 
     describe('final debit rounding', () => {

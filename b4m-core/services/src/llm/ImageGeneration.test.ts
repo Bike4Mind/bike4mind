@@ -843,6 +843,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       useRealCreditValidator = false,
       organizationId,
       validatedCost = { requiredCredits: 40, usdCost: 0.02 },
+      settledCredits,
     }: {
       model?: ImageModels;
       n?: number;
@@ -851,10 +852,12 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       useRealCreditValidator?: boolean;
       organizationId?: string | null;
       validatedCost?: { requiredCredits: number; usdCost: number };
+      settledCredits?: number;
     } = {}
   ) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined } as any;
     const creditHolds = makeCreditHolds();
+    if (settledCredits !== undefined) creditHolds.settle.mockResolvedValueOnce(settledCredits);
     const service = new ImageGenerationService({
       creditHolds,
       db: {
@@ -935,6 +938,16 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       expect.objectContaining({ requestId: 'quest1', feature: 'image_generation', creditsCharged: 40 })
     );
     expect(landed).toBe(true);
+  });
+
+  it('records the confirmed charge, not the draw, when settle confirms less (the sweep already refunded)', async () => {
+    const record = vi.fn(async () => undefined);
+
+    const quest = await runCharged(record, { settledCredits: 0 });
+
+    expect(quest.status).toBe('done');
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+    expect(quest.creditHolds.release).not.toHaveBeenCalled();
   });
 
   it('deducts the selected primary image input cost on a GPT generation', async () => {
@@ -2025,10 +2038,12 @@ describe('ImageGenerationService quest partial writes', () => {
       question: 'Which blue?',
       originalPrompt: 'make it blue',
     });
-    const { service, update } = makeService();
+    const { service, update, creditHolds } = makeService();
     enforceCredits(service);
     await processEdit(service);
 
+    expect(creditHolds.release).toHaveBeenCalledTimes(1);
+    expect(creditHolds.settle).not.toHaveBeenCalled();
     expect(update).toHaveBeenCalledTimes(1);
     const call = callArgs(update).find(arg => arg.type === 'message');
     expect(call).toStrictEqual({
