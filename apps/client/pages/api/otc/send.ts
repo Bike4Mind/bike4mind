@@ -4,11 +4,11 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
   OTC_LIMITS,
+  OTC_SEND_EMAIL_BUDGETS,
   ipSubject,
   otcCounterLimit,
   otcDistinctEmailsPerIpLimit,
   otcEmailBudgetRetryAfter,
-  otcSendBudgets,
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
 import { requireTurnstile } from '@server/middlewares/requireTurnstile';
@@ -40,11 +40,10 @@ const handler = baseApi({ auth: false })
     }
 
     const ipBucket = ipSubject(req);
-    const budgets = await otcSendBudgets(normalizedEmail, ipBucket);
     // Per-email budgets are only spent once a code is about to be dispatched (see
     // OTC_SEND_EMAIL_BUDGETS), so refused requests cannot exhaust the owner's allowance. This read
     // refuses an over-budget caller before it can touch the address's cooldown below.
-    const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, ipBucket, budgets);
+    const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, ipBucket, OTC_SEND_EMAIL_BUDGETS);
     if (budgetRetryAfter !== undefined) {
       res.setHeader('Retry-After', String(budgetRetryAfter));
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
@@ -69,7 +68,7 @@ const handler = baseApi({ auth: false })
 
     // The reservation is keyed on the exact address and the budgets on the folded inbox, so concurrent
     // sends to aliases of one inbox can all pass the read above; this atomic spend is the real bound.
-    const budget = await reserveOtcEmailBudget(normalizedEmail, ipBucket, budgets);
+    const budget = await reserveOtcEmailBudget(normalizedEmail, ipBucket, OTC_SEND_EMAIL_BUDGETS);
     if ('retryAfter' in budget) {
       // No code goes out, so hand the cooldown slot back rather than start one for the owner.
       await pendingOtcTokenRepository.releaseReservation(

@@ -68,7 +68,6 @@ const cache = vi.hoisted(() => {
   };
 });
 const mockTryIncrement = vi.fn();
-const mockDomainEstablished = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findAll: async () => [], findBySettingNames: async () => [] },
   cacheRepository: {
@@ -76,10 +75,7 @@ vi.mock('@bike4mind/database', () => ({
     tryAddWithinLimitFixedWindow: (key: string) => cache.peek(key),
     deleteByKey: async (key: string) => cache.counts.delete(key),
     decrementCounter: (key: string) => cache.decrement(key),
-    findByKey: async () => null,
-    createOrUpdate: async () => undefined,
   },
-  userRepository: { existsVerifiedUserOnEmailDomain: (...a: any[]) => mockDomainEstablished(...a) },
   pendingOtcTokenRepository: {
     tryReserveSlot: (...a: any[]) => mockTryReserveSlot(...a),
     confirmReservation: (...a: any[]) => mockConfirmReservation(...a),
@@ -107,9 +103,6 @@ const resetCache = () => {
   cache.counts.clear();
   cache.state.blindPeek = false;
   mockTryIncrement.mockImplementation(cache.tryIncrement);
-  // EMAIL's domain is an established one unless a test says otherwise, so only the per-email
-  // budgets bind it.
-  mockDomainEstablished.mockResolvedValue(true);
 };
 
 // Runs every recorded middleware in order, as baseApi would before the route handler.
@@ -341,31 +334,6 @@ describe('/api/otc/send per-email budget', () => {
     expect(res.getHeader('Retry-After')).toBeDefined();
     expect(mockTryReserveSlot).not.toHaveBeenCalled();
     expect(mockSendOTC).not.toHaveBeenCalled();
-  });
-
-  // Every alias on its own subdomain and source IP, so no per-inbox or per-IP budget ever binds.
-  const sweep = (domain: string) =>
-    Array.from({ length: 20 }, (_, i) => () => post(`u${i}@s${i}.${domain}`, `81.2.70.${i + 1}`));
-
-  it('stops a many-source alias sweep across one new domain at the domain budget', async () => {
-    mockDomainEstablished.mockResolvedValue(false);
-    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
-
-    const statuses: number[] = [];
-    for (const send of sweep('burner.example')) statuses.push((await send())._getStatusCode());
-
-    const { limit } = OTC_LIMITS.send.perDomainHourly;
-    expect(mockSendOTC).toHaveBeenCalledTimes(limit);
-    expect(statuses.filter(status => status === 200)).toHaveLength(limit);
-    expect(statuses.slice(limit).every(status => status === 429)).toBe(true);
-    expect(cache.counts.get(`otc-limit:send-domain-hourly:${otcEmailKey('burner.example')}`)).toBe(limit);
-  });
-
-  it('never binds an established domain, so a stranger cannot lock its users out', async () => {
-    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
-
-    for (const send of sweep('acme.example')) expect((await send())._getStatusCode()).toBe(200);
-    expect(mockDomainEstablished).toHaveBeenCalledWith('acme.example', expect.any(Date));
   });
 });
 

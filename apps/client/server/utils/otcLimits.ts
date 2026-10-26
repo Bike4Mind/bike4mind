@@ -38,13 +38,14 @@ interface OtcWindow {
  * where many distinct people sign in from one address: the short window counts distinct emails per
  * IP and the blunt total plus daily caps keep one IP bounded no matter what.
  *
- * The per-domain caps stop one sender sweeping fresh aliases of a burner domain from many sources.
- * They are a lockout lever by design, so they bind only a domain nobody has an established account
- * on (see isEstablishedOtcDomain): a stranger can delay the first signup on a brand-new domain by at
- * most a day, never an existing customer's sign-in. Personal mail providers are exempt outright.
+ * The per-domain caps stop one abuser registering accounts on fresh aliases or subdomains of a
+ * catch-all burner domain from many sources. They count new accounts, charged only after the code
+ * is proven, never sends or sign-ins: a stranger cannot spend a domain's budget without controlling
+ * one of its inboxes, so it is no lever against anyone else, and a refusal tells only an inbox owner
+ * anything. Personal mail providers and established domains (see isEstablishedOtcDomain) are exempt.
  *
- * Each limit can be lowered, never raised, by its admin setting during an incident. Every setting's
- * `max` in settingsMap (b4m-core/common/src/schemas/settings.ts) must equal the limit here.
+ * Each window's limit can be lowered, never raised, by its admin setting during an incident. Every
+ * setting's `max` in settingsMap (b4m-core/common/src/schemas/settings.ts) must equal the limit here.
  */
 export const OTC_LIMITS = {
   send: {
@@ -52,8 +53,6 @@ export const OTC_LIMITS = {
     perEmailPerIp: { limit: 5, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerEmailPerIp' },
     perEmailPerIpDaily: { limit: 15, windowMs: DAY_MS, setting: 'otcLimitSendPerEmailPerIpDaily' },
     perEmail: { limit: 15, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerEmail' },
-    perDomainHourly: { limit: 5, windowMs: HOUR_MS, setting: 'otcLimitSendPerDomainHourly' },
-    perDomainDaily: { limit: 20, windowMs: DAY_MS, setting: 'otcLimitSendPerDomainDaily' },
     perIpDistinctEmails: { limit: 15, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerIpDistinctEmails' },
     perIpTotal: { limit: 40, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerIpTotal' },
     perIpDaily: { limit: 200, windowMs: DAY_MS, setting: 'otcLimitSendPerIpDaily' },
@@ -62,7 +61,15 @@ export const OTC_LIMITS = {
     perEmailPerIp: { limit: 10, windowMs: 15 * MINUTE_MS, setting: 'otcLimitVerifyPerEmailPerIp' },
     perIp: { limit: 60, windowMs: 15 * MINUTE_MS, setting: 'otcLimitVerifyPerIp' },
   },
-} as const satisfies { send: Record<string, OtcWindow | number>; verify: Record<string, OtcWindow> };
+  register: {
+    perDomainHourly: { limit: 5, windowMs: HOUR_MS, setting: 'otcLimitRegisterPerDomainHourly' },
+    perDomainDaily: { limit: 20, windowMs: DAY_MS, setting: 'otcLimitRegisterPerDomainDaily' },
+  },
+} as const satisfies {
+  send: Record<string, OtcWindow | number>;
+  verify: Record<string, OtcWindow>;
+  register: Record<string, OtcWindow>;
+};
 
 /** The window's limit as an admin has lowered it, else the built-in. A setting can never raise it. */
 export async function otcLimitOf({ limit, setting }: OtcWindow): Promise<number> {
@@ -178,7 +185,8 @@ const PERSONAL_EMAIL_PROVIDERS: ReadonlySet<string> = new Set(personalEmailProvi
 
 /**
  * The registrable domain (eTLD+1) a domain budget is keyed on, so rotating subdomains of one burner
- * domain shares a single budget. Undefined for a personal mail provider or an unparseable domain.
+ * domain shares a single budget. Undefined (exempt) for a personal mail provider or an unparseable
+ * domain.
  */
 export function otcLimitDomain(email: string): string | undefined {
   const mailbox = otcLimitMailbox(email);
@@ -198,10 +206,10 @@ export const OTC_SEND_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
   { bucket: 'send-email-ip-daily', window: OTC_LIMITS.send.perEmailPerIpDaily, subject: inboxFromSource },
   { bucket: 'send-email', window: OTC_LIMITS.send.perEmail, subject: inbox },
 ];
-/** Charged like OTC_SEND_EMAIL_BUDGETS, but only for a domain otcSendBudgets has not exempted. */
-export const OTC_SEND_DOMAIN_BUDGETS: readonly OtcEmailBudget[] = [
-  { bucket: 'send-domain-hourly', window: OTC_LIMITS.send.perDomainHourly, subject: otcLimitDomain },
-  { bucket: 'send-domain-daily', window: OTC_LIMITS.send.perDomainDaily, subject: otcLimitDomain },
+/** New accounts per email domain; see reserveOtcRegistrationDomainBudget. */
+export const OTC_REGISTER_DOMAIN_BUDGETS: readonly OtcEmailBudget[] = [
+  { bucket: 'register-domain-hourly', window: OTC_LIMITS.register.perDomainHourly, subject: otcLimitDomain },
+  { bucket: 'register-domain-daily', window: OTC_LIMITS.register.perDomainDaily, subject: otcLimitDomain },
 ];
 // Keyed on the exact token address plus the verifying source, not the folded inbox: each alias has
 // its own nonce and account, so folding adds no brute-force protection, and a guess from one source
@@ -332,9 +340,10 @@ const ESTABLISHED_DOMAIN_CACHE_MS = DAY_MS;
 const UNESTABLISHED_DOMAIN_CACHE_MS = HOUR_MS;
 
 /**
- * Whether an account on `domain` verified its email at least OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS ago.
- * The age keeps an abuser from lifting their own domain's budget by verifying one alias: they would
- * have to hold it for a week first. Cached both ways because the lookup is an unindexed scan.
+ * Whether a live, unbanned account on `domain` verified its email at least
+ * OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS ago. The age keeps an abuser from lifting their own domain's
+ * budget by verifying one alias: they would have to hold it for a week first. Cached both ways
+ * because the lookup is an unindexed scan.
  */
 export async function isEstablishedOtcDomain(domain: string): Promise<boolean> {
   const key = `otc-domain-established:${otcEmailKey(domain)}`;
@@ -351,15 +360,19 @@ export async function isEstablishedOtcDomain(domain: string): Promise<boolean> {
   return established;
 }
 
+const noRefund = async () => undefined;
+
 /**
- * The budgets a send to `email` must reserve: OTC_SEND_EMAIL_BUDGETS, plus the domain budgets
- * unless the domain is exempt. Only a spent domain budget pays for the established-domain lookup,
- * so ordinary sends never scan users.
+ * Spends one new-account unit of the email's domain budgets, for a registration whose code is
+ * already proven. An established domain is never refused; it is looked up only once the budget
+ * would refuse, so ordinary signups never scan users. Returns the Retry-After seconds when refused,
+ * else a refund for a registration that then fails.
  */
-export async function otcSendBudgets(email: string, ip: string): Promise<readonly OtcEmailBudget[]> {
+export async function reserveOtcRegistrationDomainBudget(
+  email: string
+): Promise<{ retryAfter: number } | { refund: () => Promise<void> }> {
+  const reservation = await reserveOtcEmailBudget(email, '', OTC_REGISTER_DOMAIN_BUDGETS);
+  if ('refund' in reservation) return reservation;
   const domain = otcLimitDomain(email);
-  if (!domain) return OTC_SEND_EMAIL_BUDGETS;
-  const domainSpent = (await otcEmailBudgetRetryAfter(email, ip, OTC_SEND_DOMAIN_BUDGETS)) !== undefined;
-  if (domainSpent && (await isEstablishedOtcDomain(domain))) return OTC_SEND_EMAIL_BUDGETS;
-  return [...OTC_SEND_EMAIL_BUDGETS, ...OTC_SEND_DOMAIN_BUDGETS];
+  return domain && (await isEstablishedOtcDomain(domain)) ? { refund: noRefund } : reservation;
 }

@@ -5,6 +5,7 @@ import {
   CreditHolderType,
   PENDING_FREE_CREDITS_TAG,
   RESERVED_USERNAME_MESSAGE,
+  UnprocessableEntityError,
 } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
@@ -96,6 +97,7 @@ const mockConsumeOtherCodes = vi.fn();
 const mockUserUpdate = vi.fn();
 const mockAddTagsToUser = vi.fn();
 const mockReleasePending = vi.fn();
+const mockDomainEstablished = vi.fn(async (_domain: string, _verifiedBefore: Date) => false);
 const mockTryIncrement = vi.fn(async (_key: string, _limit: number, _ttlMs: number) => ({
   success: true,
   count: 1,
@@ -112,6 +114,8 @@ vi.mock('@bike4mind/database', () => ({
     tryIncrementWithinLimitFixedWindow: (...a: any[]) => mockTryIncrement(...a),
     decrementCounter: (...a: any[]) => mockDecrement(...a),
     tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a),
+    findByKey: async () => null,
+    createOrUpdate: async () => undefined,
   },
   adminSettingsRepository: {
     findBySettingName: (...args: unknown[]) => mockFindSetting(...args),
@@ -128,6 +132,7 @@ vi.mock('@bike4mind/database', () => ({
     count: vi.fn(),
     update: (...a: unknown[]) => mockUserUpdate(...a),
     addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a),
+    existsVerifiedUserOnEmailDomain: (...a: unknown[]) => mockDomainEstablished(...a),
   },
   pendingOtcTokenRepository: {
     validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
@@ -778,6 +783,82 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
   });
 });
 
+describe('/api/otc/verify - new accounts per email domain', () => {
+  const BURNER = 'alias@s1.burner.example';
+  const domainKey = `otc-limit:register-domain-hourly:${otcEmailKey('burner.example')}`;
+  const spent = { success: false, count: 5, expiresAt: new Date(Date.now() + 60_000) };
+  const granted = { success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTryIncrement.mockImplementation(async key => (key === domainKey ? spent : granted));
+    mockValidateNonce.mockResolvedValue('hash');
+    mockFindByEmail.mockResolvedValue(null);
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
+    mockDomainEstablished.mockResolvedValue(false);
+  });
+
+  it('refuses a new account once the domain budget is spent, re-issuing the token to retry later', async () => {
+    const { req, res } = makeReqRes(BURNER);
+
+    await expect(handler(req, res)).rejects.toMatchObject({
+      statusCode: 429,
+      additionalInfo: { pendingToken: expect.any(String) },
+    });
+    expect(res.getHeader('Retry-After')).toBeDefined();
+    expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+    expect(mockDomainEstablished).toHaveBeenCalledWith('burner.example', expect.any(Date));
+  });
+
+  it('admits a new account on an established domain even with the budget spent', async () => {
+    mockDomainEstablished.mockResolvedValue(true);
+    const { req, res } = makeReqRes(BURNER);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the domain units back when registration fails', async () => {
+    mockTryIncrement.mockResolvedValue(granted);
+    mockRegisterViaOTC.mockRejectedValue(new UnprocessableEntityError('Username taken'));
+    const { req, res } = makeReqRes(BURNER);
+
+    await expect(handler(req, res)).rejects.toMatchObject({ statusCode: 422 });
+    expect(mockDecrement).toHaveBeenCalledWith(domainKey);
+    expect(mockDecrement).toHaveBeenCalledWith(`otc-limit:register-domain-daily:${otcEmailKey('burner.example')}`);
+  });
+
+  it('never charges a personal mail provider or a sign-in', async () => {
+    const gmail = makeReqRes('someone@gmail.com');
+    await handler(gmail.req, gmail.res);
+
+    mockFindByEmail.mockResolvedValue({ id: 'u-1', isSystem: false, isBanned: false, emailVerified: true, tags: [] });
+    const signIn = makeReqRes(BURNER);
+    await handler(signIn.req, signIn.res);
+
+    expect(mockTryIncrement).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^otc-limit:register-domain/),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('does not cap a self-host install', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    try {
+      const { req, res } = makeReqRes(BURNER);
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockDomainEstablished).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe('/api/otc/verify - existing user verification and pending free credits', () => {
   // The handler mutates the doc in place and the login response serializes it through toJSON(),
   // so the fixture must expose the CURRENT fields - a fixed toJSON would hide an unreflected grant.
@@ -829,6 +910,8 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     const replay = makeReqRes(NON_DOMAIN_EMAIL);
     await expect(handler(replay.req, replay.res)).rejects.toMatchObject({ message: 'Invalid code.' });
     expect(authSessionService.issueSession).toHaveBeenCalledTimes(1);
+    // Both attempts present the token's own nonce, so the store's rotation is what refuses the replay.
+    expect(mockValidateNonce).toHaveBeenNthCalledWith(2, NON_DOMAIN_EMAIL, 'jti-1', expect.any(String));
   });
 
   it('strips secrets and undeclared fields from the flat login body', async () => {

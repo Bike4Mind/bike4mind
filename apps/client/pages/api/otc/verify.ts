@@ -2,6 +2,7 @@ import {
   AuthEvents,
   HTTPError,
   InternalServerError,
+  TooManyRequestsError,
   UnprocessableEntityError,
   isOAuthClientIdShape,
   redactUserSecretsForSelf,
@@ -38,6 +39,7 @@ import {
   ipSubject,
   otcCounterLimit,
   reserveOtcEmailBudget,
+  reserveOtcRegistrationDomainBudget,
 } from '@server/utils/otcLimits';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
@@ -367,6 +369,7 @@ const handler = baseApi({ auth: false })
 
     // Only the claim winner is the bootstrap user; anyone else registers under the normal rules.
     let bootstrapClaimId: string | null = null;
+    let domainBudget: Awaited<ReturnType<typeof reserveOtcRegistrationDomainBudget>> | undefined;
 
     // Register + finalize (email-verified state, deferred free-credit grant) in one
     // service call. registerViaOTC grants credits BEFORE dropping the pending tag, so
@@ -377,6 +380,14 @@ const handler = baseApi({ auth: false })
       bootstrapClaimId = bootstrap.eligible ? await claimBootstrapAdmin() : null;
       const partnerDomainAllowed =
         bootstrapClaimId === null && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
+      // A self-host install's staff all share one fresh domain, and a partner domain is one an
+      // admin already vouched for, so neither is capped (see OTC_REGISTER_DOMAIN_BUDGETS).
+      domainBudget =
+        isSelfHost || partnerDomainAllowed ? undefined : await reserveOtcRegistrationDomainBudget(normalizedEmail);
+      if (domainBudget && 'retryAfter' in domainBudget) {
+        res.setHeader('Retry-After', String(domainBudget.retryAfter));
+        throw new TooManyRequestsError('Too many new accounts on this email domain. Please try again later.');
+      }
       const register = () =>
         userService.registerViaOTC(
           {
@@ -428,6 +439,11 @@ const handler = baseApi({ auth: false })
         await releaseBootstrapAdminClaim(bootstrapClaimId).catch(releaseErr =>
           req.logger.error('Self-host bootstrap claim release failed', releaseErr)
         );
+      }
+      if (domainBudget && 'refund' in domainBudget) {
+        await domainBudget
+          .refund()
+          .catch(refundErr => req.logger.error('OTC registration domain budget refund failed', refundErr));
       }
       // Registration failed AFTER the single-use nonce was rotated above, so the token the
       // client is holding can never validate again - without a re-issue every retry dies as a

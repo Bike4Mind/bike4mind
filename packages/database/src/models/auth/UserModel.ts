@@ -373,6 +373,8 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       email: { $regex: `[@.]${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
       emailVerified: true,
       $or: [{ emailVerifiedAt: { $lte: verifiedBefore } }, { emailVerifiedAt: null }],
+      isBanned: { $ne: true },
+      isSystem: { $ne: true },
       deletedAt: { $exists: false },
     };
     return (await this.model.exists(filter)) !== null;

@@ -39,7 +39,6 @@ import { settingsMap } from '@bike4mind/common';
 import {
   OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS,
   OTC_LIMITS,
-  OTC_SEND_DOMAIN_BUDGETS,
   OTC_SEND_EMAIL_BUDGETS,
   OTC_VERIFY_EMAIL_BUDGETS,
   chargeOtcEmailBudget,
@@ -52,7 +51,7 @@ import {
   otcLimitDomain,
   otcLimitMailbox,
   otcLimitOf,
-  otcSendBudgets,
+  reserveOtcRegistrationDomainBudget,
   reserveOtcEmailBudget,
 } from './otcLimits';
 
@@ -328,9 +327,11 @@ describe('otcDistinctEmailsPerIpLimit', () => {
 });
 
 describe('admin-lowered limits', () => {
-  const windows = [...Object.values(OTC_LIMITS.send), ...Object.values(OTC_LIMITS.verify)].filter(
-    w => typeof w === 'object'
-  );
+  const windows = [
+    ...Object.values(OTC_LIMITS.send),
+    ...Object.values(OTC_LIMITS.verify),
+    ...Object.values(OTC_LIMITS.register),
+  ].filter(w => typeof w === 'object');
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -349,7 +350,7 @@ describe('admin-lowered limits', () => {
     }
   });
 
-  it('lowers a limit, and never raises one', async () => {
+  it('lowers a limit, and keeps the built-in for 0 or an out-of-range stored value', async () => {
     const { perIpTotal } = OTC_LIMITS.send;
     expect(await otcLimitOf(perIpTotal)).toBe(perIpTotal.limit);
     mocks.settings = { [perIpTotal.setting]: '3' };
@@ -388,59 +389,61 @@ describe('otcLimitDomain', () => {
   });
 });
 
-describe('otcSendBudgets', () => {
+describe('reserveOtcRegistrationDomainBudget', () => {
   const spent = { success: false, count: 5, expiresAt: new Date(Date.now() + 60_000) };
-  const open = { success: true, count: 0, expiresAt: new Date(Date.now() + 60_000) };
-  const withDomain = [...OTC_SEND_EMAIL_BUDGETS, ...OTC_SEND_DOMAIN_BUDGETS];
+  const hourlyKey = `otc-limit:register-domain-hourly:${otcEmailKey('new.example')}`;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.settings = {};
     mocks.isE2EEnabled.mockReturnValue(false);
-    mocks.tryAdd.mockResolvedValue(open);
+    mocks.tryIncrement.mockResolvedValue(allowed);
     mocks.findByKey.mockResolvedValue(null);
     mocks.existsVerifiedUserOnEmailDomain.mockResolvedValue(false);
   });
 
-  it('adds no domain budget for a personal provider', async () => {
-    expect(await otcSendBudgets('someone@gmail.com', '1.1.1.1')).toEqual(OTC_SEND_EMAIL_BUDGETS);
-    expect(mocks.tryAdd).not.toHaveBeenCalled();
+  it('charges nothing for a personal provider', async () => {
+    expect(await reserveOtcRegistrationDomainBudget('someone@gmail.com')).toHaveProperty('refund');
+    expect(mocks.tryIncrement).not.toHaveBeenCalled();
   });
 
-  it('charges the domain budgets without a user lookup while they have room', async () => {
-    expect(await otcSendBudgets('x@new.example', '1.1.1.1')).toEqual(withDomain);
-    expect(mocks.tryAdd).toHaveBeenCalledWith(
-      `otc-limit:send-domain-hourly:${otcEmailKey('new.example')}`,
-      0,
-      OTC_LIMITS.send.perDomainHourly.limit,
-      OTC_LIMITS.send.perDomainHourly.windowMs
+  it('charges both domain windows without a user lookup while they have room', async () => {
+    expect(await reserveOtcRegistrationDomainBudget('x@a.new.example')).toHaveProperty('refund');
+    const { perDomainHourly, perDomainDaily } = OTC_LIMITS.register;
+    expect(mocks.tryIncrement).toHaveBeenCalledWith(hourlyKey, perDomainHourly.limit, perDomainHourly.windowMs);
+    expect(mocks.tryIncrement).toHaveBeenCalledWith(
+      `otc-limit:register-domain-daily:${otcEmailKey('new.example')}`,
+      perDomainDaily.limit,
+      perDomainDaily.windowMs
     );
     expect(mocks.existsVerifiedUserOnEmailDomain).not.toHaveBeenCalled();
   });
 
-  it('keeps a spent domain budget for a domain with no week-old verified account, and caches that', async () => {
-    mocks.tryAdd.mockResolvedValue(spent);
+  it('refuses a spent budget for a domain with no week-old verified account, and caches that', async () => {
+    mocks.tryIncrement.mockResolvedValue(spent);
     const before = Date.now();
-    expect(await otcSendBudgets('x@new.example', '1.1.1.1')).toEqual(withDomain);
+    expect(await reserveOtcRegistrationDomainBudget('x@new.example')).toHaveProperty('retryAfter');
+    const after = Date.now();
 
     const [domain, verifiedBefore] = mocks.existsVerifiedUserOnEmailDomain.mock.calls[0];
     expect(domain).toBe('new.example');
-    expect(verifiedBefore.getTime()).toBeLessThanOrEqual(before - OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS + 1000);
+    expect(verifiedBefore.getTime()).toBeGreaterThanOrEqual(before - OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS);
+    expect(verifiedBefore.getTime()).toBeLessThanOrEqual(after - OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS);
     expect(mocks.createOrUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ key: `otc-domain-established:${otcEmailKey('new.example')}`, result: false })
     );
   });
 
-  it('lifts a spent domain budget for an established domain', async () => {
-    mocks.tryAdd.mockResolvedValue(spent);
+  it('admits an established domain past a spent budget', async () => {
+    mocks.tryIncrement.mockResolvedValue(spent);
     mocks.existsVerifiedUserOnEmailDomain.mockResolvedValue(true);
-    expect(await otcSendBudgets('x@acme.example', '1.1.1.1')).toEqual(OTC_SEND_EMAIL_BUDGETS);
+    expect(await reserveOtcRegistrationDomainBudget('x@acme.example')).toHaveProperty('refund');
   });
 
   it('answers from the cache without scanning users', async () => {
-    mocks.tryAdd.mockResolvedValue(spent);
+    mocks.tryIncrement.mockResolvedValue(spent);
     mocks.findByKey.mockResolvedValue({ result: true });
-    expect(await otcSendBudgets('x@acme.example', '1.1.1.1')).toEqual(OTC_SEND_EMAIL_BUDGETS);
+    expect(await reserveOtcRegistrationDomainBudget('x@acme.example')).toHaveProperty('refund');
     expect(mocks.existsVerifiedUserOnEmailDomain).not.toHaveBeenCalled();
     expect(mocks.createOrUpdate).not.toHaveBeenCalled();
   });
