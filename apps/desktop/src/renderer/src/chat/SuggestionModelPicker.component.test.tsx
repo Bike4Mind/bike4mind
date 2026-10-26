@@ -73,6 +73,19 @@ describe('SuggestionModelPicker catalog', () => {
     expect(host.textContent).not.toContain('on this machine');
   });
 
+  it('says a device-local pick runs on this device, not on the server', async () => {
+    setPromptSuggestionModel('local:ollama:qwen3:8b');
+    list.mockResolvedValueOnce({
+      models: [{ id: 'local:ollama:qwen3:8b', name: 'qwen3:8b', backend: 'local-ollama' }],
+    });
+    await mount();
+
+    expect(host.textContent).toContain('qwen3:8b (local)');
+    expect(host.textContent).toContain('Runs on this device');
+    expect(host.textContent).not.toContain("server's configured Ollama endpoint");
+    expect(host.textContent).not.toContain('billed');
+  });
+
   it('shows loading without asserting availability or hosting before the catalog arrives', async () => {
     list.mockImplementation(() => new Promise(() => {}));
     await mount();
