@@ -28,6 +28,7 @@ import {
   type ModelsOptions,
   type RuntimeTarget,
 } from './modelsCommand.js';
+import type { OllamaManifestInfo } from './ollamaRegistry.js';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const ENDPOINT = 'https://huggingface.co';
@@ -78,6 +79,15 @@ function detail(overrides: Partial<HubModelDetail> = {}): HubModelDetail {
 
 const APACHE = readFileSync(join(__dirname, '__fixtures__', 'apache-2.0.txt'), 'utf-8');
 const GEMMA = 'Gemma Terms of Use\n\nLast modified: February 21, 2024\n...Prohibited Use Policy...';
+
+function manifestInfo(sizeBytes: number, licenses: string[], model = 'a'): OllamaManifestInfo {
+  return {
+    digest: `sha256:${model.repeat(12)}${'0'.repeat(52)}`,
+    layers: [`sha256:${model.repeat(64)}`, ...licenses.map((_, index) => `sha256:${String(index).repeat(64)}`)],
+    sizeBytes,
+    licenses,
+  };
+}
 
 function installed(name: string, extra: Partial<InstalledModel> = {}): InstalledModel {
   return {
@@ -193,7 +203,7 @@ function harness(
   const answers = [...(options.answers ?? [])];
   const controller = new AbortController();
   const registry = vi.fn<ModelsDeps['ollamaRegistry']>(
-    options.registry ?? (async () => ({ sizeBytes: 270_800_000, licenses: [APACHE] }))
+    options.registry ?? (async () => manifestInfo(270_800_000, [APACHE]))
   );
   const deps: ModelsDeps = {
     hub: () => hub,
@@ -537,6 +547,25 @@ describe('models pull (Hugging Face)', () => {
     expect(h.lines[h.lines.length - 1]).toMatch(/^Pulled hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M\./);
   });
 
+  it('re-reads the licenses after the prompt and refuses when they changed', async () => {
+    const getModel = vi
+      .fn()
+      .mockResolvedValueOnce(detail())
+      .mockResolvedValueOnce(detail({ licenses: ['gemma'] }));
+    const h = harness({ hub: fakeHub({ getModel }), answers: [true] });
+    await expect(pullModel(REPO, h.deps, OPTS)).rejects.toThrow(
+      /changed since you reviewed it \(its license is now gemma\), so nothing was downloaded/
+    );
+    expect(getModel).toHaveBeenCalledTimes(2);
+    expect(h.questions).toEqual(['Download 491 MB? [y/N] ']);
+    expect(h.hub.verifyOllamaRef).not.toHaveBeenCalled();
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+
+    const same = harness({ answers: [true] });
+    expect(await pullModel(REPO, same.deps, OPTS)).toBe('pulled');
+    expect(same.hub.getModel).toHaveBeenCalledTimes(2);
+  });
+
   it('downloads nothing when the confirmation is declined', async () => {
     const h = harness({ answers: [false] });
     expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q8_0` }, h.deps)).toBe(0);
@@ -759,15 +788,44 @@ describe('models pull (Ollama library)', () => {
     expect(await runModelsCommand('pull', { _: [], ref: 'smollm2:135m' }, h.deps)).toBe(0);
     expect(h.registry).toHaveBeenCalledWith('smollm2:135m', h.deps.signal);
     expect(h.lines).toEqual(
-      expect.arrayContaining(['Size:     271 MB', 'License:  Apache-2.0', 'Model:    smollm2:135m (Ollama registry)'])
+      expect.arrayContaining([
+        'Size:     271 MB',
+        'License:  Apache-2.0',
+        'Model:    smollm2:135m (Ollama registry)',
+        'Digest:   aaaaaaaaaaaa',
+      ])
     );
     expect(h.questions).toEqual(['Download 271 MB? [y/N] ']);
     expect(h.hub.getModel).not.toHaveBeenCalled();
+    expect(h.registry).toHaveBeenCalledTimes(2);
+    expect(h.registry.mock.invocationCallOrder[1]).toBeLessThan(vi.mocked(h.runtime.pull).mock.invocationCallOrder[0]);
     expect(h.runtime.pull).toHaveBeenCalledWith('smollm2:135m', expect.anything());
   });
 
+  it('refuses when the tag serves other layers or license texts after the prompt', async () => {
+    const moved = vi
+      .fn<ModelsDeps['ollamaRegistry']>()
+      .mockResolvedValueOnce(manifestInfo(270_800_000, [APACHE]))
+      .mockResolvedValueOnce(manifestInfo(270_800_000, [APACHE], 'b'));
+    const h = harness({ registry: moved, answers: [true] });
+    await expect(pullModel('smollm2:135m', h.deps, OPTS)).rejects.toThrow(
+      /smollm2:135m changed since you reviewed it \(the registry now serves bbbbbbbbbbbb\), so nothing was downloaded/
+    );
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+
+    const relicensed = vi
+      .fn<ModelsDeps['ollamaRegistry']>()
+      .mockResolvedValueOnce(manifestInfo(270_800_000, [APACHE]))
+      .mockResolvedValueOnce(manifestInfo(270_800_000, [GEMMA]));
+    const r = harness({ registry: relicensed, isTTY: false });
+    await expect(pullModel('smollm2:135m', r.deps, { ...OPTS, yes: true })).rejects.toThrow(
+      /changed since you reviewed it \(its license text changed\)/
+    );
+    expect(r.runtime.pull).not.toHaveBeenCalled();
+  });
+
   it('requires accepting a restricted license, even with --yes', async () => {
-    const registry = async () => ({ sizeBytes: 291_500_000, licenses: [GEMMA] });
+    const registry = async () => manifestInfo(291_500_000, [GEMMA]);
     const noTty = harness({ registry, isTTY: false });
     await expect(pullModel('gemma3:270m', noTty.deps, { ...OPTS, yes: true })).rejects.toThrow(/--accept-license/);
     expect(noTty.lines).toEqual(
@@ -787,7 +845,7 @@ describe('models pull (Ollama library)', () => {
   it('requires accepting Apache-2.0 text with added terms, even with --yes', async () => {
     const addendum = 'ACME ADDENDUM\nCommercial use requires a separate paid agreement with ACME.';
     const licenses = [`${APACHE}\n${addendum}`];
-    const h = harness({ registry: async () => ({ sizeBytes: 1000, licenses }), isTTY: false });
+    const h = harness({ registry: async () => manifestInfo(1000, licenses), isTTY: false });
     await expect(pullModel('ollama.com/acme/model:1b', h.deps, { ...OPTS, yes: true })).rejects.toThrow(
       /--accept-license/
     );
@@ -810,11 +868,12 @@ describe('models pull (Ollama library)', () => {
   });
 
   it('treats a model without a license layer as restricted', async () => {
-    const h = harness({ registry: async () => ({ sizeBytes: 1000, licenses: [] }), answers: [false] });
+    const h = harness({ registry: async () => manifestInfo(1000, []), answers: [false] });
     expect(await pullModel('ollama.com/someone/model', h.deps, OPTS)).toBe('declined');
     expect(h.lines).toContain('This model does not declare a license.');
     expect(h.lines).toContain('Read its page before downloading: https://ollama.com/someone/model');
     expect(h.questions).toEqual(['Download it anyway? [y/N] ']);
+    expect(h.registry).toHaveBeenCalledTimes(1);
   });
 
   it('downloads nothing when the registry cannot be read', async () => {

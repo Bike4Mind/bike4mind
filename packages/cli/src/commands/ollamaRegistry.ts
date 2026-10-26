@@ -32,6 +32,10 @@ export interface OllamaModelName {
 }
 
 export interface OllamaManifestInfo {
+  /** `sha256:<hex>` of the manifest as the registry served it. */
+  digest: string;
+  /** Every layer's digest, in manifest order. */
+  layers: string[];
   sizeBytes: number;
   /** One text per license layer; '' when a layer is too large to read. */
   licenses: string[];
@@ -68,7 +72,14 @@ export async function readOllamaManifest(
   });
   if (response.status === 404) throw new Error(`The Ollama registry has no model named ${name}.`);
   if (!response.ok) throw new Error(`The Ollama registry answered ${response.status} for ${name}.`);
-  const parsed = manifestSchema.safeParse(await response.json());
+  const body = await response.text();
+  let json: unknown = null;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    // An unparseable body fails the schema check below.
+  }
+  const parsed = manifestSchema.safeParse(json);
   if (!parsed.success) throw new Error(`The Ollama registry sent an unreadable manifest for ${name}.`);
   const { layers } = parsed.data;
   const licenseLayers = layers.filter(layer => layer.mediaType === LICENSE_LAYER);
@@ -82,7 +93,12 @@ export async function readOllamaManifest(
         return (await blob.text()).slice(0, MAX_LICENSE_BYTES);
       })
   );
-  return { sizeBytes: layers.reduce((sum, layer) => sum + layer.size, 0), licenses };
+  return {
+    digest: `sha256:${createHash('sha256').update(body).digest('hex')}`,
+    layers: layers.map(layer => layer.digest),
+    sizeBytes: layers.reduce((sum, layer) => sum + layer.size, 0),
+    licenses,
+  };
 }
 
 /** Whitespace, markdown emphasis and quote style do not change a license's words. */

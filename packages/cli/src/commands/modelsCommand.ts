@@ -535,19 +535,67 @@ async function acceptLicense(
   return deps.confirm(declared ? `Do you accept the ${license.label} ${noun}? [y/N] ` : 'Download it anyway? [y/N] ');
 }
 
-async function pullFromOllamaRegistry(name: string, deps: ModelsDeps, opts: ModelsOptions): Promise<PullResult> {
-  const { page } = parseOllamaName(name);
-  const target = await requirePullable(deps);
-  let manifest: OllamaManifestInfo;
+type RegistryReader = Pick<ModelsDeps, 'ollamaRegistry' | 'signal'>;
+
+async function readRegistry(name: string, deps: RegistryReader): Promise<OllamaManifestInfo> {
   try {
-    manifest = await abortable(deps.ollamaRegistry(name, deps.signal), deps.signal);
+    return await abortable(deps.ollamaRegistry(name, deps.signal), deps.signal);
   } catch (error) {
     if (error instanceof CancelledError || deps.signal.aborted) throw new CancelledError();
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`Could not read ${name} from the Ollama registry, so nothing was downloaded: ${reason}`);
   }
+}
+
+/** The first 12 hex digits, the length Ollama shows digests at. */
+export function shortDigest(digest: string): string {
+  return digest.replace(/^sha256:/, '').slice(0, 12);
+}
+
+function changedSinceReview(subject: string, what: string): Error {
+  return new Error(
+    `${subject} changed since you reviewed it (${what}), so nothing was downloaded. Pull it again to review the new version.`
+  );
+}
+
+const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((entry, index) => entry === b[index]);
+
+/**
+ * Re-reads the manifest after the user approved it, because Ollama then pulls by tag and a tag can move.
+ * Refuses when the license texts or layers differ from the ones shown.
+ */
+export async function requireUnchangedManifest(
+  name: string,
+  shown: OllamaManifestInfo,
+  deps: RegistryReader
+): Promise<void> {
+  const now = await readRegistry(name, deps);
+  if (!sameList(now.licenses, shown.licenses)) throw changedSinceReview(clean(name), 'its license text changed');
+  if (!sameList(now.layers, shown.layers)) {
+    throw changedSinceReview(clean(name), `the registry now serves ${shortDigest(now.digest)}`);
+  }
+}
+
+/** Re-reads the repo after the user approved it and refuses when its declared licenses differ from the ones shown. */
+export async function requireUnchangedLicenses(
+  hub: HubClient,
+  detail: HubModelDetail,
+  shown: { label: string; link: string },
+  signal: AbortSignal
+): Promise<void> {
+  const now = licenseFor(await hub.getModel(detail.id, { signal }), hub.endpoint);
+  if (now.label !== shown.label || now.link !== shown.link) {
+    throw changedSinceReview(clean(detail.id), `its license is now ${now.label}`);
+  }
+}
+
+async function pullFromOllamaRegistry(name: string, deps: ModelsDeps, opts: ModelsOptions): Promise<PullResult> {
+  const { page } = parseOllamaName(name);
+  const target = await requirePullable(deps);
+  const manifest = await readRegistry(name, deps);
   const license = classifyLicenses(manifest.licenses);
   deps.log(`Model:    ${clean(name)} (Ollama registry)`);
+  deps.log(`Digest:   ${shortDigest(manifest.digest)}`);
   deps.log(`Size:     ${formatBytes(manifest.sizeBytes)}`);
   deps.log(`License:  ${clean(license.title)}`);
   deps.log(`Runtime:  ${runtimeLabel(target)}`);
@@ -558,6 +606,7 @@ async function pullFromOllamaRegistry(name: string, deps: ModelsDeps, opts: Mode
   );
   if (!accepted) return 'declined';
   if (!(await confirmDownload(`Download ${formatBytes(manifest.sizeBytes)}? [y/N] `, deps, opts))) return 'declined';
+  await requireUnchangedManifest(name, manifest, deps);
   return pullWithProgress(target, name, deps);
 }
 
@@ -606,6 +655,7 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
 
   let ref: string | null;
   try {
+    await requireUnchangedLicenses(hub, detail, license, deps.signal);
     ref = await hub.verifyOllamaRef(detail, build, { signal: deps.signal });
   } catch (error) {
     if (deps.signal.aborted) {
