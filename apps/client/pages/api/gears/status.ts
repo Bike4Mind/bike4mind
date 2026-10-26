@@ -35,6 +35,8 @@ export interface GearStatus {
   /** Unlocked, but the payout's stricter condition isn't met yet (e.g.
    *  Published: waiting for a non-owner view). */
   rewardPending?: boolean;
+  /** Why rewardPending is true - drives the UI copy so each reason shows the right message. */
+  pendingReason?: 'unverified' | 'too_new' | 'reward_check';
 }
 
 const handler = baseApi().get(
@@ -43,25 +45,30 @@ const handler = baseApi().get(
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
     const { evaluations, overrides } = await evaluateGears(String(userId));
-    const gears: GearStatus[] = evaluations.map(({ def, unlocked, credits, rewardEligible, alreadyRewarded }) => {
-      const o = overrides.get(def.key);
-      const base = GEAR_PRESENTATION[def.key];
-      const gear: GearStatus = {
-        key: def.key,
-        kind: def.kind,
-        unlocked,
-        credits,
-        title: o?.title ?? base.title,
-        tagline: o?.tagline ?? base.tagline,
-        intro: o?.intro ?? base.intro,
-        cta: o?.cta ?? base.cta,
-        ctaAction: o?.ctaAction ?? base.ctaAction,
-      };
-      if (unlocked && !rewardEligible && !alreadyRewarded) gear.rewardPending = true;
-      if (rewardEligible && credits > 0 && !alreadyRewarded) gear.claimable = true;
-      if (alreadyRewarded) gear.claimed = true;
-      return gear;
-    });
+    const gears: GearStatus[] = evaluations.map(
+      ({ def, unlocked, credits, rewardEligible, alreadyRewarded, pendingReason }) => {
+        const o = overrides.get(def.key);
+        const base = GEAR_PRESENTATION[def.key];
+        const gear: GearStatus = {
+          key: def.key,
+          kind: def.kind,
+          unlocked,
+          credits,
+          title: o?.title ?? base.title,
+          tagline: o?.tagline ?? base.tagline,
+          intro: o?.intro ?? base.intro,
+          cta: o?.cta ?? base.cta,
+          ctaAction: o?.ctaAction ?? base.ctaAction,
+        };
+        if (unlocked && !rewardEligible && !alreadyRewarded) {
+          gear.rewardPending = true;
+          if (pendingReason) gear.pendingReason = pendingReason;
+        }
+        if (rewardEligible && credits > 0 && !alreadyRewarded) gear.claimable = true;
+        if (alreadyRewarded) gear.claimed = true;
+        return gear;
+      }
+    );
 
     return res.status(200).json({
       gears,

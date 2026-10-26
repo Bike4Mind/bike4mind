@@ -20,6 +20,8 @@ export interface GearStatus {
   /** Paid - stays true even if the unlock later lapses (see the endpoint). */
   claimed?: boolean;
   rewardPending?: boolean;
+  /** Why rewardPending is true - drives UI copy. */
+  pendingReason?: 'unverified' | 'too_new' | 'reward_check';
   /** Presentation is server truth (code defaults + Manage Gears admin overrides). */
   title: string;
   tagline: string;

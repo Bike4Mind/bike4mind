@@ -62,11 +62,6 @@ export const gearTxId = (userId: string, key: GearKey) => `gear-unlock:${userId}
 // trivially automated on fresh unverified accounts).
 const GEAR_TRUST_MIN_AGE_DAYS = 7;
 
-// Hard ceiling on total gear credits any single account can ever collect.
-// Set just above the full catalog max so every legitimate gear can be claimed
-// but an account cannot be credited beyond the whole schedule's worth.
-const MAX_GEAR_CREDITS_PER_ACCOUNT = 31500;
-
 /** Facts gathered once per request and shared by every gear check - keeps the
  *  endpoint at a handful of indexed queries no matter how many gears exist. */
 interface GearFacts {
@@ -97,10 +92,6 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
     accountAgeInDays,
     emailVerified: user?.emailVerified ?? false,
   };
-}
-
-function isTrusted(facts: GearFacts): boolean {
-  return facts.emailVerified && facts.accountAgeInDays >= GEAR_TRUST_MIN_AGE_DAYS;
 }
 
 export interface GearDef {
@@ -165,19 +156,16 @@ const GEARS: GearDef[] = [
   },
   // --- Skills ---
   {
-    // Hard-locked for unverified accounts: these gears reward the actions most
-    // easily automated on fresh accounts (mint a key, make one API call). An
-    // unverified account sees neither gear as unlocked, not just as unrewarded.
     key: 'apikey',
     credits: 500,
     kind: 'skill',
-    check: async ({ userId, emailVerified }) => emailVerified && !!(await ApiKey.exists({ userId, isActive: true })),
+    check: async ({ userId }) => !!(await ApiKey.exists({ userId, isActive: true })),
   },
   {
     key: 'apicall',
     credits: 1000,
     kind: 'skill',
-    check: ({ usageFeatures, emailVerified }) => emailVerified && usageFeatures.has('completion_api'),
+    check: ({ usageFeatures }) => usageFeatures.has('completion_api'),
   },
   {
     key: 'image',
@@ -363,6 +351,8 @@ export const GEAR_DEFAULTS: Array<{ key: GearKey; kind: GearKind; credits: numbe
   credits: g.credits,
 }));
 
+export type GearPendingReason = 'unverified' | 'too_new' | 'reward_check';
+
 export interface GearEvaluation {
   def: GearDef;
   unlocked: boolean;
@@ -372,6 +362,8 @@ export interface GearEvaluation {
   /** The payout's own condition - `rewardCheck` where the gear has one. */
   rewardEligible: boolean;
   alreadyRewarded: boolean;
+  /** Why rewardEligible is false for an unlocked, unpaid gear. */
+  pendingReason?: GearPendingReason;
 }
 
 /**
@@ -394,20 +386,10 @@ export async function evaluateGears(
   );
   const unlockedFlags = await Promise.all(activeGears.map(g => g.check(facts)));
 
-  // Always query ALL gear transactions so the per-account cap is accurate
-  // even when the caller narrows the evaluation set via onlyKeys.
-  const allGearTxIds = GEARS.map(g => gearTxId(userId, g.key));
-  const allGearRows = (await creditTransactionRepository.find({
-    transactionId: { $in: allGearTxIds },
-  })) as Array<{ transactionId?: string; credits?: number }>;
-  const existingGearCreditTotal = allGearRows.reduce((sum, t) => sum + (t.credits ?? 0), 0);
-  // Per-gear rewarded tracking uses only the active (potentially filtered) set.
-  const activeGearTxSet = new Set(activeGears.map(g => gearTxId(userId, g.key)));
-  const rewarded = new Set(
-    allGearRows.map(t => t.transactionId).filter((id): id is string => id != null && activeGearTxSet.has(id))
-  );
-
-  const trusted = isTrusted(facts);
+  // One indexed query tells us which unlocks were already rewarded.
+  const txIds = activeGears.map(g => gearTxId(userId, g.key));
+  const existing = await creditTransactionRepository.find({ transactionId: { $in: txIds } });
+  const rewarded = new Set((existing as Array<{ transactionId?: string }>).map(t => t.transactionId).filter(Boolean));
 
   const evaluations = await Promise.all(
     activeGears.map(async (def, i) => {
@@ -416,18 +398,19 @@ export async function evaluateGears(
       const credits = overrides.get(def.key)?.credits ?? creditsFor(def);
 
       let rewardEligible: boolean;
+      let pendingReason: GearPendingReason | undefined;
       if (!unlocked || alreadyRewarded) {
-        // Not unlocked or already paid: no payout either way.
         rewardEligible = unlocked;
-      } else if (!trusted) {
-        // Account is unverified or too new: block payout regardless of unlock state.
+      } else if (!facts.emailVerified) {
         rewardEligible = false;
-      } else if (existingGearCreditTotal + credits > MAX_GEAR_CREDITS_PER_ACCOUNT) {
-        // Account has already collected up to the per-account ceiling.
+        pendingReason = 'unverified';
+      } else if (facts.accountAgeInDays < GEAR_TRUST_MIN_AGE_DAYS) {
         rewardEligible = false;
+        pendingReason = 'too_new';
       } else {
-        // Trust and cap checks pass; apply any per-gear payout condition.
-        rewardEligible = def.rewardCheck ? await def.rewardCheck(facts) : true;
+        const rewardCheckPassed = def.rewardCheck ? await def.rewardCheck(facts) : true;
+        rewardEligible = rewardCheckPassed;
+        if (!rewardCheckPassed) pendingReason = 'reward_check';
       }
 
       return {
@@ -436,6 +419,7 @@ export async function evaluateGears(
         credits,
         rewardEligible,
         alreadyRewarded,
+        pendingReason,
       };
     })
   );

@@ -195,11 +195,18 @@ describe('GET /api/gears/status', () => {
     await promise;
 
     const body = res._getJSONData() as {
-      gears: Array<{ key: string; unlocked: boolean; rewardPending?: boolean; claimable?: boolean }>;
+      gears: Array<{
+        key: string;
+        unlocked: boolean;
+        rewardPending?: boolean;
+        pendingReason?: string;
+        claimable?: boolean;
+      }>;
     };
     const projects = body.gears.find(g => g.key === 'projects')!;
     expect(projects.unlocked).toBe(true);
     expect(projects.rewardPending).toBe(true);
+    expect(projects.pendingReason).toBe('unverified');
     expect(projects.claimable).toBeUndefined();
   });
 

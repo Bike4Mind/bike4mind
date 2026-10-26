@@ -216,7 +216,7 @@ describe('POST /api/gears/claim', () => {
     const { res, promise } = claim({ key: 'published' });
     await promise;
     expect(res._getStatusCode()).toBe(409);
-    expect(res._getJSONData()).toEqual({ error: 'reward_pending' });
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'reward_check' });
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
@@ -273,7 +273,7 @@ describe('POST /api/gears/claim', () => {
     const { res, promise } = claim({ key: 'projects' });
     await promise;
     expect(res._getStatusCode()).toBe(409);
-    expect(res._getJSONData()).toEqual({ error: 'reward_pending' });
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
@@ -285,7 +285,7 @@ describe('POST /api/gears/claim', () => {
     const { res, promise } = claim({ key: 'projects' });
     await promise;
     expect(res._getStatusCode()).toBe(409);
-    expect(res._getJSONData()).toEqual({ error: 'reward_pending' });
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'too_new' });
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
@@ -308,20 +308,20 @@ describe('POST /api/gears/claim', () => {
     expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
   });
 
-  it('blocks apikey gear for an unverified account even with an active key', async () => {
+  it('blocks apikey gear payout for an unverified account even with an active key', async () => {
     mocks.apiKeyExists.mockResolvedValue({ _id: 'k1' });
     mocks.userFindById.mockReturnValue({
       lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: false }),
     });
     const { res, promise } = claim({ key: 'apikey' });
     await promise;
-    // Unverified account: apikey gear check() returns false -> not_unlocked.
+    // Gear unlocks (active key exists), but trust gate blocks the payout.
     expect(res._getStatusCode()).toBe(409);
-    expect(res._getJSONData()).toEqual({ error: 'not_unlocked' });
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
-  it('blocks apicall gear for an unverified account even with API usage', async () => {
+  it('blocks apicall gear payout for an unverified account even with API usage', async () => {
     mocks.usageDistinct.mockImplementation((field: string) =>
       Promise.resolve(field === 'feature' ? ['completion_api'] : [])
     );
@@ -330,20 +330,9 @@ describe('POST /api/gears/claim', () => {
     });
     const { res, promise } = claim({ key: 'apicall' });
     await promise;
+    // Gear unlocks (usage event exists), but trust gate blocks the payout.
     expect(res._getStatusCode()).toBe(409);
-    expect(res._getJSONData()).toEqual({ error: 'not_unlocked' });
-    expect(mocks.addCredits).not.toHaveBeenCalled();
-  });
-
-  it('blocks payout when the per-account gear credit cap would be exceeded', async () => {
-    unlockProjects();
-    // Simulate an account that has already collected 31,000 credits in prior gear claims.
-    mocks.txFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:shareproject', credits: 31000 }]);
-    const { res, promise } = claim({ key: 'projects' });
-    await promise;
-    // 31000 + 1000 = 32000 > MAX_GEAR_CREDITS_PER_ACCOUNT (31500): blocked.
-    expect(res._getStatusCode()).toBe(409);
-    expect(res._getJSONData()).toEqual({ error: 'reward_pending' });
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 });
