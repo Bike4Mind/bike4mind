@@ -9,7 +9,7 @@ import {
 import { CreateMementoSchema } from '@server/validators/mementoValidators';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
+import { MEMENTO_EMBEDDING_ID, isZodError } from '@bike4mind/common';
 import { generateMementoSummaryEmbedding } from '@bike4mind/server-utils/utils/mementoEmbedding';
 
 const handler = baseApi().post(async (req: Request, res: Response) => {
@@ -134,6 +134,13 @@ const handler = baseApi().post(async (req: Request, res: Response) => {
 
     return res.status(201).json(memento);
   } catch (error) {
+    if (isZodError(error)) throw error;
+    // The model requires a non-empty fullContent while the schema defaults it to ''.
+    if (error instanceof Error && error.name === 'ValidationError') {
+      const paths = Object.keys((error as Error & { errors?: Record<string, unknown> }).errors ?? {});
+      req.logger.warn('Rejected memento that failed model validation:', error);
+      return res.status(400).json({ error: `Invalid memento: ${paths.join(', ') || 'validation failed'}` });
+    }
     req.logger.error('Error creating memento:', error);
     return res.status(500).json({ error: 'Failed to create memento' });
   }
