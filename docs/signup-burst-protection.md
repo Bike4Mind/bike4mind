@@ -47,9 +47,9 @@ existing behavior.
 
 ## Disposable lists and domain intelligence
 
-A daily job (`apps/workers/src/cron/disposableDomainRefresh.ts`) refreshes three upstream disposable-domain lists into MongoDB: the curated `disposable-email-domains/disposable-email-domains` list, `7c/fakefilter`, and the `disposable/disposable-email-domains` aggregate. A source that fails, returns nothing, or shrinks below half of its last good size keeps its previous entries. Per-source counts, last success and last error appear in **Admin > Signup Domain Holds**; the `disposableDomainRefreshFailures` alarm fires after two failing days.
+A daily job (`apps/workers/src/cron/disposableDomainRefresh.ts`) refreshes three upstream disposable-domain lists into MongoDB: the curated `disposable-email-domains/disposable-email-domains` list, `7c/fakefilter`, and the `disposable/disposable-email-domains` aggregate. A source that fails, returns nothing, or shrinks below half of its last good size keeps its previous entries. Per-source counts, last success and last error appear in **Admin > Signup Domain Holds**; the `disposableDomainRefreshFailures` alarm fires after two failing days. If an upstream genuinely shrinks by half, the floor refuses it every day; delete that source's `disposabledomainsources` document to accept the next snapshot.
 
-- **Rejected** at registration (and withheld on OAuth signup and email change) under **Block Disposable Emails**: the admin `blockedEmailDomains` list, the bundled package list, the curated list and fakefilter.
+- **Rejected** at registration (and withheld on OAuth signup and email change) under **Block Disposable Emails**: the admin `blockedEmailDomains` list, the bundled package list, the curated list and fakefilter. Organization and internal staff domains are never rejected on a refreshed-list hit, since those lists change without review.
 - **Held** for review (account created, free credits pending) when **Hold Risky Signup Domains** is on (default on):
   - `disposable-aggregate`: the domain is only on the aggregate list, which also scrapes and so carries more false positives.
   - `young-domain`: RDAP reports a registration younger than **Hold Signups From Domains Younger Than (days)** (default 30; 0 turns it off).

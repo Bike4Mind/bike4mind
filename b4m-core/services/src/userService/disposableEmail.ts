@@ -13,6 +13,7 @@ import {
   emailDomainCandidates,
   IAdminSettingsRepository,
   isEmailInDomains,
+  parseInternalStaffDomains,
   partitionDomainList,
   settingsMap,
 } from '@bike4mind/common';
@@ -63,9 +64,10 @@ export const isAdminBlockedEmailDomain = async (
  * The anti-sybil gate for credit-bearing signups: true when the email is on an admin-blocked
  * domain, or is disposable and the blockDisposableEmails setting (default ON) is enabled. Disposable
  * means the static package list or, when `signupProtection` carries the refreshed lists, a
- * reject-tier source (REJECT_TIER_SOURCES). The admin list applies regardless of that toggle, which
- * exists to work around a false positive in the lists. A failed list read throws, so callers fail
- * closed. Shared by registerUser and the free-credit eligibility check in
+ * reject-tier source (REJECT_TIER_SOURCES). A refreshed-list hit never rejects an organization or
+ * internal staff domain, since those lists change daily without review. The admin list applies
+ * regardless of that toggle, which exists to work around a false positive in the lists. A failed
+ * list read throws, so callers fail closed. Shared by registerUser and the free-credit eligibility check in
  * apps/client/server/auth/emailVerifiedGrants.ts (OAuth signup, email change) so they cannot drift.
  */
 export const shouldBlockDisposableEmail = async (
@@ -73,19 +75,23 @@ export const shouldBlockDisposableEmail = async (
   { adminSettings, signupProtection }: { adminSettings: IAdminSettingsRepository; signupProtection?: SignupProtection }
 ): Promise<boolean> => {
   if (await isAdminBlockedEmailDomain(email, { adminSettings })) return true;
-  const disposable =
-    isDisposableEmail(email) ||
-    ((await signupProtection?.repository.disposableSources?.(emailDomainCandidates(email))) ?? []).some(source =>
-      REJECT_TIER_SOURCES.has(source)
-    );
-  if (!disposable) return false;
+  const listed = isDisposableEmail(email);
+  const repository = signupProtection?.repository;
+  if (!listed && !repository?.disposableSources) return false;
+  // The toggle is read before the list query so switching it off also bypasses a failing list read.
   const setting = await adminSettings.findBySettingName('blockDisposableEmails');
-  return blockDisposableFrom(setting?.settingValue);
+  if (!blockDisposableFrom(setting?.settingValue)) return false;
+  if (listed || !repository?.disposableSources) return listed;
+  const sources = await repository.disposableSources(emailDomainCandidates(email));
+  if (!sources.some(source => REJECT_TIER_SOURCES.has(source))) return false;
+  const staffDomains = new Set(parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS));
+  return !isEmailInDomains(email, staffDomains) && !(await repository.isOrganizationDomain(email));
 };
 
 /**
  * shouldBlockDisposableEmail as a sync predicate over settings read once, for callers that check
- * many emails in a loop (packages/scripts/backfillOAuthStartingGrant.ts).
+ * many emails in a loop (packages/scripts/backfillOAuthStartingGrant.ts). Static and admin lists
+ * only: it does not see the refreshed reject-tier lists.
  */
 export const createSignupEmailGate = async (
   adminSettings: IAdminSettingsRepository

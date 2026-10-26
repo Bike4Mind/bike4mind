@@ -26,7 +26,6 @@ const registered = (days: number) => ({ events: [{ eventAction: 'registration', 
 
 const lookupOptions = (overrides: Record<string, unknown> = {}) => ({
   timeoutMs: 500,
-  isRejectTier: async (domain: string) => domain === 'temp-mail-provider.test',
   fetchImpl: rdapFetch(registered(400)),
   resolveMx: vi.fn(async () => [{ exchange: 'mx.example-host.test', priority: 10 }]),
   now: NOW,
@@ -55,7 +54,7 @@ beforeEach(() => {
 });
 
 describe('lookupDomainIntel', () => {
-  it('reads the RDAP registration date and flags commodity and burner MX hosts', async () => {
+  it('reads the RDAP registration date and flags commodity MX hosts', async () => {
     const intel = await lookupDomainIntel(
       'fresh-burner.test',
       lookupOptions({
@@ -67,7 +66,7 @@ describe('lookupDomainIntel', () => {
       })
     );
     expect(intel.registeredAt?.toISOString()).toBe(daysAgo(3));
-    expect(intel.mxFlags).toEqual(expect.arrayContaining(['cloudflare-routing', 'burner-mx']));
+    expect(intel.mxFlags).toEqual(['cloudflare-routing']);
     expect(intel.failed).toEqual([]);
     expect(intel.expiresAt.getTime() - NOW.getTime()).toBe(7 * 24 * 60 * 60 * 1000);
   });
@@ -104,10 +103,23 @@ describe('lookupDomainIntel', () => {
   it('fails open when the lookups outlive the budget', async () => {
     const intel = await lookupDomainIntel(
       'slow.test',
-      lookupOptions({ timeoutMs: 20, resolveMx: () => new Promise(() => {}) })
+      lookupOptions({
+        timeoutMs: 20,
+        fetchImpl: vi.fn(() => new Promise(() => {})),
+        resolveMx: () => new Promise(() => {}),
+      })
     );
     expect(intel.failed.sort()).toEqual(['mx', 'rdap']);
     expect(intel.mxFlags).toEqual([]);
+  });
+
+  it('keeps a finished lookup when the other misses the budget', async () => {
+    const intel = await lookupDomainIntel(
+      'half-slow.test',
+      lookupOptions({ timeoutMs: 20, fetchImpl: vi.fn(() => new Promise(() => {})) })
+    );
+    expect(intel.failed).toEqual(['rdap']);
+    expect(intel.mxHosts).toEqual(['mx.example-host.test']);
   });
 });
 
@@ -149,6 +161,7 @@ describe('domainHoldReason', () => {
   it('labels a reject-tier domain that reaches the hold step as disposable-list', async () => {
     const repo = memoryRepo({ 'listed.test': ['aggregate', 'curated'] });
     expect(await reasonFor('a@listed.test', repo)).toBe('disposable-list');
+    expect(await reasonFor('a@mailinator.com', memoryRepo())).toBe('disposable-list');
   });
 
   it('holds a domain younger than the threshold and passes one at the boundary', async () => {
@@ -169,10 +182,27 @@ describe('domainHoldReason', () => {
       resolveMx: async () => [{ exchange: 'mx.temp-mail-provider.test', priority: 1 }],
     });
     expect(burner).toBe('burner-mx (temp-mail-provider.test)');
+    const mixed = await reasonFor('a@mixed.test', memoryRepo({ 'temp-mail-provider.test': ['curated'] }), {
+      resolveMx: async () => [
+        { exchange: 'route1.mx.cloudflare.net', priority: 1 },
+        { exchange: 'in.temp-mail-provider.test', priority: 5 },
+      ],
+    });
+    expect(mixed).toBe('burner-mx (temp-mail-provider.test)');
     const routed = await reasonFor('a@custom.test', memoryRepo(), {
       resolveMx: async () => [{ exchange: 'route1.mx.cloudflare.net', priority: 1 }],
     });
     expect(routed).toBeNull();
+  });
+
+  it('judges burner MX at read time, so a provider listed after the lookup is caught from the cache', async () => {
+    const sources: Record<string, DisposableListSource[]> = {};
+    const repo = memoryRepo(sources);
+    const mx = { resolveMx: vi.fn(async () => [{ exchange: 'mx.later-listed.test', priority: 1 }]) };
+    expect(await reasonFor('a@front.test', repo, mx)).toBeNull();
+    sources['later-listed.test'] = ['fakefilter'];
+    expect(await reasonFor('a@front.test', repo, mx)).toBe('burner-mx (later-listed.test)');
+    expect(mx.resolveMx).toHaveBeenCalledTimes(1);
   });
 
   it('fails open when the list read throws', async () => {

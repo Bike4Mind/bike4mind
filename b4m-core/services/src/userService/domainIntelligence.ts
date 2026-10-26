@@ -4,6 +4,7 @@ import type { DisposableListSource, DomainIntel, SignupProtectionRepository } fr
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { isDisposableEmail, REJECT_TIER_SOURCES } from './disposableEmail';
 
+const FAILED = Symbol('failed');
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INTEL_TTL_MS = 7 * DAY_MS;
 // Short because a cold start's bootstrap fetch can eat the whole budget; an hour bounds how long a
@@ -17,8 +18,6 @@ const RDAP_BOOTSTRAP_TIMEOUT_MS = 10_000;
 type MxRecord = { exchange: string; priority: number };
 export type DomainLookupOptions = {
   timeoutMs: number;
-  /** True when the domain is itself on a reject-tier list; marks an MX host as a disposable provider. */
-  isRejectTier: (domain: string) => Promise<boolean>;
   fetchImpl?: typeof fetch;
   resolveMx?: (domain: string, timeoutMs: number) => Promise<MxRecord[]>;
   now?: Date;
@@ -93,36 +92,33 @@ async function lookupMx(domain: string, opts: DomainLookupOptions): Promise<{ ho
   const flags = new Set<string>();
   for (const host of hosts) {
     if (host.endsWith('.mx.cloudflare.net')) flags.add('cloudflare-routing');
-    if (host === 'smtp.google.com' || host.endsWith('.google.com') || host.endsWith('.googlemail.com'))
-      flags.add('google-workspace');
-    const hostDomain = registrableDomain(host);
-    if (hostDomain === domain) flags.add('self-hosted');
-    else if (hostDomain && (await opts.isRejectTier(hostDomain))) flags.add('burner-mx');
+    if (host.endsWith('.google.com') || host.endsWith('.googlemail.com')) flags.add('google-workspace');
+    if (registrableDomain(host) === domain) flags.add('self-hosted');
   }
   return { hosts, flags: [...flags] };
 }
 
-/** RDAP and MX for one registrable domain, in parallel under one budget. Never throws. */
+/**
+ * RDAP and MX for one registrable domain, in parallel under one shared budget; a lookup that misses
+ * the deadline counts as failed without discarding the other. Never throws.
+ */
 export async function lookupDomainIntel(domain: string, opts: DomainLookupOptions): Promise<DomainIntel> {
   const now = opts.now ?? new Date();
-  const failed: DomainIntel['failed'] = [];
-  const lookups = Promise.all([
-    lookupRegisteredAt(domain, opts).catch(() => {
-      failed.push('rdap');
-      return undefined;
-    }),
-    lookupMx(domain, opts).catch(() => {
-      failed.push('mx');
-      return { hosts: [], flags: [] };
-    }),
-  ]);
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<null>(resolve => {
-    timer = setTimeout(() => resolve(null), opts.timeoutMs);
+  const deadline = new Promise<typeof FAILED>(resolve => {
+    timer = setTimeout(() => resolve(FAILED), opts.timeoutMs);
   });
-  const settled = await Promise.race([lookups, deadline]).finally(() => clearTimeout(timer));
-  const [registeredAt, mx] = settled ?? [undefined, { hosts: [], flags: [] }];
-  const failures: DomainIntel['failed'] = settled ? [...failed] : ['rdap', 'mx'];
+  const withinBudget = <T>(lookup: Promise<T>) =>
+    Promise.race([lookup.catch(() => FAILED), deadline]) as Promise<T | typeof FAILED>;
+  const [rdap, mxResult] = await Promise.all([
+    withinBudget(lookupRegisteredAt(domain, opts)),
+    withinBudget(lookupMx(domain, opts)),
+  ]).finally(() => clearTimeout(timer));
+  const failures: DomainIntel['failed'] = [];
+  if (rdap === FAILED) failures.push('rdap');
+  if (mxResult === FAILED) failures.push('mx');
+  const registeredAt = rdap === FAILED ? undefined : rdap;
+  const mx = mxResult === FAILED ? { hosts: [], flags: [] } : mxResult;
   return {
     domain,
     ...(registeredAt ? { registeredAt } : {}),
@@ -167,7 +163,7 @@ const isAggregateOnly = (sources: readonly DisposableListSource[]) =>
 /**
  * Risk facts for a signup domain, e.g. for a signup risk score: `young-domain`, `single-source-list`
  * (only on the aggregate list), plus the MX flags (`cloudflare-routing`, `google-workspace`,
- * `self-hosted`, `no-mx`, `burner-mx`).
+ * `self-hosted`, `no-mx`).
  */
 export function domainRiskFacts(
   intel: Pick<DomainIntel, 'registeredAt' | 'mxFlags'> | null,
@@ -198,22 +194,24 @@ export async function domainHoldReason(
   try {
     const sources = (await repository.disposableSources?.(emailDomainCandidates(email))) ?? [];
     if (sources.length) return isAggregateOnly(sources) ? 'disposable-aggregate' : 'disposable-list';
+    if (isDisposableEmail(email)) return 'disposable-list';
     if (!domain || !repository.findDomainIntel || !repository.saveDomainIntel) return null;
 
-    const isRejectTier = async (candidate: string) =>
-      isDisposableEmail(`x@${candidate}`) ||
-      isEmailInDomains(`x@${candidate}`, options.adminBlockedDomains) ||
-      ((await repository.disposableSources?.([candidate])) ?? []).some(source => REJECT_TIER_SOURCES.has(source));
     const intel = await getDomainIntel(
       domain,
       { findDomainIntel: repository.findDomainIntel, saveDomainIntel: repository.saveDomainIntel },
-      { ...options.lookup, timeoutMs: options.timeoutMs, isRejectTier }
+      { ...options.lookup, timeoutMs: options.timeoutMs }
     );
     if (isYoung(intel, options.youngerThanDays, options.lookup?.now ?? new Date()))
       return `young-domain (<${options.youngerThanDays} days)`;
-    if (intel.mxFlags.includes('burner-mx')) {
-      const burner = intel.mxHosts.map(host => registrableDomain(host)).find(host => host && host !== domain);
-      return `burner-mx (${burner ?? 'unknown'})`;
+    // Judged at read time, not cached, so a provider listed after the lookup is still caught.
+    for (const hostDomain of new Set(intel.mxHosts.map(host => registrableDomain(host)))) {
+      if (!hostDomain || hostDomain === domain) continue;
+      const rejectTier =
+        isDisposableEmail(`x@${hostDomain}`) ||
+        isEmailInDomains(`x@${hostDomain}`, options.adminBlockedDomains) ||
+        ((await repository.disposableSources?.([hostDomain])) ?? []).some(source => REJECT_TIER_SOURCES.has(source));
+      if (rejectTier) return `burner-mx (${hostDomain})`;
     }
     return null;
   } catch (error) {

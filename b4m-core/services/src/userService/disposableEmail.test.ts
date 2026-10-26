@@ -140,6 +140,7 @@ describe('shouldBlockDisposableEmail with refreshed lists', () => {
     ({
       repository: {
         disposableSources: vi.fn(async (domains: string[]) => domains.flatMap(domain => sources[domain] ?? [])),
+        isOrganizationDomain: vi.fn(async (email: string) => email.endsWith('@customer-org.test')),
       },
     }) as unknown as SignupProtection;
 
@@ -161,6 +162,23 @@ describe('shouldBlockDisposableEmail with refreshed lists', () => {
     const { adminSettings } = adminSettingsWith({ blockDisposableEmails: 'false' });
     const signupProtection = protectionWith({ 'curated-burner.test': ['curated'] });
     expect(await shouldBlockDisposableEmail('x@curated-burner.test', { adminSettings, signupProtection })).toBe(false);
+  });
+
+  it('never rejects an organization or internal staff domain on a refreshed-list hit', async () => {
+    vi.stubEnv('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS', 'staff-co.test');
+    const { adminSettings } = adminSettingsWith({});
+    const signupProtection = protectionWith({ 'customer-org.test': ['fakefilter'], 'staff-co.test': ['curated'] });
+    expect(await shouldBlockDisposableEmail('x@customer-org.test', { adminSettings, signupProtection })).toBe(false);
+    expect(await shouldBlockDisposableEmail('x@staff-co.test', { adminSettings, signupProtection })).toBe(false);
+    vi.unstubAllEnvs();
+  });
+
+  it('skips the list read when blockDisposableEmails is OFF, so a DB error cannot block', async () => {
+    const { adminSettings } = adminSettingsWith({ blockDisposableEmails: 'false' });
+    const signupProtection = {
+      repository: { disposableSources: vi.fn().mockRejectedValue(new Error('db down')) },
+    } as unknown as SignupProtection;
+    expect(await shouldBlockDisposableEmail('x@unknown.test', { adminSettings, signupProtection })).toBe(false);
   });
 
   it('fails closed when the list read throws', async () => {
