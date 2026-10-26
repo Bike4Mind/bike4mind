@@ -137,6 +137,27 @@ describe('system prompt admin audit', () => {
     });
   });
 
+  it('PUT with no effective changes is labeled a re-save', async () => {
+    const existing = {
+      name: 'P',
+      description: 'a long description',
+      content: longContent,
+      category: 'system',
+      version: 1,
+    };
+    h.repo.findByPromptId.mockResolvedValueOnce(existing).mockResolvedValueOnce({ ...existing, version: 2 });
+    h.repo.updatePrompt.mockResolvedValue({ enabled: true });
+    const res = await call(promptHandler, 'PUT', { content: longContent });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.system_prompt.updated',
+      summary: 're-saved system prompt p1 with no changes',
+      changes: [],
+      details: { changedFields: [], fromVersion: 1, toVersion: 2 },
+    });
+  });
+
   it('PUT on a missing row records created', async () => {
     h.repo.findByPromptId.mockResolvedValue(null);
     h.repo.upsertPrompt.mockResolvedValue({ name: 'P', category: 'system', enabled: true, version: 1 });

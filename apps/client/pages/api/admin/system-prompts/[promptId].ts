@@ -127,7 +127,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         await recordAdminActionFromRequest(req, {
           action: 'settings.system_prompt.updated',
           target: { kind: 'settings', id: promptId, displayName: final?.name ?? existing.name },
-          summary: `updated system prompt ${promptId}`,
+          summary:
+            changedFields.length === 0
+              ? `re-saved system prompt ${promptId} with no changes`
+              : `updated system prompt ${promptId}`,
           changes: (['name', 'category', 'enabled'] as const)
             .filter(field => changedFields.includes(field))
             .map(field => ({ field, before: existing[field], after: validated[field] })),
