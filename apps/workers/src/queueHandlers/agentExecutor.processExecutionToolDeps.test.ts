@@ -28,19 +28,22 @@ vi.mock('sst', () => ({
 
 // Records every frame the real `createWsSender` posts, in the order the sends complete. While
 // `holdTextDelta` is set, `subagent_text_delta` posts stay in flight until it resolves.
-const ws = vi.hoisted(() => ({ frames: [] as string[], holdTextDelta: null as Promise<void> | null }));
+const ws = vi.hoisted(() => ({
+  frames: [] as Array<{ action: string } & Record<string, unknown>>,
+  holdTextDelta: null as Promise<void> | null,
+}));
 
 vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   ApiGatewayManagementApiClient: class {
     send(command: { input: { Data: Buffer } }) {
-      const action = (JSON.parse(command.input.Data.toString()) as { action: string }).action;
-      if (action === 'subagent_text_delta' && ws.holdTextDelta) {
+      const frame = JSON.parse(command.input.Data.toString()) as { action: string } & Record<string, unknown>;
+      if (frame.action === 'subagent_text_delta' && ws.holdTextDelta) {
         return ws.holdTextDelta.then(() => {
-          ws.frames.push(action);
+          ws.frames.push(frame);
           return {};
         });
       }
-      ws.frames.push(action);
+      ws.frames.push(frame);
       return Promise.resolve({});
     }
   },
@@ -569,20 +572,39 @@ describe('processExecution tool deps', () => {
     describe('live text deltas land before the frame that clears them', () => {
       const delta = { childExecutionId: 'child-1', agentName: 'researcher', iteration: 0, delta: 'hello' };
 
-      async function withDeltaInFlight(sendTerminal: (tracker: ServerSubagentTracker) => Promise<void>) {
+      const heldDeltaFrame = expect.objectContaining({
+        action: 'subagent_text_delta',
+        executionId: 'exec-1',
+        childExecutionId: 'child-1',
+        agentName: 'researcher',
+        iteration: 0,
+        delta: 'hello',
+      });
+
+      // `awaitCreditsWrite` is for terminal handlers whose last awaited call before their own send is
+      // the credits write. Their mocked work all resolves on the microtask queue, so once that call
+      // has happened one macrotask turn lets the handler reach its send (or its flush): a missing
+      // flush then shows up as the terminal frame going out while the delta is still held.
+      async function withDeltaInFlight(
+        sendTerminal: (tracker: ServerSubagentTracker) => Promise<void>,
+        { awaitCreditsWrite = false } = {}
+      ) {
+        const { agentExecutionRepository } = await import('@bike4mind/database');
         const tracker = await subagentTracker();
         let release!: () => void;
         ws.holdTextDelta = new Promise<void>(resolve => {
           release = resolve;
         });
         ws.frames.length = 0;
+        vi.mocked(agentExecutionRepository.incrementCreditsUsed).mockClear();
 
         const delivered = tracker.onTextDelta!(delta);
         const terminal = sendTerminal(tracker);
-        // Let the terminal handler run through its awaited work to its own send, so a missing
-        // flush shows up as the frame going out while the delta is still held.
-        for (let tick = 0; tick < 20; tick++) await new Promise(resolve => setImmediate(resolve));
-        const beforeRelease = [...ws.frames];
+        if (awaitCreditsWrite) {
+          await vi.waitFor(() => expect(agentExecutionRepository.incrementCreditsUsed).toHaveBeenCalled());
+        }
+        await new Promise(resolve => setImmediate(resolve));
+        const beforeRelease = ws.frames.map(frame => frame.action);
 
         release();
         await Promise.all([delivered, terminal]);
@@ -600,30 +622,61 @@ describe('processExecution tool deps', () => {
         );
 
         expect(beforeRelease).not.toContain('subagent_iteration_step');
-        expect(afterRelease).toEqual(['subagent_text_delta', 'subagent_iteration_step']);
+        expect(afterRelease).toEqual([
+          heldDeltaFrame,
+          expect.objectContaining({
+            action: 'subagent_iteration_step',
+            executionId: 'exec-1',
+            childExecutionId: 'child-1',
+            agentName: 'researcher',
+            iteration: 0,
+            step: expect.objectContaining({ content: 'done' }),
+          }),
+        ]);
       });
 
       it('sends subagent_completed only after the child queued deltas', async () => {
-        const { beforeRelease, afterRelease } = await withDeltaInFlight(tracker =>
-          tracker.onComplete({ childExecutionId: 'child-1', result: childResult })
+        const { beforeRelease, afterRelease } = await withDeltaInFlight(
+          tracker => tracker.onComplete({ childExecutionId: 'child-1', result: childResult }),
+          { awaitCreditsWrite: true }
         );
 
         expect(beforeRelease).not.toContain('subagent_completed');
-        expect(afterRelease).toEqual(['subagent_text_delta', 'subagent_completed']);
+        expect(afterRelease).toEqual([
+          heldDeltaFrame,
+          expect.objectContaining({
+            action: 'subagent_completed',
+            executionId: 'exec-1',
+            childExecutionId: 'child-1',
+            agentName: 'researcher',
+            finalAnswer: 'found it',
+          }),
+        ]);
       });
 
       it('sends subagent_failed only after the child queued deltas', async () => {
-        const { beforeRelease, afterRelease } = await withDeltaInFlight(tracker =>
-          tracker.onFailure({
-            childExecutionId: 'child-1',
-            error: 'boom',
-            isTimeout: false,
-            partialResult: childResult,
-          })
+        const { beforeRelease, afterRelease } = await withDeltaInFlight(
+          tracker =>
+            tracker.onFailure({
+              childExecutionId: 'child-1',
+              error: 'boom',
+              isTimeout: false,
+              partialResult: childResult,
+            }),
+          { awaitCreditsWrite: true }
         );
 
         expect(beforeRelease).not.toContain('subagent_failed');
-        expect(afterRelease).toEqual(['subagent_text_delta', 'subagent_failed']);
+        expect(afterRelease).toEqual([
+          heldDeltaFrame,
+          expect.objectContaining({
+            action: 'subagent_failed',
+            executionId: 'exec-1',
+            childExecutionId: 'child-1',
+            error: 'Subagent execution failed',
+            isTimeout: false,
+          }),
+        ]);
       });
     });
 
