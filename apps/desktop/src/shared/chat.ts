@@ -820,13 +820,18 @@ export interface BackgroundProcessInfo {
 export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessInfo } | { ok: false; message: string };
 
 export function localModelId(runtimeId: string, model: string): string {
-  return `local:${runtimeId}:${model}`;
+  return `local:${encodeURIComponent(runtimeId)}:${model}`;
 }
 
-/** `local:<runtime>:<model>`; the model may itself contain colons. */
+/** `local:<encoded runtime>:<model>`; runtime ids can contain colons so they are URL-encoded, the model stays raw. */
 export function parseLocalModelId(id: string): { runtimeId: string; model: string } | null {
   const match = /^local:([^:]+):(.+)$/s.exec(id);
-  return match ? { runtimeId: match[1], model: match[2] } : null;
+  if (!match) return null;
+  try {
+    return { runtimeId: decodeURIComponent(match[1]), model: match[2] };
+  } catch {
+    return null;
+  }
 }
 
 /** Fails closed: a malformed `local:` id still counts as local so it never falls onto the hosted path. */

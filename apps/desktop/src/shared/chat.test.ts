@@ -19,6 +19,26 @@ describe('local model ids', () => {
     expect(parseLocalModelId('local:lmstudio:org/model:q4')).toEqual({ runtimeId: 'lmstudio', model: 'org/model:q4' });
   });
 
+  it('encodes colons in the runtime id and keeps the default daemon id unchanged', () => {
+    expect(localModelId('ollama', 'llama3.2')).toBe('local:ollama:llama3.2');
+    const withPort = localModelId('ollama:127.0.0.1:11435', 'qwen2.5:0.5b');
+    expect(withPort).toBe('local:ollama%3A127.0.0.1%3A11435:qwen2.5:0.5b');
+    expect(parseLocalModelId(withPort)).toEqual({ runtimeId: 'ollama:127.0.0.1:11435', model: 'qwen2.5:0.5b' });
+  });
+
+  it('round-trips a URL runtime id with a model containing colons and slashes', () => {
+    const runtimeId = 'openai-compatible:https://host:8443/v1';
+    const id = localModelId(runtimeId, 'org/model:q4/x');
+    expect(parseLocalModelId(id)).toEqual({ runtimeId, model: 'org/model:q4/x' });
+    expect(isLocalModel(id)).toBe(true);
+  });
+
+  it('returns null for a malformed encoded runtime but still fails closed', () => {
+    const id = 'local:bad%E0%A4%A:model';
+    expect(parseLocalModelId(id)).toBeNull();
+    expect(isLocalModel(id)).toBe(true);
+  });
+
   it('recognizes any runtime and rejects hosted and malformed ids', () => {
     expect(isLocalModel('local:lmstudio:some-model')).toBe(true);
     for (const id of ['claude-sonnet', 'locally:ollama:x', 'local']) {
