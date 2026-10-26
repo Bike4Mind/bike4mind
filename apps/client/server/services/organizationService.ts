@@ -27,8 +27,8 @@ export async function countPendingOrganizationInvites(orgId: string): Promise<nu
 
 /**
  * Resolve `source` defensively for rows that may pre-date the source-field
- * migration. Re-exported from `@client/lib/subscriptions/types` so the
- * repository can use it without importing this service.
+ * migration. Re-exported from `@bike4mind/server-utils/lib/subscriptions/types`
+ * so the repository can use it without importing this service.
  */
 export { resolveSubscriptionSource };
 
