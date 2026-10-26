@@ -123,7 +123,7 @@ function isSizeAllowed(size: string, sizing: ImageSizing): boolean {
     case 'constrained': {
       if (sizing.presets.includes(size) || size === sizing.autoSize) return true;
       const edges = parseSizeEdges(size);
-      return edges !== null && satisfiesGptImage2Constraints(edges, sizing.constraints);
+      return edges !== null && satisfiesGptImage2Constraints(edges);
     }
     case 'dimensions': {
       // Presets pass as declared, though resolveImageDimensions snaps the off-step ones (1440x810, 800x600,

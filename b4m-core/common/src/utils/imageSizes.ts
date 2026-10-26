@@ -35,12 +35,9 @@ export function parseSizeEdges(size?: string | null): { width: number; height: n
  * IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes, so a flat preset check would reject
  * valid custom sizes.
  */
-export function satisfiesGptImage2Constraints(
-  { width, height }: { width: number; height: number },
-  constraints: (typeof IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2)['constraints'] = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2
-    .constraints
-): boolean {
-  const { maxEdge, minTotalPixels, maxTotalPixels, edgeMultiple, maxAspectRatio } = constraints;
+export function satisfiesGptImage2Constraints({ width, height }: { width: number; height: number }): boolean {
+  const { maxEdge, minTotalPixels, maxTotalPixels, edgeMultiple, maxAspectRatio } =
+    IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.constraints;
   const longEdge = Math.max(width, height);
   const shortEdge = Math.min(width, height);
   const totalPixels = width * height;
