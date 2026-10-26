@@ -2283,6 +2283,9 @@ importers:
       '@bike4mind/llm-adapters':
         specifier: workspace:*
         version: link:../../b4m-core/llm-adapters
+      '@bike4mind/local-models':
+        specifier: workspace:*
+        version: link:../../b4m-core/local-models
       '@bike4mind/mcp':
         specifier: workspace:*
         version: link:../../b4m-core/mcp
