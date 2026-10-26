@@ -937,6 +937,22 @@ describe('OpenAIImageService source images over the ImageProcessor payload cap',
     expect(metadata).toMatchObject({ errorName: 'Error', errorMessage: 'Image too large (10.37MB).' });
   });
 
+  it('logs the OpenAI request id on an API error', async () => {
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    imagesGenerate.mockRejectedValue(
+      Object.assign(Object.create(OpenAI.APIError.prototype) as APIErrorLike, {
+        status: 500,
+        requestID: 'req_500',
+        message: '500 Server error',
+      })
+    );
+
+    await expect(makeService().generate('make it blue', { model: ImageModels.GPT_IMAGE_2 })).rejects.toThrow();
+
+    const [, metadata] = errorSpy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(metadata).toMatchObject({ requestId: 'req_500' });
+  });
+
   it('passes a PNG source through when a mask is supplied, sending only the mask to the ImageProcessor', async () => {
     const dataUrl = `data:image/png;base64,${largeImage(PNG_HEADER).toString('base64')}`;
     await makeService().edit(dataUrl, 'make it blue', { model: ImageModels.GPT_IMAGE_2, mask: PNG_DATA_URL });
@@ -1002,11 +1018,13 @@ describe('OpenAIImageService source images over the ImageProcessor payload cap',
       return `data:image/png;base64,${buffer.toString('base64')}`;
     };
 
+    // Assert on call counts, not the mock itself: a failing matcher would otherwise try to
+    // pretty-print the 50MB buffer argument and exhaust the worker's heap.
     await makeService().edit(png(cap), 'make it blue', { model: ImageModels.GPT_IMAGE_2 });
-    expect(invokeImageProcessor).not.toHaveBeenCalled();
+    expect(vi.mocked(invokeImageProcessor).mock.calls.length).toBe(0);
 
     await makeService().edit(png(cap + 1), 'make it blue', { model: ImageModels.GPT_IMAGE_2 });
-    expect(invokeImageProcessor).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(invokeImageProcessor).mock.calls.length).toBe(1);
   });
 
   it('keeps the PNG-under-4MB coercion for dall-e-2, which requires it', async () => {
