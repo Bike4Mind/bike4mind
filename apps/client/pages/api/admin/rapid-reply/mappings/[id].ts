@@ -137,8 +137,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     if (Object.keys(changes).length > 0) {
       await recordAdminActionFromRequest(req, {
         action: 'settings.rapid_reply_mapping.updated',
-        target: { kind: 'settings', id, displayName: `Rapid reply mapping ${currentMapping.mainModelId}` },
-        summary: `updated rapid reply mapping ${currentMapping.mainModelId}`,
+        target: { kind: 'settings', id, displayName: `Rapid reply mapping ${updatedMapping.mainModelId}` },
+        summary: `updated rapid reply mapping ${updatedMapping.mainModelId}`,
         // systemPrompt is free text; its values are withheld with a marker so the drawer doesn't read it as cleared.
         changes: Object.entries(changes).map(([field, change]) =>
           field === 'systemPrompt'

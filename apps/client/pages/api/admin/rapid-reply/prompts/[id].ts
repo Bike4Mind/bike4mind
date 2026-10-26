@@ -157,7 +157,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           promptId: id,
           changedFields: auditChangedFields,
           newVersion: auditAction === 'create',
-          ...(auditAction === 'create' && { newVersionId: updatedPrompt?.id }),
+          ...(auditAction === 'create' && {
+            newVersionId: updatedPrompt?.id,
+            contentChanged: content !== undefined && content !== currentPrompt.content,
+          }),
           ...(renamed && { name: { before: currentPrompt.name, after: name } }),
         },
       });
