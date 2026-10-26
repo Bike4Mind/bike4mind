@@ -48,6 +48,10 @@ vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () =>
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: mockStart }));
 vi.mock('@server/utils/loadAgentExecutionTrace', () => ({ loadAgentExecutionTrace: mockLoadTrace }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
+// The quota itself is covered by v1/agent-executions/__tests__/index.quota.test.ts.
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: async () => ({ release: async () => {} }),
+}));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: async () => ({}), getSettingsValue: () => 'claude-opus-5' }));
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
   resolveDefaultChatModel: async () => ({ model: 'default-model' }),

@@ -3478,7 +3478,7 @@ export const settingsMap = {
     max: 1000000,
     int: true,
     description:
-      "Per-day ceiling applied at request time to personal API keys whose owner is untrusted. A key's own lower limit still wins. 0 disables it.",
+      "Per-day request ceiling for each personal API key whose owner is untrusted, applied at request time and counted per key. A key's own lower limit still wins. 0 disables it.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 5,
@@ -3492,7 +3492,7 @@ export const settingsMap = {
     max: 100000000,
     int: true,
     description:
-      "Tokens an untrusted account's personal API keys may consume across completions in any rolling minute. Counted from settled usage, so a completion is admitted while the account is under the limit and its tokens count against the requests that follow. 0 disables it.",
+      'Tokens per rolling minute for an untrusted account using its personal API keys. Counts every settled model call the account billed to itself in the last minute, from any surface (input, output and prompt-cache tokens, each counted once); usage billed to an organization is left out. A completion is admitted while the account is under the limit, and its tokens count against the requests that follow. 0 disables it.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 6,

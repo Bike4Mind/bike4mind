@@ -32,42 +32,46 @@ type QuotaOwner = userApiKeyService.ApiKeyTrustSubject & { id: string };
  * completions in flight. Org-billed keys, trusted owners and quotas set to 0 pass untouched.
  *
  * Tokens are only known once a completion settles, so the check reads the account's settled
- * usage (UsageEvent) over the last minute and refuses the next request while it is at or over
- * the limit; one completion can overshoot, the ones after it wait for the window to drain.
+ * usage over the last minute (see UsageEventRepository.userTokensSince for what is counted) and
+ * refuses the next request while it is at or over the limit; one completion can overshoot, the
+ * ones after it wait for the window to drain.
  *
  * Throws a 429 carrying `errorCode` (and `retryAfter` for the token window). With `holdSlot`,
- * the caller must call `release()` on every exit path once the completion has ended.
+ * the caller must call `release()` once the work has actually ended, success or failure.
  */
 export async function admitApiKeyCompletion({
   owner,
+  ownerUntrusted,
   billingOwnerType,
   holdSlot,
   req,
 }: {
   /** The owner document, or just its id when the caller has not loaded it. */
   owner: QuotaOwner | string;
+  /** The standing auth already judged (cli/auth verifyApiKey); omitted means judge it here. */
+  ownerUntrusted?: boolean;
   billingOwnerType?: string;
   holdSlot: boolean;
   req?: ActiveSubscriptionsRequest;
 }): Promise<CompletionQuotaGrant> {
-  if (billingOwnerType === CreditHolderType.Organization) return NO_COMPLETION_QUOTA;
+  if (billingOwnerType === CreditHolderType.Organization || ownerUntrusted === false) return NO_COMPLETION_QUOTA;
 
   const settings = await userApiKeyService.loadApiKeyTrustSettings({ adminSettings: adminSettingsRepository });
   const tokensPerMinute = settings.untrustedTokensPerMinute;
   const maxConcurrent = holdSlot ? settings.untrustedMaxConcurrent : 0;
   if (!settings.gateEnabled || (tokensPerMinute <= 0 && maxConcurrent <= 0)) return NO_COMPLETION_QUOTA;
 
-  const ownerDoc = typeof owner === 'string' ? await User.findById(owner) : owner;
-  if (!ownerDoc) return NO_COMPLETION_QUOTA;
-  const { assessment } = await resolveApiKeyTrust(ownerDoc, req);
-  if (assessment.status !== 'untrusted') return NO_COMPLETION_QUOTA;
+  const ownerId = typeof owner === 'string' ? owner : owner.id;
+  if (ownerUntrusted === undefined) {
+    const ownerDoc = typeof owner === 'string' ? await User.findById(owner) : owner;
+    if (!ownerDoc) return NO_COMPLETION_QUOTA;
+    const { assessment } = await resolveApiKeyTrust(ownerDoc, req);
+    if (assessment.status !== 'untrusted') return NO_COMPLETION_QUOTA;
+  }
 
   if (tokensPerMinute > 0) {
     const now = Date.now();
-    const { tokens, oldestAt } = await usageEventRepository.userTokensSince(
-      ownerDoc.id,
-      new Date(now - TOKEN_WINDOW_MS)
-    );
+    const { tokens, oldestAt } = await usageEventRepository.userTokensSince(ownerId, new Date(now - TOKEN_WINDOW_MS));
     if (tokens >= tokensPerMinute) {
       const drainsAt = (oldestAt?.getTime() ?? now) + TOKEN_WINDOW_MS;
       const retryAfter = Math.max(1, Math.ceil((drainsAt - now) / 1000));
@@ -80,7 +84,7 @@ export async function admitApiKeyCompletion({
 
   if (maxConcurrent <= 0) return NO_COMPLETION_QUOTA;
 
-  const key = completionSlotsKey(ownerDoc.id);
+  const key = completionSlotsKey(ownerId);
   const holderId = randomUUID();
   if (!(await cacheRepository.tryAcquireLease(key, holderId, maxConcurrent, COMPLETION_SLOT_LEASE_MS))) {
     throw new TooManyRequestsError(
@@ -96,4 +100,16 @@ export async function admitApiKeyCompletion({
         // The lease lapses on its own; a failed release only holds the slot until then.
       })),
   };
+}
+
+/**
+ * {@link admitApiKeyCompletion} for a Next API route: a no-op unless an API key authenticated the
+ * request. Pass `holdSlot` only when the request itself runs the work to completion.
+ */
+export function admitRequestCompletion(
+  req: ActiveSubscriptionsRequest & Pick<Express.Request, 'user' | 'apiKeyInfo'>,
+  { holdSlot }: { holdSlot: boolean }
+): Promise<CompletionQuotaGrant> {
+  if (!req.apiKeyInfo || !req.user) return Promise.resolve(NO_COMPLETION_QUOTA);
+  return admitApiKeyCompletion({ owner: req.user, billingOwnerType: req.apiKeyInfo.billingOwnerType, holdSlot, req });
 }

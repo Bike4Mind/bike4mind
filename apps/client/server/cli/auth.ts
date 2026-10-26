@@ -17,7 +17,7 @@ import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable'
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { applyUntrustedRateLimit } from '@server/utils/apiKeyTrust';
+import { resolveUntrustedKeyLimits } from '@server/utils/apiKeyTrust';
 import { z } from 'zod';
 
 /** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */
@@ -57,6 +57,8 @@ export interface ApiKeyInfo {
   spendCap?: number;
   /** Cumulative settled spend in credits at validation time; embed keys only. */
   currentSpend?: number;
+  /** The owner's API key trust standing as judged at verification (see apiKeyTrust.ts). */
+  ownerUntrusted?: boolean;
 }
 
 /**
@@ -275,7 +277,8 @@ export async function verifyApiKey(
     const owner = await assertOwnerAccountUsable(validation.userId);
     const info = toApiKeyInfo(validation);
     // Same untrusted-owner ceiling apiKeyAuth applies, so these surfaces meter the clamped limit too.
-    return { ...info, rateLimit: await applyUntrustedRateLimit(owner, info) };
+    const { rateLimit, ownerUntrusted } = await resolveUntrustedKeyLimits(owner, info);
+    return { ...info, rateLimit, ownerUntrusted };
   } catch (error) {
     throw toApiKeyAuthError(error);
   }

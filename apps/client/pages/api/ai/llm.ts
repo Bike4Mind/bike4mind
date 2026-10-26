@@ -21,6 +21,7 @@ import { sessionWillInjectAuthoredPrompt } from '@server/utils/sessionSystemProm
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@server/utils/systemPrompts/loader';
 import { requestTurnAuth } from '@server/auth/turnAuth';
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 import { Request } from 'express';
 
 // Gate API-key callers on `ai:chat`: this route commissions a billed chat completion
@@ -86,6 +87,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // null = personal account, undefined = fall back to the caller's own org. An org-billed
     // API key always bills its own org, as on the v1 media routes; naming another is a 403.
     const effectiveOrgId = await resolveRequestBillingOrgId(req, invokeParams.organizationId);
+
+    // The turn is queued and finishes elsewhere, so only the token quota applies here.
+    await admitRequestCompletion(req, { holdSlot: false });
 
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: reqSessionId,

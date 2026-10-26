@@ -1109,11 +1109,12 @@ describe('POST /api/ai/v1/completions - untrusted owner quotas', () => {
     mockResolveContractAuth.mockResolvedValue({
       method: 'apiKey',
       userId: 'user-1',
-      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'User' },
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'User', ownerUntrusted: true },
     });
     expect((await post()).status).toBe(200);
     expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith({
       owner: 'user-1',
+      ownerUntrusted: true,
       billingOwnerType: 'User',
       holdSlot: true,
     });
@@ -1138,7 +1139,7 @@ describe('POST /api/ai/v1/completions - untrusted owner quotas', () => {
     await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalled());
   });
 
-  it('frees the slot when the client disconnects mid-stream, before the completion settles', async () => {
+  it('holds the slot after the client disconnects until the completion settles, then frees it', async () => {
     let finishCompletion: () => void = () => {};
     mockExecuteCompletion.mockImplementation(async (params: ExecuteParams) => {
       await params.onReady?.();
@@ -1155,9 +1156,12 @@ describe('POST /api/ai/v1/completions - untrusted owner quotas', () => {
     });
     expect(res.status).toBe(200);
     controller.abort();
+    // Long enough for the server to see the socket close.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(quotaRelease).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalled());
     finishCompletion();
+    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalledTimes(1));
   });
 
   it('answers a refused quota with a 429, its errorCode and Retry-After, without starting the completion', async () => {

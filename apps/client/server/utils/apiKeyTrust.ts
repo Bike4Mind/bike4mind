@@ -32,23 +32,37 @@ export async function resolveApiKeyTrust(
 }
 
 /**
- * Request-time ceilings (per minute, and per day when that setting is on) for a personal key whose owner is untrusted, so keys minted before the
- * gate existed are throttled rather than revoked. Lifts on its own once the owner becomes
- * trusted. Org-billed keys are exempt, as they are at mint time. The key's own lower limit wins.
+ * Request-time ceilings (per minute, and per day when that setting is on) for a personal key whose
+ * owner is untrusted, so keys minted before the gate existed are throttled rather than revoked.
+ * Lifts on its own once the owner becomes trusted. Org-billed keys are exempt, as they are at mint
+ * time. The key's own lower limit wins. `ownerUntrusted` lets a caller skip re-judging the owner.
  */
+export async function resolveUntrustedKeyLimits(
+  owner: ApiKeyTrustUser,
+  key: { rateLimit: IUserApiKeyRateLimit; billingOwnerType?: string },
+  req?: ActiveSubscriptionsRequest
+): Promise<{ rateLimit: IUserApiKeyRateLimit; ownerUntrusted: boolean }> {
+  if (key.billingOwnerType === CreditHolderType.Organization)
+    return { rateLimit: key.rateLimit, ownerUntrusted: false };
+  const { assessment, settings } = await resolveApiKeyTrust(owner, req);
+  if (assessment.status !== 'untrusted') return { rateLimit: key.rateLimit, ownerUntrusted: false };
+  return {
+    ownerUntrusted: true,
+    rateLimit: {
+      ...key.rateLimit,
+      requestsPerMinute: Math.min(key.rateLimit.requestsPerMinute, settings.untrustedRateLimitPerMinute),
+      ...(settings.untrustedRequestsPerDay > 0 && {
+        requestsPerDay: Math.min(key.rateLimit.requestsPerDay, settings.untrustedRequestsPerDay),
+      }),
+    },
+  };
+}
+
+/** The rate limit half of {@link resolveUntrustedKeyLimits}. */
 export async function applyUntrustedRateLimit(
   owner: ApiKeyTrustUser,
   key: { rateLimit: IUserApiKeyRateLimit; billingOwnerType?: string },
   req?: ActiveSubscriptionsRequest
 ): Promise<IUserApiKeyRateLimit> {
-  if (key.billingOwnerType === CreditHolderType.Organization) return key.rateLimit;
-  const { assessment, settings } = await resolveApiKeyTrust(owner, req);
-  if (assessment.status !== 'untrusted') return key.rateLimit;
-  return {
-    ...key.rateLimit,
-    requestsPerMinute: Math.min(key.rateLimit.requestsPerMinute, settings.untrustedRateLimitPerMinute),
-    ...(settings.untrustedRequestsPerDay > 0 && {
-      requestsPerDay: Math.min(key.rateLimit.requestsPerDay, settings.untrustedRequestsPerDay),
-    }),
-  };
+  return (await resolveUntrustedKeyLimits(owner, key, req)).rateLimit;
 }

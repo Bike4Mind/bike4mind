@@ -1574,19 +1574,19 @@ describe('POST /api/chat (integration - untrusted owner quotas)', () => {
     expect(mockQuotaRelease).toHaveBeenCalled();
   });
 
-  it('frees the slot when the client disconnects before the turn answers', async () => {
+  it('holds the slot after the client disconnects until the turn settles, then frees it', async () => {
     let finishTurn: () => void = () => {};
     mockProcess.mockImplementation(() => new Promise<void>(resolve => (finishTurn = resolve)));
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
     const pending = handler(req, res);
     await vi.waitFor(() => expect(mockProcess).toHaveBeenCalled());
-    expect(mockQuotaRelease).not.toHaveBeenCalled();
 
     res.emit('close');
-    expect(mockQuotaRelease).toHaveBeenCalled();
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
 
     finishTurn();
     await pending;
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
   });
 
   it('refuses an over-quota turn with a 429 and its errorCode before opening a notebook', async () => {

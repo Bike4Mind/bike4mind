@@ -203,6 +203,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
       try {
         quota = await admitApiKeyCompletion({
           owner: userId,
+          ownerUntrusted: apiKeyInfo.ownerUntrusted,
           billingOwnerType: apiKeyInfo.billingOwnerType,
           holdSlot: true,
         });

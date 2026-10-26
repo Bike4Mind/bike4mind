@@ -285,13 +285,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           endpoint: COMPLETIONS_ENDPOINT,
           method: req.method,
         });
+        // The slot is freed in `finally`, once executeCompletion settles, not on disconnect: the
+        // provider call keeps running after the client goes.
         quota = await admitApiKeyCompletion({
           owner: apiKeyInfo.userId,
+          ownerUntrusted: apiKeyInfo.ownerUntrusted,
           billingOwnerType: apiKeyInfo.billingOwnerType,
           holdSlot: true,
         });
-        // A client that disconnects frees its slot even while the provider call is still unwinding.
-        res.once('close', () => void quota.release());
       } else {
         logger.info('[CLI_LLM] Authenticated via JWT', { userId });
         await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });

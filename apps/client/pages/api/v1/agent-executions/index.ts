@@ -28,6 +28,7 @@ import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCo
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 
 const handler = nextRouteForContract(startAgentExecutionContract, {
   rateLimit: rateLimit({
@@ -36,6 +37,8 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
   }),
 }).post(async (req, res) => {
   assertAiAccessAllowed(req.user);
+  // The run is queued (202), so only the token quota applies here.
+  await admitRequestCompletion(req, { holdSlot: false });
   const body = req.validated;
 
   // Same model-resolution ladder as POST /api/chat: an explicit model wins, else the

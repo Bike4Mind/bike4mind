@@ -55,12 +55,13 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   },
 }));
 
-const applyUntrustedRateLimit = vi.hoisted(() =>
-  vi.fn(
-    async (_owner: unknown, key: { rateLimit: { requestsPerMinute: number; requestsPerDay: number } }) => key.rateLimit
-  )
+const resolveUntrustedKeyLimits = vi.hoisted(() =>
+  vi.fn(async (_owner: unknown, key: { rateLimit: { requestsPerMinute: number; requestsPerDay: number } }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }))
 );
-vi.mock('@server/utils/apiKeyTrust', () => ({ applyUntrustedRateLimit }));
+vi.mock('@server/utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits }));
 
 vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
   extractApiKeyFromHeaders: vi.fn(),
@@ -571,12 +572,13 @@ describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
     const owner = { id: 'u1', isBanned: false };
     const clamped = { requestsPerMinute: 3, requestsPerDay: 100 };
     vi.mocked(User.findById).mockResolvedValue(owner);
-    applyUntrustedRateLimit.mockResolvedValueOnce(clamped);
+    resolveUntrustedKeyLimits.mockResolvedValueOnce({ rateLimit: clamped, ownerUntrusted: true });
 
     const info = await verifyApiKey({});
 
     expect(info.rateLimit).toEqual(clamped);
-    expect(applyUntrustedRateLimit).toHaveBeenLastCalledWith(
+    expect(info.ownerUntrusted).toBe(true);
+    expect(resolveUntrustedKeyLimits).toHaveBeenLastCalledWith(
       owner,
       expect.objectContaining({ rateLimit: validKey.rateLimit })
     );

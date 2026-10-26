@@ -324,9 +324,13 @@ describe('admin role on the reloaded owner', () => {
 
 describe('untrusted owner quotas', () => {
   const asKey = () =>
-    vi
-      .mocked(verifyApiKey)
-      .mockResolvedValueOnce({ userId: 'u1', keyId: 'k1', scopes: [], billingOwnerType: 'User' } as never);
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [],
+      billingOwnerType: 'User',
+      ownerUntrusted: true,
+    } as never);
 
   it('admits an API-key completion with a slot and frees it once the background completion ends', async () => {
     asKey();
@@ -336,7 +340,12 @@ describe('untrusted owner quotas', () => {
     expect((await postAs({})).status).toBe(202);
     await Promise.all(tracked);
 
-    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith({ owner: 'u1', billingOwnerType: 'User', holdSlot: true });
+    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith({
+      owner: 'u1',
+      ownerUntrusted: true,
+      billingOwnerType: 'User',
+      holdSlot: true,
+    });
     expect(quotaRelease).toHaveBeenCalledTimes(1);
   });
 

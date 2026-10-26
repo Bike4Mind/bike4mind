@@ -17736,17 +17736,16 @@
             }
           },
           "429": {
-            "description": "Per-user rate limit exceeded.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
+            "description": "Rate limit exceeded: the key's own limits, or this endpoint's per-key read limit.",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
                 "schema": {
                   "type": "string"
                 }
@@ -17785,6 +17784,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

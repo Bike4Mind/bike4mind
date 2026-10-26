@@ -24,7 +24,13 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: mocks.resolveTrust }));
 
-import { admitApiKeyCompletion, completionSlotsKey, NO_COMPLETION_QUOTA } from './untrustedCompletionQuota';
+import type { Request } from 'express';
+import {
+  admitApiKeyCompletion,
+  admitRequestCompletion,
+  completionSlotsKey,
+  NO_COMPLETION_QUOTA,
+} from './untrustedCompletionQuota';
 
 const owner = {
   id: 'user-1',
@@ -103,6 +109,37 @@ describe('admitApiKeyCompletion', () => {
     await admitApiKeyCompletion({ owner: 'user-1', holdSlot: false });
     expect(mocks.findUser).toHaveBeenCalledWith('user-1');
     expect(mocks.resolveTrust).toHaveBeenCalledWith(owner, undefined);
+  });
+
+  it('trusts the standing auth already judged instead of re-judging the owner', async () => {
+    mocks.userTokensSince.mockResolvedValue({ tokens: 1000 });
+    await rejectionOf(admitApiKeyCompletion({ owner: 'user-1', ownerUntrusted: true, holdSlot: false }));
+    expect(mocks.findUser).not.toHaveBeenCalled();
+    expect(mocks.resolveTrust).not.toHaveBeenCalled();
+    expect(mocks.userTokensSince.mock.calls[0][0]).toBe('user-1');
+  });
+
+  it('passes an owner auth judged trusted without reading settings', async () => {
+    expect(await admitApiKeyCompletion({ owner: 'user-1', ownerUntrusted: false, holdSlot: true })).toBe(
+      NO_COMPLETION_QUOTA
+    );
+    expect(mocks.loadSettings).not.toHaveBeenCalled();
+  });
+
+  describe('admitRequestCompletion', () => {
+    it('passes a request no API key authenticated', async () => {
+      expect(await admitRequestCompletion({ user: owner } as unknown as Request, { holdSlot: true })).toBe(
+        NO_COMPLETION_QUOTA
+      );
+      expect(mocks.loadSettings).not.toHaveBeenCalled();
+    });
+
+    it("admits an API-key request against its owner and the key's billing owner", async () => {
+      const req = { user: owner, apiKeyInfo: { keyId: 'k1', billingOwnerType: CreditHolderType.User } };
+      await admitRequestCompletion(req as unknown as Request, { holdSlot: true });
+      expect(mocks.resolveTrust).toHaveBeenCalledWith(owner, req);
+      expect(mocks.tryAcquireLease).toHaveBeenCalled();
+    });
   });
 
   describe('tokens per minute', () => {
