@@ -145,4 +145,13 @@ describe('getCallerModelList free-tier gate', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('entitlement read failed'), expect.anything());
     warn.mockRestore();
   });
+
+  it('lists unfiltered, and warns, when the allowlist read rejects', async () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    mocks.loadFreeTierAllowedModels.mockRejectedValue(new Error('settings db down'));
+
+    expect(await listedIds()).toEqual(['priced', 'unpriced', 'free', 'image-model']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('allowlist read failed'), expect.anything());
+    warn.mockRestore();
+  });
 });

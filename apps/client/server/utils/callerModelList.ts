@@ -64,12 +64,7 @@ async function buildCallerModelList(userId: string | null, enforceCredits: boole
   return { models, supersededModels: getSupersededModels(offered) };
 }
 
-/**
- * Same free-tier rule createModelAdmission refuses at call time (llm/modelAdmission.ts), applied after the
- * cache so a plan change or a gate toggle shows on the next load. An anonymous caller is left unfiltered:
- * it cannot call a model, so this list is not a gate for it.
- */
-// Fails closed to "free", like createModelAdmission: a failed subscription read must not 500 the picker.
+// Fails closed to "free" for the listing: a failed subscription read must not 500 the picker.
 async function holdsPaidPlan(user: IUserDocument): Promise<boolean> {
   try {
     return (await getUserEntitlements(toEntitlementUser(user))).includes(PAID_PLAN_ENTITLEMENT_KEY);
@@ -79,9 +74,21 @@ async function holdsPaidPlan(user: IUserDocument): Promise<boolean> {
   }
 }
 
+/**
+ * Same free-tier rule createModelAdmission refuses at call time (llm/modelAdmission.ts), applied after the
+ * cache so a plan change or a gate toggle shows on the next load. An anonymous caller is left unfiltered:
+ * it cannot call a model, so this list is not a gate for it. A failed allowlist read also lists unfiltered:
+ * the picker is not the gate, call-time admission still enforces.
+ */
 async function withoutPaidOnlyModels(list: CallerModelList, user: IUserDocument | null): Promise<CallerModelList> {
   if (!user || isFreeTierExempt(user)) return list;
-  const allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
+  let allowedModels: ReadonlySet<string> | undefined;
+  try {
+    allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
+  } catch (error) {
+    Logger.globalInstance.warn('callerModelList: free-tier allowlist read failed; listing unfiltered', { error });
+    return list;
+  }
   if (!allowedModels) return list;
   if (await holdsPaidPlan(user)) return list;
   const models = list.models.filter(model => isFreeTierModel(model.id, model, allowedModels));
