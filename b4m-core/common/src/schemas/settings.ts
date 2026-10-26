@@ -433,6 +433,8 @@ export const SettingKeySchema = z.enum([
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
+  'usagePatternSignalsEnabled',
+  'usagePatternSignalsConfig',
   'defaultFreeCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
@@ -1175,6 +1177,43 @@ export function makeContributedBooleanSetting(
 //     schema: z.array(z.string()).default(config.defaultValue ?? []),
 //   };
 // }
+
+/**
+ * Thresholds and weights for the per-user usage pattern signals
+ * (b4m-core/services/src/userService/usagePatternSignals.ts). The defaults are generic
+ * placeholders; a deployment tunes the real values in admin settings.
+ */
+export const UsagePatternSignalsConfigSchema = z
+  .object({
+    /** Users with usage in this many recent hours are recomputed on each run. */
+    activeWindowHours: z.number().int().min(1).max(720).prefault(24),
+    maxUsersPerRun: z.number().int().min(1).max(10_000).prefault(500),
+    /** Window for the cadence and credit-polling signals. */
+    lookbackDays: z.number().int().min(1).max(90).prefault(7),
+    weights: z
+      .object({
+        apiOnlyUsage: z.number().min(0).max(100).prefault(25),
+        regularCadence: z.number().min(0).max(100).prefault(25),
+        creditPolling: z.number().min(0).max(100).prefault(25),
+        quickApiKey: z.number().min(0).max(100).prefault(25),
+      })
+      .strict()
+      .prefault({}),
+    reviewThreshold: z.number().min(1).max(100).prefault(50),
+    apiOnlyMinRequests: z.number().int().min(1).prefault(20),
+    /** Share (0-1) of usage made with an API key at which apiOnlyUsage triggers. */
+    apiOnlyMinShare: z.number().min(0).max(1).prefault(1),
+    /** Requests whose inter-request gaps are measured. */
+    cadenceSampleSize: z.number().int().min(3).max(1000).prefault(30),
+    /** Coefficient of variation of the gaps at or below which regularCadence triggers. */
+    cadenceMaxVariation: z.number().min(0).prefault(0.2),
+    creditPollMinCount: z.number().int().min(1).prefault(20),
+    creditPollMinPerCompletion: z.number().positive().prefault(2),
+    quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(30),
+  })
+  .strict();
+
+export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
 
 export enum ServerStatusEnum {
   Live = 'live',
@@ -2135,6 +2174,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'LakeAccessAuditRetentionDays', order: 1 },
       { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
       { key: 'LakeConfigAuditRetentionDays', order: 3 },
+    ],
+  },
+  USAGE_PATTERN_SIGNALS: {
+    id: 'usagePatternSignalsService',
+    name: 'Usage Pattern Signals',
+    description: 'Hourly read-only analysis of free-tier usage patterns for admin review',
+    icon: 'Security',
+    settings: [
+      { key: 'usagePatternSignalsEnabled', order: 1 },
+      { key: 'usagePatternSignalsConfig', order: 2 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -3448,6 +3497,28 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 4,
     dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  usagePatternSignalsEnabled: makeBooleanSetting({
+    key: 'usagePatternSignalsEnabled',
+    name: 'Usage Pattern Signals',
+    defaultValue: false,
+    description:
+      'Runs an hourly job that computes usage pattern signals for recently active free-tier accounts and stores the latest result per account for review. Read-only: it never changes an account, its keys or its credits.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
+    order: 1,
+  }),
+  usagePatternSignalsConfig: makeObjectSetting({
+    key: 'usagePatternSignalsConfig',
+    name: 'Usage Pattern Signals: Thresholds and Weights',
+    defaultValue: UsagePatternSignalsConfigSchema.parse({}),
+    description:
+      'Which accounts are analyzed (activeWindowHours, maxUsersPerRun), the window for cadence and polling (lookbackDays), the weight (0-100) of each signal, the score at which an account needs review, and the per-signal thresholds. Unknown fields are refused on save.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
+    order: 2,
+    dependsOn: 'usagePatternSignalsEnabled',
+    schema: UsagePatternSignalsConfigSchema,
   }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',

@@ -874,6 +874,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     symbol: 'registerTelemetryCleanup',
     fingerprint: 'da6450a4a59ea6ac4f91f4b6adc5e7c54586164f920952bb76654f03b4b0e228',
   }),
+  gap('schedule:infra/cron.ts:usagePatternSignals', 'b077a04f3379fe4c2c226a6bc06833467565ccca1eb028c3d5f6425fb8f8dd0a'),
   wired(
     'schedule:infra/cron.ts:voiceHoldSweep',
     '89b2864330246aeafc0f6771aff6bf74ca90a0f22df1ddd72409f718fc0edb45',

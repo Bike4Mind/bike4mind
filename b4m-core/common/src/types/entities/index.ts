@@ -45,6 +45,7 @@ export * from './AnalyticsTypes';
 export * from './FavoriteTypes';
 export * from './CreditTransactionTypes';
 export * from './UsageEventTypes';
+export * from './UsagePatternSignalTypes';
 export * from './ModelPriceTypes';
 export * from './ModelCatalogTypes';
 export * from './ProviderInvoiceTypes';

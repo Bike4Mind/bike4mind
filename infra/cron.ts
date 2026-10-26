@@ -146,6 +146,26 @@ const apiKeyBaselineCalculation = runsScheduledJobs
     })
   : undefined;
 
+// Read-only usage pattern signals for free-tier review; a no-op until usagePatternSignalsEnabled is on.
+const usagePatternSignals = runsScheduledJobs
+  ? new sst.aws.Cron('usagePatternSignals', {
+      schedule: 'rate(1 hour)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/usagePatternSignals.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
 // Email campaign scheduler - runs every 5 minutes to check for scheduled campaigns
 const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
   schedule: 'rate(5 minutes)',
@@ -1141,6 +1161,7 @@ export {
   secretRotationNotifierCron,
   scheduleTaskCron,
   apiKeyBaselineCalculation,
+  usagePatternSignals,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
   liveopsTriageDispatcherCron,
