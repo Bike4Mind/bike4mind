@@ -135,6 +135,31 @@ describe('registerUser', () => {
     expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
   });
 
+  describe('invite-only OTC registration', () => {
+    it('redeems an email-bound invite and verifies the account', async () => {
+      mockInvite.email = baseParams.email;
+      mockAdapters.db.users.update = vi.fn().mockResolvedValue(undefined);
+      mockAdapters.db.creditTransactions = undefined;
+      const result = await registerViaOTC({ ...baseParams, password: '' }, mockAdapters);
+      expect(result).toMatchObject({ email: baseParams.email, emailVerified: true });
+      expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledWith(
+        expect.objectContaining({ id: mockInvite.id, status: RegInviteStatusType.used }),
+        undefined
+      );
+    });
+
+    it.each([
+      [{ email: 'other@example.com' }, 'This invite code was issued for a different email address'],
+      [{ used: new Date() }, 'Invite code already used'],
+      [{ expiresAt: new Date(0) }, 'Invite code has expired'],
+    ])('rejects an unusable invite %j', async (patch, message) => {
+      Object.assign(mockInvite, patch);
+      await expect(registerViaOTC({ ...baseParams, password: '' }, mockAdapters)).rejects.toThrow(message);
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+      expect(mockAdapters.db.registrationInvites.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('reserved username prefix', () => {
     const withSyntheticDomains = (domains: string) => {
       const base = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();

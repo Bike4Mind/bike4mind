@@ -55,6 +55,7 @@ interface VerifyOTCData {
   email: string;
   code: string;
   username?: string;
+  inviteCode?: string;
   pendingToken?: string;
   // client_id of the /oauth/authorize request this signup started from; the server only uses it
   // to attribute a newly created account.
