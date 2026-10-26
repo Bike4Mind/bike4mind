@@ -1,5 +1,5 @@
 import type { Collection, Connection } from 'mongoose';
-import { CounterLog, FabFile, Quest, Session, UserApiKey } from '@bike4mind/database';
+import { CounterLog, FabFile, Quest, Session, UserApiKey, safeDropIndex } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 type IndexKey = Record<string, 1 | -1>;
@@ -39,7 +39,7 @@ async function dropRedundantIndex({ model, key, coveredBy }: RedundantIndex): Pr
   );
   // Never leave the collection without the prefix: drop only once the covering index exists.
   if (!redundant?.name || !indexes.some(index => sameKey(index.key, coveredBy))) return;
-  await model.collection.dropIndex(redundant.name);
+  await safeDropIndex(model.collection, redundant.name);
 }
 
 /**

@@ -110,21 +110,29 @@ describe('ensure-advisor-indexes migration (real DB)', () => {
       }
     );
 
-    it.each(REDUNDANT_INDEXES.map(entry => [entry.model.collection.collectionName, entry] as const))(
-      'keeps a constrained index on %s with the same key',
-      async (_name, { model, key, coveredBy }) => {
-        await model.collection.createIndex(coveredBy);
-        await model.collection.createIndex(key, { name: 'stale_prefix', sparse: true });
+    const CONSTRAINTS = [
+      ['sparse', { sparse: true }],
+      ['partial', { partialFilterExpression: { createdAt: { $exists: true } } }],
+      ['unique', { unique: true }],
+    ] as const;
 
-        try {
-          await migration.up();
+    it.each(
+      REDUNDANT_INDEXES.flatMap(entry =>
+        CONSTRAINTS.map(([label, options]) => [entry.model.collection.collectionName, label, entry, options] as const)
+      )
+    )('keeps a constrained index on %s with the same key (%s)', async (_name, _label, entry, options) => {
+      const { model, key, coveredBy } = entry;
+      await model.collection.createIndex(coveredBy);
+      await model.collection.createIndex(key, { name: 'stale_prefix', ...options });
 
-          expect(await indexNames(model.collection)).toContain('stale_prefix');
-        } finally {
-          await safeDropIndex(model.collection, 'stale_prefix');
-        }
+      try {
+        await migration.up();
+
+        expect(await indexNames(model.collection)).toContain('stale_prefix');
+      } finally {
+        await safeDropIndex(model.collection, 'stale_prefix');
       }
-    );
+    });
   });
 
   // A partial or sparse index the query does not imply is silently skipped by the planner, so pin
