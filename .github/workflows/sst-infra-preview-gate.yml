@@ -39,7 +39,7 @@ permissions:
 jobs:
   preview-gate:
     name: preview gate
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - name: Require a preview for sst / infra changes
         # merge_group has no pull_request context; skipping here still reports
