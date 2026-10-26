@@ -10,6 +10,18 @@ import type { PremiumRouteIndexing } from '../premiumContract';
  */
 
 /**
+ * True for a deployment whose stage name is set and is not `production`. An unset stage
+ * (open core, self-host, local build) is left alone: blocking on "unknown" would hide a
+ * deployment that never opted into stage naming.
+ *
+ * Callers pass NEXT_PUBLIC_SEED_STAGE_NAME, the same variable `isTestMode` keys off; it is
+ * inlined at build time, which suits the force-static robots route.
+ */
+export function isNonProductionStage(stage: string | undefined): boolean {
+  return !!stage && stage !== 'production';
+}
+
+/**
  * Core surfaces that must never be crawled.
  *
  * THE RULE THIS LIST FOLLOWS. `Disallow:` is the right tool for a well-known path

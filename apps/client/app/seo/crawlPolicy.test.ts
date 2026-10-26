@@ -7,8 +7,24 @@ import {
   buildDisallowList,
   buildSitemapPaths,
   buildSitemapUrl,
+  isNonProductionStage,
   normalizeOrigin,
 } from './crawlPolicy';
+
+describe('isNonProductionStage', () => {
+  it.each(['dev', 'pr1234', 'shared-dev', 'staging'])('is true for stage %s', stage => {
+    expect(isNonProductionStage(stage)).toBe(true);
+  });
+
+  it('is false for production', () => {
+    expect(isNonProductionStage('production')).toBe(false);
+  });
+
+  it('is false when no stage is configured', () => {
+    expect(isNonProductionStage(undefined)).toBe(false);
+    expect(isNonProductionStage('')).toBe(false);
+  });
+});
 
 const overlay = (o: Partial<PremiumRouteIndexing>): PremiumRouteIndexing => ({
   sitemapPaths: [],

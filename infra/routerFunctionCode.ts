@@ -18,3 +18,14 @@ export function minifyRouterFunction(code: string): string {
   }
   return minified;
 }
+
+export const NOINDEX_HEADER_VALUE = 'noindex, nofollow';
+
+// Viewer-response snippet that keeps every non-production stage out of search indexes.
+// Empty on production so its generated function stays byte-identical.
+export function noindexResponseInjection(stage: string): string {
+  if (stage === 'production') return '';
+  return `
+  event.response.headers["x-robots-tag"] = { value: "${NOINDEX_HEADER_VALUE}" };
+`;
+}
