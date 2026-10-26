@@ -157,7 +157,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   if (body.verdict === 'retry_finish') {
     // Re-call /finish for an incident that is stuck in confirmed_csam with a stored reportId.
     // The report was accepted by NCMEC (a prior /submit succeeded) but /finish failed.
-    // NCMEC holds unfinished reports for 24 hours; retrying /finish is safe and idempotent.
+    // NCMEC holds unfinished reports for 24 hours; retry /finish only while it is unfinished.
     const incident = await imageModerationIncidentRepository.findById(incidentId);
     if (!incident || incident.reviewStatus !== 'confirmed_csam') {
       return res.status(409).json({ error: 'Incident is not in confirmed_csam state' });
@@ -190,21 +190,33 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     // is not appropriate here (it exists to prevent mark_reported/requeue from racing a live
     // in-flight submission, not to gate a retry we just confirmed succeeded).
     // /finish already succeeded, so the verdict is audited even when a concurrent resolution
-    // won the DB write; a failed audit leaves the incident retryable (/finish is idempotent).
+    // won the DB write. If recording fails, /finish has already finalized the report; recover
+    // with mark_reported once the claim is stale instead of calling /finish again.
     const ncmecReportId = incident.ncmecReportId;
     const adminId = req.user.id;
-    const updated = await withTransaction(async () => {
-      const resolved = await imageModerationIncidentRepository.resolveConfirmedCsam(
-        incidentId,
-        { status: 'reported', ncmecReportId, reportedBy: adminId },
-        0
-      );
-      await recordVerdict(req, { incidentId, userId: incident.userId }, body.verdict, {
-        ncmecReportId,
-        incidentUpdated: resolved !== null,
+    let updated;
+    try {
+      updated = await withTransaction(async () => {
+        const resolved = await imageModerationIncidentRepository.resolveConfirmedCsam(
+          incidentId,
+          { status: 'reported', ncmecReportId, reportedBy: adminId },
+          0
+        );
+        await recordVerdict(req, { incidentId, userId: incident.userId }, body.verdict, {
+          ncmecReportId,
+          incidentUpdated: resolved !== null,
+        });
+        return resolved;
       });
-      return resolved;
-    });
+    } catch (err) {
+      req.logger.error(
+        `[NCMEC] recording retry_finish for incident ${incidentId} failed after NCMEC finalized reportId=${ncmecReportId}: ${(err as Error).message}`
+      );
+      return res.status(500).json({
+        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the confirmed_csam claim is at least 10 minutes old, use mark_reported with this reportId.`,
+        ncmecReportId,
+      });
+    }
     if (!updated) {
       // Concurrent mark_reported or requeue resolved the incident between our /finish call
       // and this DB write. The reportId is in the log above; the incident is already closed.
@@ -315,8 +327,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       }
       if (isFinishFailed) {
         // /submit succeeded -- NCMEC holds the report -- but /finish failed. Persist the
-        // reportId so an admin can manually finalize within NCMEC's 24-hour window using
-        // the 'mark_reported' verdict. Do NOT roll back.
+        // reportId so an admin can finalize within NCMEC's 24-hour window using
+        // retry_finish. Do NOT roll back.
         const finishErr = err as ncmecService.NcmecFinishFailedError;
         req.logger.info(
           `[NCMEC] /finish failed for incident ${incidentId}; persisting reportId=${finishErr.reportId} for manual recovery`
@@ -344,7 +356,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     );
 
     // A failed audit rolls this write back and leaves the incident in confirmed_csam. Persist
-    // the reportId outside the transaction so retry_finish (idempotent) can complete it.
+    // the reportId outside the transaction so mark_reported can recover it once the claim is stale.
+    // submitNcmecReport already finalized the report; calling /finish again is not safe.
     const adminId = req.user.id;
     let updated;
     try {
@@ -372,7 +385,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
           )
         );
       return res.status(500).json({
-        error: `NCMEC accepted the report (reportId=${ncmecReportId}) but recording it failed. Incident left in confirmed_csam -- use retry_finish to complete it.`,
+        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the confirmed_csam claim is at least 10 minutes old, use mark_reported with this reportId.`,
         ncmecReportId,
       });
     }
