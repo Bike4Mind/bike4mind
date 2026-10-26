@@ -563,22 +563,42 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         const modelDoneAt = Date.now();
 
         // FAIL LOUD on an empty completion. No text AND no tool call means the model produced nothing a
-        // user or the pipeline can use - almost always a misrouted inference profile (a "global." model
-        // served from a region that does not host it) or an unavailable model. Returning silently makes
-        // the chat hang with no output and no error; throwing surfaces a clear, actionable message. Token
-        // count is deliberately NOT part of the condition: an empty response can still report phantom
-        // usage, and a real assistant turn ALWAYS has text or a tool call, so this cannot false-positive.
-        // Ordering note: a stall that lands BEFORE the first token also arrives here with zero
-        // output and no terminal event, so it is reported as EMPTY rather than TRUNCATED and
-        // misses the retry below. That is deliberate, not an oversight - a misrouted "global."
-        // profile produces literally the same observable (no chunks, no terminal event), so the
-        // two are indistinguishable at this layer and the more actionable message should win.
-        if (emittedTextChars === 0 && emittedProviderBlocks === 0 && !func.some(f => f.name)) {
+        // user or the pipeline can use. Returning silently makes the chat hang with no output and no
+        // error; throwing surfaces a clear message. Token count is deliberately NOT part of the
+        // condition: an empty response can still report phantom usage, and a real assistant turn ALWAYS
+        // has text or a tool call, so this cannot false-positive.
+        // A Stop, idle timeout or Research Mode timeout before the first token also ends the body
+        // cleanly with nothing emitted (see the TRUNCATED guard below), so an aborted request is
+        // excluded here too rather than logged at ERROR as an empty response.
+        // A stall before the first token arrives as zero output and no terminal event. That is a
+        // transient transport failure, so it is worded like the truncation below to get the
+        // retry-once-then-fallback path. A misrouted "global." profile fails every call, so this
+        // intermittent shape does not point at it. An empty stream that DID end with a terminal
+        // event (the max-tool-calls cap) is deterministic and must not match the retry predicates:
+        // retrying it re-runs every tool call only to fail again. Adapters that do not signal
+        // termination cannot tell the two apart and keep the non-retried wording.
+        if (
+          emittedTextChars === 0 &&
+          emittedProviderBlocks === 0 &&
+          !func.some(f => f.name) &&
+          !options.abortSignal?.aborted
+        ) {
+          // Keep "stream timeout" and "without a terminal event" in sync with isStreamIdleTimeoutError
+          // and isTruncatedStreamError in llmErrorPredicates.ts.
+          if (this.signalsStreamTermination && !sawTerminalEvent) {
+            throw new Error(
+              `[BaseBedrockBackend] stream timeout - model "${model}" in region ${this._options.region} ` +
+                `returned an EMPTY response (no text, no tool call) without a terminal event. Usually a ` +
+                `stalled Bedrock socket before the first token. If every call on this model is empty, a ` +
+                `"global." inference profile served from a region that does not host it does the same - try ` +
+                `the "us." variant, or confirm the model/profile is granted in ${this._options.region}.`
+            );
+          }
           throw new Error(
             `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${this._options.region} ` +
-              `(no text, no tool call, no output tokens). A "global." cross-region inference profile served ` +
-              `from a region that does not host it does exactly this - try the "us." variant, or confirm the ` +
-              `model/profile is granted in ${this._options.region}.`
+              `(no text, no tool call, no output tokens). If every call on this model is empty, a "global." ` +
+              `cross-region inference profile served from a region that does not host it does the same - ` +
+              `try the "us." variant, or confirm the model/profile is granted in ${this._options.region}.`
           );
         }
 
