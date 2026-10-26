@@ -630,7 +630,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
-    'ee5e561d5e093f20865aaaf04031d5d2bacc15d51df52b80ef817abac8f36723'
+    '4436a8d9e6d699648e62f7a433fbe0c924a906b5a8001fd4b9066ca9feceb10f'
   ),
   wired('schedule:infra/cron.ts:adminAuditAlerts', '3d29c77c0415f6c9a1df4c5844222d599f060b9cc59f38fddcf9878c6882ec47', {
     source: 'apps/workers/src/selfhost/adminAuditAlerts.ts',
@@ -922,11 +922,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafAlarmSlackHandlerSubscription',
-    'f12eafd92daf91c7f1df0593fd5f6545bfd4fe8e50b77a0a50ad6e791665a18d',
+    '81258820089dd79426511eba079b7df300b084fb571f07ba51bb8f7d462614f2',
     ['lambda:InvokeFunction']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafOobAlarmTopicEmailSub',
-    '773e060944d0c679ae3ac61c166a94850695a68936544361eb597a35f3470a3a'
+    'cfdb21e48b31b60086497f7ccfeee9047b5c80dc83eec6576a273c692c1fa9fe'
   ),
 ];

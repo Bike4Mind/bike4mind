@@ -2,13 +2,15 @@
 
 ## Sample policy and deployment-owned policies
 
-The two JSON files in this directory are a sample policy with round example
-rate limits. They are not tuned for any particular deployment. A deployment
-supplies its own policy in one of two ways:
+The JSON file in this directory is a sample policy with round example rate
+limits. It is not tuned for any particular deployment, and it is used by the
+stage-owned ACLs only (dev, staging and PR previews). The production ACL is
+managed outside this stack and attached by name through `WAF_WEB_ACL_NAME`; see
+`infra/wafAssociation.ts`. A deployment supplies its own non-production policy
+in one of two ways:
 
-- overwrite `bike4mind-api-protection-prod.json` and
-  `bike4mind-api-protection-dev.json` here before SST runs, or
-- set `WAF_POLICY_DIR` to a directory holding files with those same two names
+- overwrite `bike4mind-api-protection-dev.json` here before SST runs, or
+- set `WAF_POLICY_DIR` to a directory holding a file with that same name
   (absolute, or relative to the repo root). See `resolveWafPolicyDir` in
   `infra/wafPolicy.ts`.
 
@@ -26,7 +28,7 @@ fail by design.
 
 ## Bot Control telemetry
 
-Both stage policies run `AWSManagedRulesBotControlRuleSet` at the `COMMON`
+The policy runs `AWSManagedRulesBotControlRuleSet` at the `COMMON`
 inspection level, last at priority 30, with the group return action overridden
 to `Count`. It cannot block, challenge, or CAPTCHA requests.
 
@@ -43,21 +45,11 @@ from earlier security rules.
 
 ## Capacity and cost
 
-Read-only AWS WAFv2 `CheckCapacity` measurements on 2026-10-23, in `us-east-1`
-with `CLOUDFRONT` scope, compared the policies before and after Bot Control:
-
-| Policy                          | Before (WCU) | With Bot Control (WCU) | Increase |
-| ------------------------------- | -----------: | ---------------------: | -------: |
-| dev (also staging and previews) |        1,442 |                  1,496 |       54 |
-| production                      |        1,418 |                  1,472 |       54 |
-
-The API measured the complete rule lists, replacing the emergency IPSet ARN
-placeholder with an existing CloudFront IPSet ARN. AWS optimizes combined rule
-capacity, so summing individual statement costs overestimates these policies.
-These are historical measurements from before the additional path-scoped rate
-rules. They do not describe the current policy's capacity or pricing tier.
-Re-run `CheckCapacity` after policy changes or managed-rule updates;
-these measurements are not a permanent capacity guarantee.
+Re-run the read-only AWS
+WAFv2 `CheckCapacity` API (`us-east-1`, `CLOUDFRONT` scope, with the emergency
+IPSet ARN placeholder replaced by an existing IPSet ARN) after policy changes or
+managed-rule updates. AWS optimizes combined rule capacity, so summing
+individual statement costs overestimates it.
 
 [WAF pricing](https://aws.amazon.com/waf/pricing/) adds a per-request charge for
 each additional 500 WCU above 1,500. Bot Control also has its own per-ACL monthly

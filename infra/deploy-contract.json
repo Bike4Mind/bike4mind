@@ -87,6 +87,7 @@
     "VPC_ID",
     "WAF_BLOCKED_IPS",
     "WAF_POLICY_DIR",
+    "WAF_WEB_ACL_NAME",
     "WEBSITE_URL",
     "WHATS_NEW_FEED_URL"
   ]

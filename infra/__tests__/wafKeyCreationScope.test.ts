@@ -89,12 +89,9 @@ const cases = [
   { method: 'POST', path: '/api/user-api-keys-extra', matches: false },
 ] as const;
 
-for (const stage of ['dev', 'production']) {
+for (const stage of ['dev']) {
   const rules = readRules(stage);
-  const names =
-    stage === 'dev'
-      ? ['api-key-create-rate-limit', 'api-key-create-rate-limit-prod-shadow']
-      : ['api-key-create-rate-limit'];
+  const names = ['api-key-create-rate-limit', 'api-key-create-rate-limit-prod-shadow'];
 
   for (const name of names) {
     describe(`${stage} ${name} scope`, () => {

@@ -1,16 +1,11 @@
 /**
- * WAF policy translation.
+ * WAF policy translation for the stage-owned ACLs (dev, staging and PR preview stages).
  *
- * Stage-specific source files, read from the policy directory (see resolveWafPolicyDir):
- *   - bike4mind-api-protection-prod.json  → production stage
- *   - bike4mind-api-protection-dev.json   → dev/staging + all PR preview stages
+ * The policy is bike4mind-api-protection-dev.json, read from the policy directory (see
+ * resolveWafPolicyDir). The file committed in infra/waf/ is the sample policy that ships with the
+ * product. A deployment may set WAF_POLICY_DIR to its own directory holding the same file name.
  *
- * The files committed in infra/waf/ are the sample policy that ships with the product. A
- * deployment may set WAF_POLICY_DIR to its own directory holding the same two file names.
- *
- * The files are intentionally separate. The dev file carries a higher api-rate-limit than prod
- * so Cypress CI does not trip the WAF during E2E runs, a staging-only accommodation that must
- * never ship to production.
+ * The production ACL is not built here; see wafAssociation.ts.
  *
  * IMPORTANT:
  * - IPSet ARNs in the JSON are placeholders replaced at deploy time by buildDevWafRuleJson.
@@ -52,7 +47,7 @@ export interface WafPolicyOptions {
    * Used to make WebACL/metric names traceable to a PR deployment.
    */
   nameSuffix?: string;
-  /** SST stage name. Controls which WAF JSON file is loaded (prod vs dev). */
+  /** SST stage name. Used for the default description. */
   stage: string;
 }
 
@@ -69,7 +64,7 @@ export interface WafPolicy {
 }
 
 export function getDevWafMeta(opts: Pick<WafPolicyOptions, 'nameSuffix' | 'stage'>): WafPolicy {
-  const exportJson = readExportJson(opts.stage);
+  const exportJson = readExportJson();
 
   const suffix = opts.nameSuffix ? `-${opts.nameSuffix}` : '-dev';
   const name = `bike4mind-api-protection${suffix}`;
@@ -96,8 +91,8 @@ export function getDevWafMeta(opts: Pick<WafPolicyOptions, 'nameSuffix' | 'stage
  * This avoids provider schema limitations around deeply nested statements.
  * We substitute prod IPSet ARNs in the export with the stage-managed IPSet ARN.
  */
-export function buildDevWafRuleJson(args: { emergencyIpSetArn: string; stage: string }): string {
-  const exportJson = readExportJson(args.stage);
+export function buildDevWafRuleJson(args: { emergencyIpSetArn: string; stage?: string }): string {
+  const exportJson = readExportJson();
 
   const rules = exportJson.Rules.map(rule => {
     // Deep clone (rule objects are small)
@@ -115,19 +110,6 @@ export function buildDevWafRuleJson(args: { emergencyIpSetArn: string; stage: st
   });
 
   return JSON.stringify(rules);
-}
-
-/** Metrics for enforcing rate rules in the deployment's policy, including custom metric names. */
-export function getWafRateLimitAlarmRules(stage: string): { name: string; metricName: string }[] {
-  return readExportJson(stage)
-    .Rules.filter(
-      rule =>
-        'RateBasedStatement' in rule.Statement &&
-        rule.Action !== undefined &&
-        'Block' in rule.Action &&
-        rule.VisibilityConfig.CloudWatchMetricsEnabled
-    )
-    .map(rule => ({ name: rule.Name, metricName: rule.VisibilityConfig.MetricName }));
 }
 
 const BLOCKED_IP_PLACEHOLDER = '192.0.2.0/32';
@@ -158,7 +140,7 @@ export function parseWafBlockedIps(raw: string | undefined): string[] {
 }
 
 /**
- * Directory holding the two stage policy files: WAF_POLICY_DIR (absolute, or relative to cwd)
+ * Directory holding the policy file: WAF_POLICY_DIR (absolute, or relative to cwd)
  * when set, otherwise the committed sample in <cwd>/infra/waf.
  */
 export function resolveWafPolicyDir(env: NodeJS.ProcessEnv): string {
@@ -169,8 +151,8 @@ export function resolveWafPolicyDir(env: NodeJS.ProcessEnv): string {
   return override ? path.resolve(repoRoot, override) : path.join(repoRoot, 'infra', 'waf');
 }
 
-function readExportJson(stage: string): JsonWafExport {
-  const fileName = stage === 'production' ? 'bike4mind-api-protection-prod.json' : 'bike4mind-api-protection-dev.json';
+function readExportJson(): JsonWafExport {
+  const fileName = 'bike4mind-api-protection-dev.json';
   // Read spelled out so scripts/check-deploy-contract.py sees it as a deploy-time env.
   const jsonPath = path.join(resolveWafPolicyDir({ WAF_POLICY_DIR: process.env.WAF_POLICY_DIR }), fileName);
 
