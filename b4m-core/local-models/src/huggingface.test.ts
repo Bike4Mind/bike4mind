@@ -150,7 +150,7 @@ describe('HuggingFaceHub.search', () => {
         pipelineTag: 'text-generation',
         gated: false,
         private: false,
-        license: 'apache-2.0',
+        licenses: ['apache-2.0'],
         baseModels: ['Qwen/Qwen2.5-0.5B-Instruct'],
         tags: ['gguf', 'chat', 'text-generation', 'en', 'conversational'],
       },
@@ -196,7 +196,7 @@ describe('HuggingFaceHub.getModel', () => {
     expect(detail).toMatchObject({
       id: 'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
       revision: qwenSha,
-      license: 'apache-2.0',
+      licenses: ['apache-2.0'],
       licenseName: null,
       licenseLink: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/main/LICENSE',
       baseModels: ['Qwen/Qwen2.5-0.5B-Instruct'],
@@ -256,7 +256,7 @@ describe('HuggingFaceHub.getModel', () => {
 
     expect(server.requests.filter(request => request.path.includes('/tree/'))).toHaveLength(2);
     expect(detail).toMatchObject({
-      license: 'other',
+      licenses: ['other'],
       licenseName: 'qwen',
       baseModels: ['Qwen/Qwen2.5-VL-72B-Instruct'],
     });
@@ -292,6 +292,21 @@ describe('HuggingFaceHub.getModel', () => {
       ['mmproj-F16.gguf', 'F16', 1410223552],
       ['mmproj-F32.gguf', 'F32', 2815315392],
     ]);
+  });
+
+  it('keeps every license a repo declares, from its card and its tags', async () => {
+    const repo = 'someone/Mixed-2b-GGUF';
+    const sha = 'c'.repeat(40);
+    const tags = ['gguf', 'license:apache-2.0', 'license:gemma', 'license:llama3'];
+    const info = { id: repo, sha, tags, cardData: { license: ['apache-2.0', 'Gemma', 42] } };
+    const server = await serve({
+      ...repoRoutes(repo, sha, info, qwenTree),
+      'GET /api/models': json([{ id: repo, tags }]),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+
+    expect((await hub.getModel(repo)).licenses).toEqual(['apache-2.0', 'gemma', 'llama3']);
+    expect((await hub.search({ query: 'mixed' })).models[0]?.licenses).toEqual(['apache-2.0', 'gemma', 'llama3']);
   });
 
   it('flags missing shards and picks a tag no earlier file name ends with', async () => {
@@ -332,7 +347,7 @@ describe('HuggingFaceHub.getModel', () => {
     expect(detail.projectors.map(projector => [projector.path, projector.quant])).toEqual([
       ['vision/odd.mmproj-q8_0.gguf', 'Q8_0'],
     ]);
-    expect(detail).toMatchObject({ license: null, gguf: null, gated: false, author: 'someone' });
+    expect(detail).toMatchObject({ licenses: [], gguf: null, gated: false, author: 'someone' });
   });
 
   it('follows a same-origin redirect for a renamed repo and uses the new id', async () => {
@@ -591,7 +606,7 @@ describe('HuggingFaceHub gated repos', () => {
   it('reports a gated repo as not downloadable without a token, and does not probe it', async () => {
     const server = await serve(repoRoutes(repo, gatedSha, gatedInfo, gatedTree));
     const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
-    expect(detail).toMatchObject({ gated: 'manual', canDownload: false, license: 'gemma', ollamaNeedsSshKey: true });
+    expect(detail).toMatchObject({ gated: 'manual', canDownload: false, licenses: ['gemma'], ollamaNeedsSshKey: true });
     expect(detail.builds).toEqual([
       expect.objectContaining({
         quant: 'Q4_0',

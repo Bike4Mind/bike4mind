@@ -39,6 +39,7 @@ const MAX_ERROR_BODY_BYTES = 64 * 1024;
 const MAX_REDIRECTS = 3;
 const MAX_TAGS = 30;
 const MAX_BASE_MODELS = 10;
+const MAX_LICENSES = 10;
 
 export type HubSort = 'downloads' | 'likes' | 'trending' | 'updated';
 
@@ -78,8 +79,11 @@ export interface HubModelSummary {
   pipelineTag: string | null;
   gated: HubGated;
   private: boolean;
-  /** License id, e.g. `apache-2.0`; `other` means the card names it in `licenseName`. */
-  license: string | null;
+  /**
+   * Every declared license id, lowercased and deduped, e.g. `['apache-2.0', 'gemma']`; empty when none is declared.
+   * A repo that lists several is bound by all of them. `other` means the card names it in `licenseName`.
+   */
+  licenses: string[];
   /** Repos the GGUF was converted from, whose card and license usually govern it. */
   baseModels: string[];
   /** Tags without the `license:`, `base_model:`, `arxiv:` and `region:` bookkeeping. */
@@ -415,6 +419,10 @@ function strings(value: unknown, maxLength = 200): string[] {
   return list.filter((entry): entry is string => typeof entry === 'string' && !!entry && entry.length <= maxLength);
 }
 
+function licenseIds(values: string[]): string[] {
+  return [...new Set(values.map(value => value.trim().toLowerCase()).filter(Boolean))].slice(0, MAX_LICENSES);
+}
+
 function toSummary(entry: ModelEntry): HubModelSummary {
   const tags = strings(entry.tags ?? []);
   return {
@@ -426,7 +434,7 @@ function toSummary(entry: ModelEntry): HubModelSummary {
     pipelineTag: entry.pipeline_tag ?? null,
     gated: toGated(entry.gated),
     private: entry.private ?? false,
-    license: tags.find(tag => tag.startsWith('license:'))?.slice('license:'.length) || null,
+    licenses: licenseIds(tags.flatMap(tag => (tag.startsWith('license:') ? [tag.slice('license:'.length)] : []))),
     baseModels: tags
       .flatMap(tag => /^base_model:([^:]+)$/.exec(tag)?.slice(1) ?? [])
       .filter(isHubRepoId)
@@ -641,7 +649,7 @@ export class HuggingFaceHub {
     const probe = builds[0]?.files[0] ?? projectors[0];
     return {
       ...summary,
-      license: strings(card.license)[0] ?? summary.license,
+      licenses: licenseIds([...strings(card.license), ...summary.licenses]),
       baseModels: cardBaseModels.length > 0 ? cardBaseModels : summary.baseModels,
       revision,
       licenseName: strings(card.license_name)[0] ?? null,

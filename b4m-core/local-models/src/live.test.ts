@@ -171,7 +171,7 @@ describe.runIf(HF)('live Hugging Face Hub', () => {
     expect(first.models.find(model => model.id === 'Qwen/Qwen2.5-0.5B-Instruct-GGUF')).toMatchObject({
       author: 'Qwen',
       gated: false,
-      license: 'apache-2.0',
+      licenses: ['apache-2.0'],
       pipelineTag: 'text-generation',
     });
     expect(first.nextCursor).not.toBeNull();
@@ -195,7 +195,7 @@ describe.runIf(HF)('live Hugging Face Hub', () => {
     ]);
     expect(build?.ollamaRef).toBe('hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M');
     expect(detail).toMatchObject({
-      license: 'apache-2.0',
+      licenses: ['apache-2.0'],
       baseModels: ['Qwen/Qwen2.5-0.5B-Instruct'],
       canDownload: true,
     });
@@ -220,13 +220,24 @@ describe.runIf(HF)('live Hugging Face Hub', () => {
     );
     expect(detail.projectors.map(projector => projector.quant).sort()).toEqual(['BF16', 'F16', 'F32']);
     expect(detail.builds.find(build => build.quant === 'UD-Q4_K_XL')?.ollamaRef).toBe(`hf.co/${repo}:UD-Q4_K_XL`);
-    expect(detail).toMatchObject({ license: 'other', licenseName: 'qwen', pipelineTag: 'image-text-to-text' });
+    expect(detail).toMatchObject({ licenses: ['other'], licenseName: 'qwen', pipelineTag: 'image-text-to-text' });
+  });
+
+  it('keeps the second license of repos that declare two', async () => {
+    expect((await hub().getModel('DevWorld/Gemago-2b-Q4_K_M-GGUF')).licenses).toEqual(['apache-2.0', 'gemma']);
+    expect((await hub().getModel('mradermacher/Gemago-2b-GGUF')).licenses).toEqual(['apache-2.0', 'gemma']);
+    expect((await hub().getModel('mradermacher/Lune-GGUF')).licenses).toEqual(['apache-2.0', 'llama3']);
+    const found = await hub().search({ query: 'Gemago-2b', limit: 20 });
+    expect(found.models.find(model => model.id === 'mradermacher/Gemago-2b-GGUF')?.licenses).toEqual([
+      'apache-2.0',
+      'gemma',
+    ]);
   });
 
   it('reports a gated repo as gated and not downloadable without a token', async () => {
     const repo = 'google/gemma-3-1b-it-qat-q4_0-gguf';
     const detail = await hub().getModel(repo);
-    expect(detail).toMatchObject({ gated: 'manual', canDownload: false, license: 'gemma', ollamaNeedsSshKey: true });
+    expect(detail).toMatchObject({ gated: 'manual', canDownload: false, licenses: ['gemma'], ollamaNeedsSshKey: true });
     expect(detail.builds[0]?.files[0]?.sha256).toBeNull();
     const head = await fetch(detail.builds[0]?.files[0]?.url ?? '', { method: 'HEAD', redirect: 'manual' });
     expect([head.status, head.headers.get('x-error-code')]).toEqual([401, 'GatedRepo']);
