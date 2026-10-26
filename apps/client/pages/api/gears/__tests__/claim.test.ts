@@ -133,6 +133,19 @@ beforeEach(() => {
 });
 
 describe('POST /api/gears/claim', () => {
+  it('propagates a failed trust lookup without starting a payout', async () => {
+    unlockProjects();
+    const lookupError = new Error('User lookup unavailable');
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.reject(lookupError) });
+
+    const { res, promise } = claim({ key: 'projects' });
+
+    await expect(promise).rejects.toBe(lookupError);
+    expect(res._isEndCalled()).toBe(false);
+    expect(mocks.withTransaction).not.toHaveBeenCalled();
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
   it('401s without a user', async () => {
     const { res, promise } = claim({ key: 'projects' }, null);
     await promise;
@@ -153,6 +166,7 @@ describe('POST /api/gears/claim', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ key: 'projects', creditsAwarded: 1000 });
+    expect(mocks.userFindById).toHaveBeenCalledExactlyOnceWith('u1', { createdAt: 1, emailVerified: 1 });
     expect(mocks.addCredits).toHaveBeenCalledTimes(1);
     expect(mocks.addCredits.mock.calls[0][0]).toMatchObject({
       ownerId: 'u1',

@@ -152,7 +152,9 @@ const GearsPage = () => {
         // A phone's header has room for the chip alone, and the copy below is long,
         // so the claim goes right under the header rather than after it.
         banner={
-          isMobile && rewardState(open) === 'claimable' ? (
+          rewardState(open) === 'pending' ? (
+            <PendingRewardNote gear={open} />
+          ) : isMobile && rewardState(open) === 'claimable' ? (
             <ClaimButton gear={open} onClaim={() => claim(open)} mt="0px" testId={`gear-detail-claim-${open.key}`} />
           ) : undefined
         }

@@ -401,6 +401,8 @@ export async function evaluateGears(
 
       let rewardEligible: boolean;
       let pendingReason: GearPendingReason | undefined;
+      // Payouts require email verification and age even when API-key access has
+      // an admin, purchase, plan or manual-approval exemption: access is not a reward.
       if (!unlocked || alreadyRewarded) {
         rewardEligible = unlocked;
       } else if (!facts.emailVerified) {

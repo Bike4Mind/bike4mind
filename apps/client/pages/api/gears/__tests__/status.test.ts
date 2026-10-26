@@ -120,6 +120,18 @@ beforeEach(() => {
 });
 
 describe('GET /api/gears/status', () => {
+  it('propagates a failed trust lookup without reporting eligibility', async () => {
+    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
+    const lookupError = new Error('User lookup unavailable');
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.reject(lookupError) });
+
+    const { res, promise } = run({ id: 'u1' });
+
+    await expect(promise).rejects.toBe(lookupError);
+    expect(res._isEndCalled()).toBe(false);
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
   it('401s without a user', async () => {
     const { res, promise } = run();
     await promise;
@@ -131,6 +143,7 @@ describe('GET /api/gears/status', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
+    expect(mocks.userFindById).toHaveBeenCalledExactlyOnceWith('u1', { createdAt: 1, emailVerified: 1 });
     const body = res._getJSONData() as { gears: Array<{ unlocked: boolean }>; totalUnlocked: number };
     expect(body.gears).toHaveLength(GEAR_DEFAULTS.length);
     expect(body.gears.every(g => !g.unlocked)).toBe(true);
