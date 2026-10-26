@@ -170,6 +170,7 @@ describe('system prompt admin audit', () => {
         target: expect.objectContaining({ id: 'p1' }),
       })
     );
+    expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain(longContent);
   });
 
   it('DELETE records deleted', async () => {
