@@ -233,7 +233,8 @@ const handler = baseApi()
           );
         }
 
-        await (await createModelAdmission(user, models)).assert(modelInfo.id);
+        // A platform-picked fallback (no request model) is not a user choice, so it skips the user-facing gates.
+        await (await createModelAdmission(user, models, !model)).assert(modelInfo.id);
 
         // Initialize LLM backend
         const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });
