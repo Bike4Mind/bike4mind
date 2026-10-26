@@ -6,7 +6,7 @@ import { slackDevWorkspaceRepository } from '@bike4mind/database';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import pLimit from 'p-limit';
-import { CSV_FORMULA_PREFIX } from '@client/app/utils/csv';
+import { escapeCsvField } from '@bike4mind/server-utils/integrations/slack/slackExportCsv';
 import {
   isSlackUserValidationError,
   isSlackUserValidationErrorByMessage,
@@ -383,22 +383,6 @@ async function fetchThreadReplies(channelId: string, threadTs: string, slackBotT
     }
     return [];
   }
-}
-
-/**
- * Escape CSV field to prevent formula injection and parsing issues
- */
-export function escapeCsvField(field: string): string {
-  if (!field) return '';
-
-  if (CSV_FORMULA_PREFIX.test(field)) {
-    field = "'" + field;
-  }
-
-  // Escape quotes and newlines for proper CSV parsing
-  field = field.replace(/"/g, '""').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-
-  return field;
 }
 
 /**

@@ -1,13 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
-
-vi.mock('sst', () => ({ Resource: {} }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ get: () => ({ get: vi.fn() }), post: () => ({ post: vi.fn() }) }),
-}));
-vi.mock('@bike4mind/database', () => ({ slackDevWorkspaceRepository: {} }));
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: () => 'x' }));
-
-import { escapeCsvField } from '../pages/api/slack/export/channel';
+import { describe, it, expect } from 'vitest';
+import { escapeCsvField, SLACK_CSV_FORMULA_PREFIX } from '@bike4mind/server-utils/integrations/slack/slackExportCsv';
+import { CSV_FORMULA_PREFIX } from '../app/utils/csv';
 
 /**
  * Comprehensive Test Suite for Slack Channel Export API
@@ -52,6 +45,10 @@ const mockExportData = {
 };
 
 describe('Slack Export - CSV Formula Escaping', () => {
+  it('uses the same formula prefix as the shared client CSV helper', () => {
+    expect(SLACK_CSV_FORMULA_PREFIX.source).toBe(CSV_FORMULA_PREFIX.source);
+  });
+
   it('should escape = formula cells', () => {
     const malicious = '=cmd|"/c calc"!A1';
     const escaped = escapeCsvField(malicious);

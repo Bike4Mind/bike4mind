@@ -1,4 +1,8 @@
-/** Leading characters that make a spreadsheet evaluate a cell as a formula. */
+/**
+ * Leading characters that make a spreadsheet evaluate a cell as a formula.
+ * Must stay in sync with SLACK_CSV_FORMULA_PREFIX in @bike4mind/server-utils/integrations/slack/slackExportCsv,
+ * which apps/workers can reach and this file cannot.
+ */
 export const CSV_FORMULA_PREFIX = /^[=+\-@\t\r]/;
 
 /**
