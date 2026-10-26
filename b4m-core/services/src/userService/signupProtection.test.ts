@@ -150,6 +150,24 @@ describe('signup protection and credit boundary', () => {
     const user = fixture.user(1);
     expect(await protectSignupCredits(user.id, fixture.db)).toBe(true);
   });
+  it('honors a release after the initial hold lookup', async () => {
+    const fixture = buildFixture();
+    const review: SignupDomainReview = {
+      domain: 'example.net',
+      status: 'held_pending_review',
+      reason: 'abuse',
+      triggeredAt: new Date(),
+      cohortUserIds: [],
+      sampleEmails: [],
+      signupCount: 5,
+    };
+    vi.mocked(fixture.repository.findReview)
+      .mockResolvedValueOnce(review)
+      .mockResolvedValueOnce({ ...review, status: 'released' });
+    const user = fixture.user(1);
+    expect(await protectSignupCredits(user.id, fixture.db)).toBe(false);
+    expect(fixture.repository.findReview).toHaveBeenCalledTimes(2);
+  });
   it('does not re-tag an already granted balance when its domain is held', async () => {
     const fixture = buildFixture();
     fixture.setReview({

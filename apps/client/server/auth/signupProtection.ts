@@ -1,6 +1,7 @@
 import { signupProtectionRepository } from '@bike4mind/database';
 import type { SignupProtection } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { escapeSlackText } from '@bike4mind/services';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 
 export const signupProtection: SignupProtection = {
@@ -13,9 +14,9 @@ export const signupProtection: SignupProtection = {
       const reviewLink = process.env.APP_URL ? new URL(reviewPath, process.env.APP_URL).href : reviewPath;
       const sent = await postMessageToSlack(
         [
-          `Signup domain held: ${review.domain}`,
-          `${review.signupCount} verified signups. ${review.reason}`,
-          `Samples: ${review.sampleEmails.join(', ')}`,
+          `Signup domain held: ${escapeSlackText(review.domain)}`,
+          `${review.signupCount} verified signups. ${escapeSlackText(review.reason)}`,
+          `Samples: ${review.sampleEmails.map(escapeSlackText).join(', ')}`,
           `Review: ${reviewLink}`,
         ].join('\n'),
         'SlackSecurityAlertsWebhookUrl',
