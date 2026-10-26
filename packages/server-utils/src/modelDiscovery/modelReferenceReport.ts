@@ -14,12 +14,10 @@ import { apiKeyService } from '@bike4mind/services';
 import { builtInAgentModelReferences } from '@bike4mind/services/llm/agents/ServerAgentStore';
 import { DEFAULT_FALLBACK_CHAIN, FALLBACK_PREFERENCES, getSettingsByNames } from '@bike4mind/utils';
 
-const MODEL_SETTINGS = [
-  'DefaultAPIModel',
-  'voiceSessionTranscriptionModel',
-  'OrgFeedbackSummaryModel',
-  'EmailAnalysisModel',
-] as const;
+// voiceSessionTranscriptionModel is deliberately absent: it goes straight to the
+// OpenAI Realtime API (pages/api/ai/voice-sessions), never through the merged
+// model list, so that list cannot judge it and flags the *-transcribe options.
+const MODEL_SETTINGS = ['DefaultAPIModel', 'OrgFeedbackSummaryModel', 'EmailAnalysisModel'] as const;
 
 export async function configuredModelReferences(): Promise<Record<string, string>> {
   const entries = await Promise.all(

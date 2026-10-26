@@ -100,6 +100,17 @@ describe('modelReferenceReport', () => {
     ]);
   });
 
+  it('does not audit the voice transcription model against the completion model list', async () => {
+    mocks.getSettingsValue.mockImplementation(async (key: string) => {
+      if (key === 'orchestrationDefaults') {
+        return { fallbackModels: [], intentClassifier: { enabled: false, primaryModel: 'live', fallbackModels: [] } };
+      }
+      return key === 'voiceSessionTranscriptionModel' ? 'gpt-4o-mini-transcribe' : '';
+    });
+    const report = await modelReferenceReport();
+    expect(report.filter(reference => reference.surface === 'configured-model')).toEqual([]);
+  });
+
   it('does not audit the disabled intent classifier', async () => {
     mocks.getSettingsValue.mockImplementation(async (key: string) =>
       key === 'orchestrationDefaults'
