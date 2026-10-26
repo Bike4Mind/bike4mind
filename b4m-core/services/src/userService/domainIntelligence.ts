@@ -6,7 +6,9 @@ import { isDisposableEmail, REJECT_TIER_SOURCES } from './disposableEmail';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INTEL_TTL_MS = 7 * DAY_MS;
-const FAILED_INTEL_TTL_MS = DAY_MS;
+// Short because a cold start's bootstrap fetch can eat the whole budget; an hour bounds how long a
+// domain escapes while still capping retries against a registry that is down or rate limiting.
+const FAILED_INTEL_TTL_MS = 60 * 60 * 1000;
 const RDAP_BOOTSTRAP_URL = 'https://data.iana.org/rdap/dns.json';
 const RDAP_BOOTSTRAP_TTL_MS = DAY_MS;
 // Fetched outside the per-signup budget so a slow cold start still warms the next lookup.
@@ -134,7 +136,7 @@ export async function lookupDomainIntel(domain: string, opts: DomainLookupOption
 
 /**
  * Cached intel for a registrable domain: at most one network lookup per domain per TTL (7 days, or
- * 24 hours after a failed lookup). A cache write failure is logged and the fresh result still used.
+ * 1 hour after a failed lookup). A cache write failure is logged and the fresh result still used.
  */
 export async function getDomainIntel(
   domain: string,

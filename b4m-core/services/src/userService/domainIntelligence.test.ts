@@ -83,7 +83,7 @@ describe('lookupDomainIntel', () => {
       })
     );
     expect(rateLimited.failed.sort()).toEqual(['mx', 'rdap']);
-    expect(rateLimited.expiresAt.getTime() - NOW.getTime()).toBe(24 * 60 * 60 * 1000);
+    expect(rateLimited.expiresAt.getTime() - NOW.getTime()).toBe(60 * 60 * 1000);
     const noServer = await lookupDomainIntel('unlisted.invalidtld', lookupOptions());
     expect(noServer.failed).toEqual(['rdap']);
   });
