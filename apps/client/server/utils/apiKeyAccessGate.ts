@@ -4,7 +4,11 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { ladderRateTier, resolveUserRateTier, type RateTierUser } from '@server/utils/userRateTier';
+import {
+  getActiveSubscriptionsForUser,
+  type ActiveSubscriptionsRequest,
+} from '@server/entitlements/activeSubscriptions';
+import { hasPaidSubscription, type RateTierUser } from '@server/utils/userRateTier';
 
 /** Values of the `apiKeyAccess` admin setting (settings.ts). */
 export type ApiKeyAccessMode = 'all' | 'paid' | 'disabled';
@@ -15,65 +19,94 @@ export const CLI_ACCESS_DENIED_MESSAGE = 'The CLI and desktop app require an act
 /** OAuth error code for a refusal by this switch, distinct from a revoked or denied grant. */
 export const SUBSCRIPTION_REQUIRED_ERROR = 'subscription_required';
 
-/** Who a key bills. Org-billed keys are paid for by the org, so its plan counts too. */
+/** The key being minted or used: who it bills, and whether an admin provisioned it. */
 export interface ApiKeyBillingRef {
   billingOwnerType?: CreditHolderType;
   organizationId?: string;
+  /** Set only by the admin generate-api-key route (metadata.createdByUserId). */
+  createdByUserId?: string;
 }
 
-/** Mirrors the setting's default in settings.ts: paid-only on hosted, open on self-host. */
-function defaultMode(): ApiKeyAccessMode {
-  return process.env.B4M_SELF_HOST === 'true' ? 'all' : 'paid';
-}
+/** A flip reaches every process within this window without a settings read per request. */
+const MODE_CACHE_TTL_MS = 30_000;
+let modeCache: { mode: ApiKeyAccessMode; expiresAt: number } | undefined;
 
-function parseMode(value: unknown): ApiKeyAccessMode {
-  return value === 'all' || value === 'paid' || value === 'disabled' ? value : defaultMode();
+/** Drops the cached setting, e.g. in tests or right after an admin write in this process. */
+export function clearApiKeyAccessModeCache(): void {
+  modeCache = undefined;
 }
 
 async function readMode(): Promise<ApiKeyAccessMode> {
-  // Uncached so flipping the switch takes effect on the next request in every process,
-  // not after the 5-minute settings-cache TTL. One indexed read.
+  if (modeCache && modeCache.expiresAt > Date.now()) return modeCache.mode;
+  // Bypasses the shared 5-minute settings cache; one indexed read per process per TTL.
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
     { skipCache: true, names: ['apiKeyAccess'] }
   );
-  return parseMode(getSettingsValue('apiKeyAccess', settings));
+  // getSettingsValue resolves an unset or invalid stored value to the settings.ts default.
+  const value = getSettingsValue('apiKeyAccess', settings);
+  const mode: ApiKeyAccessMode = value === 'all' || value === 'disabled' ? value : 'paid';
+  modeCache = { mode, expiresAt: Date.now() + MODE_CACHE_TTL_MS };
+  return mode;
+}
+
+/**
+ * The user's active subscriptions, through the request memo when there is one. Strict, so an
+ * org-leg read error reaches the caller as a 5xx instead of under-granting a seat member to a
+ * terminal 403. A successful read seeds `req.activeSubscriptions` for the rate limiter and
+ * entitlement gate later in the same request.
+ */
+async function userSubscriptions(user: RateTierUser, req?: ActiveSubscriptionsRequest) {
+  const sameUser = req && (!req.user || req.user.id === user.id);
+  if (sameUser && req.activeSubscriptions) return req.activeSubscriptions;
+  const rows = await getActiveSubscriptionsForUser(user.id, { strict: true });
+  if (sameUser) req.activeSubscriptions = rows;
+  return rows;
 }
 
 async function orgHasPaidPlan(organizationId: string): Promise<boolean> {
   const rows = await subscriptionRepository.findActiveSubscriptionsByOwners(SubscriptionOwnerType.Organization, [
     organizationId,
   ]);
-  return ladderRateTier(rows) !== 'free';
+  return hasPaidSubscription(rows);
 }
 
 /**
  * Whether `user` may mint or use a personal API key under the `apiKeyAccess` setting.
- * Admins and developer-tagged users always pass. Under `paid`, the user needs a Basic/Pro
- * ladder subscription (own or org seat, see getActiveSubscriptionsForUser), or the key is
- * org-billed and that org holds one. A setting or subscription read error propagates: the
- * caller fails closed with a 5xx (toApiKeyAuthError), never an allow and never a 403 that
+ * Admins, developer-tagged users and admin-provisioned keys always pass. Under `paid`, the
+ * user needs an active paid plan (own or org seat, see getActiveSubscriptionsForUser), or the
+ * key is org-billed and that org holds one. A setting or subscription read error propagates:
+ * the caller fails closed with a 5xx (toApiKeyAuthError), never an allow and never a 403 that
  * would tell a machine client its key is bad.
  */
-export async function isApiKeyAccessAllowed(user: RateTierUser, billing?: ApiKeyBillingRef): Promise<boolean> {
+export async function isApiKeyAccessAllowed(
+  user: RateTierUser,
+  key?: ApiKeyBillingRef,
+  req?: ActiveSubscriptionsRequest
+): Promise<boolean> {
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return true;
+  // An admin chose to provision this key for the account, so it is not self-service access.
+  if (key?.createdByUserId) return true;
 
   const mode = await readMode();
   if (mode === 'all') return true;
   if (mode === 'disabled') return false;
 
-  const tier = await resolveUserRateTier(user);
-  if (tier !== 'free') return true;
+  if (hasPaidSubscription(await userSubscriptions(user, req))) return true;
 
-  if (billing?.billingOwnerType === CreditHolderType.Organization && billing.organizationId) {
-    return orgHasPaidPlan(billing.organizationId);
+  if (key?.billingOwnerType === CreditHolderType.Organization && key.organizationId) {
+    return orgHasPaidPlan(key.organizationId);
   }
   return false;
 }
 
 /** Throws ForbiddenError when {@link isApiKeyAccessAllowed} denies. */
-export async function assertApiKeyAccessAllowed(user: RateTierUser, billing?: ApiKeyBillingRef): Promise<void> {
-  if (!(await isApiKeyAccessAllowed(user, billing))) {
+export async function assertApiKeyAccessAllowed(
+  user: RateTierUser,
+  key?: ApiKeyBillingRef,
+  req?: ActiveSubscriptionsRequest
+): Promise<void> {
+  if (!(await isApiKeyAccessAllowed(user, key, req))) {
     throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
   }
 }

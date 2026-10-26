@@ -148,12 +148,6 @@ const handler = baseApi()
     const { name, scopes, expiresAt, rateLimit, organizationId, agentId, allowedOrigins, branding, spendCap } =
       req.body;
 
-    // The admin paid-only switch; the same gate re-runs on every use of the key (apiKeyAuth).
-    await assertApiKeyAccessAllowed(
-      req.user,
-      organizationId ? { billingOwnerType: CreditHolderType.Organization, organizationId } : undefined
-    );
-
     // Reject any scope outside the self-service allowlist. ADMIN, CC_BRIDGE, and
     // other dedicated-flow scopes are intentionally absent from USER_API_KEY_SCOPE_VALUES
     // and must never be reachable here, regardless of what the request body contains.
@@ -180,6 +174,14 @@ const handler = baseApi()
         throw new ForbiddenError('You do not have permission to mint API keys billed to this organization');
       }
     }
+
+    // The admin paid-only switch, after the org check so an unauthorized caller learns nothing
+    // about an org's plan. The same gate re-runs on every use of the key (apiKeyAuth).
+    await assertApiKeyAccessAllowed(
+      req.user,
+      organizationId ? { billingOwnerType: CreditHolderType.Organization, organizationId } : undefined,
+      req
+    );
 
     // Embed keys: apply the host-aware origin screen here (needs the runtime app
     // host). The service re-validates format/dedup/cap and enforces the agentId

@@ -13,10 +13,10 @@ import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsage
 import { logEvent } from '@server/utils/analyticsLog';
 
 const { validateUserApiKeyMock, findByIdMock, applyUntrustedRateLimitMock, isApiKeyAccessAllowedMock } = vi.hoisted(() => ({
-  isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown) => true),
   validateUserApiKeyMock: vi.fn(),
   findByIdMock: vi.fn(),
   applyUntrustedRateLimitMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit),
+  isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown, _req?: unknown) => true),
 }));
 
 vi.mock('@bike4mind/services', async importOriginal => ({
@@ -505,10 +505,29 @@ describe('apiKeyAuth paid-only access switch', () => {
     const req = makeReq();
     expect((await run(undefined, req)).passed).toBe(true);
     expect(isAdminAtCheck).toBe(true);
-    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(expect.anything(), {
-      billingOwnerType: CreditHolderType.Organization,
-      organizationId: 'org-1',
+    // The request rides along so the gate seeds the per-request subscription memo.
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(
+      expect.anything(),
+      { billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1', createdByUserId: undefined },
+      req
+    );
+  });
+
+  it('passes the provisioning admin so admin-provisioned keys are exempt', async () => {
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      createdByUserId: 'admin-9',
     });
+    expect((await run(undefined, makeReq())).passed).toBe(true);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ createdByUserId: 'admin-9' }),
+      expect.anything()
+    );
   });
 
   it('fails closed with a 5xx, not a pass, when the access check cannot read', async () => {

@@ -63,6 +63,14 @@ export async function resolveUserRateTier(user: RateTierUser, req?: ActiveSubscr
 }
 
 /**
+ * Whether any active subscription is on a paid plan, ladder or not. Distinct from the rate
+ * tier: a standalone plan is paid but confers no tier.
+ */
+export function hasPaidSubscription(activeSubscriptions: readonly Pick<ActiveSubscription, 'priceId'>[]): boolean {
+  return activeSubscriptions.some(subscription => getEntitlingPlanByPriceId(subscription.priceId) !== undefined);
+}
+
+/**
  * The HIGHEST ladder tier across a set of active subscriptions. Plans with no `tier`
  * (standalone single-product plans sold off the main ladder) are not on the ladder and
  * don't confer a tier - they fall through to `free` unless another subscription grants one.

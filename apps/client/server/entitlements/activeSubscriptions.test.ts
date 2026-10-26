@@ -119,6 +119,14 @@ describe('getActiveSubscriptionsForUser', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it('strict rethrows an org-leg failure instead of degrading to the user rows', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([own]);
+    findPlanHolderOrgIds.mockRejectedValue(new Error('mongo unavailable'));
+
+    await expect(getActiveSubscriptionsForUser('u1', { strict: true })).rejects.toThrow('mongo unavailable');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('still fails when the user-owned read fails (nothing to degrade to)', async () => {
     findActiveUserSubscriptions.mockRejectedValue(new Error('mongo unavailable'));
 

@@ -63,6 +63,8 @@ export interface ApiKeyInfo {
   spendCap?: number;
   /** Cumulative settled spend in credits at validation time; embed keys only. */
   currentSpend?: number;
+  /** The admin who provisioned the key for its owner; exempts it from the paid-only switch. */
+  createdByUserId?: string;
 }
 
 /**
@@ -202,6 +204,7 @@ function toApiKeyInfo(v: {
   branding?: IEmbedBranding;
   spendCap?: number;
   currentSpend?: number;
+  createdByUserId?: string;
 }): ApiKeyInfo {
   return {
     keyId: v.keyId!,
@@ -216,6 +219,7 @@ function toApiKeyInfo(v: {
     branding: v.branding,
     spendCap: v.spendCap,
     currentSpend: v.currentSpend,
+    createdByUserId: v.createdByUserId,
   };
 }
 
@@ -248,6 +252,7 @@ async function assertOwnerAccountUsable(info: ApiKeyInfo) {
   const accessAllowed = await isApiKeyAccessAllowed(user, {
     billingOwnerType: info.billingOwnerType,
     organizationId: info.organizationId,
+    createdByUserId: info.createdByUserId,
   });
   if (!accessAllowed) {
     Logger.globalInstance.warn('API key rejected: apiKeyAccess setting denies this owner', {

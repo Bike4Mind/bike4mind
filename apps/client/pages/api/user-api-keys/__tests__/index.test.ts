@@ -776,6 +776,12 @@ describe('POST /api/user-api-keys - paid-only access switch', () => {
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 
+  it('answers an unauthorized org-billed mint with the org-permission 403 before reading any plan', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['notebooks:read'], organizationId: 'someone-elses-org' });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/permission to mint API keys billed/);
+    expect(isApiKeyAccessAllowedMock).not.toHaveBeenCalled();
+  });
+
   it('passes the org as billing owner for an org-billed mint', async () => {
     const { req, res } = post({ name: 'k', scopes: ['notebooks:read'], organizationId: 'org-9' }, { isAdmin: true });
     await mockRefs.postHandler!(req, res);

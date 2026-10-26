@@ -26,12 +26,18 @@ async function getActiveOrgSubscriptionsForUser(userId: string): Promise<ActiveS
  * If the org leg (membership or org-subscription read) fails, this degrades to the user's own rows
  * and logs: a seat member is under-granted for that request (the pre-seat behavior) instead of
  * every gated route and `/me` failing for every org member. The user-row read still throws.
+ * `strict` rethrows the org-leg error instead, for callers that must not mistake a read
+ * failure for "no plan" (the API key access gate, which would otherwise answer a terminal 403).
  */
-export async function getActiveSubscriptionsForUser(userId: string): Promise<ActiveSubscription[]> {
+export async function getActiveSubscriptionsForUser(
+  userId: string,
+  options?: { strict?: boolean }
+): Promise<ActiveSubscription[]> {
   const resolveOrgRows = async (): Promise<ActiveSubscription[]> => {
     try {
       return await getActiveOrgSubscriptionsForUser(userId);
     } catch (error) {
+      if (options?.strict) throw error;
       Logger.globalInstance.warn('[entitlements] org-seat resolution failed; using user-owned subscriptions only', {
         userId,
         error,

@@ -166,10 +166,15 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
 
       // Must run before withholdAdminRole: admins bypass the paid-only switch.
       if (
-        !(await isApiKeyAccessAllowed(user, {
-          billingOwnerType: validation.billingOwnerType,
-          organizationId: validation.organizationId,
-        }))
+        !(await isApiKeyAccessAllowed(
+          user,
+          {
+            billingOwnerType: validation.billingOwnerType,
+            organizationId: validation.organizationId,
+            createdByUserId: validation.createdByUserId,
+          },
+          req
+        ))
       ) {
         req.logger?.warn('API key rejected: apiKeyAccess setting denies this owner', {
           keyId: validation.keyId,

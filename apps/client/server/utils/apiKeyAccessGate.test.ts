@@ -1,129 +1,161 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CreditHolderType, ForbiddenError } from '@bike4mind/common';
 
-const { getSettingsMapMock, resolveUserRateTierMock, findActiveSubscriptionsByOwnersMock, ladderRateTierMock } =
+// Price ids are read from env when the plan constants load, so set them before any import:
+// the real SUBSCRIPTION_PLANS / TEAM_PLAN then carry these ids, and the gate resolves them
+// through the real getEntitlingPlanByPriceId.
+const PRICE = vi.hoisted(() => {
+  const ids = { basic: 'price_test_professional', team: 'price_test_team', standalone: 'price_test_libonc' };
+  process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST = ids.basic;
+  process.env.NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_TEST = ids.team;
+  process.env.NEXT_PUBLIC_STRIPE_PRICE_LIBONC_TEST = ids.standalone;
+  return ids;
+});
+
+const { getSettingsMapMock, getActiveSubscriptionsForUserMock, findActiveSubscriptionsByOwnersMock, findBySidMock } =
   vi.hoisted(() => ({
     getSettingsMapMock: vi.fn<(...args: unknown[]) => Promise<Record<string, string>>>(),
-    resolveUserRateTierMock: vi.fn(),
+    getActiveSubscriptionsForUserMock: vi.fn(),
     findActiveSubscriptionsByOwnersMock: vi.fn(),
-    ladderRateTierMock: vi.fn(),
+    findBySidMock: vi.fn(),
   }));
 
 vi.unmock('@server/utils/apiKeyAccessGate');
-const { findBySidMock } = vi.hoisted(() => ({ findBySidMock: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   authSessionRepository: { findBySid: findBySidMock },
 }));
-vi.mock('@bike4mind/utils', () => ({
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: (...args: unknown[]) => getSettingsMapMock(...args),
-  getSettingsValue: (key: string, settings: Record<string, string>) => settings[key],
 }));
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwners: findActiveSubscriptionsByOwnersMock },
 }));
-vi.mock('@server/utils/userRateTier', () => ({
-  resolveUserRateTier: resolveUserRateTierMock,
-  ladderRateTier: ladderRateTierMock,
+vi.mock('@server/entitlements/activeSubscriptions', () => ({
+  getActiveSubscriptionsForUser: getActiveSubscriptionsForUserMock,
+  getRequestActiveSubscriptions: vi.fn(),
 }));
 
 import {
-  assertApiKeyAccessAllowed,
-  isApiKeyAccessAllowed,
   API_KEY_ACCESS_DENIED_MESSAGE,
-  assertCliSessionAllowed,
   CLI_ACCESS_DENIED_MESSAGE,
+  assertApiKeyAccessAllowed,
+  assertCliSessionAllowed,
+  clearApiKeyAccessModeCache,
+  isApiKeyAccessAllowed,
 } from '@server/utils/apiKeyAccessGate';
 
 const USER = { id: 'user-1', isAdmin: false, tags: [] };
 const ADMIN = { id: 'admin-1', isAdmin: true, tags: [] };
+const DEV = { id: 'dev-1', tags: ['developer'] };
 
 const setMode = (mode: string | undefined) =>
   getSettingsMapMock.mockResolvedValue(mode === undefined ? {} : { apiKeyAccess: mode });
+const subscribedTo = (...priceIds: string[]) =>
+  getActiveSubscriptionsForUserMock.mockResolvedValue(priceIds.map(priceId => ({ priceId })));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  clearApiKeyAccessModeCache();
+  subscribedTo();
+  findActiveSubscriptionsByOwnersMock.mockResolvedValue([]);
+});
 
 describe('isApiKeyAccessAllowed', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  // [mode, resolved tier, expected]
-  const matrix: [string, string, boolean][] = [
-    ['all', 'bypass', true],
-    ['all', 'pro', true],
+  // [mode, plan, expected]. Basic = Professional, Pro = Team (org seat), standalone = tier-less plan.
+  const matrix: [string, keyof typeof PRICE | 'none', boolean][] = [
+    ['all', 'none', true],
     ['all', 'basic', true],
-    ['all', 'free', true],
-    ['paid', 'bypass', true],
-    ['paid', 'pro', true],
+    ['paid', 'none', false],
     ['paid', 'basic', true],
-    ['paid', 'free', false],
-    ['disabled', 'bypass', true],
-    ['disabled', 'pro', false],
+    ['paid', 'team', true],
+    ['paid', 'standalone', true],
     ['disabled', 'basic', false],
-    ['disabled', 'free', false],
+    ['disabled', 'team', false],
+    ['disabled', 'none', false],
   ];
 
-  it.each(matrix)('mode=%s tier=%s -> %s', async (mode, tier, expected) => {
+  it.each(matrix)('mode=%s plan=%s -> %s', async (mode, plan, expected) => {
     setMode(mode);
-    resolveUserRateTierMock.mockResolvedValue(tier);
-    const user = tier === 'bypass' ? ADMIN : USER;
-    expect(await isApiKeyAccessAllowed(user)).toBe(expected);
+    if (plan === 'none') subscribedTo();
+    else subscribedTo(PRICE[plan]);
+    expect(await isApiKeyAccessAllowed(USER)).toBe(expected);
   });
 
-  it('lets a developer-tagged user through without reading the setting', async () => {
-    expect(await isApiKeyAccessAllowed({ id: 'dev-1', tags: ['developer'] })).toBe(true);
+  it('denies an unknown price id under paid', async () => {
+    setMode('paid');
+    subscribedTo('price_unknown');
+    expect(await isApiKeyAccessAllowed(USER)).toBe(false);
+  });
+
+  it.each([
+    ['admin', ADMIN],
+    ['developer-tagged', DEV],
+  ])('lets an %s through under disabled without reading anything', async (_label, user) => {
+    setMode('disabled');
+    expect(await isApiKeyAccessAllowed(user)).toBe(true);
     expect(getSettingsMapMock).not.toHaveBeenCalled();
   });
 
-  describe('default when the setting is unset', () => {
-    const originalSelfHost = process.env.B4M_SELF_HOST;
-    afterEach(() => {
-      if (originalSelfHost === undefined) delete process.env.B4M_SELF_HOST;
-      else process.env.B4M_SELF_HOST = originalSelfHost;
-    });
+  it('exempts an admin-provisioned key for a free owner, even under disabled', async () => {
+    setMode('disabled');
+    expect(await isApiKeyAccessAllowed(USER, { createdByUserId: 'admin-1' })).toBe(true);
+  });
 
-    it('is paid on hosted: a free user is denied, a subscriber passes', async () => {
-      delete process.env.B4M_SELF_HOST;
+  describe('setting resolution (real getSettingsValue)', () => {
+    it('defaults to paid on hosted when unset', async () => {
       setMode(undefined);
-      resolveUserRateTierMock.mockResolvedValue('free');
       expect(await isApiKeyAccessAllowed(USER)).toBe(false);
-      resolveUserRateTierMock.mockResolvedValue('pro');
+      clearApiKeyAccessModeCache();
+      subscribedTo(PRICE.basic);
       expect(await isApiKeyAccessAllowed(USER)).toBe(true);
     });
 
-    it('is all on self-host', async () => {
-      process.env.B4M_SELF_HOST = 'true';
-      setMode(undefined);
-      expect(await isApiKeyAccessAllowed(USER)).toBe(true);
-      expect(resolveUserRateTierMock).not.toHaveBeenCalled();
+    it('resolves an invalid stored value to the default (paid), failing closed', async () => {
+      setMode('PAID');
+      expect(await isApiKeyAccessAllowed(USER)).toBe(false);
+    });
+
+    it('reads the setting outside the shared settings cache', async () => {
+      setMode('all');
+      await isApiKeyAccessAllowed(USER);
+      expect(getSettingsMapMock).toHaveBeenCalledWith(expect.anything(), {
+        skipCache: true,
+        names: ['apiKeyAccess'],
+      });
     });
   });
 
-  it('reads the setting uncached so a flip applies on the next request', async () => {
-    setMode('all');
-    await isApiKeyAccessAllowed(USER);
-    expect(getSettingsMapMock).toHaveBeenCalledWith(expect.anything(), {
-      skipCache: true,
-      names: ['apiKeyAccess'],
+  describe('30 s in-process cache', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('serves the cached mode within the TTL and rereads after it', async () => {
+      vi.useFakeTimers();
+      setMode('all');
+      expect(await isApiKeyAccessAllowed(USER)).toBe(true);
+      setMode('disabled');
+      expect(await isApiKeyAccessAllowed(USER)).toBe(true);
+      expect(getSettingsMapMock).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(30_001);
+      expect(await isApiKeyAccessAllowed(USER)).toBe(false);
+      expect(getSettingsMapMock).toHaveBeenCalledTimes(2);
     });
   });
 
   describe('org-billed keys under paid', () => {
     const orgBilling = { billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1' };
 
-    beforeEach(() => {
-      setMode('paid');
-      resolveUserRateTierMock.mockResolvedValue('free');
-      findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: 'price_pro' }]);
-    });
+    beforeEach(() => setMode('paid'));
 
-    it('admits a free minter when the paying org holds a ladder plan', async () => {
-      ladderRateTierMock.mockReturnValue('pro');
+    it('admits a free minter when the paying org holds the Team plan', async () => {
+      findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: PRICE.team }]);
       expect(await isApiKeyAccessAllowed(USER, orgBilling)).toBe(true);
       expect(findActiveSubscriptionsByOwnersMock).toHaveBeenCalledWith('Organization', ['org-1']);
     });
 
-    it('denies when the paying org has no ladder plan', async () => {
-      ladderRateTierMock.mockReturnValue('free');
+    it('denies when the paying org has no paid plan', async () => {
       expect(await isApiKeyAccessAllowed(USER, orgBilling)).toBe(false);
     });
 
@@ -133,9 +165,28 @@ describe('isApiKeyAccessAllowed', () => {
     });
 
     it('never admits an org-billed key under disabled', async () => {
+      clearApiKeyAccessModeCache();
       setMode('disabled');
-      ladderRateTierMock.mockReturnValue('pro');
+      findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: PRICE.team }]);
       expect(await isApiKeyAccessAllowed(USER, orgBilling)).toBe(false);
+    });
+  });
+
+  describe('request memo', () => {
+    beforeEach(() => setMode('paid'));
+
+    it('reads strictly and seeds req.activeSubscriptions for the rest of the request', async () => {
+      subscribedTo(PRICE.basic);
+      const req: { user?: { id: string }; activeSubscriptions?: unknown[] } = {};
+      expect(await isApiKeyAccessAllowed(USER, undefined, req)).toBe(true);
+      expect(getActiveSubscriptionsForUserMock).toHaveBeenCalledWith('user-1', { strict: true });
+      expect(req.activeSubscriptions).toEqual([{ priceId: PRICE.basic }]);
+    });
+
+    it('reuses an existing memo for the same user', async () => {
+      const req = { user: { id: 'user-1' }, activeSubscriptions: [{ priceId: PRICE.team }] };
+      expect(await isApiKeyAccessAllowed(USER, undefined, req as never)).toBe(true);
+      expect(getActiveSubscriptionsForUserMock).not.toHaveBeenCalled();
     });
   });
 
@@ -145,22 +196,17 @@ describe('isApiKeyAccessAllowed', () => {
       await expect(isApiKeyAccessAllowed(USER)).rejects.toThrow('db down');
     });
 
-    it('propagates a subscription read failure under paid instead of allowing', async () => {
+    it('propagates a subscription (including org-leg) read failure under paid instead of allowing', async () => {
       setMode('paid');
-      resolveUserRateTierMock.mockRejectedValue(new Error('subs down'));
-      await expect(isApiKeyAccessAllowed(USER)).rejects.toThrow('subs down');
+      getActiveSubscriptionsForUserMock.mockRejectedValue(new Error('org leg down'));
+      await expect(isApiKeyAccessAllowed(USER)).rejects.toThrow('org leg down');
     });
   });
 });
 
 describe('assertApiKeyAccessAllowed', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   it('throws ForbiddenError with the paid-subscription message on deny', async () => {
     setMode('paid');
-    resolveUserRateTierMock.mockResolvedValue('free');
     const error = await assertApiKeyAccessAllowed(USER).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ForbiddenError);
     expect((error as Error).message).toBe(API_KEY_ACCESS_DENIED_MESSAGE);
@@ -168,17 +214,13 @@ describe('assertApiKeyAccessAllowed', () => {
 
   it('resolves on allow', async () => {
     setMode('paid');
-    resolveUserRateTierMock.mockResolvedValue('basic');
+    subscribedTo(PRICE.basic);
     await expect(assertApiKeyAccessAllowed(USER)).resolves.toBeUndefined();
   });
 });
 
 describe('assertCliSessionAllowed', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setMode('paid');
-    resolveUserRateTierMock.mockResolvedValue('free');
-  });
+  beforeEach(() => setMode('paid'));
 
   it('refuses a device-flow (CLI) session the setting denies', async () => {
     findBySidMock.mockResolvedValue({ createdVia: 'device', clientId: 'b4m-cli' });
@@ -195,12 +237,12 @@ describe('assertCliSessionAllowed', () => {
   it('leaves browser sessions alone without reading subscriptions', async () => {
     findBySidMock.mockResolvedValue({ createdVia: 'otc', clientId: null });
     await expect(assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
-    expect(resolveUserRateTierMock).not.toHaveBeenCalled();
+    expect(getActiveSubscriptionsForUserMock).not.toHaveBeenCalled();
   });
 
-  it('admits a CLI session for a subscriber', async () => {
+  it('admits a CLI session for a subscriber, including a standalone plan', async () => {
     findBySidMock.mockResolvedValue({ createdVia: 'device', clientId: 'b4m-cli' });
-    resolveUserRateTierMock.mockResolvedValue('basic');
+    subscribedTo(PRICE.standalone);
     await expect(assertCliSessionAllowed(USER, 'sid-1')).resolves.toBeUndefined();
   });
 
