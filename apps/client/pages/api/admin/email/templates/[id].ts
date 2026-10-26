@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { emailTemplateRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailCategory } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -29,9 +30,13 @@ const updateBodySchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
@@ -45,7 +50,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json(template);
   })
   .put(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
@@ -94,7 +99,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json(updated);
   })
   .delete(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

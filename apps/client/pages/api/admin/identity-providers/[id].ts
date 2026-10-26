@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { identityProviderRepository, withTransaction, type IIdentityProviderDocument } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { clearConfigurationCache } from '@server/auth/oktaOidcClient';
 import { ApiKeyScope, identityProviderResponseSchema, type AuditChange } from '@bike4mind/common';
@@ -27,10 +28,14 @@ function diffIdentityProvider(existing: IIdentityProviderDocument, updated: IIde
   return changes;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 
@@ -60,7 +65,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .put(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 
@@ -134,7 +139,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .delete(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 

@@ -1,16 +1,21 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { createOAuthClient, listOAuthClients } from '@bike4mind/database';
 import { ApiKeyScope, createOAuthClientSchema } from '@bike4mind/common';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
     res.status(200).json(await listOAuthClients());
   })
   .post(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
     const input = parseOrBadRequest(createOAuthClientSchema, req.body);
     const result = await createOAuthClient(input);
 

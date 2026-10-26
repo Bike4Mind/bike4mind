@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request } from 'express';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { CounterLog } from '@bike4mind/database';
 import { ApiKeyScope, type CompletionSource, type UsageBySourceResponse } from '@bike4mind/common';
 import { z } from 'zod';
@@ -31,56 +32,55 @@ type UsageBySourceQuery = z.infer<typeof QuerySchema>;
  * Reads from CounterLog rather than CreditTransaction because the analytics
  * layer is the right home for "who did what" - the ledger is for $.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
-  async (req: Request<{}, {}, {}, UsageBySourceQuery>, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
-    const { hours = 168 } = QuerySchema.parse(req.query);
-    const windowEnd = dayjs().utc();
-    const windowStart = windowEnd.subtract(hours, 'hour');
-
-    const result = await CounterLog.aggregate<{ _id: CompletionSource; events: number; uniqueUsers: number }>([
-      {
-        $match: {
-          datetime: { $gte: windowStart.toDate(), $lte: windowEnd.toDate() },
-          'metadata.source': { $exists: true },
-        },
-      },
-      {
-        $group: {
-          _id: '$metadata.source',
-          events: { $sum: 1 },
-          // Exclude null/missing userIds so system/cron-emitted events don't
-          // inflate uniqueUsers by collapsing all anonymous rows into one bucket.
-          userIds: {
-            $addToSet: { $cond: [{ $ifNull: ['$userId', false] }, '$userId', '$$REMOVE'] },
-          },
-        },
-      },
-      {
-        $project: {
-          events: 1,
-          uniqueUsers: { $size: '$userIds' },
-        },
-      },
-      { $sort: { events: -1 } },
-    ]);
-
-    const response: UsageBySourceResponse = {
-      windowHours: hours,
-      windowStart: windowStart.toISOString(),
-      windowEnd: windowEnd.toISOString(),
-      buckets: result.map(r => ({
-        source: r._id,
-        events: r.events,
-        uniqueUsers: r.uniqueUsers,
-      })),
-    };
-
-    return res.json(response);
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req: Request<{}, {}, {}, UsageBySourceQuery>, res) => {
+  if (!canAccessAdmin(req.user)) {
+    throw new ForbiddenError('Admin access required');
   }
-);
+
+  const { hours = 168 } = QuerySchema.parse(req.query);
+  const windowEnd = dayjs().utc();
+  const windowStart = windowEnd.subtract(hours, 'hour');
+
+  const result = await CounterLog.aggregate<{ _id: CompletionSource; events: number; uniqueUsers: number }>([
+    {
+      $match: {
+        datetime: { $gte: windowStart.toDate(), $lte: windowEnd.toDate() },
+        'metadata.source': { $exists: true },
+      },
+    },
+    {
+      $group: {
+        _id: '$metadata.source',
+        events: { $sum: 1 },
+        // Exclude null/missing userIds so system/cron-emitted events don't
+        // inflate uniqueUsers by collapsing all anonymous rows into one bucket.
+        userIds: {
+          $addToSet: { $cond: [{ $ifNull: ['$userId', false] }, '$userId', '$$REMOVE'] },
+        },
+      },
+    },
+    {
+      $project: {
+        events: 1,
+        uniqueUsers: { $size: '$userIds' },
+      },
+    },
+    { $sort: { events: -1 } },
+  ]);
+
+  const response: UsageBySourceResponse = {
+    windowHours: hours,
+    windowStart: windowStart.toISOString(),
+    windowEnd: windowEnd.toISOString(),
+    buckets: result.map(r => ({
+      source: r._id,
+      events: r.events,
+      uniqueUsers: r.uniqueUsers,
+    })),
+  };
+
+  return res.json(response);
+});
 
 export default handler;

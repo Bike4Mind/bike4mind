@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 /**
  * Admin GitHub Rate Limit API
  *
@@ -10,7 +11,7 @@
  * @route GET /api/admin/github/rate-limit - Get rate limit status
  */
 
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@server/services/githubService';
@@ -19,7 +20,8 @@ import { ApiKeyScope, isNearLimit } from '@bike4mind/common';
 
 const logger = new Logger({ metadata: { component: 'admin-github-rate-limit' } });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api
   // Rate limit to prevent abuse (60/hour - makes real API calls)
   .use(
     rateLimit({
@@ -29,7 +31,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   )
   // GET - Get rate limit status
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     // Get the GitHub service for system default connection
     const service = await GitHubService.forSystem(logger);

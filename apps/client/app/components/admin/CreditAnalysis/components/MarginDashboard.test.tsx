@@ -1,3 +1,10 @@
+const permissionState = vi.hoisted(() => ({ currentUser: { isAdmin: true, adminPermissions: [] as string[] } }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: Object.assign((selector: (state: typeof permissionState) => unknown) => selector(permissionState), {
+    getState: () => permissionState,
+  }),
+}));
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
@@ -298,4 +305,34 @@ describe('MarginDashboard settlement basis section', () => {
     const local = within(table).getByTestId('margin-settlement-row-local');
     expect(local).toHaveTextContent('n/a'); // deltaSampleSize 0
   });
+});
+
+it('keeps invoice entry disabled for credit analysts while margins remain readable', async () => {
+  permissionState.currentUser = { isAdmin: false, adminPermissions: ['support:read', 'credits:adjust'] };
+  setResponses();
+  render(<MarginDashboard />, { wrapper: TestWrapper });
+  const button = await screen.findByTestId('margin-invoice-enter-2026-06-openai');
+  expect(button).toBeDisabled();
+  expect(screen.getByText('Missing permission: settings:manage')).toBeInTheDocument();
+  fireEvent.click(button);
+  expect(screen.queryByTestId('margin-invoice-save-btn')).toBeNull();
+});
+
+it('rechecks settings permission before saving an already open invoice editor', async () => {
+  permissionState.currentUser = { isAdmin: false, adminPermissions: ['settings:manage'] };
+  mockPost.mockClear();
+  setResponses();
+  const view = render(<MarginDashboard />, { wrapper: TestWrapper });
+  fireEvent.click(await screen.findByTestId('margin-invoice-enter-2026-06-openai'));
+  fireEvent.change(screen.getByTestId('margin-invoice-usd-input').querySelector('input')!, {
+    target: { value: '100' },
+  });
+  fireEvent.change(screen.getByTestId('margin-invoice-note-input').querySelector('textarea')!, {
+    target: { value: 'Monthly reconciliation' },
+  });
+  permissionState.currentUser = { isAdmin: false, adminPermissions: ['support:read', 'credits:adjust'] };
+  fireEvent.click(screen.getByTestId('margin-invoice-save-btn'));
+  expect(mockPost).not.toHaveBeenCalled();
+  view.rerender(<MarginDashboard />);
+  expect(screen.queryByTestId('margin-invoice-save-btn')).toBeNull();
 });

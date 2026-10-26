@@ -8,6 +8,10 @@ import {
   EMAIL_IN_USE_MESSAGE,
 } from './update';
 import {
+  hasAdminPermission,
+  canAccessAdmin,
+  isFullAdmin,
+  type AdminPermissionId,
   ConflictError,
   MAX_STORAGE_LIMIT_MB,
   resolveUserStorageLimit,
@@ -133,6 +137,37 @@ async function sendFriendRequestsToOrgMembers(
   }
 }
 
+const CREDIT_UPDATE_FIELDS = new Set(['creditDelta', 'currentCredits', 'creditReason']);
+const MODERATION_UPDATE_FIELDS = new Set([
+  'isBanned',
+  'isModerated',
+  'moderationStatus',
+  'disputePending',
+  'userNotes',
+]);
+
+/** A mixed update requires every permission its supplied fields exercise. */
+export function assertAdminUpdatePermissions(
+  actor: { isAdmin?: boolean; adminPermissions?: readonly string[] },
+  parameters: AdminUpdateUserParameters
+): void {
+  const actionableFields = Object.entries(parameters).filter(
+    ([field, value]) => !['id', 'roleChangeReason', 'creditReason'].includes(field) && value !== undefined
+  );
+  if (actionableFields.length === 0) {
+    throw new ForbiddenError('Admin permission required: settings:manage; no actionable update fields supplied');
+  }
+  for (const [field, value] of Object.entries(parameters)) {
+    if (field === 'id' || field === 'roleChangeReason' || value === undefined) continue;
+    const permission: AdminPermissionId = CREDIT_UPDATE_FIELDS.has(field)
+      ? 'credits:adjust'
+      : MODERATION_UPDATE_FIELDS.has(field)
+        ? 'users:moderate'
+        : 'settings:manage';
+    if (!hasAdminPermission(actor, permission)) throw new ForbiddenError(`Admin permission required: ${permission}`);
+  }
+}
+
 export async function adminUpdateUser(
   userId: string,
   parameters: AdminUpdateUserParameters,
@@ -140,13 +175,22 @@ export async function adminUpdateUser(
 ): Promise<AdminUpdateUserResult> {
   const params = secureParameters(parameters, adminUpdateUserSchema);
   const admin = await db.users.findById(userId);
-  if (!admin || !admin.isAdmin) {
-    throw new ForbiddenError('Unauthorized');
-  }
+  if (!admin) throw new ForbiddenError('Unauthorized');
+  assertAdminUpdatePermissions(admin, params);
 
   const user = await db.users.findByIdWithPassword(params.id);
   if (!user) {
     throw new Error('User not found');
+  }
+  // Which moderation statuses block (only `suspended`) lives in accountState.ts, shared with the
+  // Stripe dispute path and the client use-time gate.
+  const enteringBlockedState = entersBlockedState(user, {
+    isBanned: params.isBanned ?? user.isBanned,
+    disputePending: params.disputePending ?? user.disputePending,
+    moderation: { status: params.moderationStatus ?? user.moderation?.status },
+  });
+  if (enteringBlockedState && canAccessAdmin(user) && !isFullAdmin(admin)) {
+    throw new ForbiddenError('Only full administrators can block users with admin access');
   }
   await validateUsernameChange(user, params, db.users, { allowReservedUsername: true });
   if (params.email !== undefined && params.email !== user.email) {
@@ -170,13 +214,6 @@ export async function adminUpdateUser(
   // so they never land as stray top-level fields on the user doc.
   const previousBalance = user.currentCredits ?? 0;
   const { moderationStatus, creditReason, creditDelta: signedDelta, roleChangeReason, ...baseParams } = params;
-  // Which moderation statuses block (only `suspended`) lives in accountState.ts, shared with the
-  // Stripe dispute path and the client use-time gate.
-  const enteringBlockedState = entersBlockedState(user, {
-    isBanned: params.isBanned ?? user.isBanned,
-    disputePending: params.disputePending ?? user.disputePending,
-    moderation: { status: moderationStatus ?? user.moderation?.status },
-  });
   // A signed `creditDelta` is applied verbatim (no interim-spend refund). Absolute
   // `currentCredits` falls back to delta-from-snapshot.
   const rawDelta =

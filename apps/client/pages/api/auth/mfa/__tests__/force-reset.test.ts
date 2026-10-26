@@ -12,8 +12,8 @@ const { mockForceResetMFA, mockRemovePasskeys, mockRevokeDevices, mockRecord, mo
     txEvents: [] as string[],
   }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ post: (fn: unknown) => fn }),
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({ post: (fn: unknown) => fn }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/services', () => ({

@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { usageEventRepository, cacheRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { cacheService } from '@bike4mind/services';
@@ -269,24 +270,23 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
  * spend just because its owner is an admin. JWT/browser admins skip that check and
  * still pass the isAdmin gate below.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
-  async (req: Request<{}, {}, {}, SpendQuery>, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
-    const { recache, ...query } = QuerySchema.parse(req.query);
-
-    const cacheKey = CacheKeys.spend(query);
-    const data = await cacheService.getCachedData(cacheKey, () => buildSpendData(query), {
-      db: { caches: cacheRepository },
-      expiry: 12 * 60 * 60 * 1000, // 12 hours
-      recache,
-      logger: req.logger,
-    });
-
-    return res.json(data);
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req: Request<{}, {}, {}, SpendQuery>, res) => {
+  if (!canAccessAdmin(req.user)) {
+    throw new ForbiddenError('Admin access required');
   }
-);
+
+  const { recache, ...query } = QuerySchema.parse(req.query);
+
+  const cacheKey = CacheKeys.spend(query);
+  const data = await cacheService.getCachedData(cacheKey, () => buildSpendData(query), {
+    db: { caches: cacheRepository },
+    expiry: 12 * 60 * 60 * 1000, // 12 hours
+    recache,
+    logger: req.logger,
+  });
+
+  return res.json(data);
+});
 
 export default handler;

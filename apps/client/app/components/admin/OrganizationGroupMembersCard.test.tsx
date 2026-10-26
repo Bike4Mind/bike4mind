@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: Object.assign(() => ({ currentUser: { id: 'admin', isAdmin: true } }), {
+    getState: () => ({ currentUser: { id: 'admin', isAdmin: true } }),
+  }),
+}));
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';

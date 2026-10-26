@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 /**
  * LiveOps Triage Config - Health Check API
  *
@@ -13,7 +14,7 @@ import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { liveopsTriageConfigRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { GitHubService } from '@server/services/githubService';
@@ -39,9 +40,10 @@ interface HealthCheckResult {
   timestamp: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const api = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
   try {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

@@ -29,7 +29,8 @@ const ALL_TABS_RENDERABLE: IsAdminTabRenderable = () => true;
 export function useAdminTabUrlSync(
   activeTab: AdminTabValue,
   setActiveTab: (tab: AdminTabValue) => void,
-  isTabRenderable: IsAdminTabRenderable = ALL_TABS_RENDERABLE
+  isTabRenderable: IsAdminTabRenderable = ALL_TABS_RENDERABLE,
+  fallbackTab: AdminTab = AdminTab.Users
 ): void {
   // `select` keeps a keystroke in a tab's own search params (Admin Settings' `q`) from re-rendering
   // the console through this hook.
@@ -61,8 +62,8 @@ export function useAdminTabUrlSync(
   // rather than only the URL - the mirror below then writes the corrected slug back.
   useEffect(() => {
     if (typeof activeTab !== 'number' || isTabRenderable(activeTab)) return;
-    setActiveTab(AdminTab.Users);
-  }, [activeTab, setActiveTab, isTabRenderable]);
+    setActiveTab(fallbackTab);
+  }, [activeTab, setActiveTab, isTabRenderable, fallbackTab]);
 
   const lastMirroredTabRef = useRef(activeTab);
   useEffect(() => {

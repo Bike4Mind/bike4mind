@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { Quest } from '@bike4mind/database';
@@ -60,10 +61,11 @@ const ONE_MINUTE_MS = 60 * 1000;
 // inventing a burst that has no measured caller behind it.
 export const CONTEXT_TELEMETRY_METRICS_RATE_LIMIT = 5;
 
-// requiredScopes only constrains API-key callers (server/middlewares/baseApi.ts); browser/JWT
+// requiredScopes only constrains API-key callers (server/middlewares/adminApi.ts); browser/JWT
 // admins are unaffected and still rely on the isAdmin check below. rateLimit is chained after
-// baseApi so it keys on req.user.id rather than the client IP.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+// adminApi so it keys on req.user.id rather than the client IP.
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api
   .use(
     rateLimit({
       limit: CONTEXT_TELEMETRY_METRICS_RATE_LIMIT,
@@ -73,7 +75,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   )
   .get(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 

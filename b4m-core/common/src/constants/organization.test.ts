@@ -4,6 +4,8 @@ import {
   canManageMemberCreditBudgets,
   canRevokeOrgMember,
   isOrgOwnerOrCurrentAdmin,
+  isOrgMember,
+  isOrgOwnerOrPlatformAdmin,
 } from './organization';
 
 describe('isOrgOwnerOrCurrentAdmin', () => {
@@ -128,5 +130,22 @@ describe('canRevokeOrgMember', () => {
   it('refuses a manager who is no longer on the roster, whoever the target is', () => {
     const stale = { ...org, users: [{ userId: 'member-id' }] };
     expect(canRevokeOrgMember({ id: 'mgr-id' }, stale, 'member-id')).toBe(false);
+  });
+});
+
+describe('delegated organization management', () => {
+  const organization = { userId: 'owner', users: [], adminUserIds: [] };
+  it('allows settings delegates to manage the roster and groups without becoming a factual member', () => {
+    const actor = { id: 'operator', adminPermissions: ['settings:manage'] };
+    expect(canAdministerOrganization(actor, organization)).toBe(true);
+    expect(isOrgOwnerOrCurrentAdmin(actor, organization)).toBe(true);
+    expect(isOrgMember(actor, organization)).toBe(false);
+    expect(isOrgOwnerOrPlatformAdmin(actor, organization)).toBe(false);
+  });
+  it('does not grant management authority to credit or support delegates', () => {
+    expect(canAdministerOrganization({ id: 'credits', adminPermissions: ['credits:adjust'] }, organization)).toBe(
+      false
+    );
+    expect(canAdministerOrganization({ id: 'support', adminPermissions: ['support:read'] }, organization)).toBe(false);
   });
 });

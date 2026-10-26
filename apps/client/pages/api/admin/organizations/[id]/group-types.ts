@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
@@ -22,9 +23,10 @@ const bodySchema = z.object({
   allowedGroupTypes: z.array(z.string()).max(20),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
+const api = adminApi({ adminPermissions: { PUT: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
     const organizationId = req.query.id;
     if (!organizationId) throw new BadRequestError('Organization id is required');
 

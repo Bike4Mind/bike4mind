@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { agentExecutionRepository } from '@bike4mind/database';
@@ -33,8 +34,9 @@ export type CleanupResponse = {
  * have already reached a terminal state are no-ops. `markAbandoned` filters
  * to sweepable statuses to avoid clobbering a concurrent natural completion.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
+  ensureAdmin(canAccessAdmin(req.user));
 
   const parsed = BodySchema.safeParse(req.body);
   if (!parsed.success) {

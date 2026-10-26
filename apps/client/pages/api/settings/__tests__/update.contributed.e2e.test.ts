@@ -22,6 +22,9 @@ import { configureSecretsAtRest } from '@bike4mind/utils/security';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
+vi.mock('@server/middlewares/adminApi', async () => ({
+  adminApi: (await import('@server/middlewares/baseApi')).baseApi,
+}));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
     put: (handler: (...a: unknown[]) => unknown) => handler,

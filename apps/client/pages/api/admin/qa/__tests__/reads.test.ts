@@ -11,8 +11,10 @@ const { reads } = vi.hoisted(() => ({
   },
 }));
 
-// baseApi is stubbed (no auth chain), so ensureAdmin in each route is what is under test.
-vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
+// adminApi is stubbed (no auth chain), so ensureAdmin in each route is what is under test.
+vi.mock('@server/middlewares/adminApi', async () => ({
+  adminApi: (await import('@server/qa/testing/baseApiStub')).baseApi,
+}));
 vi.mock('@server/qa/reads', () => reads);
 vi.mock('@server/qa/storage', () => ({ qaMediaStorage: () => ({ exists: vi.fn(), signedGetUrl: vi.fn() }) }));
 vi.mock('@server/qa/reportToken', () => ({ signQaReportToken: (id: string) => `tok-${id}` }));

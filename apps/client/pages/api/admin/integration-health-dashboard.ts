@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
   integrationHealthCheckRepository,
@@ -47,9 +48,13 @@ function buildHealthToAuditMap(): Record<IntegrationName, string[]> {
 
 const HEALTH_TO_AUDIT = buildHealthToAuditMap();
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 
@@ -181,7 +186,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       inMemoryBreakerStates,
     });
   })
-  // Rate limit between GET and POST - baseApi applies middleware in declaration order
+  // Rate limit between GET and POST - adminApi applies middleware in declaration order
   .use(
     rateLimit({
       limit: 5,
@@ -189,7 +194,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 

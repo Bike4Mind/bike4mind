@@ -62,6 +62,24 @@ describe('RestrictedPage — auth redirect', () => {
     });
   });
 
+  it('admits delegated admins to the console while preserving full-admin-only routes', () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'support', isAdmin: false, adminPermissions: ['support:read'] } });
+    const { container, rerender } = render(
+      <RestrictedPage requireAdminAccess>
+        <div>console</div>
+      </RestrictedPage>
+    );
+    expect(container.textContent).toBe('console');
+    expect(mockHistoryPush).not.toHaveBeenCalled();
+    rerender(
+      <RestrictedPage requireAdmin>
+        <div>full admin only</div>
+      </RestrictedPage>
+    );
+    expect(container.textContent).toBe('');
+    expect(mockHistoryPush).toHaveBeenCalledWith('/new');
+  });
+
   it('preserves the query string in redirectTo', () => {
     mockUseUser.mockReturnValue({ currentUser: null });
     mockRouterState.location = {

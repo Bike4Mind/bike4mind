@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-// Wrap handlers so thrown HTTPErrors become JSON responses, matching production baseApi behaviour.
+// Wrap handlers so thrown HTTPErrors become JSON responses, matching production adminApi behaviour.
 function wrapHandler(fn: (req: unknown, res: any) => Promise<unknown>) {
   return async (req: unknown, res: any) => {
     try {
@@ -14,8 +14,8 @@ function wrapHandler(fn: (req: unknown, res: any) => Promise<unknown>) {
   };
 }
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const mock: { _post?: (req: unknown, res: unknown) => Promise<unknown>; post: (fn: unknown) => typeof mock } = {
       post: function (fn: unknown) {
         mock._post = wrapHandler(fn as (req: unknown, res: unknown) => Promise<unknown>);

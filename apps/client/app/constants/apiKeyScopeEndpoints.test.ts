@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import ts from 'typescript';
 import { describe, it, expect, vi } from 'vitest';
 import { ApiKeyScope, CONTRACTS } from '@bike4mind/common';
 import * as agentScopes from '@server/agents/agentScopes';
@@ -101,9 +102,6 @@ const ENFORCING_SITE = new RegExp(
   'g'
 );
 
-// A route's door: the scopes `baseApi` refuses a key without, before any in-handler check runs.
-const DOOR_SITE = new RegExp(String.raw`\bbaseApi\(\s*\{[^{}]*?\brequiredScopes\s*:\s*${GATE_EXPR}`, 'g');
-
 /** Resolves a gate expression to its scopes: literals, shared lists and lists declared in `code`. */
 function listResolver(code: string) {
   const localLists = new Map<string, string>();
@@ -148,10 +146,31 @@ function gatesIn(code: string, helpers: ReadonlyMap<string, Gate>): Gate[] {
   return gates;
 }
 
-/** The `baseApi` doors in `code`. A file may hold several (one per handler), so any one may admit. */
+/** The authenticated router factories' doors, including nested admin permission declarations. */
 function doorsIn(code: string): Gate[] {
   const resolve = listResolver(code);
-  return [...code.matchAll(DOOR_SITE)].map(([, expr]) => resolve(expr)).filter(door => door.size > 0);
+  const tree = ts.createSourceFile('route.ts', code, ts.ScriptTarget.Latest, true);
+  const doors: Gate[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      ['baseApi', 'adminApi'].includes(node.expression.text)
+    ) {
+      const options = node.arguments[0];
+      if (options && ts.isObjectLiteralExpression(options)) {
+        for (const option of options.properties) {
+          if (ts.isPropertyAssignment(option) && option.name.getText(tree) === 'requiredScopes') {
+            const scopes = resolve(option.initializer.getText(tree));
+            if (scopes.size > 0) doors.push(scopes);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return doors;
 }
 
 /**
@@ -201,7 +220,9 @@ const PAGE_EXTENSIONS = ['.ts', '.tsx'];
  * follow, so `Promise.all(` and `headers.get(` are not links.
  */
 function chainLinks(source: string): { verb: string; start: number; end: number }[] {
-  const bound = [...source.matchAll(/\bconst (\w+)\s*=\s*baseApi\(/g)].map(m => String.raw`\b${m[1]}\s*`);
+  const bound = [...source.matchAll(/\bconst (\w+)\s*=\s*(?:baseApi|adminApi)(?:<[^;\n]+>)?\(/g)].map(
+    m => String.raw`\b${m[1]}\s*`
+  );
   const link = new RegExp(
     String.raw`(?:${[String.raw`\)\s*`, ...bound].join('|')})(\.(get|post|put|patch|delete|all)\s*[<(])`,
     'g'
@@ -353,6 +374,19 @@ describe('apiKeyScopes endpoint claims', () => {
     const source = 'const api = baseApi({});\napi.get(handler);';
     expect(servesVerb(source, 'GET')).toBe(true);
     expect(servesVerb(source, 'POST')).toBe(false);
+  });
+
+  it('recognizes typed adminApi handlers and nested permission options without mistaking metadata for a scope door', () => {
+    const source = `const api = adminApi<Request, Response>({
+      adminPermissions: { GET: 'support:read' },
+      alternateApiKeyPermission: { scope: ApiKeyScope.RELEASE_NOTES_WRITE, permission: 'support:read' },
+      requiredScopes: [ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NOTES_WRITE],
+    });
+    const handler = api.get(handler);`;
+    expect(servesVerb(source, 'GET')).toBe(true);
+    expect(servesVerb(source, 'PATCH')).toBe(false);
+    expect(doorsIn(source)).toEqual([new Set([ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NOTES_WRITE])]);
+    expect(doorsIn(source.replace('requiredScopes:', 'descriptiveScopes:'))).toEqual([]);
   });
 
   it('finds no export name shared by two scope modules, which would shadow one gate list', () => {

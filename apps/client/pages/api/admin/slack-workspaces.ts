@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { slackDevWorkspaceRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -24,9 +25,13 @@ const ensureAdmin = (isAdmin?: boolean | null) => {
   }
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', PATCH: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const workspaces = await slackDevWorkspaceRepository.findAllActive();
 
@@ -38,7 +43,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json({ workspaces });
   })
   .patch(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const result = DeactivateWorkspaceSchema.safeParse(req.body);
     if (!result.success) {

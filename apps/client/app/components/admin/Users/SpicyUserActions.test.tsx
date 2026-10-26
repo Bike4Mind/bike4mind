@@ -1,3 +1,4 @@
+import { ADMIN_PERMISSIONS } from '@bike4mind/common';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -5,6 +6,11 @@ import type { ReactNode } from 'react';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import SpicyUserActions from './SpicyUserActions';
+
+const actor = vi.hoisted(() => ({ currentUser: { isAdmin: true, adminPermissions: [] as string[] } }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: Object.assign((selector: (state: typeof actor) => unknown) => selector(actor), { getState: () => actor }),
+}));
 
 vi.mock('@client/app/components/help/DestructiveActionHelp', () => ({ default: () => null }));
 
@@ -55,5 +61,48 @@ describe('SpicyUserActions - accessible names', () => {
 
     expect(screen.getByRole('checkbox', { name: 'Ban' })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Moderate' })).toBeInTheDocument();
+  });
+});
+
+describe('privileged target ban controls', () => {
+  const renderActions = (target: AdminUserListItem, onFieldChange = vi.fn()) => {
+    render(
+      <SpicyUserActions user={target} editedFields={{}} onFieldChange={onFieldChange} handleDeleteUser={vi.fn()} />,
+      { wrapper: TestWrapper }
+    );
+    return onFieldChange;
+  };
+  it.each([{ isAdmin: true }, { isAdmin: false, adminPermissions: ['support:read'] }])(
+    'blocks newly banning privileged target %j for a moderator',
+    target => {
+      actor.currentUser = { isAdmin: false, adminPermissions: ['support:read', 'users:moderate'] };
+      renderActions({ ...user, ...target } as AdminUserListItem);
+      expect(screen.getByTestId('admin-user-ban-checkbox').querySelector('input')).toBeDisabled();
+      expect(screen.getByText(/Full admin access is required to ban/)).toBeInTheDocument();
+    }
+  );
+  it('allows a delegated moderator to clear an existing privileged target ban', () => {
+    actor.currentUser = { isAdmin: false, adminPermissions: ['support:read', 'users:moderate'] };
+    const changed = renderActions({ ...user, isAdmin: true, isBanned: true });
+    const checkbox = screen.getByTestId('admin-user-ban-checkbox').querySelector('input')!;
+    expect(checkbox).toBeEnabled();
+    fireEvent.click(checkbox);
+    expect(changed).toHaveBeenCalledWith('isBanned', false);
+  });
+  it('allows a delegated moderator to ban an ordinary target', () => {
+    actor.currentUser = { isAdmin: false, adminPermissions: ['support:read', 'users:moderate'] };
+    const changed = renderActions({ ...user, isAdmin: false, adminPermissions: [] });
+    const checkbox = screen.getByTestId('admin-user-ban-checkbox').querySelector('input')!;
+    expect(checkbox).toBeEnabled();
+    fireEvent.click(checkbox);
+    expect(changed).toHaveBeenCalledWith('isBanned', true);
+  });
+  it.each([true, false])('allows a full actor with legacy isAdmin=%s to ban admin targets', legacy => {
+    actor.currentUser = { isAdmin: legacy, adminPermissions: legacy ? [] : [...ADMIN_PERMISSIONS] };
+    const changed = renderActions({ ...user, isAdmin: true });
+    const checkbox = screen.getByTestId('admin-user-ban-checkbox').querySelector('input')!;
+    expect(checkbox).toBeEnabled();
+    fireEvent.click(checkbox);
+    expect(changed).toHaveBeenCalledWith('isBanned', true);
   });
 });

@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
@@ -13,59 +14,62 @@ interface RequestQuery {
 }
 
 // Admin-only endpoint to manually unverify a user's email
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
-  .use(csrfProtection())
-  .post(
-    asyncHandler(async (req, res) => {
-      // Check admin authorization
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
+const api = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.use(csrfProtection()).post(
+  asyncHandler(async (req, res) => {
+    // Check admin authorization
+    if (!canAccessAdmin(req.user)) {
+      throw new ForbiddenError('Unauthorized. Admin access required.');
+    }
+
+    const { userId } = req.query as RequestQuery;
+
+    if (typeof userId !== 'string' || !userId) {
+      throw new BadRequestError('Invalid user ID');
+    }
+
+    await withTransaction(async () => {
+      // Get the user
+      const user = await userRepository.findById(userId);
+
+      if (!user) {
+        throw new BadRequestError('User not found');
       }
 
-      const { userId } = req.query as RequestQuery;
-
-      if (typeof userId !== 'string' || !userId) {
-        throw new BadRequestError('Invalid user ID');
+      // Check if already unverified
+      if (!user.emailVerified) {
+        return res.json({ message: 'Email is already unverified', alreadyUnverified: true });
       }
 
-      await withTransaction(async () => {
-        // Get the user
-        const user = await userRepository.findById(userId);
+      // Update user email verification status
+      await userRepository.update({ id: user.id, emailVerified: false, emailVerifiedAt: null });
 
-        if (!user) {
-          throw new BadRequestError('User not found');
-        }
-
-        // Check if already unverified
-        if (!user.emailVerified) {
-          return res.json({ message: 'Email is already unverified', alreadyUnverified: true });
-        }
-
-        // Update user email verification status
-        await userRepository.update({ id: user.id, emailVerified: false, emailVerifiedAt: null });
-
-        // Log admin action with audit trail
-        await recordAdminActionFromRequest(req, {
-          action: 'user.email.unverified',
-          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
-          summary: 'unverified email',
-        });
-
-        // Log admin action to analytics
-        await logEvent({
-          userId: user.id,
-          type: AuthEvents.EMAIL_VERIFIED,
-          metadata: {},
-        });
-
-        req.logger.info(
-          `Admin ${req.user.username} (${req.user.id}) manually unverified email for user ${user.username} (${userId})`
-        );
-
-        return res.json({ message: 'Email unverified successfully' });
+      // Log admin action with audit trail
+      await recordAdminActionFromRequest(req, {
+        action: 'user.email.unverified',
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+        summary: 'unverified email',
       });
-    })
-  );
+
+      // Log admin action to analytics
+      await logEvent({
+        userId: user.id,
+        type: AuthEvents.EMAIL_VERIFIED,
+        metadata: {},
+      });
+
+      req.logger.info(
+        `Admin ${req.user.username} (${req.user.id}) manually unverified email for user ${user.username} (${userId})`
+      );
+
+      return res.json({ message: 'Email unverified successfully' });
+    });
+  })
+);
 
 export const config = {
   api: {

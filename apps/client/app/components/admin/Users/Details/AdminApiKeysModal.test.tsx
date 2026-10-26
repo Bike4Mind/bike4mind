@@ -10,9 +10,18 @@ const h = vi.hoisted(() => ({
   hookArgs: [] as unknown[],
   liveUsage: {} as Record<string, { minute: number; day: number; minuteResetAt?: number; dayResetAt?: number }>,
   resetMutate: vi.fn(),
+  permissions: ['settings:manage'],
   // Auto-invokes onOk so the confirm-then-mutate flow runs synchronously;
   // individual tests override the implementation to model a dismissal.
   confirmRun: vi.fn((opts: { onOk?: () => void | Promise<void> }) => opts.onOk?.()),
+}));
+
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: Object.assign(
+    (selector: (state: { currentUser: { isAdmin: boolean; adminPermissions: string[] } }) => unknown) =>
+      selector({ currentUser: { isAdmin: false, adminPermissions: h.permissions } }),
+    { getState: () => ({ currentUser: { isAdmin: false, adminPermissions: h.permissions } }) }
+  ),
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
@@ -63,6 +72,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW_MS);
   h.keys = [];
+  h.permissions = ['settings:manage'];
   h.liveUsage = {};
   h.resetMutate.mockReset();
   h.confirmRun.mockClear();
@@ -303,4 +313,32 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-keys-empty')).toBeTruthy();
     expect(screen.queryByTestId('admin-api-key-row-k1')).toBeNull();
   });
+});
+
+it('keeps support readers from resetting API key counters', () => {
+  h.permissions = ['support:read'];
+  h.keys = [KEY];
+  renderModal();
+  expect(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1')).toBeDisabled();
+  expect(screen.getByText('Missing permission: settings:manage')).toBeInTheDocument();
+});
+
+it('rechecks permissions when a previously opened rate-limit confirmation is accepted', () => {
+  h.permissions = ['settings:manage'];
+  h.keys = [KEY];
+  let pendingConfirm: (() => void | Promise<void>) | undefined;
+  h.confirmRun.mockImplementation(options => {
+    pendingConfirm = options.onOk;
+  });
+  const view = renderModal();
+  fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+  expect(pendingConfirm).toBeDefined();
+  h.permissions = ['support:read'];
+  view.rerender(
+    <CssVarsProvider theme={appTheme}>
+      <AdminApiKeysModal open onClose={vi.fn()} user={USER} />
+    </CssVarsProvider>
+  );
+  pendingConfirm?.();
+  expect(h.resetMutate).not.toHaveBeenCalled();
 });

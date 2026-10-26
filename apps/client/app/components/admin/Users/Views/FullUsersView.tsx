@@ -1,3 +1,8 @@
+import { canAccessAdmin, isFullAdmin } from '@bike4mind/common';
+import { AdminUserKeyRevocation } from '../AdminUserKeyRevocation';
+import { hasAdminPermission, type AdminPermissionId } from '@bike4mind/common';
+import { AdminPermissionBoundary } from '../../shared/AdminPermissionBoundary';
+import { AdminPermissionsEditor } from '../AdminPermissionsEditor';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Card,
@@ -132,6 +137,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   const { currentUser, setCurrentUser } = useUser(
     useShallow(s => ({ currentUser: s.currentUser, setCurrentUser: s.setCurrentUser }))
   );
+  const impersonationRequiresFullAdmin = canAccessAdmin(user) && !isFullAdmin(currentUser);
   const navigate = useNavigate();
   const { settings: adminSettings } = useAdminSettings();
   const enforceMFA = adminSettings?.enforceMFA === 'true';
@@ -187,13 +193,25 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
     return () => reportUnsavedFields.current?.([]);
   }, [unsavedKeys]);
 
+  const permissionForField = (key: keyof IUserDocument): AdminPermissionId =>
+    key === 'currentCredits'
+      ? 'credits:adjust'
+      : key === 'isBanned' || key === 'isModerated'
+        ? 'users:moderate'
+        : 'settings:manage';
+
   const handleFormFieldChange = (key: keyof IUserDocument, value: unknown) => {
+    if (key === 'isBanned' && value === true && canAccessAdmin(user) && !isFullAdmin(useUser.getState().currentUser))
+      return;
+    if (!hasAdminPermission(currentUser, permissionForField(key))) return;
     setFormState(prev => ({ ...prev, [key]: value }));
     setEditedFields(prev => stageFieldEdit(prev, key, value, user));
   };
 
   const handleDeleteUser = async (userId: string, reason: string) => {
-    deleteUser.mutate({ id: userId, reason }, { onSuccess: () => onUserDeleted?.() });
+    if (!hasAdminPermission(currentUser, 'users:delete')) return;
+    await deleteUser.mutateAsync({ id: userId, reason });
+    onUserDeleted?.();
   };
 
   const closeRoleConfirm = () => {
@@ -207,6 +225,8 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   };
 
   const submitLoginAs = () => {
+    const actor = useUser.getState().currentUser;
+    if (!hasAdminPermission(actor, 'users:impersonate') || (canAccessAdmin(user) && !isFullAdmin(actor))) return;
     loginAsUser.mutate({ id: user.id, mfaToken: loginAsMfaToken.trim(), reason: loginAsReason.trim() });
     closeLoginAsModal();
   };
@@ -232,6 +252,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   };
 
   const handleUserLevelButtonChange = () => {
+    if (!hasAdminPermission(currentUser, 'settings:manage')) return;
     const newLevelValue = getNextLevel(tempUserLevel);
     setTempUserLevel(newLevelValue);
     handleFormFieldChange('level', newLevelValue);
@@ -262,6 +283,16 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   };
 
   const handleSaveChanges = async (roleReason?: string) => {
+    if (
+      editedFields.isBanned &&
+      formState.isBanned &&
+      !user.isBanned &&
+      canAccessAdmin(user) &&
+      !isFullAdmin(useUser.getState().currentUser)
+    )
+      return;
+    if (unsavedKeys.some(key => !hasAdminPermission(currentUser, permissionForField(key as keyof IUserDocument))))
+      return;
     const data = Object.entries(editedFields).reduce<
       Partial<IUserDocument> & { creditReason?: string; roleChangeReason?: string }
     >((acc, [key, value]) => {
@@ -329,14 +360,16 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       title: 'Roles',
       icon: <SecurityIcon fontSize="small" color="primary" />,
       content: (
-        <UserPermissions
-          user={{ ...formState, level: tempUserLevel }}
-          key={`user-permissions-${user.id}`}
-          editedFields={editedFields}
-          onFieldChange={handleFormFieldChange}
-          handleUserLevelButtonChange={handleUserLevelButtonChange}
-          isSelf={currentUser?.id === user.id}
-        />
+        <AdminPermissionBoundary permission="settings:manage">
+          <UserPermissions
+            user={{ ...formState, level: tempUserLevel }}
+            key={`user-permissions-${user.id}`}
+            editedFields={editedFields}
+            onFieldChange={handleFormFieldChange}
+            handleUserLevelButtonChange={handleUserLevelButtonChange}
+            isSelf={currentUser?.id === user.id}
+          />
+        </AdminPermissionBoundary>
       ),
     },
     // Product Access is a separate axis from Role: what they ARE vs which products they can use,
@@ -346,7 +379,9 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       title: 'Product Access',
       icon: <VerifiedUserIcon fontSize="small" color="primary" />,
       content: (
-        <ProductAccess user={formState} key={`product-access-${user.id}`} onFieldChange={handleFormFieldChange} />
+        <AdminPermissionBoundary permission="settings:manage">
+          <ProductAccess user={formState} key={`product-access-${user.id}`} onFieldChange={handleFormFieldChange} />
+        </AdminPermissionBoundary>
       ),
     },
     {
@@ -395,18 +430,34 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
           onFieldChange={handleFormFieldChange}
           handleDeleteUser={handleDeleteUser}
         />
-        <Button
-          data-testid="compliance-btn"
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          onClick={() => setComplianceUserId(formState.id)}
-        >
-          Compliance
-        </Button>
+        <AdminPermissionBoundary permission="settings:manage">
+          <Button
+            data-testid="compliance-btn"
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            onClick={() => {
+              if (hasAdminPermission(currentUser, 'settings:manage')) setComplianceUserId(formState.id);
+            }}
+          >
+            Compliance
+          </Button>
+        </AdminPermissionBoundary>
       </>
     ),
   };
+
+  // Full-width rows placed right after Roles in both layouts.
+  const adminAccessControls = (
+    <>
+      <Grid xs={12}>
+        <AdminUserKeyRevocation userId={user.id} />
+      </Grid>
+      <Grid xs={12}>
+        <AdminPermissionsEditor key={`${user.id}-${user.isAdmin}-${user.adminPermissions?.join()}`} user={user} />
+      </Grid>
+    </>
+  );
 
   const quickActions = (
     <Stack
@@ -436,48 +487,67 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
           </span>
         </Tooltip>
       )}
-      <Button
-        size="sm"
-        color="primary"
-        startDecorator={<LoginIcon />}
-        onClick={() => {
-          if (!currentUser?.mfa?.totpEnabled) {
-            setLoginAsMfaRequiredOpen(true);
-            return;
-          }
-          setLoginAsMfaToken('');
-          setLoginAsReason('');
-          setLoginAsMfaModalOpen(true);
-        }}
-        loading={loginAsUser.isPending}
-        sx={{ width: { xs: '100%', sm: 'auto' } }}
-        data-testid="login-as-user-btn"
-      >
-        Login as User
-      </Button>
-      <Tooltip title="Send system message to this user">
+      <AdminPermissionBoundary permission="users:impersonate">
+        {impersonationRequiresFullAdmin && (
+          <Typography level="body-sm" color="warning">
+            Full admin access is required to impersonate users with admin access.
+          </Typography>
+        )}
         <Button
           size="sm"
-          color="neutral"
-          startDecorator={<EmailIcon />}
-          onClick={() => setSystemMessageModalOpen(true)}
+          color="primary"
+          startDecorator={<LoginIcon />}
+          onClick={() => {
+            const actor = useUser.getState().currentUser;
+            if (!hasAdminPermission(actor, 'users:impersonate') || (canAccessAdmin(user) && !isFullAdmin(actor)))
+              return;
+            if (!currentUser?.mfa?.totpEnabled) {
+              setLoginAsMfaRequiredOpen(true);
+              return;
+            }
+            setLoginAsMfaToken('');
+            setLoginAsReason('');
+            setLoginAsMfaModalOpen(true);
+          }}
+          disabled={impersonationRequiresFullAdmin}
+          loading={loginAsUser.isPending}
           sx={{ width: { xs: '100%', sm: 'auto' } }}
+          data-testid="login-as-user-btn"
         >
-          Send Message
+          Login as User
         </Button>
-      </Tooltip>
+      </AdminPermissionBoundary>
+      <AdminPermissionBoundary permission="settings:manage">
+        <Tooltip title="Send system message to this user">
+          <Button
+            size="sm"
+            color="neutral"
+            startDecorator={<EmailIcon />}
+            onClick={() => {
+              if (hasAdminPermission(currentUser, 'settings:manage')) setSystemMessageModalOpen(true);
+            }}
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
+          >
+            Send Message
+          </Button>
+        </Tooltip>
+      </AdminPermissionBoundary>
       {isPage && (
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          startDecorator={<CardGiftcardIcon />}
-          onClick={() => setGrantSubscriptionOpen(true)}
-          sx={{ width: { xs: '100%', sm: 'auto' } }}
-          data-testid="user-profile-grant-subscription-btn"
-        >
-          Grant Subscription
-        </Button>
+        <AdminPermissionBoundary permission="credits:adjust">
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            startDecorator={<CardGiftcardIcon />}
+            onClick={() => {
+              if (hasAdminPermission(currentUser, 'credits:adjust')) setGrantSubscriptionOpen(true);
+            }}
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
+            data-testid="user-profile-grant-subscription-btn"
+          >
+            Grant Subscription
+          </Button>
+        </AdminPermissionBoundary>
       )}
       {hasUnsavedChanges && (
         <Button
@@ -520,14 +590,17 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   const cardOverview = (
     <Grid container spacing={3}>
       {overviewSections.map(section => (
-        <Grid key={section.key} xs={12} sm={6} md={2}>
-          <SectionBody section={section} />
-          {section.key === 'b4m-settings' && (
-            <Box mt={3} ml={0.5}>
-              <SectionBody section={adminActionsSection} />
-            </Box>
-          )}
-        </Grid>
+        <React.Fragment key={section.key}>
+          <Grid xs={12} sm={6} md={2}>
+            <SectionBody section={section} />
+            {section.key === 'b4m-settings' && (
+              <Box mt={3} ml={0.5}>
+                <SectionBody section={adminActionsSection} />
+              </Box>
+            )}
+          </Grid>
+          {section.key === 'roles' && adminAccessControls}
+        </React.Fragment>
       ))}
     </Grid>
   );
@@ -535,11 +608,14 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   const pageOverview = (
     <Grid container spacing={2}>
       {overviewSections.map(section => (
-        <Grid key={section.key} xs={12} md={6}>
-          <Card variant="outlined" data-testid={`user-profile-section-${section.key}`} sx={{ height: '100%' }}>
-            <SectionBody section={section} />
-          </Card>
-        </Grid>
+        <React.Fragment key={section.key}>
+          <Grid xs={12} md={6}>
+            <Card variant="outlined" data-testid={`user-profile-section-${section.key}`} sx={{ height: '100%' }}>
+              <SectionBody section={section} />
+            </Card>
+          </Grid>
+          {section.key === 'roles' && adminAccessControls}
+        </React.Fragment>
       ))}
     </Grid>
   );
@@ -608,7 +684,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       {isPage && (
         <GrantSubscriptionModal
           user={user}
-          open={grantSubscriptionOpen}
+          open={grantSubscriptionOpen && hasAdminPermission(currentUser, 'credits:adjust')}
           onClose={() => setGrantSubscriptionOpen(false)}
         />
       )}
@@ -723,7 +799,12 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       </Modal>
 
       {/* MFA verification modal for loginAs */}
-      <Modal open={loginAsMfaModalOpen} onClose={closeLoginAsModal}>
+      <Modal
+        open={
+          loginAsMfaModalOpen && !impersonationRequiresFullAdmin && hasAdminPermission(currentUser, 'users:impersonate')
+        }
+        onClose={closeLoginAsModal}
+      >
         <ModalDialog data-testid="login-as-mfa-modal">
           <ModalClose />
           <Typography level="title-md" startDecorator={<SecurityIcon />}>

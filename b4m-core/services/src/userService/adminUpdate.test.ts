@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { adminUpdateUser, adminUpdateUserSchema } from './adminUpdate';
+import { adminUpdateUser, adminUpdateUserSchema, type AdminUpdateUserParameters } from './adminUpdate';
+import { ADMIN_PERMISSIONS } from '@bike4mind/common';
 import { checkStorageLimit } from '@bike4mind/utils';
 
 vi.mock('../friendshipService/sendFriendRequest', () => ({ sendFriendRequest: vi.fn() }));
@@ -650,5 +651,76 @@ describe('adminUpdateUser storage overrides', () => {
 
   it.each([-1, Infinity, NaN, 1_000_000_001])('rejects invalid overrides: %s', value => {
     expect(adminUpdateUserSchema.safeParse({ id: TARGET_ID, storageLimitOverride: value }).success).toBe(false);
+  });
+});
+
+describe('adminUpdateUser privileged moderation targets', () => {
+  const blockingChanges: Pick<AdminUpdateUserParameters, 'isBanned' | 'moderationStatus' | 'disputePending'>[] = [
+    { isBanned: true },
+    { moderationStatus: 'suspended' },
+    { disputePending: true },
+  ];
+  const targetPrivileges = [
+    { isAdmin: true },
+    { isAdmin: false, adminPermissions: [...ADMIN_PERMISSIONS] },
+    { isAdmin: false, adminPermissions: ['support:read'] },
+  ];
+
+  it.each(targetPrivileges.flatMap(privileges => blockingChanges.map(change => ({ privileges, change }))))(
+    'rejects a delegated moderator newly blocking privileged target $privileges with $change',
+    async ({ privileges, change }) => {
+      const { adapters, target, update, deactivateAllByUserId, endConnections } = makeAdapters(100);
+      Object.assign(target, privileges);
+      adapters.db.users.findById.mockImplementation(async (id: string) =>
+        id === ADMIN_ID ? { id, adminPermissions: ['support:read', 'users:moderate'] } : { ...target }
+      );
+      await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...change }, adapters)).rejects.toThrow(
+        'Only full administrators'
+      );
+      expect(update).not.toHaveBeenCalled();
+      expect(deactivateAllByUserId).not.toHaveBeenCalled();
+      expect(endConnections).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(blockingChanges)('allows delegated moderation of an ordinary target: %s', async change => {
+    const { adapters, update } = makeAdapters(100);
+    adapters.db.users.findById.mockResolvedValue({ id: ADMIN_ID, adminPermissions: ['users:moderate'] });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...change }, adapters);
+    expect(update).toHaveBeenCalled();
+  });
+
+  it.each([{ isAdmin: true }, { isAdmin: false, adminPermissions: [...ADMIN_PERMISSIONS] }])(
+    'preserves full actor authority over privileged targets: %s',
+    async actorPrivileges => {
+      const { adapters, target, update } = makeAdapters(100);
+      target.isAdmin = true;
+      adapters.db.users.findById.mockResolvedValue({ id: ADMIN_ID, ...actorPrivileges });
+      await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters);
+      expect(update).toHaveBeenCalled();
+    }
+  );
+
+  it('uses fresh actor authority when a former full administrator is downgraded', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    target.isAdmin = true;
+    adapters.db.users.findById.mockResolvedValue({
+      id: ADMIN_ID,
+      isAdmin: false,
+      adminPermissions: ['users:moderate'],
+    });
+    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, disputePending: true }, adapters)).rejects.toThrow(
+      'Only full administrators'
+    );
+    expect(adapters.db.users.findById).toHaveBeenCalledWith(ADMIN_ID);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows a delegated moderator to clear a privileged target block for recovery', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { isAdmin: true, isBanned: true });
+    adapters.db.users.findById.mockResolvedValue({ id: ADMIN_ID, adminPermissions: ['users:moderate'] });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: false }, adapters);
+    expect(update).toHaveBeenCalled();
   });
 });

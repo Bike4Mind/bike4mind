@@ -1,3 +1,10 @@
+const permissionState = vi.hoisted(() => ({ currentUser: { isAdmin: true, adminPermissions: [] as string[] } }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: Object.assign((selector: (state: typeof permissionState) => unknown) => selector(permissionState), {
+    getState: () => permissionState,
+  }),
+}));
+
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -81,5 +88,68 @@ describe('CreateUserModal - storage limit', () => {
     await waitFor(() =>
       expect(apiPost).toHaveBeenCalledWith('/api/admin/create-user', expect.objectContaining({ storageLimit }))
     );
+  });
+});
+
+const renderCreate = () =>
+  render(<CreateUserModal />, {
+    wrapper: ({ children }) => (
+      <CssVarsProvider theme={appTheme}>
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { mutations: { retry: false } } })}>
+          {children}
+        </QueryClientProvider>
+      </CssVarsProvider>
+    ),
+  });
+
+describe('delegated create user permissions', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPost.mockResolvedValue({ data: {} });
+    permissionState.currentUser = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    useCreateUserModal.setState({ open: true });
+  });
+
+  it('permits zero-credit creation and disables the credit input without credits:adjust', async () => {
+    renderCreate();
+    expect(screen.getByTestId('create-user-credits-input').querySelector('input')).toBeDisabled();
+    fireEvent.submit(screen.getByTestId('create-user-submit-btn').closest('form')!);
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith(
+        '/api/admin/create-user',
+        expect.objectContaining({ initialCredits: 0, isAdmin: false })
+      )
+    );
+    expect(apiPost.mock.calls[0][1]).not.toHaveProperty('roleChangeReason');
+  });
+
+  it('requires and sends the reason for creating a full administrator', async () => {
+    renderCreate();
+    fireEvent.click(screen.getByTestId('create-user-admin-checkbox').querySelector('input')!);
+    expect(screen.getByTestId('create-user-submit-btn')).toBeDisabled();
+    fireEvent.change(screen.getByTestId('create-user-role-change-reason'), {
+      target: { value: 'Delegate full administration for coverage' },
+    });
+    fireEvent.submit(screen.getByTestId('create-user-submit-btn').closest('form')!);
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith(
+        '/api/admin/create-user',
+        expect.objectContaining({
+          isAdmin: true,
+          roleChangeReason: 'Delegate full administration for coverage',
+          initialCredits: 0,
+        })
+      )
+    );
+  });
+
+  it('hides an open create dialog and rejects its saved submit after access is revoked', () => {
+    const view = renderCreate();
+    const form = screen.getByTestId('create-user-submit-btn').closest('form')!;
+    permissionState.currentUser = { isAdmin: false, adminPermissions: [] };
+    view.rerender(<CreateUserModal />);
+    expect(screen.queryByTestId('create-user-submit-btn')).toBeNull();
+    fireEvent.submit(form);
+    expect(apiPost).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Same middleware-strip pattern as index.test.ts: capture the handlers registered on the
-// baseApi chain so PUT/DELETE can be invoked directly. Everything referenced inside a
+// adminApi chain so PUT/DELETE can be invoked directly. Everything referenced inside a
 // vi.mock factory must live in vi.hoisted (mocks are hoisted above const initialization).
 const { handlers, repo, invalidatePartnerRuleCache, audit } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => unknown>,
@@ -12,8 +12,8 @@ const { handlers, repo, invalidatePartnerRuleCache, audit } = vi.hoisted(() => (
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain: Record<string, (fn: (req: unknown, res: unknown) => unknown) => unknown> = {};
     for (const method of ['get', 'post', 'put', 'delete']) {
       chain[method] = (fn: (req: unknown, res: unknown) => unknown) => {
@@ -36,7 +36,7 @@ vi.mock('@server/entitlements/partnerRules', async importOriginal => ({
   invalidatePartnerRuleCache,
 }));
 
-// Importing the route registers handlers.put / handlers.delete via the mocked baseApi.
+// Importing the route registers handlers.put / handlers.delete via the mocked adminApi.
 import '@pages/api/admin/partner-signup-rules/[id]';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 

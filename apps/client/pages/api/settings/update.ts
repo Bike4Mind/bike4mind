@@ -1,3 +1,4 @@
+import { hasAdminPermission } from '@bike4mind/common';
 import {
   SettingKeySchema,
   isBlankSettingValue,
@@ -21,7 +22,7 @@ import { decryptAtRest } from '@bike4mind/utils/security';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
@@ -35,17 +36,15 @@ import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 let warnedSelfHostPlaintext = false;
 
 // Update Admin Setting
-const handler = baseApi().put(
+const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
   asyncHandler<
     unknown,
     unknown,
     { key: string; value: unknown; confirmClear?: boolean; confirmAboveMeasuredFloor?: boolean }
   >(async (req, res) => {
-    if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
+    if (!hasAdminPermission(req.user, 'settings:manage')) throw new ForbiddenError('Permission denied');
 
     // Authorize before any branch reads or returns stored setting data.
-    if (!req.ability) throw new NotFoundError('Ability not found');
-    if (!req.ability.can('update', AdminSettings)) throw new NotFoundError('Permission denied');
 
     // A contributed key is accepted once registered; anything else still fails SettingKeySchema (400).
     const key: string =

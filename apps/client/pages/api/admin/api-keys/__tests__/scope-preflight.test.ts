@@ -9,7 +9,7 @@ import { createMocks } from 'node-mocks-http';
  * matters (a preflight that drifts from enforcement reports a confidently wrong
  * re-mint list).
  *
- * The baseApi mock records the config it was called with. A mock that discards
+ * The adminApi mock records the config it was called with. A mock that discards
  * it - the common shape elsewhere in this repo - would let the admin-scope
  * declaration silently disappear while this file still passed.
  */
@@ -19,7 +19,7 @@ const mockRefs = vi.hoisted(() => ({
   config: undefined as undefined | Record<string, unknown>,
 }));
 
-vi.mock('@server/middlewares/baseApi', () => {
+vi.mock('@server/middlewares/adminApi', () => {
   const chain: any = {
     use: () => chain,
     post: () => chain,
@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => {
     },
   };
   return {
-    baseApi: (config?: Record<string, unknown>) => {
+    adminApi: (config?: Record<string, unknown>) => {
       mockRefs.config = config;
       return chain;
     },
@@ -199,7 +199,7 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
     });
 
     it('refuses a prefix whose traffic is never logged rather than answering zero', async () => {
-      // ApiKeyUsageLog is written only by baseApi's apiKeyAuth hook. These routes
+      // ApiKeyUsageLog is written only by adminApi's apiKeyAuth hook. These routes
       // authenticate through verifyApiKey and log nothing, so a "no keys" answer
       // here would be a false statement of fact - and verifyApiKey has no staging
       // path, so acting on it breaks live keys with no grace period.

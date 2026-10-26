@@ -12,12 +12,16 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
-      h.handler = fn;
-      return {};
-    },
-  }),
+  baseApi: () => {
+    const chain = {
+      use: () => chain,
+      post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
+        h.handler = fn;
+        return {};
+      },
+    };
+    return chain;
+  },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { update: h.update } }));

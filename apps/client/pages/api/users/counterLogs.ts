@@ -1,4 +1,4 @@
-import { ApiKeyScope, Permission, dayjs, type CompletionSource } from '@bike4mind/common';
+import { ApiKeyScope, Permission, dayjs, hasAdminPermission, type CompletionSource } from '@bike4mind/common';
 import {
   CounterLog,
   DailyReport,
@@ -12,6 +12,7 @@ import {
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { requireAdminPermission } from '@server/middlewares/adminApi';
 import { Logger } from '@bike4mind/observability';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import { counterService } from '@bike4mind/services';
@@ -192,7 +193,8 @@ export const COUNTER_LOGS_RATE_LIMIT = 60;
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: COUNTER_LOGS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'users-counter-logs' }))
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
-    if (!req.ability?.can(Permission.read, CounterLog)) {
+    const canReadCounterLogs = !!req.ability?.can(Permission.read, CounterLog);
+    if (!canReadCounterLogs && !hasAdminPermission(req.user, 'settings:manage')) {
       throw new ForbiddenError('Unauthorized');
     }
 
@@ -216,6 +218,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       // For report requests, check cache first
       if (report || weeklyReport) {
+        requireAdminPermission(req, 'settings:manage');
         const cacheKey = `reports:${startDate}:${endDate}:${report}:${weeklyReport}:${includeInsights}`;
 
         const cachedResult = await cacheRepository.findByKey(cacheKey);
@@ -251,6 +254,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
         return sendMaybeGzip(req, res, response);
       } else {
+        if (!canReadCounterLogs) throw new ForbiddenError('Unauthorized');
         // Filter-scoped, NOT page-scoped: the entry holds a window of the sorted result set, so
         // every page of one filter set shares it and costs one aggregation between them
         // (userActivityCache.ts). `limit` stays out of the key for the same reason - the window is

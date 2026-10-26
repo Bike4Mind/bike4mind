@@ -9,8 +9,8 @@ const { adminAuditLogRepository, agentRepository, route } = vi.hoisted(() => ({
   route: { patch: undefined as Handler | undefined },
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain = {
       get: () => chain,
       delete: () => chain,

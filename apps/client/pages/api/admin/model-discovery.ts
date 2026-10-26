@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { adminSettingsRepository, modelDiscoveryRunRepository } from '@bike4mind/database';
 import type { IModelDiscoveryRun } from '@bike4mind/common';
@@ -120,9 +121,13 @@ const fullRun = (run: IModelDiscoveryRun) => ({
   droppedRecords: run.droppedRecords ?? [],
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
+    if (!canAccessAdmin(req.user)) throw new ForbiddenError('Admin access required');
 
     const runId = req.query.runId;
     // ?runId=a&runId=b arrives as an array: answering the status list for it would
@@ -157,7 +162,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     });
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
+    if (!canAccessAdmin(req.user)) throw new ForbiddenError('Admin access required');
 
     // The service returns a 'skipped' result before it ever creates a run
     // document, so dispatching with the master switch off would answer 202 and

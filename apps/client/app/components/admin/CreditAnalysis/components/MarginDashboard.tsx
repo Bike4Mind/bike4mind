@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
@@ -86,6 +88,7 @@ const invoiceStatus = (
 const signedUsd = (value: number) => `${value < 0 ? '-' : '+'}$${Math.abs(value).toFixed(2)}`;
 
 export const MarginDashboard: React.FC = () => {
+  const canManage = useUser(state => hasAdminPermission(state.currentUser, 'settings:manage'));
   const [modelDay, setModelDay] = useState<MarginResponse<IModelDayMargin> | null>(null);
   const [byUser, setByUser] = useState<MarginResponse<NamedUserMargin> | null>(null);
   const [byProvider, setByProvider] = useState<MarginResponse<IProviderMonthCogs> | null>(null);
@@ -150,6 +153,7 @@ export const MarginDashboard: React.FC = () => {
     invoices.find(i => i.month === month && i.provider === provider);
 
   const openEntry = (month: string, provider: string, existing?: IProviderInvoice) => {
+    if (!hasAdminPermission(useUser.getState().currentUser, 'settings:manage')) return;
     setEntryTarget({ month, provider });
     setEntryUsd(existing ? String(existing.invoiceUsd) : '');
     setEntryNote('');
@@ -160,6 +164,7 @@ export const MarginDashboard: React.FC = () => {
   const entryValid = Number.isFinite(entryAmount) && entryAmount >= 0 && entryNote.trim().length > 0;
 
   const saveEntry = async () => {
+    if (!hasAdminPermission(useUser.getState().currentUser, 'settings:manage')) return;
     if (!entryTarget || !entryValid) return;
     setIsSaving(true);
     setEntryError(null);
@@ -204,6 +209,7 @@ export const MarginDashboard: React.FC = () => {
               target: {target.toLocaleString()} credits/$
             </Chip>
           )}
+          {!canManage && <Typography color="warning">Missing permission: settings:manage</Typography>}
           <IconButton size="sm" onClick={fetchAll} disabled={isLoading} data-testid="margin-refresh-btn">
             <RefreshIcon />
           </IconButton>
@@ -357,7 +363,7 @@ export const MarginDashboard: React.FC = () => {
                             <Button
                               size="sm"
                               variant="plain"
-                              disabled={isCurrent}
+                              disabled={isCurrent || !canManage}
                               title={isCurrent ? 'Month still accruing; reconcile closed months only' : undefined}
                               onClick={() => openEntry(row.month, row.provider)}
                               data-testid={`margin-invoice-enter-${key}`}
@@ -377,6 +383,7 @@ export const MarginDashboard: React.FC = () => {
                                 <Chip
                                   size="sm"
                                   color={status.color}
+                                  disabled={!canManage}
                                   onClick={() => openEntry(row.month, row.provider, invoice)}
                                   data-testid={`margin-invoice-chip-${key}`}
                                 >
@@ -460,7 +467,7 @@ export const MarginDashboard: React.FC = () => {
         </Stack>
       )}
 
-      <Modal open={entryTarget !== null} onClose={() => !isSaving && setEntryTarget(null)}>
+      <Modal open={entryTarget !== null && canManage} onClose={() => !isSaving && setEntryTarget(null)}>
         <ModalDialog data-testid="margin-invoice-modal" sx={{ minWidth: 360 }}>
           <Typography level="title-md">
             Invoice: {entryTarget?.provider} {entryTarget?.month}
@@ -493,7 +500,12 @@ export const MarginDashboard: React.FC = () => {
             <Button variant="plain" color="neutral" disabled={isSaving} onClick={() => setEntryTarget(null)}>
               Cancel
             </Button>
-            <Button loading={isSaving} disabled={!entryValid} onClick={saveEntry} data-testid="margin-invoice-save-btn">
+            <Button
+              loading={isSaving}
+              disabled={!canManage || !entryValid}
+              onClick={saveEntry}
+              data-testid="margin-invoice-save-btn"
+            >
               Save
             </Button>
           </Stack>

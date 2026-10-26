@@ -1,3 +1,6 @@
+import { hasAdminPermission, isValidAdminActionReason } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { AdminReasonField } from '../shared/AdminReasonField';
 import React, { useState, useMemo } from 'react';
 import {
   Modal,
@@ -63,6 +66,9 @@ const DEFAULT_FORM_DATA: CreateUserFormData = {
 const USER_LEVELS = ['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser'];
 
 const CreateUserModal: React.FC = () => {
+  const canManage = useUser(state => hasAdminPermission(state.currentUser, 'settings:manage'));
+  const canAdjustCredits = useUser(state => hasAdminPermission(state.currentUser, 'credits:adjust'));
+  const [roleChangeReason, setRoleChangeReason] = useState('');
   const { open, setOpen } = useCreateUserModal();
   const [formData, setFormData] = useState<CreateUserFormData>(DEFAULT_FORM_DATA);
   const queryClient = useQueryClient();
@@ -75,9 +81,15 @@ const CreateUserModal: React.FC = () => {
 
   const createUserMutation = useMutation({
     mutationFn: async (userData: CreateUserFormData) => {
-      console.log('Sending user data:', userData);
-      const response = await api.post('/api/admin/create-user', userData);
-      console.log('Success response:', response.data);
+      const currentUser = useUser.getState().currentUser;
+      if (!hasAdminPermission(currentUser, 'settings:manage')) throw new Error('Missing permission: settings:manage');
+      if (userData.isAdmin && !isValidAdminActionReason(roleChangeReason))
+        throw new Error('A role change reason is required');
+      const response = await api.post('/api/admin/create-user', {
+        ...userData,
+        initialCredits: hasAdminPermission(currentUser, 'credits:adjust') ? userData.initialCredits : 0,
+        ...(userData.isAdmin ? { roleChangeReason: roleChangeReason.trim() } : {}),
+      });
       return response.data;
     },
     onSuccess: () => {
@@ -93,6 +105,7 @@ const CreateUserModal: React.FC = () => {
 
   const handleClose = () => {
     setFormData(DEFAULT_FORM_DATA);
+    setRoleChangeReason('');
     createUserMutation.reset();
     setOpen(false);
   };
@@ -125,6 +138,7 @@ const CreateUserModal: React.FC = () => {
 
   const isFormValid = () => {
     return (
+      (!formData.isAdmin || isValidAdminActionReason(roleChangeReason)) &&
       formData.username.trim() !== '' &&
       formData.email.trim() !== '' &&
       formData.name.trim() !== '' &&
@@ -134,7 +148,7 @@ const CreateUserModal: React.FC = () => {
   };
 
   return (
-    <Modal open={open} onClose={handleClose}>
+    <Modal open={open && canManage} onClose={handleClose}>
       <ModalDialog
         sx={{
           minWidth: { xs: '90%', sm: 600 },
@@ -188,6 +202,14 @@ const CreateUserModal: React.FC = () => {
         )}
 
         <form onSubmit={handleSubmit}>
+          {formData.isAdmin && (
+            <AdminReasonField
+              value={roleChangeReason}
+              onChange={setRoleChangeReason}
+              data-testid="create-user-role-change-reason"
+            />
+          )}
+          {!canAdjustCredits && <Typography color="warning">Missing permission: credits:adjust</Typography>}
           <Stack spacing={2}>
             {/* Basic Information */}
             <Typography level="title-md" sx={{ mt: 1 }}>
@@ -348,9 +370,11 @@ const CreateUserModal: React.FC = () => {
               <Input
                 data-testid="create-user-credits-input"
                 type="number"
-                value={formData.initialCredits}
-                onChange={e => setFormData({ ...formData, initialCredits: parseInt(e.target.value) || 0 })}
-                disabled={createUserMutation.isPending}
+                value={canAdjustCredits ? formData.initialCredits : 0}
+                onChange={e => {
+                  if (canAdjustCredits) setFormData({ ...formData, initialCredits: parseInt(e.target.value) || 0 });
+                }}
+                disabled={!canAdjustCredits || createUserMutation.isPending}
                 slotProps={{
                   input: {
                     min: 0,

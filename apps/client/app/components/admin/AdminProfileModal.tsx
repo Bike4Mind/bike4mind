@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import ProfileDataForm from '@client/app/components/ProfileModal/ProfileDataForm';
 import { useGetUser } from '@client/app/hooks/data/user';
 import { LinearProgress, Modal, ModalClose, ModalDialog, Stack } from '@mui/joy';
@@ -17,11 +19,12 @@ export const useAdminProfileModal = create<{
 }));
 
 const AdminProfileModal = () => {
+  const canManage = useUser(state => hasAdminPermission(state.currentUser, 'settings:manage'));
   const [userId, setUserId] = useAdminProfileModal(useShallow(state => [state.userId, state.setUserId]));
   const user = useGetUser(userId);
 
   return (
-    <Modal open={!!userId} onClose={() => setUserId(null)}>
+    <Modal open={!!userId && canManage} onClose={() => setUserId(null)}>
       <ModalDialog data-testid="admin-profile-modal" sx={{ maxHeight: '90vh', overflowY: 'auto' }}>
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
           <ModalClose data-testid="modal-close-btn" />

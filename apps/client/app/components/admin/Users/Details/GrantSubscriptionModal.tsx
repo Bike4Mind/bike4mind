@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGrantSubscription } from '@client/app/hooks/data/subscriptions';
@@ -53,7 +55,9 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
     return SUBSCRIPTION_PLANS.filter(plan => plans.data.some(p => p.id === plan.priceId && p.active));
   }, [plans.data]);
 
+  const canAdjustCredits = useUser(state => hasAdminPermission(state.currentUser, 'credits:adjust'));
   const handleSubmit = async () => {
+    if (!canAdjustCredits) return;
     if (subscriptionType === 'individual') {
       if (!priceId) return;
 

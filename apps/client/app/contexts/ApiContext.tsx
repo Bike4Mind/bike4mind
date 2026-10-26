@@ -1,3 +1,5 @@
+import { ADMIN_PERMISSIONS } from '@bike4mind/common';
+import { toast } from 'sonner';
 import axios, { isAxiosError } from 'axios';
 import React, { PropsWithChildren } from 'react';
 import { useAccessToken } from '../hooks/useAccessToken';
@@ -79,6 +81,16 @@ api.interceptors.response.use(
   response => response,
   async error => {
     const { getState } = useAccessToken;
+
+    if (isAxiosError(error) && error.response?.status === 403 && !isStepUpRequired(error)) {
+      const payload: unknown = error.response.data;
+      if (payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string') {
+        const message = payload.error;
+        if (ADMIN_PERMISSIONS.some(permission => message === `Missing permission: ${permission}`)) {
+          toast.error(message, { id: message });
+        }
+      }
+    }
 
     // Ignore cancelled requests (user-initiated abort)
     if (axios.isCancel(error) || error.code === 'ERR_CANCELED') {

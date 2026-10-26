@@ -47,8 +47,8 @@ vi.mock('@bike4mind/utils/security', () => ({
   isEncrypted: (v: unknown) => typeof v === 'string' && v.startsWith('enc:'),
   isValidEncryptionKey: (k: unknown) => typeof k === 'string' && k.length === 64,
 }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ put: (handler: (...a: unknown[]) => unknown) => handler }),
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({ put: (handler: (...a: unknown[]) => unknown) => handler }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,

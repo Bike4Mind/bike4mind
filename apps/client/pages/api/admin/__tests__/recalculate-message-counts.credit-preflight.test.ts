@@ -8,8 +8,8 @@ const { mockAssertCredits, mockCount, mockCountTaggable, mockPublishStart } = vi
   mockPublishStart: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain: Record<string, unknown> = {};
     chain.use = () => chain;
     chain.post = (handler: (...a: unknown[]) => unknown) => handler;

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
     const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
     chain.use = () => chain;
@@ -114,7 +114,7 @@ beforeEach(() => {
 describe('GET /api/admin/sessions/[id] - support read gate', () => {
   it('rejects a non-admin before touching the session', async () => {
     const { run } = call(sessionHandler, { isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow('Missing permission: support:read');
     expect(mockFindSessionById).not.toHaveBeenCalled();
     expect(mockRecordAudit).not.toHaveBeenCalled();
   });
@@ -276,7 +276,7 @@ describe('GET /api/admin/sessions/[id] - support read gate', () => {
 describe('GET /api/admin/sessions/[id]/quests - conversation read', () => {
   it('rejects a non-admin', async () => {
     const { run } = call(questsHandler, { isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow('Missing permission: support:read');
     expect(mockFindPageBySessionId).not.toHaveBeenCalled();
   });
 

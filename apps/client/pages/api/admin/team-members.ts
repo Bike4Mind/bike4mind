@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { internalTeamMemberRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
 import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
   ApiKeyScope,
@@ -25,9 +26,13 @@ const ensureAdmin = (isAdmin?: boolean | null) => {
   }
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const includeInactive = req.query.includeInactive === 'true';
 
@@ -38,7 +43,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return respond(res, internalTeamMemberListResponseSchema, members);
   })
   .post(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const parsed = TeamMemberCreateSchema.safeParse(req.body);
 
@@ -70,7 +75,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return respond(res, internalTeamMemberResponseSchema, created, 201);
   })
   .put(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const parsed = TeamMemberUpdateSchema.safeParse(req.body);
 
@@ -98,7 +103,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return respond(res, internalTeamMemberResponseSchema, updated);
   })
   .delete(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const id = req.query.id;
 

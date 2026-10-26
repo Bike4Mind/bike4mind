@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import {
@@ -11,7 +12,7 @@ import {
 import { withTransaction } from '@bike4mind/database';
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
@@ -100,9 +101,13 @@ const scopedTarget = (settingName: SettingKey, scopeLevel: ScopeLevel, scopeId: 
   displayName: `${settingName} (${scopeLevel} ${scopeId})`,
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
     // The whole collection in one read. It is small by design - a row exists only where an operator
     // actually set an override - and both questions the admin UI asks ("which rungs override setting
     // X" and "what is overridden at scope Y") are answered from the same inventory. The soft-delete
@@ -110,7 +115,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json(await scopedSettingsRepository.find({}));
   })
   .put(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
     const { settingName, scopeLevel, scopeId, ownerType, value, confirmAboveMeasuredFloor } = parseOrBadRequest(
       PutBodySchema,
       req.body
@@ -157,7 +162,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json({ settingName, scopeLevel, scopeId, ownerType, settingValue });
   })
   .delete(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
     // Address comes from the query, not a body: a DELETE body is awkward to send through axios and
     // next-connect.
     const { settingName, scopeLevel, scopeId } = parseOrBadRequest(ScopeAddressSchema, req.query);

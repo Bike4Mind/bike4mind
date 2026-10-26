@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { User, OverwatchUserFirstSeen } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
@@ -13,8 +14,9 @@ const bodySchema = z.object({
   skip: z.number().int().nonnegative().default(0),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

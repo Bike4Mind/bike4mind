@@ -1,4 +1,4 @@
-import { IUserDocument, IUserRepository } from '@bike4mind/common';
+import { IUserDocument, IUserRepository, hasAdminPermission } from '@bike4mind/common';
 
 export interface ForceResetMFARequest {
   targetUserId: string;
@@ -18,7 +18,7 @@ export async function forceResetMFA(
   { targetUserId, adminUser }: ForceResetMFARequest,
   userRepository: Pick<IUserRepository, 'findById' | 'update'>
 ): Promise<ForceResetMFAResponse> {
-  if (!adminUser.isAdmin) {
+  if (!hasAdminPermission(adminUser, 'settings:manage')) {
     throw new Error('Only administrators can force reset MFA.');
   }
 

@@ -36,6 +36,9 @@ vi.mock('@bike4mind/services', () => ({
   userService: { adminDeleteUser: (...a: unknown[]) => mockAdminDeleteUser(...a) },
 }));
 vi.mock('@bike4mind/database', () => ({
+  prepareAdminMutationLock: vi.fn(),
+  lockAdminMutations: vi.fn(),
+  assertCanRemoveFullAdmin: vi.fn(),
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   userRepository: {
     delete: (...a: unknown[]) => mockRepoDelete(...a),
@@ -64,7 +67,9 @@ import handler from '../delete';
 
 type DeleteAdapters = { db: { users: { delete: (id: string) => Promise<unknown> } } };
 
-async function run(options: { user?: { id: string; isAdmin: boolean }; body?: unknown; id?: string } = {}) {
+async function run(
+  options: { user?: { id: string; isAdmin: boolean; adminPermissions?: string[] }; body?: unknown; id?: string } = {}
+) {
   const { req, res } = createMocks({
     method: 'DELETE',
     query: { id: options.id ?? 'u1' },
@@ -91,6 +96,35 @@ beforeEach(() => {
 });
 
 describe('DELETE /api/users/[id]/delete', () => {
+  it('allows a delegated deletion grant through the handler', async () => {
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      return { id: 'u1' };
+    });
+    const { call } = await run({
+      user: { id: 'operator', isAdmin: false, adminPermissions: ['support:read', 'users:delete'] },
+    });
+    await call;
+    expect(mockRepoDelete).toHaveBeenCalledWith('u1');
+  });
+
+  it('denies a delete-only actor before target reads or deletion', async () => {
+    const { call } = await run({ user: { id: 'delete-only', isAdmin: false, adminPermissions: ['users:delete'] } });
+    await expect(call).rejects.toThrow('Missing permission: support:read');
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockReadGrants).not.toHaveBeenCalled();
+    expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+    expect(mockRepoDelete).not.toHaveBeenCalled();
+    expect(mockWithTransaction).not.toHaveBeenCalled();
+  });
+
+  it('denies a support-only actor before deletion', async () => {
+    const { call } = await run({ user: { id: 'support', isAdmin: false, adminPermissions: ['support:read'] } });
+    await expect(call).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+    expect(mockRepoDelete).not.toHaveBeenCalled();
+  });
+
   it('purges the user data after the delete commits', async () => {
     mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
       await db.users.delete('u1');
@@ -197,7 +231,7 @@ describe('DELETE /api/users/[id]/delete', () => {
 
     const { call } = await run();
 
-    await expect(call).rejects.toThrow('not authorized');
+    await expect(call).rejects.toThrow('You are not authorized to delete users');
     expect(mockRepoDelete).not.toHaveBeenCalled();
     expect(mockPurge).not.toHaveBeenCalled();
     expect(mockEmitBillingEvent).not.toHaveBeenCalled();
@@ -249,10 +283,10 @@ describe('DELETE /api/users/[id]/delete', () => {
   });
 
   describe('audit trail', () => {
-    it('rejects a non-admin with 401 before any write', async () => {
+    it('rejects a non-admin with 403 before any write', async () => {
       const { call } = await run({ user: { id: 'user1', isAdmin: false } });
 
-      await expect(call).rejects.toThrow('not authorized');
+      await expect(call).rejects.toMatchObject({ statusCode: 403 });
       expect(mockAdminDeleteUser).not.toHaveBeenCalled();
       expect(mockRecord).not.toHaveBeenCalled();
     });

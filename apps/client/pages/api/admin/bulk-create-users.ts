@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
@@ -11,7 +12,7 @@ import { respond } from '@server/utils/respond';
 import { userService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
@@ -51,9 +52,13 @@ const bulkCreateResponseSchema = z.object({
   ),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const api = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.post(
   asyncHandler<{}, unknown, { users: UserImportRow[] }>(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
@@ -61,6 +66,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     if (!Array.isArray(users) || users.length === 0) {
       throw new BadRequestError('Invalid input: users array is required and must not be empty');
+    }
+
+    if (users.some(row => typeof row?.startingCredits === 'number' && row.startingCredits > 0)) {
+      requireAdminPermission(req, 'credits:adjust');
     }
 
     const createdUserIds: string[] = [];

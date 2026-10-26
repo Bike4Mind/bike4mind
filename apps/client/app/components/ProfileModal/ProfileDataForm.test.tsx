@@ -1,3 +1,8 @@
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: Object.assign(() => ({ currentUser: { isAdmin: true } }), {
+    getState: () => ({ currentUser: { isAdmin: true } }),
+  }),
+}));
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';

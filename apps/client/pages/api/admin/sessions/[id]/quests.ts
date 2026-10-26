@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { questRepository } from '@bike4mind/database';
 import {
   AdminSupportAccessAction,
@@ -33,7 +33,8 @@ const PaginationSchema = z.object({
   sort: z.enum(['asc', 'desc']).prefault('asc'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
   const ctx = await authorizeSupportRead(req);
   const { page, limit, sort } = PaginationSchema.parse(req.query);
 

@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { userRepository, subscriberRepository, emailPreferencesRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailCategory, IEmailRecipientFilter } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { randomUUID } from 'crypto';
 
@@ -11,8 +12,9 @@ interface PreviewRecipient {
   type: 'user' | 'subscriber' | 'direct';
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 

@@ -1,11 +1,13 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { updateOAuthClient } from '@bike4mind/database';
 import { ApiKeyScope, updateOAuthClientSchema } from '@bike4mind/common';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const api = adminApi({ adminPermissions: { PATCH: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.patch(async (req, res) => {
+  ensureAdmin(canAccessAdmin(req.user));
   const { id } = req.query;
   if (typeof id !== 'string' || !id) throw new BadRequestError('OAuth client id required');
 

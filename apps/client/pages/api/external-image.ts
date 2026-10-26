@@ -1,8 +1,9 @@
+import { hasAdminPermission } from '@bike4mind/common';
 import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { isExecutableUploadMimeType } from '@bike4mind/common';
 import { createS3Client } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
   assertUrlAllowed,
@@ -45,9 +46,9 @@ function generateCacheKey(rawUrl: string, parsed: URL): string {
   return `proxied-images/${hash}.${safeExt}`;
 }
 
-const handler = baseApi().get(
+const handler = adminApi({ adminPermissions: { GET: 'settings:manage' } }).get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!hasAdminPermission(req.user, 'settings:manage')) {
       throw new ForbiddenError('Admin only');
     }
 

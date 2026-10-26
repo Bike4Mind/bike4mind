@@ -1,12 +1,14 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { ApiKeyScope, type AuditLogPage } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { encodeAuditCursor, parseAuditListQuery } from '@server/utils/adminAuditQuery';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  ensureAdmin(canAccessAdmin(req.user));
   const { filters, limit, cursor } = parseAuditListQuery(req.query);
 
   const { entries, nextCursor } = await adminAuditLogRepository.list(filters, { limit, cursor });

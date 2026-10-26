@@ -1,3 +1,10 @@
+const permissionState = vi.hoisted(() => ({ currentUser: { isAdmin: true, adminPermissions: [] as string[] } }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: Object.assign((selector: (state: typeof permissionState) => unknown) => selector(permissionState), {
+    getState: () => permissionState,
+  }),
+}));
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
@@ -559,4 +566,13 @@ describe('ModelPricingCatalog', () => {
     expect(await screen.findByTestId('history-drawer')).toBeInTheDocument();
     expect(screen.getAllByTestId('history-row')).toHaveLength(2);
   });
+});
+
+it('lets a credit analyst inspect pricing while disabling pricing writes', async () => {
+  permissionState.currentUser = { isAdmin: false, adminPermissions: ['credits:adjust'] };
+  mockGet.mockResolvedValue({ data: { rows: ROWS } });
+  render(<ModelPricingCatalog />, { wrapper: TestWrapper });
+  expect(await screen.findByTestId('model-pricing-reprice-gpt-x-per_token')).toBeDisabled();
+  expect(screen.getByTestId('model-pricing-revert-gpt-y-per_token')).toBeDisabled();
+  expect(screen.getByText('Missing permission: settings:manage')).toBeInTheDocument();
 });

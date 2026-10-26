@@ -9,8 +9,8 @@ const h = vi.hoisted(() => ({
   audit: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({
     post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
       h.handler = fn;
       return {};

@@ -1,7 +1,8 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
@@ -15,11 +16,11 @@ const bodySchema = z.object({ approved: z.boolean() });
 
 // Admin-only endpoint to trust (or stop trusting) an account for minting personal API keys
 // without waiting for the account-age or purchase requirement. Email must still be verified.
-const handler = baseApi({ auth: 'jwtOnly' })
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, auth: 'jwtOnly' })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Request, Response } from 'express';
 import { createMocks } from 'node-mocks-http';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
@@ -10,8 +11,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({
     post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
       h.handler = fn;
       return {};
@@ -108,5 +109,62 @@ describe('POST /api/reg-invites/update - admin audit', () => {
     expect(entry.details.ids).toHaveLength(100);
     expect(entry.details.idsTruncated).toBe(true);
     expect(entry.target.displayName).toBe('150 registration invites');
+  });
+});
+
+describe('registration invite update response boundary', () => {
+  it('preserves known invite fields and strips future unknown fields before responding', async () => {
+    const date = new Date('2026-10-26T00:00:00.000Z');
+    h.formatRegInvites.mockResolvedValue([
+      {
+        id: 'invite',
+        status: 'waiting',
+        code: 'invite-code',
+        userId: 'sender',
+        usedbyId: 'recipient',
+        expiresAt: date,
+        used: date,
+        email: 'recipient@example.com',
+        title: 'Invitation',
+        description: 'Join',
+        unlimitedUse: true,
+        tags: ['Customer'],
+        startingCredits: 25,
+        startingStorage: 100,
+        usageHistory: [{ userId: 'recipient', usedAt: date, futureUsageSecret: 'never returned' }],
+        createdAt: date,
+        updatedAt: date,
+        futureInternalSecret: 'never returned',
+      },
+    ]);
+    const { req, res } = createMocks<Request, Response>({
+      method: 'POST',
+      body: { ids: ['invite'], status: 'waiting', startingCredits: 999 },
+    });
+    req.user = { id: 'settings', isAdmin: false, adminPermissions: ['settings:manage'] } as Request['user'];
+    await h.handler!(req, res);
+    expect(h.formatRegInvites).toHaveBeenCalledWith({ status: 'waiting' }, ['invite']);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual([
+      {
+        id: 'invite',
+        status: 'waiting',
+        code: 'invite-code',
+        userId: 'sender',
+        usedbyId: 'recipient',
+        expiresAt: date.toISOString(),
+        used: date.toISOString(),
+        email: 'recipient@example.com',
+        title: 'Invitation',
+        description: 'Join',
+        unlimitedUse: true,
+        tags: ['Customer'],
+        startingCredits: 25,
+        startingStorage: 100,
+        usageHistory: [{ userId: 'recipient', usedAt: date.toISOString() }],
+        createdAt: date.toISOString(),
+        updatedAt: date.toISOString(),
+      },
+    ]);
   });
 });

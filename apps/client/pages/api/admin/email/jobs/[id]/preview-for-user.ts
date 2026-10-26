@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { emailJobRepository, emailTemplateRepository, userRepository, subscriberRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 
@@ -9,8 +10,9 @@ import { ApiKeyScope } from '@bike4mind/common';
  * Renders the email as it would appear for a specific user/subscriber.
  * Used for preview dropdown in campaign editor.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 

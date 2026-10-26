@@ -26,7 +26,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { IOrganizationDocument, WithId, isValidAdminActionReason } from '@bike4mind/common';
+import { IOrganizationDocument, WithId, isValidAdminActionReason, hasAdminPermission } from '@bike4mind/common';
 import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
 import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { toast } from 'sonner';
@@ -54,6 +54,8 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import { ORGS_PAGE_LIMIT_OPTIONS, organizationsPageToClampTo } from './organizationsTabSearch';
 import { useOpenOrganizationId, useOrganizationsParams, useOrganizationsTabUrlSync } from './useOrganizationsTabParams';
+import { useUser } from '@client/app/contexts/UserContext';
+import { requireOrganizationAdminPermission } from './organizationAdminPermissions';
 
 /**
  * Adjust Seats modal, extracted so it can fetch pending invites for the org
@@ -78,6 +80,7 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
   onSubmit,
   isPending,
 }) => {
+  const canAdjustCredits = useUser(state => hasAdminPermission(state.currentUser, 'credits:adjust'));
   const { data: pendingUsers } = useGetPendingOrganizationUsers(org.id);
   const { maxSeats } = useTeamSeatLimits();
   const pendingCount = pendingUsers?.length ?? 0;
@@ -113,7 +116,13 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
           <Button variant="outlined" color="neutral" onClick={onClose}>
             Cancel
           </Button>
-          <Button loading={isPending} onClick={onSubmit} data-testid="seats-submit">
+          <Button
+            disabled={!canAdjustCredits}
+            title={canAdjustCredits ? undefined : 'Missing permission: credits:adjust'}
+            loading={isPending}
+            onClick={onSubmit}
+            data-testid="seats-submit"
+          >
             Update seats
           </Button>
         </Stack>
@@ -125,6 +134,12 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
 const OrganizationsTab: React.FC = () => {
   const isMobile = useIsMobile();
   const { setOrgId } = useOpenOrganizationId();
+  const currentUser = useUser(state => state.currentUser);
+  const canRead = hasAdminPermission(currentUser, 'support:read');
+  const canManageSettings = canRead && hasAdminPermission(currentUser, 'settings:manage');
+  const canAdjustCredits = canRead && hasAdminPermission(currentUser, 'credits:adjust');
+  const settingsDenied = canManageSettings ? undefined : 'Missing permission: settings:manage';
+  const creditsDenied = canAdjustCredits ? undefined : 'Missing permission: credits:adjust';
   const [membersOrg, setMembersOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newOrgName, setNewOrgName] = useState('');
@@ -198,6 +213,7 @@ const OrganizationsTab: React.FC = () => {
   };
 
   const handleCreateOrganization = async () => {
+    if (!requireOrganizationAdminPermission(grantMode ? 'credits:adjust' : 'settings:manage')) return;
     if (grantMode) {
       if (!newOrgName.trim() || !grantOwnerEmail.trim() || !isValidAdminActionReason(grantReason)) {
         toast.error('Name, owner email, and a reason of at least 5 characters are required for grants');
@@ -234,6 +250,7 @@ const OrganizationsTab: React.FC = () => {
   };
 
   const handleTopUp = async () => {
+    if (!requireOrganizationAdminPermission('credits:adjust')) return;
     if (!topUpOrg) return;
     try {
       await topUpMutation.mutateAsync({
@@ -251,6 +268,7 @@ const OrganizationsTab: React.FC = () => {
   };
 
   const handleAdjustSeats = async () => {
+    if (!requireOrganizationAdminPermission('credits:adjust')) return;
     if (!seatsOrg) return;
     try {
       await seatsMutation.mutateAsync({ organizationId: seatsOrg.id, seats: seatsValue });
@@ -262,6 +280,7 @@ const OrganizationsTab: React.FC = () => {
   };
 
   const handleReconcileSeats = async (org: WithId<IOrganizationDocument>) => {
+    if (!requireOrganizationAdminPermission('credits:adjust')) return;
     try {
       await reconcileMutation.mutateAsync({ organizationId: org.id });
       refetch();
@@ -271,6 +290,7 @@ const OrganizationsTab: React.FC = () => {
   };
 
   const handleConvertToPaid = async (org: WithId<IOrganizationDocument>) => {
+    if (!requireOrganizationAdminPermission('credits:adjust')) return;
     try {
       const { checkoutUrl } = await convertMutation.mutateAsync({
         organizationId: org.id,
@@ -287,6 +307,7 @@ const OrganizationsTab: React.FC = () => {
   };
 
   const handleRevoke = async () => {
+    if (!requireOrganizationAdminPermission('credits:adjust')) return;
     if (!revokeOrg) return;
     try {
       await revokeMutation.mutateAsync({
@@ -393,10 +414,30 @@ const OrganizationsTab: React.FC = () => {
             <Button
               size="sm"
               startDecorator={<AddIcon />}
-              onClick={() => setIsCreateModalOpen(true)}
+              disabled={!canManageSettings}
+              title={settingsDenied}
+              data-testid="admin-org-create-open"
+              onClick={() => {
+                if (!requireOrganizationAdminPermission('settings:manage')) return;
+                setGrantMode(false);
+                setIsCreateModalOpen(true);
+              }}
               sx={{ flex: { xs: 1, sm: 'unset' } }}
             >
               Create Organization
+            </Button>
+            <Button
+              size="sm"
+              disabled={!canAdjustCredits}
+              title={creditsDenied}
+              data-testid="admin-org-grant-open"
+              onClick={() => {
+                if (!requireOrganizationAdminPermission('credits:adjust')) return;
+                setGrantMode(true);
+                setIsCreateModalOpen(true);
+              }}
+            >
+              Grant Free Organization
             </Button>
             <ContextHelpButton helpId="admin/organizations" tooltipText="Organizations Help" />
           </Stack>
@@ -450,7 +491,12 @@ const OrganizationsTab: React.FC = () => {
                         color="primary"
                         size="sm"
                         startDecorator={<EditIcon sx={{ fontSize: 14 }} />}
-                        onClick={() => setOrgId(org.id)}
+                        disabled={!canManageSettings}
+                        title={settingsDenied}
+                        data-testid={`admin-org-edit-${org.id}`}
+                        onClick={() => {
+                          if (requireOrganizationAdminPermission('settings:manage')) setOrgId(org.id);
+                        }}
                       >
                         Edit
                       </Button>
@@ -459,7 +505,12 @@ const OrganizationsTab: React.FC = () => {
                         color="neutral"
                         size="sm"
                         startDecorator={<GroupOutlinedIcon sx={{ fontSize: 14 }} />}
-                        onClick={() => setMembersOrg(org)}
+                        disabled={!canManageSettings}
+                        title={settingsDenied}
+                        data-testid={`admin-org-members-${org.id}`}
+                        onClick={() => {
+                          if (requireOrganizationAdminPermission('settings:manage')) setMembersOrg(org);
+                        }}
                       >
                         Members
                       </Button>
@@ -473,8 +524,11 @@ const OrganizationsTab: React.FC = () => {
                         </MenuButton>
                         <Menu>
                           <MenuItem
+                            disabled={!canAdjustCredits}
+                            title={creditsDenied}
                             data-testid={`topup-credits-${org.id}`}
                             onClick={() => {
+                              if (!requireOrganizationAdminPermission('credits:adjust')) return;
                               setTopUpOrg(org);
                               setTopUpCredits(50_000);
                               setTopUpReason('');
@@ -484,8 +538,11 @@ const OrganizationsTab: React.FC = () => {
                           </MenuItem>
                           {isGranted && (
                             <MenuItem
+                              disabled={!canAdjustCredits}
+                              title={creditsDenied}
                               data-testid={`adjust-seats-${org.id}`}
                               onClick={() => {
+                                if (!requireOrganizationAdminPermission('credits:adjust')) return;
                                 setSeatsOrg(org);
                                 setSeatsValue(org.seats ?? 1);
                               }}
@@ -495,6 +552,8 @@ const OrganizationsTab: React.FC = () => {
                           )}
                           {!isGranted && !org.personal && (
                             <MenuItem
+                              disabled={!canAdjustCredits}
+                              title={creditsDenied}
                               data-testid={`reconcile-seats-${org.id}`}
                               onClick={() => handleReconcileSeats(org)}
                             >
@@ -503,6 +562,8 @@ const OrganizationsTab: React.FC = () => {
                           )}
                           {isGranted && (
                             <MenuItem
+                              disabled={!canAdjustCredits}
+                              title={creditsDenied}
                               data-testid={`convert-to-paid-${org.id}`}
                               onClick={() => handleConvertToPaid(org)}
                             >
@@ -511,9 +572,12 @@ const OrganizationsTab: React.FC = () => {
                           )}
                           {isGranted && (
                             <MenuItem
+                              disabled={!canAdjustCredits}
+                              title={creditsDenied}
                               data-testid={`revoke-grant-${org.id}`}
                               color="danger"
                               onClick={() => {
+                                if (!requireOrganizationAdminPermission('credits:adjust')) return;
                                 setRevokeOrg(org);
                                 setRevokeReason('');
                               }}
@@ -578,7 +642,12 @@ const OrganizationsTab: React.FC = () => {
                             color="primary"
                             size="sm"
                             startDecorator={<EditIcon sx={{ fontSize: 14 }} />}
-                            onClick={() => setOrgId(org.id)}
+                            disabled={!canManageSettings}
+                            title={settingsDenied}
+                            data-testid={`admin-org-edit-${org.id}`}
+                            onClick={() => {
+                              if (requireOrganizationAdminPermission('settings:manage')) setOrgId(org.id);
+                            }}
                           >
                             Edit
                           </Button>
@@ -587,7 +656,12 @@ const OrganizationsTab: React.FC = () => {
                             color="neutral"
                             size="sm"
                             startDecorator={<GroupOutlinedIcon sx={{ fontSize: 14 }} />}
-                            onClick={() => setMembersOrg(org)}
+                            disabled={!canManageSettings}
+                            title={settingsDenied}
+                            data-testid={`admin-org-members-${org.id}`}
+                            onClick={() => {
+                              if (requireOrganizationAdminPermission('settings:manage')) setMembersOrg(org);
+                            }}
                           >
                             Members
                           </Button>
@@ -601,8 +675,11 @@ const OrganizationsTab: React.FC = () => {
                             </MenuButton>
                             <Menu>
                               <MenuItem
+                                disabled={!canAdjustCredits}
+                                title={creditsDenied}
                                 data-testid={`topup-credits-${org.id}`}
                                 onClick={() => {
+                                  if (!requireOrganizationAdminPermission('credits:adjust')) return;
                                   setTopUpOrg(org);
                                   setTopUpCredits(50_000);
                                   setTopUpReason('');
@@ -612,8 +689,11 @@ const OrganizationsTab: React.FC = () => {
                               </MenuItem>
                               {isGranted && (
                                 <MenuItem
+                                  disabled={!canAdjustCredits}
+                                  title={creditsDenied}
                                   data-testid={`adjust-seats-${org.id}`}
                                   onClick={() => {
+                                    if (!requireOrganizationAdminPermission('credits:adjust')) return;
                                     setSeatsOrg(org);
                                     setSeatsValue(org.seats ?? 1);
                                   }}
@@ -623,6 +703,8 @@ const OrganizationsTab: React.FC = () => {
                               )}
                               {!isGranted && !org.personal && (
                                 <MenuItem
+                                  disabled={!canAdjustCredits}
+                                  title={creditsDenied}
                                   data-testid={`reconcile-seats-${org.id}`}
                                   onClick={() => handleReconcileSeats(org)}
                                 >
@@ -631,6 +713,8 @@ const OrganizationsTab: React.FC = () => {
                               )}
                               {isGranted && (
                                 <MenuItem
+                                  disabled={!canAdjustCredits}
+                                  title={creditsDenied}
                                   data-testid={`convert-to-paid-${org.id}`}
                                   onClick={() => handleConvertToPaid(org)}
                                 >
@@ -639,9 +723,12 @@ const OrganizationsTab: React.FC = () => {
                               )}
                               {isGranted && (
                                 <MenuItem
+                                  disabled={!canAdjustCredits}
+                                  title={creditsDenied}
                                   data-testid={`revoke-grant-${org.id}`}
                                   color="danger"
                                   onClick={() => {
+                                    if (!requireOrganizationAdminPermission('credits:adjust')) return;
                                     setRevokeOrg(org);
                                     setRevokeReason('');
                                   }}
@@ -682,10 +769,10 @@ const OrganizationsTab: React.FC = () => {
       </Box>
 
       {/* Organization Profile Modal */}
-      <OrganizationProfileModal onClosed={refetch} />
+      {canManageSettings && <OrganizationProfileModal onClosed={refetch} />}
 
       {/* Members Modal */}
-      {membersOrg && (
+      {membersOrg && canManageSettings && (
         <Modal
           open={!!membersOrg}
           onClose={() => {
@@ -698,13 +785,16 @@ const OrganizationsTab: React.FC = () => {
             <Typography level="h4" sx={{ mb: 2 }}>
               {membersOrg.name} - Members
             </Typography>
-            <OrganizationMembers organization={liveMembersOrg ?? membersOrg} />
+            <OrganizationMembers
+              organization={liveMembersOrg ?? membersOrg}
+              beforeMutation={() => requireOrganizationAdminPermission('settings:manage')}
+            />
           </ModalDialog>
         </Modal>
       )}
 
       {/* Create Organization Modal */}
-      <Modal open={isCreateModalOpen} onClose={resetCreateModal}>
+      <Modal open={isCreateModalOpen && (grantMode ? canAdjustCredits : canManageSettings)} onClose={resetCreateModal}>
         <ModalDialog>
           <ModalClose />
           <Typography level="h4">Create New Organization</Typography>
@@ -712,7 +802,12 @@ const OrganizationsTab: React.FC = () => {
           <Stack spacing={2}>
             <Checkbox
               checked={grantMode}
-              onChange={e => setGrantMode(e.target.checked)}
+              disabled={!canAdjustCredits || !canManageSettings}
+              title={!canAdjustCredits ? creditsDenied : settingsDenied}
+              onChange={e => {
+                if (requireOrganizationAdminPermission(e.target.checked ? 'credits:adjust' : 'settings:manage'))
+                  setGrantMode(e.target.checked);
+              }}
               label="Grant Free Org (no Stripe checkout)"
               data-testid="grant-org-toggle"
             />
@@ -772,7 +867,8 @@ const OrganizationsTab: React.FC = () => {
             </Button>
             <Button
               loading={createOrganizationMutation.isPending || grantOrgMutation.isPending}
-              disabled={grantMode && !isValidAdminActionReason(grantReason)}
+              disabled={grantMode ? !canAdjustCredits || !isValidAdminActionReason(grantReason) : !canManageSettings}
+              title={grantMode ? creditsDenied : settingsDenied}
               onClick={handleCreateOrganization}
               data-testid={grantMode ? 'grant-org-submit' : 'create-org-submit'}
             >
@@ -783,7 +879,7 @@ const OrganizationsTab: React.FC = () => {
       </Modal>
 
       {/* Top Up Credits Modal */}
-      {topUpOrg && (
+      {topUpOrg && canAdjustCredits && (
         <Modal open onClose={() => setTopUpOrg(null)}>
           <ModalDialog>
             <ModalClose />
@@ -808,7 +904,8 @@ const OrganizationsTab: React.FC = () => {
               </Button>
               <Button
                 loading={topUpMutation.isPending}
-                disabled={!isValidAdminActionReason(topUpReason)}
+                disabled={!canAdjustCredits || !isValidAdminActionReason(topUpReason)}
+                title={creditsDenied}
                 onClick={handleTopUp}
                 data-testid="topup-submit"
               >
@@ -820,7 +917,7 @@ const OrganizationsTab: React.FC = () => {
       )}
 
       {/* Adjust Seats Modal */}
-      {seatsOrg && (
+      {seatsOrg && canAdjustCredits && (
         <AdjustSeatsModal
           org={seatsOrg}
           seatsValue={seatsValue}
@@ -832,7 +929,7 @@ const OrganizationsTab: React.FC = () => {
       )}
 
       {/* Revoke Modal */}
-      {revokeOrg && (
+      {revokeOrg && canAdjustCredits && (
         <Modal open onClose={() => setRevokeOrg(null)}>
           <ModalDialog>
             <ModalClose />
@@ -858,6 +955,8 @@ const OrganizationsTab: React.FC = () => {
                 color="danger"
                 loading={revokeMutation.isPending}
                 onClick={handleRevoke}
+                disabled={!canAdjustCredits}
+                title={creditsDenied}
                 data-testid="revoke-submit"
               >
                 Revoke

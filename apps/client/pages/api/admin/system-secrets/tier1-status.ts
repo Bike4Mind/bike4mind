@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 /**
  * Admin API for Tier 1 Secrets Status
  *
@@ -18,7 +19,7 @@
 
 import { ApiKeyScope } from '@bike4mind/common';
 import { Resource } from 'sst';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
@@ -84,9 +85,10 @@ function getTier1Status(stage: string): Tier1SecretInfo[] {
   }).map(({ isValid: _isValid, exposure: _exposure, ...info }) => info);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const api = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
   try {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

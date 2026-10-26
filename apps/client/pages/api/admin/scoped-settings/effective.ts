@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import {
@@ -9,7 +10,7 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 
 /**
@@ -57,8 +58,9 @@ const EffectiveQuerySchema = z
 
 export type EffectiveSettingQuery = z.infer<typeof EffectiveQuerySchema>;
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res: Response) => {
-  ensureAdmin(req.user?.isAdmin);
+const api = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req: Request, res: Response) => {
+  ensureAdmin(canAccessAdmin(req.user));
   const { settingName, organizationId, ownerId, ownerType, lakeId } = parseOrBadRequest(
     EffectiveQuerySchema,
     req.query

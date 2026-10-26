@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { randomUUID } from 'crypto';
@@ -18,8 +19,9 @@ const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes between manual runs
  * Invokes the attackSimulationFunction Lambda asynchronously and returns immediately
  * with the runId so the UI can poll for results.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

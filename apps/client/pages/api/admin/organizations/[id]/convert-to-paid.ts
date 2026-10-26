@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Organization, organizationRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
@@ -25,9 +26,10 @@ interface RequestQuery {
   id: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const api = adminApi({ adminPermissions: { POST: 'credits:adjust' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

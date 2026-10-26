@@ -1,4 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { fabFileRepository } from '@bike4mind/database';
 import {
   AdminSupportAccessAction,
@@ -115,7 +115,8 @@ const toSupportSession = (session: ISessionDocument): IAdminSupportSession => ({
   curatedAt: session.curatedAt,
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
   const ctx = await authorizeSupportRead(req);
 
   const knowledgeIds = ctx.session.knowledgeIds ?? [];

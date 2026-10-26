@@ -1,7 +1,8 @@
+import { hasAdminPermission } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { redactSettingSecrets, type AdminSettingDoc } from '@bike4mind/common';
 import { decryptAtRest } from '@bike4mind/utils/security';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 
 // Get Admin Settings - returns the FULL AdminSettings collection, and is admin-only.
@@ -16,8 +17,8 @@ import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 // the stored value is encrypted at rest, and only the mask (real last-4) is returned for
 // any setting tagged `isSensitive` in the merged core/contributed definitions, or for a
 // `settingName` with no definition at all (fail closed - an orphaned/renamed key defaults to masked, not plaintext).
-const handler = baseApi().get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const handler = adminApi({ adminPermissions: { GET: 'settings:manage' } }).get(async (req, res) => {
+  ensureAdmin(hasAdminPermission(req.user, 'settings:manage'));
 
   const settings = await AdminSettings.find().lean();
 

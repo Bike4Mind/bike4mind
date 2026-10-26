@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
@@ -9,7 +10,7 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { toCsv } from '@client/app/utils/csv';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { stageAdminAuditExport } from '@server/utils/adminAuditExportStorage';
 import { parseAuditExportQuery } from '@server/utils/adminAuditQuery';
@@ -81,8 +82,9 @@ const stageExportOrThrow = async (csv: string, fileName: string, rowCount: numbe
   }
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  ensureAdmin(canAccessAdmin(req.user));
   const filters = parseAuditExportQuery(req.query);
 
   const { entries, truncated } = await collectEntries(filters);

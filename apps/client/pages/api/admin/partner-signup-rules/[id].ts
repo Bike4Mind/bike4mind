@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
@@ -35,10 +36,14 @@ const diffRuleFields = <T extends Partial<Record<RuleField, unknown>>>(
     return JSON.stringify(previous) === JSON.stringify(next) ? [] : [{ field, before: previous, after: next }];
   });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .put(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
+      ensureAdmin(canAccessAdmin(req.user));
       const { id } = req.query as unknown as RequestQuery;
       if (!id) throw new BadRequestError('Rule id required');
 
@@ -88,7 +93,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   )
   .delete(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
+      ensureAdmin(canAccessAdmin(req.user));
       const { id } = req.query as unknown as RequestQuery;
       if (!id) throw new BadRequestError('Rule id required');
 

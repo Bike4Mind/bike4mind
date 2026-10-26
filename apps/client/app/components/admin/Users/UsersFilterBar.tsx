@@ -1,3 +1,4 @@
+import { AdminPermissionBoundary } from '../shared/AdminPermissionBoundary';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import CloseIcon from '@mui/icons-material/Close';
@@ -117,30 +118,34 @@ const UsersFilterBar: React.FC<UsersFilterBarProps> = ({
 
   const createUserButton = (label: boolean) =>
     label ? (
-      <Button
-        data-testid="admin-create-user-btn"
-        size="sm"
-        color="primary"
-        startDecorator={<PersonAddIcon />}
-        onClick={onCreateUser}
-        sx={{ flexShrink: 0 }}
-      >
-        Create User
-      </Button>
-    ) : (
-      <Tooltip title="Create User">
-        <IconButton
+      <AdminPermissionBoundary permission="settings:manage">
+        <Button
           data-testid="admin-create-user-btn"
-          // Tooltip only sets aria-describedby, so icon-only buttons still need their own name.
-          aria-label="Create user"
           size="sm"
-          variant="solid"
           color="primary"
+          startDecorator={<PersonAddIcon />}
           onClick={onCreateUser}
+          sx={{ flexShrink: 0 }}
         >
-          <PersonAddIcon />
-        </IconButton>
-      </Tooltip>
+          Create User
+        </Button>
+      </AdminPermissionBoundary>
+    ) : (
+      <AdminPermissionBoundary permission="settings:manage">
+        <Tooltip title="Create User">
+          <IconButton
+            data-testid="admin-create-user-btn"
+            // Tooltip only sets aria-describedby, so icon-only buttons still need their own name.
+            aria-label="Create user"
+            size="sm"
+            variant="solid"
+            color="primary"
+            onClick={onCreateUser}
+          >
+            <PersonAddIcon />
+          </IconButton>
+        </Tooltip>
+      </AdminPermissionBoundary>
     );
 
   const refreshButton = (

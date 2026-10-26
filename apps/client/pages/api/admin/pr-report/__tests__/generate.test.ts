@@ -18,8 +18,8 @@ const { mockLoadConfig, mockGenerateReport } = vi.hoisted(() => ({
 
 // Strip the middleware chain (DB connect, auth, logging) so the test exercises the route
 // body directly, matching the other pages/api suites.
-vi.mock('@client/server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@client/server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain: Record<string, unknown> = {};
     chain.use = () => chain;
     chain.post = (handler: unknown) => handler;
@@ -70,7 +70,7 @@ beforeEach(() => {
   mockGenerateReport.mockReset();
 });
 
-// The mocked baseApi returns the raw handler, so the middleware's error-to-HTTP mapping is
+// The mocked adminApi returns the raw handler, so the middleware's error-to-HTTP mapping is
 // absent - a thrown BadRequestError surfaces as a rejection rather than a 400 body. That is
 // the observable behavior of the gate.
 const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);

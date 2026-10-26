@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
@@ -163,9 +164,10 @@ function generateSampleTelemetry(severity: 'critical' | 'high' | 'medium' | 'low
  * Triggers a test of the telemetry alert configuration.
  * Simulates what would happen without actually creating issues or sending alerts.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

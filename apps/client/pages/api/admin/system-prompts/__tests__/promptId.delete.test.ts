@@ -4,11 +4,11 @@ import { createMocks } from 'node-mocks-http';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
-// baseApi: capture the DELETE handler so it can be invoked directly. The real route
+// adminApi: capture the DELETE handler so it can be invoked directly. The real route
 // chains .get(...).put(...).delete(...), so every method must return `this`.
 const captured = vi.hoisted(() => ({ deleteHandler: undefined as HandlerFn | undefined }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain = {
       use() {
         return this;

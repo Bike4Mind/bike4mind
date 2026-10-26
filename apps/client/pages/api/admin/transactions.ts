@@ -1,4 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { creditTransactionRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
@@ -11,7 +11,7 @@ import {
   type ILedgerRow,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgUsageRead } from '@server/utils/adminUsageRead';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
@@ -52,23 +52,28 @@ const QuerySchema = z.object({
  * not carry it, so those rows have no member.
  *
  * Access: platform admins (cross-org) plus the org's own owner, via
- * verifyOrgOwner - which pins non-admins to their org and 404s the rest.
+ * verifyOrgUsageRead - which pins non-admins to their org and 404s the rest.
  *
  * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
  * before req.user is set, so a key issued for a narrow integration can't read an
  * org's ledger just because its owner is an admin. JWT/browser callers (admin or
- * org owner) skip that check and still go through verifyOrgOwner below.
+ * org owner) skip that check and still go through verifyOrgUsageRead below.
  * ApiKeyScope.ADMIN has no mint path (excluded from every key-creation UI and
  * rejected server-side), so this closes the API-key path entirely for a
  * non-admin org owner - only a JWT/browser session still works for them.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const api = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  organizationOwnerRead: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.get(async (req, res) => {
   if (!req.user) {
     throw new ForbiddenError('Authentication required');
   }
 
   const { organizationId, page = 1, limit = 25, days, type, source, model } = QuerySchema.parse(req.query);
-  await verifyOrgOwner(req.user, organizationId);
+  await verifyOrgUsageRead(req.user, organizationId);
 
   const { data, total } = await creditTransactionRepository.queryLedgerPage(
     organizationId,

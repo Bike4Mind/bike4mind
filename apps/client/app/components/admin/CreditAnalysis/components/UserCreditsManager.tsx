@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import React, { useState } from 'react';
 import {
   Box,
@@ -56,11 +58,13 @@ const getActivityStatus = (user: AdminUserListItem): { label: string; color: 'su
 };
 
 export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefresh }) => {
+  const canAdjustCredits = useUser(state => hasAdminPermission(state.currentUser, 'credits:adjust'));
   const [selectedUser, setSelectedUser] = useState<AdminUserListItem | null>(null);
   const [creditsModalOpen, setCreditsModalOpen] = useState(false);
   const isMobile = useIsMobile();
 
   const openCreditsModal = (user: AdminUserListItem) => {
+    if (!hasAdminPermission(useUser.getState().currentUser, 'credits:adjust')) return;
     setSelectedUser(user);
     setCreditsModalOpen(true);
   };
@@ -88,6 +92,7 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
 
   return (
     <Box sx={{ height: '100%', p: 0.5 }}>
+      {!canAdjustCredits && <Typography color="warning">Missing permission: credits:adjust</Typography>}
       <Card variant="outlined" sx={{ mb: 1, px: 2, py: 1 }}>
         <Stack spacing={1}>
           {/* Search - always full width */}
@@ -198,6 +203,7 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
                     variant="outlined"
                     color="primary"
                     startDecorator={<CreditCardIcon />}
+                    disabled={!canAdjustCredits}
                     onClick={() => openCreditsModal(user)}
                     sx={{ flex: 1 }}
                   >
@@ -268,6 +274,7 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
                           variant="outlined"
                           color="primary"
                           startDecorator={<CreditCardIcon />}
+                          disabled={!canAdjustCredits}
                           onClick={() => openCreditsModal(user)}
                         >
                           Credits

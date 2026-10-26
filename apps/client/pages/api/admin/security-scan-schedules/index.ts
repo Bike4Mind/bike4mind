@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 /**
  * API Endpoint: GET /api/admin/security-scan-schedules
  *
@@ -16,13 +17,14 @@
 
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { securityScanScheduleRepository } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res: Response) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req: Request, res: Response) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

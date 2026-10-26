@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { envKey } from '@bike4mind/auth/apiKeyService';
@@ -89,9 +90,10 @@ async function resolvePlatformEmbeddingKeys() {
  * on a billable probe just because its owner is an admin. JWT/browser callers still go through the
  * isAdmin check below.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const api = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(
   asyncHandler(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

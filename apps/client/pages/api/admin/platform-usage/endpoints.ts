@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { apiKeyUsageLogRepository } from '@bike4mind/database';
 import { API_KEY_COMPLETION_SOURCES, ApiKeyScope, type IPlatformEndpointUsageResponse } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -19,11 +20,12 @@ const QuerySchema = z.object({
  * /api/admin/platform-usage so the two admin dashboard sections filter separately.
  * Admin-only; requiredScopes gates the API-key path as on the sibling route.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
   if (!req.user) {
     throw new ForbiddenError('Authentication required');
   }
-  if (!req.user.isAdmin) {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

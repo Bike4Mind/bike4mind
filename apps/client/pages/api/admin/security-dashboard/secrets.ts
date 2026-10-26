@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import axios from 'axios';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
@@ -13,9 +14,13 @@ import {
 import type { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi<Request, Response>({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 
@@ -36,7 +41,7 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
     });
   })
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 

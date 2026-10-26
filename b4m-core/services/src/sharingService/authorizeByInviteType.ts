@@ -7,6 +7,7 @@ import {
   ISessionRepository,
   IUserDocument,
   isOrgMember,
+  hasAdminPermission,
 } from '@bike4mind/common';
 import { UnauthorizedError } from '@bike4mind/utils';
 import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
@@ -53,7 +54,7 @@ export const authorizeByInviteType = async (
     authorized = await db.projects.shareable.findShareAccessById(user, documentId);
   } else if (type === InviteType.Organization) {
     const org = await db.organizations.findById(documentId);
-    if (org && isOrgMember(user, org)) {
+    if (org && (hasAdminPermission(user, 'settings:manage') || isOrgMember(user, org))) {
       if (options?.requireManageGroups) assertCanManageOrgGroups(user, org);
       authorized = org;
     }
@@ -61,7 +62,7 @@ export const authorizeByInviteType = async (
     const group = await db.groups.findById(documentId);
     if (group) {
       const org = await db.organizations.findById(group.organizationId);
-      if (org && isOrgMember(user, org)) {
+      if (org && (hasAdminPermission(user, 'settings:manage') || isOrgMember(user, org))) {
         if (options?.requireManageGroups) assertCanManageOrgGroups(user, org);
         authorized = org;
       }

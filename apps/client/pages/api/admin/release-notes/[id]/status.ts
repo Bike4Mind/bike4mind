@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { z } from 'zod';
 import { releaseNoteRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -14,8 +15,9 @@ import {
 
 const ActionSchema = z.object({ action: z.enum(['hide', 'unhide', 'publishNow']) }).strict();
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 

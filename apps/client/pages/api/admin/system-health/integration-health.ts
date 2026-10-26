@@ -1,7 +1,8 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
@@ -24,9 +25,13 @@ const ensureAdmin = (isAdmin?: boolean | null) => {
   }
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const { integration, history } = req.query;
     const logger = new Logger();
@@ -77,7 +82,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const { integration } = req.body;
     const logger = new Logger();
@@ -115,7 +120,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     });
   })
   .put(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const { integration, mode, reason } = req.body;
 

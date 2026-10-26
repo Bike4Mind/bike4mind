@@ -1,4 +1,4 @@
-import { IUserDocument, IUserRepository } from '@bike4mind/common';
+import { canAccessAdmin, isFullAdmin, hasAdminPermission, IUserDocument, IUserRepository } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -25,7 +25,7 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
   const { db, notify } = adapters;
   const { targetUserId, mfaToken } = secureParameters(parameters, loginAsSchema);
 
-  if (!adminUser.isAdmin) {
+  if (!hasAdminPermission(adminUser, 'users:impersonate')) {
     throw new ForbiddenError('Admin privileges required');
   }
 
@@ -42,7 +42,7 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
   }
 
   // Re-verify admin status on fresh record - JWT may be stale if privileges were revoked
-  if (!freshAdmin.isAdmin) {
+  if (!hasAdminPermission(freshAdmin, 'users:impersonate')) {
     throw new ForbiddenError('Admin privileges required');
   }
 
@@ -69,6 +69,10 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
   const targetUser = await db.users.findById(targetUserId);
   if (!targetUser) {
     throw new NotFoundError('Target user not found');
+  }
+
+  if (canAccessAdmin(targetUser) && !isFullAdmin(freshAdmin)) {
+    throw new ForbiddenError('Only full administrators can impersonate users with admin access');
   }
 
   if (targetUser.isSystem) {

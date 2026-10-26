@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { hasAdminPermission } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { usageEventRepository, agentExecutionRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
@@ -9,7 +10,7 @@ import {
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgUsageRead } from '@server/utils/adminUsageRead';
 import { z } from 'zod';
 
 const QuerySchema = z.object({
@@ -26,7 +27,7 @@ const QuerySchema = z.object({
  * this session cost what it did?".
  *
  * Access: platform admins read any session, cross-org. A non-admin must pass
- * the org they can access (verifyOrgOwner) AND the session's spend must be
+ * the org they can access (verifyOrgUsageRead) AND the session's spend must be
  * billed to that org - sessions carry no org of their own, so ownership is
  * proven off the usage events. Mismatches 404 (same as no access, to avoid
  * enumeration).
@@ -45,7 +46,12 @@ const QuerySchema = z.object({
  * rejected server-side), so this closes the API-key path entirely for a
  * non-admin org owner - only a JWT/browser session still works for them.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const api = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  organizationOwnerRead: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.get(async (req, res) => {
   if (!req.user) {
     throw new ForbiddenError('Authentication required');
   }
@@ -55,11 +61,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   // Undefined for admins (whole session, cross-org); set for a non-admin so
   // both the usage rollup and the execution list return only their org's slice.
   let orgScope: string | undefined;
-  if (!req.user.isAdmin) {
+  if (!hasAdminPermission(req.user, 'support:read')) {
     if (!organizationId) {
       throw new ForbiddenError('Admin access required');
     }
-    await verifyOrgOwner(req.user, organizationId);
+    await verifyOrgUsageRead(req.user, organizationId);
     const belongsToOrg = await usageEventRepository.sessionBelongsToOwner(
       sessionId,
       organizationId,

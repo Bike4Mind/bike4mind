@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import {
   creditLotRepository,
   creditTransactionRepository,
@@ -13,7 +14,7 @@ import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -42,9 +43,10 @@ const GrantOrgSchema = z.object({
 // before req.user is set, so a key issued for a narrow integration can't create
 // an org with an initial credit grant just because its owner is an admin.
 // JWT/browser admins skip that check and still pass the isAdmin gate below.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const api = adminApi({ adminPermissions: { POST: 'credits:adjust' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

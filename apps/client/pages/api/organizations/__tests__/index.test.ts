@@ -121,7 +121,7 @@ describe('POST /api/organizations - admin gate + safe serialization', () => {
     // 0-credit org, so it must be admin-only - a stray authenticated caller can't self-brick.
     const { req, res } = mocks({ id: 'creator1', isAdmin: false });
     (req as any).body = { name: 'Acme' };
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/admin/i);
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('Missing permission: settings:manage');
     expect(create).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
   });

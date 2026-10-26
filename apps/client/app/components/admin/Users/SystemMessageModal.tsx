@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import React, { useState } from 'react';
 import {
   Modal,
@@ -22,6 +24,7 @@ interface SystemMessageModalProps {
 }
 
 const SystemMessageModal: React.FC<SystemMessageModalProps> = ({ open, onClose, receiverId }) => {
+  const canManage = useUser(state => hasAdminPermission(state.currentUser, 'settings:manage'));
   const { t } = useTranslation();
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
@@ -36,6 +39,7 @@ const SystemMessageModal: React.FC<SystemMessageModalProps> = ({ open, onClose, 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!hasAdminPermission(useUser.getState().currentUser, 'settings:manage')) return;
     if (!title.trim() || !message.trim()) return;
 
     sendSystemMessage.mutate({
@@ -46,7 +50,11 @@ const SystemMessageModal: React.FC<SystemMessageModalProps> = ({ open, onClose, 
   };
 
   return (
-    <Modal sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }} open={open} onClose={onClose}>
+    <Modal
+      sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}
+      open={open && canManage}
+      onClose={onClose}
+    >
       <Sheet
         variant="outlined"
         sx={{

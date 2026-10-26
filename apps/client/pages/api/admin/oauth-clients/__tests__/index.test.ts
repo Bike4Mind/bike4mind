@@ -9,8 +9,8 @@ const { handlers, configs, db, recordAdminActionFromRequest } = vi.hoisted(() =>
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     configs.push(config);
     const chain: Record<string, (fn: (req: unknown, res: unknown) => unknown) => unknown> = {};
     for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
@@ -56,7 +56,9 @@ beforeEach(() => {
 
 describe('/api/admin/oauth-clients', () => {
   it('requires the admin API-key scope', () => {
-    expect(configs).toEqual([{ requiredScopes: [ApiKeyScope.ADMIN] }]);
+    expect(configs).toEqual([
+      { requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: 'support:read', POST: 'settings:manage' } },
+    ]);
   });
 
   it.each(['get', 'post'])('rejects a non-admin on %s with ForbiddenError and touches nothing', async method => {

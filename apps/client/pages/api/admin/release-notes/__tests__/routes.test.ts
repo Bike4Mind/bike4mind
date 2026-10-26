@@ -27,7 +27,15 @@ const m = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
+    const middleware: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const guard of middleware) await guard(req, res, () => {});
+      return handlers[req.method](req, res);
+    };
+    chain.use = (guard: (typeof middleware)[number]) => {
+      middleware.push(guard);
+      return chain;
+    };
     for (const method of ['get', 'post', 'patch', 'put']) {
       (chain as unknown as Record<string, unknown>)[method] = (fn: (typeof handlers)[string]) => {
         handlers[method.toUpperCase()] = fn;
@@ -92,6 +100,7 @@ async function call(
     method: string;
     isAdmin?: boolean;
     withheldAdmin?: boolean;
+    adminPermissions?: string[];
     query?: Record<string, string>;
     body?: unknown;
     keyScopes?: string[];
@@ -102,7 +111,7 @@ async function call(
     query: opts.query ?? {},
     body: opts.body as object,
   });
-  const user = { id: 'admin-1', isAdmin: opts.isAdmin ?? true };
+  const user = { id: 'admin-1', isAdmin: opts.isAdmin ?? true, adminPermissions: opts.adminPermissions };
   Object.assign(req, { user: opts.withheldAdmin ? withholdAdminRole(user) : user, logger: { warn: vi.fn() } });
   if (opts.keyScopes) Object.assign(req, { apiKeyInfo: { scopes: opts.keyScopes } });
   const error = await (handler as Handler)(req, res).then(
@@ -683,4 +692,35 @@ describe('release note admin audit', () => {
 
     expect(m.audit).not.toHaveBeenCalled();
   });
+});
+
+describe('named release-note permission compatibility', () => {
+  it.each([
+    ['GET', listHandler, 'support:read', { tag: 'v1.2.3' }, undefined],
+    ['PATCH', editHandler, 'settings:manage', { id: ID }, {}],
+    ['POST', statusHandler, 'settings:manage', { id: ID }, { action: 'hide' }],
+    ['GET', configHandler, 'settings:manage', {}, undefined],
+    ['PUT', configHandler, 'settings:manage', {}, { enabled: true }],
+  ] as const)('%s uses %s for browser grants', async (method, handler, permission, query, body) => {
+    const denied = await call(handler, { method, isAdmin: false, query, body, adminPermissions: [] });
+    expect(denied.error?.message).toBe(`Missing permission: ${permission}`);
+    const granted = await call(handler, { method, isAdmin: false, query, body, adminPermissions: [permission] });
+    expect(granted.error?.statusCode).not.toBe(403);
+    if (method !== 'GET') {
+      const support = await call(handler, { method, isAdmin: false, query, body, adminPermissions: ['support:read'] });
+      expect(support.error?.message).toBe('Missing permission: settings:manage');
+    }
+  });
+
+  it.each([
+    ['GET', listHandler, { tag: 'v1.2.3' }, undefined],
+    ['PATCH', editHandler, { id: ID }, { video: null }],
+  ] as const)(
+    '%s rejects unrelated narrow API keys even when their owner is a full admin',
+    async (method, handler, query, body) => {
+      const result = await call(handler, { method, query, body, withheldAdmin: true, keyScopes: ['files:read'] });
+      expect(result.error?.statusCode).toBe(403);
+      expect(result.error?.message).toContain('API key permissions');
+    }
+  );
 });

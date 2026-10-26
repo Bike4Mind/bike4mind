@@ -18,7 +18,7 @@ const mockRefs = vi.hoisted(() => ({
   otherVerbs: [] as string[],
 }));
 
-vi.mock('@server/middlewares/baseApi', () => {
+vi.mock('@server/middlewares/adminApi', () => {
   const verb = (name: string) => () => {
     mockRefs.otherVerbs.push(name);
     return chain;
@@ -34,7 +34,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return { adminApi: () => chain };
 });
 vi.mock('@server/middlewares/csrfProtection', () => ({
   csrfProtection: () => (_req: any, _res: any, next: any) => next(),

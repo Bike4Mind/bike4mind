@@ -5,6 +5,9 @@ import {
   userRepository,
   realtimeConnectionRepository,
   withTransaction,
+  prepareAdminMutationLock,
+  lockAdminMutations,
+  assertCanRemoveFullAdmin,
 } from '@bike4mind/database';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
@@ -15,7 +18,13 @@ import {
   readUserIntegrationGrants,
   type UserIntegrationGrants,
 } from '@server/services/purgeDeletedUserData';
-import { toSafeUser, UnauthorizedError, type IUserDocument, type IUserRepository } from '@bike4mind/common';
+import {
+  toSafeUser,
+  hasAdminPermission,
+  UnauthorizedError,
+  type IUserDocument,
+  type IUserRepository,
+} from '@bike4mind/common';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
@@ -25,6 +34,7 @@ import {
 import { emitBillingEvent } from '@server/analytics/signupEvents';
 import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
+import { requireAdminPermission } from '@server/middlewares/adminApi';
 import { resolveUserType } from '@server/analytics/resolveUserType';
 
 const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' | 'username' | 'email'> | null) => ({
@@ -61,8 +71,11 @@ async function emitAccountDeleted(account: IUserDocument | null): Promise<void> 
 const handler = baseApi().delete(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const userId = req.query.id!;
+    requireAdminPermission(req, 'users:delete');
+    requireAdminPermission(req, 'support:read');
 
-    if (!req.user.isAdmin) throw new UnauthorizedError('You are not authorized to delete users');
+    if (!hasAdminPermission(req.user, 'users:delete'))
+      throw new UnauthorizedError('You are not authorized to delete users');
     if (isSelfOrImpersonator(req.user, userId)) {
       await denySelfAdminAction(req, {
         action: 'user.deletion.denied',
@@ -70,6 +83,7 @@ const handler = baseApi().delete(
         target: deletedUserTarget(userId, await userRepository.findById(userId)),
       });
     }
+    await prepareAdminMutationLock();
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     // adminDeleteUser still sends notifications after the row is gone, and a throw there must not
@@ -88,6 +102,8 @@ const handler = baseApi().delete(
           deletedAccount = target;
           // The delete and its audit entry commit together; cascades and notifications run after.
           const result = await withTransaction(async () => {
+            await lockAdminMutations();
+            await assertCanRemoveFullAdmin(id);
             const deleted = await userRepository.delete(id);
             await recordAdminActionFromRequest(req, {
               action: 'user.deleted',

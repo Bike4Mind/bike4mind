@@ -5,8 +5,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
 // apiKeyAuth (real middleware, not exercised here), so asserting the handler is
 // registered with it is the only guard available at this level.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'POST']?.(req, res),
@@ -99,10 +99,10 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
 
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
     // Pins the whole config object, not just requiredScopes - a sibling `auth: false`
-    // would skip baseApi's entire api-key chain (baseApi.ts's `if (resolvedOptions.auth)`)
+    // would skip adminApi's entire api-key chain (adminApi.ts's `if (resolvedOptions.auth)`)
     // and disable this gate while leaving requiredScopes untouched.
     const config = (handler as unknown as { _config?: unknown })._config;
-    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } });
   });
 
   it('rejects a non-admin', async () => {

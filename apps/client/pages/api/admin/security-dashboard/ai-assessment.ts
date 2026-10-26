@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository, cacheRepository } from '@bike4mind/database';
@@ -264,8 +265,9 @@ Respond ONLY with the JSON object, no prose, no backticks.
   };
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

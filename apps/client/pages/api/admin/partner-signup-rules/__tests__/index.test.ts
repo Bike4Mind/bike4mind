@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-// Capture the route handlers registered on the baseApi chain so each method can be
+// Capture the route handlers registered on the adminApi chain so each method can be
 // invoked directly (same middleware-strip pattern as pages/api/email/__tests__/verify.test.ts).
 // Everything referenced inside a vi.mock factory must live in vi.hoisted (mocks are hoisted
 // above top-level const initialization).
@@ -13,8 +13,8 @@ const { handlers, repo, invalidatePartnerRuleCache, audit } = vi.hoisted(() => (
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain: Record<string, (fn: (req: unknown, res: unknown) => unknown) => unknown> = {};
     for (const method of ['get', 'post', 'put', 'delete']) {
       chain[method] = (fn: (req: unknown, res: unknown) => unknown) => {
@@ -37,7 +37,7 @@ vi.mock('@server/entitlements/partnerRules', async importOriginal => ({
   invalidatePartnerRuleCache,
 }));
 
-// Importing the route registers handlers.get / handlers.post via the mocked baseApi.
+// Importing the route registers handlers.get / handlers.post via the mocked adminApi.
 import '@pages/api/admin/partner-signup-rules/index';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 

@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl, getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
@@ -47,8 +48,9 @@ interface ReplayResult {
  * - Batch: Receives messages from the DLQ (optionally filtered by `messageIds`),
  *   sends to source queue, then deletes from DLQ on success.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
+  ensureAdmin(canAccessAdmin(req.user));
 
   const result = BodySchema.safeParse(req.body);
   if (!result.success) {
@@ -283,7 +285,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       // Check replay attempt count
       const attemptCount = await dlqReplayLogRepository.countAttempts(messageId);
       if (attemptCount >= MAX_REPLAY_ATTEMPTS) {
-        results.push({ messageId, status: 'skipped', reason: `Max replay attempts (${MAX_REPLAY_ATTEMPTS}) exceeded` });
+        results.push({
+          messageId,
+          status: 'skipped',
+          reason: `Max replay attempts (${MAX_REPLAY_ATTEMPTS}) exceeded`,
+        });
         await safeLogReplay({
           queueLabel,
           messageId,

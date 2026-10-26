@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import type { IUserDocument } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule);
@@ -72,6 +74,7 @@ const renderTab = () =>
   );
 
 beforeEach(() => {
+  useUser.setState({ currentUser: { id: 'admin', isAdmin: true } as IUserDocument });
   localStorage.removeItem('admin-organizations-tab-01');
   useSearchOrganizationsMock.mockReset();
   mockList();

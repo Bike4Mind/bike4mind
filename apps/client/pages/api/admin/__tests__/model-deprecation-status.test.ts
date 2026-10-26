@@ -8,8 +8,8 @@ import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
 // Middleware stripped so the handler body runs directly (same pattern as
 // __tests__/model-prices.test.ts). The chain object doubles as the exported
 // handler and dispatches on req.method.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
     const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
     chain.use = () => chain;

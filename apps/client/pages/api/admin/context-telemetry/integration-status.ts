@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
@@ -12,9 +13,10 @@ interface HealthCheckItem {
   message: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

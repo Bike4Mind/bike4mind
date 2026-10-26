@@ -1,3 +1,6 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { AdminPermissionBoundary } from '../../shared/AdminPermissionBoundary';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGetUserApiKeys, useAdminResetApiKeyRateLimit } from '@client/app/hooks/data/userApiKeys';
 import type { ApiKeyRateLimitResetResponse } from '@client/app/hooks/data/userApiKeys';
@@ -42,6 +45,7 @@ const STATUS_CHIP: Record<ApiKeyStatus, { color: 'success' | 'neutral' | 'warnin
 };
 
 export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysModalProps) {
+  const canManage = useUser(state => hasAdminPermission(state.currentUser, 'settings:manage'));
   // The minute window lives at most 60s, so a fetch-time snapshot goes stale within seconds.
   const { data, isLoading, error, refetch } = useAdminGetUserApiKeys(open ? user.id : undefined, {
     refetchInterval: 15_000,
@@ -100,11 +104,13 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
   };
 
   const handleReset = (key: IUserApiKeyDocument) => {
+    if (!canManage) return;
     confirm({
       title: 'Reset rate limit',
       description: `Reset the minute and day rate-limit counters for "${key.name}"? The next request opens a fresh window.`,
       type: 'danger',
       onOk: () => {
+        if (!hasAdminPermission(useUser.getState().currentUser, 'settings:manage')) return;
         setResettingKeyId(key.id);
         resetMutation.mutate(key.id, {
           // `lockout` absent entirely means a stale bundled client is talking to a server build
@@ -189,15 +195,17 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
                     <td>{key.lastUsedAt ? dayjs(key.lastUsedAt).fromNow() : 'Never'}</td>
                     <td>
                       <Tooltip title="Reset rate limit">
-                        <IconButton
-                          size="sm"
-                          variant="outlined"
-                          onClick={() => handleReset(key)}
-                          loading={resetMutation.isPending && resettingKeyId === key.id}
-                          data-testid={`admin-api-key-reset-rate-limit-btn-${key.id}`}
-                        >
-                          <RestartAltIcon />
-                        </IconButton>
+                        <AdminPermissionBoundary permission="settings:manage">
+                          <IconButton
+                            size="sm"
+                            variant="outlined"
+                            onClick={() => handleReset(key)}
+                            loading={resetMutation.isPending && resettingKeyId === key.id}
+                            data-testid={`admin-api-key-reset-rate-limit-btn-${key.id}`}
+                          >
+                            <RestartAltIcon />
+                          </IconButton>
+                        </AdminPermissionBoundary>
                       </Tooltip>
                     </td>
                   </tr>

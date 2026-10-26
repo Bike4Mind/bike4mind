@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest, User, TelemetryAuditLogModel } from '@bike4mind/database';
 import { z } from 'zod';
@@ -22,13 +23,14 @@ const querySchema = z.object({
  *
  * Admin-only. Audit-logged with action 'export'.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(
   asyncHandler(async (req, res) => {
     const startTime = Date.now();
     const sourceIp = truncateIp(getClientIp(req as Parameters<typeof getClientIp>[0]));
     const userAgent = (req.headers['user-agent'] as string) || 'unknown';
 
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

@@ -13,8 +13,8 @@ const { adminAuditLogRepository, agentRepository, createElevenLabsAgent, deleteE
   })
 );
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain = {
       get: () => chain,
       post: (handler: Handler) => {

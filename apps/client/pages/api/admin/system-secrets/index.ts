@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 /**
  * Admin API for System Secrets
  *
@@ -12,7 +13,7 @@
 
 import { systemSecretRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { encryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -35,10 +36,14 @@ function maskSecretValue(value: string | undefined): string {
   return '****' + value.slice(-4);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 
@@ -87,7 +92,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .post(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 

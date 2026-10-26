@@ -5,8 +5,8 @@ import { encodeAuditCursor } from '@server/utils/adminAuditQuery';
 
 const mocks = vi.hoisted(() => ({ findById: vi.fn(), listUserActivity: vi.fn(), hasAdminHistory: vi.fn() }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),

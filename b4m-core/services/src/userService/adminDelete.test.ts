@@ -22,6 +22,17 @@ function makeAdapters() {
 }
 
 describe('adminDeleteUser', () => {
+  it('authorizes a delegated deletion grant from the freshly loaded actor', async () => {
+    const { adapters, users } = makeAdapters();
+    users.findById.mockImplementation(async (id: string) =>
+      id === 'admin-1'
+        ? { id, isAdmin: false, adminPermissions: ['users:delete'] }
+        : { id, name: 'User', email: 'u@example.com' }
+    );
+    await adminDeleteUser('admin-1', { id: 'user-1' }, adapters);
+    expect(users.delete).toHaveBeenCalledWith('user-1');
+  });
+
   it("ends the deleted user's realtime connections after the delete", async () => {
     const { adapters, users, endConnections } = makeAdapters();
 

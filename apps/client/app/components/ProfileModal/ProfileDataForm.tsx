@@ -1,3 +1,5 @@
+import { useUser } from '@client/app/contexts/UserContext';
+import { hasAdminPermission } from '@bike4mind/common';
 import { ISecurityQuestion, IUserDocument, WithOrgRef } from '@bike4mind/common';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -115,6 +117,7 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
   };
 
   const handleSave = async () => {
+    if (adminMode && !hasAdminPermission(useUser.getState().currentUser, 'settings:manage')) return;
     if (!editUser.id) {
       console.error('Failed to update user: User ID not found');
       return;

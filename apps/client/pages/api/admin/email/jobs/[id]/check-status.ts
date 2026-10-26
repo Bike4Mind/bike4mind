@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { emailJobRepository, emailSendAttemptRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobOverallStatus, EmailSendStatus } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 // Timeout threshold in minutes - emails stuck in pending/processing longer than this are considered timed out
@@ -13,8 +14,9 @@ const TIMEOUT_THRESHOLD_MINUTES = 30;
  * - Marks emails stuck in pending/processing as failed
  * - Updates job overall status based on current state
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 

@@ -1,3 +1,6 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { AdminPermissionBoundary } from '../../shared/AdminPermissionBoundary';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useGetUserSubscriptions, useRemoveSubscription } from '@client/app/hooks/data/subscriptions';
 import {
@@ -33,6 +36,7 @@ const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user })
   const { data: subscriptionData, isLoading, error } = useGetUserSubscriptions(user.id);
   const removeSubscription = useRemoveSubscription();
   const confirm = useConfirmation();
+  const canAdjustCredits = useUser(state => hasAdminPermission(state.currentUser, 'credits:adjust'));
   const [editCreditsModalOpen, setEditCreditsModalOpen] = useState(false);
   const [selectedSubscription, setSelectedSubscription] = useState<{
     subscriptionId: string;
@@ -75,11 +79,13 @@ const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user })
   };
 
   const handleRemoveSubscription = (subscriptionId: string, subscriptionName: string, type: 'individual' | 'team') => {
+    if (!canAdjustCredits) return;
     confirm({
       title: 'Remove Subscription',
       description: `Are you sure you want to remove the ${type} subscription "${subscriptionName}" for ${user.name}? This action cannot be undone.`,
       type: 'danger',
       onOk: () => {
+        if (!hasAdminPermission(useUser.getState().currentUser, 'credits:adjust')) return;
         removeSubscription.mutate({
           userId: user.id,
           subscriptionId,
@@ -94,292 +100,301 @@ const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user })
     name: string,
     currentCredits: number
   ) => {
+    if (!canAdjustCredits) return;
     setSelectedSubscription({ subscriptionId, type, name, currentCredits });
     setEditCreditsModalOpen(true);
   };
 
   return (
-    <Card variant="outlined">
-      <CardContent>
-        <Typography level="title-lg" sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <CreditCardIcon />
-          Subscription Status
-        </Typography>
+    <AdminPermissionBoundary permission="credits:adjust">
+      <Card variant="outlined">
+        <CardContent>
+          <Typography level="title-lg" sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <CreditCardIcon />
+            Subscription Status
+          </Typography>
 
-        <Stack spacing={3}>
-          {/* User Credits */}
-          <Box>
-            <Typography level="body-md" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-              <CreditIcon />
-              User Credits: <strong>{userCredits.toLocaleString()}</strong>
-            </Typography>
-          </Box>
-
-          <Divider />
-
-          {/* Individual Subscriptions */}
-          <Box>
-            <Typography level="title-md" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-              <PersonIcon />
-              Individual Subscriptions ({individualSubscriptions.length})
-            </Typography>
-
-            {individualSubscriptions.length === 0 ? (
-              <Typography level="body-sm" color="neutral">
-                No active individual subscriptions
+          <Stack spacing={3}>
+            {/* User Credits */}
+            <Box>
+              <Typography level="body-md" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                <CreditIcon />
+                User Credits: <strong>{userCredits.toLocaleString()}</strong>
               </Typography>
-            ) : (
-              <Stack spacing={2}>
-                {individualSubscriptions.map(subscription => {
-                  const effectiveCredits = subscription.effectiveCreditsPerCycle || subscription.planCredits || 0;
-                  const hasCustomCredits = subscription.customCreditsPerCycle !== undefined;
+            </Box>
 
-                  return (
-                    <Card key={subscription.id ?? subscription.subscriptionId} variant="soft">
-                      <CardContent>
-                        <Stack spacing={2}>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                            <Box sx={{ flex: 1 }}>
-                              <Typography level="body-md" sx={{ fontWeight: 'bold' }}>
-                                {subscription.planName || 'Unknown Plan'}
-                              </Typography>
-                              <Typography level="body-sm" color="neutral">
-                                {effectiveCredits.toLocaleString()} credits per billing cycle
-                                {hasCustomCredits && ' (custom)'}
-                              </Typography>
-                              {hasCustomCredits && subscription.planCredits && (
-                                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                                  Default: {subscription.planCredits.toLocaleString()} credits
-                                </Typography>
-                              )}
-                            </Box>
-                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                              <Chip color={getStatusColor(subscription.status, subscription.canceledAt)} size="sm">
-                                {subscription.canceledAt ? 'Canceling' : subscription.status}
-                              </Chip>
-                              {subscription.subscriptionId && (
-                                <>
-                                  <Tooltip title="Edit credits per cycle">
-                                    <IconButton
-                                      size="sm"
-                                      variant="soft"
-                                      color="primary"
-                                      onClick={() =>
-                                        handleEditCredits(
-                                          subscription.subscriptionId!,
-                                          'individual',
-                                          subscription.planName || 'Unknown Plan',
-                                          effectiveCredits
-                                        )
-                                      }
-                                      data-testid={`edit-credits-${subscription.subscriptionId}`}
-                                    >
-                                      <EditIcon />
-                                    </IconButton>
-                                  </Tooltip>
-                                  <Tooltip title="Remove subscription">
-                                    <IconButton
-                                      size="sm"
-                                      variant="soft"
-                                      color="danger"
-                                      onClick={() =>
-                                        handleRemoveSubscription(
-                                          subscription.subscriptionId!,
-                                          subscription.planName || 'Unknown Plan',
-                                          'individual'
-                                        )
-                                      }
-                                      loading={removeSubscription.isPending}
-                                      data-testid={`remove-subscription-${subscription.subscriptionId}`}
-                                    >
-                                      <DeleteIcon />
-                                    </IconButton>
-                                  </Tooltip>
-                                </>
-                              )}
-                            </Box>
-                          </Box>
+            <Divider />
 
-                          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                            <Typography level="body-sm" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                              <EventIcon sx={{ fontSize: '1rem' }} />
-                              Period: {dayjs(subscription.periodStartsAt).format('MMM D, YYYY')} -{' '}
-                              {dayjs(subscription.periodEndsAt).format('MMM D, YYYY')}
-                            </Typography>
-                          </Box>
-
-                          {subscription.canceledAt && (
-                            <Typography level="body-sm" color="warning">
-                              Canceled on {dayjs(subscription.canceledAt).format('MMM D, YYYY')} • Ends on{' '}
-                              {dayjs(subscription.periodEndsAt).format('MMM D, YYYY')}
-                            </Typography>
-                          )}
-                        </Stack>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </Stack>
-            )}
-          </Box>
-
-          <Divider />
-
-          {/* Team Subscriptions */}
-          <Box>
-            <Typography level="title-md" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-              <GroupIcon />
-              Team Subscriptions ({teamSubscriptions.length})
-            </Typography>
-
-            {teamSubscriptions.length === 0 ? (
-              <Typography level="body-sm" color="neutral">
-                No active team subscriptions
+            {/* Individual Subscriptions */}
+            <Box>
+              <Typography level="title-md" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <PersonIcon />
+                Individual Subscriptions ({individualSubscriptions.length})
               </Typography>
-            ) : (
-              <Stack spacing={2}>
-                {teamSubscriptions.map(teamSub => {
-                  const { organization, subscription } = teamSub;
-                  const usedSeats = organization.users.length + 1; // +1 for the owner
-                  const totalSeats = organization.seats;
-                  const seatsUsagePercentage = (usedSeats / totalSeats) * 100;
-                  const effectiveCredits =
-                    subscription.effectiveCreditsPerCycle || subscription.defaultCreditsPerCycle || 0;
-                  const hasCustomCredits = subscription.customCreditsPerCycle !== undefined;
 
-                  return (
-                    <Card key={organization.id} variant="soft">
-                      <CardContent>
-                        <Stack spacing={2}>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                            <Box sx={{ flex: 1 }}>
-                              <Typography level="body-md" sx={{ fontWeight: 'bold' }}>
-                                {organization.name}
-                              </Typography>
-                              <Typography level="body-sm" color="neutral">
-                                Team Plan • {subscription.quantity} seats
-                              </Typography>
-                              <Typography level="body-sm" color="neutral">
-                                {effectiveCredits.toLocaleString()} credits per cycle
-                                {hasCustomCredits && ' (custom)'}
-                              </Typography>
-                              {hasCustomCredits && subscription.defaultCreditsPerCycle && (
-                                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                                  Default: {subscription.defaultCreditsPerCycle.toLocaleString()} credits
+              {individualSubscriptions.length === 0 ? (
+                <Typography level="body-sm" color="neutral">
+                  No active individual subscriptions
+                </Typography>
+              ) : (
+                <Stack spacing={2}>
+                  {individualSubscriptions.map(subscription => {
+                    const effectiveCredits = subscription.effectiveCreditsPerCycle || subscription.planCredits || 0;
+                    const hasCustomCredits = subscription.customCreditsPerCycle !== undefined;
+
+                    return (
+                      <Card key={subscription.id ?? subscription.subscriptionId} variant="soft">
+                        <CardContent>
+                          <Stack spacing={2}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <Box sx={{ flex: 1 }}>
+                                <Typography level="body-md" sx={{ fontWeight: 'bold' }}>
+                                  {subscription.planName || 'Unknown Plan'}
                                 </Typography>
-                              )}
+                                <Typography level="body-sm" color="neutral">
+                                  {effectiveCredits.toLocaleString()} credits per billing cycle
+                                  {hasCustomCredits && ' (custom)'}
+                                </Typography>
+                                {hasCustomCredits && subscription.planCredits && (
+                                  <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                                    Default: {subscription.planCredits.toLocaleString()} credits
+                                  </Typography>
+                                )}
+                              </Box>
+                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                                <Chip color={getStatusColor(subscription.status, subscription.canceledAt)} size="sm">
+                                  {subscription.canceledAt ? 'Canceling' : subscription.status}
+                                </Chip>
+                                {subscription.subscriptionId && (
+                                  <>
+                                    <Tooltip title="Edit credits per cycle">
+                                      <IconButton
+                                        disabled={!canAdjustCredits}
+                                        size="sm"
+                                        variant="soft"
+                                        color="primary"
+                                        onClick={() =>
+                                          handleEditCredits(
+                                            subscription.subscriptionId!,
+                                            'individual',
+                                            subscription.planName || 'Unknown Plan',
+                                            effectiveCredits
+                                          )
+                                        }
+                                        data-testid={`edit-credits-${subscription.subscriptionId}`}
+                                      >
+                                        <EditIcon />
+                                      </IconButton>
+                                    </Tooltip>
+                                    <Tooltip title="Remove subscription">
+                                      <IconButton
+                                        disabled={!canAdjustCredits}
+                                        size="sm"
+                                        variant="soft"
+                                        color="danger"
+                                        onClick={() =>
+                                          handleRemoveSubscription(
+                                            subscription.subscriptionId!,
+                                            subscription.planName || 'Unknown Plan',
+                                            'individual'
+                                          )
+                                        }
+                                        loading={removeSubscription.isPending}
+                                        data-testid={`remove-subscription-${subscription.subscriptionId}`}
+                                      >
+                                        <DeleteIcon />
+                                      </IconButton>
+                                    </Tooltip>
+                                  </>
+                                )}
+                              </Box>
                             </Box>
-                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                              <Chip color={getStatusColor(subscription.status, subscription.canceledAt)} size="sm">
-                                {subscription.canceledAt ? 'Canceling' : subscription.status}
-                              </Chip>
-                              {subscription.subscriptionId && (
-                                <>
-                                  <Tooltip title="Edit credits per cycle">
-                                    <IconButton
-                                      size="sm"
-                                      variant="soft"
-                                      color="primary"
-                                      onClick={() =>
-                                        handleEditCredits(
-                                          subscription.subscriptionId!,
-                                          'team',
-                                          organization.name,
-                                          effectiveCredits
-                                        )
-                                      }
-                                      data-testid={`edit-credits-${subscription.subscriptionId}`}
-                                    >
-                                      <EditIcon />
-                                    </IconButton>
-                                  </Tooltip>
-                                  <Tooltip title="Remove subscription">
-                                    <IconButton
-                                      size="sm"
-                                      variant="soft"
-                                      color="danger"
-                                      onClick={() =>
-                                        handleRemoveSubscription(
-                                          subscription.subscriptionId!,
-                                          organization.name,
-                                          'team'
-                                        )
-                                      }
-                                      loading={removeSubscription.isPending}
-                                      data-testid={`remove-subscription-${subscription.subscriptionId}`}
-                                    >
-                                      <DeleteIcon />
-                                    </IconButton>
-                                  </Tooltip>
-                                </>
-                              )}
-                            </Box>
-                          </Box>
 
-                          <Box>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                              <Typography level="body-sm">
-                                Seat Usage: {usedSeats} / {totalSeats}
+                            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                              <Typography level="body-sm" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <EventIcon sx={{ fontSize: '1rem' }} />
+                                Period: {dayjs(subscription.periodStartsAt).format('MMM D, YYYY')} -{' '}
+                                {dayjs(subscription.periodEndsAt).format('MMM D, YYYY')}
                               </Typography>
-                              <Typography level="body-sm" color="neutral">
-                                {((usedSeats / totalSeats) * 100).toFixed(0)}% used
+                            </Box>
+
+                            {subscription.canceledAt && (
+                              <Typography level="body-sm" color="warning">
+                                Canceled on {dayjs(subscription.canceledAt).format('MMM D, YYYY')} • Ends on{' '}
+                                {dayjs(subscription.periodEndsAt).format('MMM D, YYYY')}
+                              </Typography>
+                            )}
+                          </Stack>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </Stack>
+              )}
+            </Box>
+
+            <Divider />
+
+            {/* Team Subscriptions */}
+            <Box>
+              <Typography level="title-md" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <GroupIcon />
+                Team Subscriptions ({teamSubscriptions.length})
+              </Typography>
+
+              {teamSubscriptions.length === 0 ? (
+                <Typography level="body-sm" color="neutral">
+                  No active team subscriptions
+                </Typography>
+              ) : (
+                <Stack spacing={2}>
+                  {teamSubscriptions.map(teamSub => {
+                    const { organization, subscription } = teamSub;
+                    const usedSeats = organization.users.length + 1; // +1 for the owner
+                    const totalSeats = organization.seats;
+                    const seatsUsagePercentage = (usedSeats / totalSeats) * 100;
+                    const effectiveCredits =
+                      subscription.effectiveCreditsPerCycle || subscription.defaultCreditsPerCycle || 0;
+                    const hasCustomCredits = subscription.customCreditsPerCycle !== undefined;
+
+                    return (
+                      <Card key={organization.id} variant="soft">
+                        <CardContent>
+                          <Stack spacing={2}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <Box sx={{ flex: 1 }}>
+                                <Typography level="body-md" sx={{ fontWeight: 'bold' }}>
+                                  {organization.name}
+                                </Typography>
+                                <Typography level="body-sm" color="neutral">
+                                  Team Plan • {subscription.quantity} seats
+                                </Typography>
+                                <Typography level="body-sm" color="neutral">
+                                  {effectiveCredits.toLocaleString()} credits per cycle
+                                  {hasCustomCredits && ' (custom)'}
+                                </Typography>
+                                {hasCustomCredits && subscription.defaultCreditsPerCycle && (
+                                  <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                                    Default: {subscription.defaultCreditsPerCycle.toLocaleString()} credits
+                                  </Typography>
+                                )}
+                              </Box>
+                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                                <Chip color={getStatusColor(subscription.status, subscription.canceledAt)} size="sm">
+                                  {subscription.canceledAt ? 'Canceling' : subscription.status}
+                                </Chip>
+                                {subscription.subscriptionId && (
+                                  <>
+                                    <Tooltip title="Edit credits per cycle">
+                                      <IconButton
+                                        disabled={!canAdjustCredits}
+                                        size="sm"
+                                        variant="soft"
+                                        color="primary"
+                                        onClick={() =>
+                                          handleEditCredits(
+                                            subscription.subscriptionId!,
+                                            'team',
+                                            organization.name,
+                                            effectiveCredits
+                                          )
+                                        }
+                                        data-testid={`edit-credits-${subscription.subscriptionId}`}
+                                      >
+                                        <EditIcon />
+                                      </IconButton>
+                                    </Tooltip>
+                                    <Tooltip title="Remove subscription">
+                                      <IconButton
+                                        disabled={!canAdjustCredits}
+                                        size="sm"
+                                        variant="soft"
+                                        color="danger"
+                                        onClick={() =>
+                                          handleRemoveSubscription(
+                                            subscription.subscriptionId!,
+                                            organization.name,
+                                            'team'
+                                          )
+                                        }
+                                        loading={removeSubscription.isPending}
+                                        data-testid={`remove-subscription-${subscription.subscriptionId}`}
+                                      >
+                                        <DeleteIcon />
+                                      </IconButton>
+                                    </Tooltip>
+                                  </>
+                                )}
+                              </Box>
+                            </Box>
+
+                            <Box>
+                              <Box
+                                sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}
+                              >
+                                <Typography level="body-sm">
+                                  Seat Usage: {usedSeats} / {totalSeats}
+                                </Typography>
+                                <Typography level="body-sm" color="neutral">
+                                  {((usedSeats / totalSeats) * 100).toFixed(0)}% used
+                                </Typography>
+                              </Box>
+                              <LinearProgress
+                                determinate
+                                value={seatsUsagePercentage}
+                                color={seatsUsagePercentage > 90 ? 'warning' : 'primary'}
+                              />
+                            </Box>
+
+                            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                              <Typography level="body-sm" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <EventIcon sx={{ fontSize: '1rem' }} />
+                                Period: {dayjs(subscription.periodStartsAt).format('MMM D, YYYY')} -{' '}
+                                {dayjs(subscription.periodEndsAt).format('MMM D, YYYY')}
                               </Typography>
                             </Box>
-                            <LinearProgress
-                              determinate
-                              value={seatsUsagePercentage}
-                              color={seatsUsagePercentage > 90 ? 'warning' : 'primary'}
-                            />
-                          </Box>
 
-                          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                            <Typography level="body-sm" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                              <EventIcon sx={{ fontSize: '1rem' }} />
-                              Period: {dayjs(subscription.periodStartsAt).format('MMM D, YYYY')} -{' '}
-                              {dayjs(subscription.periodEndsAt).format('MMM D, YYYY')}
-                            </Typography>
-                          </Box>
+                            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                              <Typography level="body-sm" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <CreditIcon sx={{ fontSize: '1rem' }} />
+                                Org Credits: {organization.currentCredits.toLocaleString()}
+                              </Typography>
+                            </Box>
 
-                          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                            <Typography level="body-sm" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                              <CreditIcon sx={{ fontSize: '1rem' }} />
-                              Org Credits: {organization.currentCredits.toLocaleString()}
-                            </Typography>
-                          </Box>
+                            {subscription.canceledAt && (
+                              <Typography level="body-sm" color="warning">
+                                Canceled on {dayjs(subscription.canceledAt).format('MMM D, YYYY')} • Ends on{' '}
+                                {dayjs(subscription.periodEndsAt).format('MMM D, YYYY')}
+                              </Typography>
+                            )}
+                          </Stack>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </Stack>
+              )}
+            </Box>
+          </Stack>
+        </CardContent>
 
-                          {subscription.canceledAt && (
-                            <Typography level="body-sm" color="warning">
-                              Canceled on {dayjs(subscription.canceledAt).format('MMM D, YYYY')} • Ends on{' '}
-                              {dayjs(subscription.periodEndsAt).format('MMM D, YYYY')}
-                            </Typography>
-                          )}
-                        </Stack>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </Stack>
-            )}
-          </Box>
-        </Stack>
-      </CardContent>
-
-      {/* Edit Credits Modal */}
-      {selectedSubscription && (
-        <EditCreditsModal
-          open={editCreditsModalOpen}
-          onClose={() => {
-            setEditCreditsModalOpen(false);
-            setSelectedSubscription(null);
-          }}
-          userId={user.id}
-          subscriptionId={selectedSubscription.subscriptionId}
-          subscriptionName={selectedSubscription.name}
-          subscriptionType={selectedSubscription.type}
-          currentCreditsPerCycle={selectedSubscription.currentCredits}
-        />
-      )}
-    </Card>
+        {/* Edit Credits Modal */}
+        {selectedSubscription && (
+          <EditCreditsModal
+            open={editCreditsModalOpen && canAdjustCredits}
+            onClose={() => {
+              setEditCreditsModalOpen(false);
+              setSelectedSubscription(null);
+            }}
+            userId={user.id}
+            subscriptionId={selectedSubscription.subscriptionId}
+            subscriptionName={selectedSubscription.name}
+            subscriptionType={selectedSubscription.type}
+            currentCreditsPerCycle={selectedSubscription.currentCredits}
+          />
+        )}
+      </Card>
+    </AdminPermissionBoundary>
   );
 };
 

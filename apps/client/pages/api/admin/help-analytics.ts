@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { HelpEventModel } from '@bike4mind/database';
 import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { assertDateInRange } from '@server/utils/dateParam';
@@ -27,7 +28,8 @@ function shiftedDate(value: string, label: string, offsetMinutes: number, endOfD
   return assertDateInRange(label, d);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 100 : 20,
@@ -35,7 +37,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 

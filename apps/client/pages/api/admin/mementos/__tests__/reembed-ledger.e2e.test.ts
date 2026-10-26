@@ -36,8 +36,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
     apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: () => getEffectiveLLMApiKeys() },
   };
 });
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ post: (fn: unknown) => fn }),
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({ post: (fn: unknown) => fn }),
 }));
 
 import handler from '../reembed-ledger';
@@ -73,7 +73,7 @@ async function post(body: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'POST', body });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- node-mocks-http req has no user field
   (req as any).user = { id: 'admin-1', isAdmin: true };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- baseApi is mocked to the bare handler
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adminApi is mocked to the bare handler
   await (handler as any)(req, res);
   return { status: res._getStatusCode(), body: res._getJSONData() };
 }

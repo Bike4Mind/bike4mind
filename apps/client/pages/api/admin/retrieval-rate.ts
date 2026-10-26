@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
@@ -80,9 +81,10 @@ const endBoundExclusive = (value: string | undefined, parsed: Date | undefined):
  * is set, so a key issued for a narrow integration can't read platform-wide retrieval telemetry
  * just because its owner is an admin. JWT/browser callers still go through the isAdmin check below.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

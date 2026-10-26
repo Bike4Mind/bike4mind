@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import {
   ApiKeyScope,
   AppFileReservedTags,
@@ -9,7 +10,7 @@ import { withTransaction } from '@bike4mind/database';
 import { AppFile } from '@bike4mind/database/content';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -67,13 +68,17 @@ async function updateLogoSettings(
 /**
  * Lambda function to generate S3 signed URL for uploading custom admin logo
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { POST: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .post(async (req, res) => {
     try {
       const { user } = req;
 
       // Only allow admin users to upload admin logos
-      if (!user?.isAdmin) {
+      if (!canAccessAdmin(user)) {
         throw new ForbiddenError('You do not have permission to upload admin logos');
       }
 
@@ -177,7 +182,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     try {
       const { user } = req;
 
-      if (!user?.isAdmin) {
+      if (!canAccessAdmin(user)) {
         throw new ForbiddenError('You do not have permission to delete admin logos');
       }
 

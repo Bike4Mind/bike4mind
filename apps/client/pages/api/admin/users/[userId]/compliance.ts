@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import {
   userRepository,
@@ -6,7 +7,7 @@ import {
   USER_AUTH_AUDIT_EVENTS,
   type UserAuthAuditEvent,
 } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { ApiKeyScope, CURRENT_POLICY_VERSION, type UserComplianceResponse } from '@bike4mind/common';
@@ -24,9 +25,14 @@ const EventFilterSchema = z.enum(USER_AUTH_AUDIT_EVENTS as [UserAuthAuditEvent, 
 const ROW_LIMIT = 50;
 
 // Admin-only read-only endpoint aggregating a user's compliance evidence.
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const api = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

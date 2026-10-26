@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Quest, cacheRepository } from '@bike4mind/database';
 import { ApiKeyScope, IChatHistoryItemDocument } from '@bike4mind/common';
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveQuestModelType } from '@server/utils/questModelType';
 import { Request } from 'express';
@@ -238,36 +239,35 @@ async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMet
   return metrics;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
-  async (req: Request<{}, {}, {}, ModelMetricsQuery>, res) => {
-    // Check if user has admin permissions
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
-    console.log('📊 Model metrics API called');
-
-    try {
-      const { recache, ...filters } = req.query;
-
-      const cacheKey = CacheKeys.modelMetrics(filters);
-      const metrics = await cacheService.getCachedData(cacheKey, () => fetchModelMetrics(filters), {
-        db: { caches: cacheRepository },
-        expiry: 12 * 60 * 60 * 1000, // 12 hours
-        recache,
-        logger: req.logger,
-      });
-
-      console.log(`✅ Returning ${metrics.length} performance metrics`);
-      return res.json(metrics);
-    } catch (error) {
-      console.error('❌ Error fetching model metrics:', error);
-      return res.status(500).json({
-        error: 'Failed to fetch model metrics',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req: Request<{}, {}, {}, ModelMetricsQuery>, res) => {
+  // Check if user has admin permissions
+  if (!canAccessAdmin(req.user)) {
+    throw new ForbiddenError('Admin access required');
   }
-);
+
+  console.log('📊 Model metrics API called');
+
+  try {
+    const { recache, ...filters } = req.query;
+
+    const cacheKey = CacheKeys.modelMetrics(filters);
+    const metrics = await cacheService.getCachedData(cacheKey, () => fetchModelMetrics(filters), {
+      db: { caches: cacheRepository },
+      expiry: 12 * 60 * 60 * 1000, // 12 hours
+      recache,
+      logger: req.logger,
+    });
+
+    console.log(`✅ Returning ${metrics.length} performance metrics`);
+    return res.json(metrics);
+  } catch (error) {
+    console.error('❌ Error fetching model metrics:', error);
+    return res.status(500).json({
+      error: 'Failed to fetch model metrics',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
 
 export default handler;

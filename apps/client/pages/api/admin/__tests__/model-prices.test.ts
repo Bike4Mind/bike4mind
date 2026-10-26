@@ -8,8 +8,8 @@ import { adminAuditService } from '@bike4mind/services';
 // Middleware stripped so the handler body runs directly (same pattern as
 // pages/api/email/__tests__/verify.test.ts). The chain object doubles as the
 // exported handler and dispatches on req.method.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
     const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
     chain.use = () => chain;

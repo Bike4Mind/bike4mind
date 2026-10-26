@@ -1,14 +1,19 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { identityProviderRepository, withTransaction } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, identityProviderListResponseSchema, identityProviderResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 
@@ -23,7 +28,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .post(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 

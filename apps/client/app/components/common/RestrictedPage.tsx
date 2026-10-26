@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useEntitlementGate, EntitlementGateState } from '@client/app/hooks/useEntitlementGate';
 import { applyRedirect, buildRedirectTo } from '@client/app/utils/authRedirect';
@@ -6,6 +7,7 @@ import { FC, PropsWithChildren, useEffect } from 'react';
 
 interface RestrictedPageProps {
   requireAdmin?: boolean;
+  requireAdminAccess?: boolean;
   /** Grants when the user carries the tag (admins/developers bypass). */
   requireFeatureTag?: string;
   /**
@@ -29,6 +31,7 @@ interface RestrictedPageProps {
 const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
   children,
   requireAdmin = false,
+  requireAdminAccess = false,
   requireFeatureTag,
   requireEntitlement,
   fallbackPath = '/new',
@@ -83,7 +86,10 @@ const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
       return;
     }
 
-    if (currentUser && requireAdmin && !currentUser.isAdmin) {
+    if (
+      currentUser &&
+      ((requireAdmin && !currentUser.isAdmin) || (requireAdminAccess && !canAccessAdmin(currentUser)))
+    ) {
       applyRedirect(router.history, fallbackPath, '/new');
       return;
     }
@@ -93,7 +99,7 @@ const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
     if (currentUser && accessState === 'denied') {
       applyRedirect(router.history, fallbackPath, '/new');
     }
-  }, [currentUser, pathname, navigate, router, requireAdmin, accessState, fallbackPath]);
+  }, [currentUser, pathname, navigate, router, requireAdmin, requireAdminAccess, accessState, fallbackPath]);
 
   // Show login page if on login route
   if (pathname === '/login') {
@@ -106,7 +112,7 @@ const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
   }
 
   // Don't render if admin required but user isn't admin
-  if (requireAdmin && !currentUser.isAdmin) {
+  if ((requireAdmin && !currentUser.isAdmin) || (requireAdminAccess && !canAccessAdmin(currentUser))) {
     return null;
   }
 

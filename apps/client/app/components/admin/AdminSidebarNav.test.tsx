@@ -6,6 +6,11 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { AdminTab } from './adminSidebarConfig';
 import { SidebarNav } from './AdminSidebarNav';
 
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (state: { currentUser: { isAdmin: boolean } }) => unknown) =>
+    selector({ currentUser: { isAdmin: true } }),
+}));
+
 const theme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={theme}>{children}</CssVarsProvider>

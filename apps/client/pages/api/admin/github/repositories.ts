@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 /**
  * Admin GitHub Repositories API
  *
@@ -13,7 +14,7 @@
  */
 
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@server/services/githubService';
@@ -21,7 +22,8 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 const logger = new Logger({ metadata: { component: 'admin-github-repositories' } });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api
   // Rate limit to prevent abuse (60/hour - makes real GitHub API calls)
   .use(
     rateLimit({
@@ -31,7 +33,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   )
   // GET - Get accessible repositories
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     // Get the GitHub service for system default connection
     const service = await GitHubService.forSystem(logger);

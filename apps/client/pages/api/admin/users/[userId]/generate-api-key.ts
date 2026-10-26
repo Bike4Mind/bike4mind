@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { userApiKeyService, dataLakeService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import {
@@ -8,7 +9,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
@@ -169,163 +170,166 @@ async function screenPreauthorizedLakeIds(
  * Admin-only endpoint to generate an API key on behalf of any user.
  * Useful for creating service account keys without logging in as the target user.
  */
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
-  .use(csrfProtection())
-  .post(
-    asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
+const api = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.use(csrfProtection()).post(
+  asyncHandler(async (req, res) => {
+    if (!canAccessAdmin(req.user)) {
+      throw new ForbiddenError('Unauthorized. Admin access required.');
+    }
+
+    const { userId } = req.query as RequestQuery;
+
+    if (typeof userId !== 'string' || !userId) {
+      throw new BadRequestError('Invalid user ID');
+    }
+
+    const targetUser = await userRepository.findById(userId);
+    if (!targetUser) {
+      throw new BadRequestError('User not found');
+    }
+    // Canonical target id for everything below, NOT the `userId` URL segment: findById casts to
+    // ObjectId and resolves the user under any hex casing, but every field this id is compared
+    // against afterwards is a `type: String` matched by byte equality - the key's own `userId`,
+    // and each manage rung the lake screen walks. A non-canonical segment minted a key that
+    // authenticates (apiKeyAuth casts too) yet findByUserId never returns: invisible in the
+    // owner's key list, uncounted by the per-user cap, unreachable by the owner-scoped revoke.
+    const targetUserId = targetUser.id;
+
+    // Built once so the success audit line and the refusal warning below name their principals
+    // identically. Usernames go through JSON.stringify - `username` is only
+    // `{ type: String, unique: true }` on UserModel, so it carries no schema-level shape
+    // constraint, and a newline in one would otherwise forge a sibling log entry now that these
+    // lines are the audit record for a cross-tenant lake binding. Both ids are canonical
+    // ObjectId strings and need no escaping.
+    const adminLabel = `${JSON.stringify(req.user.username)} (${req.user.id})`;
+    const targetLabel = `${JSON.stringify(targetUser.username)} (${targetUserId})`;
+
+    const { name, scopes, expiresAt, rateLimit, preauthorizedLakeIds } = req.body as CreateApiKeyBody;
+
+    // Reject any scope outside the mintable allowlist, including admin:* and cc-bridge:connect.
+    const requestedScopes = Array.isArray(scopes) ? scopes : [];
+    const invalidScopes = requestedScopes.filter(s => !ADMIN_ENDPOINT_MINTABLE_SCOPES.has(s));
+    if (invalidScopes.length > 0) {
+      throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
+    }
+    // The release-note routes keep their isAdmin check, so this key is useless on anyone else.
+    if (requestedScopes.includes(ApiKeyScope.RELEASE_NOTES_WRITE) && !targetUser.isAdmin) {
+      throw new BadRequestError(`${ApiKeyScope.RELEASE_NOTES_WRITE} needs a target user who is a platform admin`);
+    }
+
+    // A contributed scope is only ever minted for a holder of its requiredEntitlement, so the
+    // target must hold it. Built-in product scopes stay admin-grantable without that check.
+    const contributedScopes = requestedScopes.filter(s => !isBuiltInApiKeyScope(s));
+    if (contributedScopes.length > 0) {
+      const targetAccess = await resolveApiKeyScopeAccessForUser(toEntitlementUser(targetUser));
+      const unentitled = contributedScopes.filter(s => !isApiKeyScopeOffered(s, targetAccess));
+      if (unentitled.length > 0) {
+        throw new ForbiddenError(`Scope not available on the target account: ${unentitled.join(', ')}`);
       }
+    }
 
-      const { userId } = req.query as RequestQuery;
+    const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUserId, {
+      logger: req.logger,
+      adminLabel,
+      targetLabel,
+    });
 
-      if (typeof userId !== 'string' || !userId) {
-        throw new BadRequestError('Invalid user ID');
+    const newApiKey = await userApiKeyService.createUserApiKey(
+      targetUserId,
+      {
+        name,
+        scopes: scopes as Parameters<typeof userApiKeyService.createUserApiKey>[1]['scopes'],
+        expiresAt: expiresAt ? new Date(expiresAt) : undefined,
+        rateLimit,
+        preauthorizedLakeIds: lakeBinding,
+        metadata: {
+          clientIP: req.ip,
+          userAgent: req.headers['user-agent'],
+          createdFrom: 'dashboard' as const,
+          // Without this the key is indistinguishable from one the target user
+          // minted themselves - `userId` is the target, not the actor.
+          createdByUserId: req.user.id,
+        },
+      },
+      {
+        db: {
+          userApiKeys: userApiKeyRepository,
+          agents: agentRepository,
+        },
+        isKnownScope: isKnownApiKeyScope,
+        // An admin minting for the user has already vouched for the account.
+        trust: { status: 'exempt' },
       }
+    );
 
-      const targetUser = await userRepository.findById(userId);
-      if (!targetUser) {
-        throw new BadRequestError('User not found');
-      }
-      // Canonical target id for everything below, NOT the `userId` URL segment: findById casts to
-      // ObjectId and resolves the user under any hex casing, but every field this id is compared
-      // against afterwards is a `type: String` matched by byte equality - the key's own `userId`,
-      // and each manage rung the lake screen walks. A non-canonical segment minted a key that
-      // authenticates (apiKeyAuth casts too) yet findByUserId never returns: invisible in the
-      // owner's key list, uncounted by the per-user cap, unreachable by the owner-scoped revoke.
-      const targetUserId = targetUser.id;
-
-      // Built once so the success audit line and the refusal warning below name their principals
-      // identically. Usernames go through JSON.stringify - `username` is only
-      // `{ type: String, unique: true }` on UserModel, so it carries no schema-level shape
-      // constraint, and a newline in one would otherwise forge a sibling log entry now that these
-      // lines are the audit record for a cross-tenant lake binding. Both ids are canonical
-      // ObjectId strings and need no escaping.
-      const adminLabel = `${JSON.stringify(req.user.username)} (${req.user.id})`;
-      const targetLabel = `${JSON.stringify(targetUser.username)} (${targetUserId})`;
-
-      const { name, scopes, expiresAt, rateLimit, preauthorizedLakeIds } = req.body as CreateApiKeyBody;
-
-      // Reject any scope outside the mintable allowlist, including admin:* and cc-bridge:connect.
-      const requestedScopes = Array.isArray(scopes) ? scopes : [];
-      const invalidScopes = requestedScopes.filter(s => !ADMIN_ENDPOINT_MINTABLE_SCOPES.has(s));
-      if (invalidScopes.length > 0) {
-        throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
-      }
-      // The release-note routes keep their isAdmin check, so this key is useless on anyone else.
-      if (requestedScopes.includes(ApiKeyScope.RELEASE_NOTES_WRITE) && !targetUser.isAdmin) {
-        throw new BadRequestError(`${ApiKeyScope.RELEASE_NOTES_WRITE} needs a target user who is a platform admin`);
-      }
-
-      // A contributed scope is only ever minted for a holder of its requiredEntitlement, so the
-      // target must hold it. Built-in product scopes stay admin-grantable without that check.
-      const contributedScopes = requestedScopes.filter(s => !isBuiltInApiKeyScope(s));
-      if (contributedScopes.length > 0) {
-        const targetAccess = await resolveApiKeyScopeAccessForUser(toEntitlementUser(targetUser));
-        const unentitled = contributedScopes.filter(s => !isApiKeyScopeOffered(s, targetAccess));
-        if (unentitled.length > 0) {
-          throw new ForbiddenError(`Scope not available on the target account: ${unentitled.join(', ')}`);
-        }
-      }
-
-      const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUserId, {
-        logger: req.logger,
-        adminLabel,
-        targetLabel,
-      });
-
-      const newApiKey = await userApiKeyService.createUserApiKey(
-        targetUserId,
-        {
-          name,
-          scopes: scopes as Parameters<typeof userApiKeyService.createUserApiKey>[1]['scopes'],
-          expiresAt: expiresAt ? new Date(expiresAt) : undefined,
-          rateLimit,
+    // Not in a transaction: createIfUnderCap's cap check must see concurrent inserts, which a
+    // snapshot would hide. The raw key only ever leaves in this response, so a key whose audit
+    // write failed is revoked unseen and the request fails.
+    try {
+      await recordAdminActionFromRequest(req, {
+        action: 'user.api_key.generated',
+        target: { kind: 'user', id: targetUserId, displayName: targetUser.email ?? targetUser.username },
+        summary: `generated API key ${newApiKey.keyPrefix} for user`,
+        details: {
+          keyId: newApiKey.id,
+          keyPrefix: newApiKey.keyPrefix,
+          name: newApiKey.name,
+          scopes: newApiKey.scopes,
+          expiresAt: newApiKey.expiresAt?.toISOString(),
           preauthorizedLakeIds: lakeBinding,
-          metadata: {
-            clientIP: req.ip,
-            userAgent: req.headers['user-agent'],
-            createdFrom: 'dashboard' as const,
-            // Without this the key is indistinguishable from one the target user
-            // minted themselves - `userId` is the target, not the actor.
-            createdByUserId: req.user.id,
-          },
         },
-        {
-          db: {
-            userApiKeys: userApiKeyRepository,
-            agents: agentRepository,
-          },
-          isKnownScope: isKnownApiKeyScope,
-          // An admin minting for the user has already vouched for the account.
-          trust: { status: 'exempt' },
-        }
-      );
-
-      // Not in a transaction: createIfUnderCap's cap check must see concurrent inserts, which a
-      // snapshot would hide. The raw key only ever leaves in this response, so a key whose audit
-      // write failed is revoked unseen and the request fails.
-      try {
-        await recordAdminActionFromRequest(req, {
-          action: 'user.api_key.generated',
-          target: { kind: 'user', id: targetUserId, displayName: targetUser.email ?? targetUser.username },
-          summary: `generated API key ${newApiKey.keyPrefix} for user`,
-          details: {
-            keyId: newApiKey.id,
-            keyPrefix: newApiKey.keyPrefix,
-            name: newApiKey.name,
-            scopes: newApiKey.scopes,
-            expiresAt: newApiKey.expiresAt?.toISOString(),
-            preauthorizedLakeIds: lakeBinding,
-          },
+      });
+    } catch (error) {
+      // Surface the audit failure even if the revoke also fails; the log names the key left live.
+      await userApiKeyRepository
+        .revokeIfNotDisabled(newApiKey.id, req.user.impersonatedBy ?? req.user.id, 'admin audit write failed')
+        .catch((revokeError: unknown) => {
+          req.logger.error('Failed to revoke unaudited API key', { keyId: newApiKey.id, revokeError });
         });
-      } catch (error) {
-        // Surface the audit failure even if the revoke also fails; the log names the key left live.
-        await userApiKeyRepository
-          .revokeIfNotDisabled(newApiKey.id, req.user.impersonatedBy ?? req.user.id, 'admin audit write failed')
-          .catch((revokeError: unknown) => {
-            req.logger.error('Failed to revoke unaudited API key', { keyId: newApiKey.id, revokeError });
-          });
-        throw error;
-      }
+      throw error;
+    }
 
-      // Attributed to the target user, since the key is theirs - but the acting admin is recorded
-      // alongside (createdBy*), so the event is not readable as a self-service mint by that user.
-      // The lake binding rides along because it is the one part of this mint that reaches another
-      // tenant's asset and is invisible on the lake side - it grants nothing there, so it appears in
-      // no grant listing. Recording it here makes "which keys are bound to this lake" answerable
-      // without grepping logs.
-      await logEventSafe(
-        {
-          userId: targetUserId,
-          type: UserApiKeyEvents.CREATED,
-          metadata: {
-            keyId: newApiKey.id,
-            name: newApiKey.name,
-            scopes: newApiKey.scopes,
-            expiresAt: newApiKey.expiresAt?.toISOString(),
-            createdFrom: 'dashboard',
-            createdByUserId: req.user.id,
-            createdByUsername: req.user.username,
-            preauthorizedLakeIds: lakeBinding,
-          },
+    // Attributed to the target user, since the key is theirs - but the acting admin is recorded
+    // alongside (createdBy*), so the event is not readable as a self-service mint by that user.
+    // The lake binding rides along because it is the one part of this mint that reaches another
+    // tenant's asset and is invisible on the lake side - it grants nothing there, so it appears in
+    // no grant listing. Recording it here makes "which keys are bound to this lake" answerable
+    // without grepping logs.
+    await logEventSafe(
+      {
+        userId: targetUserId,
+        type: UserApiKeyEvents.CREATED,
+        metadata: {
+          keyId: newApiKey.id,
+          name: newApiKey.name,
+          scopes: newApiKey.scopes,
+          expiresAt: newApiKey.expiresAt?.toISOString(),
+          createdFrom: 'dashboard',
+          createdByUserId: req.user.id,
+          createdByUsername: req.user.username,
+          preauthorizedLakeIds: lakeBinding,
         },
-        { ability: req.ability },
-        req.logger,
-        `API key ${newApiKey.id}`
-      );
+      },
+      { ability: req.ability },
+      req.logger,
+      `API key ${newApiKey.id}`
+    );
 
-      // Audit trail with admin details. `name` is escaped for the same reason the usernames inside
-      // adminLabel/targetLabel are: it is caller-chosen, and this line is the audit record for a
-      // cross-tenant lake binding.
-      req.logger.info(
-        `Admin ${adminLabel} generated API key ${JSON.stringify(name)} for user ${targetLabel}` +
-          (lakeBinding ? ` bound to data lake(s) ${lakeBinding.join('; ')}` : '')
-      );
+    // Audit trail with admin details. `name` is escaped for the same reason the usernames inside
+    // adminLabel/targetLabel are: it is caller-chosen, and this line is the audit record for a
+    // cross-tenant lake binding.
+    req.logger.info(
+      `Admin ${adminLabel} generated API key ${JSON.stringify(name)} for user ${targetLabel}` +
+        (lakeBinding ? ` bound to data lake(s) ${lakeBinding.join('; ')}` : '')
+    );
 
-      return res.status(201).json(newApiKey);
-    })
-  );
+    return res.status(201).json(newApiKey);
+  })
+);
 
 export const config = {
   api: {

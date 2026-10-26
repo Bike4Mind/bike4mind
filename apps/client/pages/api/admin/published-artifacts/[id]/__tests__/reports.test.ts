@@ -3,8 +3,8 @@ import { createMocks } from 'node-mocks-http';
 
 const { mockFind, mockCount } = vi.hoisted(() => ({ mockFind: vi.fn(), mockCount: vi.fn() }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),

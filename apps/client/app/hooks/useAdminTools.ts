@@ -1,3 +1,4 @@
+import { hasAdminPermission } from '@bike4mind/common';
 import { useState, useCallback, useEffect } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 import { toast } from 'sonner';
@@ -8,6 +9,7 @@ import { api } from '@client/app/contexts/ApiContext';
 interface UseAdminToolsReturn {
   isAdmin: boolean;
   canUseAdminTools: boolean;
+  canAccessTool: (tool: string) => boolean;
   executeAdminTool: (
     tool: string,
     params: AdminToolParams,
@@ -25,14 +27,21 @@ export function useAdminTools(): UseAdminToolsReturn {
 
   // Initialize admin tools on first use
   useEffect(() => {
-    if (user?.isAdmin) {
+    if (hasAdminPermission(user, 'settings:manage')) {
       initializeAdminTools();
     }
   }, [user]);
 
-  // Only check the isAdmin flag; there is no 'Admin' tag in VALID_USER_TAGS.
   const isAdmin = user?.isAdmin || false;
-  const canUseAdminTools = isAdmin;
+  const canUseAdminTools = hasAdminPermission(user, 'settings:manage');
+  const canAccessTool = useCallback(
+    (tool: string): boolean => {
+      if (!user) return false;
+      if (user.isAdmin) return true;
+      return initializeAdminTools().canAccess(user, tool);
+    },
+    [user]
+  );
 
   // Parse command to detect admin tools
   const parseCommand = useCallback(
@@ -133,7 +142,7 @@ export function useAdminTools(): UseAdminToolsReturn {
         }
 
         // Credit management patterns
-        if (lower.includes('add') && lower.includes('credit')) {
+        if (isAdmin && lower.includes('add') && lower.includes('credit')) {
           return {
             isAdminCommand: true,
             tool: 'credits',
@@ -147,19 +156,24 @@ export function useAdminTools(): UseAdminToolsReturn {
 
       return { isAdminCommand: false };
     },
-    [canUseAdminTools]
+    [canUseAdminTools, isAdmin]
   );
 
   // Execute admin tool
   const executeAdminTool = useCallback(
     async (tool: string, params: AdminToolParams, context?: Partial<AdminToolContext>): Promise<AdminToolResult> => {
-      if (!canUseAdminTools) {
+      const currentUser = useUser.getState().currentUser;
+      const service = initializeAdminTools();
+      if (!currentUser || (!currentUser.isAdmin && !service.canAccess(currentUser, tool))) {
         const result = {
           success: false,
-          error: 'You do not have permission to use admin tools. Admin access required.',
+          error:
+            tool === 'modal'
+              ? 'Missing permission: settings:manage'
+              : 'You do not have permission to use admin tools. Admin access required.',
         };
         setLastResult(result);
-        toast.error('Admin access required to use this feature');
+        toast.error(result.error);
         return result;
       }
 
@@ -240,12 +254,13 @@ export function useAdminTools(): UseAdminToolsReturn {
         setIsExecuting(false);
       }
     },
-    [canUseAdminTools, user]
+    [user]
   );
 
   return {
     isAdmin,
     canUseAdminTools,
+    canAccessTool,
     executeAdminTool,
     isExecuting,
     lastResult,

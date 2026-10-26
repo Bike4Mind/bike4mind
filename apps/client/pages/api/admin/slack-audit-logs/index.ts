@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { slackAuditLogRepository, SlackAuditEventType } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -42,8 +43,9 @@ const ensureAdmin = (isAdmin?: boolean | null) => {
   }
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  ensureAdmin(canAccessAdmin(req.user));
 
   const result = QuerySchema.safeParse(req.query);
   if (!result.success) {

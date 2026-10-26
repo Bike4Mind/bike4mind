@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-// Wrap handlers so thrown HTTPErrors become JSON responses, matching production baseApi behaviour.
+// Wrap handlers so thrown HTTPErrors become JSON responses, matching production adminApi behaviour.
 function wrapHandler(fn: (req: unknown, res: any) => Promise<unknown>) {
   return async (req: unknown, res: any) => {
     try {
@@ -13,8 +13,8 @@ function wrapHandler(fn: (req: unknown, res: any) => Promise<unknown>) {
   };
 }
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const mock: { _post?: (req: unknown, res: unknown) => Promise<unknown>; post: (fn: unknown) => typeof mock } = {
       post: function (fn: unknown) {
         mock._post = wrapHandler(fn as (req: unknown, res: unknown) => Promise<unknown>);
@@ -122,17 +122,13 @@ describe('/api/admin/mementos/reembed-ledger', () => {
   it('surfaces a keyless principal in failedPrincipals during a dry run', async () => {
     listPrincipals.mockResolvedValue([p('a'), p('b')]);
     migrateMock
-      .mockResolvedValueOnce(
-        stats({ noProviderKey: 5, embedderError: 'no key', errors: ['owner o1: no key'] })
-      )
+      .mockResolvedValueOnce(stats({ noProviderKey: 5, embedderError: 'no key', errors: ['owner o1: no key'] }))
       .mockResolvedValueOnce(stats({ backfilled: 3, providerCalls: 3 }));
 
     const data = (await post({}))._getJSONData();
 
     expect(migrateMock).toHaveBeenCalledWith(expect.anything(), { dryRun: true });
-    expect(data.failedPrincipals).toEqual([
-      { ...p('a'), error: 'embedding service unavailable for owner o1: no key' },
-    ]);
+    expect(data.failedPrincipals).toEqual([{ ...p('a'), error: 'embedding service unavailable for owner o1: no key' }]);
     expect(data).toMatchObject({
       dryRun: true,
       noProviderKey: 5,

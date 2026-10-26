@@ -17,8 +17,8 @@ import { configureSecretsAtRest, generateEncryptionKey } from '@bike4mind/utils/
  * without its value ever reaching a response, and survives an edit that omits it.
  */
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain: Record<string, unknown> = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),

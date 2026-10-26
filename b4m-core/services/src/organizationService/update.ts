@@ -1,4 +1,4 @@
-import { IOrganizationRepository, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
+import { hasAdminPermission, IOrganizationRepository, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -25,8 +25,9 @@ interface UpdateAdapters {
 export const update = async (user: IUserDocument, params: UpdateParameters, adapters: UpdateAdapters) => {
   const { id, ...rest } = secureParameters(params, updateSchema);
 
+  const isPlatformManager = hasAdminPermission(user, 'settings:manage');
   let organization = await adapters.db.organizations.shareable.findUpdateAccessById(user, id);
-  if (user.isAdmin) {
+  if (isPlatformManager) {
     organization = await adapters.db.organizations.findById(id);
   }
 
@@ -53,7 +54,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   if (rest.name !== undefined) update.name = rest.name;
   if (rest.description !== undefined) update.description = rest.description;
   // Only allow billing contact changes for owners and admins, not managers.
-  if (rest.billingContact !== undefined && !(isManager && !isOwner && !user.isAdmin)) {
+  if (rest.billingContact !== undefined && !(isManager && !isOwner && !isPlatformManager)) {
     update.billingContact = rest.billingContact;
   }
   // Managers can update systemPrompt intentionally - they customize org-wide AI
@@ -66,14 +67,14 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   // Coalesce a cleared cap to null, NOT undefined:
   // $set persists null (read as "no cap" by isMemberCreditCapExceeded), and BSON drops
   // undefined, so `?? undefined` would leave the previous cap in place (a null PUT no-ops).
-  if (user.isAdmin && rest.maxCreditsPerMember !== undefined) {
+  if (isPlatformManager && rest.maxCreditsPerMember !== undefined) {
     update.maxCreditsPerMember = rest.maxCreditsPerMember ?? null;
   }
 
   // Platform-admin only: a manager must not raise their own org's quota. Same null-not-undefined
   // rule as maxCreditsPerMember, so a cleared limit falls back to the default. Lowering it below
   // current usage deletes nothing; checkStorageLimit just refuses new uploads.
-  if (user.isAdmin && rest.storageLimit !== undefined) {
+  if (isPlatformManager && rest.storageLimit !== undefined) {
     update.storageLimit = rest.storageLimit ?? null;
   }
 

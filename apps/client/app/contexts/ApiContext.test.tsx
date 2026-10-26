@@ -1,3 +1,4 @@
+import { toast } from 'sonner';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
@@ -371,6 +372,28 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     expect(errorSpy).toHaveBeenCalledWith('Axios Error:', expect.anything());
 
     errorSpy.mockRestore();
+  });
+
+  it('surfaces a missing permission 403 without refreshing or signing out', async () => {
+    const toastSpy = vi.spyOn(toast, 'error');
+    useAccessToken.setState({ accessToken: 'tok', refreshToken: 'refresh', expired: false, mfaPending: false });
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(
+        new AxiosError('Forbidden', 'ERR_BAD_REQUEST', config, {}, {
+          status: 403,
+          statusText: 'Forbidden',
+          data: { error: 'Missing permission: users:delete' },
+          headers: {},
+          config,
+        } as AxiosResponse)
+      )) as AxiosAdapter;
+    await expect(api.delete('/api/users/target/delete')).rejects.toBeTruthy();
+    expect(toastSpy).toHaveBeenCalledWith('Missing permission: users:delete', {
+      id: 'Missing permission: users:delete',
+    });
+    expect(useAccessToken.getState().expired).toBe(false);
+    expect(replace).not.toHaveBeenCalled();
+    toastSpy.mockRestore();
   });
 
   it('fires exactly one redirect when a burst of concurrent 401s are all unrecoverable', async () => {

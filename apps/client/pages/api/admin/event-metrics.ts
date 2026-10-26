@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { categorizeEvent } from '@server/admin/categorizeEvent';
 import { Request } from 'express';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { z } from 'zod';
 import { CounterLog, cacheRepository } from '@bike4mind/database';
 import { cacheService } from '@bike4mind/services';
@@ -128,15 +129,16 @@ const ONE_MINUTE_MS = 60 * 1000;
 // near 10 in a minute, so 30 leaves headroom while still bounding the uncached recache path.
 export const EVENT_METRICS_RATE_LIMIT = 30;
 
-// Chained after baseApi so auth has run and the limiter keys on req.user.id rather than the
+// Chained after adminApi so auth has run and the limiter keys on req.user.id rather than the
 // client IP. It also runs ahead of the isAdmin check below, so a non-admin who empties their own
 // bucket is refused with 429 instead of 403 - both refuse, and the bucket is per principal. The
 // requiredScopes gate below only constrains API-key callers; browser/JWT admins are unaffected.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api
   .use(rateLimit({ limit: EVENT_METRICS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-event-metrics' }))
   .get(async (req: Request<{}, {}, {}, EventMetricsQuery>, res) => {
     // Check if user has admin permissions
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 

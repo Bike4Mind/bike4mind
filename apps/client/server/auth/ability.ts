@@ -17,7 +17,13 @@ import {
   QuestMasterPlan,
   applySharedShareableRules,
 } from '@bike4mind/database';
-import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
+import {
+  InvitePermission,
+  IUserDocument,
+  Permission,
+  hasDeveloperUserTag,
+  hasAdminPermission,
+} from '@bike4mind/common';
 import { SecretRotation } from '@bike4mind/database/infra';
 import { Subscription } from '@server/models/Subscription';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
@@ -34,6 +40,12 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       }
       */
     const ownDocumentPermission: MongoQuery = { userId: user.id };
+
+    if (hasAdminPermission(user, 'support:read')) {
+      allow('read', User);
+      allow('read', CounterLog);
+      allow('read', UserActivityCounter);
+    }
 
     if (user.isAdmin) {
       allow('read', User);

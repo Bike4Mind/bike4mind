@@ -1,4 +1,5 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { requireAdminPermission } from '@server/middlewares/adminApi';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   userRepository,
@@ -19,6 +20,7 @@ import { ApiKeyScope } from '@bike4mind/common';
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
+    requireAdminPermission(req, 'users:moderate');
     const targetId = req.query.id!;
     const tokenVersion = await userService.adminRevokeUserSessions(
       req.user.id,

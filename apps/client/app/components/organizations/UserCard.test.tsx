@@ -9,14 +9,15 @@ import OrganizationUserCard from './UserCard';
 import { MemberCreditUsage } from './memberCreditBudget';
 
 const setOverride = vi.fn();
+const confirmation = vi.hoisted(() => ({ open: vi.fn(), remove: vi.fn() }));
 const viewer = vi.hoisted(() => ({ id: 'viewer' }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
-  useRemoveMemberFromOrganization: () => ({ mutateAsync: vi.fn() }),
+  useRemoveMemberFromOrganization: () => ({ mutateAsync: confirmation.remove }),
   useLeaveOrganization: () => ({ mutateAsync: vi.fn() }),
   useSetMemberCreditOverride: () => ({ mutateAsync: setOverride, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({ useCancelInvite: () => ({ mutateAsync: vi.fn() }) }));
-vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => vi.fn() }));
+vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => confirmation.open }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: viewer.id, isAdmin: false } }),
 }));
@@ -38,7 +39,8 @@ type Roster = { invite: boolean; revoke: boolean };
 const renderCard = (
   user: ReturnType<typeof member>,
   canManageCreditBudgets: boolean,
-  roster: boolean | Roster = false
+  roster: boolean | Roster = false,
+  beforeMutation?: () => boolean
 ) =>
   render(
     ((children: ReactNode) => (
@@ -48,6 +50,7 @@ const renderCard = (
     ))(
       <OrganizationUserCard
         organization={org}
+        beforeMutation={beforeMutation}
         user={user}
         canInviteMembers={typeof roster === 'boolean' ? roster : roster.invite}
         canRevokeMembers={typeof roster === 'boolean' ? roster : roster.revoke}
@@ -164,5 +167,20 @@ describe('OrganizationUserCard roster actions', () => {
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
     renderCard(member('p', null, 'pending'), false, { invite: false, revoke: false });
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+});
+
+describe('organization admin deferred confirmation authority', () => {
+  it('checks the current authority after a removal confirmation has opened', async () => {
+    confirmation.open.mockClear();
+    confirmation.remove.mockClear();
+    const authority = { allowed: true };
+    renderCard(member('target', null), false, true, () => authority.allowed);
+    openMenu();
+    fireEvent.click(await screen.findByTestId('organization-user-card-revoke-access'));
+    const options = confirmation.open.mock.calls[0][0] as { onOk: () => Promise<void> };
+    authority.allowed = false;
+    await options.onOk();
+    expect(confirmation.remove).not.toHaveBeenCalled();
   });
 });

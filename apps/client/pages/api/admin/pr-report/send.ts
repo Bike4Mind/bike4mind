@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 /**
  * POST /api/admin/pr-report/send
  *
@@ -16,7 +17,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
 
-import { baseApi } from '@client/server/middlewares/baseApi';
+import { adminApi } from '@client/server/middlewares/adminApi';
 import { prReportService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/utils';
 
@@ -36,8 +37,9 @@ const sendBodySchema = z.object({
 
 type SendBody = z.infer<typeof sendBodySchema>;
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post<Request<{}, {}, SendBody>>(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post<Request<{}, {}, SendBody>>(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

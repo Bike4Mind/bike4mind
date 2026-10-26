@@ -1,3 +1,4 @@
+import { hasAdminPermission } from '@bike4mind/common';
 import { RegInviteEvents, requireEnv, sanitizeUsername } from '@bike4mind/common';
 import { organizationService, userService } from '@bike4mind/services';
 import { withTransaction } from '@bike4mind/database';
@@ -5,7 +6,7 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
@@ -54,8 +55,8 @@ function buildMigrationEmailBody(userName: string, loginLink: string): string {
   `;
 }
 
-const handler = baseApi().post(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(async (req, res) => {
+  if (!hasAdminPermission(req.user, 'settings:manage')) {
     throw new ForbiddenError('Only admins can perform user migration');
   }
 

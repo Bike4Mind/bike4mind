@@ -9,8 +9,16 @@ import { ApiKeyScope } from '@bike4mind/common';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middleware: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const guard of middleware) await guard(req, res, () => {});
+      return handlers[req.method](req, res);
+    };
+    chain.use = (guard: (typeof middleware)[number]) => {
+      middleware.push(guard);
+      return chain;
+    };
+
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -31,9 +39,9 @@ vi.mock('@bike4mind/database', () => ({
   agentExecutionRepository: { findBillingBySessionId: (...a: unknown[]) => mockFindBillingBySessionId(...a) },
 }));
 
-const mockVerifyOrgOwner = vi.fn();
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgOwner: (...a: unknown[]) => mockVerifyOrgOwner(...a),
+const mockVerifyOrgUsageRead = vi.fn();
+vi.mock('@server/utils/adminUsageRead', () => ({
+  verifyOrgUsageRead: (...a: unknown[]) => mockVerifyOrgUsageRead(...a),
 }));
 
 import handler from '../session-usage';
@@ -61,7 +69,7 @@ const emptyUsage = {
 describe('GET /api/admin/session-usage — access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockVerifyOrgOwner.mockResolvedValue({ id: ORG });
+    mockVerifyOrgUsageRead.mockResolvedValue({ id: ORG });
     mockSessionBelongsToOwner.mockResolvedValue(true);
     mockSessionUsageSummary.mockResolvedValue(emptyUsage);
     mockFindBillingBySessionId.mockResolvedValue([]);
@@ -75,7 +83,7 @@ describe('GET /api/admin/session-usage — access', () => {
   it('lets an admin read the whole session cross-org (unscoped queries, no ownership probe)', async () => {
     const { res, run } = call({ isAdmin: true });
     await run();
-    expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
+    expect(mockVerifyOrgUsageRead).not.toHaveBeenCalled();
     expect(mockSessionBelongsToOwner).not.toHaveBeenCalled();
     // No owner filter: admins see the full cross-org rollup.
     expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, undefined);
@@ -85,14 +93,14 @@ describe('GET /api/admin/session-usage — access', () => {
 
   it('rejects a non-admin who omits the organization', async () => {
     const { run } = call({ isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/Missing permission: support:read/);
     expect(mockSessionUsageSummary).not.toHaveBeenCalled();
   });
 
   it('scopes an org owner to their org slice of the session (no cross-owner leak)', async () => {
     const { res, run } = call({ isAdmin: false, query: { sessionId: SESSION, organizationId: ORG } });
     await run();
-    expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, ORG);
+    expect(mockVerifyOrgUsageRead).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, ORG);
     expect(mockSessionBelongsToOwner).toHaveBeenCalledWith(SESSION, ORG, 'Organization');
     // Both response queries owner-scoped to the org - a mixed-owner session must
     // not surface another owner's spend to a non-admin.
@@ -108,8 +116,8 @@ describe('GET /api/admin/session-usage — access', () => {
     expect(mockSessionUsageSummary).not.toHaveBeenCalled();
   });
 
-  it('propagates verifyOrgOwner denial before probing ownership', async () => {
-    mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+  it('propagates verifyOrgUsageRead denial before probing ownership', async () => {
+    mockVerifyOrgUsageRead.mockRejectedValue(new NotFoundError('Organization not found'));
     const { run } = call({ isAdmin: false, query: { sessionId: SESSION, organizationId: ORG } });
     await expect(run()).rejects.toThrow(/not found/i);
     expect(mockSessionBelongsToOwner).not.toHaveBeenCalled();

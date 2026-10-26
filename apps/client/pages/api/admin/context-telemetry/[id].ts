@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest, telemetryAuditLogRepository } from '@bike4mind/database';
 import { z } from 'zod';
@@ -12,11 +13,15 @@ const paramsSchema = z.object({
   id: z.string().min(1),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   // GET /api/admin/context-telemetry/[id] - Get single telemetry entry
   .get(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 
@@ -47,7 +52,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       const sourceIp = truncateIp(getClientIp(req as Parameters<typeof getClientIp>[0]));
       const userAgent = (req.headers['user-agent'] as string) || 'unknown';
 
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 

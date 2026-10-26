@@ -1,7 +1,8 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -20,9 +21,10 @@ interface RequestQuery {
   id: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(
+const api = adminApi({ adminPermissions: { PATCH: 'credits:adjust' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.patch(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

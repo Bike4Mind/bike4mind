@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { adminSettingsRepository, agentRepository } from '@bike4mind/database';
 import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
@@ -7,8 +8,8 @@ import {
   SILENCE_TURN_TIMEOUT_SECONDS,
 } from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { z } from 'zod';
 
 const DEFAULT_FIRST_MESSAGE = 'Hello! How can I help you today?';
@@ -31,16 +32,20 @@ function getCustomLlmUrl(req: { headers: { host?: string; 'x-forwarded-proto'?: 
   return `${proto}://${host}/api/voice/v2/llm-proxy`;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
     const agents = await agentRepository.listAllVoiceAgents();
     return res.status(200).json({ agents });
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

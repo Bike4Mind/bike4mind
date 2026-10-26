@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { z } from 'zod';
 import { Request } from 'express';
 import { Resource } from 'sst';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { imageModerationIncidentRepository } from '@bike4mind/database';
 import { ncmecService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -76,8 +77,9 @@ const bodySchema = z.union([
   z.object({ verdict: z.literal('record_manual_report'), ncmecReportId: ncmecReportIdSchema }),
 ]);
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req: Request, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { POST: 'users:moderate' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req: Request, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

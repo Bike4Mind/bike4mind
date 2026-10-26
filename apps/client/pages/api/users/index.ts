@@ -1,3 +1,4 @@
+import { hasAdminPermission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -89,9 +90,9 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // usable for targeted lookup, but not as a bulk-export or full-directory dump:
     // non-admins require a minimum search term to prevent blind pagination over all
     // users, downloadAll is admin-only, and the page size is hard-capped.
-    const isAdmin = !!req.user?.isAdmin;
-    const viewer = { userId: String(req.user?.id), isAdmin };
-    const isPicker = publicView && !isAdmin;
+    const hasAdminReadAccess = hasAdminPermission(req.user, 'support:read');
+    const viewer = { userId: String(req.user?.id), isAdmin: !!req.user?.isAdmin };
+    const isPicker = publicView && !hasAdminReadAccess;
     if (isPicker) {
       // projectId-scoped requests show members of one specific project rather than the whole
       // directory, so they are exempt from the search-term minimum. What makes that safe is
@@ -102,11 +103,11 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       if (downloadAll) {
         return res.status(403).json({ message: 'Bulk user export is admin-only.' });
       }
-    } else if (downloadAll && !isAdmin) {
+    } else if (downloadAll && !hasAdminReadAccess) {
       return res.status(403).json({ message: 'Bulk user export is admin-only.' });
     }
     const PUBLIC_VIEW_MAX_LIMIT = 50;
-    const effectiveLimit = publicView && !isAdmin ? Math.min(limit, PUBLIC_VIEW_MAX_LIMIT) : limit;
+    const effectiveLimit = publicView && !hasAdminReadAccess ? Math.min(limit, PUBLIC_VIEW_MAX_LIMIT) : limit;
 
     // $sort runs before $project, so the allowlist is keyed off the same publicView flag that
     // picks the projection: a caller can only rank on fields their own response returns.
@@ -177,7 +178,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // tags selects on isAdmin/tags, neither of which the public projection returns. On the
     // CASL-scoped path that reveals nothing the caller could not already read, but publicView
     // bypasses CASL, so for a non-admin there `tags[]=Admin` answers "who are the admins".
-    const canFilterByTags = isAdmin || !publicView;
+    const canFilterByTags = hasAdminReadAccess || !publicView;
     if (canFilterByTags && tags && tags.length > 0) {
       const hasAdminTag = tags.includes('Admin');
       const otherTags = tags.filter(tag => tag !== 'Admin');
@@ -234,7 +235,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       // the unrestricted lookup; everyone else must hold read/write on the project. A caller
       // without access gets the same 404 as a project that does not exist, so this does not
       // become a project-existence oracle.
-      const project = isAdmin
+      const project = hasAdminReadAccess
         ? await Project.findById(projectId)
         : await projectRepository.shareable.findAccessibleById(req.user, projectId);
 

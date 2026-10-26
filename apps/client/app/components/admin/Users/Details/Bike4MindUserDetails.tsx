@@ -1,3 +1,6 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { AdminPermissionBoundary } from '../../shared/AdminPermissionBoundary';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 import { IUserDocument, resolveUserStorageLimit, storageLimitToBytes, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
@@ -24,6 +27,8 @@ interface Bike4MindUserDetailsProps {
 
 const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
   ({ user, editedFields, onFieldChange, userKey, creditReason = '', onCreditReasonChange }) => {
+    const currentUser = useUser(state => state.currentUser);
+    const canManage = hasAdminPermission(currentUser, 'settings:manage');
     const [isRecalculating, setIsRecalculating] = useState(false);
     const queryClient = useQueryClient();
     const storage = resolveUserStorageLimit(user);
@@ -35,6 +40,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
     };
 
     const handleRecalculateStorage = async () => {
+      if (!canManage) return;
       setIsRecalculating(true);
       try {
         await api.post(`/api/users/${user.id}/recalculate-storage`);
@@ -80,6 +86,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px' }}>
             <WorkspacePremiumIcon />
             <Input
+              disabled={!canManage}
               key={`subscribed-until-${userKey}`}
               type="date"
               size="sm"
@@ -98,6 +105,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px' }}>
             <GroupAddIcon sx={{ width: '24px', pl: 0.24 }} />
             <Input
+              disabled={!canManage}
               key={`referrals-${userKey}`}
               size="sm"
               type="number"
@@ -111,28 +119,33 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
           </Stack>
         </Tooltip>
 
-        <Tooltip title="Credits">
-          <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px', width: '100%' }}>
-            <CreditIcon />
-            <Input
-              key={`credits-${userKey}`}
-              sx={{
-                borderColor: editedFields?.currentCredits ? 'danger.500' : 'default',
-                flex: 1,
-              }}
-              type="number"
-              value={user.currentCredits}
-              onChange={handleCreditsChange}
-              onKeyDown={handleCreditsKeyDown}
-              slotProps={{
-                input: {
-                  step: 50,
-                },
-              }}
-            />
-          </Stack>
-        </Tooltip>
-
+        <AdminPermissionBoundary permission="credits:adjust">
+          <Tooltip title="Credits">
+            <Stack
+              direction="row"
+              spacing={2}
+              sx={{ alignItems: 'center', padding: '0px 16px 0px 8px', width: '100%' }}
+            >
+              <CreditIcon />
+              <Input
+                key={`credits-${userKey}`}
+                sx={{
+                  borderColor: editedFields?.currentCredits ? 'danger.500' : 'default',
+                  flex: 1,
+                }}
+                type="number"
+                value={user.currentCredits}
+                onChange={handleCreditsChange}
+                onKeyDown={handleCreditsKeyDown}
+                slotProps={{
+                  input: {
+                    step: 50,
+                  },
+                }}
+              />
+            </Stack>
+          </Tooltip>
+        </AdminPermissionBoundary>
         {/* Reason surfaces only once credits are edited - it applies to that change. */}
         {editedFields?.currentCredits && onCreditReasonChange && (
           <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', padding: '0px 16px 0px 8px' }}>
@@ -188,6 +201,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
             <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px' }}>
               <Box sx={{ width: 24 }} />
               <Input
+                disabled={!canManage}
                 key={`storage-limit-${userKey}`}
                 sx={{
                   borderColor: editedFields?.storageLimitOverride ? 'danger.500' : 'default',
@@ -211,6 +225,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
               </Typography>
               {storage.source === 'override' && (
                 <Button
+                  disabled={!canManage}
                   data-testid="admin-user-storage-override-reset"
                   size="sm"
                   variant="plain"
@@ -222,6 +237,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
             </Stack>
             <Box sx={{ padding: '0px 16px 0px 8px' }}>
               <Button
+                disabled={!canManage}
                 size="sm"
                 variant="soft"
                 color="primary"

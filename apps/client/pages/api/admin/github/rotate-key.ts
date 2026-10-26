@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 /**
  * Admin GitHub Rotate Key API
  *
@@ -14,7 +15,7 @@
 
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { orgGitHubConnectionRepository, withTransaction } from '@bike4mind/database';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -34,7 +35,8 @@ const RotateKeySchema = z.object({
   privateKey: z.string().min(1, 'privateKey is required').max(MAX_PRIVATE_KEY_LENGTH, 'privateKey too long'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api
   // Rate limit to 3 rotations per hour
   .use(
     rateLimit({
@@ -44,7 +46,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   )
   // POST - Rotate private key
   .post(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const parseResult = RotateKeySchema.safeParse(req.body);
     if (!parseResult.success) {

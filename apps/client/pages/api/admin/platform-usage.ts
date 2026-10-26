@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { usageEventRepository, userApiKeyRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import {
@@ -37,11 +38,12 @@ const QuerySchema = z.object({
  * platform usage just because its owner is an admin. JWT/browser admins skip that
  * check and still pass the isAdmin gate below.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
   if (!req.user) {
     throw new ForbiddenError('Authentication required');
   }
-  if (!req.user.isAdmin) {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

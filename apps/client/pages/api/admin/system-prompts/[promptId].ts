@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { systemPromptRepository } from '@bike4mind/database';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
@@ -15,14 +16,18 @@ const UpdateSystemPromptSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(
     /**
      * GET /api/admin/system-prompts/[promptId]
      * Get a single system prompt by promptId
      */
     async (req, res) => {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 
@@ -77,7 +82,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
      * Create or update a system prompt
      */
     async (req, res) => {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 
@@ -161,7 +166,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
      * deleting them here would be ambiguous, since the row would reappear as a code entry.
      */
     async (req, res) => {
-      if (!req.user?.isAdmin) {
+      if (!canAccessAdmin(req.user)) {
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 

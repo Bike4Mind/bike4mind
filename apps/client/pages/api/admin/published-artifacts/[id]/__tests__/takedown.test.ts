@@ -6,9 +6,9 @@ const { mockFindOneAndUpdate, mockReportUpdateMany } = vi.hoisted(() => ({
   mockReportUpdateMany: vi.fn(),
 }));
 
-// baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is the handler.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+// adminApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is the handler.
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 // ForbiddenError: a throwable the handler propagates; we assert it's thrown (the real
-// baseApi error middleware maps it to 403, out of scope for a unit test).
+// adminApi error middleware maps it to 403, out of scope for a unit test).
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));

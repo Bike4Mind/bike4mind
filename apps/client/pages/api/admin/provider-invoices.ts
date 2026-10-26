@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { providerInvoiceRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -24,13 +25,17 @@ const InvoiceBody = z.object({
 // before req.user is set, so a key issued for a narrow integration can't read or
 // enter provider invoices just because its owner is an admin. JWT/browser admins
 // skip that check and still pass the isAdmin gates below.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
+    if (!canAccessAdmin(req.user)) throw new ForbiddenError('Admin access required');
     return res.json({ invoices: await providerInvoiceRepository.newestPerMonthProvider() });
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
+    if (!canAccessAdmin(req.user)) throw new ForbiddenError('Admin access required');
 
     const parsed = InvoiceBody.safeParse(req.body);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'invalid invoice entry');

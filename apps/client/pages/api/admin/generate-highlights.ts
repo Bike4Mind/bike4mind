@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { AdminSettings } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
@@ -22,11 +23,12 @@ const ONE_MINUTE_MS = 60 * 1000;
 
 const SETTING_NAME = 'whatsNewHighlightsConfig';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api
   .use(rateLimit({ limit: GENERATE_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .post(async (req: Request, res: Response) => {
     // Check if user is admin
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

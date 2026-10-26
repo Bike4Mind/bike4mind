@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { MailService, type TestEmailResult } from '@server/utils/mailer';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -11,7 +12,8 @@ const TestEmailSchema = z.object({
   to: z.email().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api
   .use(
     rateLimit({
       limit: 5,
@@ -19,7 +21,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

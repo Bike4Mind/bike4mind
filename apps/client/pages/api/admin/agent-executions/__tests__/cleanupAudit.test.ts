@@ -11,8 +11,8 @@ const h = vi.hoisted(() => ({
 
 type Route = (req: unknown, res: unknown) => unknown;
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const routes: Record<string, Route> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),

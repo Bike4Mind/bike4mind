@@ -23,8 +23,8 @@ const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain: any = {
       use: () => chain,
       post: (fn: any) => {

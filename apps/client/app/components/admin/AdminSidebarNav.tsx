@@ -1,3 +1,5 @@
+import { useUser } from '@client/app/contexts/UserContext';
+import { canAccessAdminTab } from './adminTabRenderability';
 import type { ReactNode } from 'react';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import {
@@ -31,6 +33,7 @@ export const SidebarNav = ({
   hiddenNotifications,
   onTabSelect,
 }: SidebarNavProps) => {
+  const currentUser = useUser(state => state.currentUser);
   const activeTab = useAdminModal(state => state.activeTab);
 
   const { isExpanded, toggleSection } = useAdminSidebarSections(activeTab);
@@ -84,19 +87,24 @@ export const SidebarNav = ({
 
   return (
     <Stack spacing={1} sx={{ p: 0.5 }}>
-      <Button
-        startDecorator={<DashboardIcon />}
-        onClick={() => onTabSelect(AdminTab.Dashboard)}
-        variant="plain"
-        sx={getMenuButtonSx(AdminTab.Dashboard)}
-        data-testid="admin-dashboard-tab-btn"
-      >
-        Dashboard
-      </Button>
+      {canAccessAdminTab(currentUser, AdminTab.Dashboard) && (
+        <Button
+          startDecorator={<DashboardIcon />}
+          onClick={() => onTabSelect(AdminTab.Dashboard)}
+          variant="plain"
+          sx={getMenuButtonSx(AdminTab.Dashboard)}
+          data-testid="admin-dashboard-tab-btn"
+        >
+          Dashboard
+        </Button>
+      )}
       <AccordionGroup sx={{ marginLeft: 0.5 }}>
         {SIDEBAR_SECTIONS.map(section => {
           const { Icon: SectionIcon } = section;
-          const visibleItems = section.items.filter(item => !item.gate || gates[item.gate]);
+          const visibleItems = section.items.filter(
+            item => (!item.gate || gates[item.gate]) && canAccessAdminTab(currentUser, item.tab)
+          );
+          if (visibleItems.length === 0) return null;
           return (
             <Accordion key={section.key} expanded={isExpanded(section.key)} onChange={() => toggleSection(section.key)}>
               <AccordionSummary>

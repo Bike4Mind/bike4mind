@@ -15,8 +15,8 @@ import { AdminSettings, adminSettingsRepository } from '@bike4mind/database/infr
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ put: (handler: (...a: unknown[]) => unknown) => handler }),
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({ put: (handler: (...a: unknown[]) => unknown) => handler }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,

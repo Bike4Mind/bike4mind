@@ -1,4 +1,5 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { requireAdminPermission } from '@server/middlewares/adminApi';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   adminSettingsRepository,
@@ -9,12 +10,16 @@ import {
   creditTransactionRepository,
   TelemetryAuditLogModel,
   realtimeConnectionRepository,
+  prepareAdminMutationLock,
+  lockAdminMutations,
+  assertCanRemoveFullAdmin,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
 import { commitWithSessionEnd, type SessionEndReason } from '@server/auth/endUserSessions';
 import {
   ApiKeyScope,
+  canAccessAdmin,
   ForbiddenError,
   redactUserSecretsForSelf,
   selfUserProfileResponseSchema,
@@ -178,7 +183,7 @@ const handler = baseApi().put(
     const mirrorsProfileUpdate = !isSelf || !!currentUser.impersonatedBy;
 
     // Non-admin users can only update their own profile
-    if (!currentUser.isAdmin && !isSelf) {
+    if (!canAccessAdmin(currentUser) && !isSelf) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -190,7 +195,7 @@ const handler = baseApi().put(
       await requireStepUp(req);
     }
 
-    if (currentUser.isAdmin) {
+    if (currentUser.isAdmin || (!isSelf && canAccessAdmin(currentUser))) {
       // The admin branch writes credits, roles and email, so it needs the ADMIN
       // scope - but this route cannot declare `requiredScopes`, because it is also
       // every ordinary user's own profile update. The gate therefore lives on the
@@ -202,6 +207,8 @@ const handler = baseApi().put(
       if (req.apiKeyInfo && !req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN)) {
         throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.ADMIN] });
       }
+
+      requireAdminPermission(req, 'support:read');
 
       // Another user's credentials and the admin role are session-only changes: an API key is
       // refused, a browser session must have recently re-verified. Both run before any write.
@@ -229,6 +236,7 @@ const handler = baseApi().put(
 
       // id comes from the route param; the spread ensures it wins over any id in the body.
       const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
+      userService.assertAdminUpdatePermissions(currentUser, body);
 
       const targetBefore = (await User.findById(userId)
         .select('isAdmin currentCredits name username email')
@@ -256,16 +264,10 @@ const handler = baseApi().put(
       }
 
       // Validated before any write so a missing reason never leaves a half-applied update.
-      const roleChangeReason = changesRole ? parseAdminActionReason(body.roleChangeReason) : undefined;
+      if (changesRole) parseAdminActionReason(body.roleChangeReason);
       const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
 
-      // Lockout guard: an explicit demote must not remove the ONLY remaining Super Admin.
-      if (changesRole && body.isAdmin === false) {
-        const adminCount = await userRepository.count({ isAdmin: true });
-        if (adminCount <= 1) {
-          return res.status(400).json({ error: 'Cannot remove the last remaining Super Admin.' });
-        }
-      }
+      if (body.isAdmin !== undefined) await prepareAdminMutationLock();
 
       const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
       const previousTelemetryLevel = incomingTelemetryLevel
@@ -279,11 +281,24 @@ const handler = baseApi().put(
       await commitWithSessionEnd(
         req,
         async () => {
+          if (body.isAdmin !== undefined) {
+            await lockAdminMutations();
+            if (body.isAdmin === false) await assertCanRemoveFullAdmin(userId, { isAdmin: false });
+          }
           // Read inside the transaction so the reason sees the state the write saw; an
           // outside read can be stale by the time the write commits.
           const snapshot = (await User.findById(userId)
             .select('isAdmin email isBanned disputePending moderation')
             .lean()) as AccountStateSnapshot | null;
+          const changesRoleInTransaction = body.isAdmin !== undefined && body.isAdmin !== !!snapshot?.isAdmin;
+          const roleChangeReason = changesRoleInTransaction ? parseAdminActionReason(body.roleChangeReason) : undefined;
+          if (deniesSelf && changesRoleInTransaction) {
+            await denySelfAdminAction(req, {
+              action: 'user.role.denied',
+              attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
+              target: auditTarget,
+            });
+          }
           const { user: updated, creditAdjustment } = await userService.adminUpdateUser(
             currentUser.id,
             changesCredits ? { ...body, creditReason } : { ...body, currentCredits: undefined, creditReason },
@@ -301,7 +316,7 @@ const handler = baseApi().put(
 
           // Both entries are strict: a failed audit write aborts this transaction, so neither the
           // role change nor the balance change can commit without its record.
-          if (changesRole && snapshot?.isAdmin !== updated?.isAdmin) {
+          if (changesRoleInTransaction && snapshot?.isAdmin !== updated?.isAdmin) {
             await recordAdminActionFromRequest(req, {
               action: updated?.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
               target: auditTarget,

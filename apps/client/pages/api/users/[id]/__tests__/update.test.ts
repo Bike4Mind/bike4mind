@@ -80,6 +80,8 @@ vi.mock('@bike4mind/services', async orig => ({
   userService: {
     // The real block-state rules, so a snapshot missing any block field is caught.
     entersBlockedState: (await orig<typeof import('@bike4mind/services')>()).userService.entersBlockedState,
+    assertAdminUpdatePermissions: (await orig<typeof import('@bike4mind/services')>()).userService
+      .assertAdminUpdatePermissions,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
     // Both stand-ins are real allowlists (not passthrough) so the discarded-field
@@ -109,6 +111,12 @@ vi.mock('@bike4mind/services', async orig => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  prepareAdminMutationLock: vi.fn(),
+  lockAdminMutations: vi.fn(),
+  assertCanRemoveFullAdmin: vi.fn(async () => {
+    if (mockUserFindById()?.isAdmin && (await mockCount()) <= 1)
+      throw Object.assign(new Error('Cannot remove the last remaining full administrator.'), { statusCode: 400 });
+  }),
   adminSettingsRepository: { findBySettingName: vi.fn() },
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: {
@@ -199,6 +207,53 @@ beforeEach(() => {
   txnState.changeRunning = false;
   txnState.snapshotReadInsideChange = undefined;
   mockRequireStepUp.mockReset().mockResolvedValue(undefined);
+});
+
+describe('PUT /api/users/:id/update - delegated authority boundaries', () => {
+  it('rejects a credits-only operator before a sensitive profile can be returned', async () => {
+    const { promise } = run({
+      user: { id: 'operator', adminPermissions: ['credits:adjust'] },
+      body: { creditDelta: 100, creditReason: 'Support compensation' },
+    });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403, message: expect.stringContaining('support:read') });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(mockUserFindById).not.toHaveBeenCalled();
+  });
+
+  it('rejects a support-only empty update before it reaches the service or reads sensitive data', async () => {
+    const { promise } = run({ user: { id: 'support', adminPermissions: ['support:read'] }, body: {} });
+    await expect(promise).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining('settings:manage'),
+    });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(mockUserFindById).not.toHaveBeenCalled();
+  });
+
+  it('rejects support-only credit mutations through the real field authorization helper', async () => {
+    const { promise } = run({
+      user: { id: 'support', adminPermissions: ['support:read'] },
+      body: { creditDelta: 100, creditReason: 'Support compensation' },
+    });
+    await expect(promise).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining('credits:adjust'),
+    });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('passes the authorized actor and parsed mutation to the service with both grants', async () => {
+    const { promise } = run({
+      user: { id: 'operator', adminPermissions: ['support:read', 'credits:adjust'] },
+      body: { creditDelta: 100, creditReason: 'Support compensation' },
+    });
+    await promise;
+    expect(mockAdminUpdateUser).toHaveBeenCalledWith(
+      'operator',
+      expect.objectContaining({ id: 'u1', creditDelta: 100, creditReason: 'Support compensation' }),
+      expect.anything()
+    );
+  });
 });
 
 describe('PUT /api/users/:id/update - changing your own password', () => {
@@ -383,14 +438,12 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
   it('rejects demoting the LAST remaining Super Admin (a different user)', async () => {
     mockUserFindById.mockReturnValue({ isAdmin: true });
     mockCount.mockResolvedValue(1);
-    const { res, promise } = run({
+    const { promise } = run({
       user: ADMIN,
       userId: 'other-admin',
       body: { isAdmin: false, roleChangeReason: 'Left the company' },
     });
-    await promise;
-    expect(res._getStatusCode()).toBe(400);
-    expect(res._getJSONData().error).toMatch(/last remaining/i);
+    await expect(promise).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/last remaining/i) });
     expect(mockAdminUpdateUser).not.toHaveBeenCalled();
   });
 

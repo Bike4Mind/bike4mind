@@ -2,8 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { USER_SECRET_FIELDS } from '@bike4mind/common';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain: any = { use: () => chain, get: (fn: any) => fn };
     return chain;
   },

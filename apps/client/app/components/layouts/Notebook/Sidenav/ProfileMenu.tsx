@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { forwardRef, KeyboardEvent as ReactKeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { Avatar, Box, Chip, CircularProgress, Divider, IconButton, Radio, Stack, Tooltip, Typography } from '@mui/joy';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
@@ -257,7 +258,7 @@ const ProfileMenu = () => {
   const modeToggleEnabled = theme.branding.modeToggleEnabled;
 
   const currentUser = useUser(s => s.currentUser);
-  const isAdmin = useUser(s => s.isAdmin);
+  const isAdmin = useUser(s => canAccessAdmin(s.currentUser));
   const { accounts, selectedAccount, setSelectedAccount, showAccountType } = useAccounts();
 
   const { isFeatureEnabled } = useFeatureEnabled();

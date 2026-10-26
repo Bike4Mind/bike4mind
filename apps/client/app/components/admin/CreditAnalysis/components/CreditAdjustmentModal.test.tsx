@@ -1,3 +1,10 @@
+const permissionState = vi.hoisted(() => ({ currentUser: { isAdmin: true, adminPermissions: [] as string[] } }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: Object.assign((selector: (state: typeof permissionState) => unknown) => selector(permissionState), {
+    getState: () => permissionState,
+  }),
+}));
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';

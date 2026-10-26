@@ -1,7 +1,8 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { userService } from '@bike4mind/services';
 import { EmailEvents } from '@server/utils/eventBus';
@@ -20,35 +21,38 @@ interface RequestQuery {
 }
 
 // Admin-only endpoint to resend email verification for a specific user
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
-  .use(csrfProtection())
-  .post(
-    asyncHandler(async (req, res) => {
-      // Check admin authorization
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+const api = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.use(csrfProtection()).post(
+  asyncHandler(async (req, res) => {
+    // Check admin authorization
+    if (!canAccessAdmin(req.user)) {
+      throw new ForbiddenError('Unauthorized. Admin access required.');
+    }
 
-      const { userId } = req.query as RequestQuery;
+    const { userId } = req.query as RequestQuery;
 
-      if (typeof userId !== 'string' || !userId) {
-        throw new BadRequestError('Invalid user ID');
-      }
+    if (typeof userId !== 'string' || !userId) {
+      throw new BadRequestError('Invalid user ID');
+    }
 
-      await withTransaction(async () => {
-        await userService.resendEmailVerification(
-          { userId },
-          {
-            db: {
-              users: userRepository,
-            },
-            mailer: {
-              sendEmailVerificationEmail: async (user, token) => {
-                const brand = process.env.APP_NAME || '';
-                const logoUrl = getLogoUrl();
-                const verificationLink = generateVerificationLink(token);
+    await withTransaction(async () => {
+      await userService.resendEmailVerification(
+        { userId },
+        {
+          db: {
+            users: userRepository,
+          },
+          mailer: {
+            sendEmailVerificationEmail: async (user, token) => {
+              const brand = process.env.APP_NAME || '';
+              const logoUrl = getLogoUrl();
+              const verificationLink = generateVerificationLink(token);
 
-                const emailBody = `
+              const emailBody = `
       <!DOCTYPE html>
         <html>
           <head>
@@ -103,29 +107,29 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
           </body>
         </html>
       `;
-                await EmailEvents.Send.publish({
-                  to: user.email!,
-                  subject: 'Verify Your Email Address',
-                  body: emailBody,
-                });
-              },
+              await EmailEvents.Send.publish({
+                to: user.email!,
+                subject: 'Verify Your Email Address',
+                body: emailBody,
+              });
             },
-          }
-        );
+          },
+        }
+      );
 
-        // Log admin action
-        await recordAdminActionFromRequest(req, {
-          action: 'user.email.verification_resent',
-          target: { kind: 'user', id: userId, displayName: userId },
-          summary: 'resent email verification',
-        });
-
-        req.logger.info(`Admin ${req.user.id} resent email verification for user ${userId}`);
-
-        return res.json({ message: 'Verification email resent successfully' });
+      // Log admin action
+      await recordAdminActionFromRequest(req, {
+        action: 'user.email.verification_resent',
+        target: { kind: 'user', id: userId, displayName: userId },
+        summary: 'resent email verification',
       });
-    })
-  );
+
+      req.logger.info(`Admin ${req.user.id} resent email verification for user ${userId}`);
+
+      return res.json({ message: 'Verification email resent successfully' });
+    });
+  })
+);
 
 export const config = {
   api: {

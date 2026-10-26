@@ -27,11 +27,11 @@ import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergen
  *    is the failure this whole scoped-settings epic exists to prevent, and it is invisible to any
  *    test that stops at the repository.
  *
- * Only two seams are stubbed, neither under test: `baseApi` (auth middleware) and the lake lookup.
+ * Only two seams are stubbed, neither under test: `adminApi` (auth middleware) and the lake lookup.
  */
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),

@@ -1,6 +1,7 @@
 import { FC } from 'react';
 import { Card } from '@mui/joy';
 import { IOrganizationDocument, WithId } from '@bike4mind/common';
+import { requireOrganizationAdminPermission } from './organizationAdminPermissions';
 import { OrganizationGroupsList } from '../organizations/OrganizationGroupsList';
 
 /**
@@ -24,6 +25,7 @@ const OrganizationGroupMembersCard: FC<{ org: WithId<IOrganizationDocument> }> =
       */}
       <OrganizationGroupsList
         organization={org}
+        beforeMutation={() => requireOrganizationAdminPermission('settings:manage')}
         emptyStateMessage="No group types have been granted to this organization yet. Grant one in the Group Types card above to provision a group."
       />
     </Card>

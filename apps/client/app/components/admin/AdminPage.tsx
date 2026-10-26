@@ -1,3 +1,4 @@
+import { canAccessAdmin, hasAdminPermission } from '@bike4mind/common';
 import AdminSettingsTab from '@client/app/components/admin/AdminSettingsTab';
 import FeedbackTab from '@client/app/components/admin/Feedback';
 import AdminFilesTab from '@client/app/components/admin/FilesTab';
@@ -52,7 +53,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
 import { AdminTab } from './adminSidebarConfig';
-import { canRenderAdminTab } from './adminTabRenderability';
+import { canAccessAdminTab, canRenderAdminTab } from './adminTabRenderability';
 import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
 import { SidebarNav } from './AdminSidebarNav';
@@ -185,21 +186,37 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const { currentUser } = useUser();
 
   // LiveOps Triage tab visibility - show everywhere except fork production environments
-  const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useLiveOpsTriageEnv(!!currentUser?.isAdmin);
+  const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useLiveOpsTriageEnv(
+    hasAdminPermission(currentUser, 'settings:manage')
+  );
   const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
 
   // Selecting a tab this screen cannot draw would leave the content pane blank, so the URL sync
   // treats it as unknown and corrects the store instead.
   const isAdminTabRenderable = useCallback(
     (tab: AdminTab) =>
+      canAccessAdminTab(currentUser, tab) &&
       canRenderAdminTab(tab, {
         enableUserMigration,
         liveOpsTriage: isLiveOpsEnvError ? false : liveopsEnvData?.showTab,
       }),
-    [enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
+    [currentUser, enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
   );
 
-  useAdminTabUrlSync(activeTab, setActiveTab, isAdminTabRenderable);
+  useAdminTabUrlSync(
+    activeTab,
+    setActiveTab,
+    isAdminTabRenderable,
+    hasAdminPermission(currentUser, 'support:read')
+      ? AdminTab.Users
+      : hasAdminPermission(currentUser, 'settings:manage')
+        ? AdminTab.AdminSettings
+        : hasAdminPermission(currentUser, 'keys:revoke')
+          ? AdminTab.EmbedKeys
+          : hasAdminPermission(currentUser, 'credits:adjust')
+            ? AdminTab.CreditAnalytics
+            : AdminTab.PublishedPages
+  );
 
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
@@ -251,7 +268,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   // Get waiting subscribers count for badge
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: currentUser?.isAdmin });
 
-  if (!currentUser?.isAdmin) {
+  if (!canAccessAdmin(currentUser)) {
     return (
       <Box
         sx={{
@@ -264,6 +281,19 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
         <Typography level="h1">Admin Access Only</Typography>
       </Box>
     );
+  }
+
+  if (
+    ![
+      AdminTab.Users,
+      AdminTab.AdminSettings,
+      AdminTab.EmbedKeys,
+      AdminTab.CreditAnalytics,
+      AdminTab.Organizations,
+      AdminTab.PublishedPages,
+    ].some(tab => canAccessAdminTab(currentUser, tab))
+  ) {
+    return <Typography color="warning">Missing permission: support:read</Typography>;
   }
 
   return (
@@ -337,164 +367,304 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               sx={{ flex: 1, minHeight: 0, '& [role="tabpanel"]': { height: '100%', overflow: 'auto' } }}
             >
               <TabPanel value={AdminTab.Dashboard}>
-                {activeTab === AdminTab.Dashboard && <AdminDashboardTab onNavigate={setActiveTab} />}
+                {activeTab === AdminTab.Dashboard && canAccessAdminTab(currentUser, AdminTab.Dashboard) && (
+                  <AdminDashboardTab onNavigate={setActiveTab} />
+                )}
               </TabPanel>
-              <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
+              <TabPanel value={AdminTab.Users}>
+                {activeTab === AdminTab.Users && canAccessAdminTab(currentUser, AdminTab.Users) && <UsersTab />}
+              </TabPanel>
               <TabPanel value={AdminTab.EmailVerification}>
-                {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
+                {activeTab === AdminTab.EmailVerification &&
+                  canAccessAdminTab(currentUser, AdminTab.EmailVerification) && <EmailVerificationTab />}
               </TabPanel>
               <TabPanel value={AdminTab.GrowthPricing} sx={{ padding: 0 }}>
-                {activeTab === AdminTab.GrowthPricing && <AdminGrowthPricingTab />}
+                {activeTab === AdminTab.GrowthPricing && canAccessAdminTab(currentUser, AdminTab.GrowthPricing) && (
+                  <AdminGrowthPricingTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.AdminSettings} sx={{ padding: 0 }}>
-                {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
+                {activeTab === AdminTab.AdminSettings && canAccessAdminTab(currentUser, AdminTab.AdminSettings) && (
+                  <AdminSettingsTab />
+                )}
               </TabPanel>
-              <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
-              <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
-              <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
+              <TabPanel value={AdminTab.WorldTime}>
+                {activeTab === AdminTab.WorldTime && canAccessAdminTab(currentUser, AdminTab.WorldTime) && (
+                  <WorldTimeTab />
+                )}
+              </TabPanel>
+              <TabPanel value={AdminTab.Feedback}>
+                {activeTab === AdminTab.Feedback && canAccessAdminTab(currentUser, AdminTab.Feedback) && (
+                  <FeedbackTab />
+                )}
+              </TabPanel>
+              <TabPanel value={AdminTab.Analytics}>
+                {activeTab === AdminTab.Analytics && canAccessAdminTab(currentUser, AdminTab.Analytics) && (
+                  <AnalyticsTab />
+                )}
+              </TabPanel>
               <TabPanel value={AdminTab.RegistrationInvites} sx={{ padding: 0 }}>
-                {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
+                {activeTab === AdminTab.RegistrationInvites &&
+                  canAccessAdminTab(currentUser, AdminTab.RegistrationInvites) && <InviteCenter />}
               </TabPanel>
               {enableUserMigration && (
-                <TabPanel value={AdminTab.Migrate}>{activeTab === AdminTab.Migrate && <MigrateUsersTab />}</TabPanel>
+                <TabPanel value={AdminTab.Migrate}>
+                  {activeTab === AdminTab.Migrate && canAccessAdminTab(currentUser, AdminTab.Migrate) && (
+                    <MigrateUsersTab />
+                  )}
+                </TabPanel>
               )}
-              <TabPanel value={AdminTab.Modals}>{activeTab === AdminTab.Modals && <ModalsAdminTab />}</TabPanel>
+              <TabPanel value={AdminTab.Modals}>
+                {activeTab === AdminTab.Modals && canAccessAdminTab(currentUser, AdminTab.Modals) && <ModalsAdminTab />}
+              </TabPanel>
               <TabPanel value={AdminTab.WhatsNewModals} sx={{ padding: { xs: 0, sm: 2 } }}>
-                {activeTab === AdminTab.WhatsNewModals && <AdminWhatsNewModalsTab />}
+                {activeTab === AdminTab.WhatsNewModals && canAccessAdminTab(currentUser, AdminTab.WhatsNewModals) && (
+                  <AdminWhatsNewModalsTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.ReleaseNotes}>
-                {activeTab === AdminTab.ReleaseNotes && <AdminReleaseNotesTab />}
+                {activeTab === AdminTab.ReleaseNotes && canAccessAdminTab(currentUser, AdminTab.ReleaseNotes) && (
+                  <AdminReleaseNotesTab />
+                )}
               </TabPanel>
-              <TabPanel value={AdminTab.Files}>{activeTab === AdminTab.Files && <AdminFilesTab />}</TabPanel>
+              <TabPanel value={AdminTab.Files}>
+                {activeTab === AdminTab.Files && canAccessAdminTab(currentUser, AdminTab.Files) && <AdminFilesTab />}
+              </TabPanel>
               <TabPanel value={AdminTab.Documentation} sx={{ padding: 0 }}>
-                {activeTab === AdminTab.Documentation && <DocumentationTab />}
+                {activeTab === AdminTab.Documentation && canAccessAdminTab(currentUser, AdminTab.Documentation) && (
+                  <DocumentationTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.ApiReference}>
-                {activeTab === AdminTab.ApiReference && <ApiReferenceTab />}
+                {activeTab === AdminTab.ApiReference && canAccessAdminTab(currentUser, AdminTab.ApiReference) && (
+                  <ApiReferenceTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.ArchitectureDiagrams}>
-                {activeTab === AdminTab.ArchitectureDiagrams && <ArchitectureDiagramsTab />}
+                {activeTab === AdminTab.ArchitectureDiagrams &&
+                  canAccessAdminTab(currentUser, AdminTab.ArchitectureDiagrams) && <ArchitectureDiagramsTab />}
               </TabPanel>
               <TabPanel value={AdminTab.Dependencies}>
-                {activeTab === AdminTab.Dependencies && <DependenciesTab />}
+                {activeTab === AdminTab.Dependencies && canAccessAdminTab(currentUser, AdminTab.Dependencies) && (
+                  <DependenciesTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.ApiCookbook}>
-                {activeTab === AdminTab.ApiCookbook && <ApiCookbookTab />}
+                {activeTab === AdminTab.ApiCookbook && canAccessAdminTab(currentUser, AdminTab.ApiCookbook) && (
+                  <ApiCookbookTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.Subscribers}>
-                {activeTab === AdminTab.Subscribers && <SubscribersTab />}
+                {activeTab === AdminTab.Subscribers && canAccessAdminTab(currentUser, AdminTab.Subscribers) && (
+                  <SubscribersTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
-                {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
+                {activeTab === AdminTab.PartnerSignupRules &&
+                  canAccessAdminTab(currentUser, AdminTab.PartnerSignupRules) && <PartnerSignupRulesTab />}
               </TabPanel>
               <TabPanel value={AdminTab.Subscriptions}>
-                {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
+                {activeTab === AdminTab.Subscriptions && canAccessAdminTab(currentUser, AdminTab.Subscriptions) && (
+                  <AdminSubscriptions />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.Organizations}>
-                {activeTab === AdminTab.Organizations && <OrganizationsTab />}
+                {activeTab === AdminTab.Organizations && canAccessAdminTab(currentUser, AdminTab.Organizations) && (
+                  <OrganizationsTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.CreditAnalytics}>
-                {activeTab === AdminTab.CreditAnalytics && <CreditAnalyticsTab />}
+                {activeTab === AdminTab.CreditAnalytics && canAccessAdminTab(currentUser, AdminTab.CreditAnalytics) && (
+                  <CreditAnalyticsTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.SecretsRotation}>
-                {activeTab === AdminTab.SecretsRotation && <SecretsRotationTab />}
+                {activeTab === AdminTab.SecretsRotation && canAccessAdminTab(currentUser, AdminTab.SecretsRotation) && (
+                  <SecretsRotationTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.SystemSecrets}>
-                {activeTab === AdminTab.SystemSecrets && <SystemSecretsTab />}
+                {activeTab === AdminTab.SystemSecrets && canAccessAdminTab(currentUser, AdminTab.SystemSecrets) && (
+                  <SystemSecretsTab />
+                )}
               </TabPanel>
               {showLiveOpsTriageTab && (
                 <TabPanel value={AdminTab.LiveOpsTriage}>
-                  {activeTab === AdminTab.LiveOpsTriage && <AdminLiveOpsTriageMultiConfigTab />}
+                  {activeTab === AdminTab.LiveOpsTriage && canAccessAdminTab(currentUser, AdminTab.LiveOpsTriage) && (
+                    <AdminLiveOpsTriageMultiConfigTab />
+                  )}
                 </TabPanel>
               )}
-              <TabPanel value={AdminTab.ModelLogs}>{activeTab === AdminTab.ModelLogs && <ModelLogsTab />}</TabPanel>
+              <TabPanel value={AdminTab.ModelLogs}>
+                {activeTab === AdminTab.ModelLogs && canAccessAdminTab(currentUser, AdminTab.ModelLogs) && (
+                  <ModelLogsTab />
+                )}
+              </TabPanel>
               <TabPanel value={AdminTab.ModelMetrics}>
-                {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
+                {activeTab === AdminTab.ModelMetrics && canAccessAdminTab(currentUser, AdminTab.ModelMetrics) && (
+                  <ModelMetricsTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.ModelLifecycle}>
-                {activeTab === AdminTab.ModelLifecycle && <ModelLifecycleTab />}
+                {activeTab === AdminTab.ModelLifecycle && canAccessAdminTab(currentUser, AdminTab.ModelLifecycle) && (
+                  <ModelLifecycleTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.ContextInspector}>
-                {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}
+                {activeTab === AdminTab.ContextInspector &&
+                  canAccessAdminTab(currentUser, AdminTab.ContextInspector) && <ContextInspectorTab />}
               </TabPanel>
               <TabPanel value={AdminTab.RetrievalRate}>
-                {activeTab === AdminTab.RetrievalRate && <RetrievalRateTab />}
+                {activeTab === AdminTab.RetrievalRate && canAccessAdminTab(currentUser, AdminTab.RetrievalRate) && (
+                  <RetrievalRateTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.EventMetrics}>
-                {activeTab === AdminTab.EventMetrics && <EventMetricsTab />}
+                {activeTab === AdminTab.EventMetrics && canAccessAdminTab(currentUser, AdminTab.EventMetrics) && (
+                  <EventMetricsTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.SlackMetrics}>
-                {activeTab === AdminTab.SlackMetrics && <SlackMetricsPage />}
+                {activeTab === AdminTab.SlackMetrics && canAccessAdminTab(currentUser, AdminTab.SlackMetrics) && (
+                  <SlackMetricsPage />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.ManageGears}>
-                {activeTab === AdminTab.ManageGears && <ManageGearsTab />}
+                {activeTab === AdminTab.ManageGears && canAccessAdminTab(currentUser, AdminTab.ManageGears) && (
+                  <ManageGearsTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.SystemPrompts}>
-                {activeTab === AdminTab.SystemPrompts && <SystemPromptsTab />}
+                {activeTab === AdminTab.SystemPrompts && canAccessAdminTab(currentUser, AdminTab.SystemPrompts) && (
+                  <SystemPromptsTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.IdentityProviders}>
-                {activeTab === AdminTab.IdentityProviders && <IdentityProvidersTab />}
+                {activeTab === AdminTab.IdentityProviders &&
+                  canAccessAdminTab(currentUser, AdminTab.IdentityProviders) && <IdentityProvidersTab />}
               </TabPanel>
               <TabPanel value={AdminTab.OAuthClients} sx={{ padding: 0 }}>
-                {activeTab === AdminTab.OAuthClients && <OAuthClientsTab />}
+                {activeTab === AdminTab.OAuthClients && canAccessAdminTab(currentUser, AdminTab.OAuthClients) && (
+                  <OAuthClientsTab />
+                )}
               </TabPanel>
-              <TabPanel value={AdminTab.AgentOps}>{activeTab === AdminTab.AgentOps && <AgentOpsTab />}</TabPanel>
+              <TabPanel value={AdminTab.AgentOps}>
+                {activeTab === AdminTab.AgentOps && canAccessAdminTab(currentUser, AdminTab.AgentOps) && (
+                  <AgentOpsTab />
+                )}
+              </TabPanel>
               <TabPanel value={AdminTab.AgentExecutions}>
-                {activeTab === AdminTab.AgentExecutions && <AgentExecutionsTab />}
+                {activeTab === AdminTab.AgentExecutions && canAccessAdminTab(currentUser, AdminTab.AgentExecutions) && (
+                  <AgentExecutionsTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.LLMDashboard}>
-                {activeTab === AdminTab.LLMDashboard && <LLMDashboardTab />}
+                {activeTab === AdminTab.LLMDashboard && canAccessAdminTab(currentUser, AdminTab.LLMDashboard) && (
+                  <LLMDashboardTab />
+                )}
               </TabPanel>
-              <TabPanel value={AdminTab.RapidReply}>{activeTab === AdminTab.RapidReply && <RapidReplyTab />}</TabPanel>
+              <TabPanel value={AdminTab.RapidReply}>
+                {activeTab === AdminTab.RapidReply && canAccessAdminTab(currentUser, AdminTab.RapidReply) && (
+                  <RapidReplyTab />
+                )}
+              </TabPanel>
               <TabPanel value={AdminTab.VoiceSettings}>
-                {activeTab === AdminTab.VoiceSettings && <VoiceSettingsTab />}
+                {activeTab === AdminTab.VoiceSettings && canAccessAdminTab(currentUser, AdminTab.VoiceSettings) && (
+                  <VoiceSettingsTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.SecurityDashboard}>
-                {activeTab === AdminTab.SecurityDashboard && <SecurityDashboardMock />}
+                {activeTab === AdminTab.SecurityDashboard &&
+                  canAccessAdminTab(currentUser, AdminTab.SecurityDashboard) && <SecurityDashboardMock />}
               </TabPanel>
-              <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
+              <TabPanel value={AdminTab.Team}>
+                {activeTab === AdminTab.Team && canAccessAdminTab(currentUser, AdminTab.Team) && <Team />}
+              </TabPanel>
               <TabPanel value={AdminTab.SystemHealth}>
-                {activeTab === AdminTab.SystemHealth && <AdminSystemHealthTab />}
+                {activeTab === AdminTab.SystemHealth && canAccessAdminTab(currentUser, AdminTab.SystemHealth) && (
+                  <AdminSystemHealthTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.SlackWorkspaces}>
-                {activeTab === AdminTab.SlackWorkspaces && <SlackWorkspacesTab />}
+                {activeTab === AdminTab.SlackWorkspaces && canAccessAdminTab(currentUser, AdminTab.SlackWorkspaces) && (
+                  <SlackWorkspacesTab />
+                )}
               </TabPanel>
-              <TabPanel value={AdminTab.EmbedKeys}>{activeTab === AdminTab.EmbedKeys && <EmbedKeysTab />}</TabPanel>
+              <TabPanel value={AdminTab.EmbedKeys}>
+                {activeTab === AdminTab.EmbedKeys && canAccessAdminTab(currentUser, AdminTab.EmbedKeys) && (
+                  <EmbedKeysTab />
+                )}
+              </TabPanel>
               <TabPanel value={AdminTab.ToolDefinitions}>
-                {activeTab === AdminTab.ToolDefinitions && <ToolDefinitionsTab />}
+                {activeTab === AdminTab.ToolDefinitions && canAccessAdminTab(currentUser, AdminTab.ToolDefinitions) && (
+                  <ToolDefinitionsTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.EmailMarketing} sx={{ padding: 0 }}>
-                {activeTab === AdminTab.EmailMarketing && <EmailMarketingTab />}
+                {activeTab === AdminTab.EmailMarketing && canAccessAdminTab(currentUser, AdminTab.EmailMarketing) && (
+                  <EmailMarketingTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.WebhookAuditLogs}>
-                {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
+                {activeTab === AdminTab.WebhookAuditLogs &&
+                  canAccessAdminTab(currentUser, AdminTab.WebhookAuditLogs) && <WebhookAuditLogsTab />}
               </TabPanel>
-              <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
+              <TabPanel value={AdminTab.AuditLog}>
+                {activeTab === AdminTab.AuditLog && canAccessAdminTab(currentUser, AdminTab.AuditLog) && (
+                  <AuditLogTab />
+                )}
+              </TabPanel>
               <TabPanel value={AdminTab.GitHubConnection}>
-                {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}
+                {activeTab === AdminTab.GitHubConnection &&
+                  canAccessAdminTab(currentUser, AdminTab.GitHubConnection) && <GitHubConnectionTab />}
               </TabPanel>
               <TabPanel value={AdminTab.HelpAnalytics}>
-                {activeTab === AdminTab.HelpAnalytics && <HelpAnalyticsTab />}
+                {activeTab === AdminTab.HelpAnalytics && canAccessAdminTab(currentUser, AdminTab.HelpAnalytics) && (
+                  <HelpAnalyticsTab />
+                )}
               </TabPanel>
-              <TabPanel value={AdminTab.RateLimits}>{activeTab === AdminTab.RateLimits && <RateLimitsTab />}</TabPanel>
-              <TabPanel value={AdminTab.DlqReplay}>{activeTab === AdminTab.DlqReplay && <DlqReplayTab />}</TabPanel>
+              <TabPanel value={AdminTab.RateLimits}>
+                {activeTab === AdminTab.RateLimits && canAccessAdminTab(currentUser, AdminTab.RateLimits) && (
+                  <RateLimitsTab />
+                )}
+              </TabPanel>
+              <TabPanel value={AdminTab.DlqReplay}>
+                {activeTab === AdminTab.DlqReplay && canAccessAdminTab(currentUser, AdminTab.DlqReplay) && (
+                  <DlqReplayTab />
+                )}
+              </TabPanel>
               <TabPanel value={AdminTab.ApiKeyScopePreflight}>
-                {activeTab === AdminTab.ApiKeyScopePreflight && <ApiKeyScopePreflightTab />}
+                {activeTab === AdminTab.ApiKeyScopePreflight &&
+                  canAccessAdminTab(currentUser, AdminTab.ApiKeyScopePreflight) && <ApiKeyScopePreflightTab />}
               </TabPanel>
               <TabPanel value={AdminTab.IntegrationHealth}>
-                {activeTab === AdminTab.IntegrationHealth && <IntegrationHealthTab />}
+                {activeTab === AdminTab.IntegrationHealth &&
+                  canAccessAdminTab(currentUser, AdminTab.IntegrationHealth) && <IntegrationHealthTab />}
               </TabPanel>
               <TabPanel value={AdminTab.IntegrationDemand}>
-                {activeTab === AdminTab.IntegrationDemand && <IntegrationDemandTab />}
+                {activeTab === AdminTab.IntegrationDemand &&
+                  canAccessAdminTab(currentUser, AdminTab.IntegrationDemand) && <IntegrationDemandTab />}
               </TabPanel>
-              <TabPanel value={AdminTab.SreAgent}>{activeTab === AdminTab.SreAgent && <SreAgentTab />}</TabPanel>
+              <TabPanel value={AdminTab.SreAgent}>
+                {activeTab === AdminTab.SreAgent && canAccessAdminTab(currentUser, AdminTab.SreAgent) && (
+                  <SreAgentTab />
+                )}
+              </TabPanel>
               <TabPanel value={AdminTab.SecOpsTriage}>
-                {activeTab === AdminTab.SecOpsTriage && <SecopsTriageTab />}
+                {activeTab === AdminTab.SecOpsTriage && canAccessAdminTab(currentUser, AdminTab.SecOpsTriage) && (
+                  <SecopsTriageTab />
+                )}
               </TabPanel>
               <TabPanel value={AdminTab.PublishedPages}>
-                {activeTab === AdminTab.PublishedPages && <PublishedArtifactsTab />}
+                {activeTab === AdminTab.PublishedPages && canAccessAdminTab(currentUser, AdminTab.PublishedPages) && (
+                  <PublishedArtifactsTab />
+                )}
               </TabPanel>
-              <TabPanel value={AdminTab.PrReport}>{activeTab === AdminTab.PrReport && <PrReportTab />}</TabPanel>
+              <TabPanel value={AdminTab.PrReport}>
+                {activeTab === AdminTab.PrReport && canAccessAdminTab(currentUser, AdminTab.PrReport) && (
+                  <PrReportTab />
+                )}
+              </TabPanel>
             </Tabs>
           </Grid>
         </Grid>

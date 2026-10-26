@@ -1,7 +1,8 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -19,83 +20,86 @@ import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
  * a ceiling below a live counter wedges the key until the window rolls over, or
  * until reset-rate-limit clears it.
  */
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
-  .use(csrfProtection())
-  .patch(
-    asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+const api = adminApi({
+  adminPermissions: { PATCH: 'settings:manage' },
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.use(csrfProtection()).patch(
+  asyncHandler(async (req, res) => {
+    if (!canAccessAdmin(req.user)) {
+      throw new ForbiddenError('Unauthorized. Admin access required.');
+    }
 
-      const { id } = req.query as { id?: string | string[] };
-      if (typeof id !== 'string' || !id) {
-        throw new BadRequestError('Invalid API key ID');
-      }
+    const { id } = req.query as { id?: string | string[] };
+    if (typeof id !== 'string' || !id) {
+      throw new BadRequestError('Invalid API key ID');
+    }
 
-      const { requestsPerMinute, requestsPerDay } = (req.body ?? {}) as {
-        requestsPerMinute?: number;
-        requestsPerDay?: number;
-      };
+    const { requestsPerMinute, requestsPerDay } = (req.body ?? {}) as {
+      requestsPerMinute?: number;
+      requestsPerDay?: number;
+    };
 
-      const apiKey = await userApiKeyRepository.findById(id);
-      if (!apiKey) {
-        throw new NotFoundError('API key not found');
-      }
+    const apiKey = await userApiKeyRepository.findById(id);
+    if (!apiKey) {
+      throw new NotFoundError('API key not found');
+    }
 
-      const updated = await userApiKeyService.updateApiKeyRateLimit(
-        apiKey.userId,
-        { keyId: apiKey.id, requestsPerMinute, requestsPerDay },
-        { db: { userApiKeys: userApiKeyRepository } }
-      );
+    const updated = await userApiKeyService.updateApiKeyRateLimit(
+      apiKey.userId,
+      { keyId: apiKey.id, requestsPerMinute, requestsPerDay },
+      { db: { userApiKeys: userApiKeyRepository } }
+    );
 
-      // Attributed to the key owner. Best-effort for the same reason as the
-      // reset route: the write already landed, and an orphaned key (owner doc
-      // deleted) is exactly the case an admin edit exists for.
-      await logEventSafe(
-        {
-          userId: apiKey.userId,
-          type: UserApiKeyEvents.UPDATED,
-          metadata: {
-            keyId: apiKey.id,
-            name: updated.name,
-            updatedFields: [
-              ...(requestsPerMinute !== undefined ? ['rateLimit.requestsPerMinute'] : []),
-              ...(requestsPerDay !== undefined ? ['rateLimit.requestsPerDay'] : []),
-            ],
-          },
+    // Attributed to the key owner. Best-effort for the same reason as the
+    // reset route: the write already landed, and an orphaned key (owner doc
+    // deleted) is exactly the case an admin edit exists for.
+    await logEventSafe(
+      {
+        userId: apiKey.userId,
+        type: UserApiKeyEvents.UPDATED,
+        metadata: {
+          keyId: apiKey.id,
+          name: updated.name,
+          updatedFields: [
+            ...(requestsPerMinute !== undefined ? ['rateLimit.requestsPerMinute'] : []),
+            ...(requestsPerDay !== undefined ? ['rateLimit.requestsPerDay'] : []),
+          ],
         },
-        { ability: req.ability },
-        req.logger,
-        `API key ${apiKey.id}`
-      );
+      },
+      { ability: req.ability },
+      req.logger,
+      `API key ${apiKey.id}`
+    );
 
-      await recordAdminActionFromRequest(req, {
-        action: 'user.api_key.rate_limit_updated',
-        target: { kind: 'apiKey', id: apiKey.id, displayName: updated.name },
-        summary: `set API key rate limits to ${updated.rateLimit.requestsPerMinute}/min, ${updated.rateLimit.requestsPerDay}/day`,
-        changes: [
-          {
-            field: 'rateLimit.requestsPerMinute',
-            before: apiKey.rateLimit?.requestsPerMinute ?? null,
-            after: updated.rateLimit.requestsPerMinute,
-          },
-          {
-            field: 'rateLimit.requestsPerDay',
-            before: apiKey.rateLimit?.requestsPerDay ?? null,
-            after: updated.rateLimit.requestsPerDay,
-          },
-        ],
-        details: { ownerUserId: apiKey.userId },
-      });
+    await recordAdminActionFromRequest(req, {
+      action: 'user.api_key.rate_limit_updated',
+      target: { kind: 'apiKey', id: apiKey.id, displayName: updated.name },
+      summary: `set API key rate limits to ${updated.rateLimit.requestsPerMinute}/min, ${updated.rateLimit.requestsPerDay}/day`,
+      changes: [
+        {
+          field: 'rateLimit.requestsPerMinute',
+          before: apiKey.rateLimit?.requestsPerMinute ?? null,
+          after: updated.rateLimit.requestsPerMinute,
+        },
+        {
+          field: 'rateLimit.requestsPerDay',
+          before: apiKey.rateLimit?.requestsPerDay ?? null,
+          after: updated.rateLimit.requestsPerDay,
+        },
+      ],
+      details: { ownerUserId: apiKey.userId },
+    });
 
-      req.logger.info(
-        `Admin ${req.user.username} (${req.user.id}) set rate limits ${updated.rateLimit.requestsPerMinute}/min, ` +
-          `${updated.rateLimit.requestsPerDay}/day for API key ${apiKey.id} (owner ${apiKey.userId})`
-      );
+    req.logger.info(
+      `Admin ${req.user.username} (${req.user.id}) set rate limits ${updated.rateLimit.requestsPerMinute}/min, ` +
+        `${updated.rateLimit.requestsPerDay}/day for API key ${apiKey.id} (owner ${apiKey.userId})`
+    );
 
-      return res.status(200).json(updated);
-    })
-  );
+    return res.status(200).json(updated);
+  })
+);
 
 export const config = {
   api: {

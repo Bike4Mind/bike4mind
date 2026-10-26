@@ -9,14 +9,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const handlers = vi.hoisted(() => ({ post: null as null | ((req: any, res: any) => unknown) }));
 
-vi.mock('@server/middlewares/baseApi', () => {
+vi.mock('@server/middlewares/adminApi', () => {
   const chain: any = {
     post: (fn: any) => {
       handlers.post = fn;
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return { adminApi: () => chain };
 });
 
 const mockCreateOrUpdateWithCredentials = vi.fn();

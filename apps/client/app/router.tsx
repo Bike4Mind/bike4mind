@@ -1182,7 +1182,7 @@ export const adminRoute = createRoute({
     if (legacyUserLink) throw redirect(legacyUserLink);
   },
   component: () => (
-    <RestrictedPage requireAdmin={true}>
+    <RestrictedPage requireAdminAccess>
       {/* These providers are not usually needed in an unprotected page. This prevents unnecessary API fetch */}
       <ProviderBundle>
         <Suspense fallback={<RouteLoadingFallback />}>

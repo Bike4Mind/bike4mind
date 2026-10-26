@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { organizationRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -24,9 +25,10 @@ interface RequestQuery {
 // cron that auto-cancels expired grants based on `periodEndsAt`. Already-
 // granted credits are intentionally NOT reclaimed here - the org keeps any
 // balance it has spent or accrued. Both behaviours are deliberate.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const api = adminApi({ adminPermissions: { POST: 'credits:adjust' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

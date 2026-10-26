@@ -2,7 +2,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 
 const PERSISTED_ADMIN_ROLE = Symbol('persistedAdminRole');
 
-type AdminFlagged = { isAdmin?: boolean };
+type AdminFlagged = { isAdmin?: boolean | null; adminPermissions?: readonly string[] | null };
 
 type ApiKeyRequest = {
   user?: { id: string };
@@ -18,8 +18,17 @@ export function apiKeyGrantsAdmin(scopes: readonly string[] | undefined): boolea
  * `get('isAdmin')` and `toJSON()` still see the stored role and nothing is written back.
  */
 export function withholdAdminRole<T extends AdminFlagged>(user: T): T {
-  if (!user.isAdmin) return user;
-  Object.defineProperty(user, PERSISTED_ADMIN_ROLE, { value: true, configurable: true });
+  if (!user.isAdmin && !user.adminPermissions?.length) return user;
+  Object.defineProperty(user, PERSISTED_ADMIN_ROLE, { value: !!user.isAdmin, configurable: true });
+  Object.defineProperty(user, 'adminPermissions', {
+    configurable: true,
+    enumerable: true,
+    get: () => [],
+    set: (value: unknown) => {
+      const doc = user as T & { set?: (path: string, value: unknown) => unknown };
+      if (typeof doc.set === 'function') doc.set('adminPermissions', value);
+    },
+  });
   Object.defineProperty(user, 'isAdmin', {
     configurable: true,
     enumerable: true,
@@ -38,7 +47,7 @@ export function withholdAdminRole<T extends AdminFlagged>(user: T): T {
  * behind a key that is separately confined to a narrow scope. Never a stand-in for req.user.isAdmin.
  */
 export function persistedIsAdmin(user: AdminFlagged): boolean {
-  return PERSISTED_ADMIN_ROLE in user || !!user.isAdmin;
+  return PERSISTED_ADMIN_ROLE in user ? !!Reflect.get(user, PERSISTED_ADMIN_ROLE) : !!user.isAdmin;
 }
 
 export function adminRoleWithheldFor(apiKeyInfo: { scopes: readonly string[] } | undefined): boolean {

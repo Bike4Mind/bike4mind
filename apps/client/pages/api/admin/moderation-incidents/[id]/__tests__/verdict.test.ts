@@ -59,8 +59,8 @@ vi.mock('sst', () => ({
   },
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({
     post: (h: (...args: unknown[]) => unknown) => h,
   }),
 }));

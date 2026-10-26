@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ensureAdmin, NotFoundError, BadRequestError, isZodError } from '@bike4mind/server-utils/utils/errors';
 import { ModalModel } from '@bike4mind/database/social';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -67,11 +68,15 @@ function zodResponse(res: Response, error: unknown): Response | null {
   return res.status(400).json({ error: 'Invalid request', details: issues, validationErrors: issues });
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .use(rateLimit({ limit: ADMIN_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   // Read the full modal INCLUDING its raw variants map (for admin editing).
   .get(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
     const modalId = typeof req.query.modalId === 'string' ? req.query.modalId : '';
     if (!modalId) throw new BadRequestError('modalId query param is required');
 
@@ -83,7 +88,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   // Create or replace the variants map for a modal.
   .put(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
     try {
       const { modalId, variants } = UpdateVariantsSchema.parse(req.body);
 
@@ -120,7 +125,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   // Clear the variants map (revert the modal to legacy single-content mode).
   .delete(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
     try {
       const { modalId } = ModalIdBodySchema.parse(req.body);
 

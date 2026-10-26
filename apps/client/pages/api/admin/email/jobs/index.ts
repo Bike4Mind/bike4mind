@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { emailJobRepository, emailTemplateRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { assertParseableDate } from '@server/utils/dateParam';
@@ -18,9 +19,13 @@ const RecipientFilterSchema = z
   })
   .optional();
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
@@ -55,7 +60,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json(result);
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

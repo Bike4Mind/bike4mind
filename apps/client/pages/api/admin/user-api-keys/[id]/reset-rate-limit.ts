@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -35,67 +36,70 @@ import { userApiKeyService } from '@bike4mind/services';
  * fails to clear, `resetApiKeyRateLimit` itself rejects rather than
  * returning a result this route could report as a 200 success.
  */
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
-  .use(csrfProtection())
-  .post(
-    asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+const api = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.use(csrfProtection()).post(
+  asyncHandler(async (req, res) => {
+    if (!canAccessAdmin(req.user)) {
+      throw new ForbiddenError('Unauthorized. Admin access required.');
+    }
 
-      const { id } = req.query as { id?: string | string[] };
-      if (typeof id !== 'string' || !id) {
-        throw new BadRequestError('Invalid API key ID');
-      }
+    const { id } = req.query as { id?: string | string[] };
+    if (typeof id !== 'string' || !id) {
+      throw new BadRequestError('Invalid API key ID');
+    }
 
-      const apiKey = await userApiKeyRepository.findById(id);
-      if (!apiKey) {
-        throw new NotFoundError('API key not found');
-      }
+    const apiKey = await userApiKeyRepository.findById(id);
+    if (!apiKey) {
+      throw new NotFoundError('API key not found');
+    }
 
-      const resetUsage = await resetApiKeyRateLimit(apiKey.id, { alsoResetManagement: true, logger: req.logger });
-      const rateLimit = apiKey.rateLimit ?? userApiKeyService.API_KEY_RATE_LIMIT_DEFAULTS;
-      const lockout = {
-        request:
-          resetUsage.request && evaluateCounterLockout(resetUsage.request, resolveCounterLimit('request', rateLimit)),
-        management:
-          resetUsage.management &&
-          evaluateCounterLockout(resetUsage.management, resolveCounterLimit('management', rateLimit)),
-      };
+    const resetUsage = await resetApiKeyRateLimit(apiKey.id, { alsoResetManagement: true, logger: req.logger });
+    const rateLimit = apiKey.rateLimit ?? userApiKeyService.API_KEY_RATE_LIMIT_DEFAULTS;
+    const lockout = {
+      request:
+        resetUsage.request && evaluateCounterLockout(resetUsage.request, resolveCounterLimit('request', rateLimit)),
+      management:
+        resetUsage.management &&
+        evaluateCounterLockout(resetUsage.management, resolveCounterLimit('management', rateLimit)),
+    };
 
-      // Attributed to the key owner; resetBy records the acting admin.
-      // Best-effort: the reset already happened, and the counter write throws
-      // for an orphaned key (owner doc deleted) - the exact case an admin
-      // reset exists for.
-      await logEventSafe(
-        {
-          userId: apiKey.userId,
-          type: UserApiKeyEvents.RATE_LIMIT_RESET,
-          metadata: {
-            keyId: apiKey.id,
-            name: apiKey.name,
-            resetBy: req.user.id,
-          },
+    // Attributed to the key owner; resetBy records the acting admin.
+    // Best-effort: the reset already happened, and the counter write throws
+    // for an orphaned key (owner doc deleted) - the exact case an admin
+    // reset exists for.
+    await logEventSafe(
+      {
+        userId: apiKey.userId,
+        type: UserApiKeyEvents.RATE_LIMIT_RESET,
+        metadata: {
+          keyId: apiKey.id,
+          name: apiKey.name,
+          resetBy: req.user.id,
         },
-        { ability: req.ability },
-        req.logger,
-        `API key ${apiKey.id}`
-      );
+      },
+      { ability: req.ability },
+      req.logger,
+      `API key ${apiKey.id}`
+    );
 
-      await recordAdminActionFromRequest(req, {
-        action: 'user.api_key.rate_limit_reset',
-        target: { kind: 'apiKey', id: apiKey.id, displayName: apiKey.name },
-        summary: 'reset API key rate-limit counters',
-        details: { ownerUserId: apiKey.userId, lockout },
-      });
+    await recordAdminActionFromRequest(req, {
+      action: 'user.api_key.rate_limit_reset',
+      target: { kind: 'apiKey', id: apiKey.id, displayName: apiKey.name },
+      summary: 'reset API key rate-limit counters',
+      details: { ownerUserId: apiKey.userId, lockout },
+    });
 
-      req.logger.info(
-        `Admin ${req.user.username} (${req.user.id}) reset rate-limit counters for API key ${apiKey.id} (owner ${apiKey.userId})`
-      );
+    req.logger.info(
+      `Admin ${req.user.username} (${req.user.id}) reset rate-limit counters for API key ${apiKey.id} (owner ${apiKey.userId})`
+    );
 
-      return res.status(200).json({ success: true, id: apiKey.id, lockout });
-    })
-  );
+    return res.status(200).json({ success: true, id: apiKey.id, lockout });
+  })
+);
 
 export const config = {
   api: {

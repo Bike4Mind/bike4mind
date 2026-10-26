@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import type { Request, Response } from 'express';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardFinding } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
@@ -13,9 +14,13 @@ import { ApiKeyScope } from '@bike4mind/common';
 const logger = new Logger({ metadata: { service: 'cloud-scan-api' } });
 const sqsClient = new SQSClient({});
 
-const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi<Request, Response>({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 
@@ -29,7 +34,7 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
     return res.status(200).json(snapshot);
   })
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 

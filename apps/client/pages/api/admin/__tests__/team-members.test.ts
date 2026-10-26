@@ -9,8 +9,8 @@ const { mockFind, mockFindAllActive, mockFindByPhone, mockCreate, mockUpdate } =
   mockUpdate: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain: Record<string, unknown> = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),

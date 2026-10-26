@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
 import { Request } from 'express';
-import { baseApi } from '@client/server/middlewares/baseApi';
+import { adminApi } from '@client/server/middlewares/adminApi';
 import { agentOpsSettingsRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
@@ -41,9 +42,13 @@ async function fetchSelectableModels() {
   return getAvailableModels(buildApiKeyTable(coreKeys), modelCatalogListingOptions());
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
-    if (!req.user!.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 
@@ -68,7 +73,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     res.json(settings);
   })
   .put<Request<{}, {}, CreateUpdateSettingsRequest>>(async (req, res) => {
-    if (!req.user!.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 
@@ -104,7 +109,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     res.json(updatedSettings);
   })
   .post<Request<{}, {}, AddVersionRequest>>(async (req, res) => {
-    if (!req.user!.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 

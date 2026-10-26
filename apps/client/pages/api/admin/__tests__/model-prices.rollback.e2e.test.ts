@@ -12,8 +12,8 @@ import { ModelPrice, generateModelPriceSeed, modelPriceRepository } from '@bike4
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method: string }, res: unknown) => handlers[req.method]?.(req, res), {
       use: () => chain,

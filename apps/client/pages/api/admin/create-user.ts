@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope, usernameSchema, MAX_STORAGE_LIMIT_MB, DEFAULT_STORAGE_LIMIT_MB } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import {
   userRepository,
   pendingOtcTokenRepository,
@@ -16,7 +17,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const createUserSchema = z.object({
   username: usernameSchema,
@@ -26,6 +27,7 @@ const createUserSchema = z.object({
   // backward compat; if omitted, an unusable random value is stored.
   password: z.string().min(6, 'Password must be at least 6 characters').optional(),
   isAdmin: z.boolean().prefault(false),
+  roleChangeReason: z.unknown().optional(),
   level: z.enum(['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser']).prefault('DemoUser'),
   initialCredits: z.number().min(0).prefault(0),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).prefault(DEFAULT_STORAGE_LIMIT_MB),
@@ -44,9 +46,10 @@ const toCreateUserError = (error: unknown) => {
   return new BadRequestError('Failed to create user');
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(
   asyncHandler<{}, unknown, CreateUserInput>(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
@@ -66,6 +69,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       }
       throw new BadRequestError('Invalid input data');
     }
+
+    if (validatedData.initialCredits > 0) requireAdminPermission(req, 'credits:adjust');
+    const roleChangeReason = validatedData.isAdmin ? parseAdminActionReason(validatedData.roleChangeReason) : undefined;
 
     // A new admin account is an admin-role grant: session-only, and a browser session must have
     // recently re-verified. A non-admin account takes over no existing account, so it is ungated.
@@ -125,6 +131,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           tags: validatedData.tags,
         },
       });
+      if (validatedData.isAdmin) {
+        await recordAdminActionFromRequest(req, {
+          action: 'user.role.admin_granted',
+          target: { kind: 'user', id: created.id, displayName: created.email ?? created.username },
+          summary: 'granted the admin role to a newly created user',
+          reason: roleChangeReason,
+          changes: [{ field: 'isAdmin', before: false, after: true }],
+        });
+      }
       return created;
     });
 

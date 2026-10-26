@@ -18,6 +18,7 @@ import {
   grantablePermissions,
   generateInviteToken,
   isOrgMember,
+  hasAdminPermission,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -102,7 +103,8 @@ export const createInvite = async (
       // Mirrors authorizeAndValidate, which returns 'Group not found' for a wrong-org group for
       // exactly this reason. A member who merely lacks group-management authority still gets 403.
       // See sharingService/accept.ts for the redemption path.
-      if (!isOrgMember(user, organization)) throw new BadRequestError('Document not found');
+      if (!hasAdminPermission(user, 'settings:manage') && !isOrgMember(user, organization))
+        throw new BadRequestError('Document not found');
       assertCanManageOrgGroups(user, organization);
       doc = group;
       name = group.name;
@@ -295,7 +297,8 @@ const inviteToOrg = async (
   // as "org not found" so the org's existence is not confirmed to outsiders. assertCanManageOrgGroups
   // then raises the bar -- billing owner, adminUserIds org admin, or platform admin only -- because
   // minting an org invite spends a seat (same authority as group-invite minting).
-  if (!isOrgMember(user, organization)) throw new BadRequestError('Organization not found');
+  if (!hasAdminPermission(user, 'settings:manage') && !isOrgMember(user, organization))
+    throw new BadRequestError('Organization not found');
   assertCanManageOrgGroups(user, organization);
 
   // We add 1 to include the owner of the organization

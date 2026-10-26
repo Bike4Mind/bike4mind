@@ -1,11 +1,15 @@
+import { ADMIN_PERMISSIONS } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import type { ReactNode } from 'react';
 import { FullUsersView } from './FullUsersView';
 
+const actor = vi.hoisted(() => ({
+  currentUser: { id: 'admin-1', isAdmin: true, adminPermissions: [] as string[], mfa: { totpEnabled: true } },
+}));
 const mutations = vi.hoisted(() => ({ updateMutate: vi.fn(), loginAsMutate: vi.fn(), navigate: vi.fn() }));
 
 // Only the Roles column is exercised here (it owns the Custom Tags control that #2441 is
@@ -31,6 +35,8 @@ vi.mock('../SpicyUserActions', () => ({
   ),
 }));
 vi.mock('../Details/GrantSubscriptionModal', () => ({ default: () => null }));
+vi.mock('../AdminUserKeyRevocation', () => ({ AdminUserKeyRevocation: () => null }));
+vi.mock('../AdminPermissionsEditor', () => ({ AdminPermissionsEditor: () => null }));
 vi.mock('../ProductAccess', () => ({ default: () => null }));
 vi.mock('../SystemMessageModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
@@ -38,20 +44,17 @@ vi.mock('../ComplianceModal', () => ({ useComplianceModal: () => vi.fn() }));
 // The real panel is lazy-loaded; stub it so the tab wiring is what this file exercises.
 vi.mock('../Activity/UserActivityPanel', () => ({ default: () => <div data-testid="user-activity-panel" /> }));
 vi.mock('@client/app/hooks/data/user', () => ({
-  // Succeeds at once, so the caller's per-call onSuccess is what the delete tests observe.
-  useDeleteUser: () => ({
-    mutate: (_variables: unknown, options?: { onSuccess?: () => void }) => options?.onSuccess?.(),
-  }),
+  // Resolves at once, so the caller's post-delete callback is what the delete tests observe.
+  useDeleteUser: () => ({ mutateAsync: async () => undefined }),
   useUpdateUser: () => ({ mutate: mutations.updateMutate, isPending: false }),
   useLoginAsUser: () => ({ mutate: mutations.loginAsMutate, isPending: false }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (
-    selector: (state: {
-      currentUser: { id: string; mfa: { totpEnabled: boolean } };
-      setCurrentUser: () => void;
-    }) => unknown
-  ) => selector({ currentUser: { id: 'admin-1', mfa: { totpEnabled: true } }, setCurrentUser: () => {} }),
+  useUser: Object.assign(
+    (selector: (state: typeof actor & { setCurrentUser: () => void }) => unknown) =>
+      selector({ ...actor, setCurrentUser: () => {} }),
+    { getState: () => ({ ...actor, setCurrentUser: () => {} }) }
+  ),
 }));
 vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
   useAdminSettings: () => ({ settings: {} }),
@@ -289,7 +292,7 @@ describe('FullUsersView - page danger zone', () => {
     expect(screen.getByTestId('user-profile-tab-admin')).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('tells its host once the user is deleted', () => {
+  it('tells its host once the user is deleted', async () => {
     const onUserDeleted = vi.fn();
     render(<FullUsersView index={0} user={savedUser()} variant="page" onUserDeleted={onUserDeleted} />, {
       wrapper: TestWrapper,
@@ -297,7 +300,7 @@ describe('FullUsersView - page danger zone', () => {
 
     fireEvent.click(screen.getByTestId('stub-delete'));
 
-    expect(onUserDeleted).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onUserDeleted).toHaveBeenCalledTimes(1));
   });
 
   it('confirms a staged ban before saving it', () => {
@@ -336,5 +339,51 @@ describe('FullUsersView - card in the Users list', () => {
     addCustomTag('unsaved-tag');
 
     expect(screen.getByTestId('user-card-open-profile-btn')).toBeDisabled();
+  });
+});
+
+describe('privileged impersonation targets', () => {
+  it.each([{ isAdmin: true }, { isAdmin: false, adminPermissions: ['support:read'] }])(
+    'requires a full actor for admin target %j',
+    target => {
+      actor.currentUser = {
+        id: 'delegate',
+        isAdmin: false,
+        adminPermissions: ['support:read', 'users:impersonate'],
+        mfa: { totpEnabled: true },
+      };
+      render(<FullUsersView index={0} user={{ ...savedUser(), ...target } as AdminUserListItem} />, {
+        wrapper: TestWrapper,
+      });
+      expect(screen.getByTestId('login-as-user-btn')).toBeDisabled();
+      expect(
+        screen.getByText('Full admin access is required to impersonate users with admin access.')
+      ).toBeInTheDocument();
+    }
+  );
+  it('keeps delegated impersonation available for ordinary users', () => {
+    actor.currentUser = {
+      id: 'delegate',
+      isAdmin: false,
+      adminPermissions: ['support:read', 'users:impersonate'],
+      mfa: { totpEnabled: true },
+    };
+    render(<FullUsersView index={0} user={savedUser()} />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('login-as-user-btn')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('login-as-user-btn'));
+    expect(screen.getByTestId('login-as-mfa-modal')).toBeInTheDocument();
+  });
+  it.each([true, false])('allows full actors with legacy isAdmin=%s to impersonate admin targets', legacy => {
+    actor.currentUser = {
+      id: 'full',
+      isAdmin: legacy,
+      adminPermissions: legacy ? [] : [...ADMIN_PERMISSIONS],
+      mfa: { totpEnabled: true },
+    };
+    render(
+      <FullUsersView index={0} user={{ ...savedUser(), adminPermissions: ['settings:manage'] } as AdminUserListItem} />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('login-as-user-btn')).toBeEnabled();
   });
 });

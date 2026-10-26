@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 /**
  * LiveOps Triage Config - Manual Trigger API
  *
@@ -14,7 +15,7 @@ import {
   liveopsTriageConfigAuditLogRepository,
 } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
@@ -35,9 +36,10 @@ const TriggerRequestSchema = z.object({
   lookbackHours: LiveOpsTriageJobMessageSchema.shape.lookbackHours,
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
   try {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

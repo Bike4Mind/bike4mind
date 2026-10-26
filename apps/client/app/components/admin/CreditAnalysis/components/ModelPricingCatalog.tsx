@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -183,6 +185,7 @@ const bandConfirmToken = (err: unknown): string | null => {
  * All writes are append-only rows via /api/admin/model-prices.
  */
 export const ModelPricingCatalog: React.FC = () => {
+  const canManage = useUser(state => hasAdminPermission(state.currentUser, 'settings:manage'));
   const [rows, setRows] = useState<PriceRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -235,6 +238,7 @@ export const ModelPricingCatalog: React.FC = () => {
   // Drafts are held in the DISPLAYED unit (per 1M for token rows), so what the
   // editor shows always matches the table it was opened from.
   const openReprice = (row: PriceRow) => {
+    if (!hasAdminPermission(useUser.getState().currentUser, 'settings:manage')) return;
     const drafts: Record<string, Record<string, string>> = {};
     for (const [threshold, tier] of Object.entries(row.pricing)) {
       drafts[threshold] = {};
@@ -256,6 +260,7 @@ export const ModelPricingCatalog: React.FC = () => {
   };
 
   const submitReprice = async (waiver?: string) => {
+    if (!hasAdminPermission(useUser.getState().currentUser, 'settings:manage')) return;
     if (!repriceTarget) return;
     setIsSaving(true);
     setError(null);
@@ -286,6 +291,7 @@ export const ModelPricingCatalog: React.FC = () => {
   };
 
   const submitRevert = async () => {
+    if (!hasAdminPermission(useUser.getState().currentUser, 'settings:manage')) return;
     if (!revertTarget) return;
     setIsSaving(true);
     setError(null);
@@ -379,6 +385,7 @@ export const ModelPricingCatalog: React.FC = () => {
       ) : (
         // Viewport-relative so the catalog fills the tab; scroll stays internal.
         <Sheet sx={{ maxHeight: 'calc(100vh - 240px)', minHeight: 320, overflow: 'auto' }}>
+          {!canManage && <Typography color="warning">Missing permission: settings:manage</Typography>}
           <Table stickyHeader hoverRow size="sm" data-testid="model-pricing-table">
             <thead>
               <tr>
@@ -442,6 +449,7 @@ export const ModelPricingCatalog: React.FC = () => {
                           size="sm"
                           title="Reprice"
                           aria-label={`Reprice ${row.modelId}`}
+                          disabled={!canManage}
                           onClick={() => openReprice(row)}
                           data-testid={`model-pricing-reprice-${row.modelId}-${row.unit}`}
                         >
@@ -461,7 +469,10 @@ export const ModelPricingCatalog: React.FC = () => {
                             size="sm"
                             title="Revert to seed pricing"
                             aria-label={`Revert ${row.modelId} to seed pricing`}
-                            onClick={() => setRevertTarget(row)}
+                            disabled={!canManage}
+                            onClick={() => {
+                              if (canManage) setRevertTarget(row);
+                            }}
                             data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
                           >
                             <ReplayIcon fontSize="small" />
@@ -477,7 +488,7 @@ export const ModelPricingCatalog: React.FC = () => {
         </Sheet>
       )}
 
-      <Modal open={repriceTarget !== null} onClose={() => setRepriceTarget(null)}>
+      <Modal open={repriceTarget !== null && canManage} onClose={() => setRepriceTarget(null)}>
         <ModalDialog sx={{ minWidth: 420 }} data-testid="reprice-modal">
           <Typography level="title-md">Reprice {repriceTarget?.modelId}</Typography>
           {error && (
@@ -557,7 +568,7 @@ export const ModelPricingCatalog: React.FC = () => {
         </ModalDialog>
       </Modal>
 
-      <Modal open={revertTarget !== null} onClose={() => setRevertTarget(null)}>
+      <Modal open={revertTarget !== null && canManage} onClose={() => setRevertTarget(null)}>
         <ModalDialog data-testid="revert-modal">
           <Typography level="title-md">Revert {revertTarget?.modelId} to seed pricing?</Typography>
           {error && (

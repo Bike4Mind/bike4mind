@@ -8,8 +8,8 @@ import {
   ReleaseNoteItemSchema,
   scrubCustomerText,
 } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
 import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -31,12 +31,16 @@ const EditSchema = z
   .strict()
   .refine(edit => Object.values(edit).some(value => value !== undefined), { message: 'Nothing to update' });
 
-const api = baseApi({ requiredScopes: [ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NOTES_WRITE] });
+const api = adminApi({
+  adminPermissions: { PATCH: 'settings:manage' },
+  alternateApiKeyPermission: { scope: ApiKeyScope.RELEASE_NOTES_WRITE, permission: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NOTES_WRITE],
+});
 
 const handler = api.patch(async (req, res) => {
   // The job key holds release-notes:write and no admin scope, so apiKeyAuth withholds the owner's admin
   // role on req.user; the narrow form that key gets is enforced below.
-  if (!canAdministerReleaseNotes(req)) {
+  if (!canAdministerReleaseNotes(req, 'settings:manage')) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 

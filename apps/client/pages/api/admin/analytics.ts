@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Quest } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveQuestModelType } from '@server/utils/questModelType';
@@ -165,8 +166,9 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
   };
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

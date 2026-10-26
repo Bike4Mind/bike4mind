@@ -9,10 +9,10 @@ const { handlers, configs, db, recordAdminActionFromRequest } = vi.hoisted(() =>
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
-// Each route module calls baseApi() once; record its handlers under the module being imported.
+// Each route module calls adminApi() once; record its handlers under the module being imported.
 let current = '';
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     configs[current] = config;
     const bucket: Record<string, (req: unknown, res: unknown) => unknown> = {};
     handlers[current] = bucket;
@@ -64,7 +64,10 @@ beforeEach(async () => {
 
 describe('route registration', () => {
   it.each(['update', 'rotate'])('%s requires the admin API-key scope', route => {
-    expect(configs[route]).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect(configs[route]).toEqual({
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: route === 'update' ? { PATCH: 'settings:manage' } : { POST: 'settings:manage' },
+    });
   });
 });
 

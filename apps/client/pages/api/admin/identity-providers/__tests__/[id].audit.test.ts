@@ -13,8 +13,8 @@ const h = vi.hoisted(() => ({
   audit: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const routes: Record<string, Route> = {};
     const chain = Object.assign((req: unknown, res: unknown) => routes[(req as { method: string }).method](req, res), {
       get: (fn: Route) => ((routes.GET = fn), chain),
@@ -101,14 +101,22 @@ describe('PUT /api/admin/identity-providers/[id] admin audit', () => {
       { field: 'samlConfig.entryPoint', before: 'https://old/sso', after: 'https://new/sso' },
       { field: 'oktaConfig.useOrgAuthServer', before: false, after: true },
     ]);
-    expect(entry.details).toEqual({ certReplaced: true, oktaClientSecretReplaced: true, samlKeyMaterialReplaced: true });
+    expect(entry.details).toEqual({
+      certReplaced: true,
+      oktaClientSecretReplaced: true,
+      samlKeyMaterialReplaced: true,
+    });
     expect(JSON.stringify(entry)).not.toMatch(/CERT-OLD|CERT-NEW|SAML-PVK|okta-client-secret-value/);
   });
 
   it('reports no secret replacement when none is submitted', async () => {
     await call('PUT', { name: 'Acme Okta', oktaConfig: { clientId: 'cid', clientSecret: '' } });
 
-    expect(h.audit.mock.calls[0][1].details).toEqual({ certReplaced: false, oktaClientSecretReplaced: false, samlKeyMaterialReplaced: false });
+    expect(h.audit.mock.calls[0][1].details).toEqual({
+      certReplaced: false,
+      oktaClientSecretReplaced: false,
+      samlKeyMaterialReplaced: false,
+    });
   });
 
   it('returns 404 without writing when the provider does not exist', async () => {

@@ -4,8 +4,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
 // apiKeyAuth (real middleware, not exercised here), so asserting the handler is
 // registered with it is the only guard available at this level.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
     const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
     chain.use = () => chain;

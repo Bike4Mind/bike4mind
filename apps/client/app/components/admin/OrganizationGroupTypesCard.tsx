@@ -12,11 +12,14 @@ import {
   Typography,
 } from '@mui/joy';
 import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
-import { GROUP_TYPE_CATALOG, getGroupType, IOrganizationDocument, WithId } from '@bike4mind/common';
+import { GROUP_TYPE_CATALOG, hasAdminPermission, getGroupType, IOrganizationDocument, WithId } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { fetchOrganizationGroups, setOrganizationGroupTypes } from '@client/app/utils/groupsAPICalls';
 import { getErrorMessage, sanitizeErrorMessage } from '@client/app/utils/error';
+
+import { useUser } from '@client/app/contexts/UserContext';
+import { requireOrganizationAdminPermission } from './organizationAdminPermissions';
 
 const GROUP_TYPE_KEYS = GROUP_TYPE_CATALOG.map(type => type.key);
 const labelFor = (key: string) => getGroupType(key)?.label ?? key;
@@ -28,6 +31,7 @@ const labelFor = (key: string) => getGroupType(key)?.label ?? key;
  * Personal orgs cannot have group types (enforced server-side), so we surface that instead of a picker.
  */
 const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = ({ org }) => {
+  const canManage = useUser(state => hasAdminPermission(state.currentUser, 'settings:manage'));
   const queryClient = useQueryClient();
 
   // `baseline` is the last-known-saved set. We keep it in local state rather than reading
@@ -62,7 +66,11 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
   });
 
   const saveMutation = useMutation({
-    mutationFn: (allowedGroupTypes: string[]) => setOrganizationGroupTypes(org.id, allowedGroupTypes),
+    mutationFn: (allowedGroupTypes: string[]) => {
+      if (!requireOrganizationAdminPermission('settings:manage'))
+        throw new Error('Missing permission: settings:manage');
+      return setOrganizationGroupTypes(org.id, allowedGroupTypes);
+    },
     onSuccess: (result, allowedGroupTypes) => {
       setBaseline(allowedGroupTypes);
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
@@ -126,7 +134,8 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
             size="sm"
             onClick={() => saveMutation.mutate(selected)}
             loading={saveMutation.isPending}
-            disabled={!isDirty}
+            disabled={!canManage || !isDirty}
+            title={canManage ? undefined : 'Missing permission: settings:manage'}
             data-testid="org-group-types-save-btn"
           >
             Save group types

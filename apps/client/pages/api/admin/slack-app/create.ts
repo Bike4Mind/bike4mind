@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
@@ -103,9 +104,10 @@ const ensureAdmin = (isAdmin?: boolean | null) => {
   }
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  req.logger.info(req.user?.isAdmin, 'isAdmin');
-  ensureAdmin(req.user?.isAdmin);
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
+  req.logger.info(canAccessAdmin(req.user), 'isAdmin');
+  ensureAdmin(canAccessAdmin(req.user));
 
   const result = CreateSlackAppSchema.safeParse(req.body);
   if (!result.success) {

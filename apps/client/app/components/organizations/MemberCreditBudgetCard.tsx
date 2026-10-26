@@ -9,10 +9,11 @@ interface MemberCreditBudgetCardProps {
   organization: IOrganizationDocument;
   /** Viewer may edit budgets (`canManageMemberCreditBudgets`); others only see the limit in force. */
   canManage: boolean;
+  beforeMutation?: () => boolean;
 }
 
 /** The org's default monthly credit limit per member, on the Members tab. */
-const MemberCreditBudgetCard: FC<MemberCreditBudgetCardProps> = ({ organization, canManage }) => {
+const MemberCreditBudgetCard: FC<MemberCreditBudgetCardProps> = ({ organization, canManage, beforeMutation }) => {
   const [editing, setEditing] = useState(false);
   const setDefault = useSetMemberCreditDefault();
   const cap = organization.maxCreditsPerMember ?? null;
@@ -51,7 +52,10 @@ const MemberCreditBudgetCard: FC<MemberCreditBudgetCardProps> = ({ organization,
         allowZero={false}
         clearLabel="Remove limit"
         saving={setDefault.isPending}
-        onSave={maxCreditsPerMember => setDefault.mutateAsync({ organizationId: organization.id, maxCreditsPerMember })}
+        onSave={async maxCreditsPerMember => {
+          if (beforeMutation && !beforeMutation()) return;
+          await setDefault.mutateAsync({ organizationId: organization.id, maxCreditsPerMember });
+        }}
       />
     </Card>
   );

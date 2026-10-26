@@ -1,10 +1,11 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { ApiKeyScope, LLMModelConfig, OAUTH_SOURCE_TAG_PREFIX, isOAuthSourceTag } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 import { ForbiddenError, NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
@@ -42,7 +43,7 @@ const getHandler = asyncHandler(async (req, res) => {
 
 // Update LLM Model Configurations
 const putHandler = asyncHandler<unknown, unknown, { configurations: LLMModelConfig[] }>(async (req, res) => {
-  if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
+  if (!canAccessAdmin(req.user)) throw new ForbiddenError('Permission denied');
 
   if (!req.ability) throw new NotFoundError('Ability not found');
 
@@ -146,9 +147,11 @@ const putHandler = asyncHandler<unknown, unknown, { configurations: LLMModelConf
   }
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
-  .get(getHandler)
-  .put(putHandler);
+const api = adminApi({
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.get(getHandler).put(putHandler);
 
 export const config = {
   api: {

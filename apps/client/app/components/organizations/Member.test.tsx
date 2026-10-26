@@ -9,7 +9,7 @@ import OrganizationMembers from './Member';
 
 const mocks = vi.hoisted(() => ({
   viewerId: 'viewer',
-  viewer: undefined as { id: string; isAdmin: boolean } | null | undefined,
+  viewer: undefined as { id: string; isAdmin: boolean; adminPermissions?: string[] } | null | undefined,
   members: [] as { id: string; name: string }[],
   pending: [] as { id: string; name: string }[],
   seats: { maxSeats: 0, currentSeats: 0, availableSeats: 0 },
@@ -218,5 +218,17 @@ describe('OrganizationMembers roster controls', () => {
     expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeTruthy();
     expect(screen.getByTestId('organization-members-seats-card')).toBeTruthy();
     expect(screen.queryByTestId('member-add-modal')).toBeNull();
+  });
+});
+
+describe('delegated settings organization invites', () => {
+  it('offers add and cancellation controls to a settings delegate outside the tenant', () => {
+    mocks.viewer = { id: 'outside-operator', isAdmin: false, adminPermissions: ['settings:manage'] };
+    mocks.members = [];
+    mocks.pending = [{ id: 'invitee', name: 'Pending invitee' }];
+    mocks.seats = { maxSeats: 10, currentSeats: 1, availableSeats: 9 };
+    renderMembers(buildOrg({ users: [], adminUserIds: [] }));
+    expect(screen.getByTestId('member-add-modal')).toBeTruthy();
+    expect(screen.getByTestId('member-card-invitee')).toHaveAttribute('data-invite', 'true');
   });
 });

@@ -55,6 +55,27 @@ describe('organizationService - update', () => {
     };
   });
 
+  it('authorizes delegated settings management without granting organization membership', async () => {
+    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(null);
+    const actor = { id: 'delegate', adminPermissions: ['settings:manage'] } as IUserDocument;
+    await update(actor, { id: 'org1', name: 'Updated', storageLimit: 12 }, mockAdapters);
+    expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({
+      id: 'org1',
+      name: 'Updated',
+      storageLimit: 12,
+    });
+  });
+
+  it('does not give credits delegates general organization editing privileges', async () => {
+    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(null);
+    const actor = { id: 'delegate', adminPermissions: ['credits:adjust'] } as IUserDocument;
+    await expect(update(actor, { id: 'org1', name: 'Unauthorized' }, mockAdapters)).rejects.toBeInstanceOf(
+      NotFoundError
+    );
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
   it('should update an organization with provided values when user is admin', async () => {
     const updateParams = {
       id: 'org1',

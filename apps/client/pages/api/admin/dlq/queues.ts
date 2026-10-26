@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqRegistry, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { getQueueAttributes } from '@bike4mind/server-utils/utils/sqs';
@@ -10,8 +11,9 @@ import { Logger } from '@bike4mind/observability';
  *
  * Returns all DLQs with their approximate message counts.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  ensureAdmin(canAccessAdmin(req.user));
   const adminUserId = req.user?.id;
   if (!adminUserId) throw new BadRequestError('Admin user ID is required');
 

@@ -1,4 +1,5 @@
 import {
+  hasAdminPermission,
   canAdministerOrganization,
   canRevokeOrgMember,
   canManageMemberCreditBudgets,
@@ -31,9 +32,10 @@ import { useOrganizationSeats } from '@client/app/hooks/data/organizations';
 
 interface OrganizationMembersProps {
   organization: IOrganizationDocument;
+  beforeMutation?: () => boolean;
 }
 
-const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => {
+const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, beforeMutation }) => {
   const { data: users } = useGetOrganizationUsers(organization.id);
   const [search, setSearch] = useState('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -119,7 +121,9 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   // Invites (create + cancel) gate on isOrgMember, then isOrgOwnerOrCurrentAdmin, in sharingService;
   // an appointed admin whose users[] row lacks read/write fails the first check.
   const canInviteMembers =
-    !!currentUser && isOrgMember(currentUser, organization) && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+    !!currentUser &&
+    (hasAdminPermission(currentUser, 'settings:manage') ||
+      (isOrgMember(currentUser, organization) && isOrgOwnerOrCurrentAdmin(currentUser, organization)));
   // DELETE /members/:userId gates on canRevokeOrgMember in organizationService.revokeAccess, which
   // also depends on the target; this coarse flag only decides whether the seats card shows.
   const canRevokeMembers = !!currentUser && canAdministerOrganization(currentUser, organization);
@@ -137,6 +141,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
 
   const handleAddMembers = useCallback(
     (selectedUserIds: string[]) => {
+      if (beforeMutation && !beforeMutation()) return;
       selectedUserIds.forEach(id => {
         shareDocument.mutate({
           description: `You've been invited to join the organization`,
@@ -147,7 +152,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         });
       });
     },
-    [organization.id, permissions.value, shareDocument]
+    [organization.id, permissions.value, shareDocument, beforeMutation]
   );
 
   const alreadyInvitedUsers = useMemo(() => {
@@ -286,7 +291,11 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         </Card>
       )}
 
-      <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
+      <MemberCreditBudgetCard
+        beforeMutation={beforeMutation}
+        organization={organization}
+        canManage={canManageCreditBudgets}
+      />
 
       {/* Search and Actions Section */}
       <Stack className="organization-members-search-container" spacing={1} mx={{ xs: 0, sm: '20px' }}>
@@ -409,6 +418,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         {filteredUsers.map(user => (
           <Fragment key={user.id}>
             <OrganizationUserCard
+              beforeMutation={beforeMutation}
               organization={organization}
               user={user}
               canInviteMembers={canInviteMembers}

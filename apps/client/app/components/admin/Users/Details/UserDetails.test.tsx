@@ -11,7 +11,12 @@ import UserDetails from './UserDetails';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-const h = vi.hoisted(() => ({ resetMutate: vi.fn(), post: vi.fn() }));
+const h = vi.hoisted(() => ({ resetMutate: vi.fn(), post: vi.fn(), permissions: ['settings:manage'] }));
+
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (state: { currentUser: { isAdmin: boolean; adminPermissions: string[] } }) => unknown) =>
+    selector({ currentUser: { isAdmin: false, adminPermissions: h.permissions } }),
+}));
 
 vi.mock('@client/app/hooks/data/mfa', () => ({
   useForceResetMFA: () => ({ mutate: h.resetMutate, isPending: false }),
@@ -39,7 +44,16 @@ const user = {
 } as unknown as AdminUserListItem;
 
 describe('UserDetails - MFA reset reason', () => {
+  it('lets a credits delegate grant subscriptions while blocking settings writes', () => {
+    h.permissions = ['support:read', 'credits:adjust'];
+    render(<UserDetails user={user} editedFields={{}} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
+    expect(screen.getByRole('button', { name: 'Grant Subscription' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /reset mfa/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Generate API Key' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'View API Keys' })).toBeEnabled();
+  });
   it('requires a valid reason and sends it with the reset request', () => {
+    h.permissions = ['settings:manage'];
     render(<UserDetails user={user} editedFields={{}} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByRole('button', { name: /reset mfa/i }));
@@ -57,6 +71,7 @@ describe('UserDetails - MFA reset reason', () => {
 
 describe('UserDetails - API key trust toggle', () => {
   beforeEach(() => {
+    h.permissions = ['settings:manage'];
     h.post.mockReset();
     vi.mocked(toast.error).mockClear();
   });

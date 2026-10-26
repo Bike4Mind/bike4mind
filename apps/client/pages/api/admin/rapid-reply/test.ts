@@ -1,9 +1,10 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { adminSettingsRepository } from '@bike4mind/database/infra';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ChatCompletionProcess, featureNames, ChatCompletionFeature } from '@bike4mind/services/llm';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -21,7 +22,11 @@ interface TestConfiguration {
   simulateLatency?: number;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .use(
     rateLimit({
       limit: 5,
@@ -29,7 +34,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

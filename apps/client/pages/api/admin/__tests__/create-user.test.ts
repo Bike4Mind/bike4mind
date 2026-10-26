@@ -37,9 +37,10 @@ const mockRequireStepUp = vi.fn();
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: (...args: unknown[]) => mockRequireStepUp(...args) }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (handler: (...args: unknown[]) => unknown) => handler,
-  }),
+  baseApi: () => {
+    const chain = { use: () => chain, post: (handler: (...args: unknown[]) => unknown) => handler };
+    return chain;
+  },
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({
@@ -71,7 +72,8 @@ vi.mock('@server/analytics/funnel', () => ({
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-token' } }));
 
 const mockRecordAdminAction = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
   recordAdminActionFromRequest: (...args: unknown[]) => {
     insideTransactionAtAudit = inTransaction;
     return mockRecordAdminAction(...args);
@@ -268,7 +270,9 @@ describe('admin/create-user', () => {
 
   describe('credential and admin-role gate', () => {
     const base = { username: 'new', email: 'new@example.com', name: 'New User' };
-    const gated: Array<[string, Record<string, unknown>]> = [['the admin role', { ...base, isAdmin: true }]];
+    const gated: Array<[string, Record<string, unknown>]> = [
+      ['the admin role', { ...base, isAdmin: true, roleChangeReason: 'Approved administrator onboarding' }],
+    ];
 
     it.each(gated)('requires recent verification for %s and creates nothing without it', async (_label, body) => {
       mockRequireStepUp.mockRejectedValueOnce(new Error('step_up_required'));
@@ -292,6 +296,27 @@ describe('admin/create-user', () => {
       await runHandler({ ...makeReq(body), apiKeyInfo: { scopes: ['admin'] } }, makeRes());
       expect(mockRequireStepUp).not.toHaveBeenCalled();
       expect(mockCreateUser).toHaveBeenCalledTimes(2);
+    });
+  });
+  describe('new administrator grant reason', () => {
+    const body = { username: 'newadmin', email: 'newadmin@example.com', name: 'New Admin', isAdmin: true };
+    it('refuses a missing reason before creating or stepping up', async () => {
+      await expect(runHandler(makeReq(body), makeRes())).rejects.toThrow();
+      expect(mockCreateUser).not.toHaveBeenCalled();
+      expect(mockRequireStepUp).not.toHaveBeenCalled();
+    });
+    it('records the full admin grant reason and before/after in the creation transaction', async () => {
+      mockCreateUser.mockResolvedValue({ id: 'new-admin', email: body.email, username: body.username, isAdmin: true });
+      await runHandler(makeReq({ ...body, roleChangeReason: 'Approved administrator onboarding' }), makeRes());
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.role.admin_granted',
+          reason: 'Approved administrator onboarding',
+          changes: [{ field: 'isAdmin', before: false, after: true }],
+        })
+      );
+      expect(insideTransactionAtAudit).toBe(true);
     });
   });
 });

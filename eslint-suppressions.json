@@ -334,11 +334,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/credits/transactions.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/data-lakes/[id]/articles.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -445,11 +440,6 @@
     }
   },
   "apps/client/pages/api/files/tags/toggle.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/friends/by-user/[id].ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -575,11 +565,6 @@
     }
   },
   "apps/client/pages/api/reg-invites/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/reg-invites/update.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }

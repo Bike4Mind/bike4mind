@@ -2,9 +2,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-// baseApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
+// adminApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({
     use: function () {
       return this;
     },

@@ -1,5 +1,6 @@
 import {
   IUserDocument,
+  hasAdminPermission,
   AdminTool,
   AdminToolContext,
   AdminToolParams,
@@ -56,7 +57,10 @@ export class AdminToolService implements AdminToolRegistry {
     const tool = this.tools.get(toolName);
     if (!tool) return false;
 
-    // Check admin requirement
+    if (tool.requiresAdmin && tool.name === 'modal') {
+      return hasAdminPermission(user, 'settings:manage');
+    }
+
     if (tool.requiresAdmin && !user.isAdmin) {
       return false;
     }

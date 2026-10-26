@@ -1,12 +1,13 @@
 import { adminService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { requireAdminPermission } from '@server/middlewares/adminApi';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { readRefreshCookie, setAdminReturnCookie, setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { hasAdminPermission, redactUserSecretsForSelf } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
 import {
@@ -20,6 +21,7 @@ import {
 // (see sessionGrantRoutesRejectApiKeys.test.ts).
 const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
+    requireAdminPermission(req, 'users:impersonate');
     const targetUserId = req.query.id;
     const adminUser = req.user;
 
@@ -29,7 +31,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       throw new BadRequestError('MFA token is required to use loginAs');
     }
 
-    if (adminUser.isAdmin && isSameUserId(adminUser.id, targetUserId)) {
+    if (hasAdminPermission(adminUser, 'users:impersonate') && isSameUserId(adminUser.id, targetUserId)) {
       await denySelfAdminAction(req, {
         action: 'user.impersonation.denied',
         attempted: 'user.impersonation.started',

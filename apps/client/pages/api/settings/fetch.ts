@@ -1,6 +1,7 @@
 import { AdminSettings } from '@bike4mind/database/infra';
 import {
   allSettingDefinitions,
+  hasAdminPermission,
   isEnforceCreditsLocked,
   redactSettingSecrets,
   settingsMap,
@@ -24,7 +25,7 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
   // sreAgentConfig, secopsTriageConfig, contextTelemetryAlerts and prReportIdentityMap
   // among them: operational config and a staff-to-Slack identity map, none of it
   // `isSensitive`, none of it the caller's business. See userReadableSettingKeys().
-  const isAdmin = req.user?.isAdmin === true;
+  const isAdmin = hasAdminPermission(req.user, 'settings:manage');
   const permittedKeys = isAdmin ? allSettingDefinitions().map(s => s.key) : userReadableSettingKeys();
 
   // Only fetch the specific settings that users are allowed to see

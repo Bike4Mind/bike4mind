@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { emailTemplateRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -7,8 +8,9 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 /**
  * Clone an existing email template to create a new one
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 

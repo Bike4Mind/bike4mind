@@ -20,6 +20,7 @@ import { formatMemberCredits, formatMemberCreditUsage, MemberCreditUsage } from 
 
 interface OrganizationUserCardProps {
   organization: IOrganizationDocument;
+  beforeMutation?: () => boolean;
   /** `creditUsage` is null for a pending invite, which has no budget yet. */
   user: IUserDocument & {
     status: 'accepted' | 'pending';
@@ -36,6 +37,7 @@ interface OrganizationUserCardProps {
 
 const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   organization,
+  beforeMutation,
   user,
   canInviteMembers,
   canRevokeMembers,
@@ -92,11 +94,12 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         description: 'Are you sure you want to remove this member?',
         type: 'danger',
         onOk: async () => {
+          if (beforeMutation && !beforeMutation()) return;
           await removeMember({ organizationId, userId });
         },
       });
     },
-    [organizationId, confirm, removeMember]
+    [organizationId, confirm, removeMember, beforeMutation]
   );
 
   const handleLeaveOrganization = useCallback(async () => {
@@ -105,11 +108,12 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       description: 'Are you sure you want to leave this team?',
       type: 'danger',
       onOk: async () => {
+        if (beforeMutation && !beforeMutation()) return;
         await leaveOrganization({ organizationId });
         navigate({ to: '/organizations' });
       },
     });
-  }, [confirm, organizationId, leaveOrganization, navigate]);
+  }, [confirm, organizationId, leaveOrganization, navigate, beforeMutation]);
 
   const canRevoke = canRevokeMembers && user.status === 'accepted';
   const canLeave = user.status === 'accepted' && currentUser?.id === user.id;
@@ -162,14 +166,16 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
                 title: 'Cancel Invite',
                 description: 'Are you sure you want to cancel this invite?',
                 type: 'danger',
-                onOk: () =>
-                  cancelInvite({
+                onOk: () => {
+                  if (beforeMutation && !beforeMutation()) return;
+                  return cancelInvite({
                     id: organizationId,
                     type: InviteType.Organization,
                     // By id: the pending-users list carries no address for non-admins, and a cancel
                     // naming nobody would cancel every open invite to the organization.
                     userId: user.id,
-                  }),
+                  });
+                },
               })
             }
             data-testid="organization-user-card-cancel-invite"
@@ -205,7 +211,10 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       allowZero
       clearLabel="Use team default"
       saving={setOverride.isPending}
-      onSave={maxCredits => setOverride.mutateAsync({ organizationId, userId: user.id, maxCredits })}
+      onSave={async maxCredits => {
+        if (beforeMutation && !beforeMutation()) return;
+        await setOverride.mutateAsync({ organizationId, userId: user.id, maxCredits });
+      }}
     />
   );
 

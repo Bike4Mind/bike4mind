@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Request } from 'express';
-import { AdminSupportAccessAction, ISessionDocument } from '@bike4mind/common';
+import { AdminSupportAccessAction, ISessionDocument, hasAdminPermission } from '@bike4mind/common';
 import { adminSupportAccessAuditLogRepository, sessionRepository } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -29,14 +29,8 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
  * Read-only by construction: nothing here grants an admin write path. Support
  * remediation needs a separate, consent-aware mechanism (see the sibling issue).
  *
- * Gated on `isAdmin` rather than a narrower support role. If that is tightened
- * later, follow the existing tag-plus-predicate primitive rather than inventing
- * one: `canAccessTavern` / `hasTavernUserTag` in `@bike4mind/common` is a single
- * predicate consumed by BOTH the client guard and the server guards so the two
- * cannot drift (`hasDeveloperUserTag` is a second instance). A
- * `canPerformSupportRead` predicate would drop straight into the check below.
- * (`User.role` and `InternalTeamMember.role` are NOT authz sources - neither is
- * read by any access check.)
+ * The shared `support:read` predicate is consumed by both the route guards and UI.
+ * `User.role` and `InternalTeamMember.role` are not authorization sources.
  *
  * Scope note: only SUCCESSFUL reads are recorded. Every rejection path below
  * throws before `recordSupportRead` is reachable, so the trail answers "who read
@@ -61,7 +55,7 @@ export interface SupportReadContext {
 
 interface SupportReadRequest {
   query: unknown;
-  user?: { id: string; isAdmin?: boolean };
+  user?: { id: string; isAdmin?: boolean; adminPermissions?: readonly string[] | null };
   headers?: Record<string, string | string[] | undefined>;
   apiKeyInfo?: { keyId: string };
 }
@@ -75,8 +69,8 @@ export async function authorizeSupportRead(req: SupportReadRequest): Promise<Sup
   if (!req.user) {
     throw new ForbiddenError('Authentication required');
   }
-  if (!req.user.isAdmin) {
-    throw new ForbiddenError('Admin access required');
+  if (!hasAdminPermission(req.user, 'support:read')) {
+    throw new ForbiddenError('Missing permission: support:read');
   }
 
   const { id, supportCase } = SupportReadQuerySchema.parse(req.query);

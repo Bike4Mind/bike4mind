@@ -61,7 +61,7 @@ describe('POST /api/admin/tools/execute', () => {
 
   it('rejects non-admin callers', async () => {
     const { run } = call({ isAdmin: false, body: { tool: 'x' } });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow('Missing permission: settings:manage');
     expect(mockExecute).not.toHaveBeenCalled();
   });
 

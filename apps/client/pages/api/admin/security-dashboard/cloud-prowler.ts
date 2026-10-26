@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import type { Request, Response } from 'express';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
@@ -12,9 +13,13 @@ const logger = new Logger({ metadata: { service: 'cloud-prowler-api' } });
 
 const WORKFLOW_FILE = 'prowler-only.yml';
 
-const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi<Request, Response>({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 
@@ -25,7 +30,7 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
     return res.status(200).json(snapshot ?? null);
   })
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 

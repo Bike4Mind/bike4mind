@@ -1,14 +1,16 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
 import { getUserCreditHistory } from '@server/utils/userActivity';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
 /** The 90-day balance series behind the Activity tab's chart, rebuilt backward from the credit ledger. */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  ensureAdmin(canAccessAdmin(req.user));
 
   const { userId } = req.query;
   if (typeof userId !== 'string' || !OBJECT_ID_PATTERN.test(userId)) throw new BadRequestError('Invalid user id');

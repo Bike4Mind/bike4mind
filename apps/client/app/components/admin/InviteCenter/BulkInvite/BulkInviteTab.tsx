@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -511,6 +513,7 @@ interface BulkInviteTabProps {
 }
 
 const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
+  const canAdjustCredits = useUser(state => hasAdminPermission(state.currentUser, 'credits:adjust'));
   const [rows, setRows] = useState<DraftRow[]>([createEmptyRow()]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
@@ -610,6 +613,8 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
 
   const sendInvites = useCallback(
     async (rowIds?: Set<string>) => {
+      const currentUser = useUser.getState().currentUser;
+      if (!hasAdminPermission(currentUser, 'settings:manage')) return;
       const toSend = draftRows.filter(r => {
         if (rowIds && !rowIds.has(r.id)) return false;
         return !validateRow(r, rows);
@@ -627,7 +632,9 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
         email: r.email,
         first: r.first || undefined,
         last: r.last || undefined,
-        startingCredits: Math.max(0, r.credits ? parseInt(r.credits) || 0 : 0),
+        startingCredits: hasAdminPermission(currentUser, 'credits:adjust')
+          ? Math.max(0, r.credits ? parseInt(r.credits) || 0 : 0)
+          : 0,
         startingStorage: Math.max(0, r.storage ? parseInt(r.storage) || 0 : 0),
         tags: r.tags.length > 0 ? r.tags : undefined,
       }));
@@ -715,6 +722,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
 
   return (
     <Box sx={{ px: 3, py: 1 }}>
+      {!canAdjustCredits && <Typography color="warning">Missing permission: credits:adjust</Typography>}
       <CsvPastePanel open={showCsvPanel} onClose={() => setShowCsvPanel(false)} onAddRows={addCsvRows} />
 
       {selectedIds.size > 0 && (
@@ -811,6 +819,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
                 <Input
                   size="sm"
                   variant="plain"
+                  data-testid={`bulk-invite-email-${row.id}`}
                   placeholder="email@example.com"
                   value={row.email}
                   onChange={e => updateRow(row.id, 'email', e.target.value)}
@@ -849,9 +858,12 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
                   size="sm"
                   variant="plain"
                   placeholder="0"
-                  value={row.credits}
-                  onChange={e => updateRow(row.id, 'credits', e.target.value)}
-                  disabled={isSent}
+                  data-testid={`bulk-invite-credits-${row.id}`}
+                  value={canAdjustCredits ? row.credits : '0'}
+                  onChange={e => {
+                    if (canAdjustCredits) updateRow(row.id, 'credits', e.target.value);
+                  }}
+                  disabled={isSent || !canAdjustCredits}
                   slotProps={{ input: { type: 'number', min: 0, step: 1 } }}
                   sx={{ fontSize: '0.8rem' }}
                 />

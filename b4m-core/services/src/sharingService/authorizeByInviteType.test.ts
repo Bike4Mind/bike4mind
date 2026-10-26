@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { InviteType } from '@bike4mind/common';
+import { InviteType, type IUserDocument } from '@bike4mind/common';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/utils';
 import { authorizeByInviteType } from './authorizeByInviteType';
 
@@ -23,6 +23,18 @@ describe('sharingService - authorizeByInviteType', () => {
       organizations: { findById: vi.fn() },
       groups: { findById: vi.fn() },
     };
+  });
+
+  it('allows settings delegates to manage organization invites without granting document sharing', async () => {
+    const actor = { id: 'delegate', adminPermissions: ['settings:manage'] } as IUserDocument;
+    db.organizations.findById.mockResolvedValue({ id: 'org', userId: 'owner', users: [] });
+    await expect(
+      authorizeByInviteType(actor, InviteType.Organization, 'org', db as never, { requireManageGroups: true })
+    ).resolves.toBeUndefined();
+    db.fabFiles.shareable.findShareAccessById.mockResolvedValue(null);
+    await expect(authorizeByInviteType(actor, InviteType.FabFile, 'file', db as never)).rejects.toBeInstanceOf(
+      UnauthorizedError
+    );
   });
 
   it('authorizes FabFile / Session / Project via their share access (resolves without throwing)', async () => {
@@ -62,7 +74,9 @@ describe('sharingService - authorizeByInviteType', () => {
     const org = { id: 'org', userId: 'owner', users: [] };
     db.organizations.findById.mockResolvedValue(org);
 
-    await expect(authorizeByInviteType({ id: 'outsider', isAdmin: false } as any, InviteType.Organization, 'org', db as any)).rejects.toThrow(UnauthorizedError);
+    await expect(
+      authorizeByInviteType({ id: 'outsider', isAdmin: false } as any, InviteType.Organization, 'org', db as any)
+    ).rejects.toThrow(UnauthorizedError);
   });
 
   it('authorizes a Group via findById + membership on its parent org', async () => {
@@ -77,7 +91,11 @@ describe('sharingService - authorizeByInviteType', () => {
     // platform admin also passes
     vi.clearAllMocks();
     db.groups.findById.mockResolvedValue({ id: 'grp', organizationId: 'org-1' });
-    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'owner', users: [{ userId: 'a', permissions: ['read'] }] });
+    db.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      userId: 'owner',
+      users: [{ userId: 'a', permissions: ['read'] }],
+    });
     await authorizeByInviteType({ id: 'x', isAdmin: true } as any, InviteType.Group, 'grp', db as any);
     expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
   });
@@ -98,19 +116,28 @@ describe('sharingService - authorizeByInviteType', () => {
   });
 
   describe('requireManageGroups option', () => {
-    const org = { id: 'org', userId: 'owner', adminUserIds: [], users: [{ userId: 'member-1', permissions: ['read'] }] };
+    const org = {
+      id: 'org',
+      userId: 'owner',
+      adminUserIds: [],
+      users: [{ userId: 'member-1', permissions: ['read'] }],
+    };
 
     it('denies a plain org member on Organization when requireManageGroups is true', async () => {
       db.organizations.findById.mockResolvedValue(org);
       await expect(
-        authorizeByInviteType({ id: 'member-1', isAdmin: false } as any, InviteType.Organization, 'org', db as any, { requireManageGroups: true })
+        authorizeByInviteType({ id: 'member-1', isAdmin: false } as any, InviteType.Organization, 'org', db as any, {
+          requireManageGroups: true,
+        })
       ).rejects.toThrow(ForbiddenError);
     });
 
     it('lets the billing owner through on Organization when requireManageGroups is true', async () => {
       db.organizations.findById.mockResolvedValue(org);
       await expect(
-        authorizeByInviteType({ id: 'owner', isAdmin: false } as any, InviteType.Organization, 'org', db as any, { requireManageGroups: true })
+        authorizeByInviteType({ id: 'owner', isAdmin: false } as any, InviteType.Organization, 'org', db as any, {
+          requireManageGroups: true,
+        })
       ).resolves.toBeUndefined();
     });
 
@@ -118,7 +145,9 @@ describe('sharingService - authorizeByInviteType', () => {
       db.groups.findById.mockResolvedValue({ id: 'grp', organizationId: 'org' });
       db.organizations.findById.mockResolvedValue(org);
       await expect(
-        authorizeByInviteType({ id: 'member-1', isAdmin: false } as any, InviteType.Group, 'grp', db as any, { requireManageGroups: true })
+        authorizeByInviteType({ id: 'member-1', isAdmin: false } as any, InviteType.Group, 'grp', db as any, {
+          requireManageGroups: true,
+        })
       ).rejects.toThrow(ForbiddenError);
     });
 
@@ -126,7 +155,9 @@ describe('sharingService - authorizeByInviteType', () => {
       db.groups.findById.mockResolvedValue({ id: 'grp', organizationId: 'org' });
       db.organizations.findById.mockResolvedValue(org);
       await expect(
-        authorizeByInviteType({ id: 'owner', isAdmin: false } as any, InviteType.Group, 'grp', db as any, { requireManageGroups: true })
+        authorizeByInviteType({ id: 'owner', isAdmin: false } as any, InviteType.Group, 'grp', db as any, {
+          requireManageGroups: true,
+        })
       ).resolves.toBeUndefined();
     });
 

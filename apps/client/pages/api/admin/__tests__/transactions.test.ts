@@ -9,8 +9,16 @@ import { ApiKeyScope } from '@bike4mind/common';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middleware: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const guard of middleware) await guard(req, res, () => {});
+      return handlers[req.method](req, res);
+    };
+    chain.use = (guard: (typeof middleware)[number]) => {
+      middleware.push(guard);
+      return chain;
+    };
+
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -25,9 +33,9 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: { queryLedgerPage: (...a: unknown[]) => mockQueryLedgerPage(...a) },
 }));
 
-const mockVerifyOrgOwner = vi.fn();
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgOwner: (...a: unknown[]) => mockVerifyOrgOwner(...a),
+const mockVerifyOrgUsageRead = vi.fn();
+vi.mock('@server/utils/adminUsageRead', () => ({
+  verifyOrgUsageRead: (...a: unknown[]) => mockVerifyOrgUsageRead(...a),
 }));
 
 vi.mock('@server/utils/resolveUserNames', () => ({
@@ -52,7 +60,7 @@ function call(options: { isAdmin?: boolean; hasUser?: boolean; query?: object })
 describe('GET /api/admin/transactions — access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockVerifyOrgOwner.mockResolvedValue({ id: ORG });
+    mockVerifyOrgUsageRead.mockResolvedValue({ id: ORG });
     mockQueryLedgerPage.mockResolvedValue({ data: [], total: 0 });
   });
 
@@ -67,14 +75,14 @@ describe('GET /api/admin/transactions — access', () => {
     expect(mockQueryLedgerPage).not.toHaveBeenCalled();
   });
 
-  it('gates access through verifyOrgOwner for the requested org', async () => {
+  it('gates access through verifyOrgUsageRead for the requested org', async () => {
     const { run } = call({ isAdmin: false });
     await run();
-    expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, ORG);
+    expect(mockVerifyOrgUsageRead).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, ORG);
   });
 
-  it('propagates verifyOrgOwner denial and never queries the ledger', async () => {
-    mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+  it('propagates verifyOrgUsageRead denial and never queries the ledger', async () => {
+    mockVerifyOrgUsageRead.mockRejectedValue(new NotFoundError('Organization not found'));
     const { run } = call({ isAdmin: false });
     await expect(run()).rejects.toThrow(/not found/i);
     expect(mockQueryLedgerPage).not.toHaveBeenCalled();

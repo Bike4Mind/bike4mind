@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 /**
  * Admin GitHub Connection API
  *
@@ -16,7 +17,7 @@
  */
 
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { orgGitHubConnectionRepository, withTransaction } from '@bike4mind/database';
 import { encryptSecret, isEncrypted, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -160,7 +161,11 @@ function diffUpdate(existing: IOrgGitHubConnectionDocument, data: z.infer<typeof
   return changes;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { POST: 'settings:manage', GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   // Rate limit all connection operations (GET/POST/PUT/DELETE) to prevent brute-force and abuse
   .use(
     rateLimit({
@@ -170,7 +175,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   )
   // POST - Create GitHub connection
   .post(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const parseResult = ConnectSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -264,7 +269,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
   // GET - Get GitHub connection status
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const connection = await orgGitHubConnectionRepository.findSystemDefault();
     if (!connection) {
@@ -315,7 +320,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
   // PUT - Update GitHub connection
   .put(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const parseResult = UpdateSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -396,7 +401,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
   // DELETE - Delete GitHub connection
   .delete(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
+    ensureAdmin(canAccessAdmin(req.user));
 
     const connection = await orgGitHubConnectionRepository.findSystemDefault();
     if (!connection) {

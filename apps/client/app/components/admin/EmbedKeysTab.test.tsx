@@ -45,6 +45,7 @@ const h = vi.hoisted(() => ({
   billingOrgs: [] as { id: string; name: string }[],
   allOrgs: [] as { id: string; name: string }[],
   isAdmin: false,
+  permissions: ['settings:manage', 'keys:revoke'],
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
@@ -57,7 +58,13 @@ vi.mock('@client/app/hooks/data/userApiKeys', () => ({
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'u1', isAdmin: h.isAdmin } }),
+  useUser: Object.assign(
+    (selector?: (state: { currentUser: { id: string; isAdmin: boolean; adminPermissions: string[] } }) => unknown) => {
+      const state = { currentUser: { id: 'u1', isAdmin: h.isAdmin, adminPermissions: h.permissions } };
+      return selector ? selector(state) : state;
+    },
+    { getState: () => ({ currentUser: { id: 'u1', isAdmin: h.isAdmin, adminPermissions: h.permissions } }) }
+  ),
 }));
 
 // The admin branch searches ALL orgs (useSearchOrganizations, no userId filter);
@@ -114,6 +121,7 @@ describe('EmbedKeysTab', () => {
     h.billingOrgs = [{ id: 'org-1', name: 'Acme Org' }];
     h.allOrgs = [{ id: 'org-admin', name: 'Global Org' }];
     h.isAdmin = false;
+    h.permissions = ['settings:manage', 'keys:revoke'];
     h.updateMutate.mockClear();
     h.createMutate.mockClear();
     ent.data = [];
@@ -385,4 +393,20 @@ describe('EmbedKeysTab', () => {
     expect(screen.getByTestId('embed-key-row-key-8')).toBeInTheDocument();
     expect(screen.queryByTestId('embed-key-row-model-warning-key-8')).not.toBeInTheDocument();
   });
+});
+
+it('hides an already open configure dialog when settings permission is revoked', () => {
+  h.isAdmin = false;
+  h.permissions = ['settings:manage', 'keys:revoke'];
+  h.keys = [embedKey];
+  const view = renderTab();
+  fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
+  expect(screen.getByTestId('embed-key-save-btn')).toBeInTheDocument();
+  h.permissions = ['keys:revoke'];
+  view.rerender(
+    <CssVarsProvider theme={appTheme}>
+      <EmbedKeysTab />
+    </CssVarsProvider>
+  );
+  expect(screen.queryByTestId('embed-key-save-btn')).toBeNull();
 });

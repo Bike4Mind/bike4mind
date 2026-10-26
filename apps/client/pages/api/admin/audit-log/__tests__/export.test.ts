@@ -11,8 +11,8 @@ const { mockList, mockRecord, mockStage } = vi.hoisted(() => ({
 
 const SIGNED_URL = 'https://storage.example.test/signed';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),

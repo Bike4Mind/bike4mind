@@ -9,8 +9,8 @@ const { getActivitySummary, route } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config: unknown) => {
     route.config = config;
     const chain = {
       use: () => chain,
@@ -31,7 +31,7 @@ describe('GET /api/admin/activity-summary', () => {
   beforeEach(() => getActivitySummary.mockReset());
 
   it('requires the admin API scope', () => {
-    expect(route.config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect(route.config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: 'support:read' } });
   });
 
   it('rejects non-admin users before querying activity', async () => {

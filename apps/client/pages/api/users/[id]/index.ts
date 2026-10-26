@@ -1,6 +1,7 @@
 import { User } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  hasAdminPermission,
   IUserDocument,
   redactUserSecretsForSelf,
   publicUserProfileResponseSchema,
@@ -35,7 +36,7 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const isSelf = req.user.id === userId;
-  const isAdmin = req.user.isAdmin;
+  const isAdmin = hasAdminPermission(req.user, 'support:read');
 
   if (isSelf || isAdmin) {
     // Self/admin-gated profile view. securityQuestions belong to the subject, so a self view
@@ -55,7 +56,7 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
     return respond(
       res,
       selfUserProfileResponseSchema.nullable(),
-      safeSelf && withSafeOrganization(safeSelf, { userId: req.user.id, isAdmin })
+      safeSelf && withSafeOrganization(safeSelf, { userId: req.user.id, isAdmin: req.user.isAdmin })
     );
   }
 

@@ -46,7 +46,7 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
 // handler on itself under a `__<method>` key; the default export IS the chain, which is how a test
 // gets hold of one method's handler. Assigning into a registry declared in this file would run
 // before that declaration (the route is imported before the test body executes).
-vi.mock('@server/middlewares/baseApi', () => {
+vi.mock('@server/middlewares/adminApi', () => {
   const chain: Record<string, unknown> = {};
   for (const method of ['get', 'put', 'delete']) {
     chain[method] = (routeHandler: unknown) => {
@@ -55,7 +55,7 @@ vi.mock('@server/middlewares/baseApi', () => {
     };
   }
   return {
-    baseApi: (config?: unknown) => {
+    adminApi: (config?: unknown) => {
       chain.__config = config;
       return chain;
     },
@@ -115,8 +115,11 @@ describe('admin/scoped-settings authorization', () => {
 
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
     // Pins the whole config object, not just requiredScopes - a sibling `auth: false` would skip
-    // baseApi's entire api-key chain and disable this gate while leaving requiredScopes untouched.
-    expect((handler as unknown as { __config?: unknown }).__config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    // adminApi's entire api-key chain and disable this gate while leaving requiredScopes untouched.
+    expect((handler as unknown as { __config?: unknown }).__config).toEqual({
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+    });
   });
 });
 

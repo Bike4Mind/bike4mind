@@ -30,6 +30,7 @@ import { getErrorMessage, sanitizeErrorMessage } from '@client/app/utils/error';
 
 interface OrganizationGroupsListProps {
   organization: WithId<IOrganizationDocument>;
+  beforeMutation?: () => boolean;
   /**
    * Copy for the no-groups-yet state. Defaults to the customer-page wording, which tells the reader
    * to contact a Bike4Mind administrator. The admin panel must override it: there the reader IS that
@@ -48,6 +49,7 @@ interface OrganizationGroupsListProps {
  */
 export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
   organization,
+  beforeMutation,
   emptyStateMessage = 'No group types have been granted to this organization yet. Contact your Bike4Mind administrator to enable them.',
 }) => {
   const queryClient = useQueryClient();
@@ -157,9 +159,18 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
             membersById={membersById}
             members={assignableMembers}
             owner={isKnownGroupType(group.type) && allowedGroupTypes.includes(group.type) ? owner : undefined}
-            onRename={name => renameMutation.mutate({ groupId: group.id, name })}
-            onAssign={userId => assignMutation.mutate({ groupId: group.id, userId })}
-            onUnassign={userId => unassignMutation.mutate({ groupId: group.id, userId })}
+            onRename={name => {
+              if (beforeMutation && !beforeMutation()) return;
+              renameMutation.mutate({ groupId: group.id, name });
+            }}
+            onAssign={userId => {
+              if (beforeMutation && !beforeMutation()) return;
+              assignMutation.mutate({ groupId: group.id, userId });
+            }}
+            onUnassign={userId => {
+              if (beforeMutation && !beforeMutation()) return;
+              unassignMutation.mutate({ groupId: group.id, userId });
+            }}
             isMutating={renameMutation.isPending || assignMutation.isPending || unassignMutation.isPending}
           />
         ))

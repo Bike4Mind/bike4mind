@@ -1,7 +1,8 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { z } from 'zod';
 import { Request } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { imageModerationIncidentRepository } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
@@ -20,8 +21,9 @@ const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req: Request, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

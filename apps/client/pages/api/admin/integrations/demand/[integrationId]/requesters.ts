@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { z } from 'zod';
 import { ApiKeyScope, type IntegrationRequestersResponse } from '@bike4mind/common';
 import { integrationRequestRepository, organizationRepository, userRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 import { ForbiddenError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
@@ -31,7 +32,8 @@ const ONE_MINUTE_MS = 60 * 1000;
 export const INTEGRATION_REQUESTERS_RATE_LIMIT = 60;
 
 // Same gate as the summary route: admin:* for API keys, isAdmin for everyone.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api
   .use(
     rateLimit({
       limit: INTEGRATION_REQUESTERS_RATE_LIMIT,
@@ -40,7 +42,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

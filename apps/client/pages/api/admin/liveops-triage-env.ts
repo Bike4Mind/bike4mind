@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 
@@ -15,9 +16,10 @@ import { Resource } from 'sst';
  * - Local development (IS_LOCAL=true): for development
  * - Fork deployments: HIDDEN (cannot act on alerts, wrong GitHub repo)
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res: Response) => {
+const api = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req: Request, res: Response) => {
   // Check if user is admin
-  if (!req.user?.isAdmin) {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 

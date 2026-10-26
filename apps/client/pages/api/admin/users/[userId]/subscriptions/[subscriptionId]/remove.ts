@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -5,7 +6,7 @@ import { ApiKeyScope, IMongoDocument } from '@bike4mind/common';
 import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
 import { SubscriptionOwnerType, ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
@@ -16,10 +17,14 @@ interface RequestQuery {
   subscriptionId: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
+const api = adminApi({
+  adminPermissions: { DELETE: 'credits:adjust' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.delete(
   asyncHandler(async (req, res) => {
     // Check admin authorization
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

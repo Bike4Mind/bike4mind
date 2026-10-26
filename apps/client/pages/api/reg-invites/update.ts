@@ -1,12 +1,39 @@
-import { IRegInviteDocument } from '@bike4mind/common';
+import { hasAdminPermission, passthroughShape, type IRegInviteDocument } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { RegInviteEvents } from '@bike4mind/common';
 import { ForbiddenError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { registrationInviteRepository, withTransaction } from '@bike4mind/database';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { respond } from '@server/utils/respond';
+
+const registrationInviteFields = {
+  id: true,
+  status: true,
+  code: true,
+  userId: true,
+  usedbyId: true,
+  expiresAt: true,
+  used: true,
+  email: true,
+  title: true,
+  description: true,
+  unlimitedUse: true,
+  usageHistory: true,
+  tags: true,
+  startingCredits: true,
+  startingStorage: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Record<keyof IRegInviteDocument, true>;
+const registrationInvitesResponseSchema = z.array(
+  z.object({
+    ...passthroughShape(registrationInviteFields),
+    usageHistory: z.array(z.object(passthroughShape({ userId: true, usedAt: true }))).nullish(),
+  })
+);
 
 const MAX_AUDITED_IDS = 100;
 
@@ -16,11 +43,11 @@ const UpdateRegisterInviteSchema = z.object({
   status: z.string().optional(),
 });
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler<unknown, unknown, unknown>(async (req, res) => {
     const user = req.user;
 
-    if (!user.isAdmin) {
+    if (!hasAdminPermission(user, 'settings:manage')) {
       throw new ForbiddenError('Permission denied');
     }
 
@@ -55,7 +82,7 @@ const handler = baseApi().post(
       { ability: req.ability }
     );
 
-    return res.status(200).json(updatedInvites);
+    return respond(res, registrationInvitesResponseSchema, updatedInvites);
   })
 );
 

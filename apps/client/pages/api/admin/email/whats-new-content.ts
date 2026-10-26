@@ -1,7 +1,8 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ModalModel } from '@bike4mind/database';
 import { usableObjectIds } from '@bike4mind/db-core';
 import { ApiKeyScope, IModalDocument } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { assertDateInRange } from '@server/utils/dateParam';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
@@ -15,8 +16,9 @@ import { MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
  * - days: number of days to look back (default: 7)
  * - ids: comma-separated list of specific modal IDs to fetch (overrides days filter)
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 

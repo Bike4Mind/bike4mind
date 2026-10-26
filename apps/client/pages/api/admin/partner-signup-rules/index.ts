@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { partnerSignupRuleRepository, withTransaction } from '@bike4mind/database';
@@ -26,10 +27,14 @@ function toBadRequest(error: unknown): never {
   throw error;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
+      ensureAdmin(canAccessAdmin(req.user));
       let query: z.infer<typeof listQuerySchema>;
       try {
         query = listQuerySchema.parse(req.query);
@@ -42,7 +47,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   )
   .post(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
+      ensureAdmin(canAccessAdmin(req.user));
       let data: ReturnType<typeof createPartnerSignupRuleSchema.parse>;
       try {
         data = createPartnerSignupRuleSchema.parse(req.body);

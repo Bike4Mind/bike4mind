@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import * as React from 'react';
 import {
   Box,
@@ -79,6 +81,7 @@ function publicPagePath(a: AdminArtifact): string {
 const PAGE_SIZE = 50;
 
 const PublishedArtifactsTab: React.FC = () => {
+  const canModerate = useUser(state => hasAdminPermission(state.currentUser, 'users:moderate'));
   const [status, setStatus] = React.useState<ModerationStatusFilter>('reported');
   const [page, setPage] = React.useState(0);
   const [expanded, setExpanded] = React.useState<string | null>(null);
@@ -97,6 +100,8 @@ const PublishedArtifactsTab: React.FC = () => {
 
   const takedown = useMutation({
     mutationFn: async (publicId: string) => {
+      if (!hasAdminPermission(useUser.getState().currentUser, 'users:moderate'))
+        throw new Error('Missing permission: users:moderate');
       const reason = window.prompt('Reason for takedown (optional):') ?? undefined;
       await api.post(`/api/admin/published-artifacts/${publicId}/takedown`, { reason });
     },
@@ -105,6 +110,8 @@ const PublishedArtifactsTab: React.FC = () => {
 
   const restore = useMutation({
     mutationFn: async (publicId: string) => {
+      if (!hasAdminPermission(useUser.getState().currentUser, 'users:moderate'))
+        throw new Error('Missing permission: users:moderate');
       await api.delete(`/api/admin/published-artifacts/${publicId}/takedown`);
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-published-artifacts'] }),
@@ -167,6 +174,7 @@ const PublishedArtifactsTab: React.FC = () => {
       {isLoading && <LinearProgress sx={{ mb: 2 }} />}
 
       <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
+        {!canModerate && <Typography color="warning">Missing permission: users:moderate</Typography>}
         <Table size="sm" stickyHeader hoverRow>
           <thead>
             <tr>
@@ -238,6 +246,7 @@ const PublishedArtifactsTab: React.FC = () => {
                         color="neutral"
                         startDecorator={<RestoreIcon />}
                         loading={restore.isPending}
+                        disabled={!canModerate}
                         onClick={() => restore.mutate(a.publicId)}
                         data-testid={`admin-published-restore-${a.publicId}`}
                       >
@@ -250,6 +259,7 @@ const PublishedArtifactsTab: React.FC = () => {
                         color="danger"
                         startDecorator={<BlockIcon />}
                         loading={takedown.isPending}
+                        disabled={!canModerate}
                         onClick={() => takedown.mutate(a.publicId)}
                         data-testid={`admin-published-takedown-${a.publicId}`}
                       >

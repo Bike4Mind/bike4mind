@@ -21,14 +21,14 @@ vi.mock('@bike4mind/services', () => ({
 }));
 // The route builds itself at import time via .get(), so the chain captures the handler on itself
 // under a `__get` key; the default export IS the chain, which is how a test gets hold of the handler.
-vi.mock('@server/middlewares/baseApi', () => {
+vi.mock('@server/middlewares/adminApi', () => {
   const chain: Record<string, unknown> = {};
   chain.get = (routeHandler: unknown) => {
     chain.__get = routeHandler;
     return chain;
   };
   return {
-    baseApi: (config?: unknown) => {
+    adminApi: (config?: unknown) => {
       chain.__config = config;
       return chain;
     },
@@ -64,7 +64,10 @@ describe('admin/scoped-settings/effective authorization', () => {
   });
 
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
-    expect(route.__config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect(route.__config).toEqual({
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: 'settings:manage' },
+    });
   });
 });
 

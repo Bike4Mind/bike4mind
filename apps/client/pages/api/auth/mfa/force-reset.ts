@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { hasAdminPermission } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import {
@@ -28,11 +29,11 @@ const forceResetResponseSchema = z.object({
   user: selfUserResponseSchema,
 });
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler(async (req, res) => {
     const adminUser = req.user;
 
-    if (!adminUser?.isAdmin) {
+    if (!hasAdminPermission(adminUser, 'settings:manage')) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 

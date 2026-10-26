@@ -1,5 +1,10 @@
 import { Logger } from '@bike4mind/observability';
-import { IAuthSessionRepository, IRealtimeConnectionRepository, IUserRepository } from '@bike4mind/common';
+import {
+  hasAdminPermission,
+  IAuthSessionRepository,
+  IRealtimeConnectionRepository,
+  IUserRepository,
+} from '@bike4mind/common';
 import { NotFoundError, UnauthorizedError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
@@ -57,7 +62,8 @@ export const adminRevokeUserSessions = async (
   const { id } = secureParameters(parameters, adminRevokeSessionsSchema);
 
   const admin = await db.users.findById(adminId);
-  if (!admin?.isAdmin) throw new UnauthorizedError('You are not authorized to revoke user sessions');
+  if (!hasAdminPermission(admin, 'users:moderate'))
+    throw new UnauthorizedError('You are not authorized to revoke user sessions');
 
   const target = await db.users.findById(id);
   if (!target) throw new NotFoundError(`User ${id} not found`);

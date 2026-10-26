@@ -1,28 +1,31 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import type { Request, Response } from 'express';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { getWafBlockedRequests } from '@server/security/wafLogsInsights';
 import { parseRangeParam } from '@server/security/wafApiHelpers';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
-  async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
-    const stage = resolveStage();
-
-    const { range, error } = parseRangeParam(req);
-    if (!range) {
-      return res.status(400).json({ error });
-    }
-
-    const result = await getWafBlockedRequests({ stage, range });
-    return res.status(200).json(result);
+const api = adminApi<Request, Response>({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api.get(async (req: Request, res: Response) => {
+  if (!canAccessAdmin(req.user)) {
+    throw new ForbiddenError('Admin access required');
   }
-);
+
+  const stage = resolveStage();
+
+  const { range, error } = parseRangeParam(req);
+  if (!range) {
+    return res.status(400).json({ error });
+  }
+
+  const result = await getWafBlockedRequests({ stage, range });
+  return res.status(200).json(result);
+});
 
 export const config = {
   api: {

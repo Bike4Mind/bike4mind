@@ -38,7 +38,7 @@ export const AdminCommandSuggestions: React.FC<AdminCommandSuggestionsProps> = (
   onSelectSuggestion,
   onVisibilityChange,
 }) => {
-  const { canUseAdminTools } = useAdminTools();
+  const { canUseAdminTools, canAccessTool } = useAdminTools();
 
   const shouldShow = (inputValue: string, filtered: CommandSuggestion[]) => {
     return canUseAdminTools && inputValue.startsWith('/admin') && filtered.length > 0;
@@ -62,7 +62,7 @@ export const AdminCommandSuggestions: React.FC<AdminCommandSuggestionsProps> = (
 
   return (
     <CommandSuggestions
-      suggestions={ADMIN_COMMANDS}
+      suggestions={ADMIN_COMMANDS.filter(suggestion => canAccessTool(suggestion.command.split(' ')[1]))}
       input={input}
       onSelectSuggestion={handleSelectSuggestion}
       onVisibilityChange={onVisibilityChange}

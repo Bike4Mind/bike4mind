@@ -4,7 +4,7 @@ type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 const captured = vi.hoisted(() => ({ put: undefined as Handler | undefined }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Handler) => fn }));
-vi.mock('@server/middlewares/baseApi', () => {
+vi.mock('@server/middlewares/adminApi', () => {
   const chain = {
     get: () => chain,
     put: (fn: Handler) => {
@@ -12,7 +12,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return { adminApi: () => chain };
 });
 const mockFindOneAndUpdate = vi.fn();
 const mockStored = vi.fn();

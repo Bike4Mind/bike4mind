@@ -8,6 +8,7 @@ import {
   ISessionDocument,
   IUserDocument,
   isOrgMember,
+  hasAdminPermission,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
 import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
@@ -69,7 +70,8 @@ export const cancelInvite = async (
   } else if (type === InviteType.Organization) {
     const org = await db.organizations.findById(id);
     if (!org) throw new NotFoundError('Organization not found');
-    if (!isOrgMember(user, org)) throw new NotFoundError('Organization not found');
+    if (!hasAdminPermission(user, 'settings:manage') && !isOrgMember(user, org))
+      throw new NotFoundError('Organization not found');
     // Authority gate: only billing owner, appointed org admin, or platform admin may cancel org invites.
     assertCanManageOrgGroups(user, org);
   } else if (type === InviteType.Group) {
@@ -77,7 +79,8 @@ export const cancelInvite = async (
     if (!group) throw new NotFoundError('Group not found');
     const org = await db.organizations.findById(group.organizationId);
     if (!org) throw new NotFoundError('Group not found');
-    if (!isOrgMember(user, org)) throw new NotFoundError('Group not found');
+    if (!hasAdminPermission(user, 'settings:manage') && !isOrgMember(user, org))
+      throw new NotFoundError('Group not found');
     // Authority gate: only billing owner, appointed org admin, or platform admin may cancel group invites.
     assertCanManageOrgGroups(user, org);
   } else if (type === InviteType.Project) {

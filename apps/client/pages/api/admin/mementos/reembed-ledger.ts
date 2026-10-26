@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ApiKeyScope, MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import {
   MEMORY_PRINCIPAL_KINDS,
@@ -41,8 +42,9 @@ const bodySchema = z.object({
     .nullish(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

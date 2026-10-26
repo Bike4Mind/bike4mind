@@ -1,7 +1,8 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { securityScanScheduleRepository, SecurityScanType } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
@@ -38,7 +39,11 @@ function validateStageName(stage: string): void {
  * @param scanType - Type of security scan (web, code, packages, secrets, cloud)
  * @returns Schedule configuration including enabled status and next run time
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .use(
     rateLimit({
       limit: 30, // 30 requests per minute per user
@@ -46,7 +51,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 
@@ -87,7 +92,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
    * @returns Success response with updated schedule
    */
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 

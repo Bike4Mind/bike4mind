@@ -1,3 +1,6 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { AdminPermissionBoundary } from '../../shared/AdminPermissionBoundary';
 import { useAdminProfileModal } from '@client/app/components/admin/AdminProfileModal';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import { Button } from '@mui/joy';
@@ -12,15 +15,19 @@ const ViewUserProfile: React.FC<ViewUserProfileProps> = ({ userId, size = 'md' }
   const setUserId = useAdminProfileModal(state => state.setUserId);
 
   return (
-    <Button
-      size={size}
-      variant="outlined"
-      color="neutral"
-      startDecorator={<VisibilityIcon />}
-      onClick={() => setUserId(userId)}
-    >
-      View
-    </Button>
+    <AdminPermissionBoundary permission="settings:manage">
+      <Button
+        size={size}
+        variant="outlined"
+        color="neutral"
+        startDecorator={<VisibilityIcon />}
+        onClick={() => {
+          if (hasAdminPermission(useUser.getState().currentUser, 'settings:manage')) setUserId(userId);
+        }}
+      >
+        View
+      </Button>
+    </AdminPermissionBoundary>
   );
 };
 

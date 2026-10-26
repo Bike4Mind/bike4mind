@@ -252,3 +252,49 @@ describe('PUT /api/organizations/[id] - admin credit edit', () => {
     expect(update).not.toHaveBeenCalled();
   });
 });
+
+describe('delegated organization credit authorization', () => {
+  beforeEach(() => {
+    update.mockClear();
+    credits.addCreditsWithLedgerRow.mockClear();
+    credits.subtractCreditsWithLedgerRow.mockClear();
+  });
+  it('rejects settings-only balance changes before the ledger or profile write', async () => {
+    const { req, res } = mocks({ id: 'delegate', adminPermissions: ['settings:manage'] }, 'PUT');
+    Object.assign(req, { body: { name: 'Updated', currentCredits: 150, creditReason: 'Adjustment' } });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(update).not.toHaveBeenCalled();
+    expect(credits.addCreditsWithLedgerRow).not.toHaveBeenCalled();
+  });
+  it('routes authorized delegated credit adjustments through the ledger', async () => {
+    const { req, res } = mocks({ id: 'delegate', adminPermissions: ['credits:adjust'] }, 'PUT');
+    Object.assign(req, { body: { currentCredits: 150, creditReason: 'Adjustment' } });
+    await mockRefs.putHandler!(req, res);
+    expect(credits.addCreditsWithLedgerRow).toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+  it('returns the updated balance for a credit-only delegate and strips unknown profile fields', async () => {
+    const before = { id: 'org1', name: 'Organization', userId: 'owner1', currentCredits: 100 };
+    credits.findById.mockResolvedValueOnce(before).mockResolvedValueOnce({ ...before, currentCredits: 150 });
+    const { req, res } = mocks({ id: 'credits-only', isAdmin: false, adminPermissions: ['credits:adjust'] }, 'PUT');
+    Object.assign(req, {
+      body: { currentCredits: 150, creditReason: 'Approved credit adjustment', unknownProfileField: 'ignored' },
+    });
+    await mockRefs.putHandler!(req, res);
+    expect(update).not.toHaveBeenCalled();
+    expect(credits.addCreditsWithLedgerRow).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'org1', credits: 50 }),
+      expect.anything()
+    );
+    expect(credits.recordAdminAction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.adjusted',
+        reason: 'Approved credit adjustment',
+        changes: [{ field: 'currentCredits', before: 100, after: 150 }],
+      })
+    );
+    expect(res._getJSONData().currentCredits).toBe(150);
+    expect(res._getJSONData()).not.toHaveProperty('unknownProfileField');
+  });
+});

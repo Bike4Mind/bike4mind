@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { usageEventRepository, userRepository } from '@bike4mind/database';
 import { usdToCredits } from '@bike4mind/utils';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -22,8 +23,9 @@ type MarginView = (typeof VIEWS)[number];
  * margin data just because its owner is an admin. JWT/browser admins skip that
  * check and still pass the isAdmin gate below.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

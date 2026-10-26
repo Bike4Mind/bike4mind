@@ -1,8 +1,9 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { rapidReplyResultRepository } from '@bike4mind/database/ai';
 import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 interface MetricsFilters {
@@ -14,8 +15,9 @@ interface MetricsFilters {
   timeRange?: 'last24h' | 'last7d' | 'last30d' | 'last90d' | 'custom';
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 

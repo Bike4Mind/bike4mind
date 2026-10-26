@@ -1,4 +1,5 @@
 import {
+  hasAdminPermission,
   IAdminSettingsRepository,
   IRealtimeConnectionRepository,
   IUserDocument,
@@ -36,7 +37,9 @@ export const adminDeleteUser = async (
   const { id } = secureParameters(parameters, adminDeleteUserSchema);
 
   const admin = await db.users.findById(adminId);
-  if (!admin?.isAdmin) throw new UnauthorizedError('You are not authorized to delete users');
+  if (!admin || !hasAdminPermission(admin, 'users:delete')) {
+    throw new UnauthorizedError('You are not authorized to delete users');
+  }
 
   const user = await db.users.findById(id);
   if (!user) throw new NotFoundError(`User ${id} not found`);

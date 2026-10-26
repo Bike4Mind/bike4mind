@@ -5,8 +5,8 @@ type Handler = (req: any, res: any) => unknown;
 const { handlers } = vi.hoisted(() => ({ handlers: {} as Record<string, Record<string, Handler>> }));
 const state = vi.hoisted(() => ({ current: '' }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const bucket: Record<string, Handler> = {};
     handlers[state.current] = bucket;
     const chain: any = { use: () => chain };

@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import {
   creditLotRepository,
   creditTransactionRepository,
@@ -8,7 +9,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -37,9 +38,10 @@ interface RequestQuery {
 // before req.user is set, so a key issued for a narrow integration can't grant
 // org credits just because its owner is an admin. JWT/browser admins skip that
 // check and still pass the isAdmin gate below.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const api = adminApi({ adminPermissions: { POST: 'credits:adjust' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

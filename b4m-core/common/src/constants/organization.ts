@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '../adminPermissions';
+
 /**
  * Organization seat-limit policy - the floor and ceiling every seat change is bound by.
  *
@@ -93,14 +95,14 @@ export const isOrgMember = (
  * an admin whose row had no permissions.
  */
 export const isOrgOwnerOrCurrentAdmin = (
-  user: { id: string; isAdmin?: boolean | null },
+  user: { id: string; isAdmin?: boolean | null; adminPermissions?: readonly string[] | null },
   org: {
     userId: string;
     adminUserIds?: readonly string[] | null;
     users?: ReadonlyArray<{ userId: string }> | null;
   }
 ): boolean =>
-  user.isAdmin === true ||
+  hasAdminPermission(user, 'settings:manage') ||
   org.userId === user.id ||
   ((org.adminUserIds ?? []).includes(user.id) && (org.users ?? []).some(member => member.userId === user.id));
 
@@ -125,7 +127,7 @@ export const isOrgOwnerOrPlatformAdmin = (
 ): boolean => user.isAdmin === true || org.userId === user.id;
 
 /** The actor slice an administration decision needs - resolved from auth, never from the body. */
-export type OrgAuthorityActor = { id: string; isAdmin?: boolean | null };
+export type OrgAuthorityActor = { id: string; isAdmin?: boolean | null; adminPermissions?: readonly string[] | null };
 
 /** The organization slice an administration decision needs. */
 export type AdministrableOrg = {

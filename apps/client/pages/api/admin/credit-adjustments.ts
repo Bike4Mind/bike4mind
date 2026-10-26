@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { creditTransactionRepository, userRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -38,9 +39,10 @@ export interface IAdminAdjustmentsResponse {
 // before req.user is set, so a key issued for a narrow integration can't read
 // admin credit adjustments just because its owner is an admin. JWT/browser admins
 // skip that check and still pass the isAdmin gate below.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(
   asyncHandler<{}, unknown, unknown, { page?: string; limit?: string; days?: string }>(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

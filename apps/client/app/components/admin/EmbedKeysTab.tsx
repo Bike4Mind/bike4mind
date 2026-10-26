@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { AdminPermissionBoundary } from './shared/AdminPermissionBoundary';
 import {
   useGetUserApiKeys,
   useCreateUserApiKey,
@@ -518,6 +520,7 @@ function NewEmbedKeyModal({
 }
 
 function ConfigureEmbedKeyModal({ embedKey, onClose }: { embedKey: IUserApiKeyDocument | null; onClose: () => void }) {
+  const canManage = useUser(state => hasAdminPermission(state.currentUser, 'settings:manage'));
   // Keyed remount (see call site) seeds the form from the key being configured.
   const [form, setForm] = useState<EmbedKeyFormState>(() =>
     embedKey
@@ -536,12 +539,13 @@ function ConfigureEmbedKeyModal({ embedKey, onClose }: { embedKey: IUserApiKeyDo
     },
   });
 
-  if (!embedKey) return null;
+  if (!embedKey || !canManage) return null;
 
   // Send only the fields the admin actually changed, so the update stays a true
   // partial (untouched branding - including a plan-gated `hideBranding` - is left
   // alone server-side) and the UPDATED analytics event reports the real diff.
   const handleSubmit = () => {
+    if (!hasAdminPermission(useUser.getState().currentUser, 'settings:manage')) return;
     const request: UpdateEmbedKeyRequest = { keyId: embedKey.id };
     if (form.agentId !== (embedKey.agentId ?? '')) request.agentId = form.agentId;
     if (!sameOrigins(form.allowedOrigins, embedKey.allowedOrigins ?? [])) {
@@ -636,6 +640,9 @@ function EmbedKeyCreatedModal({ apiKey, onClose }: { apiKey: string; onClose: ()
  * allow-list, and optional white-label branding.
  */
 export default function EmbedKeysTab() {
+  const adminUser = useUser(state => state.currentUser);
+  const canManage = hasAdminPermission(adminUser, 'settings:manage');
+  const canRevoke = hasAdminPermission(adminUser, 'keys:revoke');
   const { data, isLoading, error, refetch } = useGetUserApiKeys();
   const { data: agents } = useGetAgents();
   const agentById = useMemo(() => new Map((agents ?? []).map(agent => [agent.id, agent])), [agents]);
@@ -670,14 +677,18 @@ export default function EmbedKeysTab() {
               <RefreshIcon />
             </IconButton>
           </Tooltip>
-          <Button
-            startDecorator={<AddIcon />}
-            onClick={() => setShowNewKeyModal(true)}
-            variant="solid"
-            data-testid="embed-key-new-btn"
-          >
-            Create Embed Key
-          </Button>
+          <AdminPermissionBoundary permission="settings:manage">
+            <Button
+              startDecorator={<AddIcon />}
+              onClick={() => {
+                if (canManage) setShowNewKeyModal(true);
+              }}
+              variant="solid"
+              data-testid="embed-key-new-btn"
+            >
+              Create Embed Key
+            </Button>
+          </AdminPermissionBoundary>
         </Box>
       </Box>
 
@@ -788,36 +799,42 @@ export default function EmbedKeysTab() {
                     </td>
                     <td>
                       <Box display="flex" gap={1}>
-                        <Tooltip title="Configure">
+                        <Tooltip title={canManage ? 'Configure' : 'Missing permission: settings:manage'}>
                           <IconButton
                             size="sm"
                             variant="outlined"
-                            onClick={() => setConfiguringKey(key)}
-                            disabled={revoked}
+                            onClick={() => {
+                              if (canManage) setConfiguringKey(key);
+                            }}
+                            disabled={revoked || !canManage}
                             data-testid={`embed-key-configure-${key.id}`}
                           >
                             <SettingsIcon />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title="Rotate key">
+                        <Tooltip title={canManage ? 'Rotate key' : 'Missing permission: settings:manage'}>
                           <IconButton
                             size="sm"
                             variant="outlined"
-                            onClick={() => rotateMutation.mutate(key.id)}
+                            onClick={() => {
+                              if (canManage) rotateMutation.mutate(key.id);
+                            }}
                             loading={rotateMutation.isPending}
-                            disabled={revoked}
+                            disabled={revoked || !canManage}
                           >
                             <RotateLeftIcon />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title="Revoke key">
+                        <Tooltip title={canRevoke ? 'Revoke key' : 'Missing permission: keys:revoke'}>
                           <IconButton
                             size="sm"
                             variant="outlined"
                             color="danger"
-                            onClick={() => revokeMutation.mutate({ keyId: key.id, reason: 'Revoked by admin' })}
+                            onClick={() => {
+                              if (canRevoke) revokeMutation.mutate({ keyId: key.id, reason: 'Revoked by admin' });
+                            }}
                             loading={revokeMutation.isPending}
-                            disabled={revoked}
+                            disabled={revoked || !canRevoke}
                             data-testid={`embed-key-revoke-${key.id}`}
                           >
                             <BlockIcon />
@@ -834,7 +851,7 @@ export default function EmbedKeysTab() {
       )}
 
       <NewEmbedKeyModal
-        open={showNewKeyModal}
+        open={showNewKeyModal && canManage}
         onClose={() => setShowNewKeyModal(false)}
         onSuccess={setNewlyCreatedKey}
       />

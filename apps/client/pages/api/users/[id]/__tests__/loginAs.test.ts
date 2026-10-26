@@ -74,6 +74,24 @@ describe('POST /api/users/:id/loginAs - respond() boundary', () => {
     });
   });
 
+  it('allows a delegated impersonation grant through the handler', async () => {
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    Object.assign(req, { user: { id: 'operator', isAdmin: false, adminPermissions: ['users:impersonate'] } });
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
+    expect(mockLoginAs).toHaveBeenCalled();
+    expect(mockIssueSession).toHaveBeenCalled();
+  });
+
+  it('denies a support-only actor before minting a session', async () => {
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    Object.assign(req, { user: { id: 'support', isAdmin: false, adminPermissions: ['support:read'] } });
+    await expect(
+      (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockLoginAs).not.toHaveBeenCalled();
+    expect(mockIssueSession).not.toHaveBeenCalled();
+  });
+
   it('returns impersonating, the access token and the target user, stripping an undeclared key', async () => {
     const { req, res } = post({ mfaToken: '123456', reason: REASON });
     await (handler as any)(req, res);

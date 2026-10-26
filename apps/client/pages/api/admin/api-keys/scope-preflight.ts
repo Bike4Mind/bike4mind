@@ -1,9 +1,10 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope, ApiKeyScopeValue, IApiKeyScopePreflight, IApiKeyScopePreflightRow } from '@bike4mind/common';
 import { apiKeyUsageLogRepository, userApiKeyRepository } from '@bike4mind/database/auth';
 import { BadRequestError } from '@bike4mind/utils';
 import mongoose from 'mongoose';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
@@ -16,7 +17,7 @@ const MAX_ROWS = 500;
 /**
  * HTTP surfaces whose API-key traffic is NEVER in ApiKeyUsageLog.
  *
- * The collection has exactly one writer: `baseApi` -> `apiKeyAuth`'s `res.finish`
+ * The collection has exactly one writer: `adminApi` -> `apiKeyAuth`'s `res.finish`
  * hook (apps/client/server/middlewares/apiKeyAuth.ts). Everything authenticated
  * through `verifyApiKey` (apps/client/server/cli/auth.ts) - public contract routes
  * via `resolveContractAuth`, and the embed surfaces - logs nothing. A preflight
@@ -25,7 +26,7 @@ const MAX_ROWS = 500;
  *
  * Must stay in sync with the routes wired through `resolveContractAuth` and
  * `verifyEmbedKeyById`. A path added there and not here reads as a real empty
- * result. The runbook's "Staging applies to the `baseApi` gate only" paragraph
+ * result. The runbook's "Staging applies to the `adminApi` gate only" paragraph
  * (docs/architecture/api-key-scope-rollout.md) describes the same boundary.
  */
 const UNLOGGED_ENDPOINT_PREFIXES = ['/api/ai/v1', '/api/embed'] as const;
@@ -84,7 +85,7 @@ function unloggedSurfacesUnder(prefix: string): string[] {
  * this request*, which is the stage whose rollout you are planning.
  *
  * The one thing it must never do is report a confident zero. `ApiKeyUsageLog` is
- * written only by `baseApi`, so a prefix served by `verifyApiKey` is rejected
+ * written only by `adminApi`, so a prefix served by `verifyApiKey` is rejected
  * outright, a broader prefix that merely contains one reports the invisible
  * surfaces in `coverage.unloggedPrefixes`, and a sub-TTL window clears
  * `coverage.fullWindow`. An empty row list is safe to act on only when `coverage`
@@ -101,9 +102,10 @@ function unloggedSurfacesUnder(prefix: string): string[] {
  *
  * Read-only by design: it produces the list, a human rotates the keys.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
@@ -120,7 +122,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     const enclosingUnlogged = enclosingUnloggedSurface(endpointPrefix);
     if (enclosingUnlogged) {
       throw new BadRequestError(
-        `${endpointPrefix} is served by verifyApiKey, not baseApi, so no API-key traffic to it is ` +
+        `${endpointPrefix} is served by verifyApiKey, not adminApi, so no API-key traffic to it is ` +
           `logged and this preflight can only ever return zero keys. Routes under ${enclosingUnlogged} ` +
           `need no preflight: every scope they gate is bound to a credential minted with it, so there ` +
           `is no grandfathered population. See docs/architecture/api-key-scope-rollout.md.`

@@ -1,7 +1,8 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request } from 'express';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { PublishedArtifact } from '@bike4mind/database';
 
 /**
@@ -20,8 +21,9 @@ import { PublishedArtifact } from '@bike4mind/database';
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req: Request, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

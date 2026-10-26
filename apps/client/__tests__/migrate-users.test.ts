@@ -43,8 +43,8 @@ vi.mock('@server/utils/analyticsLog', () => ({
   logEvent: (...args: unknown[]) => mockLogEvent(...args),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({
     post: (handler: (...args: unknown[]) => unknown) => handler,
   }),
 }));
@@ -87,6 +87,7 @@ vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async () => ({
 }));
 
 vi.mock('@bike4mind/common', async () => ({
+  ...(await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common')),
   RegInviteEvents: {
     MIGRATE_REGINVITE: 'Migration Email Sent',
   },

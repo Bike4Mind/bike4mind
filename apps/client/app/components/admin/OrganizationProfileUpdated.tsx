@@ -13,7 +13,15 @@ import {
   Typography,
   Input,
 } from '@mui/joy';
-import { IOrganization, IOrganizationDocument, WithId, isValidAdminActionReason } from '@bike4mind/common';
+import {
+  IOrganization,
+  IOrganizationDocument,
+  WithId,
+  isValidAdminActionReason,
+  hasAdminPermission,
+} from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { requireOrganizationAdminPermission } from './organizationAdminPermissions';
 import { orgManagerNames } from './orgManagerNames';
 import GroupsIcon from '@mui/icons-material/Groups';
 import SportsMartialArtsIcon from '@mui/icons-material/SportsMartialArts';
@@ -53,6 +61,9 @@ interface OrganizationProfileProps {
 }
 
 const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, onClose, children, activeDays }) => {
+  const currentUser = useUser(state => state.currentUser);
+  const canManageSettings = hasAdminPermission(currentUser, 'settings:manage');
+  const canAdjustCredits = hasAdminPermission(currentUser, 'credits:adjust');
   const [editedOrg, setEditedOrg] = useState<WithId<IOrganization>>(org);
   const [storageLimitInput, setStorageLimitInput] = useState(org.storageLimit?.toString() ?? '');
   // The modal stays open after Update and `org` is the caller's snapshot, so track what was last saved.
@@ -75,7 +86,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
   // The org's own managers, not members whose platform-wide `level` happens to be Manager/Admin.
   const managerNames = orgManagerNames(org);
 
-  const handleChange = (field: keyof IOrganizationDocument, value: any) => {
+  const handleChange = (field: keyof IOrganizationDocument, value: unknown) => {
     setEditedOrg(prev => ({ ...prev, [field]: value }));
   };
 
@@ -97,6 +108,8 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
   const canSave = !creditsChanged || (creditsValid && isValidAdminActionReason(creditReason));
 
   const handleUpdate = async () => {
+    if (!requireOrganizationAdminPermission('settings:manage')) return;
+    if (creditsChanged && !requireOrganizationAdminPermission('credits:adjust')) return;
     if (!parsedStorageLimit.valid) return;
     // Send only a changed limit, so saving other fields never writes null onto an org that has no override.
     const storageLimitChanged = parsedStorageLimit.storageLimit !== savedStorageLimit;
@@ -130,6 +143,8 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
     .filter((lastExport): lastExport is Date => lastExport !== null)
     .sort((a, b) => b.getTime() - a.getTime())[0];
 
+  if (!canManageSettings) return <Typography>Missing permission: settings:manage</Typography>;
+
   return (
     <Sheet>
       <Stack spacing={2}>
@@ -157,6 +172,8 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                 <FormControl error={!creditsValid}>
                   <FormLabel>Current Credits</FormLabel>
                   <Input
+                    disabled={!canAdjustCredits}
+                    title={canAdjustCredits ? undefined : 'Missing permission: credits:adjust'}
                     value={editedOrg.currentCredits ?? 0}
                     onChange={e => handleChange('currentCredits', e.target.value)}
                     slotProps={{ input: { 'data-testid': 'org-profile-credits-input' } }}
@@ -207,7 +224,16 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                 data-testid="admin-org-update-btn"
                 onClick={handleUpdate}
                 loading={updateOrganizationMutation.isPending}
-                disabled={!parsedStorageLimit.valid || !canSave}
+                disabled={
+                  !canManageSettings || (creditsChanged && !canAdjustCredits) || !parsedStorageLimit.valid || !canSave
+                }
+                title={
+                  !canManageSettings
+                    ? 'Missing permission: settings:manage'
+                    : creditsChanged && !canAdjustCredits
+                      ? 'Missing permission: credits:adjust'
+                      : undefined
+                }
               >
                 Update
               </Button>

@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userRepository } from '@bike4mind/database';
@@ -9,7 +10,7 @@ import {
   type IUserApiKeyDocument,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { getApiKeyRateLimitUsage, type RateLimitUsage } from '@server/utils/apiKeyRateLimitCheck';
@@ -36,9 +37,10 @@ function serializeKey(key: IUserApiKeyDocument): IUserApiKey {
  * layer, by UserApiKeyModel's toJSON transform, so the docs must stay hydrated - do not
  * switch this path to .lean().
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

@@ -8,8 +8,8 @@ const h = vi.hoisted(() => ({
   sendReport: vi.fn(),
 }));
 
-vi.mock('@client/server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@client/server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain: Record<string, unknown> = {};
     chain.post = (handler: unknown) => handler;
     return chain;

@@ -1,3 +1,6 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { AdminPermissionBoundary } from '../../shared/AdminPermissionBoundary';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 
@@ -42,6 +45,9 @@ interface UserDetailsProps {
 }
 
 const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldChange }) => {
+  const currentUser = useUser(state => state.currentUser);
+  const canManage = hasAdminPermission(currentUser, 'settings:manage');
+  const canAdjustCredits = hasAdminPermission(currentUser, 'credits:adjust');
   const [organizationName, setOrganizationName] = useState<string | null>(user.organizationId?.name ?? null);
   const [isGrantSubscriptionModalOpen, setIsGrantSubscriptionModalOpen] = useState(false);
   const [isGenerateApiKeyModalOpen, setIsGenerateApiKeyModalOpen] = useState(false);
@@ -58,6 +64,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
 
   const verifyEmail = useMutation({
     mutationFn: async (userId: string) => {
+      if (!canManage) throw new Error('Missing permission: settings:manage');
       const response = await api.post(`/api/admin/users/${userId}/verify-email`);
       return response.data;
     },
@@ -74,6 +81,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
 
   const unverifyEmail = useMutation({
     mutationFn: async (userId: string) => {
+      if (!canManage) throw new Error('Missing permission: settings:manage');
       const response = await api.post(`/api/admin/users/${userId}/unverify-email`);
       return response.data;
     },
@@ -90,6 +98,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
 
   const resendVerification = useMutation({
     mutationFn: async (userId: string) => {
+      if (!canManage) throw new Error('Missing permission: settings:manage');
       const response = await api.post(`/api/admin/users/${userId}/resend-verification`);
       return response.data;
     },
@@ -102,6 +111,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
 
   const resendEmailChange = useMutation({
     mutationFn: async (userId: string) => {
+      if (!canManage) throw new Error('Missing permission: settings:manage');
       const response = await api.post(`/api/admin/users/${userId}/resend-email-change`);
       return response.data;
     },
@@ -114,6 +124,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
 
   const setApiKeyTrust = useMutation({
     mutationFn: async (approved: boolean) => {
+      if (!canManage) throw new Error('Missing permission: settings:manage');
       const response = await api.post<{ apiKeyTrustApproved: boolean }>(`/api/admin/users/${user.id}/api-key-trust`, {
         approved,
       });
@@ -137,16 +148,19 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   }, [user.apiKeyTrustApproved]);
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canManage) return;
     const newName = e.target.value;
     onFieldChange('name', newName);
   };
 
   const handleUserNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canManage) return;
     const newUsername = e.target.value;
     onFieldChange('username', newUsername);
   };
 
   const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canManage) return;
     const newEmail = e.target.value;
     onFieldChange('email', newEmail);
   };
@@ -157,11 +171,13 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   };
 
   const handleResetMFA = () => {
+    if (!canManage) return;
     setMfaResetReason('');
     setIsMfaResetOpen(true);
   };
 
   const confirmResetMFA = () => {
+    if (!canManage) return;
     forceResetMFA.mutate(
       { userId: user.id, reason: mfaResetReason.trim() },
       {
@@ -179,6 +195,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   };
 
   const handleApiKeyTrustToggle = async (approved: boolean) => {
+    if (!canManage) return;
     try {
       await setApiKeyTrust.mutateAsync(approved);
       toast.success(
@@ -196,6 +213,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   };
 
   const handleVerifyEmail = () => {
+    if (!canManage) return;
     confirm({
       title: 'Verify Email',
       description: `Are you sure you want to manually verify the email for ${user.username} (${user.email})?`,
@@ -213,6 +231,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   };
 
   const handleUnverifyEmail = () => {
+    if (!canManage) return;
     confirm({
       title: 'Unverify Email',
       description: `Are you sure you want to unverify the email for ${user.username} (${user.email})? This will require the user to verify their email again.`,
@@ -230,6 +249,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   };
 
   const handleResendVerification = () => {
+    if (!canManage) return;
     confirm({
       title: 'Resend Verification Email',
       description: `Are you sure you want to resend the verification email to ${user.email}?`,
@@ -247,6 +267,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   };
 
   const handleResendEmailChange = () => {
+    if (!canManage) return;
     confirm({
       title: 'Resend Email Change Verification',
       description: `Are you sure you want to resend the email change verification to ${user.pendingEmail}?`,
@@ -277,184 +298,195 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {/* User Edit Form */}
         <Stack direction="column" spacing={1}>
-          <Tooltip title="Name">
-            <Input
-              size="sm"
-              sx={{ borderColor: editedFields?.name ? 'danger.500' : 'default' }}
-              value={user.name}
-              onChange={handleNameChange}
-            />
-          </Tooltip>
-          <Tooltip title="User Name">
-            <Input
-              size="sm"
-              sx={{ borderColor: editedFields?.username ? 'danger.500' : 'default' }}
-              value={user.username}
-              onChange={handleUserNameChange}
-            />
-          </Tooltip>
-          <Tooltip title="Email">
-            <Input
-              size="sm"
-              sx={{ borderColor: editedFields?.email ? 'danger.500' : 'default' }}
-              value={user.email || ''}
-              onChange={handleEmailChange}
-            />
-          </Tooltip>
-          <Tooltip title={organizationName || 'No organization'}>
-            <Input size="sm" value={organizationName || 'No organization'} readOnly />
-          </Tooltip>
-          {/* MFA Status */}
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-              p: 2,
-              bgcolor: 'background.level1',
-              borderRadius: 'md',
-            }}
-          >
-            <Typography level="body-sm" sx={{ fontWeight: 'bold' }}>
-              MFA Status:
-            </Typography>
-            <MFAStatusBadge user={user} size="md" />
-          </Box>
-
-          {/* Email Verification Status */}
-          <Box
-            sx={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 1,
-              p: 2,
-              bgcolor: 'background.level1',
-              borderRadius: 'md',
-            }}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <AdminPermissionBoundary permission="settings:manage">
+            <Tooltip title="Name">
+              <Input
+                size="sm"
+                sx={{ borderColor: editedFields?.name ? 'danger.500' : 'default' }}
+                value={user.name}
+                onChange={handleNameChange}
+              />
+            </Tooltip>
+            <Tooltip title="User Name">
+              <Input
+                size="sm"
+                sx={{ borderColor: editedFields?.username ? 'danger.500' : 'default' }}
+                value={user.username}
+                onChange={handleUserNameChange}
+              />
+            </Tooltip>
+            <Tooltip title="Email">
+              <Input
+                size="sm"
+                sx={{ borderColor: editedFields?.email ? 'danger.500' : 'default' }}
+                value={user.email || ''}
+                onChange={handleEmailChange}
+              />
+            </Tooltip>
+            <Tooltip title={organizationName || 'No organization'}>
+              <Input size="sm" value={organizationName || 'No organization'} readOnly />
+            </Tooltip>
+            {/* MFA Status */}
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 2,
+                p: 2,
+                bgcolor: 'background.level1',
+                borderRadius: 'md',
+              }}
+            >
               <Typography level="body-sm" sx={{ fontWeight: 'bold' }}>
-                Email Status:
+                MFA Status:
               </Typography>
-              {user.pendingEmail ? (
-                <Chip size="md" color="primary" startDecorator={<EmailIcon />}>
-                  Changing Email
-                </Chip>
-              ) : user.emailVerified ? (
-                <Chip size="md" color="success" startDecorator={<CheckCircleIcon />}>
-                  Verified
-                </Chip>
-              ) : (
-                <Chip size="md" color="warning" startDecorator={<EmailIcon />}>
-                  Unverified
-                </Chip>
+              <MFAStatusBadge user={user} size="md" />
+            </Box>
+
+            {/* Email Verification Status */}
+            <Box
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1,
+                p: 2,
+                bgcolor: 'background.level1',
+                borderRadius: 'md',
+              }}
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography level="body-sm" sx={{ fontWeight: 'bold' }}>
+                  Email Status:
+                </Typography>
+                {user.pendingEmail ? (
+                  <Chip size="md" color="primary" startDecorator={<EmailIcon />}>
+                    Changing Email
+                  </Chip>
+                ) : user.emailVerified ? (
+                  <Chip size="md" color="success" startDecorator={<CheckCircleIcon />}>
+                    Verified
+                  </Chip>
+                ) : (
+                  <Chip size="md" color="warning" startDecorator={<EmailIcon />}>
+                    Unverified
+                  </Chip>
+                )}
+              </Box>
+              {user.pendingEmail && (
+                <Typography level="body-xs" sx={{ color: 'text.secondary', ml: 1 }}>
+                  Pending: {user.email} →{' '}
+                  <strong style={{ color: 'var(--joy-palette-primary-main)' }}>{user.pendingEmail}</strong>
+                </Typography>
               )}
             </Box>
-            {user.pendingEmail && (
-              <Typography level="body-xs" sx={{ color: 'text.secondary', ml: 1 }}>
-                Pending: {user.email} →{' '}
-                <strong style={{ color: 'var(--joy-palette-primary-main)' }}>{user.pendingEmail}</strong>
-              </Typography>
-            )}
-          </Box>
 
-          {/* Password change/reset hidden - passwordless OTC login, no user passwords */}
+            {/* Password change/reset hidden - passwordless OTC login, no user passwords */}
 
-          <Button
-            startDecorator={<SecurityIcon />}
-            color="danger"
-            variant="outlined"
-            onClick={handleResetMFA}
-            loading={forceResetMFA.isPending}
-            disabled={!user.mfa || !user.mfa.totpEnabled}
-          >
-            Reset MFA
-          </Button>
-
-          {/* Email Verification Actions */}
-          {user.pendingEmail ? (
             <Button
-              startDecorator={<EmailIcon />}
-              color="primary"
-              variant="solid"
-              onClick={handleResendEmailChange}
-              loading={resendEmailChange.isPending}
-            >
-              Resend Email Change
-            </Button>
-          ) : user.emailVerified ? (
-            <Button
-              startDecorator={<CancelIcon />}
+              startDecorator={<SecurityIcon />}
               color="danger"
               variant="outlined"
-              onClick={handleUnverifyEmail}
-              loading={unverifyEmail.isPending}
+              onClick={handleResetMFA}
+              loading={forceResetMFA.isPending}
+              disabled={!user.mfa || !user.mfa.totpEnabled}
             >
-              Unverify Email
+              Reset MFA
             </Button>
-          ) : (
-            <Stack direction="row" spacing={1}>
-              <Button
-                startDecorator={<CheckCircleIcon />}
-                color="success"
-                variant="solid"
-                onClick={handleVerifyEmail}
-                loading={verifyEmail.isPending}
-                sx={{ flex: 1 }}
-              >
-                Verify Email
-              </Button>
+
+            {/* Email Verification Actions */}
+            {user.pendingEmail ? (
               <Button
                 startDecorator={<EmailIcon />}
                 color="primary"
-                variant="outlined"
-                onClick={handleResendVerification}
-                loading={resendVerification.isPending}
-                sx={{ flex: 1 }}
+                variant="solid"
+                onClick={handleResendEmailChange}
+                loading={resendEmailChange.isPending}
               >
-                Resend Verification
+                Resend Email Change
               </Button>
-            </Stack>
-          )}
-
-          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2 }}>
-            <Box>
-              <Typography level="title-sm">Trusted for personal API keys</Typography>
-              <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                Trust this account for personal API keys without waiting for the account-age or purchase requirement.
-                Email must still be verified.
-              </Typography>
+            ) : user.emailVerified ? (
+              <Button
+                startDecorator={<CancelIcon />}
+                color="danger"
+                variant="outlined"
+                onClick={handleUnverifyEmail}
+                loading={unverifyEmail.isPending}
+              >
+                Unverify Email
+              </Button>
+            ) : (
+              <Stack direction="row" spacing={1}>
+                <Button
+                  startDecorator={<CheckCircleIcon />}
+                  color="success"
+                  variant="solid"
+                  onClick={handleVerifyEmail}
+                  loading={verifyEmail.isPending}
+                  sx={{ flex: 1 }}
+                >
+                  Verify Email
+                </Button>
+                <Button
+                  startDecorator={<EmailIcon />}
+                  color="primary"
+                  variant="outlined"
+                  onClick={handleResendVerification}
+                  loading={resendVerification.isPending}
+                  sx={{ flex: 1 }}
+                >
+                  Resend Verification
+                </Button>
+              </Stack>
+            )}
+          </AdminPermissionBoundary>
+          <AdminPermissionBoundary permission="settings:manage">
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2 }}>
+              <Box>
+                <Typography level="title-sm">Trusted for personal API keys</Typography>
+                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                  Trust this account for personal API keys without waiting for the account-age or purchase requirement.
+                  Email must still be verified.
+                </Typography>
+              </Box>
+              <Switch
+                checked={apiKeyTrustApproved}
+                disabled={setApiKeyTrust.isPending}
+                onChange={event => handleApiKeyTrustToggle(event.target.checked)}
+                slotProps={{
+                  input: {
+                    'aria-label': 'Trusted for personal API keys',
+                    'data-testid': 'admin-user-api-key-trust-toggle',
+                  },
+                }}
+              />
             </Box>
-            <Switch
-              checked={apiKeyTrustApproved}
-              disabled={setApiKeyTrust.isPending}
-              onChange={event => handleApiKeyTrustToggle(event.target.checked)}
-              slotProps={{
-                input: {
-                  'aria-label': 'Trusted for personal API keys',
-                  'data-testid': 'admin-user-api-key-trust-toggle',
-                },
+          </AdminPermissionBoundary>
+
+          <AdminPermissionBoundary permission="credits:adjust">
+            <Button
+              startDecorator={<CardGiftcardIcon />}
+              color="success"
+              variant="solid"
+              onClick={() => {
+                if (canAdjustCredits) setIsGrantSubscriptionModalOpen(true);
               }}
-            />
-          </Box>
+            >
+              Grant Subscription
+            </Button>
+          </AdminPermissionBoundary>
 
-          <Button
-            startDecorator={<CardGiftcardIcon />}
-            color="success"
-            variant="solid"
-            onClick={() => setIsGrantSubscriptionModalOpen(true)}
-          >
-            Grant Subscription
-          </Button>
-
-          <Button
-            startDecorator={<KeyIcon />}
-            color="primary"
-            variant="solid"
-            onClick={() => setIsGenerateApiKeyModalOpen(true)}
-          >
-            Generate API Key
-          </Button>
+          <AdminPermissionBoundary permission="settings:manage">
+            <Button
+              startDecorator={<KeyIcon />}
+              color="primary"
+              variant="solid"
+              onClick={() => {
+                if (canManage) setIsGenerateApiKeyModalOpen(true);
+              }}
+            >
+              Generate API Key
+            </Button>
+          </AdminPermissionBoundary>
 
           <Button
             startDecorator={<KeyIcon />}
@@ -475,7 +507,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
         </Stack>
       </Box>
 
-      <Modal open={isMfaResetOpen} onClose={closeMfaReset}>
+      <Modal open={isMfaResetOpen && canManage} onClose={closeMfaReset}>
         <ModalDialog data-testid="mfa-reset-modal">
           <ModalClose />
           <Typography level="title-md">Reset User MFA</Typography>
@@ -503,13 +535,13 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
 
       <GrantSubscriptionModal
         user={user}
-        open={isGrantSubscriptionModalOpen}
+        open={isGrantSubscriptionModalOpen && canAdjustCredits}
         onClose={() => setIsGrantSubscriptionModalOpen(false)}
       />
 
       <AdminGenerateApiKeyModal
         user={user}
-        open={isGenerateApiKeyModalOpen}
+        open={isGenerateApiKeyModalOpen && canManage}
         onClose={() => setIsGenerateApiKeyModalOpen(false)}
       />
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { IUserDocument } from '@bike4mind/common';
+import { ADMIN_PERMISSIONS, type IUserDocument } from '@bike4mind/common';
 
 // Mock the MFA service - this test guards that loginAs LOADS the admin with secrets
 // and hands that user to verifyMFA. Actual TOTP verification is covered by
@@ -52,6 +52,66 @@ const makeAdapters = (freshAdmin: IUserDocument | null) => {
 };
 
 describe('adminService.loginAs — MFA secret loading', () => {
+  it.each([
+    { label: 'legacy administrator', isAdmin: true, adminPermissions: [] },
+    { label: 'explicit administrator', isAdmin: false, adminPermissions: [...ADMIN_PERMISSIONS] },
+    { label: 'support delegate', isAdmin: false, adminPermissions: ['support:read'] },
+  ])('denies delegated impersonation of a $label target', async targetAccess => {
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const actor = {
+      ...freshAdminWithSecret(),
+      isAdmin: false,
+      adminPermissions: ['users:impersonate'],
+    } as IUserDocument;
+    const { adapters, mocks } = makeAdapters(actor);
+    mocks.findById.mockResolvedValue({ ...targetUser, ...targetAccess } as IUserDocument);
+    await expect(loginAs(actor, { targetUserId: 'target1', mfaToken: 'token' }, adapters as never)).rejects.toThrow(
+      'Only full administrators'
+    );
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { isAdmin: true, adminPermissions: [] },
+    { isAdmin: false, adminPermissions: [...ADMIN_PERMISSIONS] },
+  ])('preserves full administrator impersonation behavior for privileged targets', async actorAccess => {
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const actor = { ...freshAdminWithSecret(), ...actorAccess } as IUserDocument;
+    const target = { ...targetUser, isAdmin: true } as IUserDocument;
+    const { adapters, mocks } = makeAdapters(actor);
+    mocks.findById.mockResolvedValue(target);
+    await expect(loginAs(actor, { targetUserId: 'target1', mfaToken: 'token' }, adapters as never)).resolves.toEqual(
+      target
+    );
+  });
+
+  it('uses fresh actor authority when an old full-admin JWT attempts privileged impersonation', async () => {
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const actor = {
+      ...freshAdminWithSecret(),
+      isAdmin: false,
+      adminPermissions: ['users:impersonate'],
+    } as IUserDocument;
+    const { adapters, mocks } = makeAdapters(actor);
+    mocks.findById.mockResolvedValue({ ...targetUser, isAdmin: true } as IUserDocument);
+    await expect(loginAs(adminJwt, { targetUserId: 'target1', mfaToken: 'token' }, adapters as never)).rejects.toThrow(
+      'Only full administrators'
+    );
+  });
+
+  it('allows delegated impersonation only while the fresh database grant remains', async () => {
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const delegated = { ...freshAdminWithSecret(), isAdmin: false, adminPermissions: ['users:impersonate'] };
+    const { adapters } = makeAdapters(delegated as IUserDocument);
+    await expect(
+      loginAs(delegated as IUserDocument, { targetUserId: 'target1', mfaToken: 'token' }, adapters as never)
+    ).resolves.toEqual(targetUser);
+    const revoked = makeAdapters({ ...delegated, adminPermissions: [] } as IUserDocument);
+    await expect(
+      loginAs(delegated as IUserDocument, { targetUserId: 'target1', mfaToken: 'token' }, revoked.adapters as never)
+    ).rejects.toThrow('Admin privileges required');
+  });
+
   it('loads the admin via findByIdWithMfaSecrets and passes the secret-bearing user to verifyMFA', async () => {
     vi.clearAllMocks();
     // Secret-sensitive: fails if the admin was loaded without totpSecret - so a

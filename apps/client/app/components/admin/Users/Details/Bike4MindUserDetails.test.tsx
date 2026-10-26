@@ -5,6 +5,13 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
 
+const actor = vi.hoisted(() => ({
+  currentUser: { isAdmin: false, adminPermissions: ['settings:manage', 'credits:adjust'] },
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (state: typeof actor) => unknown) => selector(actor),
+}));
+
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn() } }));
 
 import Bike4MindUserDetails from './Bike4MindUserDetails';

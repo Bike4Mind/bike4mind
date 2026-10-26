@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import type { Request, Response } from 'express';
 import { ApiKeyScope, isPlaceholderValue } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardSnapshotDocument } from '@bike4mind/database';
@@ -15,9 +16,13 @@ import { getTargetUrlForStage } from '@bike4mind/server-utils/integrations/githu
 
 export interface WebSecuritySnapshotResponse extends ISecurityDashboardSnapshotDocument {}
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 
@@ -40,7 +45,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     });
   })
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 

@@ -1,5 +1,6 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { telemetryDryRunResultRepository, type DryRunSource } from '@bike4mind/database';
@@ -16,9 +17,10 @@ const querySchema = z.object({
  * Fetches recent dry run results for the Context Telemetry alert system.
  * Results are sorted by timestamp (most recent first) and auto-expire after 24 hours.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

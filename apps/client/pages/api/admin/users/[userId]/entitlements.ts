@@ -1,7 +1,8 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
@@ -49,9 +50,10 @@ interface EntitlementRow {
  * feature gated on a different principal (e.g. an org-billed embed key resolves
  * the org billing owner) matches only when that principal is the viewed user.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

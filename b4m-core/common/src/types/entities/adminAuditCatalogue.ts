@@ -52,6 +52,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
 
+  'user.api_key.revoked': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.permissions.updated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.admin_granted': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },

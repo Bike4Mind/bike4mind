@@ -7,8 +7,9 @@ import qs from 'qs';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { toSafeOrganization, toSafeOrganizations } from '@bike4mind/common';
-import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { toSafeOrganization, toSafeOrganizations, hasAdminPermission } from '@bike4mind/common';
+import { requireAdminPermission } from '@server/middlewares/adminApi';
 
 const handler = baseApi()
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
@@ -17,7 +18,7 @@ const handler = baseApi()
     const params = qs.parse(req.query) as any;
     // Scope non-admins to their own organizations so this search cannot enumerate
     // other tenants. Admin org-management UIs may still query across tenants.
-    if (!user.isAdmin) {
+    if (!hasAdminPermission(user, 'support:read')) {
       params.filters = { ...(params.filters ?? {}), userId: user.id };
     }
 
@@ -37,7 +38,7 @@ const handler = baseApi()
     // have none (#1405), and this org starts at 0 credits (#1428). The only caller today is the
     // admin panel's Create Organization action; gate the route so a stray authenticated caller
     // can't create an org and silently move their own spend onto an unfunded balance.
-    ensureAdmin(req.user?.isAdmin);
+    requireAdminPermission(req, 'settings:manage');
 
     const organization = await organizationService.create(
       req.user,

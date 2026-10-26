@@ -1,3 +1,5 @@
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useUpdateSubscriptionCredits } from '@client/app/hooks/data/subscriptions';
 import {
   Modal,
@@ -40,7 +42,9 @@ const EditCreditsModal: React.FC<EditCreditsModalProps> = ({
     setCreditsPerCycle(currentCreditsPerCycle);
   }, [currentCreditsPerCycle, open]);
 
+  const canAdjustCredits = useUser(state => hasAdminPermission(state.currentUser, 'credits:adjust'));
   const handleSubmit = async () => {
+    if (!canAdjustCredits) return;
     if (creditsPerCycle <= 0) return;
 
     await updateCredits.mutateAsync({

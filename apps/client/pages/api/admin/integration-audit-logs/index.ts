@@ -1,3 +1,4 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import {
   integrationAuditLogRepository,
   INTEGRATION_AUDIT_ENTITY_TYPES,
@@ -9,7 +10,7 @@ import type {
   IntegrationAuditOutcome,
 } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -33,8 +34,9 @@ const QuerySchema = z.object({
     }),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
+const api = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.get(async (req, res) => {
+  if (!canAccessAdmin(req.user)) {
     throw new ForbiddenError('Admin access required');
   }
 

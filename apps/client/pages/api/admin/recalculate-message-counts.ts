@@ -1,4 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { canAccessAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sessionRepository } from '@bike4mind/database/auth';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -74,10 +75,11 @@ const isSpendingSpiderOperation = (operation: SpiderOperation): operation is Spe
  * - dryRun: boolean (default: false) - If true, only simulates the job without making changes
  * - operations: string[] (default: all) - Specific operations to run
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const api = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const handler = api.post(
   asyncHandler(async (req, res) => {
     // Only admins can trigger Spider
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Admin access required');
     }
 

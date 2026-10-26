@@ -1,6 +1,7 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { AdminSettings, withTransaction } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -13,10 +14,14 @@ const UpdateOperationsModelSchema = z.object({
   speechModelId: z.string(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req: Request, res: Response) => {
     // Check if user is admin
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
@@ -42,7 +47,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .put(async (req: Request, res: Response) => {
     // Check if user is admin
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 

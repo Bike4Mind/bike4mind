@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { requireAdminPermission } from '@server/middlewares/adminApi';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
 import {
@@ -13,7 +14,13 @@ import {
 import { groupRepository } from '@bike4mind/database/social';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { creditService, organizationService } from '@bike4mind/services';
-import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
+import {
+  canAccessAdmin,
+  hasAdminPermission,
+  CreditHolderType,
+  MAX_STORAGE_LIMIT_MB,
+  toSafeOrganization,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { Request } from 'express';
@@ -107,7 +114,8 @@ const handler = baseApi()
       }
 
       const { currentCredits, ...profile } = updateOrgBodySchema.parse(req.body);
-      // Non-admins cannot move credits here; their value is ignored, as before.
+      if (currentCredits !== undefined && canAccessAdmin(req.user)) requireAdminPermission(req, 'credits:adjust');
+      // Organization members cannot move the balance through profile edits.
       const updateProfile = () =>
         organizationService.update(
           req.user!,
@@ -120,10 +128,13 @@ const handler = baseApi()
         );
 
       const updatedOrganization =
-        req.user!.isAdmin && currentCredits !== undefined
+        hasAdminPermission(req.user, 'credits:adjust') && currentCredits !== undefined
           ? await withTransaction(async () => {
               await applyAdminCreditEdit(req, orgId, currentCredits);
-              return updateProfile();
+              if (Object.values(profile).some(value => value !== undefined)) return updateProfile();
+              const organization = await organizationRepository.findById(orgId);
+              if (!organization) throw new NotFoundError('Organization not found');
+              return organization;
             })
           : await updateProfile();
 

@@ -1,9 +1,10 @@
+import { canAccessAdmin } from '@bike4mind/common';
 import { adminSettingsRepository, agentRepository } from '@bike4mind/database';
 import { BadRequestError, ForbiddenError, NotFoundError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { deleteElevenLabsAgent, getElevenLabsAgent, updateElevenLabsAgent } from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
 import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { z } from 'zod';
 
 const UpdateVoiceAgentBodySchema = z.object({
@@ -18,9 +19,13 @@ const UpdateVoiceAgentBodySchema = z.object({
   isDefault: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const api = adminApi({
+  adminPermissions: { GET: 'settings:manage', PATCH: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+});
+const handler = api
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
@@ -54,7 +59,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
   })
   .patch(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
@@ -140,7 +145,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.status(200).json({ agent: updated });
   })
   .delete(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    if (!canAccessAdmin(req.user)) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
