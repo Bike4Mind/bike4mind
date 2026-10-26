@@ -121,6 +121,13 @@ describe('PUT /api/modals/[id] - video', () => {
     }
   );
 
+  it('returns 404 when the modal is deleted between the read and the update', async () => {
+    const { req, res } = mocks({ enabled: false });
+    mockRefs.findOneAndUpdate.mockResolvedValueOnce(null);
+
+    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ statusCode: 404, message: 'Modal not found' });
+  });
+
   it('accepts clearing the video', async () => {
     const { req, res } = mocks({ video: null });
     await mockRefs.putHandler!(req, res);
