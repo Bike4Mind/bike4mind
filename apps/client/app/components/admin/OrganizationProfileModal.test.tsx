@@ -37,10 +37,10 @@ const renderModal = (onClosed = vi.fn()) => {
   return onClosed;
 };
 
-const notFound = () =>
-  new AxiosError('Not found', 'ERR_BAD_REQUEST', undefined, undefined, {
-    status: 404,
-    statusText: 'Not Found',
+const httpError = (status: number) =>
+  new AxiosError('Request failed', 'ERR_BAD_RESPONSE', undefined, undefined, {
+    status,
+    statusText: '',
     data: {},
     headers: {},
     config: { headers: new AxiosHeaders() },
@@ -83,7 +83,7 @@ describe('OrganizationProfileModal', () => {
 
   it('closes on a settled 404 and says so', () => {
     act(() => fakeAdminRouter.reset({ tab: 'organizations', orgsPage: 2, orgId: ORG_ID }));
-    useGetOrganizationMock.mockReturnValue({ data: undefined, isFetching: false, error: notFound() });
+    useGetOrganizationMock.mockReturnValue({ data: undefined, isFetching: false, error: httpError(404) });
     renderModal();
 
     expect(fakeAdminRouter.search).toEqual({ tab: 'organizations', orgsPage: 2 });
@@ -92,10 +92,60 @@ describe('OrganizationProfileModal', () => {
 
   it('stays open on a 404 that is still refetching', () => {
     act(() => fakeAdminRouter.reset({ tab: 'organizations', orgId: ORG_ID }));
-    useGetOrganizationMock.mockReturnValue({ data: undefined, isFetching: true, error: notFound() });
+    useGetOrganizationMock.mockReturnValue({ data: undefined, isFetching: true, error: httpError(404) });
     renderModal();
 
     expect(fakeAdminRouter.search).toMatchObject({ orgId: ORG_ID });
     expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('stays open and says so when the load fails with a server error', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'organizations', orgId: ORG_ID }));
+    useGetOrganizationMock.mockReturnValue({ data: undefined, isFetching: false, error: httpError(500) });
+    renderModal();
+
+    expect(fakeAdminRouter.search).toMatchObject({ orgId: ORG_ID });
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('admin-organization-profile-error')).toBeTruthy();
+  });
+
+  // OrganizationProfileUpdated resets unsaved edits when `org` changes, so a refetch must not reach it.
+  it('keeps showing the organization as opened when the query refetches new data', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'organizations', orgId: ORG_ID }));
+    useGetOrganizationMock.mockReturnValue({ data: { id: ORG_ID, name: 'Acme' }, isFetching: false, error: null });
+    const { rerender } = render(
+      <CssVarsProvider theme={appTheme}>
+        <OrganizationProfileModal onClosed={vi.fn()} />
+      </CssVarsProvider>
+    );
+
+    useGetOrganizationMock.mockReturnValue({
+      data: { id: ORG_ID, name: 'Acme Renamed' },
+      isFetching: false,
+      error: null,
+    });
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <OrganizationProfileModal onClosed={vi.fn()} />
+      </CssVarsProvider>
+    );
+
+    expect(screen.getByTestId('org-profile-close-btn').textContent).toBe('Acme');
+  });
+
+  it('shows fresh data when the organization is closed and opened again', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'organizations', orgId: ORG_ID }));
+    useGetOrganizationMock.mockReturnValue({ data: { id: ORG_ID, name: 'Acme' }, isFetching: false, error: null });
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('org-profile-close-btn'));
+    useGetOrganizationMock.mockReturnValue({
+      data: { id: ORG_ID, name: 'Acme Renamed' },
+      isFetching: false,
+      error: null,
+    });
+    act(() => fakeAdminRouter.navigate({ to: '/admin', search: previous => ({ ...previous, orgId: ORG_ID }) }));
+
+    expect(screen.getByTestId('org-profile-close-btn').textContent).toBe('Acme Renamed');
   });
 });

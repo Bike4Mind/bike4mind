@@ -97,7 +97,8 @@ export const ORGS_SEARCH_PARSERS: {
  * The list view a URL describes, or undefined when it carries none of the view params (a bare
  * `?tab=organizations`, which restores the last view from localStorage). When any view param is
  * present the URL describes the whole view and a missing one means its default, so a shared link
- * never picks up the recipient's saved filters.
+ * never picks up the recipient's saved page, sort or type filter. The saved free-text search still
+ * applies, as it does on the Users tab, since it never enters the URL.
  */
 export function organizationsViewFromSearch(search: Record<string, unknown>): OrganizationsView | undefined {
   const parsed = {
