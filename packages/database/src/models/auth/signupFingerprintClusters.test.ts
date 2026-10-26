@@ -62,12 +62,14 @@ describe('signup fingerprint observations', () => {
       { createdAt: new Date(start.getTime() - 1), deletedAt: null, signupMeta: { ...meta, ja4: fingerprint } },
       { createdAt: start, deletedAt: null, signupMeta: { ...meta, ja4: other } },
       { createdAt: start, deletedAt: null },
+      ...Array.from({ length: 3 }, () => ({ createdAt: start, signupMeta: { ja4: 'invalid-legacy-value' } })),
     ]);
     await AuthEventModel.create(
       Array.from({ length: 4 }, () => ({ ...meta, ja4: fingerprint, userId: 'retry', type: 'login', method: 'test' }))
     );
     const expected = [{ ja4: fingerprint, signupCount: 2, windowStart: start, windowEnd: end }];
     expect(await findSignupFingerprintClusters(query)).toEqual(expected);
+    expect(await findSignupFingerprintClusters({ ...query, limit: 1 })).toEqual(expected);
     expect(await findSignupFingerprintClusters(query)).toEqual(expected);
     expect(await findSignupFingerprintClusters({ ...query, excludedFingerprints: [fingerprint] })).toEqual([]);
     expect(await findSignupFingerprintClusters({ ...query, minimumSignups: 3 })).toEqual([]);

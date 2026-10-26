@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ja4FingerprintSchema, type SignupFingerprintCluster } from '@bike4mind/common';
+import { JA4_PATTERN, ja4FingerprintSchema, type SignupFingerprintCluster } from '@bike4mind/common';
 import { User } from './UserModel';
 
 const querySchema = z
@@ -26,7 +26,7 @@ export async function findSignupFingerprintClusters(
     {
       $match: {
         createdAt: { $gte: query.windowStart, $lt: query.windowEnd },
-        'signupMeta.ja4': { $type: 'string', $nin: query.excludedFingerprints },
+        'signupMeta.ja4': { $type: 'string', $regex: JA4_PATTERN.source, $nin: query.excludedFingerprints },
       },
     },
     { $group: { _id: '$signupMeta.ja4', signupCount: { $sum: 1 } } },
