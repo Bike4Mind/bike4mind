@@ -14,6 +14,7 @@ import { aiSoundService, aiVoiceService } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
+import { ProviderBusyError, runElevenLabsWithCapacity } from '../../../../providerCapacity';
 import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 import { ToolContext, ToolDefinition } from '../../base/types';
 
@@ -116,11 +117,19 @@ export const audioGenerationTool: ToolDefinition = {
         let audio: Buffer;
         let contentType: string;
         try {
-          ({ audio, contentType } = await aiSoundService(SFX_PROVIDER, apiKey, context.logger).generate(text, {
-            durationSeconds,
-            promptInfluence: audioConfig.promptInfluence,
-          }));
+          ({ audio, contentType } = await runElevenLabsWithCapacity(
+            { operation: 'sound', apiKey, db: context.db, logger: context.logger },
+            ({ timeoutMs }) =>
+              aiSoundService(SFX_PROVIDER, apiKey, context.logger, { timeoutMs }).generate(text, {
+                durationSeconds,
+                promptInfluence: audioConfig.promptInfluence,
+              })
+          ));
         } catch (error) {
+          if (error instanceof ProviderBusyError) {
+            context.logger.warn('[audio_generation] sound-effect provider at capacity', { reason: error.reason });
+            return `Error: the ${SFX_PROVIDER} sound-effects service is busy right now. Try again in about ${error.retryAfterSeconds} seconds.`;
+          }
           context.logger.error('[audio_generation] sound-effect generation failed', {
             errorType: error instanceof Error ? error.name : typeof error,
           });
@@ -135,6 +144,12 @@ export const audioGenerationTool: ToolDefinition = {
           provider: SFX_PROVIDER,
           prompt: text,
           ...(durationSeconds !== undefined && { durationSeconds }),
+          request: {
+            provider: SFX_PROVIDER,
+            text,
+            ...(durationSeconds !== undefined && { durationSeconds }),
+            ...(audioConfig.promptInfluence !== undefined && { promptInfluence: audioConfig.promptInfluence }),
+          },
         });
 
         await context.onFinish?.('audio_generation', {
@@ -229,6 +244,14 @@ export const audioGenerationTool: ToolDefinition = {
         provider,
         modelId: resolvedModel,
         prompt: text,
+        request: {
+          provider,
+          text,
+          model: resolvedModel,
+          ...(voice && { voice }),
+          ...(format && { format }),
+          ...(provider === 'elevenlabs' && audioConfig.languageCode && { languageCode: audioConfig.languageCode }),
+        },
       });
 
       // Settle on the ACTUAL billed model + character count so the tool charge matches

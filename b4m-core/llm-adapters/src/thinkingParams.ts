@@ -1,4 +1,5 @@
 import {
+  ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
   ChatModels,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
@@ -109,16 +110,8 @@ export function resolveAnthropicEffort(input: {
   );
 }
 
-/**
- * max_tokens floor for adaptive reasoning models (Claude 4.7+/Opus 5). These
- * models self-manage extended thinking *within* max_tokens, which is a ceiling
- * (they stop at end_turn), not a target - so a larger floor costs nothing on
- * short replies but keeps reasoning from consuming the whole budget and leaving
- * no room for the visible answer. Both paths that size an adaptive model's output
- * budget read it from here: buildThinkingParams (thinking explicitly enabled) and
- * resolveOutputMaxTokens (the default when a caller names no budget).
- */
-export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
+// Lives in common so the settings UI can warn against the same number this module sizes with.
+export { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR };
 
 /**
  * Room reserved for the visible answer above a legacy thinking budget. The API rejects a
@@ -282,6 +275,22 @@ export function resolveOutputMaxTokens({
     return Math.min(preferred, derivedOutputCeiling(modelInfo, cap));
   }
   return Math.min(preferred, cap);
+}
+
+/**
+ * The reasoning floor an explicit budget falls below, or undefined when it does not. Telemetry
+ * only: resolveOutputMaxTokens still honors the budget, so callers log it (through
+ * sentBelowReasoningFloor in modelSizing.ts, which also accounts for thinking) to trace a reply that
+ * ends empty at max_tokens back to a low setting. The floor is what an unstated budget resolves to
+ * on this model, so a budget at a model cap below ADAPTIVE_THINKING_MAX_TOKENS_FLOOR is not reported.
+ */
+export function belowReasoningFloor(
+  args: Parameters<typeof resolveOutputMaxTokens>[0]
+): { requested: number; floor: number } | undefined {
+  const requested = usableTokenCount(args.requested);
+  if (requested === undefined || !reasonsWithinOutputBudget(args.modelInfo)) return undefined;
+  const floor = resolveOutputMaxTokens({ ...args, requested: undefined });
+  return requested < floor ? { requested, floor } : undefined;
 }
 
 /**

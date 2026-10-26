@@ -100,12 +100,13 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   }),
 }));
 
+import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { GENERATED_AUDIO_TOO_LARGE_MESSAGE } from '@server/utils/generatedAudioDelivery';
 import handler from '../tts';
 
 const run = (
   body: Record<string, unknown>,
-  user: { id?: string; organizationId?: string | null; isAdmin?: boolean } | undefined = { id: 'u1' },
+  user: { id?: string; organizationId?: string | null; isAdmin?: boolean; isModerated?: boolean } | undefined = { id: 'u1' },
   apiKeyInfo?: unknown
 ) => {
   const { req, res } = createMocks({ method: 'POST', body });
@@ -161,6 +162,13 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/tts', () => {
+  it('rejects a moderated user with 403 before reserving credits or calling a provider', async () => {
+    const { promise } = run({ text: 'hi' }, { id: 'u1', isModerated: true });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403, message: AI_ACCESS_REVOKED_MESSAGE });
+    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  });
+
   it('rejects an unsupported (vendor, format) pair with 422 before any provider cost', async () => {
     const { promise } = run({ text: 'hi', provider: 'elevenlabs', format: 'wav' });
     await expect(promise).rejects.toBeInstanceOf(UnprocessableEntityError);
@@ -503,7 +511,14 @@ describe('POST /api/ai/tts', () => {
         userId: 'u1',
         bytes: expect.any(Buffer),
         contentType: 'audio/mpeg',
-        generation: { generator: 'speech', provider: 'openai', modelId: 'tts-1', prompt: 'hello', format: 'mp3' },
+        generation: {
+          generator: 'speech',
+          provider: 'openai',
+          modelId: 'tts-1',
+          prompt: 'hello',
+          format: 'mp3',
+          request: expect.objectContaining({ provider: 'openai', text: 'hello' }),
+        },
       },
       expect.anything()
     );

@@ -18,6 +18,7 @@ import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './ClaudeImportSettings';
+import { LocalHistorySettings } from './LocalHistorySettings';
 import { EntrySection, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
 import {
   ArrowLeftIcon,
@@ -140,6 +141,16 @@ function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => vo
   };
 }
 
+function localHistoryEntry(): ConfigEntry {
+  return {
+    id: 'local-history',
+    icon: <FolderIcon />,
+    label: 'Local history',
+    summary: 'Opted-in conversations and pages stay on this device and remain searchable offline.',
+    control: <LocalHistorySettings />,
+  };
+}
+
 function permissionsEntry(
   state: PermissionsState | null,
   setState: (state: PermissionsState) => void,
@@ -171,7 +182,7 @@ function claudeImportEntry(
 }
 
 /**
- * Which backend every conversation talks to.
+ * Which backend hosted conversations talk to.
  *
  * It used to live in the account menu, which is where a user looks for who they are rather than
  * for what the app is wired to. The signed-out card keeps its own copy of this picker - someone
@@ -190,7 +201,7 @@ function serverEntry(state: AuthState): ConfigEntry {
             where the agent runs; this app's agent is the Electron main process and has
             nowhere else to go. */}
         <Typography level="body-xs" textColor="text.tertiary">
-          Every conversation in this app talks to one server.
+          Hosted conversations use this server. Local models run on this device.
         </Typography>
         <EnvironmentPicker state={state} />
       </Stack>
@@ -260,6 +271,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      localHistoryEntry(),
       ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),
       updatesEntry(update),

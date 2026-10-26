@@ -26,7 +26,11 @@ export function useReleaseNoteSlides() {
       );
       return (data?.data ?? []).map(note => {
         const modal = releaseNoteToModal(note);
-        return modal.video ? { ...modal, video: localizeMediaRouteUrls(modal.video, upstreamOrigin) } : modal;
+        return {
+          ...modal,
+          video: modal.video ? localizeMediaRouteUrls(modal.video, upstreamOrigin) : modal.video,
+          stillImage: modal.stillImage ? localizeMediaRouteUrls(modal.stillImage, upstreamOrigin) : modal.stillImage,
+        };
       });
     },
     staleTime: 1000 * 60 * 5,

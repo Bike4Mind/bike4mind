@@ -20,8 +20,12 @@ export function parseImageSize(size?: string | null): { width: number; height: n
 }
 
 /**
- * BFL rejects a request outside this range outright, so a preset beyond it must not be forwarded.
- * Its API also requires each dimension to be a multiple of `step`.
+ * One ceiling for the whole BFL family: 256..1440 in 32px steps. That range is FLUX.1 Pro's
+ * documented limit, and it deliberately covers the newer FLUX.2 endpoints too - their request
+ * schemas accept a lower minimum and no maximum, but the picker offers a single BFL preset list
+ * topping out at 1440, and honouring a larger explicit pair would render a size no control can
+ * show. A wider FLUX.2 ceiling is a product decision, not something to inherit by accident.
+ * BFL also requires each dimension to be a multiple of `step`.
  */
 export const BFL_DIMENSION_BOUNDS = {
   min: IMAGE_SIZE_CONSTRAINTS.BFL.minWidth,

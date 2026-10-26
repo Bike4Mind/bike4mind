@@ -111,6 +111,8 @@ export const COMPLETION_TOOL_ERROR_CODES = [
 ] as const satisfies readonly ApiErrorCode[];
 export type CompletionToolErrorCode = (typeof COMPLETION_TOOL_ERROR_CODES)[number];
 
+export const ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE = 'assistant_prefill_unsupported' as const satisfies ApiErrorCode;
+
 export const TOOL_CHANGE_BLOCK_TYPES = ['tool_addition', 'tool_removal'] as const;
 
 /**
@@ -180,7 +182,11 @@ export const CompletionMessageSchema = z.object({
         '`tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ' +
         'ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose ' +
         '`supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with ' +
-        '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed).'
+        '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). ' +
+        'A final non-blank assistant turn is an assistant prefill, except a server-tool continuation ending in ' +
+        '`server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. It is accepted only ' +
+        'when the selected model has `supports_assistant_prefill: true`; otherwise the request returns `400` with ' +
+        '`errorCode: "assistant_prefill_unsupported"` without changing the message.'
     ),
   cache: z.boolean().optional(),
 });

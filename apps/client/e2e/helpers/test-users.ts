@@ -1,6 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import { NOTEBOOK_EXPORT_IMPORTER_KEY, SKILLS_MEMBER_KEY } from '../constants';
+import {
+  NOTEBOOK_EXPORT_IMPORTER_KEY,
+  SKILLS_MEMBER_KEY,
+  TEAMS_INVITEE_KEY,
+  TEAMS_MANAGER_KEY,
+  TEAMS_MEMBER_KEY,
+} from '../constants';
 
 export interface TestUser {
   userId: string;
@@ -52,6 +58,11 @@ const SPEC_KEYS = [
   NOTEBOOK_EXPORT_IMPORTER_KEY,
   // The skills suite's non-admin user, same arrangement as the importer above.
   SKILLS_MEMBER_KEY,
+  'teams',
+  // The teams suite's member, manager and invitee, same arrangement as the importer above.
+  TEAMS_MEMBER_KEY,
+  TEAMS_MANAGER_KEY,
+  TEAMS_INVITEE_KEY,
   // AI-latency suites (only seeded when AI_LATENCY_RUN=true; getTestUsers skips absent files).
   // Listed here so getTestUsers loads their spec users, which lets specAuthForProject resolve
   // real auth and route their navigations through /auth/success like every other authed suite -

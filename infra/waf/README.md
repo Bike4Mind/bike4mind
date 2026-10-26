@@ -1,9 +1,33 @@
 # WAF policy notes
 
+## Sample policy and deployment-owned policies
+
+The two JSON files in this directory are a sample policy with round example
+rate limits. They are not tuned for any particular deployment. A deployment
+supplies its own policy in one of two ways:
+
+- overwrite `bike4mind-api-protection-prod.json` and
+  `bike4mind-api-protection-dev.json` here before SST runs, or
+- set `WAF_POLICY_DIR` to a directory holding files with those same two names
+  (absolute, or relative to the repo root). See `resolveWafPolicyDir` in
+  `infra/wafPolicy.ts`.
+
+To check a deployment-owned policy against the structural invariants (rule
+order, priorities, shadow rules staying in Count), point the suite at it:
+
+```sh
+WAF_POLICY_DIR=<dir> pnpm exec vitest run --dir infra wafPolicy
+```
+
+In that mode the tests that pin the sample's exact rate limits are skipped and
+everything else is enforced. Do not copy a deployment-owned policy into this
+directory and run the suite without `WAF_POLICY_DIR`: the sample-limit pins will
+fail by design.
+
 ## Bot Control telemetry
 
 Both stage policies run `AWSManagedRulesBotControlRuleSet` at the `COMMON`
-inspection level, last at priority 20, with the group return action overridden
+inspection level, last at priority 30, with the group return action overridden
 to `Count`. It cannot block, challenge, or CAPTCHA requests.
 
 This is partial telemetry: earlier terminating Allow or Block rules prevent
@@ -30,8 +54,9 @@ with `CLOUDFRONT` scope, compared the policies before and after Bot Control:
 The API measured the complete rule lists, replacing the emergency IPSet ARN
 placeholder with an existing CloudFront IPSet ARN. AWS optimizes combined rule
 capacity, so summing individual statement costs overestimates these policies.
-Both remain below the 1,500 WCU base-pricing threshold, but dev has only 4 WCU
-of headroom. Re-run `CheckCapacity` after policy changes or managed-rule updates;
+These are historical measurements from before the additional path-scoped rate
+rules. They do not describe the current policy's capacity or pricing tier.
+Re-run `CheckCapacity` after policy changes or managed-rule updates;
 these measurements are not a permanent capacity guarantee.
 
 [WAF pricing](https://aws.amazon.com/waf/pricing/) adds a per-request charge for

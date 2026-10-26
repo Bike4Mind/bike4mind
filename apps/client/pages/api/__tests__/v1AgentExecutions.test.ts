@@ -217,6 +217,37 @@ describe('POST /api/v1/agent-executions', () => {
     expect(error).toMatchObject({ statusCode: 400, message: 'key is stale' });
   });
 
+  it('forwards confidence_overrides for the service to authorize', async () => {
+    const { req, res } = post({ session_id: 's1', message: 'go', confidence_overrides: [0.9, 0.1] });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(req, res);
+
+    expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({ confidenceOverrides: [0.9, 0.1] }), logger);
+  });
+
+  it('maps confidence_overrides_forbidden to a 403', async () => {
+    mockStart.mockResolvedValue({ ok: false, reason: 'confidence_overrides_forbidden', message: 'admins only' });
+    const { req, res } = post({ session_id: 's1', message: 'go', confidence_overrides: [0.1] });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const error = await (startHandler as any)(req, res).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({ statusCode: 403, message: 'admins only' });
+  });
+
+  it.each([
+    ['a score above 1', [1.5]],
+    ['a negative score', [-0.1]],
+    ['an empty script', []],
+  ])('rejects confidence_overrides with %s before dispatching anything', async (_label, confidence_overrides) => {
+    const { req, res } = post({ session_id: 's1', message: 'go', confidence_overrides });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect((startHandler as any)(req, res)).rejects.toThrow();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
   it("forwards an org-billed key's billing fields so startAgentExecution can bill its org", async () => {
     const keyInfo = {
       keyId: 'key-1',

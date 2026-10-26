@@ -306,7 +306,7 @@ export class SessionStore {
 
     let preparing = this.prepared.get(directory);
     if (!preparing) {
-      preparing = this.prepare(directory);
+      preparing = this.prepare(directory, !scope.local);
       this.prepared.set(directory, preparing);
     }
     this.lastDirectory = await preparing;
@@ -320,9 +320,9 @@ export class SessionStore {
    * the scope prepared after this one finds none. Nothing marks it as done, because an empty
    * base directory IS done - a marker could only ever come to disagree with the files.
    */
-  private async prepare(directory: string): Promise<string> {
+  private async prepare(directory: string, adoptLegacy: boolean): Promise<string> {
     await mkdir(directory, { recursive: true });
-    await migrateLegacySessions(this.baseDirectory, directory);
+    if (adoptLegacy) await migrateLegacySessions(this.baseDirectory, directory);
     return directory;
   }
 
@@ -374,6 +374,13 @@ export class SessionStore {
     };
     await this.write(directory, session);
     return summarize(session);
+  }
+
+  /** Capture identity before an asynchronous operation that must not cross accounts. */
+  scopeKey(): string | null {
+    if (!this.scope) return 'default';
+    const scope = this.scope();
+    return scope ? sessionScopeKey(scope) : null;
   }
 
   async get(id: string): Promise<ChatSession | null> {
@@ -557,6 +564,24 @@ export class SessionStore {
       session.updatedAt = new Date().toISOString();
       return true;
     });
+  }
+
+  async setHistoryEnabled(
+    id: string,
+    enabled: boolean,
+    expectedScope = this.scopeKey(),
+    isCurrentOperation: () => boolean = () => true
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        if (enabled) session.historyEnabled = true;
+        else delete session.historyEnabled;
+        return true;
+      },
+      expectedScope,
+      isCurrentOperation
+    );
   }
 
   /**
@@ -933,14 +958,18 @@ export class SessionStore {
    */
   private async mutate(
     id: string,
-    change: (session: ChatSession) => boolean | null
+    change: (session: ChatSession) => boolean | null,
+    expectedScope?: string | null,
+    isCurrentOperation: () => boolean = () => true
   ): Promise<ChatSessionSummary | null> {
     return this.serialize(id, async () => {
+      if (!isCurrentOperation() || (expectedScope !== undefined && this.scopeKey() !== expectedScope)) return null;
       const directory = await this.directoryFor(false);
       if (!directory) return null;
       const session = await this.read(directory, id);
       if (!session) return null;
 
+      if (!isCurrentOperation() || (expectedScope !== undefined && this.scopeKey() !== expectedScope)) return null;
       const outcome = change(session);
       if (outcome === null) return null;
       if (outcome) await this.write(directory, session);
@@ -1007,6 +1036,7 @@ export class SessionStore {
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),
+      ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
       ...(origin ? { origin } : {}),
       ...(importOrigin ? { importOrigin } : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],

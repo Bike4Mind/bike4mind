@@ -1342,6 +1342,40 @@ describe('ImageEditService quest partial writes', () => {
       });
     });
 
+    it('records reference lineage and the request, never the mask', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const image = (id: string, fileName: string) => ({
+        id,
+        fileName,
+        mimeType: 'image/png',
+        filePath: `fab/${id}.png`,
+        moderationStatus: 'clean',
+      });
+      const files: Record<string, unknown> = { mask1: image('mask1', 'image_mask_1.png'), r1: image('r1', 'ref.png') };
+      const { service } = arrange(save, {
+        fabFiles: { findAccessibleInIds: vi.fn(async (ids: string[]) => ids.map(id => files[id]).filter(Boolean)) },
+      });
+      await service.process({
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          userId: 'user1',
+          generationId: 'gen-1',
+          prompt: 'make it blue',
+          model: ImageModels.GPT_IMAGE_1_5,
+          image: 'https://example.invalid/source.png',
+          fabFileIds: ['mask1'],
+          referenceImageFabFileIds: ['r1'],
+        } as never,
+        logger: silentLogger,
+      });
+
+      const saved = save.mock.calls[0][0];
+      expect(saved.derivedFrom).toEqual([{ fileId: 'r1', role: 'reference' }]);
+      expect(saved.generation.request).toMatchObject({ model: ImageModels.GPT_IMAGE_1_5, prompt: 'make it blue' });
+      expect(JSON.stringify(saved.generation.request)).not.toMatch(/source\.png|mask1/);
+    });
+
     it('saves nothing when billing fails', async () => {
       const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
       const { service, update } = arrangeBilled(save);

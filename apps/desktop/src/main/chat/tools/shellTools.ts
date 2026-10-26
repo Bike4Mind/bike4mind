@@ -6,6 +6,13 @@ import type { OutputStream } from './outputBuffer';
 import { realpathNearest, resolveWithinRoots } from './paths';
 import { writesOwnRepository } from './ownRepository';
 import { scanShell } from './shellScan';
+import {
+  expectShellRun,
+  gitRunsConfiguredProgram,
+  recordSessionWrite,
+  sessionScriptRun,
+  shellCommandRan,
+} from './sessionScripts';
 import { commandEnv, launchCommand } from './commandLaunch';
 import type { SandboxedCommand } from './sandbox';
 import {
@@ -423,19 +430,35 @@ export async function shellApproval(
   const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
   if (!scan) return { detail, key, askInAuto: true };
 
+  // Recorded before the check, so a script written and run by this same command counts.
+  for (const written of scan.writes) await recordSessionWrite(context, written);
+  const script = await sessionScriptRun(command, startDirectory, context.sessionId).catch(() => null);
+  const gitProgram = gitRunsConfiguredProgram(scan.commands);
   const reasons = [
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
+    ...(script && script.names.length > 0
+      ? [
+          `Runs code from ${script.names.join(', ')}, which ${script.untracked ? 'may have been' : 'was'} written in this session.`,
+        ]
+      : []),
+    ...(script && script.hooks.length > 0
+      ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
+      : []),
+    ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
   ];
   // A push or gh write to the folder's own origin still says so on the card, but does not stop
   // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
   const ownRepository = await Promise.all(
     scan.sends.map(({ target }) => (target ? writesOwnRepository(target).catch(() => false) : false))
   );
-  const asks = scan.envFiles.length > 0 || ownRepository.includes(false);
+  const asks = scan.envFiles.length > 0 || ownRepository.includes(false) || !!script || !!gitProgram;
+  // An exact "always" for the run lapses when the script is written again.
+  const runKey = script ? `${key}\x00${script.generation}` : key;
+  if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
   return {
     detail: [detail, ...reasons].join('\n\n'),
-    key,
+    key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
     ...(scan.contained ? { contained: true as const } : {}),
     always: {
@@ -569,6 +592,7 @@ export const bashExecute: ToolDefinition = {
     if (refused) throw new Error(`Refused: this command ${refused}. It was not run.`);
 
     const cwd = await resolveCwd(input, context.roots, context.workingDirectory);
+    shellCommandRan(context);
     const requestedTimeout = optionalNumber(input, 'timeout');
     const timeoutMs = Math.min(Math.max(requestedTimeout ?? DEFAULT_TIMEOUT_MS, 1_000), MAX_TIMEOUT_MS);
 

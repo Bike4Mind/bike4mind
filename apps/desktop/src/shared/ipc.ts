@@ -84,6 +84,7 @@ import type {
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LocalHistoryResult, LocalHistoryState } from './history';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -117,6 +118,11 @@ export const IPC_CHANNELS = {
   chatListModels: 'chat:list-models',
   chatListSuggestionModels: 'chat:list-suggestion-models',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSetSessionHistory: 'chat:set-session-history',
+  chatSearchHistory: 'chat:search-history',
+  chatClearHistory: 'chat:clear-history',
+  chatHistoryState: 'chat:history-state',
+  chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
@@ -561,6 +567,11 @@ export interface DesktopApi {
     listSuggestionModels(): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null>;
+    searchHistory(query: string): Promise<LocalHistoryResult[]>;
+    clearHistory(): Promise<LocalHistoryState>;
+    historyState(): Promise<LocalHistoryState>;
+    onHistoryChanged(listener: () => void): () => void;
     /** How hard this conversation's model should think. Null when the session is gone. */
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */

@@ -46,3 +46,14 @@ describe('SpicyUserActions - delete reason', () => {
     expect(handleDeleteUser).toHaveBeenCalledWith('u1', 'Account abuse report');
   });
 });
+
+describe('SpicyUserActions - accessible names', () => {
+  it('labels the Ban and Moderate checkboxes', () => {
+    render(<SpicyUserActions user={user} editedFields={{}} onFieldChange={vi.fn()} handleDeleteUser={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+
+    expect(screen.getByRole('checkbox', { name: 'Ban' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Moderate' })).toBeInTheDocument();
+  });
+});

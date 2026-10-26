@@ -531,6 +531,33 @@ describe('ConfigStore folder-trust gate', () => {
       }
     });
 
+    it('escapes the project path when warning about skipped MCP approvals', async () => {
+      const hostileProjectDir = path.join(path.dirname(projectDir), 'proj-\x1b]52;c;dGVzdA==\x07\n\r\u202e');
+      process.chdir(path.dirname(projectDir));
+      await fs.rename(projectDir, hostileProjectDir);
+      projectDir = hostileProjectDir;
+      projectReal = await fs.realpath(projectDir);
+      process.chdir(projectDir);
+
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      try {
+        const store = await trustedStore();
+        store.warnPendingMcpApprovals();
+
+        const warning = warn.mock.calls
+          .map(([message]) => message)
+          .find(message => message.includes('unapproved repo MCP'));
+        expect(warning).toBeDefined();
+        expect(warning).toContain('proj-\\x1b]52;c;dGVzdA==\\x07\\n\\x0d\\u202e');
+        expect(warning).not.toContain('\x1b');
+        expect(warning).not.toMatch(/[\r\n]/);
+        expect(pendingNames(store)).toEqual(['mcpjson-srv', 'repo-srv']);
+        expect(await spawnable(store)).toEqual(['glob-srv']);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it('ignores a repo config that tries to pre-approve its own servers', async () => {
       await writeMcpJson({ 'sneaky-srv': { command: 'sh', args: ['x.sh'] } });
       const fp = (await trustedStore()).getPendingMcpApprovals().find(p => p.name === 'sneaky-srv')!.fingerprint;

@@ -340,14 +340,15 @@ export interface IAgentExecution {
   enableArtifacts?: boolean;
   /**
    * The orchestration profile's deniedTools, persisted when the profile is resolved (new
-   * executions; the surface-scoped optimizer profile re-resolves every invocation and does
-   * not need this copy). Continuations re-read it because the profile itself does not
+   * executions). Continuations re-read it because a pinned profile itself does not
    * survive a Lambda handoff - `startPayload.agentId` is gone on a resume, so a persisted
    * agent's denials would otherwise evaporate from the first permission card or handoff.
    * Same durability pattern as `enableLattice` above. Distinct from `deniedTools` below,
    * which is the per-execution user-approval denial list.
    */
   profileDeniedTools?: string[];
+  /** Whether the start payload pinned an agent; absent on executions predating this marker. */
+  profileIsPinned?: boolean;
   /**
    * The toolbelt names the first invocation resolved (profile + payload, ambient Smart Tools
    * included, denials already subtracted). Continuations replay this instead of recomputing,
@@ -451,6 +452,12 @@ export interface IAgentExecution {
    * written before it existed lack it; `$inc` treats the missing field as 0.
    */
   lowConfidenceStreak?: number;
+
+  /**
+   * Admin-only scripted per-iteration gate confidence; semantics are documented on
+   * `confidence_overrides` in `AgentExecutionStartRequestSchema` (@bike4mind/common).
+   */
+  confidenceOverrides?: number[];
 
   /**
    * Durable optimizer plan ledger (#680). Present only on opti agent runs; rehydrated each
@@ -766,6 +773,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
     profileDeniedTools: { type: [String], default: undefined },
+    profileIsPinned: { type: Boolean },
     resolvedEnabledTools: { type: [String], default: undefined },
     scopeDeniedTools: { type: [String], default: undefined },
     apiKeyId: { type: String },
@@ -820,6 +828,8 @@ const AgentExecutionSchema = new mongoose.Schema(
     // apply to every new execution.
     confidenceTelemetry: { type: ConfidenceTelemetrySchema, default: () => ({}) },
     lowConfidenceStreak: { type: Number, default: 0 },
+    // `default: undefined` so a normal run carries no field rather than an empty script.
+    confidenceOverrides: { type: [Number], default: undefined },
     // Opti-only; no default so non-opti executions don't carry an empty ledger.
     optiPlanState: { type: OptiPlanStateSchema, required: false },
 
@@ -1476,10 +1486,13 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     await this.model.updateOne({ _id: id }, { $set: { connectionId } });
   }
 
-  /** Written once when the orchestration profile resolves; continuations re-read it
+  /** Written atomically with profile provenance when the orchestration profile resolves; continuations re-read it
    *  (see IAgentExecution.profileDeniedTools). */
-  async persistProfileDeniedTools(id: string, profileDeniedTools: string[]): Promise<void> {
-    await this.model.updateOne({ _id: id }, { $set: { profileDeniedTools } });
+  async persistProfileDeniedTools(id: string, profileDeniedTools: string[], profileIsPinned?: boolean): Promise<void> {
+    await this.model.updateOne(
+      { _id: id },
+      { $set: { profileDeniedTools, ...(profileIsPinned !== undefined ? { profileIsPinned } : {}) } }
+    );
   }
 
   /** Written once on the first invocation; continuations re-read it
@@ -1702,21 +1715,27 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Also advances `lowConfidenceStreak` in the same write: incremented when
    * `belowThreshold`, reset to 0 otherwise. Returns the updated streak, which is
    * what the gate decides on (0 if the doc is gone).
+   *
+   * `recordTelemetry: false` advances only the streak: a scripted score
+   * (`confidenceOverrides`) must still drive the gate but stay out of the counters.
    */
   async recordIterationConfidence(
     id: string,
     confidence: number,
-    { belowThreshold }: { belowThreshold: boolean }
+    { belowThreshold, recordTelemetry = true }: { belowThreshold: boolean; recordTelemetry?: boolean }
   ): Promise<number> {
+    const inc: Record<string, number> = {
+      ...(recordTelemetry
+        ? { 'confidenceTelemetry.evaluatedCount': 1, 'confidenceTelemetry.confidenceSum': confidence }
+        : {}),
+      ...(belowThreshold ? { lowConfidenceStreak: 1 } : {}),
+    };
     const updated = await this.model.findOneAndUpdate(
       { _id: id },
       {
-        $inc: {
-          'confidenceTelemetry.evaluatedCount': 1,
-          'confidenceTelemetry.confidenceSum': confidence,
-          ...(belowThreshold ? { lowConfidenceStreak: 1 } : {}),
-        },
-        $min: { 'confidenceTelemetry.minConfidence': confidence },
+        // Mongo rejects an empty `$inc`, which a scripted above-threshold score would otherwise send.
+        ...(Object.keys(inc).length > 0 ? { $inc: inc } : {}),
+        ...(recordTelemetry ? { $min: { 'confidenceTelemetry.minConfidence': confidence } } : {}),
         ...(belowThreshold ? {} : { $set: { lowConfidenceStreak: 0 } }),
       },
       { new: true, projection: { lowConfidenceStreak: 1 } }

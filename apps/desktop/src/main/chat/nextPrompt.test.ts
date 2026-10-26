@@ -46,6 +46,13 @@ describe('pickSuggestionModel', () => {
     expect(pickSuggestionModel([option(SUGGESTION_MODELS[0])], 'qwen3:8b')).toBeNull();
   });
 
+  it('offers and uses a device-local model pinned in Settings', () => {
+    const local = option('local:ollama:qwen3:8b', 'local-ollama');
+    expect(suggestionModelChoices([local])).toEqual([local]);
+    expect(pickSuggestionModel([local], local.id)).toBe(local);
+    expect(pickSuggestionModel([local])).toBeNull();
+  });
+
   it('refuses a pin on a big hosted model the picker never offered', () => {
     expect(pickSuggestionModel([option('claude-opus-4-5-20251101')], 'claude-opus-4-5-20251101')).toBeNull();
   });

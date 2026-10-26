@@ -150,7 +150,7 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   webhookDeliveryQueue: 'reachable from the webhook retry and replay-dlq routes - needs a consumer first',
 
   // Admin-only, and each needs something self-host has not got.
-  whatsNewGenerationQueue: 'admin-only backfill route; needs a content-generation decision',
+  whatsNewGenerationQueue: 'subscribes releaseNotes.dispatch; self-host has no release-notes pipeline to run it',
   // Same feature family, surfaced once the scanner learned to read a wide cast and a wrapped
   // access. Worth noting for whoever wires it: the 500 guard at generate-highlights.ts cannot
   // fire on self-host, because the shim's Proxy throws on the property access before `?.url` is
@@ -158,6 +158,11 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   whatsNewHighlightsQueue: 'admin route; needs the same content-generation decision',
   secopsTriageQueue: 'admin security-dashboard ingest; needs Prowler and AWS findings',
   sreJobQueue: 'admin SRE rerun/retry routes; handler needs Bedrock and CloudWatch',
+
+  // Publish enqueues on every bundle publish, but the enqueue skips quietly when no URL resolves,
+  // so leaving it unregistered is the safe state: a declared queue with no consumer would only
+  // pile up messages. Registered as hosted-only in packages/scripts/src/selfhostParityPolicy.ts.
+  publishThumbnailQueue: 'publish thumbnail renders; consumer needs a headless Chromium the worker image lacks',
 };
 
 /**

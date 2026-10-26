@@ -1,9 +1,16 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
+import { chatCompletionCapacity } from './chatCompletionCapacity';
+import {
+  DEFAULT_LAMBDA_ENVIRONMENT,
+  isPreviewStage,
+  PRODUCTION_STAGES,
+  TEST_GENERATION_PROVIDER_ENVIRONMENT,
+} from './constants';
 import { ecsEnvSecret, ecsResourceSecrets, ecsSecretsVersion } from './ecsSecrets';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
+import { providerFederation } from './providerFederation';
 import { generationJobQueue } from './queues';
 import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
 import { searxngUrl } from './searxng';
@@ -117,6 +124,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   cpu: isProd ? '1 vCPU' : '0.5 vCPU',
   memory: isProd ? '2 GB' : '1 GB',
   scaling: isProd ? { min: 2, max: 6, cpuUtilization: 70 } : { min: 1, max: 2 },
+  capacity: chatCompletionCapacity(isPreviewStage),
   link: [
     ...linkedSecrets,
     fabFileBucket,
@@ -155,6 +163,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
       actions: ['aws-marketplace:ViewSubscriptions', 'aws-marketplace:Subscribe', 'aws-marketplace:Unsubscribe'],
       resources: ['*'],
     },
+    ...providerFederation.permissions,
   ],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -172,6 +181,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // that run web search (also infra/agentExecutor.ts, infra/queues.ts); the URL resolves only
     // inside the VPC.
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
+    ...providerFederation.environment,
   },
   logging: {
     // Long enough to investigate a model-fallback or billing report after the fact; these

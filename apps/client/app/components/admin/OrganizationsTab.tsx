@@ -362,6 +362,7 @@ const OrganizationsTab: React.FC = () => {
             <SearchBar
               handleChange={handleSearchChange}
               placeHolder="Search organizations..."
+              slotProps={{ input: { 'data-testid': 'admin-organizations-search-input' } }}
               debounceTimeout={300}
               endDecorator={isLoading && <CircularProgress size="sm" />}
             />

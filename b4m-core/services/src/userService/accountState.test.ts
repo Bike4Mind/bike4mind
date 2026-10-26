@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { accountBlockReasons, entersBlockedState, type AccountStateFields } from './accountState';
+import { accountBlockReasons, entersBlockedState, isAiAccessRevoked, type AccountStateFields } from './accountState';
 
 const clean: AccountStateFields = {};
 
@@ -66,5 +66,19 @@ describe('entersBlockedState', () => {
     ],
   ])('is false on %s', (_label, previous, next) => {
     expect(entersBlockedState(previous, next)).toBe(false);
+  });
+});
+
+describe('isAiAccessRevoked', () => {
+  it('revokes AI access for a moderated user', () => {
+    expect(isAiAccessRevoked({ isModerated: true })).toBe(true);
+  });
+
+  it.each([false, null, undefined])('keeps AI access when isModerated is %s', isModerated => {
+    expect(isAiAccessRevoked({ isModerated })).toBe(false);
+  });
+
+  it('is not an account block reason, so a moderated user can still sign in', () => {
+    expect(accountBlockReasons({ isModerated: true } as AccountStateFields)).toEqual([]);
   });
 });

@@ -91,6 +91,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'system_health.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'user.email.verified': { category: 'identity', severity: 'info', write: 'bestEffort' },
+  'user.api_key_trust.approved': { category: 'identity', severity: 'notice', write: 'strict' },
+  'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
@@ -131,6 +133,48 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'email.template.test_sent': { category: 'support', severity: 'info', write: 'bestEffort' },
   'support.inbox.message_sent': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'support.pr_report.sent': { category: 'support', severity: 'info', write: 'bestEffort' },
+
+  // Handler coverage: users and credentials
+  'user.created': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.bulk_created': {
+    category: 'account',
+    severity: 'notice',
+    write: 'bestEffort',
+    escalatesAboveGrantThreshold: true,
+  },
+  'user.emergency_login.challenged': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.emergency_login.denied': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.api_key.generated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.subscription.removed': { category: 'credits', severity: 'critical', write: 'strict' },
+  'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
+  'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
+  // Handler coverage: liveops, sre and queues
+
+  // ops
+
+  // Handler coverage: liveops, sre and queues
+  'ops.triage_config.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.triage_config.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.triage_config.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.scan_triggered': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.run_triggered': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.pattern_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.tracking_dismissed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.tracking_rerun': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: billing and model config
+  'settings.model_price.repriced': { category: 'settings', severity: 'notice', write: 'strict' },
+  'settings.provider_invoice.recorded': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.model_lifecycle.suggestion_resolved': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.model_discovery.triggered': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.gear_override.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.gear_override.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.tool_definition.override_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.tool_definition.override_deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;

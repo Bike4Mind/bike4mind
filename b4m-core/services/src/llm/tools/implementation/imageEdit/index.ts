@@ -19,6 +19,7 @@ import {
   toNonWebpOutputFormat,
   type ImageOutputFormat,
   type OpenAIImageBackground,
+  type GeneratedAssetLineageEntry,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -65,6 +66,8 @@ async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin =
 // (untrusted) - see `resolveImageInputUrl`.
 export interface ResolvedImageUrl {
   url: string;
+  /** Set when the input resolved through a FabFile; a generated-bucket key or a literal URL has none. */
+  fabFileId?: string;
   trustConfiguredStorageOrigin: boolean;
 }
 
@@ -109,12 +112,12 @@ export async function getImageFromFileId(fileId: string, context: ToolContext): 
   if (fabFile.filePath) {
     const signedUrl = await context.storage.getSignedUrl(fabFile.filePath);
     // Freshly minted from `getSignedUrl` - trusted provenance for the self-host storage exemption.
-    return { url: signedUrl, trustConfiguredStorageOrigin: true };
+    return { url: signedUrl, fabFileId: fabFile.id ?? fileId, trustConfiguredStorageOrigin: true };
   }
 
   if (fabFile.fileUrl) {
     // Stored verbatim, not signed by us - untrusted.
-    return { url: fabFile.fileUrl, trustConfiguredStorageOrigin: false };
+    return { url: fabFile.fileUrl, fabFileId: fabFile.id ?? fileId, trustConfiguredStorageOrigin: false };
   }
 
   throw new Error(`File ${fileId} has no accessible URL`);
@@ -212,7 +215,21 @@ async function moderateToolImage(
 export async function processAndStoreImage(
   imageUrl: string,
   context: ToolContext,
-  { model, provider, prompt, modelId }: { model: string; provider: string; prompt: string; modelId: string }
+  {
+    model,
+    provider,
+    prompt,
+    modelId,
+    request,
+    derivedFrom,
+  }: {
+    model: string;
+    provider: string;
+    prompt: string;
+    modelId: string;
+    request?: Record<string, unknown>;
+    derivedFrom?: GeneratedAssetLineageEntry[];
+  }
 ): Promise<string> {
   const buffer = await downloadImageAsBuffer(imageUrl);
   const fileType = await fileTypeFromBuffer(buffer);
@@ -229,7 +246,8 @@ export async function processAndStoreImage(
   await saveGeneratedAssetFromTool(context, {
     bytes: buffer,
     contentType: mimeType,
-    generation: { generator: 'image', provider, modelId, jobId: uuidv4(), prompt },
+    generation: { generator: 'image', provider, modelId, jobId: uuidv4(), prompt, ...(request && { request }) },
+    ...(derivedFrom?.length && { derivedFrom }),
   });
 
   return path;
@@ -394,6 +412,24 @@ Please select a supported edit model in your image settings modal.`;
       const sourceImage = await resolveImageInputUrl(toolImage, context);
       const maskImage = toolMask ? await resolveImageInputUrl(toolMask, context) : null;
 
+      // Tool arguments only: no URLs, no data, and the mask is recorded as lineage rather than a request field.
+      const request = {
+        model: editModel,
+        prompt,
+        ...(size && { size }),
+        ...(imageConfig?.quality && { quality: imageConfig.quality }),
+        ...(safety_tolerance !== undefined && { safety_tolerance }),
+        prompt_upsampling,
+        ...(seed != null && { seed }),
+        output_format,
+        ...(background && { background }),
+        ...(isBFLModel && { steps, guidance }),
+      };
+      const derivedFrom: GeneratedAssetLineageEntry[] = [
+        ...(sourceImage.fabFileId ? [{ fileId: sourceImage.fabFileId, role: 'edit_source' as const }] : []),
+        ...(maskImage?.fabFileId ? [{ fileId: maskImage.fabFileId, role: 'mask' as const }] : []),
+      ];
+
       // Bills `editModel`, NOT the configured generation model: `editModel` is what the render
       // below actually dispatches to (and what BFL/Gemini/OpenAI charges us for), and the two
       // diverge whenever imageConfig.editModel is unset and the fallback above picks a default.
@@ -456,6 +492,8 @@ Please select a supported edit model in your image settings modal.`;
               provider,
               prompt,
               modelId: bflModel,
+              request,
+              derivedFrom,
             });
 
             return updateQuestAndReturnMarkdown(storedImagePath, costInput, context);
@@ -512,6 +550,8 @@ Please check your BFL API key in settings and ensure it is configured correctly.
               provider,
               prompt,
               modelId: editModel,
+              request,
+              derivedFrom,
             });
 
             return updateQuestAndReturnMarkdown(storedImagePath, costInput, context);
@@ -560,6 +600,8 @@ Please check your BFL API key in settings and ensure it is configured correctly.
               provider,
               prompt,
               modelId: editModel,
+              request,
+              derivedFrom,
             });
 
             return updateQuestAndReturnMarkdown(storedImagePath, costInput, context);

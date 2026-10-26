@@ -1339,7 +1339,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           model,
           choices,
           ...(providerBlocks.length > 0 ? { providerBlocks } : {}),
-          ...(stopReason === 'pause_turn' ? { stopReason } : {}),
+          ...(stopReason ? { stopReason } : {}),
         },
       };
     } catch (error) {
@@ -1485,8 +1485,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         }
       } else if (isMessageDelta(chunk)) {
         refused = chunk.delta?.stop_reason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model);
-        // Only pause_turn is reported: the caller must re-send to resume a paused server tool loop.
-        if (chunk.delta?.stop_reason === 'pause_turn') stopReason = 'pause_turn';
+        // Anthropic's native vocabulary is the canonical one, so it passes through unchanged. base.ts
+        // forwards it to CompletionInfo.stopReason; without it a max_tokens cut-off is silent. pause_turn
+        // additionally tells the caller to re-send and resume a paused server tool loop.
+        if (chunk.delta?.stop_reason) stopReason = chunk.delta.stop_reason;
         // The final usage, which can exceed message_start's input: a tool search that loads deferred
         // definitions mid-response bills them here. base.ts keeps the larger of the two.
         choice = {
