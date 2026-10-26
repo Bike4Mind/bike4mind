@@ -28,7 +28,7 @@ export function emailRateQueries(metricName: 'Bounce' | 'Complaint', configurati
   return [
     {
       id: 'rate',
-      expression: 'IF(sent > 0, 100 * FILL(events, 0) / sent, IF(FILL(events, 0) > 0, 100, 0))',
+      expression: 'IF(FILL(sent, 0) > 0, 100 * FILL(events, 0) / FILL(sent, 0), IF(FILL(events, 0) > 0, 100, 0))',
       returnData: true,
     },
     ...[
