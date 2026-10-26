@@ -586,15 +586,17 @@ describe('excel_generation', () => {
     });
 
     it('emits an ASCII fallback plus filename* for CJK names', async () => {
-      const header = await run('\u5831\u544a');
-      expect(header).toMatch(/^[\x20-\x7e]+$/);
-      expect(header).toContain("filename*=UTF-8''%E5%A0%B1%E5%91%8A.xlsx");
+      expect(await run('\u5831\u544a')).toBe(
+        'attachment; filename="__.xlsx"; filename*=UTF-8\'\'%E5%A0%B1%E5%91%8A.xlsx'
+      );
     });
 
     it('does not split an emoji at the truncation boundary', async () => {
-      const header = await run('a'.repeat(99) + '\u{1F600}'.repeat(3));
-      expect(header).toContain('%F0%9F%98%80');
-      expect(header).not.toContain('%ED');
+      const a99 = 'a'.repeat(99);
+      // Fallback has two underscores: the helper replaces non-ASCII per UTF-16 unit.
+      expect(await run(a99 + '\u{1F600}'.repeat(3))).toBe(
+        `attachment; filename="${a99}__.xlsx"; filename*=UTF-8''${a99}%F0%9F%98%80.xlsx`
+      );
     });
   });
 
