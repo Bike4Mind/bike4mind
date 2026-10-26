@@ -99,6 +99,7 @@ const mapping = {
 beforeEach(() => {
   vi.resetAllMocks();
   h.audit.mockResolvedValue(null);
+  h.createLog.mockResolvedValue(null);
 });
 
 describe('rapid reply prompts admin audit', () => {
@@ -169,7 +170,13 @@ describe('rapid reply prompts admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'settings.rapid_reply_prompt.updated',
       target: { kind: 'settings', id: 'p1' },
-      details: { promptId: 'p1-v2', changedFields: ['version'], newVersion: true, newVersionId: 'p1-v3' },
+      details: {
+        promptId: 'p1-v2',
+        changedFields: ['version'],
+        newVersion: true,
+        newVersionId: 'p1-v3',
+        contentChanged: true,
+      },
     });
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('SECRET');
   });
@@ -260,6 +267,18 @@ describe('rapid reply mappings admin audit', () => {
       ],
     });
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('SECRET');
+  });
+
+  it('labels updated with the new mainModelId when the PUT changes it', async () => {
+    h.mappings.findById.mockResolvedValue(mapping);
+    h.mappings.findByMainModel.mockResolvedValue(null);
+    h.mappings.updateMapping.mockResolvedValue({ ...mapping, mainModelId: 'main-b' });
+    await call(mappingById, 'PUT', { id: 'm1', body: { mainModelId: 'main-b' } });
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      target: { kind: 'settings', id: 'm1', displayName: 'Rapid reply mapping main-b' },
+      summary: 'updated rapid reply mapping main-b',
+    });
   });
 
   it('records nothing for a PUT that changes nothing', async () => {
@@ -459,7 +478,7 @@ describe('rapid reply test run admin audit', () => {
       action: 'settings.rapid_reply.test_run',
       target: { kind: 'settings', id: 'main-a', displayName: 'Rapid reply test for main-a' },
       summary: 'ran rapid reply test for main-a',
-      details: { mainModelId: 'main-a', success: false, simulatedLatency: 25 },
+      details: { mainModelId: 'main-a', success: false, simulateLatencyMs: 25 },
     });
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('SECRET');
     expect(h.sessionCreate).not.toHaveBeenCalled();
@@ -489,5 +508,47 @@ describe('rapid reply test run admin audit', () => {
       details: { mainModelId: 'main-a', success: false },
     });
     expect(h.createLog.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('records a failed test_run before throwing when settings are missing', async () => {
+    h.settings.mockResolvedValue(null);
+
+    await expect(call(testRun, 'POST', { body: { mainModelId: 'main-a' } })).rejects.toThrow(
+      'Rapid Reply settings not found'
+    );
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({ details: { mainModelId: 'main-a', success: false } });
+  });
+
+  it('records a failed test_run before rethrowing a prompt lookup failure', async () => {
+    h.settings.mockResolvedValue({ enabled: true });
+    h.mappings.findByMainModel.mockResolvedValue(mapping);
+    h.prompts.findByModelPair.mockRejectedValue(new Error('db down'));
+
+    await expect(call(testRun, 'POST', { body: { mainModelId: 'main-a' } })).rejects.toThrow('db down');
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({ details: { success: false } });
+  });
+
+  it('records test_run before rethrowing a legacy log failure', async () => {
+    h.settings.mockResolvedValue({ enabled: true });
+    h.mappings.findByMainModel.mockResolvedValue({ ...mapping, maxTokens: 150, usageCount: 1 });
+    h.prompts.findByModelPair.mockResolvedValue([]);
+    h.sessionCreate.mockRejectedValue(new Error('boom'));
+    h.createLog.mockRejectedValue(new Error('log down'));
+
+    await expect(call(testRun, 'POST', { body: { mainModelId: 'main-a' } })).rejects.toThrow('log down');
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({ details: { success: false } });
+  });
+
+  it('bounds a long mainModelId in the test_run entry', async () => {
+    h.settings.mockResolvedValue({ enabled: false });
+
+    await call(testRun, 'POST', { body: { mainModelId: 'x'.repeat(500) } });
+
+    const entry = h.audit.mock.calls[0][1];
+    expect(entry.target.id).toHaveLength(200);
+    expect(entry.details.mainModelId).toHaveLength(200);
   });
 });
