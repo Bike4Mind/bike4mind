@@ -79,6 +79,7 @@ import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteTool
 import { getUserEntitlements } from '@server/entitlements';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -145,7 +146,7 @@ import {
   makeDagDispatcher,
   onDagNodeTerminal,
 } from './agentExecutorDag';
-import { collectDagChildArtifactBlocks } from '@server/utils/agentDagArtifacts';
+import { collectDagChildArtifactBlocks } from '@bike4mind/server-utils/utils/agentDagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services/llm';
 import { filterRunnableModels, type LLMModelConfig, type ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
@@ -1001,9 +1002,11 @@ async function processExecution(
 
     await agentExecutionRepository.updateConnectionId(executionId, connectionId);
 
-    // Load user
-    const user = await User.findById(execution.userId);
-    if (!user) throw new Error(`User ${execution.userId} not found`);
+    // Load user. A run started by a key without the admin scope sees the owner as a non-admin,
+    // as the HTTP doors do through apiKeyAuth.
+    const storedUser = await User.findById(execution.userId);
+    if (!storedUser) throw new Error(`User ${execution.userId} not found`);
+    const user = execution.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
 
     // Validate session ownership
     const loadedSession = await sessionRepository.findById(execution.sessionId);
@@ -1461,6 +1464,7 @@ async function processExecution(
           linkedQuestId: execution.linkedQuestId,
           ...executionTurnAuth(execution),
           ...(execution.scopeDeniedTools?.length && { scopeDeniedTools: execution.scopeDeniedTools }),
+          ...(execution.adminRoleWithheld && { adminRoleWithheld: true }),
           query: info.task,
           model: info.model,
           // Snapshot of the parent's lists: a Lambda-dispatched child rebuilds its tool gate
@@ -1737,6 +1741,7 @@ async function processExecution(
         linkedQuestId: execution.linkedQuestId,
         ...executionTurnAuth(execution),
         scopeDeniedTools: execution.scopeDeniedTools,
+        adminRoleWithheld: execution.adminRoleWithheld,
         approvedTools,
         deniedTools,
         spawnedByExecutionId: executionId,
@@ -2729,6 +2734,7 @@ async function processExecution(
           approvedTools,
           deniedTools,
           confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+          confidenceOverrides: execution.confidenceOverrides,
         },
         {
           executeGatedToolCall: call => agent.executeGatedToolCall(call),
@@ -3233,12 +3239,15 @@ async function processExecution(
         reachedMaxIterations: iterationResult.reachedMaxIterations,
         threshold: confidenceGateThreshold,
         iterationSteps: iterationResult.allSteps,
+        confidenceOverrides: execution.confidenceOverrides,
       });
       // Telemetry: record every iteration the gate evaluates -
       // including ones that complete in the same turn (isComplete=true) or
       // clear the threshold - so `evaluatedCount` is the true denominator for
       // fire rate. `recordGateEmitted` below increments the numerator only on
       // a real pause. Baseline observability before touching signal quality.
+      // A scripted (`overridden`) iteration advances the streak but skips the
+      // telemetry counters: it would skew the real fire rate.
       const decision = await decideIterationConfidencePause(gate, (confidence, options) =>
         agentExecutionRepository.recordIterationConfidence(executionId, confidence, options)
       );
@@ -3272,8 +3281,9 @@ async function processExecution(
           return;
         }
         // Telemetry (#56 M1.1): count this real pause only after `setPendingGate`
-        // confirms it landed (i.e. not raced by a concurrent abort).
-        await agentExecutionRepository.recordGateEmitted(executionId);
+        // confirms it landed (i.e. not raced by a concurrent abort). A scripted pause is not
+        // counted, matching the telemetry `recordIterationConfidence` skipped above.
+        if (!gate.overridden) await agentExecutionRepository.recordGateEmitted(executionId);
         await sendWs('confidence_gate', { executionId, ...gatePayload });
         // Emit a `progress` event with the paused status so the client's
         // existing `progress` subscriber flips the client store's status to
@@ -3677,8 +3687,9 @@ async function processSubagentDispatch(
     await agentExecutionRepository.updateConnectionId(childExecutionId, connectionId);
 
     // Auth + ownership checks (mirror processExecution).
-    const user = await User.findById(child.userId);
-    if (!user) throw new Error(`User ${child.userId} not found`);
+    const storedUser = await User.findById(child.userId);
+    if (!storedUser) throw new Error(`User ${child.userId} not found`);
+    const user = child.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
     const loadedSession = await sessionRepository.findById(child.sessionId);
     if (!loadedSession) throw new Error(`Session ${child.sessionId} not found`);
     if (loadedSession.userId !== child.userId) {

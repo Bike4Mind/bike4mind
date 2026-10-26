@@ -1,4 +1,3 @@
-import FullUserViewModal from '@client/app/components/admin/Users/Views/FullUserViewModal';
 import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -7,24 +6,32 @@ import { Box, LinearProgress, Sheet, Stack } from '@mui/joy';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import AdminProfileModal from '../AdminProfileModal';
+import BulkAbuseBar from './BulkAbuseBar';
+import BulkAbuseResponseModal from './BulkAbuseResponseModal';
 import ComplianceModal from './ComplianceModal';
 import CreateUserModal, { useCreateUserModal } from './CreateUserModal';
 import { exportUsersCsv } from './exportUsersCsv';
 import MobileFiltersDrawer from './MobileFiltersDrawer';
 import PaginationControls from './PaginationControls';
 import { PAGE_LIMIT_OPTIONS, useUsersParams, useUsersTab, useUsersTabUrlSync } from './useUsersTabParams';
-import UsersFilterBar, { UsersDisplayMode } from './UsersFilterBar';
+import UsersFilterBar from './UsersFilterBar';
+import { useShallow } from 'zustand/react/shallow';
 import { FullUsersView } from './Views/FullUsersView';
 import RecentActivityView from './Views/RecentActivityView';
-import SlimUsersContainer from './Views/SlimUsersView';
+import SlimUsersContainer, { type UserSelection } from './Views/SlimUsersView';
 import UserJourney from './Views/UserJourney';
 
 const UsersTab: React.FC = () => {
   const isMobile = useIsMobile();
-  const [displayMode, setDisplayMode] = useState<UsersDisplayMode>('slim');
+  const [displayMode, setDisplayMode] = useUsersTab(
+    useShallow(state => [state.displayMode, state.setDisplayMode] as const)
+  );
   const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
   const organizations = useGetAllOrganizations({ filters: { personal: false } });
   const { setOpen: setCreateUserModalOpen } = useCreateUserModal();
+  // Kept across pages and searches so a cohort can be built up; cleared after a bulk run.
+  const [selectedUserIds, setSelectedUserIds] = useState<ReadonlySet<string>>(new Set());
+  const [bulkAbuseOpen, setBulkAbuseOpen] = useState(false);
 
   const [totalUsers, setTotalUsers] = useState<number>(1);
   useUsersTabUrlSync();
@@ -74,6 +81,26 @@ const UsersTab: React.FC = () => {
     [usersQuery.isLoading, usersQuery.isFetching]
   );
 
+  const selection = useMemo<UserSelection>(
+    () => ({
+      selectedIds: selectedUserIds,
+      onToggle: userId =>
+        setSelectedUserIds(current => {
+          const next = new Set(current);
+          if (!next.delete(userId)) next.add(userId);
+          return next;
+        }),
+      onTogglePage: (userIds, selected) =>
+        setSelectedUserIds(current => {
+          const next = new Set(current);
+          userIds.forEach(userId => (selected ? next.add(userId) : next.delete(userId)));
+          return next;
+        }),
+    }),
+    [selectedUserIds]
+  );
+  const clearSelection = useCallback(() => setSelectedUserIds(new Set()), []);
+
   const handleDownloadCsv = useCallback(async () => {
     try {
       await exportUsersCsv(params);
@@ -108,6 +135,12 @@ const UsersTab: React.FC = () => {
             downloadDisabled={loading || users.length === 0}
             onOpenFilters={() => setFiltersDrawerOpen(true)}
           />
+          <BulkAbuseBar
+            // Rows are only selectable in slim mode, so the bar stays out of the other views.
+            selectedCount={displayMode === 'slim' ? selectedUserIds.size : 0}
+            onClearSelection={clearSelection}
+            onOpen={() => setBulkAbuseOpen(true)}
+          />
         </Stack>
 
         {/* Full pagination lives above the table on desktop; phones get the compact pager only. */}
@@ -138,7 +171,7 @@ const UsersTab: React.FC = () => {
           {displayMode === 'full' &&
             users.map((user, index) => <FullUsersView user={user} index={index} key={user.id} />)}
 
-          {displayMode === 'slim' && <SlimUsersContainer users={users} />}
+          {displayMode === 'slim' && <SlimUsersContainer users={users} selection={selection} />}
 
           {displayMode === 'userJourney' &&
             users.map((user, index) => <UserJourney user={user} index={index} key={user.id} />)}
@@ -168,8 +201,15 @@ const UsersTab: React.FC = () => {
       {/* Place all modals in one area */}
       <AdminProfileModal />
       <ComplianceModal />
-      <FullUserViewModal />
       <CreateUserModal />
+      {/* Mounted only while open, so each run starts from a clean form. */}
+      {bulkAbuseOpen && (
+        <BulkAbuseResponseModal
+          selectedUserIds={displayMode === 'slim' ? [...selectedUserIds] : []}
+          onClose={() => setBulkAbuseOpen(false)}
+          onExecuted={clearSelection}
+        />
+      )}
     </Sheet>
   );
 };

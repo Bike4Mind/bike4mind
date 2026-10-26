@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { ForbiddenError, IUserDocument, Permission } from '@bike4mind/common';
 import { removeSessions } from './removeSessions';
 
 type Grant = { userId: string; permissions: Permission[]; projectId?: string };
@@ -55,6 +55,18 @@ describe('projectService - removeSessions (narrowed writes)', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('rejects with a ForbiddenError when a non-owner removes a session they do not own', async () => {
+    project.userId = 'someone-else';
+    sessions[0].userId = 'someone-else';
+
+    await expect(
+      removeSessions(OWNER_ID, { projectId: PROJECT_ID, sessionIds: [SESSION_A, SESSION_B] }, {
+        db,
+      } as unknown as Parameters<typeof removeSessions>[2])
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.sessions.update).not.toHaveBeenCalled();
   });
 
   it('writes narrowed per-session and project partials', async () => {

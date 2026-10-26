@@ -10,6 +10,7 @@ import {
 } from '@server/entitlements/embedKeyEntitlement';
 import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
 import { logEventSafe } from '@server/utils/analyticsLog';
+import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
 import {
   ApiKeyScope,
   CreditHolderType,
@@ -25,6 +26,7 @@ import {
   isKnownApiKeyScope,
 } from '@client/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
+import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {
@@ -173,6 +175,14 @@ const handler = baseApi()
       }
     }
 
+    // The admin paid-only switch, after the org check so an unauthorized caller learns nothing
+    // about an org's plan. The same gate re-runs on every use of the key (apiKeyAuth).
+    await assertApiKeyAccessAllowed(
+      req.user,
+      organizationId ? { billingOwnerType: CreditHolderType.Organization, organizationId } : undefined,
+      req
+    );
+
     // Embed keys: apply the host-aware origin screen here (needs the runtime app
     // host). The service re-validates format/dedup/cap and enforces the agentId
     // binding. Pass the normalized list downstream.
@@ -201,6 +211,8 @@ const handler = baseApi()
       ? { userId, billingOwnerType: CreditHolderType.Organization, organizationId }
       : { userId, billingOwnerType: CreditHolderType.User };
     const screenedBranding = await gateEmbedBrandingWrite(brandingOwner, brandingCheck.value);
+    // Org-billed keys are not trust-gated, so skip the subscription reads the assessment may cost.
+    const trust = organizationId ? undefined : (await resolveApiKeyTrust(req.user, req)).assessment;
 
     const newApiKey = await userApiKeyService.createUserApiKey(
       userId,
@@ -232,6 +244,7 @@ const handler = baseApi()
         callerScopes: req.apiKeyInfo ? (req.apiKeyInfo.scopes ?? []) : undefined,
         callerExpiresAt: req.apiKeyInfo?.expiresAt,
         isKnownScope: isKnownApiKeyScope,
+        trust,
       }
     );
 

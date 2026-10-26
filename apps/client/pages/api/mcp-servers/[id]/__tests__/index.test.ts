@@ -41,7 +41,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class extends Error {},
   ForbiddenError: class extends Error {},
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptEnvVariables: (v: unknown) => v,
   decryptEnvVariables: (v: unknown) => mockDecrypt(v),
 }));

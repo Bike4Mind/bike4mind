@@ -26,7 +26,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { BadRequestError } from '@bike4mind/utils';
 import { ZodError } from 'zod';
 import { CleanupPayload } from '@bike4mind/server-utils/dataLakes/dataLakeCleanupPayload';
-import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
 /**
  * Background consumer for the phase-2 data-lake hard-delete sweep, offloaded off the request path

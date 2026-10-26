@@ -46,7 +46,7 @@ vi.mock('@bike4mind/server-utils/websocket/closeConnection', () => ({
   closeConnection: (...args: unknown[]) => mockCloseConnection(...(args as [])),
 }));
 // The enforceMFA gate in verifyWsAccessToken is covered in its own test; inert here.
-vi.mock('@server/auth/mfaEnforcement', () => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: async () => false,
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));

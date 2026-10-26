@@ -20,6 +20,8 @@ import { DataLakePage } from './pages/DataLakePage';
 import { SkillsPage } from './pages/SkillsPage';
 import { TeamsPage } from './pages/TeamsPage';
 import { getTestUsers } from './helpers/test-users';
+import { installWafBypass } from './helpers/waf-bypass';
+import { bypassTurnstile } from './helpers/turnstile';
 
 type VerifyAnswersOptions = {
   logic?: 'and' | 'or';
@@ -85,6 +87,8 @@ async function prepareAppPage(page: Page, getAuth: () => SpecAuth | null): Promi
     route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
   );
 
+  await bypassTurnstile(page);
+
   // A fresh browser has no region cookie, so CookieConsentBanner asks, and its fixed bar
   // intercepts clicks on the sidenav and menus. Seed a decision before any app script runs.
   // The key must stay in sync with CONSENT_KEY in app/utils/consentRegion.ts. 'denied' keeps
@@ -135,6 +139,7 @@ export const test = base.extend<TestFixtures>({
   },
 
   page: async ({ page, authState }, use) => {
+    await installWafBypass(page);
     await prepareAppPage(page, () => authState.current);
     await use(page);
   },

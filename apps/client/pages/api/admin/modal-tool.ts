@@ -87,7 +87,7 @@ export async function parseNaturalLanguageQueryDirect(query: string, context?: a
 async function parseNaturalLanguageQuery(query: string, context?: any) {
   try {
     // Dynamically import OperationsModelService only when needed (server-side only)
-    const { OperationsModelService } = await import('@client/services/operationsModelService');
+    const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
     // Get the operations model for LLM processing
     const { modelId, llm } = await OperationsModelService.getOperationsModel();
 

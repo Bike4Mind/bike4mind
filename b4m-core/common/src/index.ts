@@ -25,6 +25,7 @@ export * from './voiceGeneration';
 export * from './voicePricing';
 export * from './generation';
 export * from './video';
+export * from './image';
 export * from './embeddings';
 export * from './music';
 export * from './integrations';
@@ -34,6 +35,8 @@ export * from './soundPricing';
 export * from './musicGeneration';
 export * from './studioFeatureFlags';
 export * from './schemas';
+export * from './modelHub';
+export { personalEmailProviders } from './organizationUtils';
 // Transport-agnostic API endpoint contracts. Pure data (no `.openapi()`), so
 // safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately
 // NOT exported here - it runs extendZodWithOpenApi and is generate-time only.
@@ -102,6 +105,7 @@ export * from './schemas/questmaster';
 export * from './schemas/curation';
 export * from './schemas/imageModerationIncident';
 export * from './schemas/releaseNotes';
+export * from './schemas/bulkAbuse';
 export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';
 export * from './utils/teamPlanSettings';
@@ -110,6 +114,7 @@ export * from './utils/skillMdSource';
 export * from './utils/claudeMarketplace';
 export * from './utils/emailList';
 export * from './utils/emailDomain';
+export * from './utils/canonicalEmail';
 export * from './utils/requireEnv';
 export * from './utils/bedrockCredentials';
 export * from './utils/internalStaffDomains';

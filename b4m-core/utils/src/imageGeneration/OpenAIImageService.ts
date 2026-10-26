@@ -16,6 +16,15 @@ import {
   type OpenAIImageQuality,
 } from '@bike4mind/common';
 import { invokeImageProcessor, downloadImageAsBuffer } from './imageProcessorUtils';
+import { sniffImageFormat } from './sniffImageFormat';
+import { ImageModerationBlockedError } from './imageGenerationErrors';
+
+// Re-exported for existing importers that pull it from this module.
+export { ImageModerationBlockedError };
+
+// gpt-image's edit endpoint takes png/webp/jpg sources up to this size.
+// @see https://platform.openai.com/docs/api-reference/images/createEdit
+const GPT_IMAGE_MAX_INPUT_BYTES = 50 * 1024 * 1024;
 
 // The image-generation Lambda has a 10-minute timeout. The OpenAI SDK's default
 // request timeout is also 10 minutes, so a hung/slow request (e.g. gpt-image-2
@@ -99,20 +108,6 @@ const truncatePromptForLog = (prompt: string): string => (prompt.length > 100 ? 
  */
 const CONTENT_POLICY_ERROR_CODES = ['moderation_blocked', 'content_policy_violation'];
 
-/**
- * The provider refused the prompt on content-policy grounds. An expected, user-caused outcome:
- * callers log it below error level so it does not page the on-call alert channel.
- */
-export class ImageModerationBlockedError extends Error {
-  constructor(
-    message: string,
-    readonly requestId: string
-  ) {
-    super(message);
-    this.name = 'ImageModerationBlockedError';
-  }
-}
-
 export function buildModerationBlockedError(
   error: InstanceType<typeof OpenAI.APIError>
 ): ImageModerationBlockedError | null {
@@ -194,37 +189,61 @@ export function resolveGptImageOutputOptions(
 }
 
 export class OpenAIImageService extends AIImageService {
+  /** Fetches an image (URL or data URL) and prepares it for `model` (see toUploadFile). */
+  private async toImageFile(
+    source: string,
+    baseName: string,
+    model: string | null | undefined,
+    trustConfiguredStorageOrigin = false
+  ): Promise<File> {
+    const buffer = await downloadImageAsBuffer(source, { trustConfiguredStorageOrigin });
+    return this.toUploadFile(buffer, baseName, model);
+  }
+
   /**
-   * Fetches an image (URL or data URL) and normalizes it to the PNG-under-4MB form every
-   * OpenAI image endpoint accepts. The 4MB/PNG coercion is dall-e-2's constraint, not
-   * gpt-image's (which takes png/webp/jpg up to 50MB) - kept as-is so this refactor does
-   * not change what reaches the provider.
+   * Prepares a source image for upload to `model`. gpt-image takes png/webp/jpg up to 50MB, so
+   * those go as-is. Everything else is coerced to the PNG-under-4MB form dall-e-2 requires by
+   * the ImageProcessor Lambda, whose synchronous payload caps its input at ~4.4MB - routing a
+   * gpt-image source through it made any larger image (our own renders included) uneditable.
+   * `pngOnly` is for an image paired with a mask, which OpenAI requires in the same format
+   * (the mask is always PNG).
    */
-  private async toImageFile(source: string, fileName: string, trustConfiguredStorageOrigin = false): Promise<File> {
+  private async toUploadFile(
+    buffer: Buffer,
+    baseName: string,
+    model: string | null | undefined,
+    { pngOnly = false }: { pngOnly?: boolean } = {}
+  ): Promise<File> {
+    const passthroughFormat =
+      isGPTImageModel(model) && buffer.length <= GPT_IMAGE_MAX_INPUT_BYTES ? sniffImageFormat(buffer) : undefined;
+    if (passthroughFormat && (!pngOnly || passthroughFormat.mimeType === 'image/png')) {
+      return new File([buffer], `${baseName}.${passthroughFormat.extension}`, { type: passthroughFormat.mimeType });
+    }
+
     if (!this.imageProcessorLambdaName) {
       throw new Error(
         'ImageProcessor Lambda name is required for image processing. Please provide it when creating the image service.'
       );
     }
-    const buffer = await downloadImageAsBuffer(source, { trustConfiguredStorageOrigin });
-    const pngBuffer = await invokeImageProcessor(buffer, this.imageProcessorLambdaName, 4); // 4MB max for OpenAI
-    return new File([pngBuffer], fileName, { type: 'image/png' });
+    const pngBuffer = await invokeImageProcessor(buffer, this.imageProcessorLambdaName, 4); // 4MB max for dall-e-2
+    return new File([pngBuffer], `${baseName}.png`, { type: 'image/png' });
   }
 
   /**
    * Converts style-anchor sources into files, in the order given. Parallel on purpose: each
-   * source costs a download plus an ImageProcessor Lambda round trip, and serialized those
-   * would eat a meaningful share of the 8-minute client budget (OPENAI_IMAGE_CLIENT_OPTS).
+   * source costs a download (plus an ImageProcessor Lambda round trip when it cannot pass
+   * through as-is), and serialized those would eat a meaningful share of the 8-minute client budget (OPENAI_IMAGE_CLIENT_OPTS).
    */
   private async toReferenceImageFiles(
     sources: string[] | undefined,
+    model: string,
     trustConfiguredStorageOrigin = false
   ): Promise<File[]> {
     if (!sources?.length) {
       return [];
     }
     return Promise.all(
-      sources.map((source, i) => this.toImageFile(source, `reference-${i + 1}.png`, trustConfiguredStorageOrigin))
+      sources.map((source, i) => this.toImageFile(source, `reference-${i + 1}`, model, trustConfiguredStorageOrigin))
     );
   }
 
@@ -351,7 +370,7 @@ export class OpenAIImageService extends AIImageService {
       let result;
 
       if (imagePrompt) {
-        const imageFile = await this.toImageFile(imagePrompt, 'image.png', trustConfiguredStorageOrigin);
+        const imageFile = await this.toImageFile(imagePrompt, 'image', options.model, trustConfiguredStorageOrigin);
 
         // GPT-Image models use the edit endpoint for image-to-image generation
         if (isGPTImageModel(options.model)) {
@@ -373,7 +392,7 @@ export class OpenAIImageService extends AIImageService {
           // bind to element 0, so the primary must stay first.
           const imageFiles = [
             imageFile,
-            ...(await this.toReferenceImageFiles(referenceImages, trustConfiguredStorageOrigin)),
+            ...(await this.toReferenceImageFiles(referenceImages, editModel, trustConfiguredStorageOrigin)),
           ];
 
           this.logger.log('OpenAI image generation request (edit endpoint, image-to-image):', {
@@ -441,8 +460,11 @@ export class OpenAIImageService extends AIImageService {
 
       Logger.globalInstance.error('[DEBUG] Error in OpenAI image generation:', {
         model: options.model,
-        error: error,
+        // Flat strings only: the Slack alert renders each field with `${value}`, so a nested
+        // error object showed up as `[object Object]` (notificationDeduplicator.ts).
+        errorName: error instanceof Error ? error.name : typeof error,
         errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        requestId: error instanceof OpenAI.APIError ? error.requestID : undefined,
       });
 
       if (error instanceof OpenAI.APIError) {
@@ -539,17 +561,20 @@ export class OpenAIImageService extends AIImageService {
     try {
       const openai = new OpenAI({ apiKey: this.apiKey, ...OPENAI_IMAGE_CLIENT_OPTS });
 
-      // Convert base64 image strings to File objects
-      const cleanImageBase64 = image.replace(/^data:image\/(png|jpeg|jpg);base64,/, '');
-      const imageBuffer = Buffer.from(cleanImageBase64, 'base64');
-      // Ensure image is PNG and under size limit using serverless image processor
-      if (!this.imageProcessorLambdaName) {
-        throw new Error(
-          'ImageProcessor Lambda name is required for image processing. Please provide it when creating the image service.'
-        );
+      // IMPORTANT: The edit endpoint supports gpt-image-1, gpt-image-1.5, gpt-image-1-mini, and dall-e-2
+      // NOTE: DALL-E 3 does NOT support image editing at all. Use GPT-Image models for editing.
+      // @see https://platform.openai.com/docs/guides/image-generation#edit-images
+      let editModel = model;
+      if (!isGPTImageModel(model) && model !== ImageModels.DALL_E_2) {
+        Logger.globalInstance.debug(`[DEBUG] Edit endpoint doesn't support ${model}, defaulting to gpt-image-2`);
+        editModel = ImageModels.GPT_IMAGE_2;
       }
-      const pngBuffer = await invokeImageProcessor(imageBuffer, this.imageProcessorLambdaName, 4);
-      const imageFile = new File([pngBuffer], 'image.png', { type: 'image/png' });
+
+      // Convert base64 image strings to File objects
+      const cleanImageBase64 = image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
+      const imageFile = await this.toUploadFile(Buffer.from(cleanImageBase64, 'base64'), 'image', editModel, {
+        pngOnly: Boolean(mask),
+      });
 
       let maskFile: File | undefined;
       if (mask) {
@@ -565,26 +590,17 @@ export class OpenAIImageService extends AIImageService {
         maskFile = new File([pngMaskBuffer], 'mask.png', { type: 'image/png' });
       }
 
-      // IMPORTANT: The edit endpoint supports gpt-image-1, gpt-image-1.5, gpt-image-1-mini, and dall-e-2
-      // NOTE: DALL-E 3 does NOT support image editing at all. Use GPT-Image models for editing.
-      // @see https://platform.openai.com/docs/guides/image-generation#edit-images
-      let editModel = model;
-      if (!isGPTImageModel(model) && model !== ImageModels.DALL_E_2) {
-        Logger.globalInstance.debug(`[DEBUG] ⚠️ Edit endpoint doesn't support ${model}, defaulting to gpt-image-2`);
-        editModel = ImageModels.GPT_IMAGE_2;
-      }
-
       // Anchors trail the edit source. OpenAI binds the mask to element 0, so `imageFile`
       // has to stay first or an inpainting request would mask a style reference instead.
       // Gated on the model that will actually receive them: dall-e-2's edit endpoint takes a
-      // single image, and each anchor costs a download plus an ImageProcessor round trip, so
+      // single image, and each anchor costs at least a download, so
       // fetching them for a model that cannot use them is pure latency.
       const editModelCarriesReferences = isGPTImageModel(editModel);
       if (referenceImages?.length && !editModelCarriesReferences) {
         Logger.globalInstance.debug(`[DEBUG] Reference images are not supported by ${editModel} and were removed`);
       }
       const referenceImageFiles = editModelCarriesReferences
-        ? await this.toReferenceImageFiles(referenceImages, trustConfiguredStorageOrigin)
+        ? await this.toReferenceImageFiles(referenceImages, editModel, trustConfiguredStorageOrigin)
         : [];
 
       const editWarnings: string[] = [];

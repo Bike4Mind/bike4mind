@@ -210,15 +210,15 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 
 ## Signup and login network metadata
 
-Every self-service signup stores the network it came from on the new account (`signupMeta`), written once. Every successful signup and sign-in also writes one `AuthEvent` row. Admin-created accounts and impersonation sessions write neither. The network number (ASN) and country come from headers the CDN sets; when they are absent the fields are empty, never guessed. A failed write never blocks sign-in. Both are visible only to admins, and both are deleted with the account.
+Every self-service signup stores the network it came from on the new account (`signupMeta`), written once. Every successful signup and sign-in also writes one `AuthEvent` row. Admin-created accounts and impersonation sessions write neither. The network number (ASN) and country come from headers the CDN sets; when they are absent the fields are empty, never guessed. A failed write never blocks sign-in. Both are visible only to admins, and both are deleted with the account. The full IP on `signupMeta` is kept for the same 90 days as the `AuthEvent` rows; after that the daily `signupIpRetention` job replaces it with its /24 (IPv4) or /48 (IPv6) prefix. The other `signupMeta` fields stay for the account's lifetime. Two other stores keep sign-in IPs outside this retention: `User.loginRecords[].ip` holds the full IP of the most recent sign-ins for the account's lifetime, and `UserAuthAuditLog.actorIp` keeps it for 12 months (TTL index).
 
-| Data          | Storage                               | Lifetime                               | Purpose                                             |
-| ------------- | ------------------------------------- | -------------------------------------- | --------------------------------------------------- |
-| Client IP     | `signupMeta.ip`, `AuthEvent.ip`       | Account lifetime / 90 days (TTL index) | Abuse and security investigation                    |
-| User agent    | `signupMeta.userAgent`, `AuthEvent`   | Account lifetime / 90 days (TTL index) | Abuse and security investigation                    |
-| Network (ASN) | `asn`, plus operator for hosting ASNs | Account lifetime / 90 days (TTL index) | Spot signups from one network or a hosting provider |
-| Country       | ISO country code                      | Account lifetime / 90 days (TTL index) | Abuse and security investigation                    |
-| Hosting flag  | `isDatacenter`                        | Account lifetime / 90 days (TTL index) | Flag signups from cloud and hosting networks        |
+| Data          | Storage                               | Lifetime                                                                               | Purpose                                             |
+| ------------- | ------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Client IP     | `signupMeta.ip`, `AuthEvent.ip`       | 90 days in full, then /24 or /48 prefix for the account lifetime / 90 days (TTL index) | Abuse and security investigation                    |
+| User agent    | `signupMeta.userAgent`, `AuthEvent`   | Account lifetime / 90 days (TTL index)                                                 | Abuse and security investigation                    |
+| Network (ASN) | `asn`, plus operator for hosting ASNs | Account lifetime / 90 days (TTL index)                                                 | Spot signups from one network or a hosting provider |
+| Country       | ISO country code                      | Account lifetime / 90 days (TTL index)                                                 | Abuse and security investigation                    |
+| Hosting flag  | `isDatacenter`                        | Account lifetime / 90 days (TTL index)                                                 | Flag signups from cloud and hosting networks        |
 
 ## Chat turn timing
 
@@ -268,3 +268,19 @@ The model id is the one the conversation is set to, for example `claude-opus-5`.
 The tool category is one of `shell`, `editor`, `browser`, `mcp`, `agent` or `other`; a tool's name, its input and its output are never sent. Messages, prompts, model output, file contents, commands and paths are never sent. Unsent events wait in `fleet-activity-queue.json` (mode 0600) under the app's data folder and keep their event ids, so a retried batch is counted once.
 
 Repository identity uses the last two components of a supported network remote. The host and any earlier namespace components are omitted: a GitLab `group/subgroup/project` is reported as `subgroup/project`, and matching owner/name pairs on different hosts are combined. This is an activity label, not a globally unique repository identifier.
+
+## Model availability monitoring
+
+Hosted model monitoring publishes aggregate counts to CloudWatch. The
+`UnavailableModelReferences` count covers unavailable configured model pins and
+fallback references. `LifecycleSuggestions` counts unresolved operator review
+items, and `LifecycleDateChanges` counts lifecycle date changes observed by model
+discovery. The metrics use deployment stage and runtime host dimensions; they
+contain no user, session, prompt, reply, or provider credential fields.
+
+Diagnostic logs identify the affected model, its configuration reference path or
+fallback surface, and the availability problem. Audit failures record an error
+message. You use these records to identify broken model references and review
+lifecycle changes. Metrics follow CloudWatch retention, and logs follow the
+deployment's configured log retention. This operational monitoring does not send
+product usage events to third-party analytics services.

@@ -9,7 +9,7 @@ import { ChatService } from './ChatService';
 import { COMPACT_MAX_TOKENS } from './compaction';
 import { localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { ModelCatalog } from './ModelCatalog';
-import { LOCAL_MODEL_PREFIX, OllamaLocal } from './OllamaLocal';
+import { OllamaLocal } from './OllamaLocal';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -86,7 +86,7 @@ async function localService(
       return reply(request, init?.signal);
     })
   );
-  const model = `${LOCAL_MODEL_PREFIX}llama3.2`;
+  const model = 'local:ollama:llama3.2';
   const option = { id: model, name: 'Local', supportsTools: false, contextWindow };
   const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-local-context-')), model);
   const events: ChatStreamEvent[] = [];

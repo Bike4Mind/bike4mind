@@ -43,7 +43,7 @@ vi.mock('@bike4mind/database', () => ({
   OverwatchUserFirstSeen: { bulkWrite: (...a: unknown[]) => mockBulkWrite(...a) },
 }));
 
-vi.mock('@server/analytics/pseudonymize', () => ({
+vi.mock('@bike4mind/server-utils/analytics/pseudonymize', () => ({
   pseudonymizeUserId: (id: string) => `pseudo:${id}`,
 }));
 

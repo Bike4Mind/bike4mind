@@ -18,6 +18,20 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
+const isApiKeyAccessAllowedMock = vi.hoisted(() =>
+  vi.fn(async (_user: unknown, _billing?: unknown, _request?: unknown) => true)
+);
+vi.mock('@server/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown, request?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing, request))) throw new ForbiddenError(message);
+    },
+  };
+});
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     get: (fn: any) => {
@@ -97,6 +111,8 @@ vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
     },
   ],
 }));
+const resolveApiKeyTrust = vi.hoisted(() => vi.fn().mockResolvedValue({ assessment: { status: 'trusted' } }));
+vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
 import { CreditHolderType } from '@bike4mind/common';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
@@ -329,6 +345,7 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
 describe('POST /api/user-api-keys - org-billed authorization', () => {
   beforeEach(() => {
     createUserApiKey.mockClear();
+    isApiKeyAccessAllowedMock.mockClear();
     findIdsAdministeredBy.mockResolvedValue([]);
   });
 
@@ -365,6 +382,7 @@ describe('POST /api/user-api-keys - org-billed authorization', () => {
     findIdsAdministeredBy.mockResolvedValue([]);
     const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', organizationId: 'org-9' });
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/permission/i);
+    expect(isApiKeyAccessAllowedMock).not.toHaveBeenCalled();
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 });
@@ -707,5 +725,79 @@ describe('POST /api/user-api-keys - contributed scopes', () => {
     const { req, res } = post({ name: 'k', scopes });
     await mockRefs.postHandler!(req, res);
     expect(createUserApiKey).toHaveBeenCalledWith('u1', expect.objectContaining({ scopes }), expect.anything());
+  });
+});
+
+describe('POST /api/user-api-keys - trust gate', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    resolveApiKeyTrust.mockClear();
+    findIdsAdministeredBy.mockResolvedValue([]);
+  });
+
+  it("hands the caller's trust assessment to the service, which enforces it", async () => {
+    const assessment = { status: 'untrusted', reason: 'email_unverified' };
+    resolveApiKeyTrust.mockResolvedValueOnce({ assessment });
+    const { req, res } = post({ name: 'k', scopes: ['ai:chat'] });
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(resolveApiKeyTrust).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }), expect.anything());
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ trust: assessment })
+    );
+  });
+
+  it('skips the trust assessment for an org-billed mint and passes trust undefined', async () => {
+    findIdsAdministeredBy.mockResolvedValue(['org-1']);
+    const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', organizationId: 'org-1' });
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(resolveApiKeyTrust).not.toHaveBeenCalled();
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ trust: undefined })
+    );
+  });
+});
+
+describe('POST /api/user-api-keys - paid-only access switch', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+    resolveApiKeyTrust.mockClear();
+  });
+
+  it('rejects the mint with 403 and never calls the service when the setting denies the caller', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    const { req, res } = post({ name: 'k', scopes: ['notebooks:read'] });
+    const error = await mockRefs.postHandler!(req, res).catch((e: unknown) => e);
+    expect(error).toMatchObject({ statusCode: 403, message: 'API keys require an active paid subscription' });
+    expect(createUserApiKey).not.toHaveBeenCalled();
+    expect(resolveApiKeyTrust).not.toHaveBeenCalled();
+  });
+
+  it('answers an unauthorized org-billed mint with the org-permission 403 before reading any plan', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['notebooks:read'], organizationId: 'someone-elses-org' });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/permission to mint API keys billed/);
+    expect(isApiKeyAccessAllowedMock).not.toHaveBeenCalled();
+  });
+
+  it('passes the org as billing owner for an org-billed mint', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['notebooks:read'], organizationId: 'org-9' }, { isAdmin: true });
+    await mockRefs.postHandler!(req, res);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'u1' }),
+      {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-9',
+      },
+      req
+    );
   });
 });

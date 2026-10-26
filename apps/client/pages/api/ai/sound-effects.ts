@@ -14,7 +14,7 @@ import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/audioVendorApiKeyType';
@@ -182,6 +182,13 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
               prompt: text,
               ...(durationSeconds !== undefined && { durationSeconds }),
               ...(promptInfluence !== undefined && { promptInfluence }),
+              request: {
+                provider,
+                text,
+                ...(durationSeconds !== undefined && { durationSeconds }),
+                ...(promptInfluence !== undefined && { promptInfluence }),
+                ...(format !== undefined && { format }),
+              },
             },
           },
           req.logger

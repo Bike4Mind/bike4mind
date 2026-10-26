@@ -17,6 +17,23 @@ vi.mock('./TerminalPanel', () => ({
   TerminalPanel: ({ sessionId }: { sessionId: string }) => <div data-testid="terminal-panel">{sessionId}</div>,
 }));
 
+// The menu row itself is BrowserMenu.test.tsx's; here the pane only reports what it was handed.
+vi.mock('./BrowserPane', () => ({
+  BrowserPane: ({
+    historyEnabled,
+    onHistory,
+  }: {
+    historyEnabled: boolean | null;
+    onHistory: (on: boolean) => void;
+  }) => (
+    <button
+      data-testid="browser-pane-history"
+      data-enabled={String(historyEnabled)}
+      onClick={() => onHistory(!historyEnabled)}
+    />
+  ),
+}));
+
 window.matchMedia ??= ((query: string) => ({
   matches: false,
   media: query,
@@ -48,6 +65,10 @@ const SESSIONS = [session('first', 'First'), { ...session('second', 'Second'), m
 let model = 'local:ollama:qwen3:8b';
 const sendMessage = vi.fn(async () => ({ ok: true, messageId: 'reply' }));
 const getSession = vi.fn<(id: string) => Promise<ChatSession | null>>();
+const setSessionHistory = vi.fn(async (id: string, enabled: boolean) => ({
+  ...SESSIONS.find(entry => entry.id === id),
+  historyEnabled: enabled,
+}));
 const expiredAuth: AuthState = {
   status: 'signed-out',
   busy: 'idle',
@@ -75,6 +96,7 @@ beforeEach(() => {
   window.localStorage.clear();
   model = 'local:ollama:qwen3:8b';
   sendMessage.mockClear();
+  setSessionHistory.mockClear();
   getSession.mockReset();
   getSession.mockImplementation(
     async id => ({ ...SESSIONS.find(entry => entry.id === id), model, messages: [] }) as unknown as ChatSession
@@ -98,6 +120,7 @@ beforeEach(() => {
         listSessions: async () => SESSIONS,
         getSession,
         sendMessage,
+        setSessionHistory,
         searchHistory: async () => [
           {
             id: 'history-second',
@@ -188,9 +211,20 @@ describe('local model and history reachability', () => {
     expect(el('chat-session-title').textContent).toBe('Second');
   });
 
+  it('keeps the consent switch out of the header and hands it to the browser pane', async () => {
+    await renderShell();
+    expect(document.querySelector('[data-testid="chat-history-switch"]')).toBeNull();
+    await act(async () => el('chat-toggle-browser-btn').click());
+    expect(el('browser-pane-history').dataset.enabled).toBe('false');
+    await act(async () => el('browser-pane-history').click());
+    expect(setSessionHistory).toHaveBeenCalledWith('first', true);
+    expect(el('browser-pane-history').dataset.enabled).toBe('true');
+  });
+
   it('hides the previous consent switch until a selected history result has loaded', async () => {
     await renderShell();
-    expect(el('chat-history-switch')).not.toBeNull();
+    await act(async () => el('chat-toggle-browser-btn').click());
+    expect(el('browser-pane-history').dataset.enabled).toBe('false');
     let resolveSession!: (session: ChatSession) => void;
     getSession.mockReturnValue(
       new Promise(resolve => {
@@ -202,8 +236,45 @@ describe('local model and history reachability', () => {
       await new Promise(resolve => setTimeout(resolve, 150));
     });
     await act(async () => el('local-history-result').click());
-    expect(document.querySelector('[data-testid="chat-history-switch"]')).toBeNull();
-    await act(async () => resolveSession({ ...SESSIONS[1], model, messages: [] } as unknown as ChatSession));
-    expect(el('chat-history-switch')).not.toBeNull();
+    expect(el('browser-pane-history').dataset.enabled).toBe('null');
+    await act(async () =>
+      resolveSession({ ...SESSIONS[1], model, messages: [], historyEnabled: true } as unknown as ChatSession)
+    );
+    expect(el('browser-pane-history').dataset.enabled).toBe('true');
+  });
+
+  it.each([true, false])('shows the header indicator only while history is on (on: %s)', async on => {
+    getSession.mockImplementation(
+      async id =>
+        ({
+          ...SESSIONS.find(entry => entry.id === id),
+          model,
+          messages: [],
+          historyEnabled: on,
+        }) as unknown as ChatSession
+    );
+    await renderShell();
+    expect(document.querySelector('[data-testid="chat-history-indicator"]') !== null).toBe(on);
+  });
+
+  it('hides the header indicator while a picked session is loading', async () => {
+    getSession.mockImplementation(
+      async id =>
+        ({
+          ...SESSIONS.find(entry => entry.id === id),
+          model,
+          messages: [],
+          historyEnabled: true,
+        }) as unknown as ChatSession
+    );
+    await renderShell();
+    expect(el('chat-history-indicator')).toBeTruthy();
+    getSession.mockReturnValue(new Promise(() => undefined));
+    await act(async () => typeInto('chat-search-input', 'needle'));
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 150));
+    });
+    await act(async () => el('local-history-result').click());
+    expect(document.querySelector('[data-testid="chat-history-indicator"]')).toBeNull();
   });
 });

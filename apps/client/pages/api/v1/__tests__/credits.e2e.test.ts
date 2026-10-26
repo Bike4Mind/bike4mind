@@ -5,7 +5,7 @@
  * GET /api/v1/credits through its real nextRouteForContract chain (API-key validation, policy
  * consent gate, scope gate), against real Mongo.
  */
-import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import mongoose from 'mongoose';
 import { createMocks } from 'node-mocks-http';
@@ -20,7 +20,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: vi.fn().mockResolvedValue({ allowed: true, retryAfter: undefined, headers: {} }),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({
@@ -37,6 +37,8 @@ import { User, agentRepository, userApiKeyRepository } from '@bike4mind/database
 import { userApiKeyService } from '@bike4mind/services';
 import handler from '../credits';
 
+import { AdminSettings } from '@bike4mind/database';
+
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let mongoServer: MongoMemoryServer;
@@ -49,6 +51,11 @@ afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
 });
+// These free-user fixtures exercise scope/credit behavior under the explicit open-access policy.
+beforeEach(async () => {
+  await AdminSettings.create({ settingName: 'apiKeyAccess', settingValue: 'all' });
+});
+
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
 });

@@ -57,7 +57,10 @@ export function e2ePost({
           ),
         ],
       },
-      { type: 'section', text: mrkdwn(`*${suite ? `${suite} Run Summary` : 'Test Run Summary'}*\n${summary.join('\n')}`) },
+      {
+        type: 'section',
+        text: mrkdwn(`*${suite ? `${suite} Run Summary` : 'Test Run Summary'}*\n${summary.join('\n')}`),
+      },
       ...(credits ? [{ type: 'section', text: mrkdwn(`*\u{1F4B3} AI Credits*\n${credits.join('\n')}`) }] : []),
       ...(runUrl ? [actions(runUrl)] : []),
     ],
@@ -82,11 +85,17 @@ export function latencyPost({
   branch = 'main',
   env = 'Staging',
   rows = DEFAULT_ROWS,
+  latencyColumn = 'Average Latency',
   runUrl = 'https://github.com/example/repo/actions/runs/777#artifacts',
 } = {}) {
   const table = [
-    latencyRow('Suite', 'Model', 'Quality', 'Average Latency'),
-    latencyRow('--------------------------------', '--------------------', '--------', '---------------'),
+    latencyRow('Suite', 'Model', 'Quality', latencyColumn),
+    latencyRow(
+      '--------------------------------',
+      '--------------------',
+      '--------',
+      '-'.repeat(latencyColumn.length)
+    ),
     ...rows,
   ];
   return {

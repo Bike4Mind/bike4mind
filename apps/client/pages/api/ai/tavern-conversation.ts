@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { agentRepository } from '@bike4mind/database';
 import { agentMemoryService } from '@bike4mind/services';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
@@ -115,7 +115,8 @@ Return ONLY valid JSON (no markdown fences):
 }
 
 // Handler
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 60 : 30,

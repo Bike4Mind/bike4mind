@@ -30,7 +30,7 @@ import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { withWebSocketContext, sendToConnection } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { cliCompletionErrorFields } from '@server/utils/errorSanitization';
-import { TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { getUserEntitlements } from '@server/entitlements';
 import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 
@@ -44,7 +44,7 @@ const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or J
 function authFailureFrame(requestId: string, error: unknown) {
   // A rate limit or a failed auth check (database unreachable) is retryable: relay its message and
   // retryAfter rather than the bad-credential message.
-  if (error instanceof TooManyRequestsError || isAuthInfraFailure(error)) {
+  if (error instanceof TooManyRequestsError || error instanceof ForbiddenError || isAuthInfraFailure(error)) {
     const retryAfter = error.additionalInfo?.retryAfter;
     return {
       action: 'cli_completion_error' as const,
@@ -126,7 +126,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       return { statusCode: 200 };
     }
     try {
-      const user = await verifyJwtToken(accessToken);
+      const user = await verifyJwtToken(accessToken, { requireApiAccess: true });
       userId = user.id;
       logger.info('[CLI_WS] Authenticated via JWT', { userId });
       await checkRateLimit(userId, source);

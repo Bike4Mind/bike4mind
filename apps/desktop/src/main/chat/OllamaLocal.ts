@@ -1,6 +1,6 @@
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
-import { LOCAL_MODEL_PREFIX, type ChatModelOption } from '@shared/chat';
+import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
 import type { CompletionMessage, CompletionRequest } from './completions';
 import {
   ContextOverflowError,
@@ -12,7 +12,7 @@ import {
 } from './localContext';
 import type { CompletionStreamEvent } from './streamEvents';
 
-export { LOCAL_MODEL_PREFIX } from '@shared/chat';
+export const OLLAMA_RUNTIME_ID = 'ollama';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 const TIMEOUT_MS = 1_000;
 const MAX_TRIM_RETRIES = 3;
@@ -58,8 +58,7 @@ export class OllamaLocal {
   async contextTokens(modelId: string, signal?: AbortSignal): Promise<number> {
     const known = contextByModel.get(modelId);
     if (known !== undefined) return known;
-    if (!modelId.startsWith(LOCAL_MODEL_PREFIX)) throw new Error('Invalid local model id.');
-    const name = modelId.slice(LOCAL_MODEL_PREFIX.length);
+    const name = ollamaModelName(modelId);
     return rememberContext(modelId, showSchema.parse(await this.json('/api/show', { name }, signal)));
   }
 
@@ -70,8 +69,7 @@ export class OllamaLocal {
     /** Called with how many of the oldest messages were left out because the prompt overflowed. */
     onTrimmed?: (dropped: number) => void
   ): Promise<void> {
-    const model = request.model.startsWith(LOCAL_MODEL_PREFIX) ? request.model.slice(LOCAL_MODEL_PREFIX.length) : '';
-    if (!model) throw new Error('Invalid local model id.');
+    const model = ollamaModelName(request.model);
     const inspection = showSchema.parse(await this.json('/api/show', { name: model }, signal));
     // A localhost daemon can proxy cloud models, including aliases without a cloud suffix.
     // Inspect again before sending private messages, even when discovery was cached.
@@ -174,11 +172,11 @@ export class OllamaLocal {
     // Embedding-only models cannot answer /api/chat; failed inspection is not a plain-text capability.
     if (!show.success || usesRemoteModel(show.data) || !show.data.capabilities.includes('completion')) return null;
     const capabilities = show.data.capabilities;
-    const id = `${LOCAL_MODEL_PREFIX}${name}`;
+    const id = localModelId(OLLAMA_RUNTIME_ID, name);
     return {
       id,
       name,
-      backend: 'local-ollama',
+      backend: localBackend(OLLAMA_RUNTIME_ID),
       supportsTools: capabilities.includes('tools'),
       supportsVision: capabilities.includes('vision'),
       contextWindow: rememberContext(id, show.data),
@@ -337,6 +335,12 @@ async function httpError(response: Response): Promise<string> {
 
 async function refusedSize(response: Response): Promise<number | undefined> {
   return response.status === 400 ? overflowTokens(await response.clone().text()) : undefined;
+}
+
+function ollamaModelName(modelId: string): string {
+  const parsed = parseLocalModelId(modelId);
+  if (parsed?.runtimeId !== OLLAMA_RUNTIME_ID) throw new Error('Invalid local model id.');
+  return parsed.model;
 }
 
 // Module-wide so every OllamaLocal instance (catalog, chat, tests) reads the same figure.

@@ -37,8 +37,9 @@ const PER_TOOL_CEILINGS: Record<string, number> = {
 
 /** Any tool without its own line above must stay under this. Catches re-inflating an unlisted tool. */
 const UNLISTED_TOOL_CEILING = 600;
-const AUTO_ADDED_CEILING = 1500;
-const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2300;
+// Auto-added tools (offered on every tool-capable turn, including current_model_details), alone and with the knowledge auto-offer.
+const AUTO_ADDED_CEILING = 1650;
+const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2450;
 /**
  * Headroom for a few new tools, so legitimate growth does not force a ceiling bump. Raised once,
  * for `decide`, whose nested question schema is structure rather than prose: the per-tool ceiling
@@ -151,6 +152,7 @@ describe('tool schema token budget', () => {
         'blog_edit',
         'blog_publish',
         'create_data_lake',
+        'current_model_details',
         'list_my_data_lakes',
         'navigate_view',
         'save_content_to_data_lake',

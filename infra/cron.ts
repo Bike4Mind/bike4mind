@@ -22,6 +22,7 @@ import { lambdaVpc } from './vpc';
 import { appUrlForLambdaEnv } from './router';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { websocketApi } from './websocket';
+import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -107,6 +108,36 @@ const signupBaselineReport = runsScheduledJobs
       },
     })
   : undefined;
+
+const youngAccountSpendAlert =
+  runsScheduledJobs && youngAccountSpendAlertDeadLetter
+    ? new sst.aws.Cron('youngAccountSpendAlert', {
+        schedule: 'rate(1 hour)',
+        enabled: $app.stage === 'production',
+        function: {
+          vpc: lambdaVpc,
+          handler: 'apps/workers/src/cron/youngAccountSpendAlert.handler',
+          runtime: 'nodejs24.x',
+          timeout: '2 minutes',
+          link: [...allSecrets],
+          environment: {
+            ...DEFAULT_LAMBDA_ENVIRONMENT,
+            YOUNG_ACCOUNT_SPEND_ALERT_CREDITS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_CREDITS || '',
+            YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS || '',
+          },
+          permissions: [youngAccountSpendAlertDeadLetter.sendPermission],
+          transform: youngAccountSpendAlertDeadLetter.functionTarget,
+          logging: {
+            retention: '1 week',
+          },
+        },
+        transform: youngAccountSpendAlertDeadLetter.ruleTarget,
+      })
+    : undefined;
+
+if (youngAccountSpendAlert && youngAccountSpendAlertDeadLetter) {
+  youngAccountSpendAlertDeadLetter.allowRules([$util.output(youngAccountSpendAlert)]);
+}
 
 const secretRotationNotifierCron = runsScheduledJobs
   ? new sst.aws.Cron('secretRotationNotifier', {
@@ -208,6 +239,22 @@ const telemetryCleanupCron = runsScheduledJobs
       function: {
         vpc: lambdaVpc,
         handler: 'apps/workers/src/cron/telemetryCleanup.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
+// Signup IP retention - truncates User.signupMeta.ip to its /24 (IPv4) or /48 (IPv6) prefix once
+// the signup is older than the AuthEvent TTL (90 days)
+const signupIpRetentionCron = runsScheduledJobs
+  ? new sst.aws.Cron('signupIpRetention', {
+      schedule: 'cron(30 3 * * ? *)', // Daily at 3:30am UTC
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupIpRetention.handler',
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
         link: [...allSecrets],
@@ -1138,6 +1185,7 @@ export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
   signupBaselineReport,
+  youngAccountSpendAlert,
   secretRotationNotifierCron,
   scheduleTaskCron,
   apiKeyBaselineCalculation,
@@ -1150,6 +1198,7 @@ export {
   deepAgentWakeCron,
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
+  signupIpRetentionCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,

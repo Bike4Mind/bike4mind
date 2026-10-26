@@ -174,7 +174,7 @@ vi.mock('@bike4mind/utils', async importActual => ({
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
   getSettingsMap: (...a: unknown[]) => getSettingsMap(...a),
 }));
-vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => saveGeneratedAssetToFiles(...a),
 }));
 
@@ -448,6 +448,7 @@ describe('POST /api/ai/sound-effects', () => {
           prompt: 'rain',
           durationSeconds: 3,
           promptInfluence: 0.6,
+          request: expect.objectContaining({ text: 'rain', durationSeconds: 3, promptInfluence: 0.6 }),
         },
       },
       expect.anything()

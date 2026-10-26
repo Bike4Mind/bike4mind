@@ -88,7 +88,7 @@ vi.mock('@server/utils/creditPreflight', () => ({
 // Mock the persistence helper so this route test doesn't pull in the real
 // FabFile/services/database stack (which references @bike4mind/common exports
 // not provided by the partial mock above).
-vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 
@@ -106,7 +106,9 @@ import handler from '../tts';
 
 const run = (
   body: Record<string, unknown>,
-  user: { id?: string; organizationId?: string | null; isAdmin?: boolean; isModerated?: boolean } | undefined = { id: 'u1' },
+  user: { id?: string; organizationId?: string | null; isAdmin?: boolean; isModerated?: boolean } | undefined = {
+    id: 'u1',
+  },
   apiKeyInfo?: unknown
 ) => {
   const { req, res } = createMocks({ method: 'POST', body });
@@ -511,7 +513,14 @@ describe('POST /api/ai/tts', () => {
         userId: 'u1',
         bytes: expect.any(Buffer),
         contentType: 'audio/mpeg',
-        generation: { generator: 'speech', provider: 'openai', modelId: 'tts-1', prompt: 'hello', format: 'mp3' },
+        generation: {
+          generator: 'speech',
+          provider: 'openai',
+          modelId: 'tts-1',
+          prompt: 'hello',
+          format: 'mp3',
+          request: expect.objectContaining({ provider: 'openai', text: 'hello' }),
+        },
       },
       expect.anything()
     );
