@@ -41,6 +41,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   async embed(request: EmbeddingRequest, context: EmbeddingContext = {}): Promise<EmbeddingResult> {
     preflightEmbeddingRequest(this, request);
     if (request.inputs.length === 0) return { vectors: [] };
+    context.signal?.throwIfAborted();
 
     const vectors: number[][] = [];
     const reportedTokens: (number | undefined)[] = [];

@@ -2,9 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { getEmbeddingModelCapabilities, VoyageAIEmbeddingModel } from '@bike4mind/common';
-import { isEmbeddingAuthError } from '@bike4mind/fab-pipeline';
-import { describeEmbeddingProviderConformance, fakeEmbedding } from '../conformance';
-import { VOYAGE_KEY_MISSING_MESSAGE } from '../keyMessages';
+import { isEmbeddingAuthError, VOYAGE_KEY_MISSING_MESSAGE } from '@bike4mind/fab-pipeline';
+import { describeEmbeddingProviderConformance, fakeEmbedding, LATE_FAILURE_INPUT } from '../conformance';
 import { VoyageEmbeddingProvider } from './VoyageEmbeddingProvider';
 
 const API_KEY = 'pa-realLooking1234567890abcdef';
@@ -45,12 +44,21 @@ const armBackend = (respond: (body: VoyageBody) => Response | undefined = () => 
 const armUnauthorized = () =>
   armBackend(() => HttpResponse.json({ detail: 'Provided API key is invalid.' }, { status: 401 }));
 
-const provider = () => new VoyageEmbeddingProvider({ apiKey: API_KEY });
+const provider = () => new VoyageEmbeddingProvider({ apiKey: API_KEY, retryDelayMs: () => 0 });
 
 describeEmbeddingProviderConformance('Voyage', {
   provider,
   requestCount: () => requests.length,
-  scenarios: { succeeds: () => armBackend(), unauthorized: armUnauthorized },
+  scenarios: {
+    succeeds: () => armBackend(),
+    unauthorized: armUnauthorized,
+    failsOnLateInput: () =>
+      armBackend(body =>
+        body.input.includes(LATE_FAILURE_INPUT)
+          ? HttpResponse.json({ detail: 'bad input' }, { status: 400 })
+          : undefined
+      ),
+  },
 });
 
 describe('VoyageEmbeddingProvider', () => {
@@ -105,6 +113,37 @@ describe('VoyageEmbeddingProvider', () => {
     await expect(provider().embed({ model: VoyageAIEmbeddingModel.VOYAGE_3, inputs: ['a', 'b'] })).rejects.toThrow(
       /1 embeddings for 2 input/
     );
+  });
+
+  it('splits a batch whose characters cross the per-request budget and keeps order', async () => {
+    armBackend();
+    const inputs = Array.from({ length: 5 }, (_, index) => `${index}`.repeat(50_000));
+    const result = await provider().embed({ model: VoyageAIEmbeddingModel.VOYAGE_CODE_3, inputs });
+
+    // 120_000 chars per request: two 50_000-char inputs fit, a third does not.
+    expect(requests.map(request => request.body.input.length)).toEqual([2, 2, 1]);
+    expect(result.vectors).toEqual(inputs.map(text => fakeEmbedding(text, 1024)));
+  });
+
+  it('retries a 503 and succeeds on the next attempt', async () => {
+    let attempts = 0;
+    armBackend(() => (++attempts === 1 ? HttpResponse.json({ detail: 'busy' }, { status: 503 }) : undefined));
+    const result = await provider().embed({ model: VoyageAIEmbeddingModel.VOYAGE_3, inputs: ['a'] });
+
+    expect(requests).toHaveLength(2);
+    expect(result.vectors).toEqual([fakeEmbedding('a', 1024)]);
+  });
+
+  it('does not retry a 401', async () => {
+    armUnauthorized();
+    await expect(provider().embed({ model: VoyageAIEmbeddingModel.VOYAGE_3, inputs: ['a'] })).rejects.toThrow();
+    expect(requests).toHaveLength(1);
+  });
+
+  it('gives up after two retries', async () => {
+    armBackend(() => HttpResponse.json({ detail: 'busy' }, { status: 503 }));
+    await expect(provider().embed({ model: VoyageAIEmbeddingModel.VOYAGE_3, inputs: ['a'] })).rejects.toThrow(/503/);
+    expect(requests).toHaveLength(3);
   });
 
   it('splits more than 128 inputs into sub-batches and sums the reported tokens', async () => {

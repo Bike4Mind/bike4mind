@@ -41,6 +41,7 @@ export class BedrockEmbeddingProvider implements EmbeddingProvider {
   async embed(request: EmbeddingRequest, context: EmbeddingContext = {}): Promise<EmbeddingResult> {
     preflightEmbeddingRequest(this, request);
     if (request.inputs.length === 0) return { vectors: [] };
+    context.signal?.throwIfAborted();
 
     const results = await mapWithConcurrency(request.inputs, BEDROCK_PER_TEXT_CONCURRENCY, async text => {
       const command = new InvokeModelCommand({ modelId: request.model, body: JSON.stringify({ inputText: text }) });

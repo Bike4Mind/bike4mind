@@ -40,10 +40,19 @@ export type EmbeddingConformanceSetup = {
     succeeds: () => void | Promise<void>;
     /** Arms a backend that rejects credentials. Omit for a provider with no credentials. */
     unauthorized?: () => void | Promise<void>;
+    /**
+     * Arms a backend that rejects, with a non-retryable and non-auth error, any request whose inputs include
+     * `LATE_FAILURE_INPUT`, and serves the rest. The suite places it last in a large batch, so a provider that
+     * sub-batches has already succeeded on earlier requests when this one fails.
+     */
+    failsOnLateInput: () => void | Promise<void>;
   };
   beforeEach?: () => Promise<void> | void;
   afterEach?: () => Promise<void> | void;
 };
+
+/** The last input of the suite's large batch; see `scenarios.failsOnLateInput`. */
+export const LATE_FAILURE_INPUT = 'input number 69';
 
 // Crosses Ollama's 64-input sub-batch so the suite exercises splitting.
 const LARGE_BATCH_SIZE = 70;
@@ -74,6 +83,16 @@ export function describeEmbeddingProviderConformance(name: string, setup: Embedd
       const before = setup.requestCount();
 
       await expect(provider.embed({ model: foreign, inputs: ['a'] })).rejects.toThrow();
+      expect(setup.requestCount()).toBe(before);
+    });
+
+    it('rejects without any request when the signal is already aborted', async () => {
+      await setup.scenarios.succeeds();
+      const provider = setup.provider();
+      const [model] = provider.models;
+      const before = setup.requestCount();
+
+      await expect(provider.embed({ model, inputs: ['a'] }, { signal: AbortSignal.abort() })).rejects.toThrow();
       expect(setup.requestCount()).toBe(before);
     });
 
@@ -131,6 +150,14 @@ export function describeEmbeddingProviderConformance(name: string, setup: Embedd
 
           await expect(setup.provider().embed({ model, inputs: [] })).resolves.toEqual({ vectors: [] });
           expect(setup.requestCount()).toBe(before);
+        });
+
+        it('is all-or-nothing when a later request fails', async () => {
+          await setup.scenarios.failsOnLateInput();
+          const large = Array.from({ length: LARGE_BATCH_SIZE }, (_, index) => `input number ${index}`);
+          expect(large.at(-1)).toBe(LATE_FAILURE_INPUT);
+
+          await expect(setup.provider().embed({ model, inputs: large })).rejects.toThrow();
         });
 
         it(`keeps order across a ${LARGE_BATCH_SIZE}-input batch`, async () => {

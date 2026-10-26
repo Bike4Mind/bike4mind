@@ -7,9 +7,9 @@ import {
   EmbeddingModelProvider,
   getLastObservedEmbeddingRateLimit,
   isEmbeddingAuthError,
+  OPENAI_KEY_MISSING_MESSAGE,
 } from '@bike4mind/fab-pipeline';
-import { describeEmbeddingProviderConformance, fakeEmbedding } from '../conformance';
-import { OPENAI_KEY_MISSING_MESSAGE } from '../keyMessages';
+import { describeEmbeddingProviderConformance, fakeEmbedding, LATE_FAILURE_INPUT } from '../conformance';
 import { OpenAIEmbeddingProvider } from './OpenAIEmbeddingProvider';
 
 // A text of the form `tokens:<n> ...` counts as n tokens, so tests can drive the splitting without huge strings.
@@ -91,7 +91,16 @@ const provider = () => new OpenAIEmbeddingProvider({ apiKey: API_KEY });
 describeEmbeddingProviderConformance('OpenAI', {
   provider,
   requestCount: () => requestBodies.length,
-  scenarios: { succeeds: () => armBackend(), unauthorized: armUnauthorized },
+  scenarios: {
+    succeeds: () => armBackend(),
+    unauthorized: armUnauthorized,
+    failsOnLateInput: () =>
+      armBackend(body =>
+        [body.input].flat().includes(LATE_FAILURE_INPUT)
+          ? HttpResponse.json({ error: { type: 'invalid_request_error', message: 'bad input' } }, { status: 400 })
+          : undefined
+      ),
+  },
 });
 
 describe('OpenAIEmbeddingProvider', () => {

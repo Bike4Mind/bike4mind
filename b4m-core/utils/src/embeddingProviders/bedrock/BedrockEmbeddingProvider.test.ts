@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEmbeddingModelCapabilities, BedrockEmbeddingModel } from '@bike4mind/common';
-import { describeEmbeddingProviderConformance, fakeEmbedding } from '../conformance';
+import { describeEmbeddingProviderConformance, fakeEmbedding, LATE_FAILURE_INPUT } from '../conformance';
 
 const clientConfigs: Record<string, unknown>[] = [];
 
@@ -49,7 +49,15 @@ beforeEach(() => {
 describeEmbeddingProviderConformance('Bedrock', {
   provider,
   requestCount: () => sent.length,
-  scenarios: { succeeds: () => (respond = succeeds) },
+  scenarios: {
+    succeeds: () => (respond = succeeds),
+    failsOnLateInput: () => {
+      respond = command =>
+        JSON.parse(command.input.body).inputText === LATE_FAILURE_INPUT
+          ? Promise.reject(new Error('bad input'))
+          : succeeds(command);
+    },
+  },
 });
 
 describe('BedrockEmbeddingProvider', () => {

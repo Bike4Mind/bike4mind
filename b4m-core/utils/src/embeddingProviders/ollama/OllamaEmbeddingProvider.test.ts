@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { getEmbeddingModelCapabilities, OllamaEmbeddingModel } from '@bike4mind/common';
-import { describeEmbeddingProviderConformance, fakeEmbedding } from '../conformance';
+import { describeEmbeddingProviderConformance, fakeEmbedding, LATE_FAILURE_INPUT } from '../conformance';
 import { OllamaEmbeddingProvider } from './OllamaEmbeddingProvider';
 
 const BASE_URL = 'http://ollama.test:11434';
@@ -51,7 +51,13 @@ const embedOne = (instance = provider()) =>
 describeEmbeddingProviderConformance('Ollama', {
   provider: () => provider(),
   requestCount: () => requests.length,
-  scenarios: { succeeds: () => armBackend() },
+  scenarios: {
+    succeeds: () => armBackend(),
+    failsOnLateInput: () =>
+      armBackend(body =>
+        body.input.includes(LATE_FAILURE_INPUT) ? new HttpResponse('bad input', { status: 400 }) : undefined
+      ),
+  },
 });
 
 describe('OllamaEmbeddingProvider', () => {

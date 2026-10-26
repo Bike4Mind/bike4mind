@@ -16,9 +16,9 @@ import { OLLAMA_EMBEDDING_MODEL_MAP, OllamaEmbeddingService } from './providers/
 // Actionable fail-fast messages when a cloud embedding key is missing or a placeholder. Both name
 // the two exits (set a real key, or go keyless with a local Ollama embedder) so the operator sees
 // what to do instead of an opaque provider 401 downstream. Kept as constants so tests pin the text.
-const OPENAI_KEY_MISSING_MESSAGE =
+export const OPENAI_KEY_MISSING_MESSAGE =
   'OpenAI API key is not configured (found a missing or placeholder value). Set a real OPENAI_API_KEY, or for an airgapped self-host unset it and set OLLAMA_BASE_URL to use a local embedder.';
-const VOYAGE_KEY_MISSING_MESSAGE =
+export const VOYAGE_KEY_MISSING_MESSAGE =
   'VoyageAI API key is not configured (found a missing or placeholder value). Set a real VOYAGE_API_KEY, or for an airgapped self-host set OLLAMA_BASE_URL to use a local embedder.';
 
 /**

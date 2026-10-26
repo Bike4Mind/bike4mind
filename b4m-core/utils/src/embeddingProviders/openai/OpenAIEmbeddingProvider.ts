@@ -6,11 +6,11 @@ import {
   EmbeddingModelProvider,
   OPENAI_EFFECTIVE_TOKEN_LIMIT,
   OPENAI_MAX_INPUTS_PER_REQUEST,
+  OPENAI_KEY_MISSING_MESSAGE,
   OPENAI_MAX_TOKENS_PER_INPUT,
   recordEmbeddingRateLimitHeaders,
 } from '@bike4mind/fab-pipeline';
 import { Logger } from '@bike4mind/observability';
-import { OPENAI_KEY_MISSING_MESSAGE } from '../keyMessages';
 import { embeddingModelsOf } from '../models';
 import { assertOneVectorPerInput, preflightEmbeddingRequest, sumReportedTokens } from '../preflight';
 import type { EmbeddingContext, EmbeddingProvider, EmbeddingRequest, EmbeddingResult } from '../types';
@@ -57,6 +57,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   async embed(request: EmbeddingRequest, context: EmbeddingContext = {}): Promise<EmbeddingResult> {
     const plan = preflightEmbeddingRequest(this, request);
     if (request.inputs.length === 0) return { vectors: [] };
+    context.signal?.throwIfAborted();
 
     const texts = [...request.inputs];
     const tokenCounts = await this.countTokens(texts);
@@ -128,11 +129,6 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
     tokenCounts: number[],
     context: EmbeddingContext
   ): Promise<BatchOutcome> {
-    const batchTokens = tokenCounts.reduce((sum, count) => sum + count, 0);
-    if (batchTokens > OPENAI_EFFECTIVE_TOKEN_LIMIT && texts.length > 1) {
-      return this.embedHalves(request, texts, tokenCounts, context);
-    }
-
     try {
       const { data: body, response: httpResponse } = await this.client.embeddings
         .create({ model: request.model, input: texts }, { signal: context.signal })
@@ -143,6 +139,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
       this.recordRateLimit(request.model, httpResponse);
 
       if (!body.data || body.data.length === 0) throw new Error('No embedding data received from OpenAI');
+      assertOneVectorPerInput('OpenAI', texts.length, body.data.length);
       const sorted = [...body.data].sort((a, b) => a.index - b.index);
       return { vectors: sorted.map(item => item.embedding), inputTokens: body.usage?.prompt_tokens };
     } catch (error) {
@@ -196,6 +193,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
         });
       this.recordRateLimit(request.model, httpResponse);
       if (!body.data || body.data.length === 0) throw new Error('No embedding data received from OpenAI');
+      assertOneVectorPerInput('OpenAI', 1, body.data.length);
       vectors.push(body.data[0].embedding);
       reportedTokens.push(body.usage?.prompt_tokens);
     }
