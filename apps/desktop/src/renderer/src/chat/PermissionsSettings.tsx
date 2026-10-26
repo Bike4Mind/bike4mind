@@ -238,7 +238,6 @@ export function PermissionsSettings({
   const changing = useRef(false);
   const [ledger, setLedger] = useState<CapabilityLedgerState | null>(null);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
-  const [ledgerAttempt, setLedgerAttempt] = useState(0);
   const [permissionsStale, setPermissionsStale] = useState(false);
 
   const mutate = useCallback(async (change: () => Promise<boolean>) => {
@@ -280,19 +279,7 @@ export function PermissionsSettings({
     return () => {
       live = false;
     };
-  }, [state, ledgerAttempt]);
-
-  useEffect(() => {
-    const deadlines = ledger?.grants.flatMap(grant =>
-      grant.expiresAt && !grant.revokedAt && !grant.expiredAt ? [Date.parse(grant.expiresAt)] : []
-    );
-    if (!deadlines?.length) return;
-    const timeout = window.setTimeout(
-      () => setLedgerAttempt(attempt => attempt + 1),
-      Math.min(Math.max(0, Math.min(...deadlines) - Date.now()), 2_147_483_647)
-    );
-    return () => window.clearTimeout(timeout);
-  }, [ledger]);
+  }, [state]);
 
   const projectChoices = useMemo(() => {
     const directories = new Set([
@@ -554,7 +541,7 @@ function subjectLabel(grant: CapabilityGrant): string {
 function auditLabel(event: CapabilityAuditEvent): string {
   if (event.type === 'grant') return `Granted ${event.grant.capability}: ${scopeLabel(event.grant.scope)}`;
   if (event.type === 'use') return `Used ${event.capability}: ${scopeLabel(event.scope)}`;
-  return `${event.type === 'revoke' ? 'Revoked' : 'Expired'} grant ${event.grantId.slice(0, 8)}`;
+  return `Revoked grant ${event.grantId.slice(0, 8)}`;
 }
 
 function CapabilityLedgerView({
@@ -567,7 +554,7 @@ function CapabilityLedgerView({
   onRevoke: (grantId: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(true);
-  const active = state?.grants.filter(grant => !grant.revokedAt && !grant.expiredAt) ?? [];
+  const active = state?.grants.filter(grant => !grant.revokedAt) ?? [];
   return (
     <Stack spacing={1} data-testid="capability-ledger">
       <Stack direction="row" spacing={1} alignItems="center">
@@ -600,7 +587,6 @@ function CapabilityLedgerView({
                   </Typography>
                   <Typography level="body-xs" textColor="text.tertiary">
                     {subjectLabel(grant)} - granted {new Date(grant.createdAt).toLocaleString()}
-                    {grant.expiresAt ? ` - expires ${new Date(grant.expiresAt).toLocaleString()}` : ''}
                   </Typography>
                 </Stack>
                 <Button

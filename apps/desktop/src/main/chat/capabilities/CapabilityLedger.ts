@@ -36,7 +36,6 @@ const grantSchema = z.object({
   capability: capabilitySchema,
   scope: scopeSchema,
   createdAt: z.string().datetime(),
-  expiresAt: z.string().datetime().optional(),
   approvalKey: z.string().optional(),
   source: z.enum(['folder-picker', 'permission-rule', 'project-trust', 'approval', 'migration']),
 });
@@ -58,7 +57,7 @@ const eventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     sequence: z.number().int().nonnegative(),
-    type: z.enum(['revoke', 'expire']),
+    type: z.literal('revoke'),
     timestamp: z.string().datetime(),
     grantId: z.string(),
   }),
@@ -73,13 +72,12 @@ const fileSchema = z.object({ version: z.literal(1), events: z.array(eventSchema
 type AppendEvent =
   | Omit<Extract<CapabilityAuditEvent, { type: 'grant' }>, 'sequence'>
   | Omit<Extract<CapabilityAuditEvent, { type: 'use' }>, 'sequence'>
-  | Omit<Extract<CapabilityAuditEvent, { type: 'revoke' | 'expire' }>, 'sequence'>;
+  | Omit<Extract<CapabilityAuditEvent, { type: 'revoke' }>, 'sequence'>;
 
 type GrantInput = {
   subject: CapabilitySubject;
   capability: Capability;
   scope: CapabilityScope;
-  expiresAt?: string;
   approvalKey?: string;
   source: CapabilityGrant['source'];
   migrationKey?: string;
@@ -111,7 +109,6 @@ export class CapabilityLedger {
   }
 
   private async currentState(): Promise<CapabilityLedgerState> {
-    await this.expireDue();
     const events = await this.read();
     const grants = new Map<string, CapabilityGrant>();
     for (const event of events) {
@@ -119,9 +116,6 @@ export class CapabilityLedger {
       else if (event.type === 'revoke') {
         const grant = grants.get(event.grantId);
         if (grant) grant.revokedAt = event.timestamp;
-      } else if (event.type === 'expire') {
-        const grant = grants.get(event.grantId);
-        if (grant) grant.expiredAt = event.timestamp;
       }
     }
     return {
@@ -136,9 +130,7 @@ export class CapabilityLedger {
 
   private async createGrant(input: GrantInput): Promise<CapabilityGrant> {
     const normalized = { ...input, scope: normalizeScope(input.scope) };
-    const existing = (await this.currentState()).grants.find(
-      grant => !grant.revokedAt && !grant.expiredAt && sameGrant(grant, normalized)
-    );
+    const existing = (await this.currentState()).grants.find(grant => !grant.revokedAt && sameGrant(grant, normalized));
     if (existing) return existing;
     const timestamp = this.now().toISOString();
     const grant: CapabilityGrant = {
@@ -147,7 +139,6 @@ export class CapabilityLedger {
       capability: input.capability,
       scope: normalized.scope,
       createdAt: timestamp,
-      ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
       ...(input.approvalKey ? { approvalKey: input.approvalKey } : {}),
       source: input.source,
     };
@@ -177,9 +168,7 @@ export class CapabilityLedger {
     enforce?: (grant: CapabilityGrant) => Promise<void> | void
   ): Promise<CapabilityGrant | null> {
     return this.serialize(async () => {
-      const grant = (await this.currentState()).grants.find(
-        entry => entry.id === grantId && !entry.revokedAt && !entry.expiredAt
-      );
+      const grant = (await this.currentState()).grants.find(entry => entry.id === grantId && !entry.revokedAt);
       if (!grant) return null;
       await enforce?.(grant);
       await this.append({ type: 'revoke', timestamp: this.now().toISOString(), grantId });
@@ -189,9 +178,7 @@ export class CapabilityLedger {
 
   async revokeMatching(match: (grant: CapabilityGrant) => boolean): Promise<CapabilityGrant[]> {
     return this.serialize(async () => {
-      const active = (await this.currentState()).grants.filter(
-        grant => !grant.revokedAt && !grant.expiredAt && match(grant)
-      );
+      const active = (await this.currentState()).grants.filter(grant => !grant.revokedAt && match(grant));
       for (const grant of active)
         await this.append({ type: 'revoke', timestamp: this.now().toISOString(), grantId: grant.id });
       return active;
@@ -208,7 +195,7 @@ export class CapabilityLedger {
     );
     const additions: Array<Parameters<CapabilityLedger['grant']>[0]> = [];
     const history = (await this.currentState()).grants;
-    const active = history.filter(grant => !grant.revokedAt && !grant.expiredAt);
+    const active = history.filter(grant => !grant.revokedAt);
     for (const root of input.roots) {
       const value = resolve(root);
       additions.push({
@@ -263,25 +250,6 @@ export class CapabilityLedger {
       if (active.some(grant => sameMigrationGrant(grant, addition))) continue;
       await this.createGrant(addition);
       existing.add(addition.migrationKey!);
-    }
-  }
-
-  private async expireDue(): Promise<void> {
-    const events = await this.read();
-    const ended = new Set(
-      events.flatMap(event => (event.type === 'revoke' || event.type === 'expire' ? [event.grantId] : []))
-    );
-    const now = this.now();
-    for (const event of events) {
-      if (
-        event.type === 'grant' &&
-        event.grant.expiresAt &&
-        !ended.has(event.grant.id) &&
-        new Date(event.grant.expiresAt) <= now
-      ) {
-        await this.append({ type: 'expire', timestamp: now.toISOString(), grantId: event.grant.id });
-        ended.add(event.grant.id);
-      }
     }
   }
 
@@ -341,12 +309,7 @@ function sameMigrationGrant(grant: CapabilityGrant, addition: GrantInput): boole
 }
 
 function sameGrant(grant: CapabilityGrant, input: GrantInput): boolean {
-  if (
-    grant.capability !== input.capability ||
-    grant.approvalKey !== input.approvalKey ||
-    grant.expiresAt !== input.expiresAt
-  )
-    return false;
+  if (grant.capability !== input.capability || grant.approvalKey !== input.approvalKey) return false;
   if (
     grant.subject.kind !== input.subject.kind ||
     grant.scope.kind !== input.scope.kind ||

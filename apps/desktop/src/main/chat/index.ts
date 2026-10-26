@@ -737,11 +737,7 @@ export function registerChat(
         !parsedLists.allow.includes(grant.scope.value)
     );
     const active = (await capabilityLedger.state()).grants.filter(
-      grant =>
-        !grant.revokedAt &&
-        !grant.expiredAt &&
-        grant.scope.kind === 'permission-rule' &&
-        sameSubject(grant.subject, subject)
+      grant => !grant.revokedAt && grant.scope.kind === 'permission-rule' && sameSubject(grant.subject, subject)
     );
     for (const rule of parsedLists.allow) {
       if (active.some(grant => grant.scope.kind === 'permission-rule' && grant.scope.value === rule)) continue;
@@ -1124,7 +1120,6 @@ export function registerChat(
     const active = (await capabilityLedger.state()).grants.filter(
       grant =>
         !grant.revokedAt &&
-        !grant.expiredAt &&
         grant.subject.kind === 'desktop-user' &&
         grant.capability === 'files' &&
         grant.scope.kind === 'path'

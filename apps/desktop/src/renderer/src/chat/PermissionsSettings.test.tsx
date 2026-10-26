@@ -377,7 +377,6 @@ describe('PermissionsSettings ledger synchronization', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
-    vi.useRealTimers();
   });
 
   const render = () =>
@@ -532,25 +531,5 @@ describe('PermissionsSettings ledger synchronization', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="permissions-reload-btn"]')?.click());
     expect(host.querySelectorAll('[data-testid="permissions-rule-row"]')).toHaveLength(1);
     expect(host.querySelector('fieldset')?.disabled).toBe(false);
-  });
-
-  it('reloads when a visible grant reaches its expiry', async () => {
-    vi.useFakeTimers();
-    const expiresAt = new Date(Date.now() + 1000).toISOString();
-    const expiringLedger = { ...ruleLedger, grants: [{ ...ruleLedger.grants[0], expiresAt }] };
-    const expiredLedger = { ...ruleLedger, grants: [{ ...ruleLedger.grants[0], expiresAt, expiredAt: expiresAt }] };
-    const getLedger = vi.fn().mockResolvedValue(expiringLedger);
-    (window as unknown as { b4m: unknown }).b4m = {
-      chat: { listRecentFolders: async () => [] },
-      permissions: { getState: async () => state },
-      capabilities: { getState: getLedger },
-    };
-    await render();
-    expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(1);
-    getLedger.mockResolvedValue(expiredLedger);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-    expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(0);
   });
 });

@@ -136,20 +136,9 @@ describe('CapabilityLedger', () => {
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
-  it('expires once and revokes immediately', async () => {
-    let now = new Date('2026-01-01T00:00:00.000Z');
+  it('revokes immediately', async () => {
+    const now = new Date('2026-01-03T00:00:00.000Z');
     const { store } = await makeLedger(() => now);
-    const expiring = await store.grant({
-      subject: { kind: 'desktop-user' },
-      capability: 'files',
-      scope: { kind: 'path', value: '/tmp/a' },
-      source: 'folder-picker',
-      expiresAt: '2026-01-02T00:00:00.000Z',
-    });
-    now = new Date('2026-01-03T00:00:00.000Z');
-    expect((await store.state()).grants.find(grant => grant.id === expiring.id)?.expiredAt).toBe(now.toISOString());
-    expect((await store.state()).audit.filter(event => event.type === 'expire')).toHaveLength(1);
-
     const active = await store.grant({
       subject: { kind: 'desktop-user' },
       capability: 'tool',
@@ -175,19 +164,6 @@ describe('CapabilityLedger', () => {
       })
     ).rejects.toThrow('disk full');
     expect((await store.state()).grants.find(entry => entry.id === grant.id)?.revokedAt).toBeUndefined();
-  });
-
-  it('expires exactly once when multiple readers observe the deadline together', async () => {
-    const { store } = await makeLedger();
-    await store.grant({
-      subject: { kind: 'desktop-user' },
-      capability: 'files',
-      scope: { kind: 'path', value: '/tmp/a' },
-      source: 'folder-picker',
-      expiresAt: '2025-12-31T00:00:00.000Z',
-    });
-    await Promise.all([store.state(), store.state(), store.state()]);
-    expect((await store.state()).audit.filter(event => event.type === 'expire')).toHaveLength(1);
   });
 
   it('enforces concurrent revocation only once and lets readers observe the completed transition', async () => {

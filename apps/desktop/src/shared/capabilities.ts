@@ -19,9 +19,7 @@ export interface CapabilityGrant {
   createdAt: string;
   /** Exact standing approval to remove when this session grant is revoked. */
   approvalKey?: string;
-  expiresAt?: string;
   revokedAt?: string;
-  expiredAt?: string;
   source: 'folder-picker' | 'permission-rule' | 'project-trust' | 'approval' | 'migration';
 }
 
@@ -35,7 +33,7 @@ export type CapabilityAuditEvent =
       capability: Capability;
       scope: CapabilityScope;
     }
-  | { sequence: number; type: 'revoke' | 'expire'; timestamp: string; grantId: string };
+  | { sequence: number; type: 'revoke'; timestamp: string; grantId: string };
 
 export interface CapabilityLedgerState {
   grants: CapabilityGrant[];
