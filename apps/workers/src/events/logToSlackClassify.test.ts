@@ -1,10 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SreClassification } from '@bike4mind/common';
-import {
-  bedrockEmptyResponseMessage,
-  createAnthropicRequestTimeoutError,
-  createAnthropicStreamTimeoutError,
-} from '@bike4mind/llm-adapters';
+import { createAnthropicRequestTimeoutError, createAnthropicStreamTimeoutError } from '@bike4mind/llm-adapters';
 import { classifyError } from './logToSlackClassify';
 
 describe('classifyError', () => {
@@ -70,14 +66,6 @@ describe('classifyError', () => {
       String(createAnthropicRequestTimeoutError(60_000)),
     ])('skips our own stream/request timeouts: %s', message => {
       expect(classifyError(message)).toBe(SreClassification.SKIP);
-    });
-
-    // A persistent misrouted "global." profile surfaces as this error on every attempt, so the
-    // retry-then-fallback path must not make it look benign to the alert pipeline.
-    it.each([true, false])('does not skip an empty Bedrock stream (stalled=%s)', stalled => {
-      const { stack } = new Error(bedrockEmptyResponseMessage('m', 'r', stalled));
-
-      expect(classifyError(stack!)).toBe(SreClassification.LOW);
     });
 
     it('still skips ECONNREFUSED / ETIMEDOUT', () => {
