@@ -34,8 +34,8 @@ const handler = baseApi().post(async (req, res) => {
       blocked.push(r.ip);
     } catch (error) {
       if (ipBlocked) {
-        // The failed audit rolled this block back; keep blocking the rest and fail the run after.
-        req.logger?.error(`Audit write failed for auto-block of IP ${r.ip}; block rolled back:`, error);
+        // The audit or commit failed and rolled this block back; keep blocking the rest and fail the run after.
+        req.logger?.error(`Auto-block of IP ${r.ip} not committed (audit or commit failed); block rolled back:`, error);
         auditFailed.push(r.ip);
         continue;
       }
@@ -46,7 +46,12 @@ const handler = baseApi().post(async (req, res) => {
   if (auditFailed.length > 0) {
     return res
       .status(500)
-      .json({ error: 'Audit write failed; these IPs were not blocked', auditFailed, blocked, evaluatedSince: since });
+      .json({
+        error: 'Audit or commit failed; these IPs were not blocked',
+        auditFailed,
+        blocked,
+        evaluatedSince: since,
+      });
   }
   return res.status(200).json({ blocked, evaluatedSince: since });
 });
