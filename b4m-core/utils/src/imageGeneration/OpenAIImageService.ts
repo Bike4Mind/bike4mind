@@ -474,6 +474,7 @@ export class OpenAIImageService extends AIImageService {
         // error object showed up as `[object Object]` (notificationDeduplicator.ts).
         errorName: error instanceof Error ? error.name : typeof error,
         errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        requestId: error instanceof OpenAI.APIError ? error.requestID : undefined,
       });
 
       if (error instanceof OpenAI.APIError) {
@@ -575,7 +576,7 @@ export class OpenAIImageService extends AIImageService {
       // @see https://platform.openai.com/docs/guides/image-generation#edit-images
       let editModel = model;
       if (!isGPTImageModel(model) && model !== ImageModels.DALL_E_2) {
-        Logger.globalInstance.debug(`[DEBUG] ⚠️ Edit endpoint doesn't support ${model}, defaulting to gpt-image-2`);
+        Logger.globalInstance.debug(`[DEBUG] Edit endpoint doesn't support ${model}, defaulting to gpt-image-2`);
         editModel = ImageModels.GPT_IMAGE_2;
       }
 
