@@ -255,9 +255,12 @@ import { premiumMigrations } from './premium.generated';
 import type { MigrationFile } from '@bike4mind/database';
 export type { MigrationFile };
 
+import EnsureBusinessMetricStateTtl from './20260921235899_ensure-business-metric-state-ttl';
+
 // 3. Reference the imported variable here:
 const coreMigrations: MigrationFile[] = [
   EnsureAccountCreationIndexes,
+  EnsureBusinessMetricStateTtl,
   AddMementosToUsers,
   DemoToPaid,
   CreateAndPopulateQuests,

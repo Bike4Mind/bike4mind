@@ -55,6 +55,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
     'c51286a11ea2ee3a29b05d4d3586737a2e39f3cc0f0268e083f506f614a5fc32'
   ),
+  broker(
+    'queue:infra/businessMetricAlerts.ts:businessMetricAlertsDLQ',
+    '673c6f139ed9d3c3cb6695ec42bdf0f2da000f8d79e5ed17a00060cdc353549e'
+  ),
+  hostedOnly(
+    'schedule:infra/businessMetricAlerts.ts:businessMetricAlerts',
+    'f5c13b99d4998a23c9b8f61166fce194ad31e87e612a453901c925c5a7e2f17a',
+    'Hosted business analytics and Stripe receipts; not applicable to a portable deployment.'
+  ),
   gap('event:infra/eventBus.ts:email-send', '3e4a74324ec602608487f3d9f877681aebdf77d584cf02c00a89e2e759aa7d96'),
   gap(
     'event:infra/eventBus.ts:notebook-curation-complete-analytics',
