@@ -173,6 +173,7 @@ describe('takedown and restore - owner-only thumbnails', () => {
     await promise;
     expect(thumbnails.enqueuePublishThumbnail).not.toHaveBeenCalled();
   });
+});
 
 describe('POST /api/admin/published-artifacts/:id/takedown', () => {
   it('rejects non-admins', async () => {
