@@ -1,9 +1,14 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CapabilityLedger } from './CapabilityLedger';
 import { SessionStore } from '../SessionStore';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
 
 const directories: string[] = [];
 
@@ -231,6 +236,19 @@ describe('CapabilityLedger', () => {
     const state = await new CapabilityLedger(path).state();
     expect(state.grants).toHaveLength(3);
     expect(state.grants.find(grant => grant.capability === 'files')?.scope).toEqual({ kind: 'path', value: '/tmp/a' });
+  });
+
+  it('writes a whole migration in one append', async () => {
+    const { path, store } = await makeLedger();
+    vi.mocked(rename).mockClear();
+    await store.migrate({
+      roots: ['/tmp/a', '/tmp/b', '/tmp/a'],
+      trustedProjects: ['/tmp/project'],
+      permissions: { user: { allow: ['Read', 'Edit'], ask: [], deny: [] }, projects: {} },
+    });
+    expect(vi.mocked(rename)).toHaveBeenCalledTimes(1);
+    const { audit } = await new CapabilityLedger(path).state();
+    expect([...audit].reverse().map(event => event.sequence)).toEqual([0, 1, 2, 3, 4]);
   });
 
   it('keeps anonymous origin, imported identity and script grants separate', async () => {

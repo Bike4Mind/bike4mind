@@ -132,23 +132,27 @@ export class CapabilityLedger {
     const normalized = { ...input, scope: normalizeScope(input.scope) };
     const existing = (await this.currentState()).grants.find(grant => !grant.revokedAt && sameGrant(grant, normalized));
     if (existing) return existing;
+    const event = this.grantEvent(normalized);
+    await this.append(event);
+    return event.grant;
+  }
+
+  private grantEvent(input: GrantInput): Extract<AppendEvent, { type: 'grant' }> {
     const timestamp = this.now().toISOString();
-    const grant: CapabilityGrant = {
-      id: randomUUID(),
-      subject: input.subject,
-      capability: input.capability,
-      scope: normalized.scope,
-      createdAt: timestamp,
-      ...(input.approvalKey ? { approvalKey: input.approvalKey } : {}),
-      source: input.source,
-    };
-    await this.append({
+    return {
       type: 'grant',
       timestamp,
-      grant,
+      grant: {
+        id: randomUUID(),
+        subject: input.subject,
+        capability: input.capability,
+        scope: input.scope,
+        createdAt: timestamp,
+        ...(input.approvalKey ? { approvalKey: input.approvalKey } : {}),
+        source: input.source,
+      },
       ...(input.migrationKey ? { migrationKey: input.migrationKey } : {}),
-    });
-    return grant;
+    };
   }
 
   async use(capability: Capability, scope: CapabilityScope, grantId?: string): Promise<void> {
@@ -179,8 +183,9 @@ export class CapabilityLedger {
   async revokeMatching(match: (grant: CapabilityGrant) => boolean): Promise<CapabilityGrant[]> {
     return this.serialize(async () => {
       const active = (await this.currentState()).grants.filter(grant => !grant.revokedAt && match(grant));
-      for (const grant of active)
-        await this.append({ type: 'revoke', timestamp: this.now().toISOString(), grantId: grant.id });
+      await this.append(
+        ...active.map(grant => ({ type: 'revoke' as const, timestamp: this.now().toISOString(), grantId: grant.id }))
+      );
       return active;
     });
   }
@@ -242,15 +247,19 @@ export class CapabilityLedger {
         });
       }
     }
+    const added: Extract<AppendEvent, { type: 'grant' }>[] = [];
     for (const addition of additions) {
       if (existing.has(addition.migrationKey!)) continue;
       // A session snapshot may predate removal. Only fill missing history: a fresh
       // user grant is recorded by the native writer, never by replaying old directories.
       if (addition.subject.kind === 'session' && history.some(grant => sameMigrationGrant(grant, addition))) continue;
       if (active.some(grant => sameMigrationGrant(grant, addition))) continue;
-      await this.createGrant(addition);
+      const event = this.grantEvent({ ...addition, scope: normalizeScope(addition.scope) });
+      added.push(event);
+      active.push(event.grant);
       existing.add(addition.migrationKey!);
     }
+    await this.append(...added);
   }
 
   private async read(): Promise<CapabilityAuditEvent[]> {
@@ -280,9 +289,13 @@ export class CapabilityLedger {
     return run;
   }
 
-  private async append(event: AppendEvent): Promise<void> {
+  private async append(...events: AppendEvent[]): Promise<void> {
+    if (events.length === 0) return;
     const current = await this.read();
-    const next = [...current, { ...event, sequence: current.length } as CapabilityAuditEvent];
+    const next = [
+      ...current,
+      ...events.map((event, index) => ({ ...event, sequence: current.length + index }) as CapabilityAuditEvent),
+    ];
     await mkdir(dirname(this.filePath), { recursive: true });
     const temporary = `${this.filePath}.tmp`;
     await writeFile(temporary, JSON.stringify({ version: 1, events: next }, null, 2), {
