@@ -348,6 +348,24 @@ describe('GET /api/v1/agent-executions/{id}', () => {
     expect(body.steps[0].content).toBe('done');
   });
 
+  it('publishes an empty string, not null, when the stored answer is only reasoning', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      answer: '<think>truncated',
+      steps: [{ type: 'final_answer' as const, content: '<think>truncated' }],
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(AgentExecutionStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.status).toBe('completed');
+    expect(body.answer).toBe('');
+    expect(body.steps[0].content).toBe('');
+  });
+
   it('publishes the failure reason so a failed run is not an opaque null answer', async () => {
     mockLoadTrace.mockResolvedValue({
       ...trace,
