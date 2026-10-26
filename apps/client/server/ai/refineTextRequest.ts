@@ -1,4 +1,5 @@
 import { IMessage } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
 import { cacheRepository } from '@bike4mind/database';
 import { cacheService, meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
 import { refineText } from '@bike4mind/services/llm/refineText';
@@ -44,7 +45,8 @@ export class RefineFailedError extends Error {
  */
 export const refineTextRequest = async (
   { text, context }: { text: string; context?: string },
-  req: MeteredRequest
+  // cacheService wants the concrete Logger, not MeteredRequest's ILogger; both callers pass one.
+  req: MeteredRequest & { logger: Logger }
 ): Promise<string> => {
   assertAiAccessAllowed(req.user);
   return cacheService.getCachedData(
