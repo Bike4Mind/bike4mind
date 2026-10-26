@@ -1207,10 +1207,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       });
     };
 
-    const makeLargeScopeCtx = (opts: { vectorSearchEnabled: boolean }) => {
+    const makeLargeScopeCtx = (opts: { vectorSearchEnabled: boolean; rows?: (ids: string[]) => unknown[] }) => {
       const ctx = makeCtx({
         files: lakeFiles,
-        rows,
+        rows: opts.rows ?? rows,
         settings: { EnableDataLakeVectorSearch: opts.vectorSearchEnabled },
       });
       // The real listing honours `limit`; the fixture has to, or the cut under test never happens.
@@ -1328,8 +1328,8 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
 
     // `freshFrom`.. are stamped seconds ago (inside the mongot lag); the first 110 files get ANN hits,
     // so hits alone fill the cap and the rest are ready files the ANN ranked outside its pool.
-    const withFreshFiles = (freshFrom: number) => {
-      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+    const withFreshFiles = (freshFrom: number, chunkRows?: (ids: string[]) => unknown[]) => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true, rows: chunkRows });
       const files = lakeFiles.map((f, i) =>
         i >= freshFrom ? { ...f, chunkEmbeddingModelStampedAt: new Date(Date.now() - 10_000) } : f
       );
@@ -1350,6 +1350,23 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(scanned.has(TARGET)).toBe(true);
       expect(scanned.size).toBe(100);
       expect((quest.promptMeta as { retrievalCoverage?: unknown }).retrievalCoverage).toBeUndefined();
+    });
+
+    it('with vector search, scans a reserved fresh file before chunk-heavy hits spend the budget', async () => {
+      // 45 chunks per file: the 4000-chunk budget runs out before the 90th file.
+      const heavyRows = (ids: string[]) =>
+        ids.flatMap(id =>
+          Array.from({ length: 45 }, (_, i) => ({
+            id: `ch-${id}-${String(i).padStart(2, '0')}`,
+            fabFileId: id,
+            text: `text ${id}`,
+            vector: id === TARGET ? [1, 0] : [0, 1],
+          }))
+        );
+      const { ctx } = withFreshFiles(TARGET_INDEX, heavyRows);
+      const { content } = await run(ctx);
+      expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls[0][0]).toContain(TARGET);
+      expect(content).toContain(targetHeading);
     });
 
     it('with vector search, says so when more recently embedded files than the reserve are cut', async () => {

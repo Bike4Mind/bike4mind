@@ -68,7 +68,7 @@ describe('selectRelevanceCandidates', () => {
     const hits = hitFiles(30);
     const recent = Array.from({ length: 80 }, (_, i) => file(`fresh${String(i).padStart(2, '0')}`, fresh));
     const { files, notIndexedCut } = selectRelevanceCandidates([...hits, ...recent], hitsFor(hits), NOW, opts);
-    expect(files.map(f => f.id)).toEqual([...hits, ...recent.slice(0, 70)].map(f => f.id));
+    expect(files.map(f => f.id)).toEqual([...recent.slice(0, 10), ...hits, ...recent.slice(10, 70)].map(f => f.id));
     expect(notIndexedCut).toBe(10);
   });
 
@@ -79,8 +79,8 @@ describe('selectRelevanceCandidates', () => {
     expect(files).toHaveLength(100);
     const keptFresh = files.filter(f => f.id.startsWith('fresh'));
     expect(keptFresh.map(f => f.id)).toEqual(Array.from({ length: 10 }, (_, i) => `fresh${i}`));
-    expect(files.slice(90).map(f => f.id)).toEqual(keptFresh.map(f => f.id));
-    expect(files.slice(0, 90).map(f => f.id)).toEqual(hits.slice(0, 90).map(f => f.id));
+    expect(files.slice(0, 10).map(f => f.id)).toEqual(keptFresh.map(f => f.id));
+    expect(files.slice(10).map(f => f.id)).toEqual(hits.slice(0, 90).map(f => f.id));
     expect(notIndexedCut).toBe(5);
   });
 
@@ -115,12 +115,7 @@ describe('selectRelevanceCandidates', () => {
     );
     expect(files).toHaveLength(100);
     expect(files.map(f => f.id)).toContain('m-new');
-    expect(
-      files
-        .slice(0, 99)
-        .map(f => f.id)
-        .filter(id => id !== 'm-new')
-    ).toEqual(hits.slice(0, 99).map(f => f.id));
+    expect(files.map(f => f.id)).toEqual(['m-new', ...hits.slice(0, 99).map(f => f.id)]);
     expect(notIndexedCut).toBe(0);
   });
 

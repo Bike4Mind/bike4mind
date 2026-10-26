@@ -42,8 +42,10 @@ export function rankCandidateFilesByRelevance<T extends VectorSearchReadinessFil
 
 /**
  * rankCandidateFilesByRelevance cut at `cap`, except that up to `notIndexedReserve` files stamped within
- * the mongot lag are placed ahead of the lowest-scoring hits. Such a file has no hit yet, so without
- * the reserve it would sit behind a full cap of hits and be dropped silently. Never-stamped files
+ * the mongot lag take the first slots, displacing the lowest-scoring hits. Such a file has no hit yet,
+ * so without the reserve it would sit behind a full cap of hits and be dropped silently. They go first
+ * rather than last because the chunk scan spends its budget in this order (ChatCompletionFeatures.ts),
+ * so a reserved slot at the tail could be kept yet never read. Never-stamped files
  * (chunkless images, legacy rows) never get a slot: waiting does not make them searchable, so they
  * keep their tier-2 position behind the hits and are cut silently, as before.
  * `notIndexedCut` counts only the lag-window files that still fell past the cap, for the coverage notice.
@@ -57,10 +59,12 @@ export function selectRelevanceCandidates<T extends VectorSearchReadinessFile>(
   const { withHit, notIndexed, rankedOutside } = splitByRelevanceTier(files, hits, now);
   const recent = notIndexed.filter(file => isStampedWithinLag(file, now));
   const unstamped = notIndexed.filter(file => !isStampedWithinLag(file, now));
-  const hitSlots = Math.max(0, cap - Math.min(recent.length, notIndexedReserve));
+  const reserved = Math.min(recent.length, notIndexedReserve);
+  const hitSlots = Math.max(0, cap - reserved);
   const ordered = [
+    ...recent.slice(0, reserved),
     ...withHit.slice(0, hitSlots),
-    ...recent,
+    ...recent.slice(reserved),
     ...withHit.slice(hitSlots),
     ...unstamped,
     ...rankedOutside,
