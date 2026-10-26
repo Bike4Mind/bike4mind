@@ -1,5 +1,7 @@
 # Gears Discovery Modal Implementation Plan
 
+> **Historical:** the numbers below (account age gate, 3-day cooldown, 3-5 cards) were superseded during implementation. The shipped rules are a 1-day cooldown, no account-age gate, 1 to 3 cards; the spec is authoritative.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A modal titled "Don't miss these features" that periodically shows a user 3-5 Gears cards for features they have not used yet, in the Gears page's card style, each card taking the user straight into the feature.
