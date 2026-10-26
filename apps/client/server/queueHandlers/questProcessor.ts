@@ -55,7 +55,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@server/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
-import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, IUserDocument, Permission } from '@bike4mind/common';
+import { IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
@@ -312,7 +312,6 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     await questRepository.settleIfUnfinished(params.questId, {
       status: 'stopped',
       type: 'error',
-      errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
       reply: error.message,
       replies: [error.message],
     });

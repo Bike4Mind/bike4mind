@@ -9,7 +9,7 @@ import { MessageContentObject } from './MessageTypes';
 import type { IUserDocument } from './UserTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
-import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, type ApiErrorCode } from '../../apiErrorCodes';
+import type { ApiErrorCode } from '../../apiErrorCodes';
 import type { GenerationJobRef } from './GenerationJobTypes';
 import type { IQuestCallback } from '../../schemas/generationCallback';
 import type { SuggestedChoices } from '../../utils/replyChoices';
@@ -100,7 +100,6 @@ export type SessionProps = {
 export const QUEST_ERROR_CODES = [
   'insufficient_credits',
   'spend_cap_exceeded',
-  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
 ] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 

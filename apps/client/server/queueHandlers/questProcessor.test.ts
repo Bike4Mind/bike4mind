@@ -217,7 +217,6 @@ describe('processQuest', () => {
     expect(settle).toHaveBeenCalledWith('quest-1', {
       status: 'stopped',
       type: 'error',
-      errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
       reply: capError.message,
       replies: [capError.message],
     });
