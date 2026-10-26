@@ -7,7 +7,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-import { comparisonWindow } from '@bike4mind/server-utils/analytics/businessMetricAnomalies';
+import { comparisonWindow, DAY_MS } from '@bike4mind/server-utils/analytics/businessMetricAnomalies';
 
 const payments = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
@@ -101,6 +101,30 @@ describe('business metric persisted behavior', () => {
     expect(values('completions:firstParty')).toEqual([1, 0]);
     expect(values('verifiedSignups')).toEqual([1, 0]);
     expect(values('activeUsers')).toEqual([1, 0]);
+  });
+
+  it('counts a signup only once its cohort has had equal time to verify', async () => {
+    const window = comparisonWindow(new Date('2026-10-26T12:05:00Z'));
+    const cutoff = window.end.getTime() - DAY_MS;
+    const createdAt = new Date(cutoff - 60 * 60 * 1000);
+    await User.collection.insertMany([
+      {
+        _id: new Types.ObjectId(),
+        email: 'early@example.org',
+        emailVerified: true,
+        createdAt,
+        emailVerifiedAt: new Date(cutoff - 1000),
+      },
+      {
+        _id: new Types.ObjectId(),
+        email: 'late@example.org',
+        emailVerified: true,
+        createdAt,
+        emailVerifiedAt: new Date(cutoff + 1000),
+      },
+    ]);
+    const { metrics } = await collectBusinessMetrics(window);
+    expect(metrics.find(metric => metric.name === 'verifiedSignups')?.values[1]).toBe(1);
   });
 
   it('includes real email aliases by default and honors explicitly configured test patterns', async () => {

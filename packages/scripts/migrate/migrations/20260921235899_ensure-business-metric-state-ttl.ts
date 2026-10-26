@@ -7,7 +7,6 @@ const migration: MigrationFile = {
   name: 'ensure business metric indexes',
   up: async () => {
     await BusinessMetricState.createIndexes();
-    await User.collection.createIndex({ createdAt: 1 }, { name: 'user_createdAt' });
     await User.collection.createIndex({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
     await Organization.collection.createIndex({ stripeCustomerId: 1 }, { name: 'organization_stripeCustomerId' });
   },

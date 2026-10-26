@@ -43,6 +43,7 @@ const ACCOUNT_FIELDS = {
   isSynthetic: 1,
   createdAt: 1,
   emailVerified: 1,
+  emailVerifiedAt: 1,
   stripeCustomerId: 1,
 };
 const ORGANIZATION_FIELDS = { userId: 1, stripeCustomerId: 1 };
@@ -142,7 +143,10 @@ export async function collectBusinessMetrics(window: ComparisonWindow) {
     const id = String(account._id);
     if (!users.has(id) || !account.emailVerified) continue;
     const index = periodIndex(account.createdAt, window);
-    if (index !== null) metrics.add('verifiedSignups', index, 1, [`user:${id}`]);
+    const verifiedAt = account.emailVerifiedAt ?? account.createdAt;
+    if (index !== null && verifiedAt.getTime() < window.end.getTime() - index * DAY_MS) {
+      metrics.add('verifiedSignups', index, 1, [`user:${id}`]);
+    }
   }
   const internalKeys = new Set<string>();
   const keys = UserApiKey.find({ productId: { $exists: true, $nin: [null, ''] } }, { _id: 1 })
