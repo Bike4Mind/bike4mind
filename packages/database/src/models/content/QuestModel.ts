@@ -1680,6 +1680,8 @@ function initializeQuestModel() {
 
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
+    // Built in production by migration 20260921235966_ensure-quest-signup-activity-index; keep the
+    // name and key in sync with it.
     ChatHistoryItemSchema.index(
       { 'signupActivity.userId': 1, status: 1, 'signupActivity.startedAt': 1 },
       { name: 'signupActivity_user_status_startedAt' }

@@ -308,6 +308,17 @@ describe('staged signup ledger', () => {
     expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(12);
   });
 
+  it('rolls back the grant when the account update matches no user', async () => {
+    const user = await createUser();
+    const update = vi.spyOn(userRepository, 'update').mockResolvedValueOnce(null as never);
+    await expect(userService.releaseSignupTranche(user.id, adapters)).rejects.toThrow(
+      'Staged grant account update failed'
+    );
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+    expect((await User.findById(user.id))?.currentCredits).toBe(0);
+    update.mockRestore();
+  });
+
   it('does not enroll or grant existing accounts', async () => {
     const user = await createUser(false);
     await userService.releaseSignupTranche(user.id, adapters);
