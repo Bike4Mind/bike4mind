@@ -165,6 +165,27 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     expect(message).not.toContain('without a terminal event');
   });
 
+  it('keeps a real Anthropic empty message (message_start + message_stop) out of the retry classification', async () => {
+    const body = streamBody([
+      { type: 'message_start', message: { usage: { input_tokens: 5, output_tokens: 1 } } },
+      { type: 'message_stop' },
+    ]);
+    // updateClientForModel swaps _bedrockRuntime per model, so stub the stream call itself.
+    const backend = new (class extends AnthropicBedrockBackend {
+      protected override async invokeModelStream() {
+        return { body };
+      }
+    })();
+    const err = await backend
+      .complete(ChatModels.CLAUDE_4_5_SONNET_BEDROCK, [{ role: 'user', content: 'hi' }], { stream: true }, cb)
+      .catch((e: Error) => e);
+    const message = (err as Error).message;
+
+    expect(message).toMatch(/EMPTY response/i);
+    expect(message).not.toMatch(/stream timeout/i);
+    expect(message).not.toContain('without a terminal event');
+  });
+
   // The retry and fallback downstream log the failure at WARN, so this backend log is the ERROR
   // signal a persistent misroute (every call empty) still raises.
   it('logs a stalled empty stream at ERROR before it is retried', async () => {
