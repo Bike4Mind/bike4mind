@@ -64,6 +64,16 @@ describe('createSignupRiskCollector', () => {
     for (const [call] of mockRecentDistinctSignups.mock.calls) expect(call.until).toEqual(capturedAt);
   });
 
+  it('keeps an old signup inside the AuthEvent retention window', async () => {
+    counts({ ipSignups: 0, prefixSignups: 0 }, 0);
+    const capturedAt = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000);
+
+    await createSignupRiskCollector()(user({ ...network, capturedAt }));
+
+    for (const [call] of mockRecentDistinctSignups.mock.calls)
+      expect(call.since.getTime()).toBeGreaterThan(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  });
+
   it('leaves every signal missing when no network is known', async () => {
     expect(await createSignupRiskCollector(null)(user())).toEqual({});
     expect(mockRecentDistinctSignups).not.toHaveBeenCalled();
@@ -90,10 +100,17 @@ describe('isSignupNetworkOverLimit', () => {
     expect(mockRecentDistinctSignups.mock.calls[0][0].userId).toBeUndefined();
   });
 
-  it('allows a network below its caps or with unknown counts', async () => {
+  it('allows a network below its caps', async () => {
     settings({ maxSignupsPerIpPerDay: '3', maxSignupsPerAsnPerHour: '10' });
-    counts({ ipSignups: 2, prefixSignups: 40 }, null);
+    counts({ ipSignups: 2, prefixSignups: 40 }, 9);
     expect(await isSignupNetworkOverLimit(network, logger)).toBe(false);
+  });
+
+  it('treats a truncated count as over, but an unknown network as allowed', async () => {
+    settings({ maxSignupsPerAsnPerHour: '10' });
+    counts({ ipSignups: 0, prefixSignups: 0 }, null);
+    expect(await isSignupNetworkOverLimit(network, logger)).toBe(true);
+    expect(await isSignupNetworkOverLimit({ ...network, asn: null }, logger)).toBe(false);
   });
 
   it('fails open when the count fails', async () => {

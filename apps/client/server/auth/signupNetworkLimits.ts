@@ -1,15 +1,18 @@
-import type { INetworkMeta, IUserDocument } from '@bike4mind/common';
+import { isIP } from 'node:net';
+import { type INetworkMeta, type IUserDocument, TooManyRequestsError } from '@bike4mind/common';
 import { adminSettingsRepository, authEventRepository } from '@bike4mind/database';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import type { userService } from '@bike4mind/services';
-import { TooManyRequestsError } from '@bike4mind/utils';
 import { SIGNUP_LIMITED_MESSAGE } from '@server/utils/auth/oauthFailureReason';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
-// A bigger result set is reported as unknown (null), never as a low count. Keep the limit
-// settings' max (settings.ts) at or below this so a truncated scan cannot hide a breach.
-const MAX_COUNTED_ROWS = 5_000;
+// A bigger result set is reported as unknown (null), never as a low count. The limit settings'
+// max (settings.ts) must stay at or below this; the gate treats a truncated count as over.
+export const MAX_COUNTED_ROWS = 5_000;
+// recentDistinctSignups refuses windows reaching past the AuthEvent TTL (90 days); the 24h window
+// plus a day of slack keeps an old anchor inside it.
+const OLDEST_ANCHOR_MS = 88 * DAY_MS;
 
 /** The windows the risk policy's `ipSignups`/`prefixSignups` (24h) and `asnSignups` (1h) count over. */
 export const SIGNUP_NETWORK_WINDOWS = { ipMs: DAY_MS, asnMs: HOUR_MS } as const;
@@ -43,7 +46,10 @@ export function createSignupRiskCollector(network?: SignupNetwork | null) {
     const source = network ?? user.signupMeta ?? null;
     if (!source) return {};
     const capturedAt = network ? null : user.signupMeta?.capturedAt;
-    const at = capturedAt ? new Date(Math.min(new Date(capturedAt).getTime(), Date.now())) : new Date();
+    const now = Date.now();
+    const at = new Date(
+      capturedAt ? Math.min(Math.max(new Date(capturedAt).getTime(), now - OLDEST_ANCHOR_MS), now) : now
+    );
     const counts = await countRecentSignups({ network: source, userId: user.id, at });
     return { datacenter: source.isDatacenter, ...counts };
   };
@@ -68,8 +74,9 @@ export async function isSignupNetworkOverLimit(network: SignupNetwork, logger: W
     ]);
     if (!ipLimit && !asnLimit) return false;
     const { ipSignups, asnSignups } = await countRecentSignups({ network, at: new Date() });
-    const overIp = ipLimit > 0 && ipSignups !== null && ipSignups >= ipLimit;
-    const overAsn = asnLimit > 0 && asnSignups !== null && asnSignups >= asnLimit;
+    // With a usable ip/asn a null count means the scan was truncated, i.e. far over any cap.
+    const overIp = ipLimit > 0 && !!network.ip && isIP(network.ip) > 0 && (ipSignups ?? Infinity) >= ipLimit;
+    const overAsn = asnLimit > 0 && !!network.asn && network.asn > 0 && (asnSignups ?? Infinity) >= asnLimit;
     if (overIp || overAsn) logger.warn('[signup-limits] Refused signup', { overIp, overAsn, asn: network.asn });
     return overIp || overAsn;
   } catch (error) {

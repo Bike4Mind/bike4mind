@@ -378,13 +378,16 @@ const handler = baseApi({ auth: false })
     // a grant failure leaves a retry breadcrumb rather than losing credits.
     let newUser: Awaited<ReturnType<typeof userService.registerViaOTC>>;
     try {
-      const signupNetwork = readNetworkMeta(req);
-      // Inside the try so a refusal re-issues the token and the user can retry later.
-      await assertSignupNetworkWithinLimits(signupNetwork, req.logger);
       // Inside the try so a claim or lookup failure still re-issues the token (the nonce is spent).
       bootstrapClaimId = bootstrap.eligible ? await claimBootstrapAdmin() : null;
       const partnerDomainAllowed =
         bootstrapClaimId === null && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
+      const signupNetwork = readNetworkMeta(req);
+      // The network caps are for anonymous self-serve signups; a partner rule or the bootstrap
+      // claim is an admin's authorization, as for enterprise SSO.
+      if (bootstrapClaimId === null && !partnerDomainAllowed) {
+        await assertSignupNetworkWithinLimits(signupNetwork, req.logger);
+      }
       // A self-host install's staff all share one fresh domain, and a partner domain is one an
       // admin already vouched for, so neither is capped (see OTC_REGISTER_DOMAIN_BUDGETS).
       domainBudget =
@@ -459,7 +462,8 @@ const handler = baseApi({ auth: false })
       // even though the code was correct: the username is attacker-varying input, and an
       // uncapped re-issue would let one proven code probe username existence indefinitely.
       // Post-code-proven, so the specific error message leaks nothing about email existence.
-      const nextAttempts = attempts + 1;
+      // A network-cap refusal is not attacker-varying input, so it does not spend an attempt.
+      const nextAttempts = err instanceof TooManyRequestsError ? attempts : attempts + 1;
       const reissuedToken = jwt.sign(
         { email: tokenPayload.email, attempts: nextAttempts, jti: newNonce },
         Config.JWT_SECRET,

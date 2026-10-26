@@ -87,8 +87,9 @@ vi.mock('@bike4mind/db-core', async importOriginal => ({
 // The one-time code is already proven by the time we reach registration; stub the
 // verify layer so the happy path lands on the new-user branch.
 const mockJwtVerify = vi.fn();
+const mockJwtSign = vi.fn((..._a: unknown[]) => 'signed-token');
 vi.mock('jsonwebtoken', () => ({
-  default: { verify: (...a: any[]) => mockJwtVerify(...a), sign: () => 'signed-token' },
+  default: { verify: (...a: any[]) => mockJwtVerify(...a), sign: (...a: unknown[]) => mockJwtSign(...a) },
 }));
 
 // DB-backed partner rules (issue #293). Default to "no rule" so the base cases fall
@@ -528,6 +529,26 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       expect.anything()
     );
     expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+    // The refusal is not attacker-varying input, so retrying later does not burn the code.
+    expect(mockJwtSign).toHaveBeenLastCalledWith(
+      expect.objectContaining({ attempts: 0 }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('exempts a partner-domain signup from the network caps', async () => {
+    mockPartnerGrant.mockResolvedValue({ matched: true, entitlements: new Set(), signupCredits: 0, tags: [] });
+    mockAssertSignupNetworkWithinLimits.mockRejectedValue(new TooManyRequestsError('limited'));
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockAssertSignupNetworkWithinLimits).not.toHaveBeenCalled();
+    expect(mockRegisterViaOTC).toHaveBeenCalled();
+    mockAssertSignupNetworkWithinLimits.mockReset();
+    mockAssertSignupNetworkWithinLimits.mockResolvedValue(undefined);
   });
 
   it("hands the request network's risk collector to the staged grant", async () => {

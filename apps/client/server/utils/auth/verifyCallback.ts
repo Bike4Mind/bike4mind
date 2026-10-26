@@ -224,8 +224,13 @@ const authenticateUser = async (
         done(null, undefined, { code: 'registration_closed' });
         return;
       }
-      // Only Google/GitHub pass a network (selfServeVerifyCallback), matching the invite gate's scope.
-      if (signupNetwork && (await isSignupNetworkOverLimit(signupNetwork, Logger.globalInstance))) {
+      // Only Google/GitHub pass a network (selfServeVerifyCallback), matching the invite gate's scope;
+      // a partner-domain rule is an admin's authorization and skips the caps, as on the OTC path.
+      if (
+        signupNetwork &&
+        (await isSignupNetworkOverLimit(signupNetwork, Logger.globalInstance)) &&
+        !(await isPartnerDomainSignupAllowed(email, isProviderEmailVerified(profile)))
+      ) {
         done(null, undefined, { code: 'signup_limited' });
         return;
       }
