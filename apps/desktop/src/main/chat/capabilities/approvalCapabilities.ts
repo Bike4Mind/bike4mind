@@ -1,4 +1,5 @@
 import type { Capability, CapabilityGrant, CapabilityScope } from '@shared/capabilities';
+import type { PermissionScope } from '@shared/permissions';
 import type { ApprovalGate } from '../tools/ApprovalGate';
 import { spendsCredits } from '../tools/riskAssessment';
 
@@ -38,4 +39,28 @@ export function revokeSessionCapability(grant: CapabilityGrant, approvals: Pick<
     grant.scope.access === 'script' ? 'browser-script' : grant.scope.access === 'act' ? 'browser-act' : 'browser-open';
   const identity = grant.capability === 'imported-identity' ? '-as-you' : '';
   approvals.revoke(grant.subject.sessionId, `${prefix}${identity}:${grant.scope.value}`);
+}
+
+export interface RevocationTargets {
+  approvals: Pick<ApprovalGate, 'revoke'>;
+  removeSessionDirectory(sessionId: string, directory: string): Promise<unknown>;
+  revokeRoot(root: string): Promise<unknown>;
+  untrustProject(directory: string): Promise<unknown>;
+  revokeAllow(scope: PermissionScope, rule: string): Promise<unknown>;
+}
+
+/** Withdraws what a grant allowed; the ledger records the revoke only once this resolves. */
+export async function enforceRevocation(grant: CapabilityGrant, targets: RevocationTargets): Promise<void> {
+  revokeSessionCapability(grant, targets.approvals);
+  if (grant.scope.kind === 'path') {
+    if (grant.subject.kind === 'session') {
+      await targets.removeSessionDirectory(grant.subject.sessionId, grant.scope.value);
+    } else await targets.revokeRoot(grant.scope.value);
+  }
+  if (grant.scope.kind === 'project') await targets.untrustProject(grant.scope.value);
+  if (grant.scope.kind === 'permission-rule') {
+    const scope: PermissionScope =
+      grant.subject.kind === 'project' ? { kind: 'project', directory: grant.subject.directory } : { kind: 'user' };
+    await targets.revokeAllow(scope, grant.scope.value);
+  }
 }

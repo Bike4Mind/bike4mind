@@ -109,7 +109,7 @@ import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeC
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
-import { revokeSessionCapability } from './capabilities/approvalCapabilities';
+import { enforceRevocation } from './capabilities/approvalCapabilities';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -773,28 +773,21 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, async (_event, grantId: unknown) => {
     await capabilitiesReady;
     if (typeof grantId !== 'string') return capabilityLedger.state();
-    await capabilityLedger.revoke(grantId, async grant => {
-      revokeSessionCapability(grant, approvals);
-      if (grant.scope.kind === 'path') {
-        if (grant.subject.kind === 'session')
-          await service.removeContextDirectory(grant.subject.sessionId, grant.scope.value, false);
-        else {
-          await access.revoke(grant.scope.value);
+    await capabilityLedger.revoke(grantId, grant =>
+      enforceRevocation(grant, {
+        approvals,
+        removeSessionDirectory: (sessionId, directory) => service.removeContextDirectory(sessionId, directory, false),
+        revokeRoot: async root => {
+          await access.revoke(root);
           service.refreshAccessScopes();
-        }
-      }
-      if (grant.scope.kind === 'project') {
-        await skills.setTrusted(grant.scope.value, false);
-        permissions.invalidate();
-      }
-      if (grant.scope.kind === 'permission-rule') {
-        const scope =
-          grant.subject.kind === 'project'
-            ? ({ kind: 'project', directory: grant.subject.directory } as const)
-            : ({ kind: 'user' } as const);
-        await permissions.revokeAllow(scope, grant.scope.value);
-      }
-    });
+        },
+        untrustProject: async directory => {
+          await skills.setTrusted(directory, false);
+          permissions.invalidate();
+        },
+        revokeAllow: (scope, rule) => permissions.revokeAllow(scope, rule),
+      })
+    );
     return capabilityLedger.state();
   });
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());

@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CapabilityGrant } from '@shared/capabilities';
 import { ApprovalGate } from '../tools/ApprovalGate';
-import { capabilityFor, capabilityScope, revokeSessionCapability } from './approvalCapabilities';
+import { capabilityFor, capabilityScope, enforceRevocation, revokeSessionCapability } from './approvalCapabilities';
 
 describe('approval capabilities', () => {
   it.each([
@@ -57,5 +57,97 @@ describe('approval capabilities', () => {
     expect(gate.isStanding('session', key)).not.toBeNull();
     revokeSessionCapability(grant, gate);
     expect(gate.isStanding('session', key)).toBeNull();
+  });
+
+  describe('enforceRevocation', () => {
+    const targets = () => ({
+      approvals: { revoke: vi.fn() },
+      removeSessionDirectory: vi.fn().mockResolvedValue(undefined),
+      revokeRoot: vi.fn().mockResolvedValue(undefined),
+      untrustProject: vi.fn().mockResolvedValue(undefined),
+      revokeAllow: vi.fn().mockResolvedValue(undefined),
+    });
+    const grant = (fields: Pick<CapabilityGrant, 'subject' | 'capability' | 'scope'> & Partial<CapabilityGrant>) => ({
+      id: 'grant',
+      createdAt: new Date().toISOString(),
+      source: 'migration' as const,
+      ...fields,
+    });
+
+    it('removes a session folder from that conversation only', async () => {
+      const t = targets();
+      await enforceRevocation(
+        grant({
+          subject: { kind: 'session', sessionId: 's1' },
+          capability: 'files',
+          scope: { kind: 'path', value: '/work/a' },
+        }),
+        t
+      );
+      expect(t.removeSessionDirectory).toHaveBeenCalledWith('s1', '/work/a');
+      expect(t.revokeRoot).not.toHaveBeenCalled();
+    });
+
+    it('revokes a desktop folder root', async () => {
+      const t = targets();
+      await enforceRevocation(
+        grant({ subject: { kind: 'desktop-user' }, capability: 'files', scope: { kind: 'path', value: '/work/a' } }),
+        t
+      );
+      expect(t.revokeRoot).toHaveBeenCalledWith('/work/a');
+      expect(t.removeSessionDirectory).not.toHaveBeenCalled();
+    });
+
+    it('withdraws project trust', async () => {
+      const t = targets();
+      await enforceRevocation(
+        grant({
+          subject: { kind: 'project', directory: '/work/p' },
+          capability: 'project-trust',
+          scope: { kind: 'project', value: '/work/p' },
+        }),
+        t
+      );
+      expect(t.untrustProject).toHaveBeenCalledWith('/work/p');
+    });
+
+    it.each([
+      [{ kind: 'desktop-user' } as const, { kind: 'user' }],
+      [{ kind: 'project', directory: '/work/p' } as const, { kind: 'project', directory: '/work/p' }],
+    ])('removes a permission rule from the scope it was saved in', async (subject, scope) => {
+      const t = targets();
+      await enforceRevocation(
+        grant({ subject, capability: 'tool', scope: { kind: 'permission-rule', value: 'Bash(ls:*)' } }),
+        t
+      );
+      expect(t.revokeAllow).toHaveBeenCalledWith(scope, 'Bash(ls:*)');
+    });
+
+    it('drops the exact standing approval of a session grant', async () => {
+      const t = targets();
+      await enforceRevocation(
+        grant({
+          subject: { kind: 'session', sessionId: 's1' },
+          capability: 'tool',
+          scope: { kind: 'tool', value: 'bash_execute' },
+          approvalKey: 'bash-execute:ls',
+        }),
+        t
+      );
+      expect(t.approvals.revoke).toHaveBeenCalledWith('s1', 'bash-execute:ls');
+      expect(t.removeSessionDirectory).not.toHaveBeenCalled();
+      expect(t.revokeAllow).not.toHaveBeenCalled();
+    });
+
+    it('propagates an enforcement failure so the ledger does not record the revoke', async () => {
+      const t = targets();
+      t.revokeRoot.mockRejectedValue(new Error('disk full'));
+      await expect(
+        enforceRevocation(
+          grant({ subject: { kind: 'desktop-user' }, capability: 'files', scope: { kind: 'path', value: '/a' } }),
+          t
+        )
+      ).rejects.toThrow('disk full');
+    });
   });
 });
