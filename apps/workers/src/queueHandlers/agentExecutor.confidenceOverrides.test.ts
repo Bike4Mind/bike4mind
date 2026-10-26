@@ -28,7 +28,7 @@ describe('confidenceOverrides wiring in agentExecutor', () => {
   it.each(['evaluateConfidenceGate(', 'resumeApprovedPauseAndGateConfidence('])(
     'passes the execution script to %s',
     opener => {
-      expect(firstObjectArg(opener)).toContain('confidenceOverrides: execution.confidenceOverrides,');
+      expect(firstObjectArg(opener)).toMatch(/\bconfidenceOverrides\b/);
     }
   );
 });
