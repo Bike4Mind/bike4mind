@@ -10,6 +10,7 @@ import {
   ModelBackend,
   type ISessionDocument,
   type ModelInfo,
+  insufficientCreditsError,
   usdToCredits,
 } from '@bike4mind/common';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
@@ -20,7 +21,6 @@ import type { Logger } from '@bike4mind/observability';
 import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
 import { getSettingsValue, ImageModerationBlockedError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from './imageModerationGate';
-import { deductCreditsWithOrgSupport } from '../creditService';
 import { startQuestHeartbeat } from './questHeartbeat';
 
 // The real stochastic rounding, with its draw pinned so the final debit is assertable.
@@ -66,17 +66,26 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   };
 });
 
-vi.mock('../creditService', async importOriginal => {
-  const actual = await importOriginal<typeof import('../creditService')>();
-  return { ...actual, deductCreditsWithOrgSupport: vi.fn(async () => undefined) };
-});
-
 vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
 
 vi.mock('./questHeartbeat', async importOriginal => ({
   ...(await importOriginal<typeof import('./questHeartbeat')>()),
   startQuestHeartbeat: vi.fn().mockResolvedValue(() => undefined),
 }));
+
+// A fake ImageCreditHolds port: hold reserves the estimate, settle keeps the draw, release is a no-op.
+const makeCreditHolds = () => ({
+  hold: vi.fn(async (params: { userId: string; organizationId: string | null; requiredCredits: number }) => ({
+    ownerId: params.organizationId ?? params.userId,
+    ownerType: params.organizationId ? CreditHolderType.Organization : CreditHolderType.User,
+    userId: params.userId,
+    organizationId: params.organizationId,
+    reservedCredits: params.requiredCredits,
+    balanceAfterHold: 0,
+  })),
+  settle: vi.fn(async (_hold: unknown, chargedCredits: number) => chargedCredits),
+  release: vi.fn(async () => undefined),
+});
 
 const makeService = (overrides: {
   invokeSummarizeSession?: ReturnType<typeof vi.fn>;
@@ -845,7 +854,9 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     } = {}
   ) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined } as any;
+    const creditHolds = makeCreditHolds();
     const service = new ImageGenerationService({
+      creditHolds,
       db: {
         quests: {
           findById: vi.fn(async () => quest),
@@ -871,7 +882,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       wsHttpsUrl: 'https://ws.example.com',
     } as any);
     if (!useRealCreditValidator) {
-      (service as any).validateUserCredits = vi.fn(async () => validatedCost);
+      (service as any).estimateCredits = vi.fn(() => validatedCost);
     }
 
     await service.process({
@@ -887,11 +898,10 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       } as any,
       logger: silentLogger,
     });
-    return quest;
+    return Object.assign(quest, { creditHolds });
   };
 
   beforeEach(() => {
-    vi.mocked(deductCreditsWithOrgSupport).mockClear();
     vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
     vi.mocked(getSettingsValue).mockImplementation(((name: string) => name === 'enforceCredits' || undefined) as never);
     vi.mocked(silentLogger.warn).mockClear();
@@ -920,7 +930,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     const quest = await runCharged(record);
 
     expect(quest.status).toBe('done');
-    expect(deductCreditsWithOrgSupport).toHaveBeenCalledTimes(1);
+    expect(quest.creditHolds.settle).toHaveBeenCalledTimes(1);
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ requestId: 'quest1', feature: 'image_generation', creditsCharged: 40 })
     );
@@ -948,8 +958,10 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     expect(quest.status).toBe('done');
     expect(expectedCredits).toBeLessThanOrEqual(requiredCredits);
     expect(quest.creditsUsed).toBe(expectedCredits);
-    expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
-      expect.objectContaining({ credits: expectedCredits, model: ImageModels.GPT_IMAGE_2 }),
+    expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+      expect.anything(),
+      expectedCredits,
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_2 }),
       expect.anything()
     );
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expectedCredits }));
@@ -967,14 +979,16 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     });
 
     expect(quest.creditsUsed).toBe(expected);
-    expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'image_generation_usage', credits: expected }),
+    expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+      expect.anything(),
+      expected,
+      expect.objectContaining({ type: 'image_generation_usage', sessionId: 'session1', questId: 'quest1' }),
       expect.anything()
     );
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
   });
 
-  it('debits 0 for a tiny cost: no ledger row, but the usage event still records the generation', async () => {
+  it('settles 0 for a tiny cost (the whole hold is refunded), and the usage event still records the generation', async () => {
     settlementDraw.mockReturnValue(0.5);
     const record = vi.fn(async () => undefined);
 
@@ -982,7 +996,13 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
 
     expect(quest.status).toBe('done');
     expect(quest.creditsUsed).toBe(0);
-    expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+    expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+      expect.anything(),
+      0,
+      expect.objectContaining({ type: 'image_generation_usage' }),
+      expect.anything()
+    );
+    expect(quest.creditHolds.release).not.toHaveBeenCalled();
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ feature: 'image_generation', creditsCharged: 0, costUsd: 0.00001 })
     );
@@ -1008,19 +1028,23 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
   it('charges the personal account (no organization) when organizationId is null, the organization otherwise', async () => {
     const record = vi.fn(async () => undefined);
 
-    await runCharged(record, { organizationId: null });
-    expect(deductCreditsWithOrgSupport).toHaveBeenLastCalledWith(
-      expect.objectContaining({ type: 'image_generation_usage', organization: null, credits: 40 }),
+    const personal = await runCharged(record, { organizationId: null });
+    expect(personal.creditHolds.hold).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user1', organizationId: null, requiredCredits: 40 })
+    );
+    expect(personal.creditHolds.settle).toHaveBeenCalledWith(
+      expect.anything(),
+      40,
+      expect.objectContaining({ type: 'image_generation_usage' }),
       expect.anything()
     );
     expect(record).toHaveBeenLastCalledWith(
       expect.objectContaining({ ownerId: 'user1', ownerType: CreditHolderType.User })
     );
 
-    await runCharged(record, { organizationId: 'org1' });
-    expect(deductCreditsWithOrgSupport).toHaveBeenLastCalledWith(
-      expect.objectContaining({ type: 'image_generation_usage', organization: { id: 'org1' } }),
-      expect.anything()
+    const organizational = await runCharged(record, { organizationId: 'org1' });
+    expect(organizational.creditHolds.hold).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user1', organizationId: 'org1' })
     );
     expect(record).toHaveBeenLastCalledWith(
       expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization })
@@ -1048,26 +1072,21 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
   });
 });
 
-describe('ImageGenerationService.validateUserCredits input images', () => {
-  const user = { id: 'user1', currentCredits: 1_000_000 } as any;
+describe('ImageGenerationService.estimateCredits input images', () => {
   const logger = { ...silentLogger, updateMetadata: vi.fn() } as unknown as Logger;
   const validate = (modelInfo: ModelInfo, n: number, input: Record<string, unknown>) =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (new ImageGenerationService({ db: {} } as any) as any).validateUserCredits(
-      user,
-      modelInfo,
-      n,
-      input,
-      logger,
-      null
-    ) as Promise<{ requiredCredits: number; usdCost: number }>;
+    (new ImageGenerationService({ db: {} } as any) as any).estimateCredits(modelInfo, n, input, logger) as {
+      requiredCredits: number;
+      usdCost: number;
+    };
 
-  it('adds a GPT model input term once, not per output image, matching estimateImageCredits', async () => {
+  it('adds a GPT model input term once, not per output image, matching estimateImageCredits', () => {
     const modelInfo = { id: ImageModels.GPT_IMAGE_2 } as ModelInfo;
     const input = { model: ImageModels.GPT_IMAGE_2, quality: 'high', size: '1024x1024', inputImageCount: 2 };
     const calculator = new OpenAIImageCostCalculator();
 
-    const held = await validate(modelInfo, 3, input);
+    const held = validate(modelInfo, 3, input);
 
     expect(held.usdCost).toBeCloseTo(
       3 * calculator.getCost(input as never) + calculator.getInputImageCost(input as never),
@@ -1076,99 +1095,47 @@ describe('ImageGenerationService.validateUserCredits input images', () => {
     expect(held).toEqual(estimateImageCredits(modelInfo, 3, input as never));
   });
 
-  it('gates on the rounded-up cost: never below the exact credits the final debit draws on', async () => {
+  it('holds the rounded-up cost: never below the exact credits the final debit draws on', () => {
     const modelInfo = { id: ImageModels.GPT_IMAGE_2 } as ModelInfo;
     const input = { model: ImageModels.GPT_IMAGE_2, quality: 'high', size: '1024x1024', inputImageCount: 2 };
 
-    const held = await validate(modelInfo, 3, input);
+    const held = validate(modelInfo, 3, input);
 
     expect(held.requiredCredits).toBe(usdToCredits(held.usdCost));
     expect(held.requiredCredits).toBeGreaterThanOrEqual(held.usdCost * CREDITS_PER_USD_COST);
   });
 
-  it('adds no input term for a non-GPT model', async () => {
+  it('adds no input term for a non-GPT model', () => {
     const modelInfo = { id: ImageModels.FLUX_PRO_1_1 } as ModelInfo;
-    expect(await validate(modelInfo, 1, { model: modelInfo.id, inputImageCount: 4 })).toMatchObject(
-      await validate(modelInfo, 1, { model: modelInfo.id })
+    expect(validate(modelInfo, 1, { model: modelInfo.id, inputImageCount: 4 })).toMatchObject(
+      validate(modelInfo, 1, { model: modelInfo.id })
     );
   });
 });
 
-describe('ImageGenerationService.validateUserCredits (model dispatch)', () => {
-  const user = { id: 'user1', currentCredits: 1_000_000 } as any;
+describe('ImageGenerationService.estimateCredits (model dispatch)', () => {
   const logger = { ...silentLogger, updateMetadata: vi.fn() } as unknown as Logger;
   const validate = (modelInfo: ModelInfo, input: Record<string, unknown>) =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (new ImageGenerationService({ db: {} } as any) as any).validateUserCredits(
-      user,
-      modelInfo,
-      1,
-      input,
-      logger,
-      null
-    ) as Promise<{ requiredCredits: number; usdCost: number }>;
+    (new ImageGenerationService({ db: {} } as any) as any).estimateCredits(modelInfo, 1, input, logger) as {
+      requiredCredits: number;
+      usdCost: number;
+    };
 
   // The BFL branch used to enumerate the FLUX.1 ids, so a curated-but-newer model was accepted by
   // the render path and then rejected here with "Model not supported" at credit pre-flight.
   it.each([
     [ImageModels.FLUX_2_PRO, 0.03],
     [ImageModels.FLUX_2_KLEIN_4B, 0.014],
-  ])('prices a %s generation at pre-flight instead of throwing', async (model, usd) => {
-    await expect(validate({ id: model } as ModelInfo, { model })).resolves.toMatchObject({
+  ])('prices a %s generation at pre-flight instead of throwing', (model, usd) => {
+    expect(validate({ id: model } as ModelInfo, { model })).toMatchObject({
       usdCost: usd,
       requiredCredits: usdToCredits(usd),
     });
   });
 
-  it('leaves FLUX_PRO_FILL unpriced here, because it bills through the edit path', async () => {
-    await expect(validate({ id: ImageModels.FLUX_PRO_FILL } as ModelInfo, {})).rejects.toThrow(/not supported/i);
-  });
-});
-
-describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
-  // GROK image quality has a flat usdCost, so requiredCredits is deterministic here.
-  const modelInfo = { id: ImageModels.GROK_IMAGINE_IMAGE_QUALITY } as ModelInfo;
-  const user = { id: 'user1', currentCredits: 1_000_000 } as any;
-  const logger = { ...silentLogger, updateMetadata: vi.fn() } as unknown as Logger;
-  const validate = (organization: unknown) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (new ImageGenerationService({ db: {} } as any) as any).validateUserCredits(
-      user,
-      modelInfo,
-      1,
-      {},
-      logger,
-      organization
-    );
-
-  it('throws when the member is over the org per-member cap even though the pool is funded', async () => {
-    const organization = {
-      id: 'org1',
-      currentCredits: 1_000_000,
-      maxCreditsPerMember: 500,
-      userDetails: [{ id: 'user1', usedCredits: 1000, periodStart: new Date() }],
-    };
-    await expect(validate(organization)).rejects.toThrow(/member credit limit/i);
-  });
-
-  it('allows a member who is still under the cap', async () => {
-    const organization = {
-      id: 'org1',
-      currentCredits: 1_000_000,
-      maxCreditsPerMember: 1_000_000,
-      userDetails: [{ id: 'user1', usedCredits: 0, periodStart: new Date() }],
-    };
-    await expect(validate(organization)).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
-  });
-
-  it('does not gate when the org configures no per-member cap', async () => {
-    const organization = {
-      id: 'org1',
-      currentCredits: 1_000_000,
-      maxCreditsPerMember: null,
-      userDetails: [{ id: 'user1', usedCredits: 999_999, periodStart: new Date() }],
-    };
-    await expect(validate(organization)).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
+  it('leaves FLUX_PRO_FILL unpriced here, because it bills through the edit path', () => {
+    expect(() => validate({ id: ImageModels.FLUX_PRO_FILL } as ModelInfo, {})).toThrow(/not supported/i);
   });
 });
 
@@ -1261,6 +1228,7 @@ describe('ImageGenerationService.process (size normalization)', () => {
   const makeProcessService = (files: FakeFile[] = [], recentMessages: unknown[] = []) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
     return new ImageGenerationService({
+      creditHolds: makeCreditHolds(),
       db: {
         quests: {
           findById: vi.fn(async () => quest as any),
@@ -1312,9 +1280,9 @@ describe('ImageGenerationService.process (size normalization)', () => {
     mockGeminiGenerate.mockResolvedValue([]); // empty images short-circuits storage/moderation
 
     const service = makeProcessService(files, recentMessages);
-    const validateUserCredits = vi
-      .spyOn(service as any, 'validateUserCredits')
-      .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
+    const estimateCredits = vi
+      .spyOn(service as any, 'estimateCredits')
+      .mockReturnValue({ requiredCredits: 0, usdCost: 0 });
     // One fresh map per request carries both the credit gate and moderation.
     vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' });
 
@@ -1333,7 +1301,7 @@ describe('ImageGenerationService.process (size normalization)', () => {
 
     return {
       rendered: mockGeminiGenerate.mock.calls[0]?.[1],
-      billed: validateUserCredits.mock.calls[0]?.[3] as { size?: string; inputImageCount?: number } | undefined,
+      billed: estimateCredits.mock.calls[0]?.[2] as { size?: string; inputImageCount?: number } | undefined,
     };
   };
 
@@ -1362,9 +1330,9 @@ describe('ImageGenerationService.process (size normalization)', () => {
     mockGeminiGenerate.mockReset();
     mockGeminiGenerate.mockResolvedValue([]);
     const service = makeProcessService();
-    const validateUserCredits = vi
-      .spyOn(service as any, 'validateUserCredits')
-      .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
+    const estimateCredits = vi
+      .spyOn(service as any, 'estimateCredits')
+      .mockReturnValue({ requiredCredits: 0, usdCost: 0 });
     vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
 
     await service.process({
@@ -1379,7 +1347,7 @@ describe('ImageGenerationService.process (size normalization)', () => {
       logger: silentLogger,
     });
 
-    expect(validateUserCredits.mock.calls[0]?.[2]).toBe(1);
+    expect(estimateCredits.mock.calls[0]?.[1]).toBe(1);
   });
 
   it.each([
@@ -1602,7 +1570,9 @@ describe('ImageGenerationService quest partial writes', () => {
       promptMeta: { marker: 'meta' },
     };
     const update = vi.fn(async () => undefined);
+    const creditHolds = makeCreditHolds();
     const service = new ImageGenerationService({
+      creditHolds,
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' }) as ISessionDocument) },
         quests: {
@@ -1628,7 +1598,7 @@ describe('ImageGenerationService quest partial writes', () => {
       fabFileStorage: { getSignedUrl: vi.fn(async (path: string) => path) },
       wsHttpsUrl: 'https://ws.example.com',
     } as never);
-    return { service, update, quest };
+    return { service, update, quest, creditHolds };
   };
 
   // Turns credit enforcement on so quest.creditsUsed is a real number (7) on the partial writes.
@@ -1636,10 +1606,7 @@ describe('ImageGenerationService quest partial writes', () => {
     service: ImageGenerationService,
     cost: { requiredCredits: number; usdCost: number } = { requiredCredits: 7, usdCost: 7 / CREDITS_PER_USD_COST }
   ) => {
-    vi.spyOn(
-      service as unknown as { validateUserCredits: () => Promise<unknown> },
-      'validateUserCredits'
-    ).mockResolvedValue(cost);
+    vi.spyOn(service as unknown as { estimateCredits: () => unknown }, 'estimateCredits').mockReturnValue(cost);
     // One fresh map per request carries both the credit gate and moderation.
     vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' });
   };
@@ -1812,22 +1779,57 @@ describe('ImageGenerationService quest partial writes', () => {
     expect(callArgs(update).find(arg => arg.status === 'done')?.creditsUsed).toBe(6);
   });
 
+  it('ends the quest with insufficient_credits and never calls the provider when the hold is refused', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    mockGeminiEdit.mockReset();
+    const { service, update, creditHolds } = makeService();
+    enforceCredits(service);
+    creditHolds.hold.mockRejectedValueOnce(insufficientCreditsError('Not enough credits.'));
+    await processEdit(service);
+
+    expect(callArgs(update).find(arg => arg.type === 'error')).toMatchObject({
+      status: 'done',
+      errorCode: 'insufficient_credits',
+    });
+    expect(mockGeminiEdit).not.toHaveBeenCalled();
+    expect(creditHolds.release).not.toHaveBeenCalled();
+    expect(creditHolds.settle).not.toHaveBeenCalled();
+  });
+
+  it('releases the hold and never settles when the provider call rejects after the hold', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    mockGeminiEdit.mockReset();
+    mockGeminiEdit.mockRejectedValue(new Error('provider down'));
+    const { service, creditHolds } = makeService();
+    enforceCredits(service);
+    await processEdit(service);
+
+    expect(creditHolds.hold).toHaveBeenCalledTimes(1);
+    const hold = await creditHolds.hold.mock.results[0]?.value;
+    expect(creditHolds.release).toHaveBeenCalledTimes(1);
+    expect(creditHolds.release).toHaveBeenCalledWith(
+      hold,
+      expect.objectContaining({ featureLabel: 'image generation' })
+    );
+    expect(creditHolds.settle).not.toHaveBeenCalled();
+  });
+
   it('draws and debits nothing when credit enforcement is off', async () => {
     vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
     mockGeminiEdit.mockReset();
     mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: 'data:image/png;base64,RESULT' });
-    const { service, update, quest } = makeService();
+    const { service, update, quest, creditHolds } = makeService();
     // A quest that already carries a pre-flight figure: without the enforcement term the
     // settlement would draw and debit it even though billing is off.
     quest.creditsUsed = 7;
     settlementDraw.mockClear();
-    vi.mocked(deductCreditsWithOrgSupport).mockClear();
-    // The credit gate, then moderation; enforcement off means no validateUserCredits call.
+    // The credit gate, then moderation; enforcement off means no estimateCredits call.
     vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'false' }).mockResolvedValueOnce({});
     await processEdit(service);
 
     expect(settlementDraw).not.toHaveBeenCalled();
-    expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+    expect(creditHolds.hold).not.toHaveBeenCalled();
+    expect(creditHolds.settle).not.toHaveBeenCalled();
     expect(callArgs(update).find(arg => arg.status === 'done')?.creditsUsed).toBe(7);
   });
 
@@ -1935,12 +1937,13 @@ describe('ImageGenerationService quest partial writes', () => {
 
     it('saves nothing when billing fails', async () => {
       const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
-      const { service, update } = arrange(save);
+      const { service, update, creditHolds } = arrange(save);
       enforceCredits(service);
-      vi.mocked(deductCreditsWithOrgSupport).mockRejectedValueOnce(new Error('billing down'));
+      creditHolds.settle.mockRejectedValueOnce(new Error('billing down'));
       await processEdit(service, 'gen-1');
 
       expect(save).not.toHaveBeenCalled();
+      expect(creditHolds.release).toHaveBeenCalledTimes(1);
       expect(callArgs(update).find(arg => arg.type === 'error')).toMatchObject({ reply: 'billing down' });
     });
 

@@ -19,7 +19,6 @@ import {
   IAdminSettingsRepository,
   ModelInfo,
   IOrganizationRepository,
-  IOrganizationDocument,
   ICreditTransactionRepository,
   IUsageEventRepository,
   CreditHolderType,
@@ -28,6 +27,7 @@ import {
   AttachmentLakeAccess,
   materializePromptMetaSession,
   PersistedSessionSummaryTrigger,
+  type PersistedCreditHold,
 } from '@bike4mind/common';
 import {
   BFL_IMAGE_MODELS,
@@ -44,7 +44,6 @@ import {
   isKontextModel,
   MAX_REFERENCE_IMAGES,
   requiresImageInput,
-  insufficientCreditsError,
   getQuestErrorCode,
   resolveImageDimensions,
   BFL_DIMENSION_BOUNDS,
@@ -97,7 +96,7 @@ import {
 import { FluxImageCostCalculator } from './imageCostCalculator/FluxImageCostCalculator';
 import { GeminiImageCostCalculator } from './imageCostCalculator/GeminiImageCostCalculator';
 import { CostInput } from './imageCostCalculator/types';
-import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
+import type { ImageCreditHolds } from './imageCreditHolds';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
@@ -107,7 +106,7 @@ import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
  * hd -> high, and an omitted tier pinned to OMITTED_QUALITY_TIER. Quality is returned
  * unchanged for every other model family, none of which has a tier concept.
  *
- * Both callers below read this one function - validateUserCredits (the charge) and the
+ * Both callers below read this one function - estimateCredits (the charge) and the
  * openaiParams dispatch (the render) - so the two cannot disagree.
  *
  * Pinning an omitted tier is the #3007 fix. Left undefined, the parameter is dropped from
@@ -153,6 +152,11 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
+const IMAGE_GENERATION_FEATURE_LABEL = 'image generation';
+
+/** Re-exported so the app wires the port without a new package subpath; ImageEdit takes the same port. */
+export type { ImageCreditHolds } from './imageCreditHolds';
+
 interface IImageGenerationServiceOptions {
   db: {
     sessions: {
@@ -174,6 +178,8 @@ interface IImageGenerationServiceOptions {
     imageModerationIncidents?: { record(input: ImageModerationIncidentInput): Promise<unknown> };
   } & GetEffectiveApiKeyAdapters['db'];
   startImageGenerationProcess: (body: ImageGenerationBody) => Promise<void>;
+  /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
+  creditHolds: ImageCreditHolds;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
   logEvent: (event: any, options?: { session?: mongoose.ClientSession; ability?: MongoAbility }) => Promise<any>;
@@ -240,6 +246,7 @@ function lineageOf(
 export class ImageGenerationService {
   private db: IImageGenerationServiceOptions['db'];
   private startImageGenerationProcess: IImageGenerationServiceOptions['startImageGenerationProcess'];
+  private creditHolds: ImageCreditHolds;
   private wsHttpsUrl: string;
   private logEvent: IImageGenerationServiceOptions['logEvent'];
   private abilityGetter: IImageGenerationServiceOptions['abilityGetter'];
@@ -256,6 +263,7 @@ export class ImageGenerationService {
   constructor(options: IImageGenerationServiceOptions) {
     this.db = options.db;
     this.startImageGenerationProcess = options.startImageGenerationProcess;
+    this.creditHolds = options.creditHolds;
     this.wsHttpsUrl = options.wsHttpsUrl;
     this.logEvent = options.logEvent;
     this.storage = options.storage;
@@ -511,26 +519,8 @@ export class ImageGenerationService {
     return quest;
   }
 
-  private async validateUserCredits(
-    user: IUserDocument,
-    modelInfo: ModelInfo,
-    n: number = 1,
-    input: CostInput,
-    logger: Logger,
-    organization?: IOrganizationDocument | null
-  ) {
-    let credits = user.currentCredits ?? 0;
-    let creditsSource: 'user' | 'organization' = 'user';
-
-    // If organization exists, use organization credits instead
-    if (organization) {
-      credits = organization.currentCredits ?? 0;
-      creditsSource = 'organization';
-      logger.updateMetadata({ creditsSource: 'organization', creditsSourceId: organization.id });
-    } else {
-      logger.updateMetadata({ creditsSource: 'user', creditsSourceId: user.id });
-    }
-
+  /** Prices a request; the balance and member-cap checks happen atomically in creditHolds.hold. */
+  private estimateCredits(modelInfo: ModelInfo, n: number = 1, input: CostInput, logger: Logger) {
     let usdCost = 0;
     // Input images are billed once per request, outside the `* n` (see getInputImageCost).
     let inputUsd = 0;
@@ -566,23 +556,7 @@ export class ImageGenerationService {
       throw new InternalServerError(`Unable to compute credit cost for model "${modelInfo.id}" (got ${usdCost}).`);
     }
 
-    if (credits < requiredCredits) {
-      const creditsOwner = creditsSource === 'organization' ? 'Your organization does' : 'You do';
-      throw insufficientCreditsError(
-        `${creditsOwner} not have enough credits to complete this request. ${creditsSource === 'organization' ? 'Organization' : 'You'} currently have ${credits} credits, and this request requires approximately ${requiredCredits} credits. Try reducing the number of images to lower the credit cost.`
-      );
-    }
-
-    // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
-    // shared pool. This is the only enforcement point - the settlement write
-    // (deductCreditsWithOrgSupport) intentionally does NOT re-check the cap (#1536).
-    if (organization && isMemberCreditCapExceeded(organization, user.id, requiredCredits)) {
-      throw insufficientCreditsError(
-        `Your organization member credit limit has been reached for image generation. Contact your organization administrator.`
-      );
-    }
-
-    // requiredCredits only gates the request (rounded up); the final debit settles usdCost stochastically.
+    // requiredCredits is the rounded-up hold; the final debit settles usdCost stochastically.
     return { requiredCredits, usdCost: usdCost * n + inputUsd };
   }
 
@@ -909,6 +883,8 @@ export class ImageGenerationService {
     // Persist status='running' + heartbeat updatedAt so a hung/killed render is recoverable by the
     // check-timeout endpoint. Disposer is cleared in the finally below. See startQuestHeartbeat.
     let stopHeartbeat: (() => void) | undefined;
+    // Cleared once settled; the finally returns a hold still set (a failure or an early return).
+    let creditHold: PersistedCreditHold | undefined;
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-heartbeat');
@@ -1025,8 +1001,7 @@ export class ImageGenerationService {
       // the primary (if any) plus every resolved reference. With no primary the first reference
       // is promoted into its slot, which referenceImages already counts.
       if (adminSettingsEnforceCredits && model && !!this.db.creditTransactions) {
-        const { requiredCredits, usdCost } = await this.validateUserCredits(
-          user,
+        const { requiredCredits, usdCost } = this.estimateCredits(
           modelInfo,
           billedN,
           {
@@ -1035,9 +1010,16 @@ export class ImageGenerationService {
             quality: mapQualityForModel(model, quality),
             inputImageCount: (fileImage?.filePath ? 1 : 0) + referenceImages.length,
           },
-          logger,
-          organization
+          logger
         );
+        // An atomic decrement, not a balance read: concurrent runs cannot all pass on one balance.
+        creditHold = await this.creditHolds.hold({
+          userId,
+          organizationId: organization ? organization.id : null,
+          requiredCredits,
+          featureLabel: IMAGE_GENERATION_FEATURE_LABEL,
+          logger,
+        });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
       }
@@ -1430,7 +1412,7 @@ export class ImageGenerationService {
         // Filter parameters based on model type
         if (isGPTImageModel(model)) {
           // GPT-Image models don't support 'style' or 'response_format' parameters.
-          // Same mapping validateUserCredits billed against, so the render matches the charge -
+          // Same mapping estimateCredits billed against, so the render matches the charge -
           // including the omitted case, which mapQualityForModel pins rather than dropping.
           // The truthiness guard is kept for the unrecognized-value case only.
           const mappedQuality = mapQualityForModel(model, quality);
@@ -1639,27 +1621,17 @@ export class ImageGenerationService {
         statusMessage: null,
       });
 
-      // Deduct credits after successful generation. A zero draw writes no ledger row; the usage event still lands.
+      // Settle the hold after successful generation: keep the draw, refund the rest. A zero draw writes no
+      // ledger row; the usage event still lands.
       if (settlement) {
-        if (settlement.credits > 0) {
-          await deductCreditsWithOrgSupport(
-            {
-              type: 'image_generation_usage',
-              user,
-              organization,
-              credits: settlement.credits,
-              sessionId,
-              questId,
-              model,
-            },
-            {
-              db: {
-                creditTransactions: settlement.creditTransactions,
-                users: this.db.users,
-                organizations: this.db.organizations,
-              },
-            }
+        if (creditHold) {
+          await this.creditHolds.settle(
+            creditHold,
+            settlement.credits,
+            { type: 'image_generation_usage', sessionId, questId, model },
+            { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger }
           );
+          creditHold = undefined;
         }
 
         // Dual-write usage event: analytics only, never billing. Awaited because a write still in
@@ -1769,6 +1741,8 @@ export class ImageGenerationService {
       // Always stop the heartbeat, on success, error, or an early return (e.g. Gemini
       // clarification). The terminal write above owns the final status.
       stopHeartbeat?.();
+      if (creditHold)
+        await this.creditHolds.release(creditHold, { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger });
     }
   }
 }

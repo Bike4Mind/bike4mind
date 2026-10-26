@@ -18,13 +18,12 @@ import {
   IUsageEventRepository,
   CreditHolderType,
   IOrganizationRepository,
-  IOrganizationDocument,
   ImageModerationIncident as ImageModerationIncidentInput,
-  insufficientCreditsError,
   ImageOutputFormatSchema,
   AttachmentLakeAccess,
   IFabFileDocument,
   usdToCreditsStochastic,
+  type PersistedCreditHold,
 } from '@bike4mind/common';
 import {
   isImageServeable,
@@ -67,11 +66,10 @@ import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
-import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
+import type { ImageCreditHolds } from './imageCreditHolds';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
-// Aliased: this module also has a private method named validateUserCredits.
-import { validateUserCredits as validateImageUserCredits } from './tools/base/utils';
+import { estimateImageCredits } from '../imageCost';
 import { getQuestErrorCode } from '@bike4mind/common';
 import { recordGeneratedImages } from './recordGeneratedImages';
 import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
@@ -116,6 +114,8 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
 });
 export type ImageEditBody = z.infer<typeof ImageEditBodySchema>;
 
+const IMAGE_EDIT_FEATURE_LABEL = 'image editing';
+
 interface IImageEditServiceOptions {
   db: {
     sessions: {
@@ -137,6 +137,8 @@ interface IImageEditServiceOptions {
     imageModerationIncidents?: { record(input: ImageModerationIncidentInput): Promise<unknown> };
   } & GetEffectiveApiKeyAdapters['db'];
   startImageEditProcess: (body: ImageEditBody) => Promise<void>;
+  /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
+  creditHolds: ImageCreditHolds;
   deleteFabFile: (userId: string, fileId: string) => Promise<void>;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
@@ -166,6 +168,7 @@ async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin =
 export class ImageEditService {
   private db: IImageEditServiceOptions['db'];
   private startImageEditProcess: IImageEditServiceOptions['startImageEditProcess'];
+  private creditHolds: ImageCreditHolds;
   private wsHttpsUrl: string;
   private logEvent: IImageEditServiceOptions['logEvent'];
   private abilityGetter: IImageEditServiceOptions['abilityGetter'];
@@ -181,6 +184,7 @@ export class ImageEditService {
   constructor(options: IImageEditServiceOptions) {
     this.db = options.db;
     this.startImageEditProcess = options.startImageEditProcess;
+    this.creditHolds = options.creditHolds;
     this.wsHttpsUrl = options.wsHttpsUrl;
     this.logEvent = options.logEvent;
     this.storage = options.storage;
@@ -312,39 +316,20 @@ export class ImageEditService {
     return quest;
   }
 
-  private async validateUserCredits(
-    user: IUserDocument,
+  /** Prices an edit; the balance and member-cap checks happen atomically in creditHolds.hold. */
+  private async estimateCredits(
+    userId: string,
     model: string,
-    imageParams: Pick<ImageEditBody, 'size' | 'quality'> & { inputImageCount?: number },
-    logger: Logger,
-    organization?: IOrganizationDocument | null
+    imageParams: Pick<ImageEditBody, 'size' | 'quality'> & { inputImageCount?: number }
   ) {
-    const apiKeyTable = await getEffectiveLLMApiKeys(user.id, { db: this.db, getSettingsByNames });
+    const apiKeyTable = await getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames });
     const models = await getAvailableModels(apiKeyTable);
     const modelInfo = models.find(m => m.id === model);
     if (!modelInfo) throw new BadRequestError(`Invalid model: "${model}" is not available`);
 
     // Same estimator the chat edit_image tool charges through (ToolBuilder.onToolStart), so both
     // paths bill identically. Billed for the one image this path renders, not the requested n.
-    const result = await validateImageUserCredits(
-      user,
-      modelInfo,
-      IMAGES_PER_EDIT_REQUEST,
-      { model, ...imageParams },
-      logger,
-      organization
-    );
-
-    // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
-    // shared pool. This is the only enforcement point - the settlement write
-    // (deductCreditsWithOrgSupport) intentionally does NOT re-check the cap (#1536).
-    if (organization && isMemberCreditCapExceeded(organization, user.id, result.requiredCredits)) {
-      throw insufficientCreditsError(
-        `Your organization member credit limit has been reached for image editing. Contact your organization administrator.`
-      );
-    }
-
-    return result;
+    return estimateImageCredits(modelInfo, IMAGES_PER_EDIT_REQUEST, { model, ...imageParams });
   }
 
   /**
@@ -508,6 +493,8 @@ export class ImageEditService {
     // Persist status='running' + heartbeat updatedAt so a hung/killed edit is recoverable by the
     // check-timeout endpoint. Disposer is cleared in the finally below. See startQuestHeartbeat.
     let stopHeartbeat: (() => void) | undefined;
+    // Cleared once settled; the finally returns a hold still set (a failure or an early return).
+    let creditHold: PersistedCreditHold | undefined;
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-edit-heartbeat');
@@ -605,14 +592,20 @@ export class ImageEditService {
       // Validate credits before proceeding
       let usageCostUsd = 0;
       if (adminSettingsEnforceCredits && model && this.db.creditTransactions) {
-        const { requiredCredits, usdCost } = await this.validateUserCredits(
-          user,
-          model,
+        const { requiredCredits, usdCost } = await this.estimateCredits(userId, model, {
+          size,
+          quality,
           // The primary image plus the de-duped references; the mask is not an input image.
-          { size, quality, inputImageCount: 1 + new Set(referenceImageFabFileIds ?? []).size },
+          inputImageCount: 1 + new Set(referenceImageFabFileIds ?? []).size,
+        });
+        // An atomic decrement, not a balance read: concurrent runs cannot all pass on one balance.
+        creditHold = await this.creditHolds.hold({
+          userId,
+          organizationId: organization ? organization.id : null,
+          requiredCredits,
+          featureLabel: IMAGE_EDIT_FEATURE_LABEL,
           logger,
-          organization
-        );
+        });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
       }
@@ -880,27 +873,17 @@ export class ImageEditService {
         statusMessage: null,
       });
 
-      // Deduct credits after successful edit. A zero draw writes no ledger row; the usage event still lands.
+      // Settle the hold after successful edit: keep the draw, refund the rest. A zero draw writes no ledger
+      // row; the usage event still lands.
       if (settlement) {
-        if (settlement.credits > 0) {
-          await deductCreditsWithOrgSupport(
-            {
-              type: 'image_edit_usage',
-              user,
-              organization,
-              credits: settlement.credits,
-              sessionId,
-              questId,
-              model,
-            },
-            {
-              db: {
-                creditTransactions: settlement.creditTransactions,
-                users: this.db.users,
-                organizations: this.db.organizations,
-              },
-            }
+        if (creditHold) {
+          await this.creditHolds.settle(
+            creditHold,
+            settlement.credits,
+            { type: 'image_edit_usage', sessionId, questId, model },
+            { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger }
           );
+          creditHold = undefined;
         }
 
         // Dual-write usage event: analytics only, never billing. Awaited because a write still in
@@ -997,6 +980,7 @@ export class ImageEditService {
       // Always stop the running-status heartbeat, on success or error. The terminal write above
       // owns the final status.
       stopHeartbeat?.();
+      if (creditHold) await this.creditHolds.release(creditHold, { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger });
       // Clean up the mask fab files in finally block to ensure they're always deleted.
       // Awaited, not fire-and-forget: this runs in a queue Lambda, which freezes as soon as process()
       // resolves, so a dropped delete never finishes and the mask stays in the user's files.
