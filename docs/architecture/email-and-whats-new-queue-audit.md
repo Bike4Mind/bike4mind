@@ -79,7 +79,7 @@ Evidence: `infra/queues.ts` (release notes on the legacy `whatsNewGenerationQueu
 | Retry / DLQ | retry 3, 14-day, KMS-encrypted DLQ; queue KMS-encrypted | identical |
 | Payload | `ReleaseNotesJobPayloadSchema` (`b4m-core/common/src/schemas/releaseNotes.ts`), already carries `kind: 'release-notes'` | `WhatsNewHighlightsPayloadSchema` (`packages/server-utils/src/whatsNew/whatsNewHighlights.types.ts`), no discriminator |
 
-No subscription-config row differs except the handler; the payload shapes differ too (highlights has no discriminator and would gain one). Memory is "unset for both, so the same SST default"; no number is asserted.
+No subscription-config row differs except the handler; the payload shapes differ too (highlights has no discriminator and would gain one).
 
 Scaling: neither subscription sets reserved concurrency today (`infra/queues.ts`, `whatsNewGenerationQueueSubscription` and `whatsNewHighlightsQueueSubscription`). The SRE merge reserved capacity to preserve the pre-merge aggregate (`infra/queues.ts`, `sreJobQueueSubscription`); the What's New merge should decide explicitly whether to reserve any, since an unreserved shared pool has no cap on a highlights backfill.
 
