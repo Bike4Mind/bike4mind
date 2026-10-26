@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type { ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { archFromModelInfo, tensorStatsFromTensors } from './arch';
 import {
@@ -282,7 +283,7 @@ describe('readGgufMetadata values', () => {
           { name: 'token_embd.weight', shape: [896, 151936], type: 12, offset: 0 },
           { name: 'blk.0.ffn_up_exps.weight', shape: [2880, 2880, 32], type: 39, offset: 4096 },
           { name: 'scalar', shape: [], type: 0, offset: 2n ** 40n },
-          { name: 'legacy', shape: [32], type: 31, offset: 64 },
+          { name: 'future', shape: [32], type: 43, offset: 64 },
         ],
       })
     );
@@ -290,8 +291,32 @@ describe('readGgufMetadata values', () => {
       { name: 'token_embd.weight', type: 'Q4_K', typeId: 12, shape: [896, 151936], offset: 0 },
       { name: 'blk.0.ffn_up_exps.weight', type: 'MXFP4', typeId: 39, shape: [2880, 2880, 32], offset: 4096 },
       { name: 'scalar', type: 'F32', typeId: 0, shape: [], offset: 2 ** 40 },
-      { name: 'legacy', type: 'unknown', typeId: 31, shape: [32], offset: 64 },
+      { name: 'future', type: 'unknown', typeId: 43, shape: [32], offset: 64 },
     ]);
+  });
+
+  it('names the ggml types ggml has removed as /api/show does', async () => {
+    const names = Object.entries({
+      4: 'Q4_2',
+      5: 'Q4_3',
+      31: 'Q4_0_4_4',
+      32: 'Q4_0_4_8',
+      33: 'Q4_0_8_8',
+      36: 'IQ4_NL_4_4',
+      37: 'IQ4_NL_4_8',
+      38: 'IQ4_NL_8_8',
+    });
+    const header = await read(
+      gguf({ tensors: names.map(([id]) => ({ name: `t${id}`, shape: [32], type: Number(id) })) })
+    );
+    expect(header.tensors.map(tensor => [String(tensor.typeId), tensor.type])).toEqual(names);
+  });
+
+  it('reads a float32 that needs nine significant digits as its shortest decimal', async () => {
+    const value = Math.fround(10.0000105);
+    for (let digits = 1; digits <= 8; digits++) expect(Math.fround(Number(value.toPrecision(digits)))).not.toBe(value);
+    const header = await read(gguf({ kv: [['x', f32(value)]] }));
+    expect(header.metadata.x).toBe(Number(value.toPrecision(9)));
   });
 
   it('reads v2 and v3 identically and reports the version', async () => {
@@ -379,6 +404,11 @@ describe('readGgufMetadata rejects', () => {
     ['a five-dimensional tensor', gguf({ tensors: [{ name: 't', shape: [1, 1, 1, 1, 1], type: 0 }] }), 'invalid'],
     ['a tensor dimension past 2^53', gguf({ tensors: [{ name: 't', shape: [2n ** 60n], type: 0 }] }), 'invalid'],
     [
+      'a tensor with more elements than int64 can count',
+      gguf({ tensors: [{ name: 't', shape: [2n ** 31n, 2n ** 32n], type: 0 }] }),
+      'invalid',
+    ],
+    [
       'a tensor offset past 2^53',
       gguf({ tensors: [{ name: 't', shape: [1], type: 0, offset: 2n ** 63n }] }),
       'invalid',
@@ -415,8 +445,8 @@ describe('readGgufMetadata rejects', () => {
   });
 });
 
-/** Answers Range requests from `bytes`, as Hugging Face's CDN does. */
-function rangeHandler(bytes: Uint8Array): Handler {
+/** Answers Range requests from `bytes`, as Hugging Face's CDN does, with at most `cap` bytes per response. */
+function rangeHandler(bytes: Uint8Array, cap = Infinity): Handler {
   return (request, response) => {
     const match = /^bytes=(\d+)-(\d+)$/.exec(String(request.headers.range ?? ''));
     if (!match) {
@@ -430,7 +460,7 @@ function rangeHandler(bytes: Uint8Array): Handler {
       response.end();
       return;
     }
-    const end = Math.min(Number(match[2]), bytes.length - 1);
+    const end = Math.min(Number(match[2]), bytes.length - 1, start + cap - 1);
     response.writeHead(206, { 'content-range': `bytes ${start}-${end}/${bytes.length}` });
     response.end(Buffer.from(bytes.subarray(start, end + 1)));
   };
@@ -582,6 +612,70 @@ describe('readGgufMetadata over HTTP', () => {
     expect(error).toBeInstanceOf(LocalRuntimeError);
     expect((error as Error).message).not.toContain('hunter2');
   });
+
+  // fetch rejects CR, LF and NUL with an error quoting the whole header value, and anything past U+00FF.
+  it.each([10, 13, 0, 0x2028])(
+    'rejects an Authorization value fetch refuses without echoing it (char %i)',
+    async code => {
+      const server = await serve({ 'GET /model.gguf': rangeHandler(gguf({})) });
+      const authorization = `Bearer hf_SECRET${String.fromCharCode(code)}tail`;
+      for (const call of [readGgufMetadata, inspectGguf]) {
+        const error = await failure(call(`${server.baseUrl}/model.gguf`, { authorization }));
+        expect(error).toBeInstanceOf(LocalRuntimeError);
+        expect(error).not.toBeInstanceOf(RuntimeConnectionError);
+        expect((error as Error).message).toBe('gguf authorization header contains a character HTTP does not allow');
+        expect((error as Error).cause).toBeUndefined();
+        expect(inspect(error, { depth: 10 })).not.toContain('hf_SECRET');
+      }
+      expect(server.requests).toEqual([]);
+    }
+  );
+
+  it('asks again for the rest when a server answers a range with fewer bytes', async () => {
+    const template = 'x'.repeat(300 * 1024);
+    const bytes = gguf({ kv: [...qwen3Kv, ['tokenizer.chat_template', str(template)]], tensors: moeTensors(1) });
+    const server = await serve({ 'GET /model.gguf': rangeHandler(bytes, 128 * 1024) });
+    const header = await readGgufMetadata(`${server.baseUrl}/model.gguf`);
+    expect(header).toEqual(await read(bytes));
+    expect(header.metadata['tokenizer.chat_template']).toBe(template);
+
+    const cut = await serve({ 'GET /model.gguf': rangeHandler(bytes.subarray(0, bytes.length - 3), 128 * 1024) });
+    expect((await formatError(readGgufMetadata(`${cut.baseUrl}/model.gguf`))).reason).toBe('truncated');
+  });
+
+  it('rejects a Content-Range that ends before it starts with RuntimeProtocolError', async () => {
+    const bytes = gguf({ kv: [...qwen3Kv, ['tokenizer.chat_template', str('y'.repeat(400 * 1024))]] });
+    const server = await serve({
+      'GET /model.gguf': (request, response) => {
+        const start = Number(/^bytes=(\d+)-/.exec(String(request.headers.range))?.[1]);
+        if (start === 0) return rangeHandler(bytes)(request, response);
+        response.writeHead(206, { 'content-range': `bytes ${start}-${start - 10}/${bytes.length}` });
+        response.end(Buffer.alloc(16));
+      },
+    });
+    expect(await failure(readGgufMetadata(`${server.baseUrl}/model.gguf`))).toBeInstanceOf(RuntimeProtocolError);
+  });
+
+  it('treats Infinity and timeouts past the timer limit as no deadline', async () => {
+    const bytes = gguf({ kv: qwen3Kv });
+    const server = await serve({
+      'GET /model.gguf': async (request, response) => {
+        await delay(50);
+        rangeHandler(bytes)(request, response);
+      },
+    });
+    for (const timeoutMs of [2 ** 31, Infinity]) {
+      expect(await readGgufMetadata(`${server.baseUrl}/model.gguf`, { timeoutMs })).toEqual(await read(bytes));
+    }
+  });
+
+  it.each([0, -1, NaN])('rejects timeoutMs %s before making a request', async timeoutMs => {
+    const server = await serve({ 'GET /model.gguf': rangeHandler(gguf({})) });
+    expect(await failure(readGgufMetadata(`${server.baseUrl}/model.gguf`, { timeoutMs }))).toBeInstanceOf(
+      LocalRuntimeError
+    );
+    expect(server.requests).toEqual([]);
+  });
 });
 
 describe('readGgufMetadata from a file', () => {
@@ -693,6 +787,63 @@ describe('inspectGguf', () => {
     const server = await serve(routes);
     expect(await inspectGguf(`${server.baseUrl}/repo/resolve/main/Q4_K_M/M-00001-of-00003.gguf`)).toEqual(whole);
     expect(server.requests).toHaveLength(3);
+  });
+
+  it('stops reading the other shards once one fails', async () => {
+    const count = 8;
+    let delivered = 0;
+    const name = (i: number) => `/m-${String(i + 1).padStart(5, '0')}-of-${String(count).padStart(5, '0')}.gguf`;
+    const routes = Object.fromEntries(
+      Array.from({ length: count }, (_, i): [string, Handler] => {
+        const bytes = gguf({
+          kv: [
+            ...(i === 0 ? qwen3Kv : []),
+            ['split.no', u16(i)],
+            ['split.count', u16(count)],
+            ['split.tensors.count', i32(count)],
+          ],
+          tensors: [{ name: `t${i}`, shape: [4], type: F32 }],
+        });
+        if (i === 0) return [`GET ${name(i)}`, rangeHandler(bytes)];
+        if (i === 1) return [`GET ${name(i)}`, json({}, 404)];
+        return [
+          `GET ${name(i)}`,
+          async (request, response) => {
+            await delay(300);
+            if (response.destroyed) return;
+            delivered++;
+            rangeHandler(bytes)(request, response);
+          },
+        ];
+      })
+    );
+    const server = await serve(routes);
+    const fetched: string[] = [];
+    const countingFetch: typeof fetch = (input, init) => {
+      fetched.push(String(input));
+      return fetch(input, init);
+    };
+    const error = await failure(inspectGguf(`${server.baseUrl}${name(0)}`, { fetch: countingFetch }));
+    expect(error).toBeInstanceOf(RuntimeHttpError);
+    const atRejection = fetched.length;
+    await delay(500);
+    // The first shard, then one window of SHARD_CONCURRENCY reads, the slow ones aborted mid-flight.
+    expect(fetched).toHaveLength(atRejection);
+    expect(fetched.map(url => new URL(url).pathname)).toEqual([0, 1, 2, 3, 4].map(name));
+    expect(delivered).toBe(0);
+  });
+
+  it('ignores maxArrayLength, which would hide the per-layer arrays arch reads', async () => {
+    const kv: [string, Field][] = [
+      ...qwen3Kv.filter(([key]) => key !== 'qwen3moe.attention.head_count_kv'),
+      ['qwen3moe.attention.head_count_kv', arr(T.UINT32, [u32(4), u32(4), u32(4), u32(4)])],
+    ];
+    const bytes = gguf({ kv, tensors: moeTensors(4) });
+    const options = { maxArrayLength: 1, timeoutMs: 10_000 };
+    const result = await inspectGguf(memorySource(bytes), options);
+    expect(result.arch).not.toBeNull();
+    expect(result).toEqual(await inspectGguf(memorySource(bytes)));
+    expect((await read(bytes, options)).metadata['qwen3moe.attention.head_count_kv']).toMatchObject({ omitted: true });
   });
 
   it('refuses a split GGUF whose other shards it cannot find or that do not match', async () => {

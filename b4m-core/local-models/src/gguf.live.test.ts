@@ -57,10 +57,12 @@ describe.runIf(OLLAMA && OLLAMA_STORE)('GGUF blobs against live Ollama', () => {
     const show = (await response.json()) as { model_info: Record<string, unknown>; tensors: unknown[] };
     const header = await readGgufMetadata(await ollamaBlob(OLLAMA_STORE ?? '', model));
     for (const [key, value] of Object.entries(header.metadata)) {
-      // Ollama drops these two and non-finite floats; JSON cannot carry a bigint or our omitted-array marker.
+      // Ollama drops these two, and any float or float array holding a non-finite value (jsonSafeValues in
+      // server/gguf_metadata.go); JSON cannot carry a bigint or our omitted-array marker.
       if (key === 'general.name' || key === 'tokenizer.chat_template') continue;
       if (typeof value === 'bigint' || (typeof value === 'object' && !Array.isArray(value))) continue;
       if (typeof value === 'number' && !Number.isFinite(value)) continue;
+      if (Array.isArray(value) && value.some(item => typeof item === 'number' && !Number.isFinite(item))) continue;
       expect(show.model_info[key], key).toEqual(value);
     }
     expect(header.tensors.map(({ name, type, shape }) => ({ name, type, shape }))).toEqual(show.tensors);
@@ -105,6 +107,7 @@ const HF_MOE = [
 ];
 const HF_SPLIT =
   'https://huggingface.co/unsloth/Qwen3-235B-A22B-GGUF/resolve/main/Q4_K_M/Qwen3-235B-A22B-Q4_K_M-00001-of-00003.gguf';
+const HF_GEMMA3N = 'https://huggingface.co/unsloth/gemma-3n-E2B-it-GGUF/resolve/main/gemma-3n-E2B-it-Q4_K_M.gguf';
 
 // [elements, bytes] per block for the types these files use, from ggml's type_traits.
 const BLOCKS: Record<string, readonly [number, number]> = {
@@ -113,6 +116,7 @@ const BLOCKS: Record<string, readonly [number, number]> = {
   BF16: [1, 2],
   Q4_0: [32, 18],
   Q5_0: [32, 22],
+  Q5_1: [32, 24],
   Q8_0: [32, 34],
   MXFP4: [32, 17],
   Q4_K: [256, 144],
@@ -252,6 +256,19 @@ describe.runIf(HF)('GGUF headers from Hugging Face', () => {
       expect(inspection.tensorStats).toEqual(stats);
       expect(inspection.arch?.moe?.moeLayers).toBe(layers);
       expect(inspection.tensorStats).not.toEqual(expectedStats(first.tensors).stats);
+    },
+    LIVE_TIMEOUT_MS
+  );
+
+  it(
+    'reads a gemma3n header, whose per-layer float array holds the infinities Ollama drops from model_info',
+    async () => {
+      const { metadata } = await readRemote(HF_GEMMA3N);
+      const scale = metadata['gemma3n.activation_sparsity_scale'];
+      expect(Array.isArray(scale) && scale.some(item => typeof item === 'number' && !Number.isFinite(item))).toBe(true);
+      const { arch } = await inspectGguf(HF_GEMMA3N, { authorization });
+      const kvLayers = Number(metadata['gemma3n.block_count']) - Number(metadata['gemma3n.attention.shared_kv_layers']);
+      expect((arch?.full.layers ?? 0) + (arch?.swa?.layers ?? 0)).toBe(kvLayers);
     },
     LIVE_TIMEOUT_MS
   );

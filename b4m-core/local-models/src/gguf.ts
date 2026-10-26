@@ -8,7 +8,7 @@ import {
   RuntimeProtocolError,
   type GgufFormatErrorReason,
 } from './errors';
-import { connectionError, mapLimit, type HttpClient } from './http';
+import { assertHeaderValues, connectionError, mapLimit, type HttpClient } from './http';
 import type { FetchLike, ModelInspection } from './types';
 
 export const DEFAULT_GGUF_TIMEOUT_MS = 60_000;
@@ -30,6 +30,9 @@ const MAX_KEPT_ELEMENTS = 1 << 20;
 const FIRST_CHUNK_BYTES = 256 * 1024;
 const MAX_CHUNK_BYTES = 16 * 1024 * 1024;
 const SHARD_CONCURRENCY = 4;
+const INT64_MAX = 2n ** 63n - 1n;
+// setTimeout's limit; a longer deadline means none.
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 const VALUE_TYPES = [
   'uint8',
@@ -52,12 +55,14 @@ const ARRAY = 9;
 // Bytes per value; strings and arrays are length-prefixed instead.
 const WIDTH: readonly number[] = [1, 1, 2, 2, 4, 4, 4, 1, 0, 0, 8, 8, 8];
 
-// ggml.h `ggml_type` ids, named as `/api/show` prints them; removed ids read as unknown.
+// ggml.h `ggml_type` ids named as `/api/show` prints them, removed ids included (Ollama's fs/gguf/tensor.go).
 const GGML_TYPES: Partial<Record<number, string>> = {
   0: 'F32',
   1: 'F16',
   2: 'Q4_0',
   3: 'Q4_1',
+  4: 'Q4_2',
+  5: 'Q4_3',
   6: 'Q5_0',
   7: 'Q5_1',
   8: 'Q8_0',
@@ -83,8 +88,14 @@ const GGML_TYPES: Partial<Record<number, string>> = {
   28: 'F64',
   29: 'IQ1_M',
   30: 'BF16',
+  31: 'Q4_0_4_4',
+  32: 'Q4_0_4_8',
+  33: 'Q4_0_8_8',
   34: 'TQ1_0',
   35: 'TQ2_0',
+  36: 'IQ4_NL_4_4',
+  37: 'IQ4_NL_4_8',
+  38: 'IQ4_NL_8_8',
   39: 'MXFP4',
   40: 'NVFP4',
   41: 'Q1_0',
@@ -106,7 +117,7 @@ export type GgufMetadata = Record<string, GgufValue>;
 
 export interface GgufTensorInfo {
   name: string;
-  /** e.g. `Q4_K`; `unknown` for an id ggml does not define. */
+  /** e.g. `Q4_K`; `unknown` for an id `/api/show` has no name for. */
   type: string;
   typeId: number;
   /** Elements per dimension, innermost first, as `/api/show` lists them. */
@@ -140,13 +151,14 @@ export interface ReadGgufOptions {
   /** `Authorization` value for URL sources, e.g. `Bearer hf_...` for a gated Hugging Face repo. Never sent cross-origin. */
   authorization?: string;
   signal?: AbortSignal;
-  /** Deadline for the whole read (ms). */
+  /** Deadline for the whole read (ms); `Infinity` for none. */
   timeoutMs?: number;
   maxHeaderBytes?: number;
   maxArrayLength?: number;
 }
 
-export interface InspectGgufOptions extends ReadGgufOptions {
+/** No `maxArrayLength`: arch reads whole per-layer arrays, so inspection keeps the default. */
+export interface InspectGgufOptions extends Omit<ReadGgufOptions, 'maxArrayLength'> {
   /** The remaining shards of a split GGUF, in order. String sources named `*-00001-of-0000N.gguf` find their own. */
   shards?: readonly GgufSource[];
 }
@@ -244,7 +256,7 @@ class ByteCursor {
 /** The shortest decimal that rounds to the same float32, so 1e-6 reads as 1e-6 as it does in `/api/show`. */
 function shortestFloat32(value: number): number {
   if (!Number.isFinite(value)) return value;
-  for (let digits = 1; digits < 9; digits++) {
+  for (let digits = 1; digits <= 9; digits++) {
     const candidate = Number(value.toPrecision(digits));
     if (Math.fround(candidate) === value) return candidate;
   }
@@ -419,6 +431,10 @@ class HeaderReader {
     if (dims > MAX_TENSOR_DIMS) throw c.fail(`tensor ${quote(name)} has ${dims} dimensions`, 'invalid');
     await c.need(dims * 8 + 12);
     const shape = Array.from({ length: dims }, () => this.safeInt(c.u64(), `tensor ${quote(name)} dimension`));
+    // As llama.cpp's gguf.cpp, which refuses to load such a file.
+    if (shape.reduce((product, dim) => product * BigInt(dim), 1n) > INT64_MAX) {
+      throw c.fail(`tensor ${quote(name)} has more elements than int64 can count`, 'invalid');
+    }
     const typeId = c.u32();
     const offset = this.safeInt(c.u64(), `tensor ${quote(name)} offset`);
     return { name, type: GGML_TYPES[typeId] ?? 'unknown', typeId, shape, offset };
@@ -477,7 +493,7 @@ async function readBody(body: ReadableStream<Uint8Array> | null, length: number)
   return out.subarray(0, filled);
 }
 
-const CONTENT_RANGE = /^bytes (\d+)-(\d+)\/(?:\d+|\*)$/;
+const CONTENT_RANGE = /^bytes (\d+)-(\d+)\/(\d+|\*)$/;
 
 class HttpByteSource implements GgufByteSource {
   readonly label: string;
@@ -500,6 +516,7 @@ class HttpByteSource implements GgufByteSource {
     this.label = `${parsed.origin}${parsed.pathname}`;
     this.url = parsed.href;
     this.origin = parsed.origin;
+    if (authorization !== undefined) assertHeaderValues({ authorization }, GGUF_ID);
     this.authorization = authorization;
     this.client = { runtimeId: GGUF_ID, baseUrl: '', fetch };
   }
@@ -507,17 +524,37 @@ class HttpByteSource implements GgufByteSource {
   async read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array> {
     try {
       if (this.stream) return await this.fromStream(this.stream, offset, length);
-      const response = await this.request(offset, length, signal);
-      if (response.status === 206) return await this.partial(response, offset, length);
-      if (response.status === 200) {
-        if (!response.body) throw new RuntimeProtocolError(`${GGUF_ID} ${this.label} returned no body`, GGUF_ID);
-        // The server ignored Range: keep reading this one body forward and cancel it once the header is in.
-        this.stream = { reader: response.body.getReader(), position: 0, chunk: new Uint8Array(0) };
-        return await this.fromStream(this.stream, offset, length);
+      const out = new Uint8Array(length);
+      let filled = 0;
+      // A server may answer a range with fewer bytes than asked; ask again for the rest until the file ends.
+      while (filled < length) {
+        const at = offset + filled;
+        const response = await this.request(at, length - filled, signal);
+        if (response.status === 206) {
+          const { bytes, last } = await this.partial(response, at, length - filled);
+          out.set(bytes, filled);
+          filled += bytes.length;
+          if (last) break;
+          continue;
+        }
+        if (response.status === 200) {
+          if (!response.body) throw new RuntimeProtocolError(`${GGUF_ID} ${this.label} returned no body`, GGUF_ID);
+          // The server ignored Range: keep reading this one body forward and cancel it once the header is in.
+          this.stream = { reader: response.body.getReader(), position: 0, chunk: new Uint8Array(0) };
+          const rest = await this.fromStream(this.stream, at, length - filled);
+          out.set(rest, filled);
+          filled += rest.length;
+          break;
+        }
+        await response.body?.cancel().catch(() => undefined);
+        if (response.status === 416) break;
+        throw new RuntimeHttpError(
+          `${GGUF_ID} ${this.label} returned HTTP ${response.status}`,
+          GGUF_ID,
+          response.status
+        );
       }
-      await response.body?.cancel().catch(() => undefined);
-      if (response.status === 416) return new Uint8Array(0);
-      throw new RuntimeHttpError(`${GGUF_ID} ${this.label} returned HTTP ${response.status}`, GGUF_ID, response.status);
+      return out.subarray(0, filled);
     } catch (error) {
       throw connectionError(this.client, this.label, error, { signal });
     }
@@ -542,18 +579,24 @@ class HttpByteSource implements GgufByteSource {
     return response;
   }
 
-  private async partial(response: Response, offset: number, length: number): Promise<Uint8Array> {
+  /** `last` is true once the bytes reach the file size the server announced. */
+  private async partial(
+    response: Response,
+    offset: number,
+    length: number
+  ): Promise<{ bytes: Uint8Array; last: boolean }> {
     const range = CONTENT_RANGE.exec(response.headers.get('content-range') ?? '');
-    if (!range || Number(range[1]) !== offset) {
+    const end = Number(range?.[2]);
+    if (!range || Number(range[1]) !== offset || end < offset) {
       await response.body?.cancel().catch(() => undefined);
       throw new RuntimeProtocolError(`${GGUF_ID} ${this.label} answered with a different byte range`, GGUF_ID);
     }
-    const expected = Math.min(length, Number(range[2]) - offset + 1);
+    const expected = Math.min(length, end - offset + 1);
     const bytes = await readBody(response.body, expected);
     if (bytes.length < expected) {
       throw new RuntimeProtocolError(`${GGUF_ID} ${this.label} ended before the byte range it announced`, GGUF_ID);
     }
-    return bytes;
+    return { bytes, last: range[3] !== '*' && end + 1 >= Number(range[3]) };
   }
 
   private async fromStream(stream: BodyStream, offset: number, length: number): Promise<Uint8Array> {
@@ -609,12 +652,16 @@ async function withDeadline<T>(
   task: (signal: AbortSignal) => Promise<T>
 ): Promise<T> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_GGUF_TIMEOUT_MS;
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  if (typeof timeoutMs !== 'number' || Number.isNaN(timeoutMs) || timeoutMs <= 0) {
+    throw new LocalRuntimeError('GGUF timeoutMs must be a positive number of milliseconds or Infinity', GGUF_ID);
+  }
+  const timeout = timeoutMs <= MAX_TIMER_MS ? AbortSignal.timeout(timeoutMs) : undefined;
+  const signals = [options.signal, timeout].filter(signal => signal !== undefined);
+  const signal = signals.length === 1 && signals[0] ? signals[0] : AbortSignal.any(signals);
   try {
     return await task(signal);
   } catch (error) {
-    if (timeout.aborted && !options.signal?.aborted && !(error instanceof LocalRuntimeError)) {
+    if (timeout?.aborted && !options.signal?.aborted && !(error instanceof LocalRuntimeError)) {
       throw new RuntimeConnectionError(`${GGUF_ID} ${label} failed: timed out after ${timeoutMs}ms`, GGUF_ID, {
         cause: error,
       });
@@ -681,7 +728,18 @@ async function allTensors(
   if (others.length !== count - 1)
     throw fail(`is split into ${count} shards but ${others.length + 1} were given`, 'invalid');
 
-  const shards = await mapLimit(others, SHARD_CONCURRENCY, shard => readSource(shard, options, signal));
+  // mapLimit keeps going after a rejection, so the first failure aborts the reads in flight and the ones not started.
+  const failed = new AbortController();
+  const shardSignal = AbortSignal.any([signal, failed.signal]);
+  const shards = await mapLimit(others, SHARD_CONCURRENCY, async shard => {
+    shardSignal.throwIfAborted();
+    try {
+      return await readSource(shard, options, shardSignal);
+    } catch (error) {
+      failed.abort();
+      throw error;
+    }
+  });
   const tensors = [...header.tensors];
   const names = new Set(tensors.map(tensor => tensor.name));
   shards.forEach((shard, i) => {
@@ -706,9 +764,10 @@ async function allTensors(
  * A split GGUF reads every shard's tensor infos, so MoE expert sizes cover the whole model.
  */
 export async function inspectGguf(source: GgufSource, options: InspectGgufOptions = {}): Promise<GgufInspection> {
-  return withDeadline(sourceLabel(source), options, async signal => {
-    const header = await readSource(source, options, signal);
-    const tensors = await allTensors(header, source, options, signal);
+  const readOptions = { ...options, maxArrayLength: undefined };
+  return withDeadline(sourceLabel(source), readOptions, async signal => {
+    const header = await readSource(source, readOptions, signal);
+    const tensors = await allTensors(header, source, readOptions, signal);
     return { arch: archFromModelInfo(header.metadata, tensors), tensorStats: tensorStatsFromTensors(tensors) };
   });
 }
