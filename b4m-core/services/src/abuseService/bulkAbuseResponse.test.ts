@@ -60,7 +60,7 @@ function matches(row: Record<string, unknown>, filter: Record<string, unknown>):
 
 function cohortAdapters({
   users = [] as IUser[],
-  orgs = [] as { userId: string; adminUserIds?: string[] }[],
+  orgs = [] as { userId: string; adminUserIds?: string[]; users?: { userId: string; permissions: string[] }[] }[],
   credits = [] as CreditRow[],
 } = {}) {
   const find = vi.fn(async (filter: Record<string, unknown>, options?: { limit?: number }) => {
@@ -161,6 +161,41 @@ describe('resolveBulkAbuseCohort', () => {
       [id(6)]: 'org_owner',
       [id(7)]: 'paid',
       [ACTOR_ID]: 'self',
+    });
+  });
+
+  it('excludes seat members of an organization with org_member, by pointer or by users[] row', async () => {
+    const users = [
+      makeUser(1),
+      makeUser(2, { organizationId: 'a'.repeat(24) }),
+      makeUser(3),
+      makeUser(4),
+      makeUser(5),
+    ];
+    const { adapters } = cohortAdapters({
+      users,
+      orgs: [
+        {
+          userId: id(5),
+          users: [
+            { userId: id(3), permissions: ['read'] },
+            { userId: id(4), permissions: ['none'] },
+            { userId: id(5), permissions: ['read', 'write'] },
+          ],
+        },
+      ],
+    });
+    const cohort = await resolveBulkAbuseCohort(
+      { kind: 'users', userIds: users.map(user => user.id) },
+      ACTOR_ID,
+      adapters
+    );
+
+    expect(cohort.included.map(user => user.id)).toEqual([id(1), id(4)]);
+    expect(Object.fromEntries(cohort.excluded.map(entry => [entry.userId, entry.reason]))).toEqual({
+      [id(2)]: 'org_member',
+      [id(3)]: 'org_member',
+      [id(5)]: 'org_owner',
     });
   });
 

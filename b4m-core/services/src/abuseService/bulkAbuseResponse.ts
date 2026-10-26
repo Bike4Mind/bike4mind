@@ -4,6 +4,7 @@ import {
   BULK_ABUSE_SAMPLE_SIZE,
   CreditHolderType,
   MAX_BULK_ABUSE_BATCH,
+  ORG_MEMBERSHIP_ACL_PERMISSIONS,
   isEmailInDomains,
   normalizeEmailDomain,
   type AdminAuditAction,
@@ -144,6 +145,25 @@ async function orgOwnerIds(userIds: string[], { db }: BulkAbuseCohortAdapters): 
   return owners;
 }
 
+/** Seat members of any organization: a users[] ACL row with member permissions (the org membership rule). */
+async function orgMemberIds(userIds: string[], { db }: BulkAbuseCohortAdapters): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const memberPermissions: readonly string[] = ORG_MEMBERSHIP_ACL_PERMISSIONS;
+  const orgs = await db.organizations.find({
+    users: { $elemMatch: { userId: { $in: userIds }, permissions: { $in: [...memberPermissions] } } },
+  });
+  const candidates = new Set(userIds);
+  const members = new Set<string>();
+  for (const org of orgs) {
+    for (const row of org.users ?? []) {
+      if (candidates.has(row.userId) && row.permissions?.some(permission => memberPermissions.includes(permission))) {
+        members.add(row.userId);
+      }
+    }
+  }
+  return members;
+}
+
 async function purchaserIds(userIds: string[], { db }: BulkAbuseCohortAdapters): Promise<Set<string>> {
   if (userIds.length === 0) return new Set();
   const rows = await db.creditTransactions.find({
@@ -156,7 +176,7 @@ async function purchaserIds(userIds: string[], { db }: BulkAbuseCohortAdapters):
 
 /**
  * The users a bulk action would touch, and the ones it skips with why. Admins, system accounts,
- * org owners and managers, paid accounts and the acting admin are never actioned. A domain target
+ * org owners, managers and members, paid accounts and the acting admin are never actioned. A domain target
  * returns at most MAX_BULK_ABUSE_BATCH users in id order, with a cursor for the rest. Pass the
  * preview's `upToUserId` back on execute so both resolve the same users.
  */
@@ -178,15 +198,18 @@ export async function resolveBulkAbuseCohort(
   }
 
   const candidateIds = candidates.map(user => user.id);
-  const [owners, purchasers] = await Promise.all([
+  const [owners, purchasers, members] = await Promise.all([
     orgOwnerIds(candidateIds, adapters),
     purchaserIds(candidateIds, adapters),
+    orgMemberIds(candidateIds, adapters),
   ]);
   const included: IUser[] = [];
   for (const user of candidates) {
     if (owners.has(user.id)) excluded.push({ userId: user.id, email: user.email, reason: 'org_owner' });
     else if (purchasers.has(user.id)) excluded.push({ userId: user.id, email: user.email, reason: 'paid' });
-    else included.push(user);
+    else if (user.organizationId || members.has(user.id)) {
+      excluded.push({ userId: user.id, email: user.email, reason: 'org_member' });
+    } else included.push(user);
   }
 
   return {

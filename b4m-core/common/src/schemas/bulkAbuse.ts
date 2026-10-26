@@ -49,7 +49,7 @@ export const BulkAbuseExecuteRequestSchema = BulkAbusePreviewRequestSchema.exten
 });
 export type BulkAbuseExecuteRequest = z.infer<typeof BulkAbuseExecuteRequestSchema>;
 
-export type BulkAbuseExclusionReason = 'self' | 'admin' | 'system' | 'org_owner' | 'paid' | 'not_found';
+export type BulkAbuseExclusionReason = 'self' | 'admin' | 'system' | 'org_owner' | 'org_member' | 'paid' | 'not_found';
 
 export type BulkAbuseUserSummary = {
   id: string;

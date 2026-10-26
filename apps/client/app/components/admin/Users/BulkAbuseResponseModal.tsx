@@ -57,6 +57,7 @@ const EXCLUSION_LABELS: Record<BulkAbuseExclusionReason, string> = {
   admin: 'admin',
   system: 'system account',
   org_owner: 'organization owner or manager',
+  org_member: 'organization member',
   paid: 'paid account',
   not_found: 'not found',
 };
