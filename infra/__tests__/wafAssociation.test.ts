@@ -15,29 +15,35 @@ describe('resolveExternalWafAssociation', () => {
   });
 
   it.each([undefined, '', '   '])('throws in production when WAF_WEB_ACL_NAME is %j', webAclName => {
-    expect(() => resolveExternalWafAssociation({ stage: 'production', isPreview: false, enableWaf: 'true', webAclName })).toThrow(
-      /WAF_WEB_ACL_NAME/
-    );
+    expect(() =>
+      resolveExternalWafAssociation({ stage: 'production', isPreview: false, enableWaf: 'true', webAclName })
+    ).toThrow(/WAF_WEB_ACL_NAME/);
   });
 
   it.each([undefined, '', 'false', 'TRUE'])('throws in production when ENABLE_WAF is %j', enableWaf => {
-    expect(() => resolveExternalWafAssociation({ stage: 'production', isPreview: false, enableWaf, webAclName: 'acl' })).toThrow(
-      /ENABLE_WAF/
-    );
+    expect(() =>
+      resolveExternalWafAssociation({ stage: 'production', isPreview: false, enableWaf, webAclName: 'acl' })
+    ).toThrow(/ENABLE_WAF/);
   });
 
   it('returns the trimmed ACL name for the staging stage when ENABLE_WAF is true', () => {
-    expect(resolveExternalWafAssociation({ stage: 'dev', isPreview: false, enableWaf: 'true', webAclName: ' staging-acl ' })).toEqual({
+    expect(
+      resolveExternalWafAssociation({ stage: 'dev', isPreview: false, enableWaf: 'true', webAclName: ' staging-acl ' })
+    ).toEqual({
       webAclName: 'staging-acl',
     });
   });
 
   it.each([undefined, '', '   '])('keeps the staging stage-owned ACL when WAF_WEB_ACL_NAME is %j', webAclName => {
-    expect(resolveExternalWafAssociation({ stage: 'dev', isPreview: false, enableWaf: 'true', webAclName })).toBeUndefined();
+    expect(
+      resolveExternalWafAssociation({ stage: 'dev', isPreview: false, enableWaf: 'true', webAclName })
+    ).toBeUndefined();
   });
 
   it.each([undefined, '', 'false'])('keeps the staging stage-owned ACL when ENABLE_WAF is %j', enableWaf => {
-    expect(resolveExternalWafAssociation({ stage: 'dev', isPreview: false, enableWaf, webAclName: 'acl' })).toBeUndefined();
+    expect(
+      resolveExternalWafAssociation({ stage: 'dev', isPreview: false, enableWaf, webAclName: 'acl' })
+    ).toBeUndefined();
   });
 
   it.each(['staging', 'shared-dev'])('leaves %s to own its ACL', stage => {
@@ -89,7 +95,10 @@ const resources = vi.hoisted(() => {
 vi.mock('../secrets', () => ({ secrets: { SLACK_ERROR_REPORTING_WEBHOOK_URL: 'webhook-secret' } }));
 vi.mock('../constants', () => ({
   DEFAULT_LAMBDA_ENVIRONMENT: {},
-  isPreviewStage: /^pr\d+$/.test($app.stage),
+  // Getter so each loadWaf() sees its own stubbed stage rather than a cached first evaluation.
+  get isPreviewStage() {
+    return /^pr\d+$/.test($app.stage);
+  },
 }));
 
 afterEach(() => {
