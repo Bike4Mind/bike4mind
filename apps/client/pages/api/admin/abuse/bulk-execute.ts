@@ -67,6 +67,10 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       blockedDomain,
     };
 
+    // Every user is already committed: a failed summary write must not turn an applied run into a 500.
+    const failed = results
+      .filter(entry => entry.status === 'failed')
+      .map(entry => ({ userId: entry.userId, error: entry.error }));
     await recordAdminActionFromRequest(req, {
       action: 'abuse.bulk.executed',
       target: {
@@ -89,11 +93,11 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         blockedDomain,
         hasMore: result.hasMore,
         // A failed user's own entries rolled back with it, so this is the only record of the failure.
-        failed: results
-          .filter(entry => entry.status === 'failed')
-          .map(entry => ({ userId: entry.userId, error: entry.error })),
+        failed,
         excluded: cohort.excluded.map(({ userId, reason: excludedFor }) => ({ userId, reason: excludedFor })),
       },
+    }).catch(error => {
+      req.logger.error('[ADMIN_AUDIT_WRITE_FAILED]', { action: 'abuse.bulk.executed', failed, error });
     });
 
     return res.json(result);

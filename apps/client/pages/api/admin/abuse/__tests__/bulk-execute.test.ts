@@ -64,9 +64,11 @@ function succeeded(userId: string) {
   };
 }
 
+const mockLoggerError = vi.fn();
+
 async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN, canEditSettings = true) {
   const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user, ability: { can: () => canEditSettings } });
+  Object.assign(req, { user, ability: { can: () => canEditSettings }, logger: { error: mockLoggerError } });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }
@@ -119,6 +121,18 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
       expect.objectContaining({ action: 'abuse.bulk.executed', reason: REASON })
     );
     expect(mockAddBlockedDomain).not.toHaveBeenCalled();
+  });
+
+  it('still returns the applied result when the summary audit write fails', async () => {
+    vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('audit down'));
+    const res = await call(validBody());
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ succeededCount: 1, failedCount: 0 });
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      '[ADMIN_AUDIT_WRITE_FAILED]',
+      expect.objectContaining({ action: 'abuse.bulk.executed' })
+    );
   });
 
   it('refuses when the cohort changed since the preview', async () => {
