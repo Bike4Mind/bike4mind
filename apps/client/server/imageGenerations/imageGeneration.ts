@@ -26,6 +26,7 @@ import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAcce
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageCreditHolds } from '@server/billing/imageCreditHolds';
 
 let _imageGeneration: ImageGenerationService | undefined;
 export const getImageGeneration = (): ImageGenerationService => {
@@ -53,6 +54,7 @@ export const getImageGeneration = (): ImageGenerationService => {
       // Owner-wide lake arms for the input-image lookup, parity with the chat/agent attachment
       // doors - a lake-only image the workbench admitted must still resolve as an image-gen input.
       resolveLakeAccess: (user: IUserDocument, logger: Logger) => createAttachmentLakeAccess(user, logger)(),
+      creditHolds: imageCreditHolds,
       startImageGenerationProcess: async body => {
         const queueUrl = getSourceQueueUrl('imageGenerationQueue');
         imageLogger.log('Queueing image generation', {
