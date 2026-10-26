@@ -56,11 +56,21 @@ async function startCheckout(page: Page, teamsPage: TeamsPage, teamName: string)
   const total = await modalTotal(teamsPage);
   const seats = Number(await teamsPage.createTeamSizeInput().inputValue());
 
+  // The app navigates to Stripe as soon as subscribe returns, and the browser drops the body of a
+  // response it navigated away from, so read the body through the route instead of the page.
+  let body = '';
+  await page.route(`**${SUBSCRIBE_PATH}`, async route => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const fetched = await route.fetch();
+    body = await fetched.text();
+    await route.fulfill({ response: fetched, body });
+  });
   const subscribed = page.waitForResponse(isSubscribeResponse, { timeout: TIMEOUTS.ACTION });
   await teamsPage.createTeamSubmit().click();
   const response = await subscribed;
-  expect(response.status(), await response.text()).toBe(200);
-  const { sessionUrl }: { sessionUrl: string } = await response.json();
+  await page.unroute(`**${SUBSCRIBE_PATH}`);
+  expect(response.status(), body).toBe(200);
+  const { sessionUrl }: { sessionUrl: string } = JSON.parse(body);
 
   await page.waitForURL(STRIPE_CHECKOUT_URL, { timeout: TIMEOUTS.ACTION });
   return { sessionUrl, total, seats };
