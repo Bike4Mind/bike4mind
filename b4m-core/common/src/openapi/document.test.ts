@@ -257,7 +257,12 @@ describe('buildOpenApiDocument', () => {
   it('publishes the real ApiKeyScope vocabulary in info.description', () => {
     expect(doc.info.description).toContain(ApiKeyScope.AI_CHAT);
     expect(doc.info.description).toContain(ApiKeyScope.READ_FILES);
-    for (const scope of PUBLIC_DOC_API_KEY_SCOPES) expect(doc.info.description).toContain(`\`${scope}\``);
+    const section = doc.info.description.split('\n## Scopes\n')[1].split('\n## ')[0];
+    const listed = section
+      .split('\n')
+      .filter((line: string) => line.startsWith('- '))
+      .map((line: string) => line.slice(3, -1));
+    expect(listed).toEqual([...PUBLIC_DOC_API_KEY_SCOPES]);
     for (const scope of UNDOCUMENTED_API_KEY_SCOPES) expect(doc.info.description).not.toContain(`\`${scope}\``);
     // The aspirational vocab from the issue must NOT leak in (Decision 2).
     expect(doc.info.description).not.toContain('ai.completions:write');
