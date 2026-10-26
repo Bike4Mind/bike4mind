@@ -9,6 +9,9 @@ export interface IBlockedIPDocument extends IMongoDocument {
   blockedAt: Date;
   expiresAt: Date;
   unblockedAt?: Date;
+  source: 'auto' | 'manual';
+  /** 0 for manual blocks; for auto blocks, the step reached in the escalation schedule. */
+  escalationLevel: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -21,11 +24,22 @@ const BlockedIPSchema = new mongoose.Schema<IBlockedIPDocument>(
     blockedAt: { type: Date, default: () => new Date(), index: true },
     expiresAt: { type: Date, required: true, index: true },
     unblockedAt: { type: Date },
+    source: { type: String, enum: ['auto', 'manual'], default: 'manual' },
+    escalationLevel: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
 
 BlockedIPSchema.index({ ip: 1, active: 1 }, { unique: false });
+BlockedIPSchema.index({ ip: 1, source: 1, blockedAt: -1 });
+
+export const DEFAULT_BLOCK_DURATION_MS = 10 * 60 * 1000;
+
+export interface BlockOptions {
+  durationMs?: number;
+  source?: 'auto' | 'manual';
+  escalationLevel?: number;
+}
 
 export const BlockedIP: Model<IBlockedIPDocument> =
   mongoose.models.BlockedIP || mongoose.model<IBlockedIPDocument>('BlockedIP', BlockedIPSchema);
@@ -35,9 +49,14 @@ export class BlockedIPRepository extends BaseRepository<IBlockedIPDocument> {
     super(model);
   }
 
-  async block(ip: string, reason?: string): Promise<{ doc: IBlockedIPDocument; created: boolean }> {
+  async block(
+    ip: string,
+    reason?: string,
+    options: BlockOptions = {}
+  ): Promise<{ doc: IBlockedIPDocument; created: boolean }> {
+    const { durationMs = DEFAULT_BLOCK_DURATION_MS, source = 'manual', escalationLevel = 0 } = options;
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + 10 * 60 * 1000); // 10 minutes from now
+    const expiresAt = new Date(now.getTime() + durationMs);
 
     const existing = await this.isBlocked(ip);
     if (existing) {
@@ -52,8 +71,15 @@ export class BlockedIPRepository extends BaseRepository<IBlockedIPDocument> {
       active: true,
       blockedAt: now,
       expiresAt,
+      source,
+      escalationLevel,
     });
     return { doc, created: true };
+  }
+
+  /** Auto blocks of this IP started at or after `since`; drives the escalation step. */
+  async countAutoBlocksSince(ip: string, since: Date): Promise<number> {
+    return this.model.countDocuments({ ip, source: 'auto', blockedAt: { $gte: since } });
   }
 
   async unblock(ip: string): Promise<IBlockedIPDocument | null> {
