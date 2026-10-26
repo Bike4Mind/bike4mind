@@ -46,7 +46,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
 }) => {
   const [mode, setMode] = useState<Mode>('adjust');
   const [creditAmount, setCreditAmount] = useState(100);
-  const [targetBalance, setTargetBalance] = useState(0);
+  const [targetBalance, setTargetBalance] = useState<number | null>(0);
   const [creditNote, setCreditNote] = useState('');
   const queryClient = useQueryClient();
 
@@ -54,8 +54,9 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
 
   const isReasonValid = isValidAdminActionReason(creditNote);
   const currentBalance = selectedUser?.currentCredits ?? 0;
-  const setDelta = targetBalance - currentBalance;
-  const canSet = isReasonValid && Number.isInteger(targetBalance) && targetBalance >= 0 && setDelta !== 0;
+  const setDelta = targetBalance === null ? 0 : targetBalance - currentBalance;
+  const canSet =
+    isReasonValid && targetBalance !== null && Number.isInteger(targetBalance) && targetBalance >= 0 && setDelta !== 0;
 
   const handleClose = () => {
     setMode('adjust');
@@ -79,7 +80,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
   };
 
   const handleSetBalance = async () => {
-    if (canSet) await submit({ kind: 'set', balance: targetBalance });
+    if (canSet && targetBalance !== null) await submit({ kind: 'set', balance: targetBalance });
   };
 
   return (
@@ -136,18 +137,20 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                   <FormLabel>New balance</FormLabel>
                   <Input
                     type="number"
-                    value={targetBalance}
+                    value={targetBalance ?? ''}
                     onChange={e => {
                       const value = parseInt(e.target.value);
-                      setTargetBalance(isNaN(value) ? 0 : Math.min(Math.max(value, 0), MAX_BALANCE));
+                      setTargetBalance(isNaN(value) ? null : Math.min(Math.max(value, 0), MAX_BALANCE));
                     }}
                     endDecorator="credits"
                     slotProps={{ input: { min: 0, step: 1, 'data-testid': 'credit-adjust-set-input' } }}
                   />
                   <FormHelperText data-testid="credit-adjust-set-preview">
-                    {setDelta === 0
-                      ? 'Already at this balance; nothing to change.'
-                      : `Change: ${setDelta > 0 ? '+' : ''}${setDelta.toLocaleString()} credits`}
+                    {targetBalance === null
+                      ? 'Enter a balance.'
+                      : setDelta === 0
+                        ? 'Already at this balance; nothing to change.'
+                        : `Change: ${setDelta > 0 ? '+' : ''}${setDelta.toLocaleString()} credits`}
                   </FormHelperText>
                 </FormControl>
               )}

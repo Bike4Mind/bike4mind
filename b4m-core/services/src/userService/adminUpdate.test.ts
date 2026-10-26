@@ -329,19 +329,21 @@ describe('adminUpdateUser - signed creditDelta path', () => {
     expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -30);
   });
 
-  it('does not invert a deduction when the balance is already negative', async () => {
+  it('neither inverts nor deepens a negative balance on a deduction', async () => {
     const { adapters, createTransaction, incrementCredits } = makeAdapters(-100);
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -50 }, adapters);
 
-    // The clamp must not floor at -previousBalance (+100): that would turn a 50-credit
-    // deduction into a +100 grant. The deduction applies verbatim on a negative balance.
-    expect(createTransaction.mock.calls[0][0]).toBe('generic_deduct');
-    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -50);
-    expect(createTransaction.mock.calls[0][1].metadata).toMatchObject({
-      previousBalance: -100,
-      resultingBalance: -150,
-    });
+    expect(createTransaction).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('rejects negative absolute and oversized credit values', () => {
+    const base = { id: TARGET_ID };
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: -5 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: 1e308 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, creditDelta: -1e308 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: 0, creditDelta: -50 }).success).toBe(true);
   });
 });
 

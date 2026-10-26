@@ -130,6 +130,14 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
       expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', { kind: 'set', balance: 0 }, 'Abusive signup');
     });
 
+    it('stays disabled when the balance input is cleared, instead of treating it as 0', () => {
+      renderModal();
+      fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Abusive signup' } });
+      expect(screen.getByTestId('credit-adjust-set-btn')).toBeEnabled();
+      fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '' } });
+      expect(screen.getByTestId('credit-adjust-set-btn')).toBeDisabled();
+    });
+
     it('stays disabled when the target equals the current balance', () => {
       renderModal();
       fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '100' } });

@@ -40,7 +40,7 @@ describe('useUserCreditsManager', () => {
 
     await act(() => result.current.handleCreditAdjustment('u1', { kind: 'set', balance: 0 }, 'zeroed'));
     expect(mockMutateAsync).toHaveBeenLastCalledWith({ userId: 'u1', currentCredits: 0, note: 'zeroed' });
-    expect(result.current.notification.message).toBe('Balance set to 0');
+    expect(result.current.notification.message).toContain('Balance adjusted toward 0');
   });
 
   it('requests server-side sort by currentCredits (default highest first)', () => {

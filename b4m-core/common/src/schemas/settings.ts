@@ -2151,7 +2151,8 @@ export const API_SERVICE_GROUPS = {
   RATE_LIMITING: {
     id: 'rateLimitingService',
     name: 'API Rate Limiting',
-    description: 'Per-user request rate limits on /chat and /opti, tunable per subscription tier (#9780)',
+    description:
+      'Per-user request rate limits on every per-user rate-limited API route, tunable per subscription tier (#9780)',
     icon: 'Speed',
     settings: [
       { key: 'apiRateLimitFreePerMin', order: 1 },
@@ -3037,9 +3038,8 @@ export const settingsMap = {
     defaultValue: 10,
     min: 0,
     max: 100000,
-    int: true,
     description:
-      'Max /chat and /opti requests per minute for users with no active paid subscription. Set to 0 to block all free-tier requests.',
+      'Max requests per minute on every per-user rate-limited API route (chat and opti included) for users with no active paid subscription. Set to 0 to block all free-tier requests on those routes.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 1,
@@ -3050,7 +3050,8 @@ export const settingsMap = {
     defaultValue: 30,
     min: 1,
     max: 100000,
-    description: 'Max /chat and /opti requests per minute for Basic-tier subscribers (e.g. Professional plan).',
+    description:
+      'Max requests per minute on every per-user rate-limited API route for Basic-tier subscribers (e.g. Professional plan).',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 2,
@@ -3061,7 +3062,7 @@ export const settingsMap = {
     defaultValue: 60,
     min: 1,
     max: 100000,
-    description: 'Max /chat and /opti requests per minute for Pro-tier subscribers.',
+    description: 'Max requests per minute on every per-user rate-limited API route for Pro-tier subscribers.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 3,

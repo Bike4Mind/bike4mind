@@ -205,6 +205,10 @@ describe('resolveUserRateLimitPerMin', () => {
   it('reads the Free-tier setting for an unsubscribed user', async () => {
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(10);
     expect(getSettingsValueMock).toHaveBeenCalledWith('apiRateLimitFreePerMin', expect.anything());
+    expect(getSettingsMapMock).toHaveBeenCalledWith(expect.anything(), {
+      skipCache: true,
+      names: ['apiRateLimitFreePerMin'],
+    });
   });
 
   it('keeps an explicit 0 Free-tier limit instead of the fallback', async () => {

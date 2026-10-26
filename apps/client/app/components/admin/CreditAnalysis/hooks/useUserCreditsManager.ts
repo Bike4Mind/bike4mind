@@ -65,7 +65,7 @@ export function useUserCreditsManager(onRefresh?: () => void) {
         open: true,
         message:
           change.kind === 'set'
-            ? `Balance set to ${change.balance.toLocaleString()}`
+            ? `Balance adjusted toward ${change.balance.toLocaleString()}; spend since the page loaded can change the final amount`
             : `Successfully ${change.delta > 0 ? 'added' : 'removed'} ${Math.abs(change.delta)} credits`,
         color: 'success',
       });
