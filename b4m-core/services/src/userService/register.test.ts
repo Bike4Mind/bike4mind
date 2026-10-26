@@ -484,6 +484,7 @@ describe('registerViaOTC', () => {
           findByUsernameOrEmail: vi.fn().mockResolvedValue(null),
           create: vi.fn().mockImplementation(async (user: any) => ({ ...user, id: 'newUserId' })),
           update: vi.fn().mockImplementation(async (user: any) => user),
+          claimFreeCreditGrant: vi.fn().mockResolvedValue(true),
         },
         adminSettings: {
           findBySettingName: vi.fn().mockImplementation((name: string) => {
@@ -541,6 +542,18 @@ describe('registerViaOTC', () => {
       tags: ['Customer'],
       pendingCreditGrant: null,
     });
+  });
+
+  it('registers an alias of an already-granted inbox but grants it nothing', async () => {
+    mockAdapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
+
+    const result = await registerViaOTC(otcParams, mockAdapters);
+
+    expect(mockAdapters.db.users.claimFreeCreditGrant).toHaveBeenCalledWith('newUserId');
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(result.emailVerified).toBe(true);
+    // The pending tag is released, so the refused grant is not retried on every login.
+    expect(result.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
   });
 
   it('grants the default credits for an admitted no-invite signup while open registration is off', async () => {
