@@ -76,6 +76,11 @@ export const grantFreeCredits = async (
   });
   if (legacyGrant) return { creditsGranted: 0, currentCredits: null };
 
+  // The transactionId dedupes per account; the claim dedupes per inbox, so an alias of an
+  // address that already earned a grant (x+1@gmail.com, x.y@gmail.com) earns none.
+  const claimed = await db.users.claimFreeCreditGrant(user.id);
+  if (!claimed) return { creditsGranted: 0, currentCredits: null };
+
   const holder = await addCredits(
     {
       ownerId: user.id,

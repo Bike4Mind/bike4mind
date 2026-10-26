@@ -14,7 +14,7 @@ const buildAdapters = (defaultFreeCredits: string | null = '100') => {
       },
       creditTransactions: { findOne: vi.fn().mockResolvedValue(null) },
       creditLots: {},
-      users: {},
+      users: { claimFreeCreditGrant: vi.fn().mockResolvedValue(true) },
     },
     reason: 'test grant',
     logger,
@@ -79,6 +79,23 @@ describe('free credits service', () => {
         expect.objectContaining({ db: expect.objectContaining({ creditLots: adapters.db.creditLots }) })
       );
     });
+
+    it('grants nothing when another account already claimed the same inbox', async () => {
+      const adapters = buildAdapters('100');
+      adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
+
+      const result = await grantFreeCredits({ id: 'user-2' }, adapters);
+
+      expect(adapters.db.users.claimFreeCreditGrant).toHaveBeenCalledWith('user-2');
+      expect(result).toEqual({ creditsGranted: 0, currentCredits: null });
+      expect(addCreditsSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not spend the inbox claim when there is nothing to grant', async () => {
+      const adapters = buildAdapters('0');
+      await grantFreeCredits({ id: 'user-1' }, adapters);
+      expect(adapters.db.users.claimFreeCreditGrant).not.toHaveBeenCalled();
+    });
   });
 
   describe('legacy otc-register-grant transaction', () => {
@@ -116,6 +133,21 @@ describe('free credits service', () => {
       expect(result.released).toBe(true);
       expect(result.creditsGranted).toBe(250);
       expect(result.patch).toEqual({ tags: ['Customer'], pendingCreditGrant: null });
+    });
+
+    it('releases the tag without a grant when the inbox was already claimed', async () => {
+      const adapters = buildAdapters();
+      adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
+
+      const result = await releasePendingFreeCredits({ id: 'user-2', tags: [PENDING_FREE_CREDITS_TAG] }, adapters);
+
+      expect(result).toEqual({
+        released: true,
+        creditsGranted: 0,
+        currentCredits: null,
+        patch: { tags: [], pendingCreditGrant: null },
+      });
+      expect(addCreditsSpy).not.toHaveBeenCalled();
     });
 
     it('releases the tag when there is nothing to grant', async () => {
