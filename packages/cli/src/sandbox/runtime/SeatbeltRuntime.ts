@@ -44,17 +44,25 @@ function assertPort(port: number): void {
 /**
  * Seatbelt matches a socket connect against the fully resolved path, so a symlink like
  * /var/run/docker.sock is denied at its current target, resolved each time a profile is built.
+ * The write denies stop a socket in a writable directory from being renamed to an unlisted path,
+ * directly or by renaming one of its parent directories.
  */
-function containerSocketDenies(): string[] {
-  const rules = new Set<string>();
+function containerSocketDenies(): { network: string[]; fileWrite: string[] } {
+  const network = new Set<string>();
+  const fileWrite = new Set<string>();
   for (const entry of getContainerSocketPaths()) {
     const resolvedParent = path.join(resolveSandboxPath(path.dirname(entry.path)), path.basename(entry.path));
     for (const candidate of [resolvedParent, resolveSandboxPath(entry.path)]) {
       const filter = entry.directory ? 'subpath' : 'path-literal';
-      rules.add(`(deny network-outbound (remote unix-socket (${filter} "${escapeSeatbeltPath(candidate)}")))`);
+      const escaped = escapeSeatbeltPath(candidate);
+      network.add(`(deny network-outbound (remote unix-socket (${filter} "${escaped}")))`);
+      fileWrite.add(`(deny file-write* (${filter} "${escaped}"))`);
+      for (let dir = path.dirname(candidate); dir !== path.dirname(dir); dir = path.dirname(dir)) {
+        fileWrite.add(`(deny file-write* (path-literal "${escapeSeatbeltPath(dir)}"))`);
+      }
     }
   }
-  return [...rules];
+  return { network: [...network], fileWrite: [...fileWrite] };
 }
 
 export class SeatbeltRuntime implements SandboxRuntime {
@@ -79,6 +87,8 @@ export class SeatbeltRuntime implements SandboxRuntime {
     const { cwd, filesystemConfig } = options;
     const expandedDenied = filesystemConfig.deniedPaths.map(resolveSandboxPath);
     const expandedAllowed = filesystemConfig.allowedReadPaths.map(resolveSandboxPath);
+
+    const containerDenies = options.allowContainerSockets ? null : containerSocketDenies();
 
     const lines: string[] = [
       '(version 1)',
@@ -109,9 +119,9 @@ export class SeatbeltRuntime implements SandboxRuntime {
       lines.push('(allow network-outbound (remote ip "localhost:*"))');
       lines.push(`(deny network-outbound (remote unix-socket (path-literal "${MDNS_RESPONDER_SOCKET}")))`);
     }
-    if (!options.allowContainerSockets) {
+    if (containerDenies) {
       lines.push('; Keep container engine sockets out of reach');
-      lines.push(...containerSocketDenies());
+      lines.push(...containerDenies.network);
     }
     lines.push('');
 
@@ -136,6 +146,11 @@ export class SeatbeltRuntime implements SandboxRuntime {
       lines.push(`(deny file-write* (subpath "${escapeSeatbeltPath(protectedPath)}"))`);
     }
     lines.push('');
+
+    if (containerDenies) {
+      lines.push('; Keep container engine sockets where they are');
+      lines.push(...containerDenies.fileWrite, '');
+    }
 
     // Allowed read paths (explicit allowlist, useful if we ever change default to deny reads)
     if (expandedAllowed.length > 0) {

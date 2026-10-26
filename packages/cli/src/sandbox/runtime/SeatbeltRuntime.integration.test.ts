@@ -152,6 +152,42 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
     }
   });
 
+  it('keeps a configured socket in /tmp from being renamed and reached', async () => {
+    const socketDir = mkdtempSync('/tmp/b4m-dh-');
+    const socketPath = path.join(socketDir, 'd.sock');
+    const server = net.createServer(socket => socket.end());
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, resolve);
+    });
+    const original = process.env.DOCKER_HOST;
+    process.env.DOCKER_HOST = `unix://${socketPath}`;
+    const connect = (target: string) =>
+      `node -e "require('net').connect('${target}').on('connect',()=>{console.log('open');process.exit(0)}).on('error',e=>{console.log(e.code);process.exit(0)})"`;
+    const wrapped = runtime.wrapCommand({
+      command: [
+        `mv ${socketPath} ${socketDir}/m.sock && echo moved || echo kept`,
+        `mv ${socketDir} ${socketDir}-m && echo moved || echo kept`,
+        connect(socketPath),
+      ].join('; '),
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled: false,
+    });
+    if (original === undefined) delete process.env.DOCKER_HOST;
+    else process.env.DOCKER_HOST = original;
+
+    try {
+      const output = execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' });
+      expect(output.trim().split('\n')).toEqual(['kept', 'kept', 'EPERM']);
+    } finally {
+      cleanupWrapped(wrapped.cleanupPaths);
+      server.close();
+      rmSync(socketDir, { recursive: true, force: true });
+      rmSync(`${socketDir}-m`, { recursive: true, force: true });
+    }
+  });
+
   it('allows writing to CWD', () => {
     const testFile = path.join(TEST_DIR, 'write-test.txt');
     const wrapped = runtime.wrapCommand({

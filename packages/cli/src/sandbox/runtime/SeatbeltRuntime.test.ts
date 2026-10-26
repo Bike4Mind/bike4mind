@@ -275,7 +275,8 @@ describe('SeatbeltRuntime', () => {
     it.each([false, true])('denies them after the unix-socket allow (network %s)', networkEnabled => {
       const profile = runtime.generateProfile({ ...baseOptions, networkEnabled, proxyPort: 8080 });
       const unixAllowIdx = profile.indexOf('(allow network-outbound (remote unix-socket))');
-      const dockerDeny = '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/docker.sock")))';
+      const dockerSocket = path.join(realpathSync('/var/run'), 'docker.sock');
+      const dockerDeny = `(deny network-outbound (remote unix-socket (path-literal "${dockerSocket}")))`;
       expect(unixAllowIdx).toBeGreaterThan(-1);
       expect(profile.indexOf(dockerDeny)).toBeGreaterThan(unixAllowIdx);
       for (const dir of [
@@ -316,11 +317,36 @@ describe('SeatbeltRuntime', () => {
       }
     });
 
+    it('denies renaming a configured socket or its parents after the write allows', async () => {
+      const fs = await vi.importActual<typeof import('fs')>('fs');
+      const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'seatbelt-host-')));
+      const original = process.env.DOCKER_HOST;
+      try {
+        process.env.DOCKER_HOST = `unix://${fixture}/engine/api.sock`;
+        const profile = runtime.generateProfile({ ...baseOptions, networkEnabled: false });
+        const lastWriteAllowIdx = profile.lastIndexOf('(allow file-write*');
+        expect(lastWriteAllowIdx).toBeGreaterThan(-1);
+        for (const rule of [
+          `(deny file-write* (path-literal "${fixture}/engine/api.sock"))`,
+          `(deny file-write* (path-literal "${fixture}/engine"))`,
+          `(deny file-write* (path-literal "${fixture}"))`,
+          `(deny file-write* (subpath "${home}/.colima"))`,
+        ]) {
+          expect(profile.indexOf(rule)).toBeGreaterThan(lastWriteAllowIdx);
+        }
+      } finally {
+        if (original === undefined) delete process.env.DOCKER_HOST;
+        else process.env.DOCKER_HOST = original;
+        fs.rmSync(fixture, { recursive: true, force: true });
+      }
+    });
+
     it('leaves them reachable when allowContainerSockets is set', () => {
       const profile = runtime.generateProfile({ ...baseOptions, networkEnabled: false, allowContainerSockets: true });
       expect(profile).toContain('(allow network-outbound (remote unix-socket))');
       expect(profile).not.toContain('docker.sock');
       expect(profile).not.toContain('.colima');
+      expect(profile).not.toMatch(/\(deny file-write\* \(path-literal/);
     });
   });
 
