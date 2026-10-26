@@ -19,6 +19,7 @@ const { mocks } = vi.hoisted(() => ({
     importFindOne: vi.fn(),
     overridesByKey: vi.fn(),
     hearthHasAnyChannel: vi.fn(),
+    userFindById: vi.fn(),
   },
 }));
 
@@ -47,7 +48,10 @@ vi.mock('@bike4mind/database', () => ({
   Artifact: { exists: (...a: unknown[]) => mocks.artifactExists(...a) },
   ApiKey: { exists: (...a: unknown[]) => mocks.apiKeyExists(...a) },
   UsageEvent: { distinct: (...a: unknown[]) => mocks.usageDistinct(...a) },
-  User: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
+  User: {
+    exists: (...a: unknown[]) => mocks.miscExists(...a),
+    findById: (...a: unknown[]) => mocks.userFindById(...a),
+  },
   Session: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
   Agent: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
   Memento: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
@@ -87,6 +91,8 @@ const run = (user?: { id: string }) => {
   };
 };
 
+const TRUSTED_USER = { createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true };
+
 const lockEverything = () => {
   mocks.projectExists.mockResolvedValue(null);
   mocks.agentCount.mockResolvedValue(0);
@@ -103,6 +109,8 @@ const lockEverything = () => {
   mocks.overridesByKey.mockResolvedValue(new Map());
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
+  // Default: trusted account so existing status tests continue to pass.
+  mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve(TRUSTED_USER) });
 };
 
 beforeEach(() => {

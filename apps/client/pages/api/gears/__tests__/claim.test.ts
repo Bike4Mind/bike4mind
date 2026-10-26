@@ -21,6 +21,7 @@ const { mocks } = vi.hoisted(() => ({
     overridesByKey: vi.fn(),
     hearthHasAnyChannel: vi.fn(),
     withTransaction: vi.fn(),
+    userFindById: vi.fn(),
   },
 }));
 
@@ -50,7 +51,10 @@ vi.mock('@bike4mind/database', () => ({
   Artifact: { exists: (...a: unknown[]) => mocks.artifactExists(...a) },
   ApiKey: { exists: (...a: unknown[]) => mocks.apiKeyExists(...a) },
   UsageEvent: { distinct: (...a: unknown[]) => mocks.usageDistinct(...a) },
-  User: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
+  User: {
+    exists: (...a: unknown[]) => mocks.miscExists(...a),
+    findById: (...a: unknown[]) => mocks.userFindById(...a),
+  },
   Session: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
   Agent: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
   Memento: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
@@ -94,6 +98,10 @@ const claim = (body: unknown, user: { id: string } | null = { id: 'u1' }) => {
 const unlockProjects = () =>
   mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
 
+// An account that passes all trust checks (email verified, older than 7 days).
+const TRUSTED_USER = { createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true };
+const makeTrustedUser = () => mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve(TRUSTED_USER) });
+
 const lockEverything = () => {
   mocks.projectExists.mockResolvedValue(null);
   mocks.agentCount.mockResolvedValue(0);
@@ -111,6 +119,8 @@ const lockEverything = () => {
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
   mocks.txFindOne.mockResolvedValue(null);
+  // Default: trusted account so existing tests that expect payouts continue to pass.
+  makeTrustedUser();
 };
 
 beforeEach(() => {
@@ -251,5 +261,76 @@ describe('POST /api/gears/claim', () => {
     await promise;
     expect(mocks.agentCount).not.toHaveBeenCalled();
     expect(mocks.apiKeyExists).not.toHaveBeenCalled();
+  });
+
+  it('blocks payout when the account is not email-verified', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('blocks payout when the account is younger than 7 days', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), emailVerified: true }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('pays a trusted account (email-verified and older than 7 days)', async () => {
+    unlockProjects();
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
+  });
+
+  it('blocks apikey gear for an unverified account even with an active key', async () => {
+    mocks.apiKeyExists.mockResolvedValue({ _id: 'k1' });
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'apikey' });
+    await promise;
+    // Unverified account: apikey gear check() returns false -> not_unlocked.
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'not_unlocked' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('blocks apicall gear for an unverified account even with API usage', async () => {
+    mocks.usageDistinct.mockImplementation((field: string) =>
+      Promise.resolve(field === 'feature' ? ['completion_api'] : [])
+    );
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'apicall' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'not_unlocked' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('blocks payout when the per-account gear credit cap would be exceeded', async () => {
+    unlockProjects();
+    // Simulate an account that has already collected 31,000 credits in prior gear claims.
+    mocks.txFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:shareproject', credits: 31000 }]);
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    // 31000 + 1000 = 32000 > MAX_GEAR_CREDITS_PER_ACCOUNT (31500): blocked.
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 });
