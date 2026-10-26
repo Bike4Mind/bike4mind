@@ -1,6 +1,6 @@
 import { IOrganizationDocument, WithId } from '@bike4mind/common';
 import { useGetOrganization } from '@client/app/hooks/data/organizations';
-import { LinearProgress, Modal, ModalClose, ModalDialog, Typography } from '@mui/joy';
+import { Button, LinearProgress, Modal, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy';
 import { isAxiosError } from 'axios';
 import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
@@ -49,9 +49,18 @@ const OrganizationProfileModal: React.FC<{ onClosed: () => void }> = ({ onClosed
         {shownOrganization ? (
           <OrganizationProfileUpdated org={shownOrganization} onClose={close} activeDays={30} />
         ) : failedToLoad ? (
-          <Typography color="danger" data-testid="admin-organization-profile-error">
-            This organization could not be loaded. Close this window and try again.
-          </Typography>
+          <Stack spacing={1.5} alignItems="flex-start">
+            <Typography color="danger" data-testid="admin-organization-profile-error">
+              This organization could not be loaded.
+            </Typography>
+            <Button
+              variant="outlined"
+              onClick={() => organization.refetch()}
+              data-testid="admin-organization-profile-retry-btn"
+            >
+              Retry
+            </Button>
+          </Stack>
         ) : (
           <LinearProgress data-testid="admin-organization-profile-loading" />
         )}

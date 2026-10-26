@@ -109,6 +109,17 @@ describe('OrganizationProfileModal', () => {
     expect(screen.getByTestId('admin-organization-profile-error')).toBeTruthy();
   });
 
+  it('retries the load from the error state', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'organizations', orgId: ORG_ID }));
+    const refetch = vi.fn();
+    useGetOrganizationMock.mockReturnValue({ data: undefined, isFetching: false, error: httpError(500), refetch });
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('admin-organization-profile-retry-btn'));
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
   // OrganizationProfileUpdated resets unsaved edits when `org` changes, so a refetch must not reach it.
   it('keeps showing the organization as opened when the query refetches new data', () => {
     act(() => fakeAdminRouter.reset({ tab: 'organizations', orgId: ORG_ID }));
