@@ -476,7 +476,8 @@ describe('OllamaRuntime.pull', () => {
 
   it('rejects with RuntimeProtocolError on a frame that is not JSON', async () => {
     server = await startFakeServer({
-      'POST /api/pull': (_request, response) => response.end(ndjson([{ status: 'pulling manifest' }]) + '<html>\n'),
+      'POST /api/pull': (_request, response) =>
+        response.end(ndjson([{ status: 'pulling manifest' }]) + '<html>\n' + ndjson([{ status: 'success' }])),
     });
     await expect(runtimeFor(server).pull('qwen3:8b')).rejects.toBeInstanceOf(RuntimeProtocolError);
   });
