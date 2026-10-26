@@ -289,7 +289,7 @@ type SendOptions = {
  *
  * Counts autonomous runs only. A user typing into a spawned session is not rationed.
  */
-const MAX_CONCURRENT_SPAWNED = 3;
+export const MAX_CONCURRENT_SPAWNED = 10;
 
 /**
  * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
