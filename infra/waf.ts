@@ -193,8 +193,8 @@ export const wafLoggingConfig =
         {
           // MUST be us-east-1 for CloudFront-scope WAF
           provider: wafProviderUsEast1,
-          // No retainOnDelete needed - lifecycle is tied to WebACL
-          // If WebACL is deleted, this logging configuration is automatically removed
+          // Retained so removing only this resource never turns logging off; AWS still drops it with the WebACL
+          retainOnDelete: ['production', 'dev'].includes($app.stage),
         }
       )
     : undefined;
@@ -219,7 +219,8 @@ export const wafOobAlarmTopic = isExternalProduction
   ? new aws.sns.Topic(
       'WafOobAlarmTopic',
       { name: `${$app.name}-${$app.stage}-waf-oob-alarm` },
-      { provider: wafProviderUsEast1 }
+      // Retained so subscriptions added outside this stack keep a stable topic ARN
+      { provider: wafProviderUsEast1, retainOnDelete: true }
     )
   : undefined;
 
