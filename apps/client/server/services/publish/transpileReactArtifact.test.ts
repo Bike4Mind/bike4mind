@@ -247,11 +247,11 @@ export default function C() {
     expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
   });
 
-  it('rejects a multi-file (relative import) artifact', async () => {
+  it('rejects a relative import with no sibling files as a missing file', async () => {
     const src = `import Foo from './foo';\nexport default function C() { return <Foo />; }`;
-    await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
-      ReactArtifactTranspileError
-    );
+    const err = await buildReactArtifactBundle({ source: src, title: 'x' }).catch(e => e);
+    expect(err).toBeInstanceOf(ReactArtifactTranspileError);
+    expect(err.message).toBe('Cannot resolve "./foo": no artifact file is named "foo". Available files: none.');
   });
 
   it('rejects a component with no default export', async () => {
@@ -631,6 +631,23 @@ describe('rewriteImportsToRequire ESM survivor backstop', () => {
     expect(() =>
       mod.rewriteImportsToRequire(`const a = 1;\nimport Chart from 'chartjs'\nimport Grid from 'gridjs';`)
     ).toThrow(/import Chart from 'chartjs'/);
+  });
+
+  it('skips import text inside a template or comment but still throws for a real survivor after it', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    const text = "const note = `\nimport X from 'recharts'\n`;\n/*\nimport Y from 'react'\n*/\n";
+    const app = 'export default function App() { return <p>{note}</p>; }';
+    await expect(mod.transpileReactSource(text + app)).resolves.toContain('__DEFAULT_EXPORT__');
+    await expect(
+      mod.buildReactArtifactBundle({ source: `${text}import { useState } from 'react';\n${app}`, title: 'App' })
+    ).rejects.toThrow(/Could not rewrite an ESM import for a script bundle: "import \{ useState \} from 'react'"/);
   });
 
   it('is blind to a non-line-initial survivor - a documented, narrow gap', async () => {
