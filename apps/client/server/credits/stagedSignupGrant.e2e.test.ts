@@ -348,4 +348,64 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(12);
     expect(await CreditTransaction.countDocuments({ transactionId: `unlock-grant:${user.id}` })).toBe(0);
   });
+  it('refuses to pay from a corrupt snapshot', async () => {
+    const user = await createUser();
+    await userService.releaseSignupTranche(user.id, adapters);
+    await User.updateOne({ _id: user.id }, { 'signupGrant.creditsReleased': 41 });
+    await expect(userService.unlockSignupGrant(user.id, 'activity', adapters)).rejects.toThrow(
+      'Invalid staged grant amount'
+    );
+    expect((await User.findById(user.id))?.currentCredits).toBe(12);
+  });
+
+  it('refuses to pay when a ledger row already exists for a stage the account has not recorded', async () => {
+    const user = await createUser();
+    await userService.releaseSignupTranche(user.id, adapters);
+    await CreditTransaction.collection.insertOne({ transactionId: `unlock-grant:${user.id}` });
+    await expect(userService.unlockSignupGrant(user.id, 'activity', adapters)).rejects.toThrow(
+      'Staged grant ledger and account state disagree'
+    );
+    expect((await User.findById(user.id))?.currentCredits).toBe(12);
+    expect((await User.findById(user.id))?.signupGrant?.stage).toBe('signup');
+  });
+
+  it('pays nothing before the signup tranche is released or to an AI-revoked account', async () => {
+    const user = await createUser();
+    expect((await userService.unlockSignupGrant(user.id, 'activity', adapters)).creditsGranted).toBe(0);
+    await userService.releaseSignupTranche(user.id, adapters);
+    await User.updateOne({ _id: user.id }, { isModerated: true });
+    expect((await userService.unlockSignupGrant(user.id, 'activity', adapters)).creditsGranted).toBe(0);
+    expect((await User.findById(user.id))?.currentCredits).toBe(12);
+  });
+
+  it.each([['false'], [undefined]])('does not unlock from activity when the flag is %s', async flag => {
+    const user = await createUser();
+    const first = new Date(Date.now() - 3 * 86400000);
+    await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date(first.getTime() - 86400000) } });
+    await userService.releaseSignupTranche(user.id, adapters);
+    vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
+      async name =>
+        ({
+          settingValue: (
+            {
+              signupGrantActivityEnabled: flag,
+              signupGrantActivityMinMessages: '2',
+              signupGrantActivityMinDays: '2',
+            } as Record<string, string | undefined>
+          )[name],
+        }) as never
+    );
+    await Quest.create(
+      [0, 86400000].map((offset, index) => ({
+        sessionId: 'synthetic-session',
+        timestamp: first,
+        type: 'message',
+        status: 'done',
+        reply: 'Completed answer',
+        signupActivity: { userId: user.id, turnId: String(index), startedAt: new Date(first.getTime() + offset) },
+      }))
+    );
+    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(0);
+    expect((await User.findById(user.id))?.currentCredits).toBe(12);
+  });
 });
