@@ -15,44 +15,73 @@ This guide is the target. Pages that predate it are being moved onto it tab by t
 
 ## 2. Foundations
 
-Defined once as Joy theme tokens in `apps/client/app/utils/themes`. Never hard-code a hex value or pixel size in an admin component. The values below are the light-theme targets; each token needs a dark-theme value that passes the same contrast checks (`contrast.test.ts`).
+Defined once in `apps/client/app/utils/themes/admin.ts` and applied by the admin skin. Never hard-code a hex value or pixel size in an admin component. Every token has a light and a dark value, and both must pass `contrast.test.ts`. The prototype (the admin redesign canvas) is the visual reference; where it and this table disagree, this table wins and the prototype gets fixed.
 
 ### Color
 
-| Token | Light value | Use |
+The admin is a **monochrome UI with one accent**. Ink and warm greys do the work; indigo marks focus, links and selection; status colors appear only inside status chips, banners and charts. If a screen reads as "colorful", something is wrong.
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `canvas` | `#F6F6F4` | `#141416` | Page and sidebar background |
+| `surface` | `#FFFFFF` | `#1E1E22` | Cards, tables, dialogs, active nav item |
+| `surfaceSubtle` | `#FAFAF8` | `#232328` | Table header, row hover |
+| `hover` | `#ECECE8` | `#2A2A30` | Hover on nav items, ghost buttons, chips |
+| `border` | `#E4E4DF` | `#2E2E34` | Card, table and sidebar edges; row dividers |
+| `borderStrong` | `#D9D9D4` | `#45454D` | Outlines of buttons, inputs, selects |
+| `ink` | `#18181B` | `#FAFAFA` | Headings, body text, primary button fill |
+| `inkSecondary` | `#3F3F46` | `#D4D4D8` | Nav labels, secondary text |
+| `inkMuted` | `#62626B` | `#B4B4BE` | Meta text, table headers, icons at rest |
+| `accent` | `#4F46E5` | `#A5B4FC` | Focus ring, checkbox, data bars |
+| `link` | `#3F3BC9` | `#A5B4FC` | Text links |
+| `selection` | `#F3F2FE` / `#C7C4F7` / `#2B27A3` | `#26244A` / `#4B47A8` / `#C7C4F7` | Selected row, set filter chip (fill / border / text) |
+| `danger` | `#B42318` | `#FCA5A5` | Destructive actions only |
+
+**Mapping onto Joy.** Inside the admin, Joy's color props are remapped so existing code cannot leak off-palette color:
+
+| Joy `color` | Becomes | Notes |
 |---|---|---|
-| `admin.canvas` | `#F6F6F4` | Page background |
-| `admin.surface` | `#FFFFFF` | Cards, tables, dialogs |
-| `admin.border` | `#E4E4DF` | Card and table borders |
-| `admin.ink` | `#18181B` | Body text, primary button |
-| `admin.inkMuted` | `#62626B` | Meta text (passes 4.5:1 on surface) |
-| `admin.accent` | `#4F46E5` | Focus ring, links, selection |
-| `admin.danger` | `#B42318` | Destructive actions only |
+| `primary` (solid) | `ink` fill, `canvas`-on-ink text | Dark theme inverts: light fill, dark text |
+| `primary` (plain, soft, outlined) | `ink` text, `borderStrong` outline, `hover` fill | Not blue |
+| `neutral` | Same as `primary` plain/outlined | |
+| `danger` | `danger` | Outlined opens a destructive flow; solid only for the final confirm |
+| `success`, `warning` | The `good` and `warn` status tones | Only valid on `Chip`, `Alert` and charts; never on a `Button` |
+
+Never use Joy's default blue, orange or yellow anywhere in the admin, and never color an icon by meaning alone (icons are `inkMuted` at rest, `ink` when active).
 
 ### Status tones
 
 Five tones with one meaning each, used everywhere. They differ in lightness as well as hue, and every chip also has a text label.
 
-| Tone | Means | Examples |
-|---|---|---|
-| good | Healthy, allowed | Active, Verified, Success |
-| info | New or neutral-notable | New, Pro |
-| warn | Needs a look | Medium risk |
-| bad | Blocked or failing | Suspended, High risk, Blocked sign-in |
-| neutral | Inactive, informational | Revoked, Free |
+| Tone | Means | Examples | Light fg / bg | Dark fg / bg |
+|---|---|---|---|---|
+| good | Healthy, allowed | Active, Verified, Success | `#166534` / `#E7F5EC` | `#BBF7D0` / `#14532D` |
+| info | New or neutral-notable | New, Pro | `#3730A3` / `#E8EEFF` | `#C7D2FE` / `#312E81` |
+| warn | Needs a look | Medium risk | `#8A4B00` / `#FFF1DE` | `#FED7AA` / `#7C2D12` |
+| bad | Blocked or failing | Suspended, High risk, Blocked sign-in | `#9F1C12` / `#FDECEA` | `#FECACA` / `#7F1D1D` |
+| neutral | Inactive, informational | Revoked, Free, Low risk | `#52525B` / `#F1F1EE` | `#E4E4E7` / `#3F3F46` |
+
+Status chips are 22 px pills (12 / 500) with an optional 6 px dot in the same color. A count of zero, an empty value or "not set" is **neutral**, not bad: red means something is wrong, not that a number is small.
+
+### Data visualization
+
+Charts use `accent` for the primary series and `inkMuted` at 40% for comparisons; categorical charts take the status tones only when the categories are statuses. Inline bars (spend, risk, storage) are 6 px tall with a 3 px radius on a `selection` fill track. Gridlines use `border`; axis labels use `inkMuted` 12 px.
 
 Shared terms: **Suspended** (not "banned"), **Restricted** (not "moderated"), **Revoked**, **Deleted**.
 
-### Type (Inter, IDs in a monospace face)
+### Type (Inter, IDs in JetBrains Mono)
 
-| Role | Size / weight |
-|---|---|
-| Page title | 24 / 600 |
-| Dialog title | 18 / 600 |
-| Section title | 15 / 600 |
-| Body | 14 / 400 |
-| Meta, table header | 12 / 500 |
-| IDs, key prefixes | mono 12 |
+| Role | Size / weight | Color |
+|---|---|---|
+| Page title | 24 / 600, -0.01em | `ink` |
+| Dialog title | 18 / 600 | `ink` |
+| Section and card title | 15 / 600 | `ink` |
+| Body, table cell | 14 / 400 | `ink` |
+| Nav item, button | 13 to 14 / 500 | `inkSecondary` (nav), `ink` (button) |
+| Meta, table header, nav section label | 12 / 500 | `inkMuted` |
+| IDs, key prefixes, shortcut hints | mono 12 (hints 11) | `inkMuted` |
+
+There are only these seven levels. Headings are never larger than the page title, never colored, and never followed by a help icon larger than 16 px.
 
 ### Space and shape
 
@@ -64,7 +93,23 @@ Shared terms: **Suspended** (not "banned"), **Restricted** (not "moderated"), **
 
 Every admin page renders inside the shared admin layout (sidebar navigation plus content frame); there are no full-screen admin pages. New admin routes are children of the `/admin` layout route, never siblings of it.
 
-Inside that layout, every page uses one of two skeletons, so admins always know where to look.
+### Sidebar
+
+The sidebar is the frame of every admin page, so it sets the tone. Calm, scannable and never louder than the content.
+
+- **Size and surface.** 248 px wide on desktop, `canvas` background, 1 px `border` on its right edge, padding 20 px top and 14 px sides. No shadow, no colored background.
+- **Brand row.** 28 px ink tile with the product mark, "Admin" in 14 / 600, and a `Cmd K` key hint pushed to the right. 18 px below it before the first item.
+- **Search.** A 32 px filter input under the brand row ("Filter pages", `/` to focus). Typing narrows items across all sections and hides empty sections.
+- **Sections.** A small number of groups (Overview, People, Money, Trust and safety, AI, Platform, Settings) with a 12 / 500 `inkMuted` label in sentence case, 20 px above each label. Labels are static text, not accordions; there are no section icons, no section colors and no dividers between sections.
+- **Items.** 36 px tall, 8 px radius, 10 px horizontal padding, 16 px stroke icon (2 px stroke, `inkMuted`) then the label in 14 / 500 `inkSecondary`. One line only: labels are short ("Credits", not "Credit Analytics") and truncate with a tooltip rather than wrap. Hover: `hover` fill and `ink` text.
+- **Active item.** `surface` fill, `ink` text and icon, and a 1 px `border` ring. Exactly one active item; on a detail page the item of its list is active (Users on a user profile).
+- **Long lists.** A section with more than 7 items shows the 5 most used and a "More" row that expands in place. The sidebar scrolls on its own with a hidden scrollbar until hover; the brand row and search stay pinned.
+- **Footer.** Pinned at the bottom: the signed-in admin (24 px avatar, name, role in `inkMuted`) and a collapse button.
+- **Collapsed and mobile.** Collapsed is a 64 px icon rail with tooltips, remembered per admin. Under 900 px the sidebar becomes a drawer opened from a menu button in the page header.
+
+### Page skeletons
+
+Inside that layout, every page uses one of two skeletons, so admins always know where to look. The content frame has a 32 px gutter (16 on phones), a 1280 px max width for detail and settings pages, and full width for list pages.
 
 **List page**
 
@@ -115,6 +160,15 @@ Build new admin pages from these, in `apps/client/app/components/admin/shared/`.
 - **Outlined danger** opens a destructive flow; **solid danger** is only the final confirm inside a dialog.
 - Labels start with a verb and name the object: "Suspend account", never "Submit" or "OK".
 - The commit button repeats the consequence where it helps: "Set balance to 0".
+- Sizes: 36 px (default), 32 px (toolbars, filter bars), 28 px (inside table rows). Radius 8, label 13 / 500, 16 px icon with a 6 px gap.
+- Variants: **primary** is an `ink` fill; **secondary** is a `surface` fill with a `borderStrong` outline; **ghost** has no outline and a `hover` fill. No other colors.
+
+### Tables
+
+- One table is one surface: a single card with a `surfaceSubtle` 38 px header row and 56 px body rows separated by 1 px `border` lines. Rows are never separate cards with gaps between them.
+- The whole row opens the detail page. Row actions are ghost icon buttons (or one "..." menu) that appear on hover and focus, never a pair of solid buttons in every row.
+- Numbers are right-aligned and tabular; IDs are mono with a copy button that appears on hover; empty values render as an `inkMuted` dash.
+- Pagination lives once, in the table footer: "1 to 25 of 1,204" on the left, page size and arrows on the right.
 
 ### Toolkit
 
