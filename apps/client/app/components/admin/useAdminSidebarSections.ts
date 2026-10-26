@@ -1,21 +1,27 @@
-import { useEffect, useRef, useState } from 'react';
-import { AdminTab, SIDEBAR_SECTIONS, SIDEBAR_EXPANDED_STORAGE_KEY, findSectionKeyForTab } from './adminSidebarConfig';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  AdminTab,
+  SIDEBAR_COLLAPSED_STORAGE_KEY,
+  SIDEBAR_EXPANDED_STORAGE_KEY,
+  SIDEBAR_SECTIONS,
+  findSectionKeyForTab,
+} from './adminSidebarConfig';
 
-const readStored = (): Record<string, boolean> | null => {
+const readStored = <T>(key: string): T | null => {
   if (typeof window === 'undefined') return null;
   try {
-    const stored = window.localStorage.getItem(SIDEBAR_EXPANDED_STORAGE_KEY);
-    return stored ? (JSON.parse(stored) as Record<string, boolean>) : null;
+    const stored = window.localStorage.getItem(key);
+    return stored ? (JSON.parse(stored) as T) : null;
   } catch {
     // Malformed storage reads as no preference at all.
     return null;
   }
 };
 
-const persist = (sections: Record<string, boolean>) => {
+const persist = (key: string, value: unknown) => {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(SIDEBAR_EXPANDED_STORAGE_KEY, JSON.stringify(sections));
+    window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // Persistence is best-effort; ignore quota/serialization failures.
   }
@@ -37,11 +43,11 @@ export function useAdminSidebarSections(activeTab: AdminTab | string | null): {
   toggleSection: (key: string) => void;
 } {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => {
-    const stored = readStored();
-    if (stored) return Object.fromEntries(SIDEBAR_SECTIONS.map(s => [s.key, stored[s.key] ?? false]));
-    // No preference yet: open only the active tab's section so the sidebar opens
-    // scannable instead of fully expanded.
+    const stored = readStored<Record<string, boolean>>(SIDEBAR_EXPANDED_STORAGE_KEY);
+    // No preference yet (or a section added since it was stored): open only the active tab's
+    // section so the sidebar opens scannable instead of fully expanded.
     const activeKey = findSectionKeyForTab(activeTab);
+    if (stored) return Object.fromEntries(SIDEBAR_SECTIONS.map(s => [s.key, stored[s.key] ?? s.key === activeKey]));
     return Object.fromEntries(SIDEBAR_SECTIONS.map(s => [s.key, s.key === activeKey]));
   });
 
@@ -64,10 +70,24 @@ export function useAdminSidebarSections(activeTab: AdminTab | string | null): {
     if (forcedSection === key) setForcedSection(null);
     setExpandedSections(prev => {
       const next = { ...prev, [key]: !open };
-      persist(next);
+      persist(SIDEBAR_EXPANDED_STORAGE_KEY, next);
       return next;
     });
   };
 
   return { isExpanded, toggleSection };
+}
+
+/** Whether the desktop sidebar is folded to its icon rail; persisted per browser. */
+export function useAdminSidebarCollapsed(): { collapsed: boolean; toggleCollapsed: () => void } {
+  const [collapsed, setCollapsed] = useState(() => readStored<boolean>(SIDEBAR_COLLAPSED_STORAGE_KEY) === true);
+
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed(previous => {
+      persist(SIDEBAR_COLLAPSED_STORAGE_KEY, !previous);
+      return !previous;
+    });
+  }, []);
+
+  return { collapsed, toggleCollapsed };
 }

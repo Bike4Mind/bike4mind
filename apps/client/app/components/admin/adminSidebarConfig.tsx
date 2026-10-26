@@ -131,6 +131,7 @@ export type SidebarItem = {
 export type SidebarSection = {
   /** Stable key - drives expand state and the localStorage persistence key. */
   key: string;
+  /** Stands in for the whole section on the collapsed icon rail. */
   Icon: ElementType;
   label: string;
   items: SidebarItem[];
@@ -139,36 +140,42 @@ export type SidebarSection = {
 /**
  * Single source of truth for the admin sidebar. Each `AdminTab` that has a
  * sidebar entry appears exactly once here - adding a tab is a one-line change.
- * Order within a section and the `testid` values are preserved from the
- * original hand-written JSX so existing E2E selectors keep working.
+ * Section `key`s are persisted (expand state), so keep them stable when relabelling; the
+ * `testid` values are what the E2E page objects select on.
  */
 export const SIDEBAR_SECTIONS: SidebarSection[] = [
   {
     key: 'userOps',
     Icon: PeopleIcon,
-    label: 'User Ops',
+    label: 'People',
     items: [
       { Icon: PeopleIcon, tab: AdminTab.Users, label: 'Users', testid: 'admin-users-tab-btn' },
-      { Icon: EmailIcon, tab: AdminTab.EmailVerification, label: 'Email Verification' },
-      { Icon: ContactSupportIcon, tab: AdminTab.Feedback, label: 'Feedback' },
-      { Icon: PersonAddIcon, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
-      { Icon: QueryStatsIcon, tab: AdminTab.Analytics, label: 'Analytics' },
-      {
-        Icon: PersonAddIcon,
-        tab: AdminTab.RegistrationInvites,
-        label: 'Invite Center',
-        testid: 'admin-invite-center-tab-btn',
-      },
-      { Icon: PeopleIcon, tab: AdminTab.Subscribers, label: 'Subscribers', badge: 'waitingSubscribers' },
-      { Icon: HandshakeIcon, tab: AdminTab.PartnerSignupRules, label: 'Partner Signup Rules' },
-      { Icon: EmailIcon, tab: AdminTab.EmailMarketing, label: 'Email Marketing' },
-      { Icon: PeopleIcon, tab: AdminTab.Subscriptions, label: 'Subscriptions' },
       {
         Icon: BusinessIcon,
         tab: AdminTab.Organizations,
         label: 'Organizations',
         testid: 'admin-organizations-tab-btn',
       },
+      { Icon: GroupsIcon, tab: AdminTab.Team, label: 'Team' },
+      { Icon: PeopleIcon, tab: AdminTab.Subscribers, label: 'Subscribers', badge: 'waitingSubscribers' },
+      { Icon: PeopleIcon, tab: AdminTab.Subscriptions, label: 'Subscriptions' },
+      {
+        Icon: PersonAddIcon,
+        tab: AdminTab.RegistrationInvites,
+        label: 'Invite Center',
+        testid: 'admin-invite-center-tab-btn',
+      },
+      { Icon: EmailIcon, tab: AdminTab.EmailVerification, label: 'Email Verification' },
+      { Icon: HandshakeIcon, tab: AdminTab.PartnerSignupRules, label: 'Partner Signup Rules' },
+      { Icon: PersonAddIcon, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
+      { Icon: ContactSupportIcon, tab: AdminTab.Feedback, label: 'Feedback' },
+    ],
+  },
+  {
+    key: 'revenue',
+    Icon: CreditCardIcon,
+    label: 'Billing & Growth',
+    items: [
       { Icon: CreditCardIcon, tab: AdminTab.CreditAnalytics, label: 'Credit Analytics' },
       {
         Icon: TrendingUpIcon,
@@ -176,7 +183,8 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Growth & Pricing',
         testid: 'admin-growth-pricing-btn',
       },
-      { Icon: GroupsIcon, tab: AdminTab.Team, label: 'Team' },
+      { Icon: QueryStatsIcon, tab: AdminTab.Analytics, label: 'Analytics' },
+      { Icon: EmailIcon, tab: AdminTab.EmailMarketing, label: 'Email Marketing' },
     ],
   },
   {
@@ -186,45 +194,40 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: SecurityIcon, tab: AdminTab.SecOpsTriage, label: 'SecOps Triage', testid: 'admin-secops-triage-btn' },
       {
-        Icon: SecurityIcon,
+        Icon: VerifiedUserIcon,
         tab: AdminTab.SecurityDashboard,
         label: 'Security Dashboard',
         testid: 'admin-security-dashboard-btn',
       },
+      { Icon: HistoryIcon, tab: AdminTab.AuditLog, label: 'Audit Log', testid: 'admin-audit-log-btn' },
+      { Icon: AccountBoxIcon, tab: AdminTab.IdentityProviders, label: 'Identity Providers' },
+      { Icon: VpnKeyIcon, tab: AdminTab.OAuthClients, label: 'OAuth Clients', testid: 'admin-oauth-clients-btn' },
+      {
+        Icon: VpnKeyIcon,
+        tab: AdminTab.ApiKeyScopePreflight,
+        label: 'API Key Scope Preflight',
+        testid: 'admin-scope-preflight-btn',
+      },
+      { Icon: SecurityIcon, tab: AdminTab.SecretsRotation, label: 'Secrets Rotation' },
+      { Icon: SecurityIcon, tab: AdminTab.SystemSecrets, label: 'System Secrets' },
       {
         Icon: FlagIcon,
         tab: AdminTab.PublishedPages,
         label: 'Published Pages',
         testid: 'admin-published-pages-btn',
       },
-      { Icon: SecurityIcon, tab: AdminTab.SecretsRotation, label: 'Secrets Rotation' },
-      { Icon: SecurityIcon, tab: AdminTab.SystemSecrets, label: 'System Secrets' },
-      { Icon: AccountBoxIcon, tab: AdminTab.IdentityProviders, label: 'Identity Providers' },
-      { Icon: VpnKeyIcon, tab: AdminTab.OAuthClients, label: 'OAuth Clients', testid: 'admin-oauth-clients-btn' },
     ],
-  },
-  {
-    key: 'securityCompliance',
-    Icon: VerifiedUserIcon,
-    label: 'Security & Compliance',
-    items: [{ Icon: HistoryIcon, tab: AdminTab.AuditLog, label: 'Audit Log', testid: 'admin-audit-log-btn' }],
   },
   {
     key: 'reliability',
     Icon: MonitorHeartIcon,
-    label: 'Reliability / Incident Ops',
+    label: 'Reliability',
     items: [
+      { Icon: MonitorHeartIcon, tab: AdminTab.SystemHealth, label: 'System Health' },
       { Icon: BugReportIcon, tab: AdminTab.LiveOpsTriage, label: 'LiveOps Triage', gate: 'liveOpsTriage' },
       { Icon: BugReportIcon, tab: AdminTab.SreAgent, label: 'SRE Agent', testid: 'admin-sre-agent-btn' },
       { Icon: QueueIcon, tab: AdminTab.DlqReplay, label: 'DLQ Management', testid: 'admin-dlq-replay-btn' },
       { Icon: SpeedIcon, tab: AdminTab.RateLimits, label: 'Rate Limits', testid: 'admin-rate-limits-btn' },
-      {
-        Icon: SecurityIcon,
-        tab: AdminTab.ApiKeyScopePreflight,
-        label: 'API Key Scope Preflight',
-        testid: 'admin-scope-preflight-btn',
-      },
-      { Icon: MonitorHeartIcon, tab: AdminTab.SystemHealth, label: 'System Health' },
       { Icon: QueryStatsIcon, tab: AdminTab.EventMetrics, label: 'Event Metrics' },
     ],
   },
@@ -293,9 +296,26 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     ],
   },
   {
+    key: 'generalOps',
+    Icon: HandymanIcon,
+    label: 'Platform',
+    items: [
+      {
+        Icon: HandymanIcon,
+        tab: AdminTab.AdminSettings,
+        label: 'Admin Settings',
+        testid: 'admin-settings-btn',
+      },
+      { Icon: WidgetsIcon, tab: AdminTab.Modals, label: 'Modals' },
+      { Icon: NewspaperIcon, tab: AdminTab.WhatsNewModals, label: "What's New" },
+      { Icon: SummarizeIcon, tab: AdminTab.ReleaseNotes, label: 'Release notes', testid: 'admin-release-notes-btn' },
+      { Icon: LanguageIcon, tab: AdminTab.WorldTime, label: 'World Time' },
+    ],
+  },
+  {
     key: 'docs',
     Icon: MenuBookIcon,
-    label: 'Docs & Architecture',
+    label: 'Docs',
     items: [
       { Icon: NewspaperIcon, tab: AdminTab.Documentation, label: 'Documentation' },
       { Icon: ApiIcon, tab: AdminTab.ApiReference, label: 'API Reference' },
@@ -310,23 +330,6 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       },
     ],
   },
-  {
-    key: 'generalOps',
-    Icon: HandymanIcon,
-    label: 'General Ops',
-    items: [
-      {
-        Icon: HandymanIcon,
-        tab: AdminTab.AdminSettings,
-        label: 'Admin Settings',
-        testid: 'admin-settings-btn',
-      },
-      { Icon: WidgetsIcon, tab: AdminTab.Modals, label: 'Modals' },
-      { Icon: NewspaperIcon, tab: AdminTab.WhatsNewModals, label: "What's New" },
-      { Icon: SummarizeIcon, tab: AdminTab.ReleaseNotes, label: 'Release notes', testid: 'admin-release-notes-btn' },
-      { Icon: LanguageIcon, tab: AdminTab.WorldTime, label: 'World Time' },
-    ],
-  },
 ];
 
 export const SIDEBAR_EXPANDED_STORAGE_KEY = 'admin-sidebar-expanded-sections';
@@ -334,3 +337,28 @@ export const SIDEBAR_EXPANDED_STORAGE_KEY = 'admin-sidebar-expanded-sections';
 /** Find which section owns a given tab (used to expand the active section on mount). */
 export const findSectionKeyForTab = (tab: AdminTab | string | null): string | undefined =>
   SIDEBAR_SECTIONS.find(section => section.items.some(item => item.tab === tab))?.key;
+
+export const SIDEBAR_COLLAPSED_STORAGE_KEY = 'admin-sidebar-collapsed';
+
+/**
+ * The sections an admin can see: gated items dropped, then (when `query` is non-blank) only the
+ * items whose label or section label contains it. Sections left empty are omitted.
+ */
+export const filterSidebarSections = (
+  sections: SidebarSection[],
+  gates: Record<SidebarGate, boolean>,
+  query: string
+): SidebarSection[] => {
+  const needle = query.trim().toLowerCase();
+  return sections
+    .map(section => {
+      const sectionMatches = needle !== '' && section.label.toLowerCase().includes(needle);
+      const items = section.items.filter(
+        item =>
+          (!item.gate || gates[item.gate]) &&
+          (needle === '' || sectionMatches || item.label.toLowerCase().includes(needle))
+      );
+      return { ...section, items };
+    })
+    .filter(section => section.items.length > 0);
+};

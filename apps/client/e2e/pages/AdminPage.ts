@@ -54,7 +54,7 @@ export class AdminPage extends BasePage {
   }
 
   private async expandUserOps() {
-    const section = this.page.getByRole('button', { name: 'User Ops', exact: true }).filter({ visible: true }).first();
+    const section = this.page.getByRole('button', { name: 'People', exact: true }).filter({ visible: true }).first();
     if (!(await section.isVisible())) {
       await this.page.getByTestId('admin-mobile-menu-btn').click();
     }

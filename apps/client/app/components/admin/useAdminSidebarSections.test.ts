@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { AdminTab, SIDEBAR_EXPANDED_STORAGE_KEY } from './adminSidebarConfig';
-import { useAdminSidebarSections } from './useAdminSidebarSections';
+import { AdminTab, SIDEBAR_COLLAPSED_STORAGE_KEY, SIDEBAR_EXPANDED_STORAGE_KEY } from './adminSidebarConfig';
+import { useAdminSidebarCollapsed, useAdminSidebarSections } from './useAdminSidebarSections';
 
-/** The cross-section jump this hook exists for: aiAgents -> userOps. */
+/** The cross-section jump this hook exists for: aiAgents -> revenue. */
 const LIFECYCLE_SECTION = 'aiAgents';
-const PRICING_SECTION = 'userOps';
+const PRICING_SECTION = 'revenue';
 
 const stored = () => JSON.parse(window.localStorage.getItem(SIDEBAR_EXPANDED_STORAGE_KEY) ?? 'null');
 
@@ -29,6 +29,15 @@ describe('useAdminSidebarSections', () => {
     const { result } = renderHook(() => useAdminSidebarSections(AdminTab.ModelLifecycle));
 
     expect(result.current.isExpanded(LIFECYCLE_SECTION)).toBe(false);
+  });
+
+  it('opens the active section when the stored preference predates it', () => {
+    window.localStorage.setItem(SIDEBAR_EXPANDED_STORAGE_KEY, JSON.stringify({ security: true }));
+
+    const { result } = renderHook(() => useAdminSidebarSections(AdminTab.ModelLifecycle));
+
+    expect(result.current.isExpanded(LIFECYCLE_SECTION)).toBe(true);
+    expect(result.current.isExpanded(PRICING_SECTION)).toBe(false);
   });
 
   it('force-expands the section a cross-section jump lands in', () => {
@@ -78,5 +87,29 @@ describe('useAdminSidebarSections', () => {
 
     act(() => result.current.toggleSection(LIFECYCLE_SECTION));
     expect(stored()).toMatchObject({ [PRICING_SECTION]: true, [LIFECYCLE_SECTION]: false });
+  });
+});
+
+describe('useAdminSidebarCollapsed', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('starts expanded and persists each toggle', () => {
+    const { result } = renderHook(() => useAdminSidebarCollapsed());
+    expect(result.current.collapsed).toBe(false);
+
+    act(() => result.current.toggleCollapsed());
+
+    expect(result.current.collapsed).toBe(true);
+    expect(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY)).toBe('true');
+  });
+
+  it('restores a stored collapse', () => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, 'true');
+
+    const { result } = renderHook(() => useAdminSidebarCollapsed());
+
+    expect(result.current.collapsed).toBe(true);
   });
 });
