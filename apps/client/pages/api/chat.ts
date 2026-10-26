@@ -207,7 +207,13 @@ const handler = nextRouteForContract(chatContract, {
   };
 
   // Daily spend cap: check before quest creation so a capped request never creates a quest.
-  await checkFreeTierDailySpendCap({ user: req.user, req, usageEventRepository, logger: req.logger });
+  await checkFreeTierDailySpendCap({
+    user: req.user,
+    req,
+    billingOrganizationId: organizationId,
+    usageEventRepository,
+    logger: req.logger,
+  });
 
   // Create the quest (this is immediate)
   apiTimer.phase('invoke');

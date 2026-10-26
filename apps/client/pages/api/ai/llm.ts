@@ -89,7 +89,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     const effectiveOrgId = await resolveRequestBillingOrgId(req, invokeParams.organizationId);
 
     // Refuse a capped free-tier turn here, as a 429, rather than letting the quest worker settle it.
-    await checkFreeTierDailySpendCap({ user: req.user, req, usageEventRepository, logger: req.logger });
+    await checkFreeTierDailySpendCap({
+      user: req.user,
+      req,
+      billingOrganizationId: effectiveOrgId,
+      usageEventRepository,
+      logger: req.logger,
+    });
 
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: reqSessionId,

@@ -41,18 +41,24 @@ export async function checkFreeTierDailySpendCap({
   usageEventRepository,
   logger,
   req,
+  billingOrganizationId,
   ...input
 }: CapCheckInput & {
   usageEventRepository: IUsageEventRepository;
   logger: ILogger;
   /** Request memo for the tier lookup, so it reuses the request's subscription reads. */
   req?: ActiveSubscriptionsRequest;
+  /** When set, the turn bills an org rather than the user personally; the personal cap does not apply. */
+  billingOrganizationId?: string | null;
 }): Promise<void> {
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
 
     const enforceCredits = getSettingsValue('enforceCredits', settings) === true;
     if (!enforceCredits) return;
+
+    // Org-billed turns are settled against the org's shared pool, not the user's personal credits.
+    if (billingOrganizationId) return;
 
     // When only a userId is provided, defer the DB read until here so callers that
     // reach this point rarely (paid tier, enforcement off) don't pay it on every request.

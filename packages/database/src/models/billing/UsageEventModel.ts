@@ -702,9 +702,9 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
   }
 
   async findDailySpendByUser(userId: string, since: Date): Promise<number> {
-    // Existing { userId: 1, createdAt: -1 } index covers this query.
+    // {ownerId, ownerType, createdAt} index covers this; ownerType: 'User' excludes org-billed turns.
     const [result] = await this.model.aggregate<{ total: number }>([
-      { $match: { userId, createdAt: { $gte: since } } },
+      { $match: { ownerId: userId, ownerType: 'User', createdAt: { $gte: since } } },
       {
         $group: {
           _id: null,

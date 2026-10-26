@@ -295,6 +295,51 @@ describe('checkFreeTierDailySpendCap', () => {
     expect(findByIdMock).not.toHaveBeenCalled();
   });
 
+  it('skips when billingOrganizationId is set (org-billed turn)', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+
+    const user = makeUser(10 * DAY_MS);
+    findByIdMock.mockResolvedValue(user);
+
+    await expect(
+      checkFreeTierDailySpendCap({
+        userId: user.id,
+        userRepository: mockUserRepo,
+        billingOrganizationId: 'org-abc',
+        usageEventRepository: mockUsageRepo,
+        logger: mockLogger,
+      })
+    ).resolves.toBeUndefined();
+
+    // Should not reach the tier lookup or spend query when the turn is org-billed.
+    expect(resolveUserRateTierMock).not.toHaveBeenCalled();
+    expect(findDailySpendByUserMock).not.toHaveBeenCalled();
+  });
+
+  it('skips when billingOrganizationId is set on a resolved-user call path', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+
+    await expect(
+      checkFreeTierDailySpendCap({
+        user: makeUser(10 * DAY_MS),
+        billingOrganizationId: 'org-xyz',
+        usageEventRepository: mockUsageRepo,
+        logger: mockLogger,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(resolveUserRateTierMock).not.toHaveBeenCalled();
+    expect(findDailySpendByUserMock).not.toHaveBeenCalled();
+  });
+
   it('does not treat an unrelated 429 as the daily cap', () => {
     expect(isFreeTierDailyCapError(new TooManyRequestsError('slow down'))).toBe(false);
   });

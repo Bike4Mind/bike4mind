@@ -165,7 +165,13 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   try {
     // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
-    await checkFreeTierDailySpendCap({ userId, userRepository, usageEventRepository, logger });
+    await checkFreeTierDailySpendCap({
+      userId,
+      userRepository,
+      billingOrganizationId: apiKeyInfo?.organizationId,
+      usageEventRepository,
+      logger,
+    });
 
     // Execute completion - same function as SSE handler
     // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays

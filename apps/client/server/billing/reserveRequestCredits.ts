@@ -117,6 +117,7 @@ export async function reserveRequestCredits({
   await checkFreeTierDailySpendCap({
     user: req.user,
     req,
+    billingOrganizationId,
     usageEventRepository,
     logger: req.logger,
   });
