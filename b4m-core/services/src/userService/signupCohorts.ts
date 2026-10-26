@@ -105,27 +105,44 @@ function findBridgeDomains(domains: readonly string[], edges: readonly CohortEdg
     neighbors.get(a)!.push(b);
     neighbors.get(b)!.push(a);
   }
+  type Frame = { domain: string; parent: string | null; nextNeighbor: number; children: number };
   const order = new Map<string, number>();
   const low = new Map<string, number>();
   const bridges = new Set<string>();
-  const visit = (domain: string, parent: string | null) => {
+  const enter = (domain: string, parent: string | null): Frame => {
     order.set(domain, order.size);
     low.set(domain, order.get(domain)!);
-    let children = 0;
-    for (const next of neighbors.get(domain)!) {
-      if (next === parent) continue;
-      if (order.has(next)) {
-        low.set(domain, Math.min(low.get(domain)!, order.get(next)!));
+    return { domain, parent, nextNeighbor: 0, children: 0 };
+  };
+  for (const root of domains) {
+    if (order.has(root)) continue;
+    const stack: Frame[] = [enter(root, null)];
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      const adjacent = neighbors.get(frame.domain)!;
+      if (frame.nextNeighbor < adjacent.length) {
+        const next = adjacent[frame.nextNeighbor++];
+        if (next === frame.parent) continue;
+        if (order.has(next)) {
+          low.set(frame.domain, Math.min(low.get(frame.domain)!, order.get(next)!));
+        } else {
+          frame.children += 1;
+          stack.push(enter(next, frame.domain));
+        }
         continue;
       }
-      children += 1;
-      visit(next, domain);
-      low.set(domain, Math.min(low.get(domain)!, low.get(next)!));
-      if (parent !== null && low.get(next)! >= order.get(domain)!) bridges.add(domain);
+      stack.pop();
+      if (frame.parent === null) {
+        if (frame.children > 1) bridges.add(frame.domain);
+        continue;
+      }
+      const parentFrame = stack[stack.length - 1];
+      low.set(frame.parent, Math.min(low.get(frame.parent)!, low.get(frame.domain)!));
+      if (parentFrame.parent !== null && low.get(frame.domain)! >= order.get(frame.parent)!) {
+        bridges.add(frame.parent);
+      }
     }
-    if (parent === null && children > 1) bridges.add(domain);
-  };
-  visit(domains[0], null);
+  }
   return [...bridges].sort();
 }
 
@@ -137,20 +154,20 @@ export function groupDomainProfiles(
   profiles: readonly DomainProfile[],
   options: CohortOptions = DEFAULT_COHORT_OPTIONS
 ): SignupGroupingResult {
-  const domainsByKey = new Map<string, { key: ClusterKey; domains: string[] }>();
+  const domainsByKey = new Map<string, { key: ClusterKey; domains: Set<string> }>();
   for (const profile of profiles) {
     for (const key of profile.keys) {
-      const entry = domainsByKey.get(keyId(key)) ?? { key, domains: [] };
-      if (!entry.domains.includes(profile.domain)) entry.domains.push(profile.domain);
+      const entry = domainsByKey.get(keyId(key)) ?? { key, domains: new Set<string>() };
+      entry.domains.add(profile.domain);
       domainsByKey.set(keyId(key), entry);
     }
   }
   const commonKeyList: CommonKey[] = [];
   const linkingKeys = [...domainsByKey.values()].filter(({ key, domains }) => {
-    if (domains.length < 2) return false;
+    if (domains.size < 2) return false;
     const cap = BROAD_KINDS.has(key.kind) ? options.maxDomainsPerKey : options.maxDomainsPerInfraKey;
-    if (domains.length > cap) {
-      commonKeyList.push({ label: key.label, domainCount: domains.length });
+    if (domains.size > cap) {
+      commonKeyList.push({ label: key.label, domainCount: domains.size });
       return false;
     }
     return true;

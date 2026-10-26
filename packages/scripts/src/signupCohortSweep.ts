@@ -111,9 +111,13 @@ export function buildSweepOptions(flags: SweepFlags, defaults: CohortOptions): C
   const userKeyShare = flags['min-user-key-share'];
   return {
     ...defaults,
-    localPartShapes: parseShapes(flags.shapes),
-    ignoredInfrastructureHosts: list(flags['ignore-hosts']),
-    sharedMailboxDomains: list(flags['mailbox-domains']).map(normalizeDomainEntry),
+    localPartShapes: flags.shapes === undefined ? defaults.localPartShapes : parseShapes(flags.shapes),
+    ignoredInfrastructureHosts:
+      flags['ignore-hosts'] === undefined ? defaults.ignoredInfrastructureHosts : list(flags['ignore-hosts']),
+    sharedMailboxDomains:
+      flags['mailbox-domains'] === undefined
+        ? defaults.sharedMailboxDomains
+        : list(flags['mailbox-domains']).map(normalizeDomainEntry),
     minSharedKeyKinds: int('min-shared-key-kinds', defaults.minSharedKeyKinds),
     minDomains: int('min-domains', defaults.minDomains),
     maxDomainsPerKey: int('max-domains-per-key', defaults.maxDomainsPerKey),
@@ -130,9 +134,14 @@ export type SignupSelection = { since?: Date; until?: Date; maxUsers?: number };
 
 /** Validates `--since`, `--until` and `--max-users`. Throws on an invalid value. */
 export function parseSignupSelection(flags: SweepFlags): SignupSelection {
+  const since = flags.since === undefined ? undefined : isoDate.parse(flags.since);
+  const until = flags.until === undefined ? undefined : isoDate.parse(flags.until);
+  if (since && until && since >= until) {
+    throw new Error('--since must be before --until');
+  }
   return {
-    since: flags.since === undefined ? undefined : isoDate.parse(flags.since),
-    until: flags.until === undefined ? undefined : isoDate.parse(flags.until),
+    since,
+    until,
     maxUsers: flags['max-users'] === undefined ? undefined : positiveInt.parse(flags['max-users']),
   };
 }

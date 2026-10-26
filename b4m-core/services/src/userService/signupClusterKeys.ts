@@ -184,12 +184,15 @@ export function signupClusterKeys(
 }
 
 /**
- * Wraps a lookup so each domain is fetched once and any failure resolves to null (fail-open). A failed
- * lookup is not cached, so a later call retries it.
+ * Wraps a lookup so each domain is fetched once and lookup failures resolve to null (fail-open).
+ * Failures are reported and not cached, so a later call retries them. Exceptions from a caller-supplied
+ * error reporter propagate to the caller.
  */
 export function cachedFailOpenLookup(
   lookup: DomainFactsLookup,
-  onError?: (domain: string, error: unknown) => void
+  onError: (domain: string, error: unknown) => void = (domain, error) => {
+    console.warn(`[signup-cluster-keys] Domain facts lookup failed for ${domain}:`, error);
+  }
 ): DomainFactsLookup {
   const cache = new Map<string, Promise<DomainFacts | null>>();
   return domain => {
@@ -199,7 +202,7 @@ export function cachedFailOpenLookup(
       .then(() => lookup(domain))
       .catch((error: unknown) => {
         cache.delete(domain);
-        onError?.(domain, error);
+        onError(domain, error);
         return null;
       });
     cache.set(domain, pending);

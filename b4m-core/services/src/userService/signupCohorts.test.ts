@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { cachedFailOpenLookup, toSignupRecord, type DomainFacts, type SignupFootprint } from './signupClusterKeys';
+import {
+  cachedFailOpenLookup,
+  toSignupRecord,
+  type ClusterKey,
+  type DomainFacts,
+  type SignupFootprint,
+} from './signupClusterKeys';
 import { DEFAULT_COHORT_OPTIONS, findCandidateCohorts, groupDomainProfiles, type CohortOptions } from './signupCohorts';
 
 const OPTIONS: CohortOptions = { ...DEFAULT_COHORT_OPTIONS, localPartShapes: ['alpha+digits'] };
@@ -46,7 +52,7 @@ describe('findCandidateCohorts', () => {
     expect((await findCandidateCohorts(grouped, lookupFrom(FACTS), options)).cohorts).toEqual([]);
   });
 
-  it('never caps infrastructure keys by domain count', async () => {
+  it('does not apply the broad-key cap to infrastructure keys', async () => {
     const { cohorts, commonKeys } = await findCandidateCohorts(grouped, lookupFrom(FACTS), {
       ...OPTIONS,
       maxDomainsPerKey: 1,
@@ -83,7 +89,7 @@ describe('findCandidateCohorts', () => {
     );
   });
 
-  it('groups a long chain of linked domains without overflowing the stack', async () => {
+  it('analyzes a long chain of linked domains without overflowing the stack', () => {
     const count = 20000;
     const profiles = Array.from({ length: count }, (_, i) => ({
       domain: `d${i}.example`,
@@ -95,9 +101,69 @@ describe('findCandidateCohorts', () => {
         { kind: 'ns' as const, value: `ns${i + 1}`, label: `nameservers ns${i + 1}` },
       ],
     }));
-    const { cohorts } = groupDomainProfiles(profiles, OPTIONS);
+    const { cohorts } = groupDomainProfiles(profiles, { ...OPTIONS, maxCohortDomains: count });
     expect(cohorts).toHaveLength(1);
-    expect(cohorts[0].tooBroad).toBe(true);
+    expect(cohorts[0].tooBroad).toBe(false);
+    expect(cohorts[0].bridgeDomains).toEqual(
+      profiles
+        .slice(1, -1)
+        .map(profile => profile.domain)
+        .sort()
+    );
+  });
+
+  it('counts widespread keys by distinct domain, including repeated keys and profiles', () => {
+    const count = 20000;
+    const key: ClusterKey = { kind: 'asn', value: '64500', label: 'signup ASN 64500' };
+    const profiles = Array.from({ length: count }, (_, index) => ({
+      domain: `d${index}.example`,
+      members: [],
+      keys: [key, key],
+    }));
+    const result = groupDomainProfiles([...profiles, profiles[0]], OPTIONS);
+    expect(result).toEqual({ cohorts: [], commonKeys: [{ label: key.label, domainCount: count }] });
+  });
+
+  it.each([
+    {
+      pairs: [
+        ['a', 'b'],
+        ['a', 'c'],
+      ],
+      bridges: ['a.example'],
+    },
+    {
+      pairs: [
+        ['a', 'b'],
+        ['b', 'c'],
+        ['c', 'a'],
+      ],
+      bridges: [],
+    },
+    {
+      pairs: [
+        ['a', 'b'],
+        ['b', 'c'],
+        ['c', 'a'],
+        ['c', 'd'],
+      ],
+      bridges: ['c.example'],
+    },
+  ])('finds articulation domains for $pairs', ({ pairs, bridges }) => {
+    const domains = [...new Set(pairs.flat())];
+    const profiles = domains.map(domain => ({
+      domain: `${domain}.example`,
+      members: [],
+      keys: pairs.flatMap(([left, right], index): ClusterKey[] =>
+        domain === left || domain === right
+          ? [
+              { kind: 'mx', value: `mx${index}`, label: `MX hosts mx${index}` },
+              { kind: 'ns', value: `ns${index}`, label: `nameservers ns${index}` },
+            ]
+          : []
+      ),
+    }));
+    expect(groupDomainProfiles(profiles, OPTIONS).cohorts[0].bridgeDomains).toEqual(bridges);
   });
 
   it('keeps different signup windows in one cohort as separate reasons', () => {
@@ -155,7 +221,11 @@ describe('findCandidateCohorts', () => {
       if (domain === 'quarry.test') throw new Error('lookup unavailable');
       return (FACTS as Record<string, DomainFacts>)[domain] ?? null;
     };
-    const { cohorts } = await findCandidateCohorts(grouped, cachedFailOpenLookup(lookup), OPTIONS);
+    const { cohorts } = await findCandidateCohorts(
+      grouped,
+      cachedFailOpenLookup(lookup, () => undefined),
+      OPTIONS
+    );
     expect(cohorts[0].domains).toEqual(['harbor.example', 'meadow.example']);
   });
 

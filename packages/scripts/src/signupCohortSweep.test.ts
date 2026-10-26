@@ -100,6 +100,36 @@ describe('buildSweepOptions', () => {
     expect(buildSweepOptions({}, defaults)).toEqual(defaults);
   });
 
+  it.each([{ localPartShapes: ['hex'] }, { localPartShapes: 'any' }] as const)(
+    'preserves configured list defaults including $localPartShapes',
+    ({ localPartShapes }) => {
+      const configured = {
+        ...defaults,
+        localPartShapes,
+        ignoredInfrastructureHosts: ['shared-mail.example'],
+        sharedMailboxDomains: ['mailbox.example'],
+      };
+      expect(buildSweepOptions({}, configured)).toEqual(configured);
+    }
+  );
+
+  it('allows explicitly empty flags to clear configured lists', () => {
+    const options = buildSweepOptions(
+      { shapes: '', 'ignore-hosts': '', 'mailbox-domains': '' },
+      {
+        ...defaults,
+        localPartShapes: ['hex'],
+        ignoredInfrastructureHosts: ['shared-mail.example'],
+        sharedMailboxDomains: ['mailbox.example'],
+      }
+    );
+    expect(options).toMatchObject({
+      localPartShapes: [],
+      ignoredInfrastructureHosts: [],
+      sharedMailboxDomains: [],
+    });
+  });
+
   it('applies provided values', () => {
     const options = buildSweepOptions(
       {
@@ -153,6 +183,15 @@ describe('parseSignupSelection', () => {
       maxUsers: 10,
     });
   });
+
+  it.each(['2026-03-01T00:00:00Z', '2026-02-28T00:00:00Z'])(
+    'rejects an empty or reversed range ending at %s',
+    until => {
+      expect(() => parseSignupSelection({ since: '2026-03-01T00:00:00Z', until })).toThrow(
+        '--since must be before --until'
+      );
+    }
+  );
 
   it.each([
     ['since', 'notadate'],

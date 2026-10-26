@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   cachedFailOpenLookup,
   DEFAULT_CLUSTER_KEY_OPTIONS,
@@ -114,12 +114,61 @@ describe('signupClusterKeys', () => {
 });
 
 describe('cachedFailOpenLookup', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   it('looks each domain up once', async () => {
     const lookup = vi.fn(async () => ({ mxHosts: ['mx.mail.example'] }));
     const cached = cachedFailOpenLookup(lookup);
     await cached('a.example');
     await cached('a.example');
     expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports asynchronous lookup failures by default and retries the failed domain', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = new Error('DNS unavailable');
+    const facts = { mxHosts: ['mx.mail.example'] };
+    const lookup = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(facts);
+    const cached = cachedFailOpenLookup(lookup);
+
+    expect(await cached('a.example')).toBeNull();
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      '[signup-cluster-keys] Domain facts lookup failed for a.example:',
+      error
+    );
+    expect(await cached('a.example')).toEqual(facts);
+    expect(lookup).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares an in-flight lookup and reports its failure once', async () => {
+    const error = new Error('DNS unavailable');
+    const lookup = vi.fn(async () => {
+      throw error;
+    });
+    const onError = vi.fn();
+    const cached = cachedFailOpenLookup(lookup, onError);
+    const first = cached('a.example');
+    const second = cached('a.example');
+
+    expect(first).toBe(second);
+    expect(await Promise.all([first, second])).toEqual([null, null]);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledExactlyOnceWith('a.example', error);
+  });
+
+  it('propagates reporter errors and still retries the failed lookup', async () => {
+    const error = new Error('reporter failed');
+    const facts = { nameservers: ['ns.dns.example'] };
+    const lookup = vi.fn().mockRejectedValueOnce(new Error('DNS unavailable')).mockResolvedValueOnce(facts);
+    const onError = vi.fn(() => {
+      throw error;
+    });
+    const cached = cachedFailOpenLookup(lookup, onError);
+
+    await expect(cached('a.example')).rejects.toBe(error);
+    expect(await cached('a.example')).toEqual(facts);
+    expect(lookup).toHaveBeenCalledTimes(2);
   });
 
   it('resolves a failure to null and retries it on the next call', async () => {
