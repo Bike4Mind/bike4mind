@@ -89,7 +89,7 @@ const recordVerdict = (
   recordAdminActionFromRequest(req, {
     action: 'moderation.incident.verdict_recorded',
     target: { kind: 'user', id: incident.userId, displayName: incident.userId },
-    summary: `recorded ${verdict} verdict on moderation incident ${incident.incidentId}`,
+    summary: `recorded verdict on moderation incident ${incident.incidentId}`,
     details: { incidentId: incident.incidentId, verdict, ...details },
   });
 

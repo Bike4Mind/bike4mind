@@ -229,12 +229,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
 
   // Handler coverage: security and trust and safety
-  'security.blocked_ip.added': { category: 'access', severity: 'critical', write: 'strict' },
-  'security.blocked_ip.removed': { category: 'access', severity: 'critical', write: 'strict' },
+  'security.blocked_ip.added': { category: 'access', severity: 'notice', write: 'strict' },
+  'security.blocked_ip.removed': { category: 'access', severity: 'critical', write: 'strict' }, // critical: removing a block lifts a security control
   'security.blocked_ip.auto_added': { category: 'access', severity: 'notice', write: 'strict' },
-  'moderation.incident.verdict_recorded': { category: 'support', severity: 'critical', write: 'strict' },
-  'moderation.published_artifact.taken_down': { category: 'support', severity: 'critical', write: 'strict' },
-  'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'critical', write: 'strict' },
+  'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
