@@ -150,6 +150,7 @@ describe('ClaudeImportService', () => {
     const repository = join(root, 'repo');
     const worktree = join(repository, '.claude', 'worktrees', 'wt');
     await mkdir(worktree, { recursive: true });
+    await mkdir(join(repository, '.manifold', 'worktrees', 'run'), { recursive: true });
     const copy = (id: string, cwd: string, extra: Partial<ChatSession['importOrigin']> = {}): ChatSession => ({
       id,
       title: id,
