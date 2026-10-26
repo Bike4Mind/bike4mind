@@ -4,7 +4,15 @@ import { join } from 'node:path';
 import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
 import type { WorktreeEntry } from './git';
-import { branchExists, containerDirectory, fetchRemoteFor, git, listWorktrees, resolveBaseRef } from './git';
+import {
+  branchExists,
+  containerDirectory,
+  currentBranch,
+  fetchRemoteFor,
+  git,
+  listWorktrees,
+  resolveBaseRef,
+} from './git';
 
 /**
  * A branch's folder name under the app's worktree root.
@@ -154,7 +162,8 @@ export function sessionBranchName(name?: string): string {
  */
 async function baseRefFor(directory: string, base: string): Promise<string> {
   const selected = base || (await resolveBaseRef(directory));
-  if (selected === 'main' || selected === 'origin/main') {
+  const defaultMain = !base && selected === 'HEAD' && (await currentBranch(directory)) === 'main';
+  if (selected === 'main' || selected === 'origin/main' || defaultMain) {
     const remotes = (await git(directory, ['remote'])).trim().split('\n');
     if (remotes.includes('origin')) {
       await fetchRemoteFor(directory, 'origin/main', true);

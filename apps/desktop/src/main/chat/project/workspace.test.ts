@@ -445,6 +445,16 @@ describe('resolveWorkspace choosing what to fork from', () => {
     expect(await headOf(resolved.workingDirectory)).toBe(local);
   });
 
+  it('does not default to local main when its tracking ref is missing and origin is offline', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+
+    await expect(resolveWorkspace(repo, { branch: 'agent/refused' })).rejects.toThrow();
+
+    expect(await branchExists(repo, 'agent/refused')).toBe(false);
+  });
+
   it('keeps an explicit feature base usable while origin is offline', async () => {
     const { repo } = await clonedRepository();
     await git(repo, ['switch', '--quiet', '-c', 'feat/local']);
