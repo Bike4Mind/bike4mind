@@ -192,6 +192,7 @@ import {
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
+import { createSubagentTextDeltaSender } from './agentExecutor.subagentTextDelta';
 import {
   aggregationWakeStartIteration as wakeStartIterationOf,
   aggregationGraceReasonOf,
@@ -1441,6 +1442,10 @@ async function processExecution(
     const approvedTools = [...(execution.approvedTools ?? [])];
     const deniedTools = [...(execution.deniedTools ?? [])];
 
+    const subagentTextDeltas = createSubagentTextDeltaSender(
+      payload => sendWs('subagent_text_delta', { executionId, ...payload }),
+      MAX_STEP_CONTENT
+    );
     const subagentTracker: ServerSubagentTracker = {
       onStart: async info => {
         // Background children are treated as TOP-LEVEL for cap/billing purposes:
@@ -1558,6 +1563,7 @@ async function processExecution(
         return child.id;
       },
       onStep: async ({ childExecutionId, agentName, step, iteration }) => {
+        await subagentTextDeltas.flush(childExecutionId);
         const truncatedStep =
           step.content.length > MAX_STEP_CONTENT
             ? { ...step, content: step.content.slice(0, MAX_STEP_CONTENT) + '\n\n...(truncated)' }
@@ -1581,18 +1587,10 @@ async function processExecution(
       // coalescing many tokens, or a single large code block) cannot exceed
       // the 128KB API Gateway frame limit and get silently dropped by
       // `createWsSender`. Reuses the same ceiling `onStep` enforces.
-      onTextDelta: async ({ childExecutionId, agentName, iteration, delta }) => {
-        for (let offset = 0; offset < delta.length; offset += MAX_STEP_CONTENT) {
-          const chunk = delta.slice(offset, offset + MAX_STEP_CONTENT);
-          await sendWs('subagent_text_delta', {
-            executionId,
-            childExecutionId,
-            agentName,
-            iteration,
-            delta: chunk,
-          });
-        }
-      },
+      //
+      // Sends are chained per child so frames cannot arrive out of order; the
+      // chain itself is never awaited by the orchestrator.
+      onTextDelta: subagentTextDeltas.send,
       onChildProgress: async ({ childExecutionId, status }) => {
         await sendWs('subagent_progress', {
           executionId,
