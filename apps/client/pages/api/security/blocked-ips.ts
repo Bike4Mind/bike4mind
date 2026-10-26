@@ -52,11 +52,12 @@ const handler = baseApi()
     const doc = await withTransaction(async () => {
       const unblocked = await blockedIPRepository.unblock(ip);
       if (unblocked) {
+        // unblock() matches on active alone, so a block past its expiry can still be removed here.
         await recordAdminActionFromRequest(req, {
           action: 'security.blocked_ip.removed',
           target: { kind: 'settings', id: `blocked-ip:${ip}`, displayName: ip },
           summary: `unblocked ip ${ip}`,
-          details: { ip },
+          details: { ip, expiresAt: unblocked.expiresAt, wasExpired: unblocked.expiresAt <= new Date() },
         });
       }
       return unblocked;

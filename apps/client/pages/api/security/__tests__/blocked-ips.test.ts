@@ -36,7 +36,7 @@ const repo = vi.hoisted(() => ({
   list: vi.fn().mockResolvedValue([{ ip: '1.2.3.4' }]),
   block: vi.fn().mockResolvedValue({ ip: '1.2.3.4' }),
   isBlocked: vi.fn().mockResolvedValue(null),
-  unblock: vi.fn().mockResolvedValue({ ip: '1.2.3.4' }),
+  unblock: vi.fn().mockResolvedValue({ ip: '1.2.3.4', expiresAt: new Date(Date.now() + 3_600_000) }),
 }));
 
 const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
@@ -155,8 +155,18 @@ describe('/api/security/blocked-ips - admin gate', () => {
     expect(audit.record.mock.calls[0][1]).toMatchObject({
       action: 'security.blocked_ip.removed',
       target: { kind: 'settings', id: 'blocked-ip:1.2.3.4' },
+      details: { ip: '1.2.3.4', wasExpired: false },
     });
     expect(audit.inTransaction).toEqual([true]);
+  });
+
+  it('DELETE flags an unblock of an already-expired block', async () => {
+    const expiresAt = new Date(Date.now() - 60_000);
+    repo.unblock.mockResolvedValueOnce({ ip: '1.2.3.4', expiresAt });
+    const { req, res } = mocks(ADMIN, { method: 'DELETE', query: { ip: '1.2.3.4' } });
+    await mockRefs.deleteHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(audit.record.mock.calls[0][1].details).toEqual({ ip: '1.2.3.4', expiresAt, wasExpired: true });
   });
 
   it('DELETE records nothing when the IP had no active block', async () => {
