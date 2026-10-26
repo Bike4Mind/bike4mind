@@ -197,13 +197,13 @@ class ChromiumActionTests(unittest.TestCase):
                 ])
 
 
-def live_state_after(pid, deadline=5.0):
-    """Return the pid's /proc state if it is still alive after the deadline, else None.
+def live_state_after(pid, grace=5.0):
+    """Return the pid's /proc state if it is still alive after the grace period, else None.
 
     timeout's group SIGKILL only marks the child; on a loaded runner it can still
     read 'R' when timeout exits, until the scheduler lets it run do_exit.
     """
-    stop = time.monotonic() + deadline
+    stop = time.monotonic() + grace
     while True:
         try:
             state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
@@ -234,13 +234,12 @@ class TimeoutProcessGroupTests(unittest.TestCase):
                 for parent_script in ('"$@" & wait', 'trap "" TERM; "$@" & wait'):
                     with tempfile.TemporaryDirectory() as directory:
                         pid_file = Path(directory) / 'child-pid'
-                        # A shell child starts well inside the 0.5s deadline even on a loaded
-                        # runner (Python's startup did not), and SIG_IGN survives the exec.
+                        # sh starts well inside the 0.5s deadline on a loaded runner; SIG_IGN survives the exec.
                         pid_tmp = shlex.quote(f'{pid_file}.tmp')
                         child = f'trap "" TERM; echo $$ > {pid_tmp}; mv {pid_tmp} {shlex.quote(str(pid_file))}; exec sleep 20'
                         process = subprocess.Popen(
                             ['timeout', *options, 'bash', '-c', parent_script, 'bash', 'sh', '-c', child],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
                         )
                         try:
                             process.communicate(timeout=3)
