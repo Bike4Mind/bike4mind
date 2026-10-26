@@ -28,8 +28,8 @@ describe('admin skin scope', () => {
     expect(solidBg('outside-btn')).not.toBe('var(--joy-palette-admin-ink)');
   });
 
-  // The environment banner sits inside the admin root and must look as it does elsewhere: white title on its color.
-  it('keeps a flat sx color on body-sm text, so the environment banner title stays white', () => {
+  // The skin colors body-sm through a var rather than `color`, so white text on a colored strip survives inside the scope.
+  it('keeps a flat sx color on body-sm text', () => {
     render(
       <AppTheme>
         <Sheet data-admin-surface>
