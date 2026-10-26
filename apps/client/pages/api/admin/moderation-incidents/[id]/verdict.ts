@@ -147,7 +147,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     if (!updated) {
       return res.status(409).json({
         error:
-          'Incident is not a stale confirmed_csam claim without an ncmecReportId (wrong state, submission still in flight, or an a stored reportId exists -- use retry_finish within the 24-hour window if /finish failed; if NCMEC already finalized it, use mark_reported and do not re-file)',
+          'Incident is not a stale confirmed_csam claim without an ncmecReportId (wrong state, submission still in flight, or a stored reportId exists -- use retry_finish within the 24-hour window if /finish failed; if NCMEC already finalized it, use mark_reported and do not re-file)',
       });
     }
     req.logger.info(`[Moderation] incident ${incidentId} requeued from confirmed_csam by admin=${req.user.id}`);
