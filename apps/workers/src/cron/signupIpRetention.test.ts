@@ -68,12 +68,14 @@ describe('signup IP retention adapter', () => {
           updateOne: {
             filter: { _id: 'v4', 'signupMeta.ip': '203.0.113.42' },
             update: { $set: { 'signupMeta.ip': '203.0.113.0' } },
+            timestamps: false,
           },
         },
         {
           updateOne: {
             filter: { _id: 'v6', 'signupMeta.ip': '2001:db8:abcd:12::1' },
             update: { $set: { 'signupMeta.ip': '2001:db8:abcd:0:0:0:0:0' } },
+            timestamps: false,
           },
         },
       ],
@@ -87,12 +89,13 @@ describe('signup IP retention adapter', () => {
       { _id: 'done-v4', signupMeta: { ip: '203.0.113.0' } },
       { _id: 'done-v6', signupMeta: { ip: '2001:db8:abcd:0:0:0:0:0' } },
       { _id: 'odd', signupMeta: { ip: 'not-an-ip' } },
+      { _id: 'colon-junk', signupMeta: { ip: 'a:b' } },
       { _id: 'null', signupMeta: { ip: null } },
     ];
     const logger = { log: vi.fn(), warn: vi.fn() } as unknown as Logger;
     expect(await runSignupIpRetention({ logger })).toMatchObject({ truncatedCount: 0, batches: 0 });
     expect(bulkWrite).not.toHaveBeenCalled();
-    expect(vi.mocked(logger.warn)).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('1 signup IPs'));
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('2 signup IPs'));
   });
 
   it('flushes a write per full batch and one for the remainder', async () => {
