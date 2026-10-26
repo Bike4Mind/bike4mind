@@ -147,7 +147,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     if (!updated) {
       return res.status(409).json({
         error:
-          'Incident is not a stale confirmed_csam claim without an ncmecReportId (wrong state, submission still in flight, or an unfinished report exists -- use retry_finish within the 24-hour window, or mark_reported once it is finalized)',
+          'Incident is not a stale confirmed_csam claim without an ncmecReportId (wrong state, submission still in flight, or an a stored reportId exists -- use retry_finish within the 24-hour window if /finish failed; if NCMEC already finalized it, use mark_reported and do not re-file)',
       });
     }
     req.logger.info(`[Moderation] incident ${incidentId} requeued from confirmed_csam by admin=${req.user.id}`);
@@ -213,7 +213,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
         `[NCMEC] recording retry_finish for incident ${incidentId} failed after NCMEC finalized reportId=${ncmecReportId}: ${(err as Error).message}`
       );
       return res.status(500).json({
-        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the confirmed_csam claim is at least 10 minutes old, use mark_reported with this reportId.`,
+        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. In about 10 minutes, once the claim is stale, use mark_reported with this reportId.`,
         ncmecReportId,
       });
     }
@@ -252,7 +252,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       if (incident.reviewStatus === 'confirmed_csam') {
         return res.status(409).json({
           error: incident.ncmecReportId
-            ? `Incident has an unfinished API report (reportId=${incident.ncmecReportId}) -- use retry_finish within NCMEC's 24-hour window; after it, file by hand on the web form and use mark_reported with the new report id`
+            ? `Incident has a stored API reportId (reportId=${incident.ncmecReportId}) -- if NCMEC already finalized it, use mark_reported with that id and do not re-file; otherwise use retry_finish within NCMEC's 24-hour window, and after it, file by hand on the web form and use mark_reported with the new report id`
             : 'Incident has an API submission in flight or with an unknown outcome -- once it is stale, use mark_reported if NCMEC has a tip, or requeue then record_manual_report if it does not',
         });
       }
@@ -385,7 +385,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
           )
         );
       return res.status(500).json({
-        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the confirmed_csam claim is at least 10 minutes old, use mark_reported with this reportId.`,
+        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. In about 10 minutes, once the claim is stale, use mark_reported with this reportId.`,
         ncmecReportId,
       });
     }
