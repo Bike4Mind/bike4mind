@@ -34,7 +34,7 @@ const handler = baseApi().post(
         target:
           invites.length === 1
             ? { kind: 'settings', id: invites[0].id, displayName: 'registration invite' }
-            : { kind: 'system', id: 'registration_invites', displayName: `${invites.length} registration invites` },
+            : { kind: 'settings', id: 'registration_invites', displayName: `${invites.length} registration invites` },
         summary: `updated ${invites.length} registration invite${invites.length === 1 ? '' : 's'}`,
         details: {
           requested: ids.length,

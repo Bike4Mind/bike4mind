@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -62,7 +63,7 @@ describe('POST /api/reg-invites/update - admin audit', () => {
     expect(h.audit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        target: { kind: 'system', id: 'registration_invites', displayName: '2 registration invites' },
+        target: { kind: 'settings', id: 'registration_invites', displayName: '2 registration invites' },
       })
     );
   });
@@ -93,7 +94,7 @@ describe('POST /api/reg-invites/update - admin audit', () => {
   });
 
   it('rejects a string ids body before any write', async () => {
-    await expect(run('inv-1')).rejects.toThrow();
+    await expect(run('inv-1')).rejects.toBeInstanceOf(BadRequestError);
     expect(h.formatRegInvites).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
   });
