@@ -5,7 +5,7 @@ import {
   IUserDocument,
   IUserRepository,
 } from '@bike4mind/common';
-import { IRegInviteDocument, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
+import { IRegInviteDocument, RegInviteSource, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
 import { ISubscriberRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
@@ -275,9 +275,11 @@ export const registerUser = async (
     }
   }
 
-  // Only a referral invite (issued to a specific inbox) names an inviter; admin bulk codes and
-  // unlimited codes have no single sender to credit.
-  const referredByUserId = invite && !isUnlimitedInvite && invite.email && invite.userId ? invite.userId : null;
+  // Only an invite a user sent through the refer flow names an inviter. Admin bulk codes,
+  // admin-issued subscriber invites and unlimited codes have no sender to credit, and invites
+  // minted before `source` existed are deliberately not attributed.
+  const referredByUserId =
+    invite && !isUnlimitedInvite && invite.source === RegInviteSource.referral && invite.userId ? invite.userId : null;
 
   const invitesPerUserSetting = await db.adminSettings.findBySettingName('ReferralInvitesPerUser');
   const invitesPerUserParsed = settingsMap.ReferralInvitesPerUser.schema.safeParse(invitesPerUserSetting?.settingValue);
