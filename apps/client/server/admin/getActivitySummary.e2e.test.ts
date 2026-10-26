@@ -70,15 +70,16 @@ describe('dashboard activity aggregation', () => {
         metadata: { endpoint: '/api/overwatch/v1/events' },
       })),
       { counterName: 'User API Key Used', datetime: now, metadata: { endpoint: '/api/v1/sessions' } },
+      { counterName: 'User API Key Used', datetime: now },
       { counterName: 'Session Created', datetime: now, metadata: { endpoint: '/api/overwatch/v1/events' } },
     ]);
 
     const result = await getActivitySummary(now);
 
-    expect(result.totalEvents).toBe(2);
+    expect(result.totalEvents).toBe(3);
     expect(result.topEvents.map(({ eventName, count }) => ({ eventName, count }))).toEqual([
+      { eventName: 'User API Key Used', count: 2 },
       { eventName: 'Session Created', count: 1 },
-      { eventName: 'User API Key Used', count: 1 },
     ]);
   });
 

@@ -18,7 +18,8 @@ export async function getActivitySummary(now = new Date()): Promise<AdminActivit
       $match: {
         datetime: { $gte: windowStart, $lte: now },
         counterName: { $type: 'string' },
-        // apiKeyAuth no longer emits these; this drops rows written before it stopped.
+        // apiKeyAuth no longer emits these; this drops rows written before it stopped. Unindexed
+        // field, so delete this clause once those rows age out of the window (a week after release).
         $nor: [{ counterName: UserApiKeyEvents.USED, 'metadata.endpoint': OVERWATCH_INGEST_ENDPOINT }],
       },
     },
