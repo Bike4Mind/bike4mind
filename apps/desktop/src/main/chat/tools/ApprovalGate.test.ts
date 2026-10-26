@@ -56,6 +56,23 @@ describe('ApprovalGate', () => {
     expect(gate.isStanding('session-b', 'bash:rm')).toBeNull();
   });
 
+  it('reports an "always" it did not keep as "once", so callers never record it as standing', async () => {
+    const gate = new ApprovalGate();
+    for (const options of [{ remember: false }, { rememberable: ['run'] }]) {
+      let approvalId = '';
+      const answer = gate.request(
+        'session-a',
+        'bash:rm',
+        new AbortController().signal,
+        id => (approvalId = id),
+        options
+      );
+      gate.resolve(approvalId, { decision: 'always', optionId: 'redirect' });
+      await expect(answer).resolves.toMatchObject({ decision: 'once' });
+    }
+    expect(gate.isStanding('session-a', 'bash:rm')).toBeNull();
+  });
+
   describe('a card waits for an answer', () => {
     afterEach(() => {
       vi.useRealTimers();
