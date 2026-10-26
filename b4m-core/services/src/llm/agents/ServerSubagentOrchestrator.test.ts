@@ -300,7 +300,10 @@ describe('ServerSubagentOrchestrator', () => {
 
       it('still rejects when the pinned model is refused for any reason other than the free-tier gate', async () => {
         const assert = vi.fn(async (modelId: string) => {
-          if (modelId === PAID_ID) throw new Error(`Model "${modelId}" is not accessible and no fallback available`);
+          // A ForbiddenError without the subscription errorCode pins that only that code degrades.
+          if (modelId === PAID_ID) {
+            throw new ForbiddenError(`Model "${modelId}" is not accessible and no fallback available`);
+          }
         });
         const { orchestrator } = makeOrchestrator(assert, [PAID_ID, FREE_ID]);
 

@@ -446,7 +446,9 @@ export class ChatCompletionInvoke {
       const admission = createModelAdmission({
         user: this.user,
         configs: modelConfigurations,
-        getEntitlements: () => this.resolveEntitlementKeys(),
+        // Not resolveEntitlementKeys(): admission must see a failed read to answer the free-tier gate
+        // with a retryable 503 rather than the upgrade prompt; it degrades to [] for other gates itself.
+        getEntitlements: async () => (await this.getEntitlements?.(this.user)) ?? [],
         models: modelInfo,
         enforceCredits: enforceCredits === true,
         freeTierAllowedModels,

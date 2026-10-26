@@ -400,6 +400,20 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     expectErrorWithoutPin('requires a paid plan');
   });
 
+  it('answers a failed entitlement read with a retryable error, not the upgrade prompt', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+
+    const invoke = makeInvoke({ getEntitlements: vi.fn().mockRejectedValue(new Error('subscription DB down')) });
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).toBeNull();
+    expectErrorWithoutPin('Could not verify your plan');
+    expect(mockDb.quests.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reply: expect.stringContaining('requires a paid plan') })
+    );
+  });
+
   it('admits the same model once the caller holds the paid-plan entitlement', async () => {
     mockedGetAvailableModels.mockResolvedValue([successor] as any);
     gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
