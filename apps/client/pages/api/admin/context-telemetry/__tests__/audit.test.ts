@@ -103,6 +103,7 @@ const run = async (bucket: string, method: string, opts: { query?: Record<string
   const mutable = req as unknown as Record<string, unknown>;
   mutable.user = { id: 'admin-1', isAdmin: true };
   mutable.headers = { 'user-agent': 'test' };
+  vi.spyOn(res, 'json');
   await h.handlers[bucket][method](req, res);
   return { req, res };
 };
@@ -129,6 +130,7 @@ describe('context telemetry admin audit', () => {
       target: { kind: 'system', id: QUEST_ID },
     });
     expect(h.updateOne.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+    expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(res.json).mock.invocationCallOrder[0]);
   });
 
   it('does not log a GDPR failure when the audit write throws after a deletion', async () => {
