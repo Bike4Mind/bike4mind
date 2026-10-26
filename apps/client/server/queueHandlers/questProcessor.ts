@@ -53,6 +53,7 @@ import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { operationalBillingAdapters } from '@server/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
 import { IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
@@ -112,6 +113,7 @@ export const getStaticOptions = () => {
       mcpServers: mcpServerRepository,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
+      operationalBilling: operationalBillingAdapters,
       agents: agentRepository,
       skills: skillRepository,
       prompts: promptRepository,

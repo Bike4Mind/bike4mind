@@ -80,6 +80,7 @@ You can customize this list via the `excludedCommands` config option. Setting `a
 - **No CPU/memory limits** — no cgroup or resource isolation.
 - **No process tree isolation** — child processes inherit sandbox restrictions on macOS but are not namespaced.
 - **Excluded commands bypass the sandbox** — docker, podman, and watchman run without restrictions unless you set `allowUnsandboxedCommands: false`.
+- **No container engine access from sandboxed commands** - container engine sockets (Docker, Podman, Colima, Lima, Rancher Desktop, OrbStack) are unreachable unless you set `allowContainerSockets: true`.
 - **Platform-dependent** — Seatbelt and Bubblewrap have different granularity and enforcement mechanisms.
 
 ## Next Steps

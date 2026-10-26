@@ -359,6 +359,13 @@ describe('getDefaultChatCompletionOptions', () => {
     runDecisionToolMock.mockReset();
   });
 
+  it('wires the shared operational billing adapter into tool execution', async () => {
+    const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
+    const { operationalBillingAdapters } = await import('@server/billing/operationalBilling');
+
+    expect(getDefaultChatCompletionOptions().db.operationalBilling).toBe(operationalBillingAdapters);
+  }, 20000);
+
   it('forwards the trusted key and active workspace into the decision host', async () => {
     const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
     const params = {

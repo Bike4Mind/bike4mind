@@ -38,6 +38,7 @@ describe('resolveBridgeWsAuth JWT fallback', () => {
   it('rate-limits the JWT path on the ws bucket, apart from the completions counter', async () => {
     await expect(resolve()).resolves.toEqual({ userId: 'u1', apiKeyId: null });
 
+    expect(verifyJwtToken).toHaveBeenCalledWith('jwt-token', { requireApiAccess: true });
     expect(checkRateLimit).toHaveBeenCalledWith('u1', undefined, { bucket: 'ws' });
   });
 
@@ -65,6 +66,11 @@ describe('resolveBridgeWsAuth API-key check outcome', () => {
     expect(error).toMatchObject({ statusCode: 503, message: 'Authentication temporarily unavailable' });
     expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain('ECONNREFUSED');
     expect(verifyJwtToken).not.toHaveBeenCalled();
+  });
+
+  it('propagates an unavailable live JWT access check as 503', async () => {
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(databaseUnreachable());
+    await expect(resolve()).rejects.toMatchObject({ statusCode: 503 });
   });
 
   it('resolves null for an unknown key that the JWT check also rejects', async () => {

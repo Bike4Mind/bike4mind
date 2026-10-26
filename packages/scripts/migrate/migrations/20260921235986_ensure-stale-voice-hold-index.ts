@@ -11,9 +11,9 @@ const SWEEP_INDEX_KEY = { voiceSessionStartedAt: 1 };
  * `{ voiceSessionStartedAt: { $type: 'date' } }`, which the sweep's `$lt` ranges do not imply, so
  * the planner never chose it and the sweep walked every live session instead.
  *
- * Migration rather than autoIndex, as 20260921235980_ensure-session-origin-channel-index: prod runs
- * DocumentDB, where an index build takes a foreground collection lock. The old index is found by key
- * pattern, not by its auto-derived name, which can differ on DocumentDB; neither autoIndex nor
+ * Migration rather than autoIndex, as 20260921235980_ensure-session-origin-channel-index: autoIndex
+ * builds are fire-and-forget (a failure is silent). The old index is found by key
+ * pattern, not by its auto-derived name, which may differ; neither autoIndex nor
  * createIndexes drops an index the schema stopped declaring.
  *
  * Idempotent: a missing old index is skipped and createIndexes is a no-op for existing indexes.

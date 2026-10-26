@@ -375,10 +375,12 @@ export interface MergeContributedRowsOptions {
  * `builtIn` with `contributed` added, strictly in new territory: a contributed row that names a
  * built-in tag, implying key or priced key must repeat the built-in value (a no-op), and a
  * contributed tag, implication, credit or staff key may not grant a key core already grants (built-in
- * tag names count, since user tags pass through as keys). An implication must start from a key a
- * contributed row grants, and a credit row must sit on a contributed staff key. Every other
- * conflict, reserved key and out-of-range amount is dropped and reported through `onReject`;
- * malformed shapes (non-strings, empty lists) are dropped silently, as codegen already rejects them.
+ * tag names count, since user tags pass through as keys). A key core only pays signup credits on is
+ * not one it grants, so a contribution may grant it; the credit is still paid once. An implication
+ * must start from a key a contributed row grants, and a credit row must sit on a contributed staff
+ * key. Every other conflict, reserved key and out-of-range amount is dropped and reported through
+ * `onReject`; malformed shapes (non-strings, empty lists) are dropped silently, as codegen already
+ * rejects them.
  * This runs at module load, so it never throws.
  */
 export function mergeContributedRows(
@@ -402,7 +404,6 @@ export function mergeContributedRows(
     ...[...coreTags.values()].flatMap(keys => [...keys]),
     ...coreImplied.keys(),
     ...[...coreImplied.values()].flatMap(keys => [...keys]),
-    ...coreCredits.keys(),
     ...coreStaff,
     ...coreTags.keys(),
     ...[...(options.otherCoreKeys ?? [])].map(normalizeTag),

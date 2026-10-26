@@ -439,6 +439,8 @@ export interface BuildToolsArgs {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   config: { [key in LlmTools]?: any };
   model?: string;
+  /** See `ToolContext.servingModel`. */
+  servingModel?: { current: ModelInfo };
   organization?: IOrganizationDocument | null;
   precomputed?: {
     adminSettingsEnforceCredits: boolean;
@@ -956,6 +958,7 @@ export class ToolBuilder {
     agentStore,
     externalTools,
     toolAvailability,
+    servingModel,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
     const tools = buildSharedTools(
       {
@@ -984,6 +987,7 @@ export class ToolBuilder {
         imageProcessorLambdaName: this.deps.imageProcessorLambdaName,
         llm,
         model,
+        servingModel,
         precomputed,
         subagentModels,
         apiKeyTable,

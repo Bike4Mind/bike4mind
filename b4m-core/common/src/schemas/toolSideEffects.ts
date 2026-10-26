@@ -43,6 +43,7 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   deep_research: 'none',
   math_evaluate: 'none',
   current_datetime: 'none',
+  current_model_details: 'none',
   prompt_enhancement: 'none',
   wikipedia_on_this_day: 'none',
   moon_phase: 'none',

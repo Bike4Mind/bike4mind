@@ -80,6 +80,24 @@ Located in the AI category, the Operations Model setting allows administrators t
 - **Image Model** -- The model for image-related operations
 - **Speech Model** -- The model for speech-to-text operations
 
+### Operational Usage Billing
+
+In User Management, search for **Bill Operational Usage**. With **Enforce Credits** on,
+automatic naming, summaries, tagging, knowledge-base query embeddings and file indexing outside
+data lakes debit credits for free-tier users paying for themselves. A user is free tier when
+they have no credit purchase and no active plan, including a plan granted through an organization
+seat.
+
+**Bill Operational Usage** defaults to off. Turning it on also bills paying users and
+organization-funded usage. With **Enforce Credits** off, these operations do not debit credits.
+Data-lake ingestion and research retain their separate billing rules.
+
+If a balance falls while the toggle is off, check whether the user has a purchase or active plan
+and which account pays for the operation. Tool and knowledge-base usage settles after the call,
+so it can take a free-tier balance slightly below zero. File indexing outside data lakes reserves
+credits first; if there are insufficient credits, the file shows an indexing failure. Add credits
+before retrying the upload.
+
 ### Generation Models
 
 Located in the AI category, this card has one section per generation modality (Video and Music), with one switch per model in that modality's catalog. Each switch shows whether the server will accept generation jobs for that model:

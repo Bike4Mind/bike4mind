@@ -41,7 +41,7 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
-import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, TooManyRequestsError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { sendToConnection } from '@server/websocket/utils';
 import { func } from './cliCompletion';
@@ -84,6 +84,7 @@ describe('cliCompletion websocket handler', () => {
   it('rate-limits the JWT path at the cli source, not the default cap', async () => {
     await run();
 
+    expect(verifyJwtToken).toHaveBeenCalledWith('jwt-token', { requireApiAccess: true });
     expect(checkRateLimit).toHaveBeenCalledWith('u1', 'cli');
   });
 
@@ -332,4 +333,20 @@ describe('cliCompletion websocket handler - admin role on the reloaded owner', (
     await run();
     expect(scopeActorOfCall()).toBeUndefined();
   });
+});
+
+it('relays a live CLI access refusal without starting a completion', async () => {
+  vi.clearAllMocks();
+  vi.mocked(verifyJwtToken).mockRejectedValueOnce(
+    new ForbiddenError('CLI and desktop access requires an active paid subscription')
+  );
+  await run();
+  expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  expect(sendToConnection).toHaveBeenCalledWith(
+    'conn-1',
+    'https://example.test/test',
+    expect.objectContaining({
+      error: 'CLI and desktop access requires an active paid subscription',
+    })
+  );
 });

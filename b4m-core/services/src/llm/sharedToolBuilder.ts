@@ -43,6 +43,7 @@ import type { MinimalSessionRepository } from '../conversationContextService/typ
 import { notifyToolFinish } from './toolFinishObserver';
 import { extractMcpPendingAction, type McpPendingAction } from './mcpPendingAction';
 import { JIRA_LIST_ATTACHMENTS, CONFLUENCE_LIST_ATTACHMENTS } from '@bike4mind/mcp/atlassian/constants';
+import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -98,6 +99,8 @@ export interface ToolBuilderDeps {
   imageProcessorLambdaName?: string;
   llm: ICompletionBackend;
   model?: string;
+  /** See `ToolContext.servingModel`. */
+  servingModel?: ToolContext['servingModel'];
   precomputed?: {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
@@ -460,7 +463,8 @@ export function buildSharedTools(
     callbacks.sessionId,
     undefined, // codeMinifier - CLI-only (web-tree-sitter); server path has no minifier
     deps.precomputed?.models,
-    deps.onToolLlmUsage
+    deps.onToolLlmUsage,
+    deps.servingModel
   );
 
   // The tool is inert without a usable config, so the config itself is the availability signal.
@@ -611,9 +615,11 @@ export function buildSharedTools(
   // delegate tool's closure below, so it never appears in the array this function returns and a
   // denylist applied to that array cannot reach it. Without this, a session-forbidden tool stays
   // callable by a dispatched subagent - the same loophole the delegate gate exists to close.
+  // current_model_details is bound to the parent's serving model, so a subagent on another model
+  // must not inherit it (its adapter keeps its own identity line).
   const childTools = [...tools, ...agentOnlyMcpTools];
   const parentTools = (options.wrapChildTools ? options.wrapChildTools(childTools) : childTools).filter(
-    tool => !deniedToolNames.has(tool.toolSchema.name)
+    tool => !deniedToolNames.has(tool.toolSchema.name) && tool.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME
   );
 
   const subagentModels = deps.subagentModels ?? deps.precomputed?.models;

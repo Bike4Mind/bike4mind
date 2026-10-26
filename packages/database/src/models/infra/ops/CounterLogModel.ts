@@ -1299,6 +1299,10 @@ CounterLogSchema.index({ datetime: 1 });
 // Index for user activity analysis
 CounterLogSchema.index({ userId: 1, datetime: 1, counterName: 1 });
 
+// A user's recent activity (findRecentByUserIdAndHasMetadata) sorts by createdAt, not datetime,
+// which callers can set; without this the read sorts every log the user has in memory.
+CounterLogSchema.index({ userId: 1, createdAt: -1 });
+
 // Add compound index for the specific aggregation (optimizes common aggregation queries)
 CounterLogSchema.index({ datetime: 1, counterName: 1, userId: 1 }, { background: true });
 
