@@ -5,6 +5,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   getActiveSubscriptionsForUser,
   getRequestActiveSubscriptions,
+  type ActiveSubscription,
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
@@ -58,10 +59,17 @@ export async function resolveUserRateTier(user: RateTierUser, req?: ActiveSubscr
   const activeSubscriptions =
     req?.user?.id === user.id ? await getRequestActiveSubscriptions(req) : await getActiveSubscriptionsForUser(user.id);
 
-  // Take the HIGHEST ladder tier across active subscriptions. Plans with no
-  // `tier` (standalone single-product plans sold off the main ladder) are not
-  // on the ladder and don't confer a rate tier - they fall through to `free`
-  // unless another active subscription grants one.
+  return ladderRateTier(activeSubscriptions);
+}
+
+/**
+ * The HIGHEST ladder tier across a set of active subscriptions. Plans with no `tier`
+ * (standalone single-product plans sold off the main ladder) are not on the ladder and
+ * don't confer a tier - they fall through to `free` unless another subscription grants one.
+ */
+export function ladderRateTier(
+  activeSubscriptions: readonly Pick<ActiveSubscription, 'priceId'>[]
+): Exclude<UserRateTier, 'bypass'> {
   let highestTier: UserSubscriptionTier | undefined;
   for (const subscription of activeSubscriptions) {
     const planTier = getEntitlingPlanByPriceId(subscription.priceId)?.tier;

@@ -26,6 +26,7 @@ import {
   isKnownApiKeyScope,
 } from '@client/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
+import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {
@@ -146,6 +147,12 @@ const handler = baseApi()
     const userId = req.user?.id;
     const { name, scopes, expiresAt, rateLimit, organizationId, agentId, allowedOrigins, branding, spendCap } =
       req.body;
+
+    // The admin paid-only switch; the same gate re-runs on every use of the key (apiKeyAuth).
+    await assertApiKeyAccessAllowed(
+      req.user,
+      organizationId ? { billingOwnerType: CreditHolderType.Organization, organizationId } : undefined
+    );
 
     // Reject any scope outside the self-service allowlist. ADMIN, CC_BRIDGE, and
     // other dedicated-flow scopes are intentionally absent from USER_API_KEY_SCOPE_VALUES

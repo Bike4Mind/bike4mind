@@ -15,6 +15,18 @@ const mockRefs = vi.hoisted(() => ({
 }));
 
 // A fresh chain per import so rotate and revoke capture their own handler.
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+vi.mock('@server/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    },
+  };
+});
 vi.mock('@server/middlewares/baseApi', () => {
   const makeChain = (slot: 'rotateHandler' | 'revokeHandler') => {
     const chain: any = {
@@ -221,5 +233,16 @@ describe('rotate and revoke - analytics is best effort', () => {
     await mockRefs.revokeHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
+  });
+});
+
+describe('POST /api/user-api-keys/[id]/rotate - paid-only access switch', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('rejects the rotation with 403 and never rotates when the setting denies the caller', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    const { req, res } = post('key-1');
+    await expect(mockRefs.rotateHandler!(req, res)).rejects.toThrow('API keys require an active paid subscription');
+    expect(rotateUserApiKey).not.toHaveBeenCalled();
   });
 });

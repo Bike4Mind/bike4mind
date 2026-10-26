@@ -8,6 +8,18 @@ import {
 } from '@bike4mind/server-utils/utils/errors';
 
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+vi.mock('@server/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    },
+  };
+});
 vi.mock('@server/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
@@ -752,5 +764,53 @@ describe('API-key verification failures (credential miss vs infra failure)', () 
       await expect(rejection).rejects.toBeInstanceOf(UnauthorizedError);
       await expect(rejection).rejects.toMatchObject({ statusCode: 401 });
     });
+  });
+});
+
+describe('api-key paid-only access switch (mirrors apiKeyAuth)', () => {
+  const orgKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.EMBED_CHAT],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    billingOwnerType: CreditHolderType.Organization,
+    organizationId: 'org-1',
+    agentId: 'agent-1',
+  };
+
+  beforeEach(() => {
+    isApiKeyAccessAllowedMock.mockClear();
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_key');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(orgKey);
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue(orgKey);
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('403s verifyApiKey (CLI, WebSocket and contract routes) when the setting denies the owner', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    await expect(verifyApiKey({})).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'API keys require an active paid subscription',
+    });
+  });
+
+  it('gates the embed raw-key and session-token paths by the key owner and paying org', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    await expect(verifyEmbedApiKey({})).rejects.toMatchObject({ statusCode: 403 });
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    await expect(verifyEmbedKeyById('k1')).rejects.toMatchObject({ statusCode: 403 });
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), {
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+    });
+  });
+
+  it('turns an access-check read failure into a 5xx, never a pass', async () => {
+    isApiKeyAccessAllowedMock.mockRejectedValueOnce(new Error('db down'));
+    await expect(verifyApiKey({})).rejects.toMatchObject({ statusCode: 500 });
   });
 });

@@ -2,6 +2,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Unwrap the handler: baseApi().use(...).post(fn) => fn
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+vi.mock('@server/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    },
+  };
+});
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: any = { use: () => chain, post: (fn: any) => fn };
@@ -359,6 +371,20 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(res._getJSONData().error).toBe('access_denied');
     expect(mockCreateUserApiKey).not.toHaveBeenCalled();
     expect(mockAuditCreate).not.toHaveBeenCalled();
+  });
+
+  it('paid-only switch: a user the apiKeyAccess setting denies gets 403 access_denied, no mint', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toEqual({
+      error: 'access_denied',
+      error_description: 'API keys require an active paid subscription',
+    });
+    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    expect(mockRevokeUserApiKey).not.toHaveBeenCalled();
   });
 
   it('AC5: reuse-or-replace revokes the prior exchange key for this (user, client) before minting', async () => {

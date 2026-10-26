@@ -14,11 +14,13 @@ import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcce
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { applyUntrustedRateLimit } from '@server/utils/apiKeyTrust';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
 
 /** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */
 export type RateLimitErrorInfo = {
@@ -226,12 +228,24 @@ function toApiKeyInfo(v: {
  * suspension lands *after* the key exists and must take effect on the surfaces
  * that spend money.
  */
-async function assertOwnerAccountUsable(userId: string) {
-  const user = await User.findById(userId);
+async function assertOwnerAccountUsable(info: ApiKeyInfo) {
+  const user = await User.findById(info.userId);
   if (!user) {
     throw new UnauthorizedError('User not found or banned');
   }
   assertAccountStateUsable(user);
+  // The admin paid-only switch, mirroring apiKeyAuth so every key surface shares it.
+  const accessAllowed = await isApiKeyAccessAllowed(user, {
+    billingOwnerType: info.billingOwnerType,
+    organizationId: info.organizationId,
+  });
+  if (!accessAllowed) {
+    Logger.globalInstance.warn('API key rejected: apiKeyAccess setting denies this owner', {
+      keyId: info.keyId,
+      userId: info.userId,
+    });
+    throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
+  }
   return user;
 }
 
@@ -272,9 +286,9 @@ export async function verifyApiKey(
       });
     }
 
-    const owner = await assertOwnerAccountUsable(validation.userId);
     const info = toApiKeyInfo(validation);
-    // Same untrusted-owner ceiling apiKeyAuth applies, so these surfaces meter the clamped limit too.
+    const owner = await assertOwnerAccountUsable(info);
+    // Apply the trust ceiling only after the access policy has accepted the owner.
     return { ...info, rateLimit: await applyUntrustedRateLimit(owner, info) };
   } catch (error) {
     throw toApiKeyAuthError(error);
@@ -350,7 +364,7 @@ export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
 
     const info = toApiKeyInfo(validation);
     assertEmbedCredential(info);
-    await assertOwnerAccountUsable(info.userId);
+    await assertOwnerAccountUsable(info);
     return info;
   } catch (error) {
     throw toApiKeyAuthError(error);

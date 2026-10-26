@@ -15,6 +15,18 @@ const refs = vi.hoisted(() => ({
   resolveTrust: vi.fn(),
 }));
 
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+vi.mock('@server/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    },
+  };
+});
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
     use: () => chain,
@@ -33,6 +45,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   CcBridgeDevice: { deleteOne: refs.deviceDeleteOne },
+  User: { findById: async (id: string) => ({ id }) },
   agentRepository: {},
   ccBridgeDeviceRepository: { create: refs.createDevice },
   ccBridgePairingTokenRepository: {
@@ -222,6 +235,25 @@ describe('POST /api/cc-bridge/redeem', () => {
     const res = await redeem(body);
     expect(res._getStatusCode()).toBe(400);
     expect(refs.findCandidates).not.toHaveBeenCalled();
+    expect(refs.createKey).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/cc-bridge/redeem - paid-only access switch', () => {
+  beforeAll(async () => {
+    tokenHash = await bcrypt.hash(TOKEN, 4);
+  });
+
+  beforeEach(() => {
+    refs.findCandidates.mockResolvedValue([record()]);
+    refs.createKey.mockReset();
+  });
+
+  it('403s and mints nothing when the setting denies the token owner', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    const res = await redeem(validBody);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toEqual({ error: 'API keys require an active paid subscription' });
     expect(refs.createKey).not.toHaveBeenCalled();
   });
 });

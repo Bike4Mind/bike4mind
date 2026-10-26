@@ -7,6 +7,7 @@ import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { notifyApiKeyRotationReown } from '@server/utils/apiKeyRotationNotifier';
+import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
@@ -14,6 +15,9 @@ const handler = baseApi().post(
     const keyId = req.query.id;
 
     if (!keyId) throw new BadRequestError('Invalid key ID');
+
+    // Rotation mints a fresh secret, so it is a mint for the admin paid-only switch.
+    await assertApiKeyAccessAllowed(req.user);
 
     const rotatedKey = await userApiKeyService.rotateUserApiKey(
       userId,
