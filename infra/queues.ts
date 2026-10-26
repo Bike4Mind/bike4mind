@@ -1698,7 +1698,7 @@ export const contributedQueues: Record<
   contributedQueuePartition.registered.map(spec => {
     const pair = buildQueuePair<$util.Output<string>>(contributedQueuePairOptions(spec));
     const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs);
-    // partitionContributedQueues only registers durations in the form QueueArgs accepts.
+    // partitionContributedQueues only registers durations QueueArgs accepts, within the SQS 12-hour ceiling.
     const queue = new sst.aws.Queue(pair.name, pair.queueArgs(dlq.arn) as sst.aws.QueueArgs);
     return [spec.name, { spec, queue, dlq }];
   })

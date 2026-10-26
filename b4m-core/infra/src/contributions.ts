@@ -147,8 +147,21 @@ export function describeDroppedContributions(kind: string, result: PartitionedCo
 
 const QUEUE_NAME_PATTERN = /^[a-z][A-Za-z0-9]*$/;
 const DLQ_LABEL_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-// The duration forms sst.aws.Queue accepts for visibilityTimeout.
-const VISIBILITY_TIMEOUT_PATTERN = /^\d+ (second|minute|hour)s?$/;
+// The duration forms sst.aws.Queue accepts for visibilityTimeout, capped at the SQS 12-hour ceiling.
+const VISIBILITY_TIMEOUT_PATTERN = /^(\d+) (second|minute|hour)s?$/;
+const SECONDS_PER_UNIT = { second: 1, minute: 60, hour: 3600 } as const;
+const MAX_VISIBILITY_TIMEOUT_SECONDS = 43200;
+
+function isValidVisibilityTimeout(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const match = VISIBILITY_TIMEOUT_PATTERN.exec(value);
+  if (!match) return false;
+  const seconds = Number(match[1]) * SECONDS_PER_UNIT[match[2] as keyof typeof SECONDS_PER_UNIT];
+  return seconds <= MAX_VISIBILITY_TIMEOUT_SECONDS;
+}
+
+const isIntBetween = (value: unknown, min: number, max: number): boolean =>
+  typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 // infra/dlqAlarms.ts names the alarm pipeline's own DLQ alarms as if this were a label.
 const RESERVED_DLQ_LABELS = new Set(['alarm-handler-dlq']);
 
@@ -233,8 +246,9 @@ export function partitionContributedQueues(
     const valid =
       names.every(n => typeof n === 'string' && QUEUE_NAME_PATTERN.test(n)) &&
       names[0] !== names[1] &&
-      typeof spec.visibilityTimeout === 'string' &&
-      VISIBILITY_TIMEOUT_PATTERN.test(spec.visibilityTimeout) &&
+      isValidVisibilityTimeout(spec.visibilityTimeout) &&
+      (spec.retry === undefined || isIntBetween(spec.retry, 1, 1000)) &&
+      (spec.dlqMessageRetentionSeconds === undefined || isIntBetween(spec.dlqMessageRetentionSeconds, 60, 1209600)) &&
       typeof label === 'string' &&
       DLQ_LABEL_PATTERN.test(label) &&
       !RESERVED_DLQ_LABELS.has(label);

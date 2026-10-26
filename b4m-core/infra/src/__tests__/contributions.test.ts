@@ -149,10 +149,21 @@ describe('partitionContributedQueues', () => {
     ['a non-kebab label', { label: 'Example Job' }],
     ['the reserved alarm pipeline label', { label: 'alarm-handler-dlq' }],
     ['a duration sst.aws.Queue rejects', { visibilityTimeout: '6m' }],
+    ['a visibility timeout above 12 hours', { visibilityTimeout: '13 hours' }],
+    ['a visibility timeout of 43201 seconds', { visibilityTimeout: '43201 seconds' }],
+    ['a retry of zero', { retry: 0 }],
+    ['a retry above 1000', { retry: 1001 }],
+    ['a DLQ retention below 60 seconds', { dlqMessageRetentionSeconds: 59 }],
+    ['a DLQ retention above 14 days', { dlqMessageRetentionSeconds: 1209601 }],
     ['a name whose env form is a reserved variable', { name: 'awsRegion' }],
     ['a DLQ name whose env form has a reserved prefix', { dlqName: 'nodeOptionsDLQ' }],
   ])('rejects %s', (_what, over) => {
     expect(dropped(queue(over)).rejected).toHaveLength(1);
+  });
+
+  it('registers a pair at the SQS limits', () => {
+    const limits = queue({ visibilityTimeout: '12 hours', retry: 1000, dlqMessageRetentionSeconds: 1209600 });
+    expect(partitionContributedQueues([limits], core).registered).toEqual([limits]);
   });
 
   it('keeps the first of two pairs sharing a name, DLQ name or label', () => {

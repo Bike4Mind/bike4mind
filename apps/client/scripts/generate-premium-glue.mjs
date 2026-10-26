@@ -1824,7 +1824,7 @@ function readInfraResources(pkg) {
     return q[field];
   };
   const isString = v => typeof v === 'string';
-  const isNonNegativeInt = v => Number.isInteger(v) && v >= 0;
+  const isIntBetween = (min, max) => v => Number.isInteger(v) && v >= min && v <= max;
   const queues = list('queues').map(q => {
     for (const field of ['name', 'visibilityTimeout', 'label', 'displayName', 'application']) {
       if (typeof q[field] !== 'string') fail(`queue ${field} must be a string`);
@@ -1834,10 +1834,15 @@ function readInfraResources(pkg) {
       name: q.name,
       dlqName: optional(q, 'dlqName', isString, 'a string'),
       visibilityTimeout: q.visibilityTimeout,
-      retry: optional(q, 'retry', isNonNegativeInt, 'a non-negative integer'),
+      retry: optional(q, 'retry', isIntBetween(1, 1000), 'an integer from 1 to 1000'),
       encryption: optional(q, 'encryption', v => ['kms', 'sse-sqs', 'none'].includes(v), "'kms', 'sse-sqs' or 'none'"),
       dlqEncryption: optional(q, 'dlqEncryption', v => ['kms', 'none'].includes(v), "'kms' or 'none'"),
-      dlqMessageRetentionSeconds: optional(q, 'dlqMessageRetentionSeconds', isNonNegativeInt, 'a non-negative integer'),
+      dlqMessageRetentionSeconds: optional(
+        q,
+        'dlqMessageRetentionSeconds',
+        isIntBetween(60, 1209600),
+        'an integer from 60 to 1209600'
+      ),
       tags: tags === undefined ? undefined : Object.fromEntries(Object.entries(tags)),
       label: q.label,
       displayName: q.displayName,
