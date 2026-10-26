@@ -6,7 +6,13 @@ import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { isTurnBudgetStop, lastBoundaryIndex, type ChatMessage, type ChatUsage } from '@shared/chat';
+import {
+  isTurnBudgetStop,
+  lastBoundaryIndex,
+  SESSION_EXPIRED_STOP,
+  type ChatMessage,
+  type ChatUsage,
+} from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
 import { CopyMessageButton, revealCopyButtonSx } from './CopyMessageButton';
@@ -68,6 +74,20 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
       <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-context-limit-chip">
         Stopped - this conversation filled the model's context. Start a new one to carry on.
       </Chip>
+    );
+  }
+  if (reason === SESSION_EXPIRED_STOP) {
+    return (
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }} flexWrap="wrap" useFlexGap>
+        <Chip size="sm" color="neutral" variant="soft" data-testid="chat-session-expired-chip">
+          Paused - sign in again, then continue
+        </Chip>
+        {onContinue && (
+          <Button size="sm" variant="soft" color="primary" onClick={onContinue} data-testid="chat-continue-reply-btn">
+            Continue
+          </Button>
+        )}
+      </Stack>
     );
   }
   if (reason === 'aborted') {
@@ -296,7 +316,8 @@ const AssistantTurn = memo(function AssistantTurn({
           got there. `content` has already had the markup removed, so nothing is shown twice. */}
       <ArtifactList artifacts={message.artifacts ?? []} />
 
-      {message.error && (
+      {/* A paused turn says so in its stop row; the window's re-auth notice carries the why. */}
+      {message.error && message.stopReason !== SESSION_EXPIRED_STOP && (
         <Alert size="sm" color="danger" variant="soft" sx={{ mt: 1 }} data-testid="chat-message-error">
           {message.error}
         </Alert>
@@ -616,6 +637,7 @@ export function MessageThread({
   messages,
   sessionId,
   noSession,
+  emptySession,
   streaming,
   onRespond,
   onMove,
@@ -632,6 +654,8 @@ export function MessageThread({
    * user to "send a message" while the composer refused to take one.
    */
   noSession?: ReactNode;
+  /** Replaces the ordinary invitation for an existing session whose transcript is still empty. */
+  emptySession?: ReactNode;
   /**
    * A reply is in flight for this conversation, however this window came to know it - so there
    * is nothing to resume, and the live line belongs at the foot of the last turn.
@@ -717,8 +741,13 @@ export function MessageThread({
 
   if (empty) {
     return (
-      <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 3 }}>
-        {sessionId ? (
+      <Box
+        sx={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'safe center', p: 3, ...scrollingColumnHostSx }}
+        data-testid="chat-thread-empty-host"
+      >
+        {sessionId && emptySession ? (
+          emptySession
+        ) : sessionId ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-empty">
             Send a message to start this conversation.
           </Typography>

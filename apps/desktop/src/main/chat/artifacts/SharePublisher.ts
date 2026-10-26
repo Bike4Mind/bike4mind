@@ -5,6 +5,8 @@ import {
   ALLOWED_MIME_EXACT,
   ArtifactTypeSchema,
   PUBLISH_LIMITS,
+  PUBLISH_RATE_LIMITED,
+  publishRateLimitMessage,
   SCOPE_URL_PREFIX,
   type ArtifactType,
   ValidationViolationSchema,
@@ -304,17 +306,23 @@ function toViolations(data: unknown): ValidationViolation[] | undefined {
 }
 
 /**
- * `checkPublishQuota` answers 4xx with a `code`, and reaching a cap is a normal thing to have
- * happened rather than something that went wrong, so it reads as one.
+ * `checkPublishQuota` and the daily publish allowance answer 4xx with a `code`, and reaching a cap
+ * is a normal thing to have happened rather than something that went wrong, so it reads as one.
  */
 function toQuotaRejection(err: unknown): ChatArtifactPublish | null {
   if (!isAxiosError(err)) return null;
   const body = asRecord(err.response?.data);
   const code = typeof body?.code === 'string' ? body.code : undefined;
+  if (code === PUBLISH_RATE_LIMITED) {
+    const retryAfter = typeof body?.retryAfter === 'number' ? body.retryAfter : undefined;
+    const fallback =
+      retryAfter === undefined ? "You've published a lot today. Try again later." : publishRateLimitMessage(retryAfter);
+    return { status: 'quota', reason: serverMessage(err) ?? fallback };
+  }
   if (!code?.toLowerCase().includes('quota')) return null;
   return {
     status: 'quota',
-    reason: serverMessage(err) ?? 'You have reached your published-artifact limit. Remove a publication to make room.',
+    reason: serverMessage(err) ?? 'You have reached your published-storage limit. Remove a publication to make room.',
   };
 }
 

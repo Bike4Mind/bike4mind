@@ -1,5 +1,12 @@
-import { ModelBackend, successorCostDelta, type IModelDiscoveryState, type ModelRecord } from '@bike4mind/common';
-import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
+import {
+  ModelBackend,
+  successorCostDelta,
+  type IModelCatalogRow,
+  type IModelDiscoveryState,
+  type ModelInfo,
+  type ModelRecord,
+} from '@bike4mind/common';
+import { mergeCatalogWithDrops, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials, testRecord } from './__fixtures__/fakes';
 import { planCatalogWrites, type CatalogWritePlan } from './catalogWrite';
@@ -346,6 +353,63 @@ describe('planLifecycle absence graduation', () => {
     });
     expect(result.rows[0].patch).toMatchObject({ lifecycle: { status: 'deprecated', deprecationDate: '2026-07-26' } });
     expect(result.diff[0]).toMatchObject({ modelId: 'gpt-5', kind: 'updated', changedKeys: ['lifecycle'] });
+  });
+
+  it('keeps the superseded row credits on the row it appends', () => {
+    const held = new Map<string, ResolvedCatalogRecord>([
+      [
+        'gpt-5',
+        {
+          modelId: 'gpt-5',
+          record: {
+            ...testRecord({ id: 'gpt-5', name: 'GPT-5' }),
+            lifecycle: { status: 'discovered' },
+            autoDisabled: true,
+            autoDisabledReason: 'not entitled in this AWS account',
+          },
+          ownedGroups: ['identity', 'lifecycle', 'availability'],
+        },
+      ],
+    ]);
+    const credits = [
+      { group: 'identity' as const, source: 'bedrock' },
+      { group: 'lifecycle' as const, source: 'bedrock' },
+      { group: 'availability' as const, source: 'bedrock' },
+    ];
+
+    const result = plan({
+      base: held,
+      priorDiscoveryGroups: new Map([['gpt-5', ['identity', 'lifecycle', 'availability'] as const]]),
+      priorContributors: new Map([['gpt-5', credits]]),
+      missed: ['gpt-5'],
+      statesBeforeRun: new Map([['gpt-5', state({ modelId: 'gpt-5', missCount: 2, firstMissAt: twoDaysAgo })]]),
+    });
+
+    expect(result.rows[0].contributors).toEqual(expect.arrayContaining(credits));
+
+    // Blanket-crediting discovery would let the read path reclaim the group as its own verdict and
+    // serve a model the provider declared uncallable.
+    const curated: ModelInfo = {
+      id: 'gpt-5' as ModelInfo['id'],
+      type: 'text',
+      name: 'GPT-5',
+      backend: ModelBackend.OpenAI,
+      contextWindow: 400_000,
+      max_tokens: 8_192,
+      pricing: {},
+      can_stream: true,
+      supportsTools: true,
+      supportsImageVariation: false,
+      rank: 1,
+      description: 'the curated description',
+    };
+    const { models } = mergeCatalogWithDrops([curated], result.rows as unknown as IModelCatalogRow[], {
+      apiKeys: null,
+      isSelfHost: false,
+      bedrockReachable: true,
+    });
+
+    expect(models[0]).toMatchObject({ disabled: true, disabledReason: 'not entitled in this AWS account' });
   });
 
   it('folds the graduation into a catalog row the same run already planned', () => {

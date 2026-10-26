@@ -1,7 +1,16 @@
 import { Logger } from '@bike4mind/observability';
 import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import axios from 'axios';
-import { ImageModels, BFL_SAFETY_TOLERANCE, isBflUltraImageModel, toNonWebpOutputFormat } from '@bike4mind/common';
+import {
+  ImageModels,
+  BFL_SAFETY_TOLERANCE,
+  type BFLImageModel,
+  isBflUltraImageModel,
+  isFlux2ImageModel,
+  getMaxReferenceImages,
+  supportsPromptUpsampling,
+  toNonWebpOutputFormat,
+} from '@bike4mind/common';
 import { redactErrorForLog } from './redactErrorForLog';
 
 export class BFLImageService extends AIImageService {
@@ -49,11 +58,12 @@ export class BFLImageService extends AIImageService {
       height = 768,
       aspect_ratio = '16:9',
       image_prompt,
+      reference_images = [],
       ...modelSpecificOptions
     }: {
       n?: number;
       user?: string;
-      model?: ImageModels.FLUX_PRO | ImageModels.FLUX_PRO_1_1 | ImageModels.FLUX_PRO_ULTRA;
+      model?: BFLImageModel;
       safety_tolerance?: number;
       prompt_upsampling?: boolean;
       seed?: number | null;
@@ -62,10 +72,28 @@ export class BFLImageService extends AIImageService {
       height?: number;
       aspect_ratio?: string;
       image_prompt?: string;
+      reference_images?: string[];
       [key: string]: unknown;
     }
   ): Promise<string[]> {
     try {
+      const referenceImages = [...new Set([...(image_prompt ? [image_prompt] : []), ...reference_images])];
+      if (reference_images.length && !isFlux2ImageModel(model)) {
+        throw new Error(`Model ${model} does not support multiple reference images`);
+      }
+      if (isFlux2ImageModel(model) && referenceImages.length > getMaxReferenceImages(model)) {
+        throw new Error(`Model ${model} accepts at most ${getMaxReferenceImages(model)} reference images`);
+      }
+      const referenceFields = isFlux2ImageModel(model)
+        ? Object.fromEntries(
+            referenceImages.map((image, index) => [index === 0 ? 'input_image' : `input_image_${index + 1}`, image])
+          )
+        : { image_prompt };
+      const promptUpsamplingFields = !supportsPromptUpsampling(model)
+        ? {}
+        : isFlux2ImageModel(model) && model !== ImageModels.FLUX_2_FLEX
+          ? { disable_pup: !prompt_upsampling }
+          : { prompt_upsampling };
       // Generate n images in parallel
       const urls = await Promise.all(
         Array.from({ length: n }).map(async () => {
@@ -74,7 +102,6 @@ export class BFLImageService extends AIImageService {
             prompt: string;
             image_prompt?: string;
             safety_tolerance: number;
-            prompt_upsampling: boolean;
             seed: number | null;
             output_format: string;
             user: string;
@@ -85,11 +112,11 @@ export class BFLImageService extends AIImageService {
           } = {
             prompt,
             safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
-            prompt_upsampling,
             seed,
-            image_prompt,
             output_format: output_format || 'jpeg',
             ...modelSpecificOptions,
+            ...referenceFields,
+            ...promptUpsamplingFields,
             user,
           };
 
@@ -111,16 +138,20 @@ export class BFLImageService extends AIImageService {
 
           const cleanedBody = this.stripNullFields(requestBody);
           // .log(), not .debug(), so the actual outbound payload is visible at the default log
-          // level. prompt is truncated and image_prompt redacted, matching every other prompt log
+          // level. prompt is truncated and the reference image redacted, matching every other prompt log
           // on this path (route: promptPreview.substring(0,100); GeminiImageService: same) -
           // logging full user prompts at the default level is a different posture than diagnosing
           // params, which is all this needed.
           const safeRequestBody = {
             ...cleanedBody,
             prompt: prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt,
-            ...(cleanedBody.image_prompt
-              ? { image_prompt: `[BASE64_DATA_${(cleanedBody.image_prompt as string).length}_CHARS]` }
-              : {}),
+            ...Object.fromEntries(
+              Object.entries(cleanedBody)
+                .filter(
+                  ([key, value]) => /^(?:image_prompt|input_image(?:_\d+)?)$/.test(key) && typeof value === 'string'
+                )
+                .map(([key, value]) => [key, `[BASE64_DATA_${String(value).length}_CHARS]`])
+            ),
           };
           Logger.globalInstance.log('BFL Image generation request body:', safeRequestBody);
 

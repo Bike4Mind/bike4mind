@@ -95,7 +95,7 @@ export async function persistArtifact(
       let existingArtifactId: string | null = null;
       if (sessionId && artifact.type === 'react' && artifact.identifier) {
         try {
-          existingArtifactId = await findArtifactIdByIdentifier('react', artifact.identifier, sessionId);
+          existingArtifactId = await findExistingArtifactId('react', artifact.identifier, sessionId);
           if (existingArtifactId) {
             console.log(`📦 [ARTIFACTS] Found existing React artifact in session: ${existingArtifactId}`);
           }
@@ -243,18 +243,28 @@ export async function findExistingArtifactId(
       },
     });
 
-    const artifacts = response.data?.artifacts || [];
+    const artifacts: unknown[] = Array.isArray(response.data?.artifacts) ? response.data.artifacts : [];
 
     // Find the artifact that matches our identifier
     // The identifier is embedded in the artifact ID: artifact_{type}_{identifier}_{timestamp}_{index}
-    const matchingArtifact = artifacts.find((artifact: any) => {
-      const idParts = artifact.id.split('_');
-      // artifact ID format: artifact_{type}_{identifier}_{timestamp}_{index}
-      if (idParts.length >= 3) {
-        const artifactIdentifier = idParts[2];
-        return artifactIdentifier === identifier;
+    const matchingArtifact = artifacts.find((artifact): artifact is { id: string } => {
+      if (typeof artifact !== 'object' || artifact === null || !('id' in artifact) || typeof artifact.id !== 'string') {
+        return false;
       }
-      return false;
+      if ('identifier' in artifact && artifact.identifier !== undefined) return false;
+      const metadata = 'metadata' in artifact ? artifact.metadata : undefined;
+      if (
+        typeof metadata === 'object' &&
+        metadata !== null &&
+        'originalIdentifier' in metadata &&
+        metadata.originalIdentifier !== undefined
+      ) {
+        return false;
+      }
+      const prefix = `artifact_${type}_`;
+      if (!artifact.id.startsWith(prefix)) return false;
+      const artifactIdentifier = /^(.+)_\d+_\d+$/.exec(artifact.id.slice(prefix.length))?.[1];
+      return artifactIdentifier === identifier;
     });
 
     return matchingArtifact?.id || null;

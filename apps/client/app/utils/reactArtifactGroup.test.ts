@@ -56,6 +56,24 @@ describe('groupReactArtifacts', () => {
     expect(roles.get(panel)).toEqual({ role: 'sibling', entryTitle: 'App title' });
   });
 
+  it.each(['__proto__', 'constructor', 'toString'])(
+    'keeps the sibling identifier %s as an own file key',
+    identifier => {
+      const app = artifact('App', component('App', [`import Panel from './${identifier}';`]));
+      const panel = artifact(identifier, component('Panel'));
+      const roles = groupReactArtifacts([app, panel]);
+      const entry = roles.get(app);
+
+      expect(entry?.role).toBe('entry');
+      if (entry?.role !== 'entry') throw new Error('Expected the app to be grouped as an entry');
+      expect(Object.keys(entry.files)).toEqual([identifier]);
+      expect(Object.prototype.hasOwnProperty.call(entry.files, identifier)).toBe(true);
+      expect(entry.files[identifier]).toBe(panel.content);
+      expect(entry.siblings).toEqual([{ identifier, title: panel.title }]);
+      expect(roles.get(panel)).toEqual({ role: 'sibling', entryTitle: app.title });
+    }
+  );
+
   it('lets the last occurrence of a repeated identifier win, whatever the array order', () => {
     const app = artifact('app', component('App', ["import Widget from './Widget';"]));
     const draft = artifact('widget', component('Draft'));

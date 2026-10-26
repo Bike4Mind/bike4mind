@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
 
 const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
@@ -292,5 +292,34 @@ describe('cliCompletion websocket handler - API-key check outcome', () => {
     });
     expect(frame).not.toHaveProperty('retryAfter');
     expect(verifyJwtToken).toHaveBeenCalled();
+  });
+});
+
+describe('cliCompletion websocket handler - admin role on the reloaded owner', () => {
+  type ScopeActor = (<U extends { isAdmin?: boolean }>(actor: U) => U) | undefined;
+  const scopeActorOfCall = (): ScopeActor => mockExecuteCompletion.mock.calls[0][0].scopeActor;
+  const asKey = (scopes: ApiKeyScope[]) =>
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({ userId: 'u1', keyId: 'k1', scopes } as never);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecuteCompletion.mockResolvedValue(undefined);
+  });
+
+  it('withholds an admin owner role for a key without the admin scope', async () => {
+    asKey([ApiKeyScope.AI_CHAT]);
+    await run();
+    expect(scopeActorOfCall()?.({ isAdmin: true }).isAdmin).toBe(false);
+  });
+
+  it('keeps the role for a key with the admin scope', async () => {
+    asKey([ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN]);
+    await run();
+    expect(scopeActorOfCall()).toBeUndefined();
+  });
+
+  it('keeps the role for a JWT session', async () => {
+    await run();
+    expect(scopeActorOfCall()).toBeUndefined();
   });
 });

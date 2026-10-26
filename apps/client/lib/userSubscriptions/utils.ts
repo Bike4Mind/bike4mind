@@ -33,7 +33,7 @@ export function getSubscriptionPlanByPriceId(priceId: string) {
  */
 export function getEntitlingPlanByPriceId(
   priceId: string
-): Pick<SubscriptionPlanDetail, 'priceId' | 'name' | 'interval' | 'tier'> | undefined {
+): (Pick<SubscriptionPlanDetail, 'priceId' | 'name' | 'interval' | 'tier'> & { credits?: number }) | undefined {
   if (!priceId) return undefined;
   return SUBSCRIPTION_PLANS_MAP[priceId] ?? (priceId === TEAM_PLAN.priceId ? TEAM_PLAN : undefined);
 }

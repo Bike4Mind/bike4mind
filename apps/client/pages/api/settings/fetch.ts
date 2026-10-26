@@ -1,5 +1,11 @@
 import { AdminSettings } from '@bike4mind/database/infra';
-import { redactSettingSecrets, settingsMap, userReadableSettingKeys, type AdminSettingDoc } from '@bike4mind/common';
+import {
+  allSettingDefinitions,
+  redactSettingSecrets,
+  settingsMap,
+  userReadableSettingKeys,
+  type AdminSettingDoc,
+} from '@bike4mind/common';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensurePublicSettingsArtifactOncePerInstance } from '@server/utils/publicSettingsArtifact';
@@ -18,9 +24,7 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
   // among them: operational config and a staff-to-Slack identity map, none of it
   // `isSensitive`, none of it the caller's business. See userReadableSettingKeys().
   const isAdmin = req.user?.isAdmin === true;
-  const permittedKeys = isAdmin
-    ? (Object.values(settingsMap) as Array<{ key: string }>).map(s => s.key)
-    : userReadableSettingKeys();
+  const permittedKeys = isAdmin ? allSettingDefinitions().map(s => s.key) : userReadableSettingKeys();
 
   // Only fetch the specific settings that users are allowed to see
   const settings = await AdminSettings.find({ settingName: { $in: permittedKeys } }).lean();

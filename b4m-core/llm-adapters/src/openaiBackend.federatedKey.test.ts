@@ -1,5 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { OPENAI_FEDERATED_KEY, OpenAIBackend, githubActionsIdToken } from './openaiBackend';
+
+const stsSend = vi.hoisted(() => vi.fn());
+vi.mock('@aws-sdk/client-sts', () => ({
+  STSClient: vi.fn().mockImplementation(function () {
+    return { send: stsSend };
+  }),
+  GetWebIdentityTokenCommand: vi.fn().mockImplementation(function (input: unknown) {
+    return { input };
+  }),
+}));
+
+import { OPENAI_FEDERATED_KEY, OpenAIBackend } from './openaiBackend';
+import { githubActionsIdToken } from './wifTokenSource';
 
 const ENV_NAMES = [
   'OPENAI_API_KEY',
@@ -8,9 +20,15 @@ const ENV_NAMES = [
   'OPENAI_WIF_AUDIENCE',
   'ACTIONS_ID_TOKEN_REQUEST_URL',
   'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+  'PROVIDER_WIF_TOKEN_SOURCE',
 ];
 
 const clientKey = (backend: OpenAIBackend) => (backend as unknown as { _api: { apiKey: string | null } })._api.apiKey;
+
+type WorkloadIdentityClient = {
+  _options: { workloadIdentity: { provider: { getToken: () => Promise<string> } } };
+};
+const apiOf = (backend: OpenAIBackend) => (backend as unknown as { _api: WorkloadIdentityClient })._api;
 
 describe('OpenAIBackend federated key', () => {
   const saved: Record<string, string | undefined> = {};
@@ -30,6 +48,10 @@ describe('OpenAIBackend federated key', () => {
     vi.unstubAllGlobals();
   });
 
+  it('treats the literal federated string as a static user key', () => {
+    expect(clientKey(new OpenAIBackend('federated'))).toBe('federated');
+  });
+
   it('passes a real key through unchanged', () => {
     expect(clientKey(new OpenAIBackend('sk-test'))).toBe('sk-test');
   });
@@ -40,6 +62,34 @@ describe('OpenAIBackend federated key', () => {
     process.env.OPENAI_SERVICE_ACCOUNT_ID = 'sa_test';
     process.env.OPENAI_WIF_AUDIENCE = 'aud-test';
     expect(clientKey(new OpenAIBackend(OPENAI_FEDERATED_KEY))).toBeNull();
+  });
+
+  it('reuses one federated client per config so its token cache survives across requests', () => {
+    process.env.OPENAI_IDENTITY_PROVIDER_ID = 'idp_reuse';
+    process.env.OPENAI_SERVICE_ACCOUNT_ID = 'sa_reuse';
+    process.env.OPENAI_WIF_AUDIENCE = 'aud-reuse';
+    const first = apiOf(new OpenAIBackend(OPENAI_FEDERATED_KEY));
+    expect(apiOf(new OpenAIBackend(OPENAI_FEDERATED_KEY))).toBe(first);
+
+    process.env.OPENAI_WIF_AUDIENCE = 'aud-other';
+    expect(apiOf(new OpenAIBackend(OPENAI_FEDERATED_KEY))).not.toBe(first);
+  });
+
+  it('still builds a fresh client per backend for a static key', () => {
+    expect(apiOf(new OpenAIBackend('sk-a'))).not.toBe(apiOf(new OpenAIBackend('sk-a')));
+  });
+
+  it('takes the subject token from STS under PROVIDER_WIF_TOKEN_SOURCE=aws-sts', async () => {
+    process.env.PROVIDER_WIF_TOKEN_SOURCE = 'aws-sts';
+    process.env.OPENAI_IDENTITY_PROVIDER_ID = 'idp_sts';
+    process.env.OPENAI_SERVICE_ACCOUNT_ID = 'sa_sts';
+    process.env.OPENAI_WIF_AUDIENCE = 'aud-sts';
+    stsSend.mockResolvedValue({ WebIdentityToken: 'sts-jwt' });
+
+    const backend = new OpenAIBackend(OPENAI_FEDERATED_KEY);
+    expect(clientKey(backend)).toBeNull();
+    await expect(apiOf(backend)._options.workloadIdentity.provider.getToken()).resolves.toBe('sts-jwt');
+    expect(stsSend).toHaveBeenCalledWith({ input: { Audience: ['aud-sts'], SigningAlgorithm: 'RS256' } });
   });
 
   it('names the missing variables instead of failing later', () => {

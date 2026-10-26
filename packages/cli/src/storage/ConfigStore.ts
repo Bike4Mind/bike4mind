@@ -17,7 +17,7 @@ import {
 import { resolveStaticToolDescriptor } from '../tools/gateway/toolCatalog.js';
 import { canTrustTool } from '../tools/gateway/toolPolicy.js';
 import { PROJECT_CONTEXT_FILES } from '../utils/contextLoader';
-import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
+import { escapeTerminalControlChars, sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import { logger } from '../utils/Logger';
 
 /**
@@ -1163,9 +1163,10 @@ export class ConfigStore {
     if (this.pendingMcpWarned || this.pendingMcpApprovals.length === 0) return;
     this.pendingMcpWarned = true;
     const names = sanitizeTerminalText(this.pendingMcpApprovals.map(s => s.name).join(', '));
+    const root = escapeTerminalControlChars(this.projectRealPath ?? '').replace(/\n/g, '\\n');
     logger.warn(
       `Skipping ${this.pendingMcpApprovals.length} unapproved repo MCP server(s): ${names}. ` +
-        `Run b4m interactively in ${this.projectRealPath} to approve them.`
+        `Run b4m interactively in ${root} to approve them.`
     );
   }
 

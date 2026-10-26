@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import {
@@ -50,6 +51,8 @@ const handler = baseApi()
     })
   )
   .post(async (req, res) => {
+    // Before the cache probe: a cache hit returns ahead of model admission.
+    assertAiAccessAllowed(req.user);
     const userId = req.user.id;
     const parsed = RequestSchema.safeParse(req.body);
     if (!parsed.success) {

@@ -1,5 +1,5 @@
 import { type IMongoDocument } from '.';
-import { type ApiKeyScope } from './UserApiKeyTypes';
+import { type ApiKeyScopeValue } from './UserApiKeyTypes';
 
 export type ConnectionSource = 'cli' | 'web';
 
@@ -12,7 +12,7 @@ export interface IConnection {
    *  narrow-scope key (e.g. CC_BRIDGE) can't silently gain privileges in any
    *  future handler that trusts socket-level auth. JWT-authenticated sockets
    *  leave this unset. */
-  scopes?: ApiKeyScope[];
+  scopes?: ApiKeyScopeValue[];
   /** AuthSession the socket belongs to (web ticket or CLI JWT). Absent for API-key sockets and
    *  legacy sid-less tokens. Revoking that session ends the connection. */
   sid?: string;

@@ -110,6 +110,8 @@ const handler = baseApi({ auth: false })
                 subject: 'Your sign-in code',
                 body: emailBody,
               });
+              // Count accepted email dispatches even if token confirmation later fails.
+              req.logger.info('otc-code-dispatched');
             },
           },
           signPendingToken: payload => {

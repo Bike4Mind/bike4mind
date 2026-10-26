@@ -168,6 +168,18 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key1' })
     );
   });
+  it('carries a withheld admin role onto questStartParams', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'apiKey', apiKeyId: 'key1', adminRoleWithheld: true });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ adminRoleWithheld: true }));
+  });
   // The positive signal a session-only tool checks; dropped here, the async worker would see none.
   it('carries the server-set authOrigin onto questStartParams', async () => {
     mockedGetAvailableModels.mockResolvedValue([

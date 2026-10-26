@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, Project } from '@bike4mind/database';
 import { buildListVisibilityFilter, buildListQuery, type ListQueryParams } from '@server/services/publish';
 import { displayReplyTitle } from '@server/services/publish/plainTitle';
+import { signOwnerThumbnailUrl } from '@server/services/publish/thumbnailUrl';
 
 /**
  * GET /api/publish/artifacts - list artifacts visible to the caller.
@@ -26,6 +27,10 @@ import { displayReplyTitle } from '@server/services/publish/plainTitle';
  * Always returns `total` alongside the page, which is what lets a caller tell a full page
  * from a truncated list - the previous hard `$limit: 200` with no count meant the
  * management tab silently stopped showing the oldest artifacts past that mark.
+ *
+ * On `mine`, each row the caller owns carries `thumbnailUrl` (a short-lived presigned GET, stable
+ * within a signing window so the browser can cache it; see thumbnailUrl.ts) once its owner-only
+ * thumbnail has rendered. No other listing, and no other route, ever exposes one.
  */
 
 /** Matches the pre-paging hard cap, so an existing caller that sends no `limit` is unaffected. */
@@ -184,6 +189,9 @@ const handler = baseApi().get(async (req, res) => {
               gateKind: '$accessGate.kind',
               // Consumed and dropped below; never sent to the caller.
               replyTitleBody,
+              // Storage key only, also consumed and dropped below: the caller gets a presigned
+              // `thumbnailUrl` instead, and only for its own rows on the owner-scoped listing.
+              thumbnailKey: '$thumbnail.key',
             },
           },
         ],
@@ -241,10 +249,22 @@ const handler = baseApi().get(async (req, res) => {
   // and hiding them would couple those reads to ownerId staying in the projection forever.
   const NON_OWNER_HIDDEN_FIELDS = ['scopeId', 'ownerId', 'previousVersionMeta', 'gateKind'] as const;
 
-  const rows = ((result?.rows ?? []) as Array<Record<string, unknown>>).map(({ replyTitleBody: body, ...row }) =>
-    typeof body === 'string' && typeof row.title === 'string'
-      ? { ...row, title: displayReplyTitle(row.title, body) || row.title }
-      : row
+  const rows = await Promise.all(
+    ((result?.rows ?? []) as Array<Record<string, unknown>>).map(
+      async ({ replyTitleBody: body, thumbnailKey, ...row }) => {
+        const titled =
+          typeof body === 'string' && typeof row.title === 'string'
+            ? { ...row, title: displayReplyTitle(row.title, body) || row.title }
+            : row;
+        // Thumbnails are owner-only: signed for the caller's OWN rows on `?mine`, never for a browse
+        // listing (admins included) and never anywhere else. See signOwnerThumbnailUrl.
+        if (!mine || row.ownerId !== userId || typeof row.publicId !== 'string' || typeof thumbnailKey !== 'string') {
+          return titled;
+        }
+        const thumbnailUrl = await signOwnerThumbnailUrl(row.publicId, thumbnailKey);
+        return thumbnailUrl ? { ...titled, thumbnailUrl } : titled;
+      }
+    )
   );
   const visibleRows = isAdmin
     ? rows

@@ -894,3 +894,60 @@ describe('userApiKeyService - createUserApiKey no escalation by minting', () => 
     );
   });
 });
+
+describe('createUserApiKey - contributed scopes', () => {
+  let repo: ReturnType<typeof makeRepo>;
+  const params = (scopes: string[]) => ({ name: 'k', scopes, metadata: { createdFrom: 'dashboard' as const } });
+  const isKnownScope = (value: string) => value === 'acme:read' || Object.values<string>(ApiKeyScope).includes(value);
+
+  beforeEach(() => {
+    repo = makeRepo();
+  });
+
+  it('rejects a scope outside the built-in set when no predicate is injected', async () => {
+    await expect(
+      createUserApiKey('user1', params(['acme:read']), { db: { userApiKeys: repo as any, agents: {} as any } })
+    ).rejects.toThrow(/Unknown API key scope/);
+    expect(repo.createIfUnderCap).not.toHaveBeenCalled();
+  });
+
+  it('mints a scope the injected predicate knows, alongside a built-in one', async () => {
+    const result = await createUserApiKey('user1', params(['acme:read', ApiKeyScope.READ_NOTEBOOKS]), {
+      db: { userApiKeys: repo as any, agents: {} as any },
+      isKnownScope,
+    });
+
+    expect(result.scopes).toEqual(['acme:read', ApiKeyScope.READ_NOTEBOOKS]);
+  });
+
+  it.each([['Acme:read'], [''], ['acme']])(
+    'rejects the malformed scope %j even when the predicate accepts it',
+    async scope => {
+      await expect(
+        createUserApiKey('user1', params([scope]), {
+          db: { userApiKeys: repo as any, agents: {} as any },
+          isKnownScope: value => value === scope || isKnownScope(value),
+        })
+      ).rejects.toThrow(/Unknown API key scope/);
+    }
+  );
+
+  it('still refuses to mix a contributed scope with a confined one', async () => {
+    await expect(
+      createUserApiKey('user1', params(['acme:read', ApiKeyScope.CC_BRIDGE]), {
+        db: { userApiKeys: repo as any, agents: {} as any },
+        isKnownScope,
+      })
+    ).rejects.toThrow(/must be the only scope/i);
+  });
+
+  it('keeps the no-escalation rule for a contributed scope', async () => {
+    await expect(
+      createUserApiKey('user1', params(['acme:read']), {
+        db: { userApiKeys: repo as any, agents: {} as any },
+        isKnownScope,
+        callerScopes: [ApiKeyScope.READ_NOTEBOOKS],
+      })
+    ).rejects.toThrow(/calling key does not have/);
+  });
+});

@@ -1,14 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // A runtime that is "available" so buildSandbox enters the network branch.
-vi.mock('../sandbox/runtime/SandboxRuntimeAdapter.js', () => ({
-  createSandboxRuntime: async () => ({
-    platform: 'linux',
-    name: 'mock-runtime',
-    isAvailable: () => true,
-    wrapCommand: () => ({ executable: 'sh', args: [], env: {}, commandString: '', cleanupPaths: [] }),
-  }),
-}));
+vi.mock('../sandbox/runtime/SandboxRuntimeAdapter.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../sandbox/runtime/SandboxRuntimeAdapter.js')>();
+  return {
+    ...actual,
+    createSandboxRuntime: async () => ({
+      platform: 'linux',
+      name: 'mock-runtime',
+      isAvailable: () => true,
+      wrapCommand: () => ({ executable: 'sh', args: [], env: {}, commandString: '', cleanupPaths: [] }),
+    }),
+  };
+});
 
 // Whether the mock proxy's start() actually brings it up. Toggled per test so we
 // can exercise BOTH the fail-closed branch (start no-ops, isRunning stays false)

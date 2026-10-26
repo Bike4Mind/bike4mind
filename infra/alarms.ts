@@ -144,6 +144,38 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: Billing Event Ingest Failures
+   *
+   * Fires when billing and account events (purchase, payment_failed, subscription_ended, ...)
+   * repeatedly fail to reach Overwatch's ingest endpoint: a network failure or timeout, a 5xx, or
+   * a 4xx or redirect, which means a bad key or OVERWATCH_INGEST_URL. Each failure is an event
+   * dropped for good, since the webhook or worker that sent it succeeds and is not retried, so
+   * revenue and churn reporting would otherwise go quietly short. Three in an hour, not one, so a
+   * single ingest blip stays quiet.
+   *
+   * Metric emitted by: apps/client/server/analytics/emitActiveEvent.ts (INGEST_FAILURE_METRIC)
+   * Namespace: Lumina5/Analytics / IngestEmitFailed
+   */
+  new aws.cloudwatch.MetricAlarm('billingEventIngestFailures', {
+    name: `${$app.name}-${$app.stage}-billing-event-ingest-failures`,
+    alarmDescription: 'Billing events are failing to reach Overwatch ingest and are being dropped',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'IngestEmitFailed',
+    namespace: 'Lumina5/Analytics',
+    dimensions: { Stage: $app.stage },
+    period: 3600, // 1 hour
+    statistic: 'Sum',
+    threshold: 3,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Analytics',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
    * Alarm: High Failure Count
    *
    * Triggers when more than 2 failures occur in a 5-minute period.
@@ -1301,6 +1333,72 @@ if (isMonitoredStage) {
     dimensions: { Stage: $app.stage },
     // No emission means no ANN query ran anywhere, which is the common state - the HTTP route in
     // particular has served single-digit requests per day.
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'DataLakeRetrieval',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: forced retrieval answering large lakes from a by-name cut
+   *
+   * A turn whose candidates were cut to the 100-file cap (the lake, plus the library when the turn
+   * includes it) publishes 1 (by-name cut) or 0 (relevance pick), so the Stage-only Average is
+   * the by-name share. A turn whose 1000-row listing overflowed but left <= 100 servable files
+   * publishes nothing. The share is Sum / SampleCount in metric math so a day with one turn, where
+   * a single cut reads as 100%, cannot fire: the alarm needs 2+ turns. Volume is low (about 16
+   * large-lake turns in 14 days on production), hence a daily period and a >50% bar, against a
+   * pre-fix rate of 7 of 16.
+   *
+   * relevance-unavailable cuts count too: EnableDataLakeVectorSearch off, Atlas vector search not
+   * available (self-host), or that setting failing to read. The first two fire on any day with
+   * 2+ large turns, which is a config to fix; a read failure is logged as a warn on the turn.
+   *
+   * Metric emitted by: b4m-core/services/src/llm/forcedRetrievalSelectionMetrics.ts ->
+   * recordForcedRetrievalCutMetrics.
+   * Namespace: Lumina5/DataLakeRetrieval / ForcedRetrievalByNameCut
+   * Alarms on the Stage-only dimension set; the second set adds an attribution dimension.
+   */
+  new aws.cloudwatch.MetricAlarm('forcedRetrievalByNameCut', {
+    name: `${$app.name}-${$app.stage}-forced-retrieval-by-name-cut`,
+    alarmDescription:
+      'Over half of a day of large-lake forced-retrieval turns (min 2) were cut by file name instead of relevance. Check the Reason series on the data-lake search dashboard: deadline points at the vector index, relevance-unavailable at the EnableDataLakeVectorSearch setting or Atlas vector search availability (or a warn that the setting could not be read)',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    threshold: 0.5,
+    metricQueries: [
+      {
+        id: 'byName',
+        returnData: false,
+        metric: {
+          metricName: 'ForcedRetrievalByNameCut',
+          namespace: 'Lumina5/DataLakeRetrieval',
+          period: 86400, // 1 day
+          stat: 'Sum',
+          dimensions: { Stage: $app.stage },
+        },
+      },
+      {
+        id: 'turns',
+        returnData: false,
+        metric: {
+          metricName: 'ForcedRetrievalByNameCut',
+          namespace: 'Lumina5/DataLakeRetrieval',
+          period: 86400, // 1 day
+          stat: 'SampleCount',
+          dimensions: { Stage: $app.stage },
+        },
+      },
+      {
+        id: 'rate',
+        returnData: true,
+        label: 'By-name share (min 2 turns)',
+        expression: 'IF(turns >= 2, byName / turns, 0)',
+      },
+    ],
+    // No emission means no large-lake turn ran, the usual state on most days.
     treatMissingData: 'notBreaching',
     alarmActions: [dlqAlarmTopic.arn],
     tags: {

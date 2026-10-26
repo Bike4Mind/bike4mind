@@ -20,6 +20,7 @@ import {
 } from '@server/utils/creditPreflight';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).
@@ -39,6 +40,7 @@ import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
  * typed body.
  */
 const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const {
     text,
     provider,

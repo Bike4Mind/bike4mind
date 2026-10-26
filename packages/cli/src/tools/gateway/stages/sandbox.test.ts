@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { SandboxOrchestrator } from '../../../sandbox/SandboxOrchestrator.js';
+import { SandboxOrchestrator } from '../../../sandbox/SandboxOrchestrator.js';
+import { DEFAULT_SANDBOX_CONFIG } from '../../../sandbox/types.js';
+import type { SandboxRuntime } from '../../../sandbox/runtime/SandboxRuntimeAdapter.js';
+import { mkdtempSync, mkdirSync, existsSync, rmSync } from 'fs';
+import os from 'os';
+import path from 'path';
 import { prepareSandbox } from './sandbox.js';
 import type { ToolDescriptor } from '../toolDescriptor.js';
 import { CORE_TOOL_DESCRIPTORS } from '../coreToolDescriptors.js';
@@ -53,6 +58,47 @@ describe('prepareSandbox', () => {
       cleanupPaths: ['/tmp/profile.sb'],
       args: { command: 'sandbox-exec ls', timeout: 5 },
     });
+  });
+
+  it('checks cwd confinement before the runtime can create workspace metadata', () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'sandbox-cwd-check-'));
+    const workspace = path.join(directory, 'workspace');
+    const outside = path.join(directory, 'outside');
+    mkdirSync(workspace);
+    mkdirSync(outside);
+    const runtime: SandboxRuntime = {
+      platform: 'linux',
+      name: 'test',
+      isAvailable: () => true,
+      wrapCommand: vi.fn(options => {
+        mkdirSync(path.join(options.cwd, '.bike4mind'));
+        throw new Error('Runtime must not run before confinement validation');
+      }),
+    };
+    const config = structuredClone(DEFAULT_SANDBOX_CONFIG);
+    config.enabled = true;
+    config.mode = 'auto-allow';
+    const sandbox = new SandboxOrchestrator(config, runtime);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(prepareSandbox(bashDescriptor, { command: 'ls', cwd: outside }, sandbox, [workspace])).toMatchObject({
+        kind: 'blocked',
+      });
+      expect(runtime.wrapCommand).not.toHaveBeenCalled();
+      expect(existsSync(path.join(outside, '.bike4mind'))).toBe(false);
+
+      expect(prepareSandbox(bashDescriptor, { command: 'docker ps', cwd: outside }, sandbox, [workspace])).toEqual({
+        kind: 'unchanged',
+      });
+      sandbox.setMode('disabled');
+      expect(prepareSandbox(bashDescriptor, { command: 'ls', cwd: outside }, sandbox, [workspace])).toEqual({
+        kind: 'unchanged',
+      });
+      expect(runtime.wrapCommand).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('does not wrap write_shell_stdin, which has a commandArg but no sandbox declaration', () => {

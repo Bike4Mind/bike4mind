@@ -149,7 +149,11 @@ async function clickNewInProject() {
   const before = inspectProject.mock.calls.length;
   await act(async () => el('project-new-btn').click());
   await act(async () => undefined);
-  return inspectProject.mock.calls.length - before;
+  const creationOrder = createCodeSession.mock.invocationCallOrder.at(-1);
+  if (creationOrder === undefined) throw new Error('No Code session was created.');
+  // The new session's workspace setup also inspects its folder after creation. Only
+  // inspections before createCodeSession can decide whether to request a worktree.
+  return inspectProject.mock.invocationCallOrder.slice(before).filter(order => order < creationOrder).length;
 }
 
 describe("starting a new session from a project group's header", () => {
@@ -164,7 +168,7 @@ describe("starting a new session from a project group's header", () => {
     expect(el('chat-session-title').textContent).toBe('Fresh thread');
   });
 
-  it('asks git nothing and carries no worktree when the preference is off', async () => {
+  it('creates without inspecting git or requesting a worktree when the preference is off', async () => {
     await mount();
 
     expect(await clickNewInProject()).toBe(0);

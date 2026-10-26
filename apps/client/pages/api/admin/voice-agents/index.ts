@@ -1,6 +1,11 @@
 import { adminSettingsRepository, agentRepository } from '@bike4mind/database';
 import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { createElevenLabsAgent, DEFAULT_TURN_EAGERNESS, SILENCE_TURN_TIMEOUT_SECONDS } from '@bike4mind/voice';
+import {
+  createElevenLabsAgent,
+  deleteElevenLabsAgent,
+  DEFAULT_TURN_EAGERNESS,
+  SILENCE_TURN_TIMEOUT_SECONDS,
+} from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
@@ -86,44 +91,58 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       return res.status(502).json({ error: 'Failed to create ElevenLabs agent', detail });
     }
 
-    const agent = await agentRepository.create({
-      name: body.name,
-      description: body.description ?? '',
-      type: 'voice',
-      provider: 'elevenlabs',
-      elevenLabsAgentId,
-      elevenLabsVoiceId: body.voiceId,
-      firstMessage: body.firstMessage,
-      // Mirror the applied turn-taking settings - defaults imported from
-      // createElevenLabsAgent's source so the persisted record can't drift from
-      // what ElevenLabs actually received.
-      turnEagerness: body.turnEagerness ?? DEFAULT_TURN_EAGERNESS,
-      turnTimeoutSeconds: body.turnTimeoutSeconds ?? SILENCE_TURN_TIMEOUT_SECONDS,
-      isSystem: true,
-      isPublic: true,
-      isDefaultVoiceAgent: isFirstVoiceAgent,
-      triggerWords: [],
-      capabilities: [],
-      useOwnCredits: false,
-      currentCredits: 0,
-      systemPrompt: body.systemPrompt,
-      personality: {
-        majorMotivation: '',
-        minorMotivation: '',
-        flaw: '',
-        quirk: '',
-        description: '',
-      },
-      visual: { portraitUrl: '', style: 'modern', generationPrompt: '' },
-      identity: {
-        gender: 'prefer-not-to-say',
-        pronouns: { subject: '', object: '', possessive: '', possessiveAdjective: '', reflexive: '' },
-      },
-      isGlobalRead: true,
-      isGlobalWrite: false,
-      users: [],
-      groups: [],
-    } as never);
+    let agent;
+    try {
+      agent = await agentRepository.create({
+        name: body.name,
+        // AgentModel requires a non-empty description, but the form treats it as optional.
+        description: body.description?.trim() || body.name,
+        type: 'voice',
+        provider: 'elevenlabs',
+        elevenLabsAgentId,
+        elevenLabsVoiceId: body.voiceId,
+        firstMessage: body.firstMessage,
+        // Mirror the applied turn-taking settings - defaults imported from
+        // createElevenLabsAgent's source so the persisted record can't drift from
+        // what ElevenLabs actually received.
+        turnEagerness: body.turnEagerness ?? DEFAULT_TURN_EAGERNESS,
+        turnTimeoutSeconds: body.turnTimeoutSeconds ?? SILENCE_TURN_TIMEOUT_SECONDS,
+        isSystem: true,
+        isPublic: true,
+        isDefaultVoiceAgent: isFirstVoiceAgent,
+        triggerWords: [],
+        capabilities: [],
+        useOwnCredits: false,
+        currentCredits: 0,
+        systemPrompt: body.systemPrompt,
+        personality: {
+          majorMotivation: '',
+          minorMotivation: '',
+          flaw: '',
+          quirk: '',
+          description: '',
+        },
+        visual: { portraitUrl: '', style: 'modern', generationPrompt: '' },
+        identity: {
+          gender: 'prefer-not-to-say',
+          pronouns: { subject: '', object: '', possessive: '', possessiveAdjective: '', reflexive: '' },
+        },
+        isGlobalRead: true,
+        isGlobalWrite: false,
+        users: [],
+        groups: [],
+      } as never);
+    } catch (error) {
+      try {
+        await deleteElevenLabsAgent(apiKey, elevenLabsAgentId);
+      } catch (cleanupError) {
+        req.logger.warn(
+          { err: cleanupError, agentId: elevenLabsAgentId },
+          '[admin/voice-agents] ElevenLabs rollback failed; agent is orphaned'
+        );
+      }
+      throw error;
+    }
 
     return res.status(201).json({ agent });
   });

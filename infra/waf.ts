@@ -8,7 +8,7 @@
  * For PR testing, temporarily set ENABLE_WAF=true (don't forget to unset before merging).
  */
 
-import { buildDevWafRuleJson, getDevWafMeta } from './wafPolicy';
+import { buildDevWafRuleJson, getDevWafMeta, getWafRateLimitAlarmRules, parseWafBlockedIps } from './wafPolicy';
 import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
@@ -27,7 +27,8 @@ const wafProviderUsEast1 = isWafEnabled
 /**
  * Emergency IP block set.
  *
- * WAF requires at least one address in the IPSet. Use a TEST-NET IP that should never appear in real traffic.
+ * Addresses come from the WAF_BLOCKED_IPS deploy variable (comma-separated IPv4 or CIDR). WAF requires
+ * at least one address, so an empty list falls back to a TEST-NET placeholder that never appears in real traffic.
  */
 export const wafEmergencyIpSet = isWafEnabled
   ? new aws.wafv2.IpSet(
@@ -39,7 +40,7 @@ export const wafEmergencyIpSet = isWafEnabled
         description: `Emergency IP block list - ${$app.stage}`,
         scope: 'CLOUDFRONT',
         ipAddressVersion: 'IPV4',
-        addresses: ['192.0.2.0/32'],
+        addresses: parseWafBlockedIps(process.env.WAF_BLOCKED_IPS),
       },
       {
         provider: wafProviderUsEast1,
@@ -179,16 +180,16 @@ export const wafLoggingConfig =
     : undefined;
 
 /**
- * SNS topic for WAF AI rate-limit block alerts (production only).
+ * SNS topic for WAF rate-limit block alerts (production only).
  *
- * Subscribe the on-call channel to receive pages when the ai-route-rate-limit rule
+ * Subscribe the on-call channel to receive pages when an enforcing rate rule
  * blocks more than 50 requests in a 5-minute window.
  *
- * Emergency rollback if the rule is misfiring:
- *   Fast path — change "Action": {"Block": {}} to "Action": {"Count": {}} in
- *   infra/waf/bike4mind-api-protection-prod.json and redeploy. The rule stays active
+ * Emergency rollback if a rule is misfiring:
+ *   Fast path: change the rule's Block action to {"Count": {}} in
+ *   the deployment's production policy and redeploy. The rule stays active
  *   but stops blocking; CloudWatch metrics keep accumulating so you can observe impact.
- *   Hard rollback — remove the ai-route-rate-limit rule from the JSON and redeploy.
+ *   Hard rollback: remove the rule from the JSON and redeploy.
  */
 export const wafAiRateLimitAlarmTopic =
   isWafEnabled && $app.stage === 'production'
@@ -353,33 +354,38 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
 }
 
 if (isWafEnabled && $app.stage === 'production' && wafWebAcl && wafAiRateLimitAlarmTopic) {
-  // CloudFront-scope WAF publishes metrics to us-east-1 with Region=Global.
+  // CloudFront-scope WAF publishes metrics to us-east-1 without a Region dimension.
   // The alarm must be created in us-east-1 via wafProviderUsEast1.
-  new aws.cloudwatch.MetricAlarm(
-    'wafAiRateLimitBlocks',
-    {
-      name: `${$app.name}-${$app.stage}-waf-ai-rate-limit-blocks`,
-      alarmDescription:
-        'WAF ai-route-rate-limit blocked >50 req/5min in production — possible misfire or attack. Fast rollback: set Action→Count in infra/waf/bike4mind-api-protection-prod.json and redeploy.',
-      comparisonOperator: 'GreaterThanThreshold',
-      evaluationPeriods: 1,
-      metricName: 'BlockedRequests',
-      namespace: 'AWS/WAFV2',
-      period: 300,
-      statistic: 'Sum',
-      threshold: 50,
-      treatMissingData: 'notBreaching',
-      dimensions: {
-        Rule: 'ai-route-rate-limit',
-        WebACL: wafWebAcl.name,
-        Region: 'Global',
+  for (const { name: rule, metricName } of getWafRateLimitAlarmRules($app.stage)) {
+    // The ai-route alarm keeps its original names so the existing resource is not replaced.
+    const isAiRoute = rule === 'ai-route-rate-limit';
+    const logicalName = isAiRoute ? 'wafAiRateLimitBlocks' : `waf-${rule}-blocks`;
+    new aws.cloudwatch.MetricAlarm(
+      logicalName,
+      {
+        name: isAiRoute
+          ? `${$app.name}-${$app.stage}-waf-ai-rate-limit-blocks`
+          : `${$app.name}-${$app.stage}-waf-${rule}-blocks`,
+        alarmDescription: `WAF ${rule} blocked >50 req/5min in production. Fast rollback: set Action to Count for this rule in the deployment's policy and redeploy.`,
+        comparisonOperator: 'GreaterThanThreshold',
+        evaluationPeriods: 1,
+        metricName: 'BlockedRequests',
+        namespace: 'AWS/WAFV2',
+        period: 300,
+        statistic: 'Sum',
+        threshold: 50,
+        treatMissingData: 'notBreaching',
+        dimensions: {
+          Rule: metricName,
+          WebACL: wafWebAcl.visibilityConfig.metricName,
+        },
+        alarmActions: [wafAiRateLimitAlarmTopic.arn],
+        tags: {
+          Application: 'WAF',
+          Severity: 'High',
+        },
       },
-      alarmActions: [wafAiRateLimitAlarmTopic.arn],
-      tags: {
-        Application: 'WAF',
-        Severity: 'High',
-      },
-    },
-    { provider: wafProviderUsEast1 }
-  );
+      { provider: wafProviderUsEast1 }
+    );
+  }
 }

@@ -72,6 +72,12 @@ export class AdminPage extends BasePage {
     await expect(this.page.getByTestId('admin-sort-order-btn')).toBeEnabled({ timeout: TIMEOUTS.ACTION });
   }
 
+  async navigateToOrganizationsTab() {
+    await this.expandUserOps();
+    await this.page.getByTestId('admin-organizations-tab-btn').filter({ visible: true }).first().click();
+    await expect(this.page.getByTestId('admin-organizations-search-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  }
+
   async navigateToInviteCenter() {
     await this.expandUserOps();
     await this.page.getByTestId('admin-invite-center-tab-btn').filter({ visible: true }).first().click();

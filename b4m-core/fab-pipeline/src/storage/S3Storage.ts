@@ -6,6 +6,7 @@ import {
   GetObjectCommand,
   GetObjectCommandOutput,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommandInput,
   ObjectCannedACL,
 } from '@aws-sdk/client-s3';
@@ -18,6 +19,11 @@ import { fileTypeFromBuffer } from 'file-type';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Agent } from 'https';
 import { createS3Client } from './createS3Client';
+
+const isInvalidRangeError = (error: unknown): boolean => {
+  const e = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null;
+  return e?.name === 'InvalidRange' || e?.$metadata?.httpStatusCode === 416;
+};
 
 export class S3Storage extends BaseStorage {
   private s3: S3Client;
@@ -157,21 +163,27 @@ export class S3Storage extends BaseStorage {
   /**
    * Ranged read of the first `length` bytes of an object - lets a caller
    * byte-sniff a file's real type from magic numbers without downloading the whole object.
-   * S3 clamps an out-of-range `Range` header to the object's actual size, so this is safe
-   * to call on objects smaller than `length` too. Mirrors `getPreview`'s Range-header
+   * S3 clamps a range that starts inside the object to its actual size, so objects smaller
+   * than `length` are fine. A 0-byte object has no byte 0 to start from, so S3 answers 416
+   * InvalidRange; that is returned as an empty `Buffer`. Mirrors `getPreview`'s Range-header
    * pattern but returns the raw `Buffer` instead of a UTF-8 string (binary-safe).
    */
   async downloadRange(path: string, length: number): Promise<Buffer> {
-    const { Body } = await this.s3.send(
-      new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: path,
-        Range: `bytes=0-${length - 1}`,
-      })
-    );
+    try {
+      const { Body } = await this.s3.send(
+        new GetObjectCommand({
+          Bucket: this.bucketName,
+          Key: path,
+          Range: `bytes=0-${length - 1}`,
+        })
+      );
 
-    if (!Body) throw new Error('File content is empty or not available');
-    return await this.streamToBuffer(Body as Readable);
+      if (!Body) throw new Error('File content is empty or not available');
+      return await this.streamToBuffer(Body as Readable);
+    } catch (error) {
+      if (isInvalidRangeError(error)) return Buffer.alloc(0);
+      throw error;
+    }
   }
 
   async delete(path: string): Promise<void> {
@@ -181,6 +193,32 @@ export class S3Storage extends BaseStorage {
         Key: path,
       })
     );
+  }
+
+  /**
+   * Delete every object whose key starts with `prefix` and return how many there were. Meant for
+   * small per-entity prefixes: lists page by page and deletes one key at a time. The prefix must
+   * name a folder at least two levels deep (`a/b/`), so a bad caller cannot sweep a bucket, a
+   * top-level folder, or the siblings that share a name's leading characters.
+   */
+  async deletePrefix(prefix: string): Promise<number> {
+    if (!prefix.endsWith('/') || prefix.split('/').filter(Boolean).length < 2) {
+      throw new Error(`deletePrefix refuses the unscoped prefix "${prefix}"`);
+    }
+    let deleted = 0;
+    let ContinuationToken: string | undefined;
+    do {
+      const page = await this.s3.send(
+        new ListObjectsV2Command({ Bucket: this.bucketName, Prefix: prefix, ContinuationToken })
+      );
+      for (const { Key } of page.Contents ?? []) {
+        if (!Key?.startsWith(prefix)) continue;
+        await this.delete(Key);
+        deleted += 1;
+      }
+      ContinuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+    return deleted;
   }
 
   /**
@@ -197,6 +235,7 @@ export class S3Storage extends BaseStorage {
       ContentLength,
       ResponseContentType,
       ResponseContentDisposition,
+      signingDate,
     }: {
       expiresIn?: number;
       audience?: 'browser';
@@ -213,6 +252,12 @@ export class S3Storage extends BaseStorage {
        */
       ResponseContentType?: string;
       ResponseContentDisposition?: string;
+      /**
+       * Sign as of this instant instead of now; the link is valid from it for `expiresIn` seconds.
+       * Repeated calls with the same value (and credentials) return the identical URL, so a browser
+       * can cache what it points at.
+       */
+      signingDate?: Date;
     } = {}
   ): Promise<string> {
     const bindLength = method !== 'get' && ContentLength !== undefined;
@@ -234,6 +279,7 @@ export class S3Storage extends BaseStorage {
           }),
       {
         expiresIn,
+        ...(signingDate && { signingDate }),
         ...(bindLength && { signableHeaders: new Set(['content-length']) }),
       }
     );
@@ -303,14 +349,19 @@ export class S3Storage extends BaseStorage {
   }
 
   async getPreview(path: string): Promise<string> {
-    const response = await this.s3.send(
-      new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: path,
-        Range: 'bytes=0-5120', // First 5KB
-      })
-    );
-    return await response.Body!.transformToString('utf-8');
+    try {
+      const response = await this.s3.send(
+        new GetObjectCommand({
+          Bucket: this.bucketName,
+          Key: path,
+          Range: 'bytes=0-5120', // First 5KB
+        })
+      );
+      return await response.Body!.transformToString('utf-8');
+    } catch (error) {
+      if (isInvalidRangeError(error)) return '';
+      throw error;
+    }
   }
 
   async getMetadata(path: string) {

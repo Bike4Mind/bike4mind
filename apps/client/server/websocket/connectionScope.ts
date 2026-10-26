@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import type { ApiKeyScopeValue } from '@bike4mind/common';
 
 /**
  * Per-action scope gate for the WebSocket handlers that authorize on the Connection row alone.
@@ -22,7 +22,7 @@ import { ApiKeyScope } from '@bike4mind/common';
  */
 export function connectionHoldsScope(
   connection: { scopes?: string[] | null } | null | undefined,
-  required: ApiKeyScope[]
+  required: ApiKeyScopeValue[]
 ): boolean {
   const held = connection?.scopes;
   if (!held?.length) return true;

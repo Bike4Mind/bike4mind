@@ -15,6 +15,7 @@ export {
   createReActRunAct,
   agentResultToActResult,
   resolveToolbeltProfile,
+  registerToolbelts,
   TOOLBELT_PROFILES,
   DEFAULT_TOOLBELT_ROLE,
   buildActQuery,
