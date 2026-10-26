@@ -1,6 +1,6 @@
 import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
-import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
+import { PUBLIC_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
 import { API_KEY_RATE_LIMIT_DEFAULTS } from '../types/entities/UserApiKeyTypes';
 import { API_KEY_RATE_LIMIT_HEADERS, API_KEY_RATE_LIMIT_HEADER_NAMES } from '../apiKeyRateLimitHeaders';
 
@@ -62,8 +62,8 @@ function infoDescription(): string {
       '`Authorization: Bearer` header.',
     '',
     '## Scopes',
-    'API keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:',
-    ...ALL_API_KEY_SCOPES.map(s => `- \`${s}\``),
+    'API keys carry `resource:action` scopes. The scopes a self-service key can hold are:',
+    ...PUBLIC_API_KEY_SCOPES.map(s => `- \`${s}\``),
     '',
     'Per-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: ' +
       "a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no " +

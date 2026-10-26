@@ -4,7 +4,12 @@ import { buildOpenApiDocument, toPythonLiteral } from './document';
 import { registerContracts } from './operations';
 import { assertUniqueOperations } from './assertUniqueOperations';
 import { assertContractConventions } from '../api-contract/assertContractConventions';
-import { API_KEY_RATE_LIMIT_DEFAULTS, ApiKeyScope } from '../types/entities/UserApiKeyTypes';
+import {
+  API_KEY_RATE_LIMIT_DEFAULTS,
+  ApiKeyScope,
+  PUBLIC_DOC_API_KEY_SCOPES,
+  UNDOCUMENTED_API_KEY_SCOPES,
+} from '../types/entities/UserApiKeyTypes';
 import { CONTRACTS, chatContract, synthesizeSpeechContract } from '../api-contract';
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
@@ -252,6 +257,8 @@ describe('buildOpenApiDocument', () => {
   it('publishes the real ApiKeyScope vocabulary in info.description', () => {
     expect(doc.info.description).toContain(ApiKeyScope.AI_CHAT);
     expect(doc.info.description).toContain(ApiKeyScope.READ_FILES);
+    for (const scope of PUBLIC_DOC_API_KEY_SCOPES) expect(doc.info.description).toContain(`\`${scope}\``);
+    for (const scope of UNDOCUMENTED_API_KEY_SCOPES) expect(doc.info.description).not.toContain(`\`${scope}\``);
     // The aspirational vocab from the issue must NOT leak in (Decision 2).
     expect(doc.info.description).not.toContain('ai.completions:write');
   });

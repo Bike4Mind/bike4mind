@@ -213,6 +213,23 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.RELEASE_NOTES_WRITE,
 ];
 
+/**
+ * Built-in scopes left out of the public API reference: platform administration, every confined
+ * scope, and tooling scopes a customer key is not minted with. Documentation only - it never
+ * affects which scopes a key may hold or what the runtime accepts.
+ */
+export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.ADMIN,
+  ...CONFINED_API_KEY_SCOPES,
+  ApiKeyScope.OPTIHASHI_READ,
+  ApiKeyScope.OPTIHASHI_COMPUTE,
+];
+
+/** Built-in scopes published in the public OpenAPI spec: every {@link ApiKeyScope} not in {@link UNDOCUMENTED_API_KEY_SCOPES}. */
+export const PUBLIC_DOC_API_KEY_SCOPES: readonly ApiKeyScope[] = Object.values(ApiKeyScope).filter(
+  scope => !UNDOCUMENTED_API_KEY_SCOPES.includes(scope)
+);
+
 export enum ApiKeyStatus {
   ACTIVE = 'active',
   DISABLED = 'disabled',

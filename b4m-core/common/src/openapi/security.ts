@@ -1,5 +1,5 @@
 import { registry } from './registry';
-import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
+import { PUBLIC_DOC_API_KEY_SCOPES } from '../types/entities/UserApiKeyTypes';
 
 /**
  * Security schemes, declared once and referenced by every operation.
@@ -53,13 +53,11 @@ export const SECURITY_REQUIREMENT: Array<Record<string, string[]>> = [{ bearerAu
 export const JWT_SECURITY_REQUIREMENT: Array<Record<string, string[]>> = [{ jwtAuth: [] }];
 
 /**
- * Canonical API key scopes, sourced verbatim from the runtime {@link ApiKeyScope}
- * enum - the single source of truth for what a key may do. Published in
- * `info.description` so consumers see the real grant vocabulary (e.g. `ai:chat`),
- * not an aspirational one. If the enum changes, this list changes with it.
+ * API key scopes published in `info.description`, from the runtime {@link ApiKeyScope} enum
+ * minus the scopes a self-service key cannot hold (see {@link PUBLIC_DOC_API_KEY_SCOPES}).
  * Built-in scopes only: scopes an overlay contributes are left out of the published spec.
  */
-export const ALL_API_KEY_SCOPES: string[] = Object.values(ApiKeyScope);
+export const PUBLIC_API_KEY_SCOPES: string[] = [...PUBLIC_DOC_API_KEY_SCOPES];
 
 /**
  * Legacy per-operation scope map for any hand-registered operation. Now EMPTY:
