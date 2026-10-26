@@ -6,6 +6,7 @@
 
 import { createInterface } from 'readline';
 import {
+  HUGGING_FACE_SSH_KEYS_URL,
   HubAccessError,
   HuggingFaceHub,
   ModelNotFoundError,
@@ -20,7 +21,15 @@ import {
   type OllamaRefIssue,
 } from '@bike4mind/local-models';
 import { ConfigStore } from '../storage/ConfigStore.js';
+import { withDefaultOllamaPort } from '../utils/ollamaHost.js';
 import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
+import {
+  OLLAMA_REGISTRY_HOSTS,
+  classifyLicenses,
+  parseOllamaName,
+  readOllamaManifest,
+  type OllamaManifestInfo,
+} from './ollamaRegistry.js';
 
 interface ModelsCommandArgs {
   _: (string | number)[];
@@ -52,6 +61,8 @@ export interface ModelsConfig {
 
 export interface ModelsDeps {
   hub: () => HubClient;
+  /** Size and license texts of an Ollama registry model, read before pulling it. */
+  ollamaRegistry: (name: string, signal: AbortSignal) => Promise<OllamaManifestInfo>;
   resolveRuntime: () => Promise<RuntimeTarget>;
   config: ModelsConfig;
   confirm: (question: string) => Promise<boolean>;
@@ -76,7 +87,36 @@ export type PullResult = 'pulled' | 'declined' | 'cancelled';
 /** Exit code for a run stopped by Ctrl-C (128 + SIGINT). */
 export const EXIT_CANCELLED = 130;
 
+/** Ctrl-C at a prompt or while waiting on the runtime. */
+export class CancelledError extends Error {
+  constructor() {
+    super('Cancelled.');
+    this.name = 'CancelledError';
+  }
+}
+
+/** Settles with `promise`, or rejects with `CancelledError` as soon as `signal` aborts. */
+export function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new CancelledError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new CancelledError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      value => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
 const DEFAULT_QUANT = 'Q4_K_M';
+const NO_LICENSE = 'none declared';
+const HF_HOSTS: ReadonlySet<string> = new Set(['hf.co', 'huggingface.co']);
 const SEARCH_LIMIT = 20;
 const PROGRESS_INTERVAL_MS = 100;
 
@@ -156,7 +196,7 @@ export function licenseFor(
   endpoint: string
 ): { label: string; link: string; restricted: boolean } {
   const id = detail.licenses[0]?.toLowerCase() ?? null;
-  const label = (id === 'other' || !id ? detail.licenseName : null) ?? detail.licenses[0] ?? 'none declared';
+  const label = (id === 'other' || !id ? detail.licenseName : null) ?? detail.licenses[0] ?? NO_LICENSE;
   const raw = detail.licenseLink;
   const link = !raw
     ? `${endpoint}/${detail.id}`
@@ -171,31 +211,59 @@ function gatedMessage(repo: string, endpoint: string): string {
     `${repo} is gated: the Hugging Face account must be granted access before anything can be downloaded.`,
     `  1. Request access at ${endpoint}/${repo}`,
     '  2. Set HF_TOKEN to a token of that account',
-    "  3. Add your Ollama public key (~/.ollama/id_ed25519.pub) under Hugging Face Settings > SSH keys, so Ollama's own download is allowed",
+    `  3. Add your Ollama public key (~/.ollama/id_ed25519.pub) at ${HUGGING_FACE_SSH_KEYS_URL}, so Ollama's own download is allowed`,
   ].join('\n');
 }
 
-/** `hf.co/owner/repo[:tag]` and `owner/repo[:tag]` are Hugging Face repos; anything else is an Ollama name. */
+/** `www.`, a port and a trailing dot do not change which registry a host names. */
+function registryHost(authority: string): string | null {
+  const match = /^([^@:]+)(?::\d+)?$/.exec(authority);
+  if (!match) return null;
+  const host = match[1].toLowerCase();
+  return host.replace(/\.+$/, '').replace(/^www\./, '');
+}
+
+/**
+ * `owner/repo[:tag]` and Hugging Face URLs (any of its host spellings) are Hugging Face repos; `model[:tag]` and
+ * names on Ollama's own registry are Ollama names. Any other host is refused, so no spelling skips the checks.
+ */
 export function parsePullTarget(input: string): PullTarget {
   const trimmed = input.trim();
-  const hf = /^(?:https?:\/\/)?(?:hf\.co|huggingface\.co)\/(.+)$/i.exec(trimmed);
-  const rest = hf ? hf[1] : trimmed;
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(trimmed);
+  if (scheme && !/^https?$/i.test(scheme[1])) throw new Error(`Unsupported model ref: ${input}`);
+  const afterScheme = scheme ? trimmed.slice(scheme[0].length) : trimmed;
+  const slash = afterScheme.indexOf('/');
+  const first = slash === -1 ? afterScheme : afterScheme.slice(0, slash);
+  const namesHost = scheme !== null || (slash !== -1 && /[.:@]/.test(first));
+  const host = namesHost ? registryHost(first) : null;
+  if (namesHost && !host) throw new Error(`Unsupported model ref: ${input}`);
+  const rest = host ? (slash === -1 ? '' : afterScheme.slice(slash + 1)) : afterScheme;
+
+  if (host && OLLAMA_REGISTRY_HOSTS.has(host)) {
+    if (!rest) throw new Error(`Not an Ollama model name: ${input}`);
+    return { kind: 'ollama', name: rest };
+  }
+  if (host && !HF_HOSTS.has(host)) {
+    throw new Error(
+      `Unsupported registry ${host} in ${input}. Pull from Hugging Face (owner/repo[:quant]) or Ollama (model[:tag]).`
+    );
+  }
   const colon = rest.lastIndexOf(':');
   const hasTag = colon > rest.lastIndexOf('/');
   const path = hasTag ? rest.slice(0, colon) : rest;
   const tag = hasTag ? rest.slice(colon + 1) : null;
   const segments = path.split('/');
-  if (hf || (segments.length === 2 && !segments[0].includes('.'))) {
-    if (!isHubRepoId(path) || tag === '')
-      throw new Error(`Not a Hugging Face repo: ${input} (expected owner/name[:quant])`);
-    return { kind: 'hub', repo: path, tag };
+  if (!host && segments.length === 1) return { kind: 'ollama', name: rest };
+  if (!isHubRepoId(path) || tag === '') {
+    throw new Error(`Not a Hugging Face repo: ${input} (expected owner/name[:quant])`);
   }
-  return { kind: 'ollama', name: trimmed };
+  return { kind: 'hub', repo: path, tag };
 }
 
-/** Matches the tag against each build's planned ref, then its quant label; no tag means Q4_K_M. */
+/** Matches the tag against each build's planned ref, then its quant label; no tag or `latest` means Q4_K_M. */
 export function pickBuild(builds: HubGgufBuild[], tag: string | null): HubGgufBuild | undefined {
-  const wanted = (tag ?? DEFAULT_QUANT).toUpperCase();
+  // Ollama tags an untagged hf.co pull `latest`, so users copy that form back.
+  const wanted = (tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT).toUpperCase();
   return (
     builds.find(build => build.ollamaRef?.slice(build.ollamaRef.lastIndexOf(':') + 1).toUpperCase() === wanted) ??
     builds.find(build => build.quant === wanted)
@@ -203,12 +271,15 @@ export function pickBuild(builds: HubGgufBuild[], tag: string | null): HubGgufBu
 }
 
 export async function listModels(deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
-  const target = await deps.resolveRuntime();
+  const target = await abortable(deps.resolveRuntime(), deps.signal);
   const { runtime } = target;
-  const [models, loaded] = await Promise.all([
-    runtime.list(),
-    runtime.capabilities.reportsLoaded ? runtime.loaded().catch(() => []) : Promise.resolve([]),
-  ]);
+  const [models, loaded] = await abortable(
+    Promise.all([
+      runtime.list(),
+      runtime.capabilities.reportsLoaded ? runtime.loaded().catch(() => []) : Promise.resolve([]),
+    ]),
+    deps.signal
+  );
   const loadedNames = new Set(loaded.map(model => model.name));
   const rows = models.map(model => ({
     ...model,
@@ -382,23 +453,60 @@ async function pullWithProgress(target: RuntimeTarget, ref: string, deps: Models
 }
 
 async function requirePullable(deps: ModelsDeps): Promise<RuntimeTarget> {
-  const target = await deps.resolveRuntime();
+  const target = await abortable(deps.resolveRuntime(), deps.signal);
   if (!target.runtime.capabilities.canPull) throw new Error(`${runtimeLabel(target)} cannot download models.`);
   return target;
 }
 
+/** Restricted or undeclared licenses need a yes at the prompt or `--accept-license`. */
+async function acceptLicense(
+  license: { label: string; link: string; restricted: boolean },
+  deps: ModelsDeps,
+  opts: ModelsOptions
+): Promise<boolean> {
+  if (!license.restricted) return true;
+  const declared = license.label !== NO_LICENSE;
+  deps.log('');
+  deps.log(
+    declared
+      ? `This model is under the ${license.label} license, which is not a permissive open-source license.`
+      : 'This model does not declare a license.'
+  );
+  deps.log(`Read ${declared ? 'it' : 'its page'} before downloading: ${license.link}`);
+  if (opts.acceptLicense) return true;
+  if (!deps.isTTY) throw new Error('Re-run with --accept-license once you have read and accepted the license.');
+  return deps.confirm(declared ? `Do you accept the ${license.label} license? [y/N] ` : 'Download it anyway? [y/N] ');
+}
+
+async function pullFromOllamaRegistry(name: string, deps: ModelsDeps, opts: ModelsOptions): Promise<PullResult> {
+  const { page } = parseOllamaName(name);
+  const target = await requirePullable(deps);
+  let manifest: OllamaManifestInfo;
+  try {
+    manifest = await abortable(deps.ollamaRegistry(name, deps.signal), deps.signal);
+  } catch (error) {
+    if (error instanceof CancelledError || deps.signal.aborted) throw new CancelledError();
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not read ${name} from the Ollama registry, so nothing was downloaded: ${reason}`);
+  }
+  const license = classifyLicenses(manifest.licenses);
+  deps.log(`Model:    ${clean(name)} (Ollama registry)`);
+  deps.log(`Size:     ${formatBytes(manifest.sizeBytes)}`);
+  deps.log(`License:  ${clean(license.title)}`);
+  deps.log(`Runtime:  ${runtimeLabel(target)}`);
+  const accepted = await acceptLicense(
+    { label: clean(license.title), link: page, restricted: !license.permissive },
+    deps,
+    opts
+  );
+  if (!accepted) return 'declined';
+  if (!(await confirmDownload(`Download ${formatBytes(manifest.sizeBytes)}? [y/N] `, deps, opts))) return 'declined';
+  return pullWithProgress(target, name, deps);
+}
+
 export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOptions): Promise<PullResult> {
   const parsed = parsePullTarget(input);
-  if (parsed.kind === 'ollama') {
-    const target = await requirePullable(deps);
-    const base = parsed.name.replace(/:.*$/, '');
-    deps.log(`Model:    ${clean(parsed.name)} (Ollama registry)`);
-    deps.log(`Runtime:  ${runtimeLabel(target)}`);
-    if (!base.includes('/')) deps.log(`Size and license: https://ollama.com/library/${clean(base)}`);
-    deps.log('Ollama reports the download size once the pull starts.');
-    if (!(await confirmDownload(`Download ${clean(parsed.name)}? [y/N] `, deps, opts))) return 'declined';
-    return pullWithProgress(target, parsed.name, deps);
-  }
+  if (parsed.kind === 'ollama') return pullFromOllamaRegistry(parsed.name, deps, opts);
 
   const hub = deps.hub();
   const detail = await hub.getModel(parsed.repo, { signal: deps.signal });
@@ -428,16 +536,15 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
   );
   deps.log(`License:  ${license.label}`);
   deps.log(`Runtime:  ${runtimeLabel(target)}`);
-
-  if (license.restricted) {
+  if (detail.ollamaNeedsSshKey) {
     deps.log('');
-    deps.log(`This model is under the ${license.label} license, which is not a permissive open-source license.`);
-    deps.log(`Read it before downloading: ${license.link}`);
-    if (!opts.acceptLicense) {
-      if (!deps.isTTY) throw new Error('Re-run with --accept-license once you have read and accepted the license.');
-      if (!(await deps.confirm(`Do you accept the ${license.label} license? [y/N] `))) return 'declined';
-    }
+    deps.log(
+      `Ollama downloads ${detail.private ? 'private' : 'gated'} repos with its own key: add ~/.ollama/id_ed25519.pub ` +
+        `of the Ollama host at ${HUGGING_FACE_SSH_KEYS_URL} if you have not.`
+    );
   }
+
+  if (!(await acceptLicense(license, deps, opts))) return 'declined';
   if (!(await confirmDownload(`Download ${formatBytes(build.sizeBytes)}? [y/N] `, deps, opts))) return 'declined';
 
   let ref: string | null;
@@ -460,7 +567,7 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
 }
 
 export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
-  const target = await deps.resolveRuntime();
+  const target = await abortable(deps.resolveRuntime(), deps.signal);
   if (!target.runtime.capabilities.canRemove) throw new Error(`${runtimeLabel(target)} cannot remove models.`);
   if (!opts.yes) {
     if (!deps.isTTY) throw new Error('Re-run with --yes to remove without a prompt.');
@@ -470,7 +577,7 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
     }
   }
   try {
-    await target.runtime.remove(name);
+    await abortable(target.runtime.remove(name), deps.signal);
   } catch (error) {
     if (error instanceof ModelNotFoundError)
       throw new Error(`No model named ${clean(name)} on ${runtimeLabel(target)}.`);
@@ -484,12 +591,12 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
 }
 
 export async function useModel(name: string, deps: ModelsDeps): Promise<number> {
-  const target = await deps.resolveRuntime();
+  const target = await abortable(deps.resolveRuntime(), deps.signal);
   const { runtime } = target;
   // The chat backend (OllamaBackend in @bike4mind/llm-adapters) only talks to Ollama.
   if (runtime.kind !== 'ollama')
     throw new Error(`The CLI chats with local models through Ollama; ${runtimeLabel(target)} is not Ollama.`);
-  const models = await runtime.list();
+  const models = await abortable(runtime.list(), deps.signal);
   const model = models.find(entry => entry.name === name) ?? models.find(entry => entry.name === `${name}:latest`);
   if (!model) throw new Error(`No model named ${clean(name)} on ${runtimeLabel(target)}. See: b4m models ls`);
   await deps.config.save({
@@ -513,7 +620,7 @@ export async function resolveRuntimeTarget(
   ];
   const chosen = configured.find(([, host]) => host);
   if (chosen?.[1]) {
-    const runtime = createOllama(chosen[1]);
+    const runtime = createOllama(withDefaultOllamaPort(chosen[1]));
     const health = await runtime.health();
     if (!health.ok) throw new Error(`Ollama at ${runtime.baseUrl} is unreachable: ${health.error}`);
     return { runtime, source: chosen[0] };
@@ -568,6 +675,10 @@ export async function runModelsCommand(
         throw new Error(`Unknown models subcommand: ${subcommand ?? '(none)'}`);
     }
   } catch (error) {
+    if (error instanceof CancelledError || deps.signal.aborted) {
+      deps.log('Cancelled.');
+      return EXIT_CANCELLED;
+    }
     if (error instanceof HubAccessError && error.reason === 'gated') {
       throw new Error(gatedMessage(clean(error.repo), deps.hub().endpoint));
     }
@@ -578,19 +689,35 @@ export async function runModelsCommand(
   }
 }
 
-function confirmOnTerminal(question: string): Promise<boolean> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise<boolean>(resolve => {
-    // Ctrl-C at a prompt arrives here (readline holds the terminal in raw mode) and counts as "no".
-    rl.on('SIGINT', () => {
-      process.stdout.write('\n');
+/** Resolves the answer; rejects with `CancelledError` on Ctrl-C at the prompt or when `signal` aborts. */
+export function confirmOnTerminal(
+  question: string,
+  signal: AbortSignal,
+  streams: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream } = {
+    input: process.stdin,
+    output: process.stdout,
+  }
+): Promise<boolean> {
+  if (signal.aborted) return Promise.reject(new CancelledError());
+  const rl = createInterface({ input: streams.input, output: streams.output });
+  return new Promise<boolean>((resolve, reject) => {
+    const cancel = () => {
+      streams.output.write('\n');
       rl.close();
-      resolve(false);
-    });
-    rl.question(question, answer => {
+      reject(new CancelledError());
+    };
+    const finish = (answer: string) => {
+      signal.removeEventListener('abort', cancel);
       rl.close();
       resolve(/^y(es)?$/i.test(answer.trim()));
+    };
+    // readline holds the terminal in raw mode, so Ctrl-C at the prompt arrives here, not as a process SIGINT.
+    rl.on('SIGINT', () => {
+      signal.removeEventListener('abort', cancel);
+      cancel();
     });
+    signal.addEventListener('abort', cancel, { once: true });
+    rl.question(question, finish);
   });
 }
 
@@ -607,17 +734,9 @@ export async function handleModelsCommand(subcommand: string | undefined, argv: 
   };
 
   const flagHost = argv['ollama-host'];
-  if (flagHost === '') {
-    if (models.ollamaHost) {
-      await models.save({ ollamaHost: undefined });
-      console.log('Cleared the saved Ollama host.');
-    }
-  } else if (flagHost) {
-    const { baseUrl } = new OllamaRuntime({ baseUrl: flagHost });
-    if (baseUrl !== models.ollamaHost) {
-      await models.save({ ollamaHost: baseUrl });
-      console.log(`Saved Ollama host ${baseUrl}`);
-    }
+  if (flagHost === '' && models.ollamaHost) {
+    await models.save({ ollamaHost: undefined });
+    console.error('Cleared the saved Ollama host.');
   }
 
   const controller = new AbortController();
@@ -631,14 +750,22 @@ export async function handleModelsCommand(subcommand: string | undefined, argv: 
   try {
     return await runModelsCommand(subcommand, argv, {
       hub: () => (hub ??= new HuggingFaceHub({ token: process.env.HF_TOKEN })),
-      resolveRuntime: () =>
-        resolveRuntimeTarget({
+      ollamaRegistry: (name, signal) => readOllamaManifest(name, signal),
+      resolveRuntime: async () => {
+        const target = await resolveRuntimeTarget({
           flag: flagHost || undefined,
           env: process.env.B4M_OLLAMA_HOST,
           config: models.ollamaHost,
-        }),
+        });
+        // Remembered only once it answered, so a typo never replaces a working saved host.
+        if (target.source === 'flag' && target.runtime.baseUrl !== models.ollamaHost) {
+          await models.save({ ollamaHost: target.runtime.baseUrl });
+          console.error(`Saved Ollama host ${target.runtime.baseUrl}`);
+        }
+        return target;
+      },
       config: models,
-      confirm: confirmOnTerminal,
+      confirm: question => confirmOnTerminal(question, controller.signal),
       isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
       log: line => console.log(line),
       progress: {
