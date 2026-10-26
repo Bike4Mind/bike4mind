@@ -290,6 +290,7 @@ import {
   libraryFlagForScope,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
+import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 const THROTTLE_INTERVAL = 100;
 const DISABLE_SERVER_THROTTLING = process.env.DISABLE_SERVER_THROTTLING === 'true';
@@ -574,7 +575,7 @@ function withholdIdentityTool(
     ((REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model.id) ||
       model.dispatchProfile?.toolTransport === 'responses') &&
       toolNames.length === 1 &&
-      toolNames[0] === 'current_model_details')
+      toolNames[0] === CURRENT_MODEL_DETAILS_TOOL_NAME)
   );
 }
 
@@ -850,7 +851,7 @@ export const AUTO_ADDED_TOOL_NAMES = [
   'blog_publish',
   'blog_edit',
   'navigate_view',
-  'current_model_details',
+  CURRENT_MODEL_DETAILS_TOOL_NAME,
   'skill',
   ...DATA_LAKE_TOOL_NAMES,
 ];
@@ -1756,7 +1757,8 @@ export class ChatCompletionProcess {
       if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
         finalEnabledTools.push('navigate_view');
       }
-      if (!finalEnabledTools.includes('current_model_details')) finalEnabledTools.push('current_model_details');
+      if (!finalEnabledTools.includes(CURRENT_MODEL_DETAILS_TOOL_NAME))
+        finalEnabledTools.push(CURRENT_MODEL_DETAILS_TOOL_NAME);
     }
 
     // Auto-add Lattice tools when Lattice feature is enabled
@@ -3478,7 +3480,7 @@ export class ChatCompletionProcess {
           allTools.map(t => t.toolSchema.name)
         )
       ) {
-        allTools = allTools.filter(t => t.toolSchema.name !== 'current_model_details');
+        allTools = allTools.filter(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME);
       }
 
       const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
@@ -4810,7 +4812,7 @@ export class ChatCompletionProcess {
           // model, so withhold it and let every adapter keep naming its own model.
           {
             ...options,
-            tools: allTools?.filter(t => t.toolSchema.name !== 'current_model_details'),
+            tools: allTools?.filter(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME),
             identityViaTool: false,
           } as ICompletionOptions,
           async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
@@ -5103,7 +5105,7 @@ export class ChatCompletionProcess {
                   (options.tools ?? []).map(t => t.toolSchema.name)
                 )
                   ? {
-                      tools: options.tools?.filter(t => t.toolSchema.name !== 'current_model_details'),
+                      tools: options.tools?.filter(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME),
                       identityViaTool: false,
                     }
                   : {}),
@@ -5486,7 +5488,7 @@ export class ChatCompletionProcess {
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
                   // the identity tool alone does not need a tool-capable fallback
-                  requireTools: !!options.tools?.some(t => t.toolSchema.name !== 'current_model_details'),
+                  requireTools: !!options.tools?.some(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME),
                   isAdmitted: this.modelAdmission?.admits,
                 }
               );

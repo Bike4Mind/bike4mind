@@ -42,6 +42,7 @@ import type { MinimalSessionRepository } from '../conversationContextService/typ
 import { notifyToolFinish } from './toolFinishObserver';
 import { extractMcpPendingAction, type McpPendingAction } from './mcpPendingAction';
 import { JIRA_LIST_ATTACHMENTS, CONFLUENCE_LIST_ATTACHMENTS } from '@bike4mind/mcp/atlassian/constants';
+import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -615,7 +616,7 @@ export function buildSharedTools(
   // must not inherit it (its adapter keeps its own identity line).
   const childTools = [...tools, ...agentOnlyMcpTools];
   const parentTools = (options.wrapChildTools ? options.wrapChildTools(childTools) : childTools).filter(
-    tool => !deniedToolNames.has(tool.toolSchema.name) && tool.toolSchema.name !== 'current_model_details'
+    tool => !deniedToolNames.has(tool.toolSchema.name) && tool.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME
   );
 
   const subagentModels = deps.subagentModels ?? deps.precomputed?.models;

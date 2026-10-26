@@ -1,6 +1,7 @@
 import { IMessage, SystemPromptDetailSchema } from '@bike4mind/common';
 import type { z } from 'zod';
 import type { featureNames } from './ChatCompletionFeatures';
+import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 /**
  * The system/context stack a completion is assembled from, as data rather than as an inline array
@@ -480,7 +481,7 @@ export function resolveIdentityReminder(input: { promptMode?: PromptMode; offere
 } {
   return {
     omitIdentityReminder: input.promptMode === 'raw',
-    identityViaTool: input.offeredToolNames.includes('current_model_details'),
+    identityViaTool: input.offeredToolNames.includes(CURRENT_MODEL_DETAILS_TOOL_NAME),
   };
 }
 

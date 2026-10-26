@@ -1,6 +1,8 @@
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { ToolDefinition } from '../../base/types';
 
+export const CURRENT_MODEL_DETAILS_TOOL_NAME = 'current_model_details';
+
 const BACKEND_LABELS: Partial<Record<ModelBackend, string>> = {
   [ModelBackend.Anthropic]: 'direct Anthropic API',
   [ModelBackend.Bedrock]: 'AWS Bedrock',
@@ -26,7 +28,7 @@ const describeModel = (model: ModelInfo) => ({
 });
 
 export const currentModelDetailsTool: ToolDefinition = {
-  name: 'current_model_details',
+  name: CURRENT_MODEL_DETAILS_TOOL_NAME,
   implementation: context => ({
     toolFn: async () => {
       // Read at call time: servingModel moves when the turn falls back to another model.
@@ -35,7 +37,7 @@ export const currentModelDetailsTool: ToolDefinition = {
       return JSON.stringify(describeModel(model));
     },
     toolSchema: {
-      name: 'current_model_details',
+      name: CURRENT_MODEL_DETAILS_TOOL_NAME,
       description:
         'Get the details of the AI model serving this conversation right now: its name, id, provider, context window, max output tokens and capabilities. Call this whenever asked which model you are, what version you are, or what you can do - never answer from memory.',
       parameters: {
