@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+const audit = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: audit,
+  definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
+}));
+
 // `any` below is deliberate test-mock plumbing for the next-connect / node-mocks-http chain,
 // matching the repo's handler-test convention.
 // Read when the route module loads, which is before any test body runs
@@ -29,10 +35,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@bike4mind/database/social', () => ({
   ModalModel: {
     findById: () => Promise.resolve(mockRefs.modal),
-    findOneAndUpdate: (...args: unknown[]) => {
-      mockRefs.findOneAndUpdate(...args);
-      return Promise.resolve(mockRefs.modal);
-    },
+    findOneAndUpdate: (...args: unknown[]) => mockRefs.findOneAndUpdate(...args),
   },
 }));
 
@@ -73,8 +76,10 @@ describe('PUT /api/modals/[id] - video', () => {
   };
 
   beforeEach(() => {
-    mockRefs.findOneAndUpdate.mockClear();
-    mockRefs.modal = { _id: { toString: () => MODAL_ID }, tags: [], toObject: () => mockRefs.modal };
+    vi.clearAllMocks();
+    audit.mockResolvedValue(null);
+    mockRefs.findOneAndUpdate.mockImplementation(async () => mockRefs.modal);
+    mockRefs.modal = { _id: { toString: () => MODAL_ID }, title: 'Demo', tags: [], toObject: () => mockRefs.modal };
   });
 
   it('persists the video urls', async () => {
@@ -83,7 +88,38 @@ describe('PUT /api/modals/[id] - video', () => {
 
     const [, update] = mockRefs.findOneAndUpdate.mock.calls[0];
     expect(update.$set.video).toEqual(video);
+    expect(audit.mock.calls[0][0]).toBe(req);
+    expect(audit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.modal.updated',
+      target: { kind: 'settings', id: MODAL_ID, displayName: 'Demo' },
+      details: { via: 'admin-modals', fields: ['video'] },
+    });
+    expect(mockRefs.findOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(audit.mock.invocationCallOrder[0]);
   });
+
+  it('audits explicit false and null field names without their values', async () => {
+    const { req, res } = mocks({ enabled: false, video: null, subtitle: undefined });
+
+    await mockRefs.putHandler!(req, res);
+
+    expect(audit).toHaveBeenCalledOnce();
+    expect(audit.mock.calls[0][1].details).toEqual({ via: 'admin-modals', fields: ['video', 'enabled'] });
+  });
+
+  it.each(['database failure', 'concurrent deletion', 'missing modal', 'permission denied'])(
+    'records nothing after %s',
+    async failure => {
+      const { req, res } = mocks({ enabled: false });
+      if (failure === 'database failure') mockRefs.findOneAndUpdate.mockRejectedValueOnce(new Error('write failed'));
+      if (failure === 'concurrent deletion') mockRefs.findOneAndUpdate.mockResolvedValueOnce(null);
+      if (failure === 'missing modal') mockRefs.modal = null;
+      if (failure === 'permission denied') Object.assign(req, { ability: { can: () => false } });
+
+      await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
+
+      expect(audit).not.toHaveBeenCalled();
+    }
+  );
 
   it('accepts clearing the video', async () => {
     const { req, res } = mocks({ video: null });
@@ -114,5 +150,6 @@ describe('PUT /api/modals/[id] - video', () => {
     const { req, res } = mocks({ video: bad });
     await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
     expect(mockRefs.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
   });
 });

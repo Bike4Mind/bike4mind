@@ -37,6 +37,24 @@ describe('recordModalChanges', () => {
     });
   });
 
+  it('records field names only when the change supplies them', async () => {
+    await recordModalChanges(
+      {} as Request,
+      [
+        { kind: 'updated', id: 'a', title: 'A', fields: ['enabled', 'video'] },
+        { kind: 'updated', id: 'b', title: 'B', fields: [] },
+        { kind: 'created', id: 'c', title: 'C' },
+      ],
+      'admin-modals'
+    );
+
+    expect(audit.mock.calls.map(([, input]) => input.details)).toEqual([
+      { via: 'admin-modals', fields: ['enabled', 'video'] },
+      { via: 'admin-modals', fields: [] },
+      { via: 'admin-modals' },
+    ]);
+  });
+
   it('records nothing for an empty change list', async () => {
     await recordModalChanges({} as Request, [], 'admin-tool');
     expect(audit).not.toHaveBeenCalled();

@@ -1,3 +1,5 @@
+import { recordModalChanges } from '@server/tools/recordModalChanges';
+import { definedKeys } from '@server/utils/adminAudit';
 import { ModalModel } from '@bike4mind/database/social';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -82,11 +84,25 @@ const handler = baseApi().put(
       { new: true, runValidators: true } // Return the updated modal and ensure schema validations are applied
     );
 
+    if (!updatedModal) throw new NotFoundError('Modal not found');
+    await recordModalChanges(
+      req,
+      [
+        {
+          kind: 'updated',
+          id: String(updatedModal._id),
+          title: updatedModal.title || updatedModal.textMessage || 'Untitled',
+          fields: definedKeys(updateData),
+        },
+      ],
+      'admin-modals'
+    );
+
     // Defense-in-depth: strip variants + generationMetadata from the response even
     // though this endpoint is admin-only today. Insulates the invariant from future
     // ability-rule changes.
     const audienceKey = await viewerClassifier.classify({ isAdmin: req.user?.isAdmin ?? false } as never);
-    return res.json(extractVariantForViewer(updatedModal?.toObject() ?? {}, audienceKey));
+    return res.json(extractVariantForViewer(updatedModal.toObject(), audienceKey));
   })
 );
 

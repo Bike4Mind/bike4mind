@@ -1,4 +1,3 @@
-import type { Request } from 'express';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import type { ModalChange } from './modalOperations';
 
@@ -10,13 +9,19 @@ const MODAL_ACTIONS: Record<ModalChange['kind'], ModalAuditAction> = {
   deleted: 'settings.modal.deleted',
 };
 
-export const recordModalChanges = async (req: Request, changes: ModalChange[], via: string): Promise<void> => {
+type ModalAuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
+
+export const recordModalChanges = async (
+  req: ModalAuditRequest,
+  changes: ModalChange[],
+  via: string
+): Promise<void> => {
   for (const change of changes) {
     await recordAdminActionFromRequest(req, {
       action: MODAL_ACTIONS[change.kind],
       target: { kind: 'settings', id: change.id, displayName: change.title },
       summary: `${change.kind} modal ${change.title}`,
-      details: { via },
+      details: { via, ...(change.fields !== undefined ? { fields: change.fields } : {}) },
     });
   }
 };

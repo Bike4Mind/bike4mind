@@ -1,3 +1,4 @@
+import { recordModalChanges } from '@server/tools/recordModalChanges';
 import { ModalModel } from '@bike4mind/database/social';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -68,6 +69,11 @@ const handler = baseApi().post(
     const newModal = new ModalModel(newModalData);
 
     await newModal.save();
+    await recordModalChanges(
+      req,
+      [{ kind: 'created', id: String(newModal._id), title: newModal.title || newModal.textMessage || 'Untitled' }],
+      'admin-modals'
+    );
     return res.status(201).send(newModal);
   })
 );

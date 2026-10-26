@@ -4,7 +4,12 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ModalImageHandler } from './modalImageHandler';
 import { cacheExternalImage } from '@server/utils/cacheExternalImage';
 
-export type ModalChange = { kind: 'created' | 'updated' | 'deleted'; id: string; title: string };
+export type ModalChange = {
+  kind: 'created' | 'updated' | 'deleted';
+  id: string;
+  title: string;
+  fields?: string[];
+};
 
 // Lets a route audit the modal writes that a tool or LLM-parsed query performed on its behalf.
 const modalChangeStore = new AsyncLocalStorage<ModalChange[]>();
