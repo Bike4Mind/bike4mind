@@ -6,6 +6,7 @@ import { slackDevWorkspaceRepository } from '@bike4mind/database';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import pLimit from 'p-limit';
+import { escapeCsvField } from '@bike4mind/server-utils/integrations/slack/slackExportCsv';
 import {
   isSlackUserValidationError,
   isSlackUserValidationErrorByMessage,
@@ -382,23 +383,6 @@ async function fetchThreadReplies(channelId: string, threadTs: string, slackBotT
     }
     return [];
   }
-}
-
-/**
- * Escape CSV field to prevent formula injection and parsing issues
- */
-function escapeCsvField(field: string): string {
-  if (!field) return '';
-
-  // Prevent CSV formula injection (security vulnerability)
-  if (field.startsWith('=') || field.startsWith('+') || field.startsWith('-') || field.startsWith('@')) {
-    field = "'" + field; // Prefix with single quote to neutralize formula
-  }
-
-  // Escape quotes and newlines for proper CSV parsing
-  field = field.replace(/"/g, '""').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-
-  return field;
 }
 
 /**
