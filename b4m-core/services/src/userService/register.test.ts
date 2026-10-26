@@ -692,6 +692,23 @@ describe('registerViaOTC', () => {
     expect(mockAdapters.logger.error).toHaveBeenCalled();
   });
 
+  it('defers the grant when the signup domain is held, through db.signupProtection', async () => {
+    mockAdapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'newUserId', email: otcParams.email });
+    mockAdapters.db.users.addTagsToUser = vi.fn();
+    mockAdapters.db.adminSettings.findBySettingNames = vi.fn().mockResolvedValue([]);
+    mockAdapters.db.signupProtection = {
+      repository: {
+        findReview: vi.fn().mockResolvedValue({ domain: 'example.com', status: 'held_pending_review' }),
+        isOrganizationDomain: vi.fn().mockResolvedValue(false),
+      },
+    };
+    const result = await registerViaOTC(otcParams, mockAdapters);
+
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(result.emailVerified).toBe(true);
+    expect(result.tags).toContain(PENDING_FREE_CREDITS_TAG);
+  });
+
   // P0-B abuse gate: OTC is now the primary new-signup surface (the password
   // register endpoint was removed). Prove the creation-time gate fires on this path too - the
   // route mocks registerViaOTC, so this service-level test is where the enforcement is verified.
