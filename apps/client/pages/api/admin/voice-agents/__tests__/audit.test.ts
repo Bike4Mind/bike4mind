@@ -156,5 +156,18 @@ describe('/api/admin/voice-agents admin audit', () => {
       target: { kind: 'settings', id: 'agent-1', displayName: 'Concierge' },
       details: { elevenLabsAgentId: 'el-1', wasDefault: true },
     });
+    expect(h.audit.mock.calls[0][1].details).not.toHaveProperty('promotedDefaultId');
+  });
+
+  it('DELETE of the default agent records which agent was promoted to default', async () => {
+    h.listAllVoiceAgents.mockResolvedValue([{ id: 'agent-2' }]);
+    await run(itemHandler, 'DELETE', { query: { id: 'agent-1' } });
+
+    expect(h.setDefaultVoiceAgent).toHaveBeenCalledWith('agent-2');
+    expect(h.audit.mock.calls[0][1].details).toEqual({
+      elevenLabsAgentId: 'el-1',
+      wasDefault: true,
+      promotedDefaultId: 'agent-2',
+    });
   });
 });

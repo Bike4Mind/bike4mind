@@ -174,10 +174,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     await agentRepository.delete(id);
 
     // If the deleted agent was the default, promote the next surviving agent.
+    let promotedDefaultId: string | undefined;
     if (agent.isDefaultVoiceAgent) {
       const remaining = await agentRepository.listAllVoiceAgents();
       if (remaining.length > 0) {
-        await agentRepository.setDefaultVoiceAgent(remaining[0].id);
+        promotedDefaultId = remaining[0].id;
+        await agentRepository.setDefaultVoiceAgent(promotedDefaultId);
       }
     }
 
@@ -185,7 +187,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       action: 'settings.voice_agent.deleted',
       target: { kind: 'settings', id, displayName: agent.name },
       summary: `deleted voice agent ${agent.name}`,
-      details: { elevenLabsAgentId: agent.elevenLabsAgentId, wasDefault: agent.isDefaultVoiceAgent === true },
+      details: {
+        elevenLabsAgentId: agent.elevenLabsAgentId,
+        wasDefault: agent.isDefaultVoiceAgent === true,
+        ...(promotedDefaultId !== undefined ? { promotedDefaultId } : {}),
+      },
     });
 
     return res.status(200).json({ ok: true });
