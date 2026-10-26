@@ -268,7 +268,6 @@ describe('BubblewrapRuntime', () => {
       const present: Record<string, boolean> = {
         [`${home}/.colima`]: true,
         [`${home}/.docker`]: true,
-        [`${home}/.docker/run`]: true,
         '/var/run/docker.sock': false,
         '/run/user/1000/podman': true,
         '/run/user/1000/docker.sock': false,
@@ -316,7 +315,26 @@ describe('BubblewrapRuntime', () => {
 
       it('does not remount a socket dir already hidden by a denied path', () => {
         const { args } = wrap();
-        expect(args).not.toContain(`${home}/.docker/run`);
+        expect(args.filter(arg => arg === `${home}/.docker`)).toHaveLength(1);
+      });
+
+      it.each(['EACCES', 'ELOOP'])('skips a container socket path that fails with %s', code => {
+        vi.mocked(statSync).mockImplementation(p => {
+          if (String(p) === `${home}/.colima`) throw Object.assign(new Error(code), { code });
+          if (String(p) in present) return fsEntry(present[String(p)]);
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        });
+        const { args } = wrap();
+        expect(args).not.toContain(`${home}/.colima`);
+        expect(mountOf(args, '/run/user/1000/podman')).toEqual(['--tmpfs', '/run/user/1000/podman']);
+      });
+
+      it('still fails closed on other errors', () => {
+        vi.mocked(statSync).mockImplementation(p => {
+          if (String(p) === `${home}/.colima`) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        });
+        expect(() => wrap()).toThrow('EIO');
       });
 
       it('leaves them alone when allowContainerSockets is set', () => {

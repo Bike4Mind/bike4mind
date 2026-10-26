@@ -126,7 +126,10 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
     const runtimeDir = mkdtempSync(path.join(os.tmpdir(), 'b4m-xdg-'));
     const socketPath = path.join(runtimeDir, 'docker.sock');
     const server = net.createServer(socket => socket.end());
-    await new Promise<void>(resolve => server.listen(socketPath, resolve));
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, resolve);
+    });
     const original = process.env.XDG_RUNTIME_DIR;
     process.env.XDG_RUNTIME_DIR = runtimeDir;
     const wrapped = runtime.wrapCommand({

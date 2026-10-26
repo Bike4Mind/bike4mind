@@ -173,7 +173,17 @@ Set to `false` for maximum security when you want to prevent any unsandboxed exe
 
 **Type:** `boolean` | **Default:** `false`
 
-Sandboxed commands cannot connect to container engine API sockets: `/var/run/docker.sock` (and the file it links to), `~/.docker/run`, `~/.colima`, `~/.lima`, `~/.rd`, `~/.orbstack`, `~/.local/share/containers`, and `docker.sock` / `podman` under `$XDG_RUNTIME_DIR`. On macOS the Seatbelt profile denies connecting to them; on Linux Bubblewrap hides them behind an empty mount.
+Sandboxed commands cannot connect to container engine API sockets. The blocked locations are:
+
+- `/var/run/docker.sock` and `/run/docker.sock` (plus whatever file they link to)
+- `/run/podman` and `$TMPDIR/podman`
+- `~/.docker` (including Docker Desktop's `~/.docker/run` and `~/.docker/desktop`) and `~/Library/Containers/com.docker.docker/Data`
+- `~/.colima`, `~/.lima`, `~/.rd`, `~/.orbstack` and `~/.local/share/containers`
+- `$XDG_CONFIG_HOME/colima` (default `~/.config/colima`), `$COLIMA_HOME` and `$LIMA_HOME`
+- `docker.sock` and `podman` under `$XDG_RUNTIME_DIR`
+- the `unix://` socket named by `$DOCKER_HOST` or `$CONTAINER_HOST`
+
+On macOS the Seatbelt profile denies connecting to them; on Linux Bubblewrap hides the ones that exist behind an empty mount. This applies to unix sockets only: an engine that listens on a loopback TCP port is reachable when sandbox networking is on.
 
 Set to `true` only if a sandboxed tool genuinely needs to talk to the container engine directly. A repo config can turn this off but never on. The `docker` and `podman` commands themselves are in `excludedCommands` and are not affected.
 

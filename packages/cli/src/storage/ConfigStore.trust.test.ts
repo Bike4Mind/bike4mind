@@ -157,6 +157,26 @@ describe('ConfigStore folder-trust gate', () => {
     expect(names).toContain('mcpjson-srv');
   });
 
+  it('lets a trusted repo turn allowContainerSockets off but keeps a global opt-in otherwise', async () => {
+    await fs.writeFile(
+      globalConfigPath,
+      globalConfigJson({ sandbox: { enabled: true, mode: 'permissions', allowContainerSockets: true } }),
+      { mode: 0o600 }
+    );
+    const store = new ConfigStore(globalConfigPath);
+    await store.load();
+    await store.trustProject();
+    expect((await store.get()).sandbox?.allowContainerSockets).toBe(true);
+
+    await fs.writeFile(
+      path.join(projectDir, '.bike4mind', 'config.json'),
+      JSON.stringify({ sandbox: { allowContainerSockets: false } })
+    );
+    const reloaded = new ConfigStore(globalConfigPath);
+    await reloaded.load();
+    expect((await reloaded.get()).sandbox?.allowContainerSockets).toBe(false);
+  });
+
   it('enforces the never-loosen invariant even when trusted', async () => {
     const store = new ConfigStore(globalConfigPath);
     await store.load();

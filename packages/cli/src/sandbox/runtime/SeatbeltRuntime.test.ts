@@ -278,7 +278,15 @@ describe('SeatbeltRuntime', () => {
       const dockerDeny = '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/docker.sock")))';
       expect(unixAllowIdx).toBeGreaterThan(-1);
       expect(profile.indexOf(dockerDeny)).toBeGreaterThan(unixAllowIdx);
-      for (const dir of ['.docker/run', '.colima', '.lima', '.rd', '.orbstack', '.local/share/containers']) {
+      for (const dir of [
+        '.docker',
+        'Library/Containers/com.docker.docker/Data',
+        '.colima',
+        '.lima',
+        '.rd',
+        '.orbstack',
+        '.local/share/containers',
+      ]) {
         const rule = `(deny network-outbound (remote unix-socket (subpath "${home}/${dir}")))`;
         expect(profile.indexOf(rule)).toBeGreaterThan(unixAllowIdx);
       }

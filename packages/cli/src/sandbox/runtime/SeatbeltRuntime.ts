@@ -91,7 +91,7 @@ export class SeatbeltRuntime implements SandboxRuntime {
     // Network egress is fail-closed unless explicitly enabled (the proxy handles
     // filtering when on). `(deny network*)` denies ALL socket families - Seatbelt's
     // `network*` covers AF_UNIX, not just IP - so a bare deny would also sever local
-    // IPC (ssh-agent, gpg-agent, a unix-socket postgres/redis, docker.sock). The
+    // IPC (ssh-agent, gpg-agent, a unix-socket postgres/redis). The
     // unix-socket re-allows below run AFTER it (Seatbelt is last-match-wins), so the
     // NET effect is an IP-only denial. This matches Linux, whose --unshare-net
     // isolates IP but not AF_UNIX.
