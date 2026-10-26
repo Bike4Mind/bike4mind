@@ -104,4 +104,19 @@ describe('SuggestionModelPicker catalog', () => {
     expect(host.textContent).toContain('qwen3:8b (unavailable)');
     expect(host.textContent).toContain('no hint is shown');
   });
+
+  it.each(['local:ollama:qwen3:8b', 'local:lmstudio:qwen3-8b'])(
+    'keeps an unavailable device model %s on the device side of the caption',
+    async modelId => {
+      setPromptSuggestionModel(modelId);
+      list.mockResolvedValue({ models: [] });
+      await mount();
+
+      expect(host.textContent).toContain(`${modelId} (unavailable)`);
+      expect(host.textContent).toContain('unavailable on this device');
+      expect(host.textContent).toContain('no hint is shown');
+      expect(host.textContent).not.toContain('This server does not offer');
+      expect(host.textContent).not.toContain('billed');
+    }
+  );
 });

@@ -39,6 +39,14 @@ describe('suggestionPickerRows', () => {
       { id: 'qwen3:8b', label: 'qwen3:8b', local: false, device: false, unavailable: false },
     ]);
   });
+
+  it.each([null, []])('preserves a saved device model classification with catalog %j', offered => {
+    for (const model of [deviceQwen, deviceOther]) {
+      expect(suggestionPickerRows(offered, model.id)).toEqual([
+        expect.objectContaining({ id: model.id, local: true, device: true, unavailable: offered !== null }),
+      ]);
+    }
+  });
 });
 
 describe('promptSuggestionsSummary', () => {

@@ -39,11 +39,12 @@ export function suggestionPickerRows(
   });
   if (saved && !choices.some(choice => choice.id === saved)) {
     const unavailable = offered !== null;
+    const device = isLocalModel(saved);
     choices.push({
       id: saved,
       label: unavailable ? `${saved} (unavailable)` : saved,
-      local: false,
-      device: false,
+      local: device,
+      device,
       unavailable,
     });
   }
@@ -52,7 +53,10 @@ export function suggestionPickerRows(
 
 function caption(selected: SuggestionPickerRow | undefined): string {
   if (!selected) return 'The smallest hosted model this server offers. No hint when it offers none.';
-  if (selected.unavailable) return 'This server does not offer this model right now, so no hint is shown.';
+  if (selected.unavailable)
+    return selected.device
+      ? 'This model is unavailable on this device right now, so no hint is shown.'
+      : 'This server does not offer this model right now, so no hint is shown.';
   if (selected.device) return 'Runs on this device. The hint can take a few seconds longer.';
   if (selected.local) return "Uses the server's configured Ollama endpoint. The hint can take a few seconds longer.";
   return 'Hosted by the server, and billed like any other request.';

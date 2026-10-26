@@ -7,6 +7,19 @@ describe('OllamaLocal', () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(['gpt-4', 'local:lmstudio:x', 'local:', 'local:ollama', 'local:ollama:', 'local::x'])(
+    'rejects unsupported or malformed model id %s before network I/O',
+    async model => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(new OllamaLocal().stream({ model, messages: [] }, () => undefined)).rejects.toThrow(
+        'Invalid local model id.'
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
   it('discovers localhost models with namespaced ids and reported capabilities', async () => {
     vi.stubGlobal(
       'fetch',

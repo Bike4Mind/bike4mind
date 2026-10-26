@@ -819,13 +819,6 @@ export interface BackgroundProcessInfo {
  */
 export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessInfo } | { ok: false; message: string };
 
-/**
- * One model this deployment offers, as the picker renders it.
- *
- * Sourced from `GET /api/models`, which builds the list from the calling account's effective
- * provider keys - so this is genuinely per-deployment and per-account, and the desktop client
- * never ships a list of its own.
- */
 export function localModelId(runtimeId: string, model: string): string {
   return `local:${runtimeId}:${model}`;
 }
@@ -849,6 +842,13 @@ export function localBackend(runtimeId: string): string {
   return `local-${runtimeId}`;
 }
 
+/**
+ * One model this deployment offers, as the picker renders it.
+ *
+ * Sourced from `GET /api/models`, which builds the list from the calling account's effective
+ * provider keys - so this is genuinely per-deployment and per-account, and the desktop client
+ * never ships a list of its own.
+ */
 export interface ChatModelOption {
   id: string;
   name: string;
