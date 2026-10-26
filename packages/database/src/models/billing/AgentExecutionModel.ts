@@ -373,6 +373,12 @@ export interface IAgentExecution {
    * read it through `executionTurnAuth` (apps/client/server/auth/turnAuth.ts), which fails those closed.
    */
   authOrigin?: AuthOrigin;
+  /**
+   * The key that started the run lacks the admin scope, so the executor withholds the owner's admin
+   * role on the user it reloads (see withholdAdminRole). Inherited by child and DAG-node runs.
+   * Absent means not withheld, matching QuestStartBodySchema.adminRoleWithheld.
+   */
+  adminRoleWithheld?: boolean;
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
@@ -778,6 +784,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     scopeDeniedTools: { type: [String], default: undefined },
     apiKeyId: { type: String },
     authOrigin: { type: String, enum: AuthOriginSchema.options },
+    adminRoleWithheld: { type: Boolean },
     usedMementoIds: [{ type: String }],
     // Memory gates resolved once at execution start and persisted so read/write/
     // stop-at-gate all agree even if the underlying flags flip mid-run. Typed

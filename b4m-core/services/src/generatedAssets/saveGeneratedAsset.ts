@@ -2,12 +2,16 @@ import {
   extensionFromMimeType,
   FabFileSourceType,
   GENERATED_ASSET_GENERATOR_TAG,
+  GENERATED_ASSET_MAX_LINEAGE_ENTRIES,
+  GENERATED_ASSET_MAX_STORED_REQUEST_BYTES,
   GENERATED_ASSET_MAX_STORED_TEXT_CHARS,
+  GeneratedAssetLineageEntrySchema,
   GENERATED_ASSET_TAG,
   isStorageLimitError,
   KnowledgeType,
   videoFileExtension,
   type GeneratedAssetGenerator,
+  type GeneratedAssetLineageEntry,
   type GeneratedAssetMetadata,
   type GeneratedAssetSaveSkippedReason,
   type IBaseRepository,
@@ -49,6 +53,11 @@ export type SaveGeneratedAssetParams = {
   /** The producer's own content type. It outranks the file name, so it must come from the provider, never a request. */
   contentType: string;
   generation: GeneratedAssetMetadata;
+  /**
+   * FabFiles this asset was made from. Real FabFile ids only. Invalid entries are dropped and the list is
+   * de-duplicated and capped, because losing a paid asset is worse than losing a lineage link.
+   */
+  derivedFrom?: GeneratedAssetLineageEntry[];
   /** The notebook the asset was made in, for in-chat producers. */
   sessionId?: string;
   questId?: string;
@@ -65,6 +74,7 @@ export type SaveGeneratedAssetDeps = {
   storage: CreateFabFileAdapters['storage'];
   logger: {
     info: (message: string, ...args: unknown[]) => void;
+    warn: (message: string, ...args: unknown[]) => void;
     error: (message: string, ...args: unknown[]) => void;
   };
 };
@@ -84,6 +94,7 @@ export async function saveGeneratedAsset(
 ): Promise<SaveGeneratedAssetResult> {
   const { userId, bytes, contentType, generation, signal } = params;
   const { logger } = deps;
+  const derivedFrom = normalizeLineage(params.derivedFrom, logger);
   const jobTag = generation.jobId ? `job:${generation.jobId}` : undefined;
 
   if (jobTag) {
@@ -129,8 +140,9 @@ export async function saveGeneratedAsset(
             ...(params.sessionId && { sessionId: params.sessionId }),
             ...(params.questId && { questId: params.questId }),
             ...(params.generatedCopyKey && { generatedCopyKey: params.generatedCopyKey }),
-            generation: storedGeneration(generation),
+            generation: storedGeneration(generation, logger),
           },
+          ...(derivedFrom.length > 0 && { derivedFrom }),
         },
         // The extension map keeps media containers closed to user uploads (no .mp4), and the type here is the
         // producer's own, so the claim wins.
@@ -154,16 +166,62 @@ export async function saveGeneratedAsset(
   }
 }
 
-function storedGeneration(generation: GeneratedAssetMetadata): GeneratedAssetMetadata {
+function storedGeneration(
+  generation: GeneratedAssetMetadata,
+  logger: SaveGeneratedAssetDeps['logger']
+): GeneratedAssetMetadata {
   const prompt = generation.prompt.slice(0, GENERATED_ASSET_MAX_STORED_TEXT_CHARS);
+  const { request, ...rest } = generation;
   return {
-    ...generation,
+    ...rest,
     prompt,
     promptTruncated: prompt.length < generation.prompt.length,
     ...(generation.lyrics !== undefined && {
       lyrics: generation.lyrics.slice(0, GENERATED_ASSET_MAX_STORED_TEXT_CHARS),
     }),
+    ...(request && fitsRequestCap(request, generation, logger) && { request }),
   };
+}
+
+function fitsRequestCap(
+  request: Record<string, unknown>,
+  generation: GeneratedAssetMetadata,
+  logger: SaveGeneratedAssetDeps['logger']
+): boolean {
+  const bytes = Buffer.byteLength(JSON.stringify(request), 'utf8');
+  if (bytes <= GENERATED_ASSET_MAX_STORED_REQUEST_BYTES) return true;
+  logger.warn('[saveGeneratedAsset] generation request over the storage cap, not stored', {
+    generator: generation.generator,
+    bytes,
+    maxBytes: GENERATED_ASSET_MAX_STORED_REQUEST_BYTES,
+  });
+  return false;
+}
+
+function normalizeLineage(
+  entries: GeneratedAssetLineageEntry[] | undefined,
+  logger: Pick<SaveGeneratedAssetDeps['logger'], 'warn'>
+): GeneratedAssetLineageEntry[] {
+  if (!entries?.length) return [];
+  const seen = new Set<string>();
+  const valid: GeneratedAssetLineageEntry[] = [];
+  for (const entry of entries) {
+    const parsed = GeneratedAssetLineageEntrySchema.safeParse(entry);
+    if (!parsed.success) {
+      logger.warn('[saveGeneratedAsset] dropping invalid lineage entry', { role: entry?.role });
+      continue;
+    }
+    const key = `${parsed.data.fileId}:${parsed.data.role}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    valid.push(parsed.data);
+  }
+  if (valid.length <= GENERATED_ASSET_MAX_LINEAGE_ENTRIES) return valid;
+  logger.warn('[saveGeneratedAsset] lineage capped', {
+    count: valid.length,
+    max: GENERATED_ASSET_MAX_LINEAGE_ENTRIES,
+  });
+  return valid.slice(0, GENERATED_ASSET_MAX_LINEAGE_ENTRIES);
 }
 
 function savedResult(file: IFabFileDocument, s3Key: string): SaveGeneratedAssetResult {

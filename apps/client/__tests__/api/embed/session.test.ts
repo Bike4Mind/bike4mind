@@ -118,7 +118,15 @@ describe('POST /api/embed/session - mint embed session token', () => {
     expect(res._getStatusCode()).toBe(200);
   });
 
-  it('treats Origin: null (sandboxed iframe) as absent, matching the chat route', async () => {
+  it('rejects Origin: null on a key with allowed origins', async () => {
+    const { req, res } = makeReq({ 'x-api-key': 'b4m_live_embed', origin: 'null' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (handler as any)(req, res);
+    expect(res._getStatusCode()).toBe(403);
+  });
+
+  it('accepts Origin: null on a key with no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
     const { req, res } = makeReq({ 'x-api-key': 'b4m_live_embed', origin: 'null' });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (handler as any)(req, res);

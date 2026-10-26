@@ -1,7 +1,8 @@
 import { createHash } from 'crypto';
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { generateModelPriceSeed, modelPriceRepository, SEED_NOTE } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { generateModelPriceSeed, modelPriceRepository, SEED_NOTE, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope, DISCOVERY_PRICE_NOTE_PREFIX, MODEL_PRICE_UNITS, ModelPriceTier } from '@bike4mind/common';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
@@ -148,6 +149,36 @@ function confirmTokenFor(
 
 const FAR_FUTURE = new Date('9999-01-01T00:00:00Z');
 
+type PricingMap = Record<string, TierRates>;
+
+/** Strict: runs inside the caller's transaction so a failed audit write rolls the new price row back. */
+const recordReprice = (
+  req: Parameters<typeof recordAdminActionFromRequest>[0],
+  {
+    modelId,
+    unit,
+    before,
+    after,
+    note,
+    revertToSeed,
+  }: {
+    modelId: string;
+    unit: string;
+    before: PricingMap | null;
+    after: PricingMap;
+    note: string;
+    revertToSeed: boolean;
+  }
+) =>
+  recordAdminActionFromRequest(req, {
+    action: 'settings.model_price.repriced',
+    target: { kind: 'settings', id: `${modelId}:${unit}`, displayName: `${modelId} price (${unit})` },
+    summary: `${revertToSeed ? 'reverted to seed price for' : 'repriced'} model ${modelId}`,
+    // Model IDs and units are metadata; secret-like path segments would redact the prices.
+    changes: [{ field: 'pricing', before, after }],
+    details: { modelId, unit, note, revertToSeed },
+  });
+
 const RevertBody = z.object({
   modelId: z.string().min(1),
   unit: z.enum(MODEL_PRICE_UNITS).default('per_token'),
@@ -180,13 +211,35 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       if (!entry) {
         throw new BadRequestError(`${modelId} (${unit}) is not seed-managed; nothing to revert to`);
       }
-      const row = await modelPriceRepository.append({
-        modelId,
-        unit,
-        pricing: entry.pricing,
-        effectiveFrom: new Date(),
-        note: SEED_NOTE,
-        repricedBy: req.user.id,
+      const row = await withTransaction(async () => {
+        const inForce = (await modelPriceRepository.rowsInForce(FAR_FUTURE)).find(
+          r => r.modelId === modelId && r.unit === unit
+        );
+        // Already seed-managed at the seed's rates: same no-op as an identical reprice resubmit.
+        if (
+          inForce &&
+          inForce.note === SEED_NOTE &&
+          normalizePricing(inForce.pricing) === normalizePricing(entry.pricing)
+        ) {
+          return inForce;
+        }
+        const appended = await modelPriceRepository.append({
+          modelId,
+          unit,
+          pricing: entry.pricing,
+          effectiveFrom: new Date(),
+          note: SEED_NOTE,
+          repricedBy: req.user.id,
+        });
+        await recordReprice(req, {
+          modelId,
+          unit,
+          before: inForce?.pricing ?? null,
+          after: entry.pricing,
+          note: SEED_NOTE,
+          revertToSeed: true,
+        });
+        return appended;
       });
       return res.json({ row });
     }
@@ -341,13 +394,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
     }
 
-    const row = await modelPriceRepository.append({
-      modelId,
-      unit,
-      pricing,
-      effectiveFrom: new Date(),
-      note,
-      repricedBy: req.user.id,
+    const row = await withTransaction(async () => {
+      const appended = await modelPriceRepository.append({
+        modelId,
+        unit,
+        pricing,
+        effectiveFrom: new Date(),
+        note,
+        repricedBy: req.user.id,
+      });
+      await recordReprice(req, {
+        modelId,
+        unit,
+        before: newest?.pricing ?? null,
+        after: pricing,
+        note,
+        revertToSeed: false,
+      });
+      return appended;
     });
     return res.json({ row });
   });

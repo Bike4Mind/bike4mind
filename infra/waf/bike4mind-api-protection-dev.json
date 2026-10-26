@@ -176,8 +176,199 @@
       }
     },
     {
-      "Name": "api-rate-limit",
+      "Name": "otc-send-rate-limit",
       "Priority": 4,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 20,
+          "EvaluationWindowSec": 600,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "AndStatement": {
+              "Statements": [
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/api/otc/send",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "NotStatement": {
+                    "Statement": {
+                      "IPSetReferenceStatement": {
+                        "ARN": "PLACEHOLDER_RATE_EXEMPT_IPSET_ARN"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "otc-send-rate-limit"
+      }
+    },
+    {
+      "Name": "credits-read-rate-limit",
+      "Priority": 5,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 50,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "AndStatement": {
+              "Statements": [
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "GET",
+                    "FieldToMatch": {
+                      "Method": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "NONE"
+                      }
+                    ],
+                    "PositionalConstraint": "EXACTLY"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/api/v1/credits",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "NotStatement": {
+                    "Statement": {
+                      "IPSetReferenceStatement": {
+                        "ARN": "PLACEHOLDER_RATE_EXEMPT_IPSET_ARN"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "credits-read-rate-limit"
+      }
+    },
+    {
+      "Name": "otc-send-asn-rate-limit",
+      "Priority": 6,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 100,
+          "EvaluationWindowSec": 600,
+          "AggregateKeyType": "CUSTOM_KEYS",
+          "CustomKeys": [
+            {
+              "ASN": {}
+            }
+          ],
+          "ScopeDownStatement": {
+            "AndStatement": {
+              "Statements": [
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/api/otc/send",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "NotStatement": {
+                    "Statement": {
+                      "IPSetReferenceStatement": {
+                        "ARN": "PLACEHOLDER_RATE_EXEMPT_IPSET_ARN"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "otc-send-asn-rate-limit"
+      }
+    },
+    {
+      "Name": "api-rate-limit",
+      "Priority": 7,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 5000,
@@ -229,7 +420,7 @@
     },
     {
       "Name": "AWS-AWSManagedRulesCommonRuleSet",
-      "Priority": 5,
+      "Priority": 8,
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
@@ -385,7 +576,7 @@
     },
     {
       "Name": "AWS-AWSManagedRulesSQLiRuleSet",
-      "Priority": 6,
+      "Priority": 9,
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
@@ -533,7 +724,7 @@
     },
     {
       "Name": "AWS-AWSManagedRulesKnownBadInputsRuleSet",
-      "Priority": 7,
+      "Priority": 10,
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
@@ -651,7 +842,7 @@
     },
     {
       "Name": "AWS-AWSManagedRulesAdminProtectionRuleSet",
-      "Priority": 8,
+      "Priority": 11,
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
@@ -677,7 +868,7 @@
     },
     {
       "Name": "AWS-AWSManagedRulesAmazonIpReputationList",
-      "Priority": 9,
+      "Priority": 12,
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
@@ -695,7 +886,7 @@
     },
     {
       "Name": "static-asset-rate-limit",
-      "Priority": 10,
+      "Priority": 13,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 20000,
@@ -891,7 +1082,7 @@
     },
     {
       "Name": "register-rate-limit",
-      "Priority": 11,
+      "Priority": 14,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 500,
@@ -943,7 +1134,7 @@
     },
     {
       "Name": "api-rate-limit-prod-shadow",
-      "Priority": 12,
+      "Priority": 15,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 1000,
@@ -985,7 +1176,7 @@
     },
     {
       "Name": "ai-route-rate-limit-prod-shadow",
-      "Priority": 13,
+      "Priority": 16,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 100,
@@ -1027,7 +1218,7 @@
     },
     {
       "Name": "register-rate-limit-prod-shadow",
-      "Priority": 14,
+      "Priority": 17,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 30,
@@ -1069,7 +1260,7 @@
     },
     {
       "Name": "image-rate-limit-prod-shadow",
-      "Priority": 15,
+      "Priority": 18,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 500,
@@ -1111,7 +1302,7 @@
     },
     {
       "Name": "default-rate-limit-prod-shadow",
-      "Priority": 16,
+      "Priority": 19,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 2000,
@@ -1301,7 +1492,7 @@
     },
     {
       "Name": "static-asset-rate-limit-prod-shadow",
-      "Priority": 17,
+      "Priority": 20,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 20000,
@@ -1487,7 +1678,7 @@
     },
     {
       "Name": "otc-verify-rate-limit-prod-shadow",
-      "Priority": 18,
+      "Priority": 21,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 30,
@@ -1529,7 +1720,7 @@
     },
     {
       "Name": "api-key-create-rate-limit-prod-shadow",
-      "Priority": 19,
+      "Priority": 22,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 20,
@@ -1621,7 +1812,7 @@
     },
     {
       "Name": "credits-rate-limit-prod-shadow",
-      "Priority": 20,
+      "Priority": 23,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 100,
@@ -1663,7 +1854,7 @@
     },
     {
       "Name": "otc-verify-rate-limit",
-      "Priority": 21,
+      "Priority": 24,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 30,
@@ -1715,7 +1906,7 @@
     },
     {
       "Name": "api-key-create-rate-limit",
-      "Priority": 22,
+      "Priority": 25,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 20,
@@ -1817,7 +2008,7 @@
     },
     {
       "Name": "credits-rate-limit",
-      "Priority": 23,
+      "Priority": 26,
       "Statement": {
         "RateBasedStatement": {
           "Limit": 100,

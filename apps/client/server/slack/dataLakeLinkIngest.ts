@@ -1,4 +1,9 @@
-import { FabFileSourceType, isDuplicateFabFileError, type IFabFileDocument } from '@bike4mind/common';
+import {
+  FabFileSourceType,
+  isDuplicateFabFileError,
+  isUrlBlockedError,
+  type IFabFileDocument,
+} from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import {
   authorizeLakeForWrite,
@@ -186,7 +191,8 @@ export async function ingestSlackLinkIntoLake(
     // tidiness: `validateUrlForFetch` reports "Hostname resolves to private IP address (10.1.2.3)",
     // so echoing it back would turn `@datalake add` into an internal-network scanner for anyone who
     // can type in Slack - they could map private space by reading our own error messages.
-    if (err instanceof BadRequestError) {
+    // UrlBlockedError is a BadRequestError subclass, so it must be excluded explicitly.
+    if (err instanceof BadRequestError && !isUrlBlockedError(err)) {
       deps.logger.info('@datalake add refused a link by content validation', { lakeSlug, message: err.message });
       return {
         ok: false,

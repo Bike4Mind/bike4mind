@@ -344,6 +344,63 @@ describe('GET /api/v1/agent-executions/{id}', () => {
     });
   });
 
+  it('strips think spans from the answer and the final_answer step, leaving thought steps raw', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      answer: '<think>weighing options</think>The answer is 4.',
+      steps: [
+        { type: 'thought' as const, content: '<think>raw reasoning</think>', metadata: { timestamp: 1, iteration: 0 } },
+        { type: 'final_answer' as const, content: '<think>weighing options</think>The answer is 4.' },
+      ],
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(AgentExecutionStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.answer).toBe('The answer is 4.');
+    expect(body.steps).toEqual([
+      { type: 'thought', content: '<think>raw reasoning</think>', iteration: 0 },
+      { type: 'final_answer', content: 'The answer is 4.' },
+    ]);
+  });
+
+  it('drops the empty <think></think> pair a run with redacted reasoning leaves at the start', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      answer: '<think></think>\n\ndone',
+      steps: [{ type: 'final_answer' as const, content: '<think></think>\n\ndone' }],
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(body.answer).toBe('done');
+    expect(body.steps[0].content).toBe('done');
+  });
+
+  it('publishes an empty string, not null, when the stored answer is only reasoning', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      answer: '<think>truncated',
+      steps: [{ type: 'final_answer' as const, content: '<think>truncated' }],
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(AgentExecutionStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.status).toBe('completed');
+    expect(body.answer).toBe('');
+    expect(body.steps[0].content).toBe('');
+  });
+
   it('publishes the failure reason so a failed run is not an opaque null answer', async () => {
     mockLoadTrace.mockResolvedValue({
       ...trace,
