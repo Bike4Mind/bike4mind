@@ -1083,6 +1083,27 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    it('current_model_details reports the requested model while the substitute runs', async () => {
+      const { body } = wireRestrictedTurn();
+      const requested = { ...((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0], supportsTools: true };
+      mockedGetAvailableModels.mockResolvedValue([requested, { ...cheapModel, supportsTools: true }] as never);
+      let reported: string | undefined;
+      const complete = vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+        const tool = opts.tools.find(
+          (t: { toolSchema: { name: string } }) => t.toolSchema.name === 'current_model_details'
+        );
+        reported = await tool.toolFn({});
+        await cb(['Hi!'], { inputTokens: 40, outputTokens: 2 });
+      });
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: '' } as any); // any: minimal backend shape, as elsewhere in this file
+      restrict();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model']);
+      expect(JSON.parse(reported ?? '{}').id).toBe(requested.id);
+    });
+
     it('skips the fallback chain when the substitute fails', async () => {
       const { body } = wireRestrictedTurn();
       const requested = ((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0];
@@ -1136,6 +1157,31 @@ describe('ChatCompletionProcess', () => {
         expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
         expect(lastSave.fallbackInfo ?? null).toBeNull();
         expect(statusText()).not.toMatch(/cheap-model|Trying alternative model/);
+      });
+
+      it('current_model_details still reports the requested model after the hop', async () => {
+        const { body, complete, requested } = await wireFailingSubstitute(['cheap-model']);
+        mockedGetAvailableModels.mockResolvedValue([
+          { ...requested, supportsTools: true },
+          { ...secondCheap, supportsTools: true },
+          { ...cheapModel, supportsTools: true },
+        ] as never);
+        let reported: string | undefined;
+        const inner = complete.getMockImplementation()!;
+        complete.mockImplementation(async (modelId: string, messages: unknown, opts: any, cb: unknown) => {
+          if (modelId === 'cheap-model-2') {
+            const tool = opts.tools.find(
+              (t: { toolSchema: { name: string } }) => t.toolSchema.name === 'current_model_details'
+            );
+            reported = await tool.toolFn({});
+          }
+          return inner(modelId, messages, opts, cb);
+        });
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model', 'cheap-model-2']);
+        expect(JSON.parse(reported ?? '{}').id).toBe(requested.id);
       });
 
       it('fails without naming the substitute once every allowlisted model fails', async () => {
