@@ -871,7 +871,7 @@ export class ImageEditService {
       // Settle the hold after successful edit: keep the draw, refund the rest. A zero draw writes no ledger
       // row; the usage event still lands.
       if (settlement && creditHold) {
-        // Less than the draw only when the expired-hold sweep already refunded this hold.
+        // Charges never exceed the hold: any provider cost above the estimate is absorbed.
         const creditsCharged = await this.creditHolds.settle(
           creditHold,
           settlement.credits,

@@ -12,6 +12,7 @@ type HoldContext = { featureLabel: string; logger: Logger };
 export type ImageCreditHolds = {
   /**
    * Atomically move `requiredCredits` out of the payer's balance BEFORE the provider is called.
+   * Checks the org member cap before the atomic balance move; the cap check is not atomic.
    * Throws a 422 `insufficient_credits` when the balance or the org member cap cannot cover it.
    */
   hold(
@@ -21,7 +22,7 @@ export type ImageCreditHolds = {
   release(hold: PersistedCreditHold, context: HoldContext): Promise<void>;
   /**
    * Keep `chargedCredits` (clamped to the hold), refund the rest and write the ledger row.
-   * Returns the credits actually charged.
+   * Returns the confirmed charge, or 0 if already swept or settlement cannot be confirmed.
    */
   settle(
     hold: PersistedCreditHold,

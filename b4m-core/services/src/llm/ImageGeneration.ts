@@ -106,13 +106,13 @@ import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
  * hd -> high, and an omitted tier pinned to OMITTED_QUALITY_TIER. Quality is returned
  * unchanged for every other model family, none of which has a tier concept.
  *
- * Both callers below read this one function - estimateCredits (the charge) and the
+ * Both callers below read this one function - estimateCredits (the reservation) and the
  * openaiParams dispatch (the render) - so the two cannot disagree.
  *
  * Pinning an omitted tier is the #3007 fix. Left undefined, the parameter is dropped from
  * the OpenAI call entirely, OpenAI applies its own 'auto' and can render at high effort,
  * while the calculator has already held the medium price - and image credits are held once,
- * before the call, with no reconciliation pass to correct it. Pinning moves nobody's bill
+ * before the call, and settlement cannot charge above that hold. Pinning moves nobody's bill
  * (the pin IS the billed tier); a caller who wants OpenAI's dynamic effort asks for it with
  * an explicit 'auto', which bills at the ceiling. Do not restore the undefined here without
  * repricing the omitted case in OpenAIImageCostCalculator.normalizeInput.
@@ -1617,7 +1617,7 @@ export class ImageGenerationService {
       // Settle the hold after successful generation: keep the draw, refund the rest. A zero draw writes no
       // ledger row; the usage event still lands.
       if (settlement && creditHold) {
-        // Less than the draw only when the expired-hold sweep already refunded this hold.
+        // Charges never exceed the hold: any provider cost above the estimate is absorbed.
         const creditsCharged = await this.creditHolds.settle(
           creditHold,
           settlement.credits,

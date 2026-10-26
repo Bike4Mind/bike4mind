@@ -1,20 +1,7 @@
-import {
-  creditTransactionRepository,
-  organizationRepository,
-  pendingCreditHoldRepository,
-  userRepository,
-  withTransaction,
-} from '@bike4mind/database';
+import { pendingCreditHoldRepository, withTransaction } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import type { ImageCreditHolds } from '@bike4mind/services/llm/ImageGeneration';
-import { CREDIT_HOLD_TTL_MS, settleHeldCredits } from './reserveRequestCredits';
-
-const holdAdapters = {
-  users: userRepository,
-  organizations: organizationRepository,
-  creditTransactions: creditTransactionRepository,
-  deductCredits: creditService.deductCreditsWithOrgSupport,
-};
+import { CREDIT_HOLD_TTL_MS, holdAdapters, releaseHeldCredits, settleHeldCredits } from './reserveRequestCredits';
 
 /**
  * The image generation / edit queue workers' credit holds. Each hold is recorded as a PendingCreditHold
@@ -37,28 +24,7 @@ export const imageCreditHolds: ImageCreditHolds = {
       return { ...hold, pendingHoldId: pending.id };
     }),
 
-  // Never throws: it runs on the failure path, and a failed refund is left for the sweep.
-  release: async ({ pendingHoldId, ...hold }, { featureLabel, logger }) => {
-    try {
-      if (!pendingHoldId) {
-        await creditService.releaseCreditHold(hold, holdAdapters);
-        return;
-      }
-      const released = await withTransaction(async () => {
-        if (!(await pendingCreditHoldRepository.claim(pendingHoldId))) return false;
-        await creditService.releaseCreditHold(hold, holdAdapters);
-        return true;
-      });
-      if (!released) logger.warn(`${featureLabel} release found its credit hold already claimed`, { pendingHoldId });
-    } catch (error) {
-      logger.error(`${featureLabel} credit release failed - left for the expired-hold sweep`, {
-        pendingHoldId,
-        ownerId: hold.ownerId,
-        reservedCredits: hold.reservedCredits,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  },
+  release: releaseHeldCredits,
 
   settle: (hold, chargedCredits, entry, context) => settleHeldCredits(hold, chargedCredits, entry, context),
 };

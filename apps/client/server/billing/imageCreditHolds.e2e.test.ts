@@ -1,5 +1,12 @@
 import { getQuestErrorCode } from '@bike4mind/common';
-import { CreditTransaction, Organization, PendingCreditHoldModel, User } from '@bike4mind/database';
+import {
+  CreditTransaction,
+  Organization,
+  PendingCreditHoldModel,
+  pendingCreditHoldRepository,
+  User,
+  userRepository,
+} from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import mongoose, { Types } from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
@@ -31,6 +38,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   await Promise.all([
     User.collection.deleteMany({}),
@@ -55,6 +63,40 @@ async function userWith(currentCredits: number) {
 }
 
 describe('image credit holds against a replica set', () => {
+  it('rolls back the debit when recording the pending hold fails', async () => {
+    const { userId, balance } = await userWith(100);
+    vi.spyOn(pendingCreditHoldRepository, 'record').mockRejectedValueOnce(new Error('record failed'));
+
+    await expect(
+      imageCreditHolds.hold({ userId, organizationId: null, requiredCredits: 40, ...context })
+    ).rejects.toThrow('record failed');
+
+    expect(await balance()).toBe(100);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+    expect(await CreditTransaction.countDocuments()).toBe(0);
+  });
+
+  it('leaves the pending hold refundable when release fails without throwing', async () => {
+    const { userId, balance } = await userWith(100);
+    const hold = await imageCreditHolds.hold({ userId, organizationId: null, requiredCredits: 40, ...context });
+    const release = vi.spyOn(userRepository, 'incrementCredits').mockRejectedValueOnce(new Error('refund failed'));
+
+    await expect(imageCreditHolds.release(hold, context)).resolves.toBeUndefined();
+
+    expect(await balance()).toBe(60);
+    expect(await PendingCreditHoldModel.findById(hold.pendingHoldId)).not.toBeNull();
+    expect(await CreditTransaction.countDocuments()).toBe(0);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('left for the expired-hold sweep'),
+      expect.objectContaining({ holdId: hold.pendingHoldId, error: 'refund failed' })
+    );
+
+    release.mockRestore();
+    await imageCreditHolds.release(hold, context);
+    expect(await balance()).toBe(100);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+  });
+
   it('lets exactly one of N concurrent holds through when the balance covers one', async () => {
     const { userId, balance } = await userWith(40);
 

@@ -1585,9 +1585,11 @@ describe('ImageGenerationService quest partial writes', () => {
         organizations: { findById: vi.fn(async () => null) },
         creditTransactions: {},
         fabFiles: {
-          findAccessibleInIds: vi.fn(async () => [
-            { id: 'f1', filePath: 'data:image/png;base64,AAAA', mimeType: 'image/png', moderationStatus: 'clean' },
-          ]),
+          findAccessibleInIds: vi.fn(async (ids: string[]) =>
+            [
+              { id: 'f1', filePath: 'data:image/png;base64,AAAA', mimeType: 'image/png', moderationStatus: 'clean' },
+            ].filter(file => ids.includes(file.id))
+          ),
         },
       },
       startImageGenerationProcess: opts.startImageGenerationProcess ?? vi.fn(async () => undefined),
@@ -1935,14 +1937,23 @@ describe('ImageGenerationService quest partial writes', () => {
       expect(callArgs(update).find(arg => arg.type === 'error')).toMatchObject({ status: 'done' });
     });
 
-    it('saves nothing when billing fails', async () => {
+    it.each(['edit', 'generation'] as const)('saves nothing when billing fails for %s', async mode => {
       const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
       const { service, update, creditHolds } = arrange(save);
       enforceCredits(service);
       creditHolds.settle.mockRejectedValueOnce(new Error('billing down'));
-      await processEdit(service, 'gen-1');
+      if (mode === 'generation') {
+        mockGeminiGenerate.mockReset();
+        mockGeminiGenerate.mockResolvedValue(twoImages);
+        await processGenerate(service, 'gen-1');
+        expect(mockGeminiGenerate).toHaveBeenCalledTimes(1);
+      } else {
+        await processEdit(service, 'gen-1');
+        expect(mockGeminiEdit).toHaveBeenCalledTimes(1);
+      }
 
       expect(save).not.toHaveBeenCalled();
+      expect(creditHolds.settle).toHaveBeenCalledTimes(1);
       expect(creditHolds.release).toHaveBeenCalledTimes(1);
       expect(callArgs(update).find(arg => arg.type === 'error')).toMatchObject({ reply: 'billing down' });
     });
