@@ -36,6 +36,7 @@ import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
+import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { isUntouchedImport, projectForGroup } from './grouping';
 import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
@@ -587,9 +588,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     [sessions, createCode, clearCodeError, markSessionStart]
   );
 
+  const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null);
   const onDelete = useCallback(
-    async (sessionId: string) => {
-      await remove(sessionId);
+    async (sessionId: string, removeWorktree: boolean) => {
+      await remove(sessionId, removeWorktree);
       setActiveId(current => (current === sessionId ? null : current));
     },
     [remove]
@@ -598,6 +600,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   return (
     <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
       <SpawnFailureToast />
+      {deleteSessionId && (
+        <DeleteSessionDialog
+          key={deleteSessionId}
+          sessionId={deleteSessionId}
+          onDelete={onDelete}
+          onClose={() => setDeleteSessionId(null)}
+        />
+      )}
       {drop.over && (
         <Box
           sx={{
@@ -634,7 +644,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onOpenArtifacts={() => setScreen('artifacts')}
         onCreateInProject={directory => void onCreateInProject(directory)}
         onCreateInSection={sectionId => void onCreateInSection(sectionId)}
-        onDelete={sessionId => void onDelete(sessionId)}
+        onDelete={setDeleteSessionId}
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
         onRename={(session, title) => void rename(session, title)}

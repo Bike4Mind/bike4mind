@@ -20,6 +20,7 @@ import { DataLakePage } from './pages/DataLakePage';
 import { SkillsPage } from './pages/SkillsPage';
 import { TeamsPage } from './pages/TeamsPage';
 import { getTestUsers } from './helpers/test-users';
+import { installWafBypass } from './helpers/waf-bypass';
 
 type VerifyAnswersOptions = {
   logic?: 'and' | 'or';
@@ -135,6 +136,7 @@ export const test = base.extend<TestFixtures>({
   },
 
   page: async ({ page, authState }, use) => {
+    await installWafBypass(page);
     await prepareAppPage(page, () => authState.current);
     await use(page);
   },

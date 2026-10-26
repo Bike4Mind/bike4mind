@@ -90,7 +90,15 @@ import type { DependencyInstaller } from './project/dependencyInstall';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
-import { prefetchBase, resolveWorkspace, type SpareWorktrees, type WorkspaceOutcome } from './project/workspace';
+import {
+  hasAppWorkspaceBranch,
+  inspectWorktreeRemoval,
+  removeSessionWorktree,
+  prefetchBase,
+  resolveWorkspace,
+  type SpareWorktrees,
+  type WorkspaceOutcome,
+} from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
@@ -471,6 +479,8 @@ export interface ChatServiceDeps {
    * them.
    */
   sessionClosed?(sessionId: string): void;
+  /** Hold terminal creation until cleanup ends; reject unless existing terminals have exited. */
+  releaseSessionTerminals?(sessionId: string): Promise<() => void>;
 }
 
 /** One model-requested tool call, as it arrives on the wire. */
@@ -537,6 +547,19 @@ export class ChatService {
 
   /** Startup has failed; no new input may race its preservation or deletion. */
   private readonly abandoning = new Set<string>();
+
+  private withWorkspaceBindings<T>(operation: () => Promise<T>): Promise<T> {
+    return this.deps.store.withWorkspaceBindings(operation);
+  }
+
+  private async workspaceBindingReason(directory: string): Promise<string | null> {
+    try {
+      if (!(await stat(directory)).isDirectory()) return `${directory} is not a directory.`;
+    } catch (error) {
+      return error instanceof Error ? error.message : `Cannot access ${directory}.`;
+    }
+    return unusableProjectReason(directory);
+  }
 
   /**
    * A queued message the user promoted past the live turn with "send now", held between the
@@ -860,6 +883,12 @@ export class ChatService {
    * any tools can run there. See ensureWorkspace.
    */
   async createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> {
+    return this.withWorkspaceBindings(() => this.createCodeSessionWithWorkspaceLease(request));
+  }
+
+  private async createCodeSessionWithWorkspaceLease(
+    request: CreateCodeSessionRequest
+  ): Promise<CreateCodeSessionResult> {
     const timer = new PhaseTimer();
     const catalog = await this.listModels();
     const model = (await this.pickModel(catalog.models)) ?? undefined;
@@ -870,7 +899,7 @@ export class ChatService {
     }
 
     const directory = resolve(request.directory);
-    const unusable = await unusableProjectReason(directory);
+    const unusable = await this.workspaceBindingReason(directory);
     if (unusable) return { ok: false, error: unusable };
     // Only the choice is recorded; see `ensureWorkspace` for when the worktree is actually cut.
     const base = await this.resolveWorkspaceBase(directory, (request.branch ?? '').trim(), request.workspace === true);
@@ -910,6 +939,10 @@ export class ChatService {
    * switch git refuses leaves the session exactly as it was; see checkoutInPlace.
    */
   async updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult> {
+    return this.withWorkspaceBindings(() => this.updateProjectWithWorkspaceLease(request));
+  }
+
+  private async updateProjectWithWorkspaceLease(request: UpdateProjectRequest): Promise<UpdateProjectResult> {
     const session = await this.deps.store.get(request.sessionId);
     if (session?.mode !== 'code') return { ok: false, error: 'Only a Code session is grounded in a project.' };
 
@@ -933,7 +966,7 @@ export class ChatService {
     if (!directory) return { ok: false, error: 'Choose a project folder for this conversation first.' };
     // Checked on every change, not only on a move: a session already bound to a container has
     // to be told why nothing it picks there can work, and re-picking the folder is the way out.
-    const unusable = await unusableProjectReason(directory);
+    const unusable = await this.workspaceBindingReason(directory);
     if (unusable) return { ok: false, error: unusable };
     // An unbound session is "moved" by its first binding, which is what drops the branch and
     // context folders it never had - the same rule that applies to moving between projects.
@@ -1109,6 +1142,8 @@ export class ChatService {
     this.preparing.set(sessionId, { since: Date.now(), base });
     this.emit({ type: 'workspace', sessionId, running: true, base });
     try {
+      const unusable = await this.workspaceBindingReason(project.directory);
+      if (unusable) return { error: unusable };
       const resolved = await resolveWorkspace(project.directory, {
         base,
         // A branch already named - a spawn's, as the user approved it - is cut as named.
@@ -1398,8 +1433,47 @@ export class ChatService {
     return outcome;
   }
 
-  async deleteSession(sessionId: string): Promise<void> {
-    await this.cleanupDeletedSession(sessionId, true);
+  async inspectSessionWorktreeRemoval(sessionId: string) {
+    const session = await this.deps.store.get(sessionId);
+    // The scan parses every stored conversation; most deletes have no app worktree to inspect.
+    if (!hasAppWorkspaceBranch(session?.project)) return null;
+    const others = await this.deps.store.workspaceProjectsExcept(sessionId);
+    const inspection = await inspectWorktreeRemoval(session.project, others);
+    if (inspection && this.hasTurnInFlight(sessionId)) {
+      return { ...inspection, safe: false, reason: 'Conversation is still running' };
+    }
+    return inspection;
+  }
+
+  async deleteSession(sessionId: string, removeWorktree = false): Promise<void> {
+    if (!removeWorktree) {
+      await this.cleanupDeletedSession(sessionId, true);
+      return;
+    }
+    return this.withWorkspaceBindings(() => this.deleteSessionWithWorkspaceLease(sessionId));
+  }
+
+  private async deleteSessionWithWorkspaceLease(sessionId: string): Promise<void> {
+    if (this.abandoning.has(sessionId)) throw new Error('This conversation is already being deleted');
+    this.abandoning.add(sessionId);
+    let releaseTerminals: (() => void) | undefined;
+    try {
+      if (this.hasTurnInFlight(sessionId)) throw new Error('Stop the conversation before removing its worktree');
+      const session = await this.deps.store.get(sessionId);
+      if (!session?.project) throw new Error('This conversation has no worktree');
+      const inspection = await this.inspectSessionWorktreeRemoval(sessionId);
+      if (!inspection?.safe) throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
+      await this.deps.background?.killSession(sessionId);
+      releaseTerminals = await this.deps.releaseSessionTerminals?.(sessionId);
+      this.deps.sessionClosed?.(sessionId);
+      await this.deps.browser?.closeSession(sessionId);
+      const others = await this.deps.store.workspaceProjectsExcept(sessionId);
+      await removeSessionWorktree(session.project, others);
+      await this.cleanupDeletedSession(sessionId, true);
+    } finally {
+      releaseTerminals?.();
+      this.abandoning.delete(sessionId);
+    }
   }
 
   private async cleanupDeletedSession(
@@ -3682,9 +3756,26 @@ export class ChatService {
     placement: SpawnPlacement,
     onFailed?: (message: string) => Promise<void>
   ): Promise<SpawnOutcome> {
+    return this.withWorkspaceBindings(() =>
+      this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, onFailed)
+    );
+  }
+
+  private async spawnSessionWithWorkspaceLease(
+    parent: ChatSession,
+    prompt: string,
+    title: string | undefined,
+    placement: SpawnPlacement,
+    onFailed?: (message: string) => Promise<void>
+  ): Promise<SpawnOutcome> {
     const project = parent.project;
     if (!project) {
       return { ok: false, reason: 'no-project', message: 'Only a Code session, which has a project, can start one.' };
+    }
+
+    const unusable = await this.workspaceBindingReason(project.workingDirectory);
+    if (unusable || !(await this.deps.store.get(parent.id))) {
+      return { ok: false, reason: 'no-project', message: unusable ?? 'The parent conversation no longer exists.' };
     }
 
     const seed = prompt.trim();
