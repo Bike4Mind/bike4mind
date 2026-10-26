@@ -54,6 +54,7 @@ function readRules(stage: string): Record<string, unknown>[] {
   const value: unknown = JSON.parse(
     buildDevWafRuleJson({
       emergencyIpSetArn: 'deployment-ipset',
+      rateExemptIpSetArn: 'deployment-rate-exempt-ipset',
       stage,
     })
   );

@@ -91,25 +91,50 @@ export function getDevWafMeta(opts: Pick<WafPolicyOptions, 'nameSuffix' | 'stage
  * This avoids provider schema limitations around deeply nested statements.
  * We substitute prod IPSet ARNs in the export with the stage-managed IPSet ARN.
  */
-export function buildDevWafRuleJson(args: { emergencyIpSetArn: string; stage?: string }): string {
+export function buildDevWafRuleJson(args: {
+  emergencyIpSetArn: string;
+  rateExemptIpSetArn: string;
+  stage: string;
+}): string {
   const exportJson = readExportJson();
 
   const rules = exportJson.Rules.map(rule => {
     // Deep clone (rule objects are small)
     const cloned = JSON.parse(JSON.stringify(rule)) as JsonWafRule;
 
-    // Replace any IPSetReferenceStatement ARN with the stage-managed one.
-    // (The export contains a prod-account ARN.)
-    // any: WAF rule Statement structure is deeply nested and varies by type; casting for IPSet ARN replacement
-    const stmt: any = cloned.Statement as any;
-    if (stmt?.IPSetReferenceStatement?.ARN) {
-      stmt.IPSetReferenceStatement.ARN = args.emergencyIpSetArn;
+    // Replace any IPSetReferenceStatement ARN with the stage-managed one. The emergency set is the
+    // whole statement of its rule; the rate-exempt set sits inside rate rule scope-downs.
+    const stmt = cloned.Statement;
+    const ipSetReference = stmt.IPSetReferenceStatement;
+    if (isStatementObject(ipSetReference) && typeof ipSetReference.ARN === 'string') {
+      ipSetReference.ARN = args.emergencyIpSetArn;
     }
+    replaceRateExemptArn(stmt, args.rateExemptIpSetArn);
 
     return cloned;
   });
 
   return JSON.stringify(rules);
+}
+
+/** ARN placeholder in the policy files for the IP set that rate rules do not count. */
+export const RATE_EXEMPT_IPSET_PLACEHOLDER = 'PLACEHOLDER_RATE_EXEMPT_IPSET_ARN';
+
+function isStatementObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function replaceRateExemptArn(node: unknown, arn: string): void {
+  if (Array.isArray(node)) {
+    for (const child of node) replaceRateExemptArn(child, arn);
+    return;
+  }
+  if (!isStatementObject(node)) return;
+  const reference = node.IPSetReferenceStatement;
+  if (isStatementObject(reference) && reference.ARN === RATE_EXEMPT_IPSET_PLACEHOLDER) {
+    reference.ARN = arn;
+  }
+  for (const value of Object.values(node)) replaceRateExemptArn(value, arn);
 }
 
 const BLOCKED_IP_PLACEHOLDER = '192.0.2.0/32';
@@ -118,9 +143,9 @@ const BLOCKED_IP_PLACEHOLDER = '192.0.2.0/32';
  * Parses a comma-separated list of IPv4 addresses or IPv4 CIDRs into WAF IPSet entries.
  * Bare addresses get /32, duplicates collapse in order, and an empty list yields a TEST-NET
  * placeholder because WAF requires at least one address. Throws on anything else, including a /0
- * prefix, which the WAF API rejects at deploy time.
+ * prefix, which the WAF API rejects at deploy time. `varName` only labels the error.
  */
-export function parseWafBlockedIps(raw: string | undefined): string[] {
+export function parseWafBlockedIps(raw: string | undefined, varName = 'WAF_BLOCKED_IPS'): string[] {
   const octet = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
   const pattern = new RegExp(`^${octet}(?:\\.${octet}){3}(?:/(?:3[0-2]|[12]\\d|[1-9]))?$`);
 
@@ -130,7 +155,7 @@ export function parseWafBlockedIps(raw: string | undefined): string[] {
     .filter(entry => entry.length > 0)
     .map(entry => {
       if (!pattern.test(entry)) {
-        throw new Error(`WAF_BLOCKED_IPS entry "${entry}" is not an IPv4 address or IPv4 CIDR`);
+        throw new Error(`${varName} entry "${entry}" is not an IPv4 address or IPv4 CIDR`);
       }
       return entry.includes('/') ? entry : `${entry}/32`;
     });

@@ -64,6 +64,29 @@ export const wafEmergencyIpSet =
     : undefined;
 
 /**
+ * IPs the path-scoped rate rules do not count (our own and allowlisted addresses). Addresses come
+ * from the WAF_RATE_EXEMPT_IPS deploy variable, same format and placeholder as the emergency set.
+ * It only narrows what rate rules count; it never allows a request past any other rule.
+ */
+export const wafRateExemptIpSet =
+  isWafEnabled && !externalWaf
+    ? new aws.wafv2.IpSet(
+        'WafRateExemptIpSet',
+        {
+          name: $app.stage === 'production' ? 'rate-exempt-ip-prod' : `rate-exempt-ip-${$app.stage}`,
+          description: `Rate rule exempt IP list - ${$app.stage}`,
+          scope: 'CLOUDFRONT',
+          ipAddressVersion: 'IPV4',
+          addresses: parseWafBlockedIps(process.env.WAF_RATE_EXEMPT_IPS, 'WAF_RATE_EXEMPT_IPS'),
+        },
+        {
+          provider: wafProviderUsEast1,
+          retainOnDelete: ['production', 'dev'].includes($app.stage),
+        }
+      )
+    : undefined;
+
+/**
  * CloudWatch Logs group for WAF traffic logs.
  *
  * CRITICAL: Log group name MUST start with 'aws-waf-logs-' prefix because:
@@ -108,9 +131,11 @@ export const wafStageWebAcl =
           // Each stage gets its own WebACL (e.g., bike4mind-api-protection-pr6391)
           const policy = getDevWafMeta({ nameSuffix: $app.stage, stage: $app.stage });
 
-          const ruleJson = wafEmergencyIpSet!.arn.apply(arn =>
-            buildDevWafRuleJson({ emergencyIpSetArn: arn, stage: $app.stage })
-          );
+          const ruleJson = $util
+            .all([wafEmergencyIpSet!.arn, wafRateExemptIpSet!.arn])
+            .apply(([emergencyIpSetArn, rateExemptIpSetArn]) =>
+              buildDevWafRuleJson({ emergencyIpSetArn, rateExemptIpSetArn, stage: $app.stage })
+            );
 
           return {
             name: policy.name,

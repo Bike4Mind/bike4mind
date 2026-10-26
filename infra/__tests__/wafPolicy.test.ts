@@ -5,7 +5,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { getDevWafMeta, buildDevWafRuleJson, parseWafBlockedIps, resolveWafPolicyDir } from '../wafPolicy';
+import {
+  getDevWafMeta,
+  buildDevWafRuleJson as buildWafRuleJson,
+  parseWafBlockedIps,
+  resolveWafPolicyDir,
+} from '../wafPolicy';
 
 interface WafRule {
   Name: string;
@@ -21,6 +26,10 @@ interface WafRule {
 }
 
 const mockEmergencyIpSetArn = 'arn:aws:wafv2:us-east-1:123456789012:global/ipset/test-ipset/abc123';
+const mockRateExemptIpSetArn = 'deployment-rate-exempt-ipset';
+
+const buildDevWafRuleJson = (args: { emergencyIpSetArn: string; stage: string }): string =>
+  buildWafRuleJson({ ...args, rateExemptIpSetArn: mockRateExemptIpSetArn });
 
 /**
  * True when WAF_POLICY_DIR points the suite at a deployment's own policy rather than the committed
@@ -786,6 +795,9 @@ describe('wafPolicy', () => {
         'image-rate-limit-prod-shadow': 500,
         'default-rate-limit-prod-shadow': 2000,
         'static-asset-rate-limit-prod-shadow': 20000,
+        'otc-send-rate-limit': 20,
+        'credits-read-rate-limit': 50,
+        'otc-send-asn-rate-limit': 100,
       },
     };
 
@@ -874,6 +886,78 @@ describe('wafPolicy', () => {
     }
   });
 
+  describe('sign-in code and credits count-mode rate rules', () => {
+    const forStage = (stage: string): WafRule[] =>
+      JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+
+    // Flip Action to Block in the policy to enforce; the block alarms follow the action.
+    const EXPECTED: Record<string, { limit: number; window: number; key: unknown; paths: string[]; method?: string }> =
+      {
+        'otc-send-rate-limit': { limit: 20, window: 600, key: 'IP', paths: ['/api/otc/send'] },
+        'credits-read-rate-limit': { limit: 50, window: 300, key: 'IP', paths: ['/api/v1/credits'], method: 'GET' },
+        'otc-send-asn-rate-limit': { limit: 100, window: 600, key: 'CUSTOM_KEYS', paths: ['/api/otc/send'] },
+      };
+
+    for (const stage of ['dev', 'production']) {
+      describe(stage, () => {
+        for (const [name, want] of Object.entries(EXPECTED)) {
+          it(`${name} counts ${want.limit} per ${want.window}s on its own route`, () => {
+            const rule = forStage(stage).find(r => r.Name === name);
+            expect(rule).toBeDefined();
+            expect(rule!.Action).toEqual({ Count: {} });
+            const rate = rule!.Statement.RateBasedStatement as {
+              Limit: number;
+              EvaluationWindowSec: number;
+              AggregateKeyType: string;
+              CustomKeys?: unknown[];
+            };
+            if (!externalPolicy) expect(rate.Limit).toBe(want.limit);
+            expect(rate.EvaluationWindowSec).toBe(want.window);
+            expect(rate.AggregateKeyType).toBe(want.key);
+            if (want.key === 'CUSTOM_KEYS') expect(rate.CustomKeys).toEqual([{ ASN: {} }]);
+            const matches = rateLimitByteMatches(rule!);
+            expect(matches.filter(m => m.FieldToMatch.UriPath).map(m => m.SearchString)).toEqual(want.paths);
+            const methods = matches.filter(m => m.FieldToMatch.Method);
+            expect(methods.map(m => m.SearchString)).toEqual(want.method ? [want.method] : []);
+          });
+
+          it(`${name} skips the rate-exempt IP set and nothing else`, () => {
+            const rule = forStage(stage).find(r => r.Name === name)!;
+            const rate = rule.Statement.RateBasedStatement as {
+              ScopeDownStatement: { AndStatement: { Statements: unknown[] } };
+            };
+            const and = rate.ScopeDownStatement.AndStatement;
+            expect(and.Statements.at(-1)).toEqual({
+              NotStatement: { Statement: { IPSetReferenceStatement: { ARN: mockRateExemptIpSetArn } } },
+            });
+            expect(JSON.stringify(rule)).not.toContain('PLACEHOLDER_');
+          });
+        }
+
+        it('keeps the emergency IP set on its own rule, not the exempt one', () => {
+          const rules = forStage(stage);
+          const emergency = rules.find(r => r.Name === 'emergency-ip-block');
+          expect(emergency!.Statement.IPSetReferenceStatement).toEqual({ ARN: mockEmergencyIpSetArn });
+        });
+
+        it('places the count rules ahead of every enforcing rate rule with unique priorities', () => {
+          const rules = forStage(stage);
+          const enforcingRateRules = rules.filter(
+            rule => 'RateBasedStatement' in rule.Statement && rule.Action !== undefined && 'Block' in rule.Action
+          );
+          expect(enforcingRateRules.length).toBeGreaterThan(0);
+          for (const name of Object.keys(EXPECTED)) {
+            const countRule = rules.find(rule => rule.Name === name)!;
+            for (const enforcingRule of enforcingRateRules) {
+              expect(countRule.Priority, `${name} before ${enforcingRule.Name}`).toBeLessThan(enforcingRule.Priority);
+            }
+          }
+          expect(new Set(rules.map(r => r.Priority)).size).toBe(rules.length);
+        });
+      });
+    }
+  });
+
   describe('resolveWafPolicyDir', () => {
     it('defaults to the committed sample under the working directory', () => {
       expect(resolveWafPolicyDir({})).toBe(path.join(process.cwd(), 'infra', 'waf'));
@@ -940,6 +1024,10 @@ describe('wafPolicy', () => {
 
     it('collapses duplicates, including a bare address and its /32, preserving order', () => {
       expect(parseWafBlockedIps('5.6.7.8,1.2.3.4,5.6.7.8,1.2.3.4/32')).toEqual(['5.6.7.8/32', '1.2.3.4/32']);
+    });
+
+    it('names the offending variable in the error', () => {
+      expect(() => parseWafBlockedIps('nope', 'WAF_RATE_EXEMPT_IPS')).toThrow(/WAF_RATE_EXEMPT_IPS entry "nope"/);
     });
 
     it('rejects anything that is not an IPv4 address or CIDR', () => {
