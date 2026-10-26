@@ -200,6 +200,15 @@ describe('Organizations tab params', () => {
     });
   });
 
+  it('keeps the default page when every view param is invalid, so the URL still describes a view', () => {
+    expect(parseAdminSearch({ tab: 'organizations', orgsSort: 'credits', orgsLimit: 7 })).toMatchObject({
+      orgsPage: 1,
+      orgsLimit: undefined,
+      orgsSort: undefined,
+    });
+    expect(parseAdminSearch({ tab: 'organizations', orgId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }).orgsPage).toBeUndefined();
+  });
+
   it('keeps them on the organizations tab and drops them on a switch away', () => {
     expect(adminSearchForTab(organizationsSearch, 'organizations')).toMatchObject(organizationsSearch);
 

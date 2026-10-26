@@ -77,11 +77,23 @@ const parsePersonal = (value: unknown): boolean | undefined => {
 const parseOrgId = (value: unknown): string | undefined =>
   typeof value === 'string' && /^[0-9a-f]{24}$/.test(value) ? value : undefined;
 
-/** Per-key coercion for the route's `validateSearch`; anything invalid becomes undefined. */
+// A view param that fails to parse still asked for a view. Keeping the default page stops
+// `validateSearch` from reducing `?orgsSort=credits` to a bare visit that restores the saved view.
+const parseOrgsPage = (value: unknown, search: Record<string, unknown> = {}): number | undefined =>
+  parsePage(value) ??
+  (ORGS_VIEW_PARAMS.some(key => search[key] !== undefined) ? DEFAULT_ORGANIZATIONS_PARAMS.page : undefined);
+
+/**
+ * Per-key coercion for the route's `validateSearch`, given the whole raw search as well; anything
+ * invalid becomes undefined.
+ */
 export const ORGS_SEARCH_PARSERS: {
-  readonly [K in keyof OrganizationsSearch]-?: (value: unknown) => OrganizationsSearch[K];
+  readonly [K in keyof OrganizationsSearch]-?: (
+    value: unknown,
+    search?: Record<string, unknown>
+  ) => OrganizationsSearch[K];
 } = {
-  [ORGS_PAGE_PARAM]: parsePage,
+  [ORGS_PAGE_PARAM]: parseOrgsPage,
   [ORGS_LIMIT_PARAM]: parseLimit,
   [ORGS_SORT_PARAM]: oneOf(ORGS_SORT_FIELDS),
   [ORGS_ORDER_PARAM]: oneOf(SORT_ORDERS),

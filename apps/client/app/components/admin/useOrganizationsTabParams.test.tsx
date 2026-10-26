@@ -64,6 +64,16 @@ describe('Organizations tab URL precedence', () => {
     expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
   });
 
+  it('reads a URL whose view params are all invalid as the default view, not the stored one', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'organizations', orgsSort: 'credits', orgsLimit: 7 }));
+    const { result } = renderOrganizationsTab();
+
+    const defaultView = { page: 1, limit: 10, sortBy: 'name', sortDirection: 'asc', personal: undefined };
+    expect(result.current[0]).toMatchObject(defaultView);
+    expect(useOrganizationsTab.getState().params).toMatchObject({ ...defaultView, search: 'Acme' });
+    expect(fakeAdminRouter.search).toEqual({ tab: 'organizations', orgsPage: 1 });
+  });
+
   it('leaves another tab URL alone', () => {
     act(() => fakeAdminRouter.reset({ tab: 'users' }));
     renderOrganizationsTab();
