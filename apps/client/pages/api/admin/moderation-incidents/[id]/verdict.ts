@@ -186,12 +186,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     req.logger.info(
       `[NCMEC] retry_finish succeeded for incident ${incidentId}, reportId=${incident.ncmecReportId}, by admin=${req.user.id}; marking reported`
     );
-    // Pass staleAfterMs=0: /finish just succeeded so the outcome is known; the stale filter
-    // is not appropriate here (it exists to prevent mark_reported/requeue from racing a live
-    // in-flight submission, not to gate a retry we just confirmed succeeded).
-    // /finish already succeeded, so the verdict is audited even when a concurrent resolution
-    // won the DB write. If recording fails, /finish has already finalized the report; recover
-    // with mark_reported once the claim is stale instead of calling /finish again.
+    // staleAfterMs=0: /finish just succeeded, so there is no in-flight submission to wait out.
+    // Audited even if a concurrent resolution won; on failure, recover with mark_reported, never a second /finish.
     const ncmecReportId = incident.ncmecReportId;
     const adminId = req.user.id;
     let updated;
@@ -213,7 +209,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
         `[NCMEC] recording retry_finish for incident ${incidentId} failed after NCMEC finalized reportId=${ncmecReportId}: ${(err as Error).message}`
       );
       return res.status(500).json({
-        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. In about 10 minutes, once the claim is stale, use mark_reported with this reportId.`,
+        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the claim is stale (up to 10 minutes), use mark_reported with this reportId.`,
         ncmecReportId,
       });
     }
@@ -385,7 +381,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
           )
         );
       return res.status(500).json({
-        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. In about 10 minutes, once the claim is stale, use mark_reported with this reportId.`,
+        error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the claim is stale (up to 10 minutes), use mark_reported with this reportId.`,
         ncmecReportId,
       });
     }
