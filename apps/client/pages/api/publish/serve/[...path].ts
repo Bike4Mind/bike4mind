@@ -531,7 +531,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // sub-request double-counts). Fire-and-forget inside bumpViewCount.
   const gateViewAudit =
     gateArtifact.accessGate?.kind === 'domain'
-      ? { gateKind: 'domain' as const, sourceIp: getClientIp(req), viewerEmailDomain: access.ok ? access.viewerEmailDomain : undefined }
+      ? {
+          gateKind: 'domain' as const,
+          sourceIp: getClientIp(req),
+          viewerEmailDomain: access.ok ? access.viewerEmailDomain : undefined,
+        }
       : undefined;
 
   // Per-link view counting (#3255 step 2). Computed once here and threaded to every

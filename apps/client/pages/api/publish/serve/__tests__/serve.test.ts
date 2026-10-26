@@ -352,20 +352,24 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     expect(mockDownload).not.toHaveBeenCalled(); // shell carries no secret, no storage read
   });
 
-  it('drops an oversized gated asset and reports it via header (no silent truncation)', async () => {
+  it('drops an oversized gated non-media asset and reports it via header (no silent truncation)', async () => {
     mockArtifactFindOne.mockReturnValue(
       bundle({
         visibility: 'private',
         ownerId: 'owner1',
         manifest: [
           { path: 'index.html', mimeType: 'text/html' },
-          { path: 'huge.png', mimeType: 'image/png' },
+          { path: 'huge.css', mimeType: 'text/css' },
         ],
       })
     );
     const huge = Buffer.alloc(3 * 1024 * 1024 + 1); // > PER_ASSET_MAX_BYTES
     mockDownload.mockImplementation((key: string) =>
-      Promise.resolve(key.endsWith('index.html') ? Buffer.from(`<html><body><img src="huge.png"></body></html>`) : huge)
+      Promise.resolve(
+        key.endsWith('index.html')
+          ? Buffer.from(`<html><head><link rel="stylesheet" href="huge.css"></head><body></body></html>`)
+          : huge
+      )
     );
 
     const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
@@ -373,9 +377,9 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('X-Publish-Dropped-Assets')).toBe('1');
-    expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('huge.png');
+    expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('huge.css');
     const data = res._getData() as string;
-    expect(data).not.toContain('data:image/png;base64,'); // huge asset was not inlined
+    expect(data).not.toContain('href=&quot;huge.css&quot;'); // link removed, not left to 404
   });
 
   it('admin views any gated bundle', async () => {
@@ -3286,10 +3290,7 @@ describe('GET /api/publish/serve - gated bundle inline budget and overflow media
   const bigBundle = (over: Record<string, unknown> = {}) =>
     bundle({
       accessGate: { kind: 'passphrase' },
-      manifest: [
-        { path: 'index.html', mimeType: 'text/html' },
-        ...imgs.map(path => ({ path, mimeType: 'image/png' })),
-      ],
+      manifest: [{ path: 'index.html', mimeType: 'text/html' }, ...imgs.map(path => ({ path, mimeType: 'image/png' }))],
       ...over,
     });
   const html = `<html><head></head><body>${imgs.map(p => `<img src="${p}">`).join('')}</body></html>`;
