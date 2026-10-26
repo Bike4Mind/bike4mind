@@ -45,7 +45,13 @@ export const MODEL_TOOL_NAMES = ['models_list', 'models_search', 'models_pull', 
 
 const searchShape = {
   query: z.string().trim().min(1).max(200).describe('Search text, e.g. "qwen2.5 0.5b"'),
-  limit: z.number().int().min(1).max(50).default(SEARCH_LIMIT).describe('Maximum repos to return'),
+  limit: z.number().int().min(1).max(50).default(SEARCH_LIMIT).describe('Maximum repos to search'),
+  includeAbliterated: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Also return abliterated or uncensored builds, labelled notRecommended and listed after every other hit. Pass true only when the user asks for them.'
+    ),
 };
 
 const pullShape = {
@@ -248,16 +254,21 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
     {
       title: 'Search local models',
       description:
-        "Search Hugging Face for GGUF models that run locally, with each repo's declared licenses, gated status and popularity. A repo is permissive only if every license it declares is permissive. Never suggest a repo marked notRecommended: those are abliterated or uncensored builds. Downloads nothing.",
+        "Search Hugging Face for GGUF models that run locally, with each repo's declared licenses, gated status and popularity. A repo is permissive only if every license it declares is permissive. Abliterated and uncensored builds are left out unless includeAbliterated is true; then they are marked notRecommended and come last. Never suggest or recommend one. Downloads nothing.",
       inputSchema: searchShape,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     (args, extra) =>
       run(async () => {
         const page = await deps.hub().search({ query: args.query, limit: args.limit, signal: extra.signal });
+        const flagged = page.models.filter(isNotRecommended);
+        const hits = [
+          ...page.models.filter(model => !isNotRecommended(model)),
+          ...(args.includeAbliterated ? flagged : []),
+        ];
         return toResult({
           query: args.query,
-          models: page.models.map(model => ({
+          models: hits.map(model => ({
             id: model.id,
             licenses: model.licenses,
             gated: model.gated,
@@ -267,6 +278,10 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
             baseModels: model.baseModels,
             ...(isNotRecommended(model) && { notRecommended: 'abliterated or uncensored build' }),
           })),
+          ...(!args.includeAbliterated &&
+            flagged.length > 0 && {
+              hidden: `${flagged.length} abliterated or uncensored ${flagged.length === 1 ? 'build was' : 'builds were'} left out.`,
+            }),
           next: 'models_pull shows the build, size and every license, and asks the user before downloading.',
         });
       })

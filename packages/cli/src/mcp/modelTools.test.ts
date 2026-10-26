@@ -84,8 +84,8 @@ function fakeHub(model: HubModelDetail = detail()): HubClient {
     endpoint: ENDPOINT,
     search: vi.fn().mockResolvedValue({
       models: [
-        { ...model, licenses: ['apache-2.0'] },
         { ...model, id: 'someone/Qwen2.5-0.5B-abliterated-GGUF' },
+        { ...model, licenses: ['apache-2.0'] },
         { ...model, id: 'someone/plain-GGUF', tags: ['uncensored'] },
       ],
       nextCursor: null,
@@ -160,14 +160,27 @@ describe('model tools', () => {
     ]);
   });
 
-  it('returns search hits with their licenses and marks abliterated or uncensored builds', async () => {
+  it('leaves abliterated and uncensored builds out of search hits by default', async () => {
     const { call } = await setup();
     const { data } = await call('models_search', { query: 'qwen2.5 0.5b' });
+    expect(data.models).toEqual([expect.objectContaining({ id: REPO, licenses: ['apache-2.0'] })]);
+    expect(data.models).toEqual([expect.not.objectContaining({ notRecommended: expect.anything() })]);
+    expect(data.hidden).toBe('2 abliterated or uncensored builds were left out.');
+  });
+
+  it('lists them last and labelled with includeAbliterated', async () => {
+    const { call } = await setup();
+    const { data } = await call('models_search', { query: 'qwen2.5 0.5b', includeAbliterated: true });
     const models = data.models as Array<Record<string, unknown>>;
-    expect(models[0]).toEqual(expect.objectContaining({ id: REPO, licenses: ['apache-2.0'] }));
+    expect(models.map(model => model.id)).toEqual([
+      REPO,
+      'someone/Qwen2.5-0.5B-abliterated-GGUF',
+      'someone/plain-GGUF',
+    ]);
     expect(models[0]).not.toHaveProperty('notRecommended');
     expect(models[1].notRecommended).toBe('abliterated or uncensored build');
     expect(models[2].notRecommended).toBe('abliterated or uncensored build');
+    expect(data).not.toHaveProperty('hidden');
   });
 
   describe('models_pull without elicitation', () => {
