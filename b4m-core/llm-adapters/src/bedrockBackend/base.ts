@@ -63,6 +63,31 @@ const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
 const loggedErrors = new WeakSet<Error>();
 
 /**
+ * Message for a stream that produced no text and no tool call. A stall (no terminal event from an
+ * adapter that signals one) carries "stream timeout" so isStreamIdleTimeoutError in
+ * services/src/llm/llmErrorPredicates.ts retries it once then falls back; it must not say "without a
+ * terminal event", which isTruncatedStreamError reads as a mid-stream truncation. Any other empty
+ * stream is deterministic (the max-tool-calls cap) and must match neither.
+ */
+export function bedrockEmptyResponseMessage(model: string, region: string, stalled: boolean): string {
+  const profileHint =
+    `If every call on this model is empty, a "global." cross-region inference profile served from a ` +
+    `region that does not host it does the same - try the "us." variant, or confirm the model/profile ` +
+    `is granted in ${region}.`;
+  if (stalled) {
+    return (
+      `[BaseBedrockBackend] stream timeout - model "${model}" in region ${region} returned an EMPTY ` +
+      `response (no text, no tool call) and no terminal event. Usually a stalled Bedrock socket ` +
+      `before the first token. ${profileHint}`
+    );
+  }
+  return (
+    `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${region} ` +
+    `(no text, no tool call, no output tokens). ${profileHint}`
+  );
+}
+
+/**
  * The subset of @smithy's NodeHttp2HandlerOptions that BEDROCK_REQUEST_HANDLER sets. Declared
  * here rather than imported: adding @smithy/node-http-handler to this package's manifest was
  * measured to re-resolve the lockfile and unify the transitive copies the repo currently carries
@@ -562,23 +587,19 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         }
         const modelDoneAt = Date.now();
 
-        // FAIL LOUD on an empty completion. No text AND no tool call means the model produced nothing a
-        // user or the pipeline can use - almost always a misrouted inference profile (a "global." model
-        // served from a region that does not host it) or an unavailable model. Returning silently makes
-        // the chat hang with no output and no error; throwing surfaces a clear, actionable message. Token
-        // count is deliberately NOT part of the condition: an empty response can still report phantom
-        // usage, and a real assistant turn ALWAYS has text or a tool call, so this cannot false-positive.
-        // Ordering note: a stall that lands BEFORE the first token also arrives here with zero
-        // output and no terminal event, so it is reported as EMPTY rather than TRUNCATED and
-        // misses the retry below. That is deliberate, not an oversight - a misrouted "global."
-        // profile produces literally the same observable (no chunks, no terminal event), so the
-        // two are indistinguishable at this layer and the more actionable message should win.
-        if (emittedTextChars === 0 && emittedProviderBlocks === 0 && !func.some(f => f.name)) {
+        // FAIL LOUD on an empty completion: no text and no tool call (token counts can be phantom).
+        // Aborted requests are excluded, as in the TRUNCATED guard below. A stall (no terminal event)
+        // gets the retried wording; a single call cannot tell it from a misrouted profile, so a
+        // persistent misroute also retries then falls back. The retry is turn-level, so a stall on a
+        // later tool round re-runs the earlier rounds, as TRUNCATED does. See bedrockEmptyResponseMessage.
+        if (
+          emittedTextChars === 0 &&
+          emittedProviderBlocks === 0 &&
+          !func.some(f => f.name) &&
+          !options.abortSignal?.aborted
+        ) {
           throw new Error(
-            `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${this._options.region} ` +
-              `(no text, no tool call, no output tokens). A "global." cross-region inference profile served ` +
-              `from a region that does not host it does exactly this - try the "us." variant, or confirm the ` +
-              `model/profile is granted in ${this._options.region}.`
+            bedrockEmptyResponseMessage(model, this._options.region, this.signalsStreamTermination && !sawTerminalEvent)
           );
         }
 

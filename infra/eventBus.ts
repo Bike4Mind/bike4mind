@@ -6,6 +6,7 @@ import { fabFileBucket, generatedImagesBucket, appFilesBucket } from './buckets'
 import { eventBus } from './bus';
 import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
 import { createEventBusDeadLetter } from './eventBusDeadLetter';
+import { otcEmailConfigurationSet } from './otcEmailMetrics';
 
 // Stripe events
 const billingEventsDLQ = new sst.aws.Queue('billingEventsDLQ', {
@@ -100,6 +101,7 @@ const emailSendSubscription = eventBus.subscribe(
     vpc: lambdaVpc,
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      OTC_SES_CONFIGURATION_SET: otcEmailConfigurationSet?.name ?? '',
     },
     permissions: [emailEventsDeadLetter.sendPermission],
     transform: emailEventsDeadLetter.functionTarget,

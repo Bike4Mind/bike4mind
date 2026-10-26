@@ -2,7 +2,13 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { randomUUID } from 'crypto';
 import { ImageModels, ModelInfo, UnprocessableEntityError, usdToCredits } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, getSettingsByNames } from '@bike4mind/utils';
+import {
+  BadRequestError,
+  ExpectedImageGenerationError,
+  ForbiddenError,
+  getSettingsByNames,
+  logImageGenerationFailure,
+} from '@bike4mind/utils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository, usageEventRepository } from '@bike4mind/database';
@@ -246,10 +252,12 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
       ) {
         throw error;
       }
-      imageLogger.error('[Blog Image] Error generating featured image:', error);
+      logImageGenerationFailure(imageLogger, '[Blog Image] Error generating featured image:', error);
 
       let errorMessage = 'Failed to generate featured image. Please try again.';
-      if (error instanceof Error) {
+      if (error instanceof ExpectedImageGenerationError) {
+        errorMessage = error.message;
+      } else if (error instanceof Error) {
         if (error.message.includes('API key') || error.message.includes('model')) {
           errorMessage = 'AI service temporarily unavailable. Please try again later.';
         } else if (error.message.includes('credits')) {

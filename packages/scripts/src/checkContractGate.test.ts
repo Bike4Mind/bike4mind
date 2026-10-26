@@ -23,7 +23,13 @@ afterEach(() => {
   while (sandboxes.length) fs.rmSync(sandboxes.pop()!, { recursive: true, force: true });
 });
 
-function makeTree(): { dir: string; v1Dir: string; allowlist: string; apiKeyAllowlist: string } {
+function makeTree(): {
+  dir: string;
+  v1Dir: string;
+  allowlist: string;
+  apiKeyAllowlist: string;
+  unmeteredAllowlist: string;
+} {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-test-'));
   sandboxes.push(dir);
   const v1Dir = path.join(dir, 'apps', 'client', 'pages', 'api', 'v1');
@@ -33,7 +39,9 @@ function makeTree(): { dir: string; v1Dir: string; allowlist: string; apiKeyAllo
   fs.writeFileSync(allowlist, '# header-only\n', 'utf8');
   const apiKeyAllowlist = path.join(dir, 'scripts', 'contract-gate-api-key-allowlist.txt');
   fs.writeFileSync(apiKeyAllowlist, '# header-only\n', 'utf8');
-  return { dir, v1Dir, allowlist, apiKeyAllowlist };
+  const unmeteredAllowlist = path.join(dir, 'scripts', 'unmetered-llm-route-allowlist.txt');
+  fs.writeFileSync(unmeteredAllowlist, '# header-only\n', 'utf8');
+  return { dir, v1Dir, allowlist, apiKeyAllowlist, unmeteredAllowlist };
 }
 
 // Writes a handler relative to pages/api (not pages/api/v1); returns its repo-relative path.
@@ -127,6 +135,14 @@ describe('check-contract-gate.sh', () => {
   it('exits 1 when the api-key allowlist file is missing', () => {
     const { dir } = makeTree();
     fs.rmSync(path.join(dir, 'scripts', 'contract-gate-api-key-allowlist.txt'));
+    const r = runGuard(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/ERROR.*Allowlist not found/);
+  });
+
+  it('exits 1 when the unmetered-LLM allowlist file is missing', () => {
+    const { dir } = makeTree();
+    fs.rmSync(path.join(dir, 'scripts', 'unmetered-llm-route-allowlist.txt'));
     const r = runGuard(dir);
     expect(r.status).toBe(1);
     expect(r.stdout).toMatch(/ERROR.*Allowlist not found/);
@@ -448,6 +464,72 @@ describe('check-contract-gate.sh', () => {
       writeHandler(v1Dir, 'bad.ts', VIOLATING);
       const r = runGuard(dir);
       expect(r.stdout).toContain('::error::');
+    });
+  });
+  describe('unmetered LLM ratchet', () => {
+    const UNMETERED_LLM = `
+const handler = baseApi({ requiredScopes: ['ai:generate'] }).post(async (req, res) => {
+  const { modelId, llm } = await OperationsModelService.getOperationsModel();
+  await llm.complete(modelId, [], {}, async () => {});
+});
+export default handler;
+`.trimStart();
+    const METERED_LLM = `
+const handler = baseApi({ requiredScopes: ['ai:generate'] }).post(async (req, res) => {
+  const operations = await OperationsModelService.getOperationsModel();
+  const llm = meterCompletionBackend(operations.llm, createRequestCompletionMeter(req, 'x'), operations.modelInfo);
+  await llm.complete(operations.modelId, [], {}, async () => {});
+});
+export default handler;
+`.trimStart();
+    const JWT_ONLY_LLM = UNMETERED_LLM.replace("{ requiredScopes: ['ai:generate'] }", "{ auth: 'jwtOnly' }");
+
+    it('flags a key-accepting handler that calls an LLM without a billing seam', () => {
+      const { dir, apiKeyAllowlist } = makeTree();
+      const rel = writeApiHandler(dir, 'ai/unmetered.ts', UNMETERED_LLM);
+      // Isolate scan 3: the handler is a known scan-2 exemption.
+      fs.writeFileSync(apiKeyAllowlist, `# header\n${rel}\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('call an LLM without credit metering');
+      expect(r.stdout).toContain(rel);
+    });
+
+    it('flags an unmetered LLM call in a v1 handler too', () => {
+      const { dir, v1Dir } = makeTree();
+      const rel = writeHandler(v1Dir, 'unmetered.ts', `${UNMETERED_LLM}// nextRouteForContract(contract)\n`);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
+    });
+
+    it('passes a handler that meters its LLM call', () => {
+      const { dir, apiKeyAllowlist } = makeTree();
+      const rel = writeApiHandler(dir, 'ai/metered.ts', METERED_LLM);
+      fs.writeFileSync(apiKeyAllowlist, `# header\n${rel}\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+    });
+
+    it('passes a jwtOnly handler that calls an LLM unmetered', () => {
+      const { dir } = makeTree();
+      writeApiHandler(dir, 'ai/spa-only.ts', JWT_ONLY_LLM);
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+    });
+
+    it('passes a baselined handler and reports it stale once metered', () => {
+      const { dir, apiKeyAllowlist, unmeteredAllowlist } = makeTree();
+      const rel = writeApiHandler(dir, 'ai/legacy.ts', UNMETERED_LLM);
+      fs.writeFileSync(apiKeyAllowlist, `# header\n${rel}\n`, 'utf8');
+      fs.writeFileSync(unmeteredAllowlist, `# header\n${rel}  # follow-up\n`, 'utf8');
+      expect(runGuard(dir).status).toBe(0);
+
+      writeApiHandler(dir, 'ai/legacy.ts', METERED_LLM);
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('INFO');
+      expect(r.stdout).toContain('unmetered-llm-route-allowlist.txt');
     });
   });
 });

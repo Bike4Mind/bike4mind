@@ -113,7 +113,7 @@ describe('ArtifactRenderer', () => {
       expect(getCachedArtifactId('stub', 'stub-1', 'session-1')).toBeNull();
     });
 
-    it('seeds a remount with the minted id, without another lookup', async () => {
+    it('renders a remount immediately with its minted id while rechecking the database', async () => {
       const messageId = nextMessageId();
       const { unmount } = render(
         <ArtifactRenderer artifact={artifact} index={1} messageId={messageId} sessionId="session-1" />
@@ -124,7 +124,8 @@ describe('ArtifactRenderer', () => {
       render(<ArtifactRenderer artifact={artifact} index={1} messageId={messageId} sessionId="session-1" />);
 
       expect(screen.getByTestId('stub-card')).toHaveTextContent(mintedId(messageId, 1));
-      expect(lookup).toHaveBeenCalledTimes(1);
+      await act(async () => {});
+      expect(lookup).toHaveBeenCalledTimes(2);
     });
 
     it("adopts the saved row once its reply's artifacts are persisted", async () => {
@@ -144,6 +145,27 @@ describe('ArtifactRenderer', () => {
 
       expect(await screen.findByText('artifact_stub_stub-1_saved_3')).toBeInTheDocument();
       expect(getCachedArtifactId('stub', 'stub-1', 'session-1')).toBe('artifact_stub_stub-1_saved_3');
+    });
+
+    it('rechecks a provisional id when persistence completed while its card was unmounted', async () => {
+      const messageId = nextMessageId();
+      const { unmount } = render(
+        <ArtifactRenderer artifact={artifact} index={0} messageId={messageId} sessionId="session-1" />
+      );
+      await screen.findByText(mintedId(messageId, 0));
+      unmount();
+
+      lookup.mockResolvedValue('artifact_stub_stub-1_saved_3');
+      act(() => {
+        window.dispatchEvent(new CustomEvent('artifacts-persisted', { detail: { questId: messageId } }));
+      });
+
+      render(<ArtifactRenderer artifact={artifact} index={0} messageId={messageId} sessionId="session-1" />);
+
+      expect(screen.getByTestId('stub-card')).toHaveTextContent(mintedId(messageId, 0));
+      expect(screen.queryByTestId('artifact-loading')).not.toBeInTheDocument();
+      expect(await screen.findByText('artifact_stub_stub-1_saved_3')).toBeInTheDocument();
+      expect(lookup).toHaveBeenCalledTimes(2);
     });
   });
 });

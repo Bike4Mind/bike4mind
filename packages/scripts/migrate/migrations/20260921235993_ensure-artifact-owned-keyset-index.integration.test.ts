@@ -11,9 +11,9 @@ import migration from './20260921235993_ensure-artifact-owned-keyset-index';
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const INDEX_NAME = 'userId_1_deletedAt_1__id_1';
-// Another index the schema declares. The migration builds ONE index by name so a prod DocumentDB
-// run does not also build every other declared index (the text index included) under the same
-// foreground lock; dropping this one and asserting it stays gone is what guards that narrowing.
+// Another index the schema declares. The migration builds ONE index by name so a prod
+// run does not also build every other declared index (the text index included) in one pass;
+// dropping this one and asserting it stays gone is what guards that narrowing.
 const OTHER_DECLARED_INDEX = 'sourceQuestId_1';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;

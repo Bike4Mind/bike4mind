@@ -131,6 +131,8 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'aws.lambda.Invocation', reason: 'Deploy-time one-shot invoke; the invoked Function is inventoried.' },
   { shape: 'aws.ses.ReceiptRuleSet', reason: 'Container for the inventoried aws.ses.ReceiptRule.' },
   { shape: 'aws.ses.ActiveReceiptRuleSet', reason: 'Activation of the inventoried receipt rule set.' },
+  { shape: 'aws.ses.ConfigurationSet', reason: 'Outbound mail metric configuration, no compute.' },
+  { shape: 'aws.ses.EventDestination', reason: 'Outbound mail metrics sent to CloudWatch, no compute.' },
   { shape: 'aws.s3.BucketLifecycleConfigurationV2', reason: 'Storage retention policy, not a compute trigger.' },
   { shape: 'sst.aws.Vpc', reason: 'Network plumbing.' },
   { shape: 'sst.aws.Cluster', reason: 'Container host for inventoried sst.aws.Service declarations.' },
