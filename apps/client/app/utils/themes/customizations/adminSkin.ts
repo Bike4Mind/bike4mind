@@ -350,7 +350,7 @@ const rowAction = (component: string) => ({
 /** The seven type levels (guide section 2, "Type"). Every Joy level maps onto one of them. */
 const pageTitle = { fontSize: '24px', fontWeight: 600, letterSpacing: '-0.01em', lineHeight: 1.3 };
 const sectionTitle = { fontSize: '15px', fontWeight: 600, letterSpacing: 'normal', lineHeight: 1.4 };
-const typographyLevels: Record<string, Record<string, string | number | Record<string, string>>> = {
+const typographyLevels: Record<string, Record<string, string | number>> = {
   h1: pageTitle,
   h2: sectionTitle,
   h3: sectionTitle,
@@ -360,9 +360,9 @@ const typographyLevels: Record<string, Record<string, string | number | Record<s
   'title-sm': { fontSize: '14px', fontWeight: 600, lineHeight: 1.4 },
   'body-lg': { fontSize: '14px' },
   'body-md': { fontSize: '14px' },
-  // Joy draws body-sm in the tertiary (muted) color, but tabs use it for content like table cells.
-  // Only uncolored text moves: a `color` prop adds a colorX class, and `textColor` goes through sx, which wins anyway.
-  'body-sm': { fontSize: '13px', '&:not([class*="MuiTypography-color"])': { color: admin('inkSecondary') } },
+  // Joy colors body-sm with the tertiary (muted) text var, but tabs use it for content like table cells.
+  // Redefine the var rather than set `color`: a nested rule would beat a flat sx color (the env banner's white title).
+  'body-sm': { fontSize: '13px', '--joy-palette-text-tertiary': admin('inkSecondary') },
   'body-xs': { fontSize: '12px', fontWeight: 500 },
 };
 

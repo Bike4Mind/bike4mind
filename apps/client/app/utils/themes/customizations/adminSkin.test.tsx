@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { Button, Card, Modal, ModalDialog, Sheet, Typography } from '@mui/joy';
+import { Box, Button, Card, Modal, ModalDialog, Sheet, Typography } from '@mui/joy';
 import type { Components, Theme } from '@mui/joy/styles';
 import AppTheme from '../AppTheme';
 import { IN_ADMIN, IN_ADMIN_PORTAL, IN_ADMIN_ROW, adminSkinComponents, withAdminSkin } from './adminSkin';
@@ -26,6 +26,29 @@ describe('admin skin scope', () => {
       getComputedStyle(screen.getByTestId(testId)).getPropertyValue('--joy-palette-primary-solidBg').trim();
     expect(solidBg('admin-root')).toBe('var(--joy-palette-admin-ink)');
     expect(solidBg('outside-btn')).not.toBe('var(--joy-palette-admin-ink)');
+  });
+
+  // The environment banner sits inside the admin root and must look as it does elsewhere: white title on its color.
+  it('keeps a flat sx color on body-sm text, so the environment banner title stays white', () => {
+    render(
+      <AppTheme>
+        <Sheet data-admin-surface>
+          <Box sx={{ backgroundColor: 'rgb(0, 128, 0)' }}>
+            <Typography data-testid="banner-title" level="body-sm" sx={{ color: 'white' }}>
+              Local Development
+            </Typography>
+          </Box>
+          <Typography data-testid="cell-text" level="body-sm">
+            cell
+          </Typography>
+        </Sheet>
+      </AppTheme>
+    );
+
+    expect(getComputedStyle(screen.getByTestId('banner-title')).color).toBe('rgb(255, 255, 255)');
+    expect(
+      getComputedStyle(screen.getByTestId('cell-text')).getPropertyValue('--joy-palette-text-tertiary').trim()
+    ).toBe('var(--joy-palette-admin-inkSecondary)');
   });
 
   it.each([
