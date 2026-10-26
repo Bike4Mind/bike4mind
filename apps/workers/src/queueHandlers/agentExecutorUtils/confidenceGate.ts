@@ -70,9 +70,8 @@ export function evaluateConfidenceGate({
     calls.push({ confidence: step.metadata?.confidence ?? 0, toolFailed: step.metadata?.toolFailed });
   }
 
-  // `gate.confidence` is the agent's mean over every call it scored, which can include
-  // observations outside `allSteps` (e.g. a checkpoint restored mid-iteration). The
-  // steps cover the iteration only when they reproduce that mean.
+  // `gate.confidence` is the agent's mean over every call it scored this iteration. When the
+  // steps reproduce that mean they cover the iteration; the else arm below is defensive only.
   const allCallsMean = calls.reduce((sum, call) => sum + call.confidence, 0) / calls.length;
   const stepsCoverIteration = calls.length > 0 && Math.abs(allCallsMean - gate.confidence) < 1e-9;
   const visibleEvidence = usableEvidenceConfidence(calls);
