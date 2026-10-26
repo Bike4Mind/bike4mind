@@ -130,7 +130,13 @@ describe('runOauthAbuseAutoBlock', () => {
   });
 
   it('does not re-block an IP an admin unblocked, on rows from before the unblock', async () => {
-    const unblocked = { active: false, expiresAt: ago(-5 * MIN), unblockedAt: ago(2 * MIN) };
+    const unblocked = {
+      active: false,
+      expiresAt: ago(-5 * MIN),
+      unblockedAt: ago(2 * MIN),
+      source: 'auto' as const,
+      escalationLevel: 1,
+    };
     const { deps, block, countAttemptsSince } = setup({}, { '1.1.1.1': unblocked, '2.2.2.2': unblocked }, 3);
     const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
     expect(countAttemptsSince).toHaveBeenCalledWith('1.1.1.1', ago(2 * MIN));
@@ -139,7 +145,13 @@ describe('runOauthAbuseAutoBlock', () => {
   });
 
   it('blocks again when new failures after the unblock reach the threshold, without escalating the unblock', async () => {
-    const unblocked = { active: false, expiresAt: ago(-5 * MIN), unblockedAt: ago(2 * MIN) };
+    const unblocked = {
+      active: false,
+      expiresAt: ago(-5 * MIN),
+      unblockedAt: ago(2 * MIN),
+      source: 'auto' as const,
+      escalationLevel: 1,
+    };
     const { deps, block } = setup({}, { '1.1.1.1': unblocked }, 20);
     const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
     expect(result.blocked.map(b => [b.ip, b.attempts, b.escalationLevel])).toEqual([
@@ -178,7 +190,7 @@ describe('default deps and policy', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     h.getIPs.mockResolvedValue([{ ip: '9.9.9.9', attempts: 7 }]);
-    h.findLatest.mockResolvedValue(null);
+    h.countForIP.mockResolvedValue(7);
     h.findLatest.mockResolvedValue({ active: false, expiresAt: ago(MIN), source: 'auto', escalationLevel: 0 });
     h.block.mockResolvedValue({});
   });
@@ -198,6 +210,7 @@ describe('default deps and policy', () => {
       { skipCache: true, names: expect.arrayContaining(['oauthAbuseLookbackHours', 'oauthAbuseWindowMinutes']) }
     );
     expect(h.getIPs).toHaveBeenCalledWith(ago(15 * MIN), 7, OAUTH_ABUSE_REASONS, OAUTH_ABUSE_STRATEGIES);
+    expect(h.countForIP).toHaveBeenCalledWith('9.9.9.9', ago(MIN), OAUTH_ABUSE_REASONS, OAUTH_ABUSE_STRATEGIES);
     expect(h.block).toHaveBeenCalledWith('9.9.9.9', expect.any(String), {
       durationMs: 30 * MIN,
       source: 'auto',
