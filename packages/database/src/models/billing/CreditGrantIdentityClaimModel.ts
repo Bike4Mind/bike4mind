@@ -54,7 +54,9 @@ export async function claimCreditGrantIdentity(claim: ICreditGrantIdentityClaim)
     transactionId: claim.transactionId,
   };
   await new CreditGrantIdentityClaim(binding).validate();
-  // autoIndex can be disabled in production; init() alone does not guarantee uniqueness.
+  // init() creates the collection so listIndexes works on a fresh database; with autoIndex off it
+  // does not build the indexes, so uniqueness is still verified explicitly.
+  await CreditGrantIdentityClaim.init();
   await assertUniqueIndexes();
   try {
     await CreditGrantIdentityClaim.create(binding);

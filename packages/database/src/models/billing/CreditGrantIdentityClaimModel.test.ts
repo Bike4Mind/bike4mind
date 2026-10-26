@@ -23,7 +23,7 @@ afterAll(async () => {
 });
 
 describe('claimCreditGrantIdentity', () => {
-  it('accepts an exact replay after a posting failure without creating another claim', async () => {
+  it('returns true for an exact replay without a second claim', async () => {
     expect(await claimCreditGrantIdentity(binding)).toBe(true);
     expect(await claimCreditGrantIdentity(binding)).toBe(true);
     expect(await CreditGrantIdentityClaim.countDocuments()).toBe(1);
@@ -41,6 +41,8 @@ describe('claimCreditGrantIdentity', () => {
     );
     expect(results.filter(Boolean)).toHaveLength(1);
     expect(await CreditGrantIdentityClaim.countDocuments()).toBe(1);
+    const stored = await CreditGrantIdentityClaim.findOne().lean();
+    expect(stored?.ownerId).toBe(`synthetic-owner-${results.indexOf(true)}`);
   });
 
   it('rejects alternate transaction keys for the same identity and account', async () => {
@@ -50,6 +52,7 @@ describe('claimCreditGrantIdentity', () => {
       )
     );
     expect(results.filter(Boolean)).toHaveLength(1);
+    expect(await CreditGrantIdentityClaim.countDocuments()).toBe(1);
   });
 
   it('prevents an account from binding multiple identities concurrently', async () => {
@@ -63,6 +66,7 @@ describe('claimCreditGrantIdentity', () => {
       )
     );
     expect(results.filter(Boolean)).toHaveLength(1);
+    expect(await CreditGrantIdentityClaim.countDocuments()).toBe(1);
   });
 
   it('does not reuse a ledger key for another identity or account', async () => {
@@ -112,6 +116,33 @@ describe('claimCreditGrantIdentity', () => {
     }
   );
 
+  it.each([
+    ['sparse', { unique: true, sparse: true }],
+    ['partial', { unique: true, partialFilterExpression: { ownerId: { $type: 'string' } } }],
+  ])('refuses a %s unique index', async (_name, options) => {
+    await CreditGrantIdentityClaim.collection.dropIndex('ownerId_1');
+    await CreditGrantIdentityClaim.collection.createIndex({ ownerId: 1 }, options);
+    try {
+      await expect(claimCreditGrantIdentity(binding)).rejects.toThrow('indexes are not ready');
+      expect(await CreditGrantIdentityClaim.countDocuments()).toBe(0);
+    } finally {
+      await CreditGrantIdentityClaim.collection.dropIndex('ownerId_1');
+      await CreditGrantIdentityClaim.createIndexes();
+    }
+  });
+
+  it('refuses a compound unique index in place of a single-field one', async () => {
+    await CreditGrantIdentityClaim.collection.dropIndex('transactionId_1');
+    await CreditGrantIdentityClaim.collection.createIndex({ transactionId: 1, ownerId: 1 }, { unique: true });
+    try {
+      await expect(claimCreditGrantIdentity(binding)).rejects.toThrow('indexes are not ready');
+      expect(await CreditGrantIdentityClaim.countDocuments()).toBe(0);
+    } finally {
+      await CreditGrantIdentityClaim.collection.dropIndex('transactionId_1_ownerId_1');
+      await CreditGrantIdentityClaim.createIndexes();
+    }
+  });
+
   it('refuses expiring claim storage', async () => {
     await CreditGrantIdentityClaim.collection.createIndex({ createdAt: 1 }, { expireAfterSeconds: 3600 });
     try {
@@ -143,5 +174,17 @@ describe('claimCreditGrantIdentity', () => {
       'transactionId',
       'updatedAt',
     ]);
+  });
+});
+
+describe('claimCreditGrantIdentity on a database without the collection', () => {
+  it('reports missing indexes instead of a raw namespace error', async () => {
+    await CreditGrantIdentityClaim.collection.drop();
+    mongoose.deleteModel('CreditGrantIdentityClaim');
+    vi.resetModules();
+    const fresh = await import('./CreditGrantIdentityClaimModel');
+    await expect(fresh.claimCreditGrantIdentity(binding)).rejects.toThrow('indexes are not ready');
+    await fresh.CreditGrantIdentityClaim.createIndexes();
+    expect(await fresh.claimCreditGrantIdentity(binding)).toBe(true);
   });
 });
