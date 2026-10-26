@@ -74,6 +74,15 @@ describe.each(IMAGE_MODELS)('IMAGE_MODEL_CATALOG[%s]', model => {
   });
 });
 
+describe('gemini image-to-image', () => {
+  it('accepts one input image rendered n times on the chat generate path', () => {
+    const request: ImageCapabilityRequest = { mode: 'generate', inputs: [{ role: 'reference' }], count: 2 };
+    for (const model of IMAGE_MODELS.filter(model => isGeminiImageModel(model))) {
+      expect(validateImageRequest(request, getImageModelCatalogEntry(model))).toMatchObject({ ok: true });
+    }
+  });
+});
+
 describe('transparent background', () => {
   it('is declared unsupported on every model the request path steps down', () => {
     const steppedDown = IMAGE_MODELS.filter(model => rejectsTransparentBackground(model));

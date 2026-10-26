@@ -109,10 +109,17 @@ const flux2 = (model: ImageModels): ImageModelCatalogEntry =>
 // The gemini-*-image models are not served by the Imagen-style generateImages call GeminiImageService tries
 // first, so both modes land on generateContent with no imageConfig: no aspect ratio or format reaches Gemini.
 // This is narrower than the `aspectRatio` sizing getImageModelCapabilities advertises (catalog.test.ts).
+// On chat, a workbench image turns generate into image-to-image: ImageGeneration edits that one image `n`
+// times, so it is a generate reference (as FLUX.1's image_prompt is), not a one-image edit_source.
 const gemini = (): ImageModelCatalogEntry => ({
   provider: 'gemini',
   modes: {
-    generate: { inputs: {}, maxOutputs: MAX_IMAGES_PER_REQUEST, aspectRatios: null, outputFormats: [] },
+    generate: {
+      inputs: { reference: { max: 1 } },
+      maxOutputs: MAX_IMAGES_PER_REQUEST,
+      aspectRatios: null,
+      outputFormats: [],
+    },
     edit: editMode({ inputs: { edit_source: { max: 1 } }, aspectRatios: null, outputFormats: [] }),
   },
   sizing: { kind: 'fixed' },
