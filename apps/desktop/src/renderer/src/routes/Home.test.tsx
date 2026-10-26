@@ -5,6 +5,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import type { AuthState } from '@shared/auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Home } from './Home';
+import { setLocalChatActive } from './localChatMode';
 
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
@@ -81,6 +82,7 @@ afterEach(() => {
   root = null;
   host = null;
   signIn.mockClear();
+  setLocalChatActive(false);
 });
 
 async function mount(): Promise<void> {
@@ -176,6 +178,20 @@ it.each(['signed-out', 'unconfigured'] as const)('opens local chat without signi
   act(() => byTestId('local-chat-signin-btn')?.click());
   expect(byTestId('composer-input')).toBeNull();
   expect(byTestId('auth-local-chat-btn')).not.toBeNull();
+});
+
+it('returns to local chat after Home unmounts for Settings and mounts again', async () => {
+  await mount();
+  act(() => push({ ...base, status: 'signed-out', user: undefined }));
+  act(() => byTestId('auth-local-chat-btn')?.click());
+  act(() => byTestId('local-chat-settings-btn')?.click());
+  act(() => root?.unmount());
+  host?.remove();
+
+  await mount();
+  act(() => push({ ...base, status: 'signed-out', user: undefined }));
+  expect(byTestId('composer-input')).not.toBeNull();
+  expect(byTestId('auth-local-chat-btn')).toBeNull();
 });
 
 it('replaces the local conversation view when an authenticated account becomes active', async () => {

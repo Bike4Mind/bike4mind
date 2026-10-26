@@ -12,11 +12,16 @@ import { SignedInPanel } from '../auth/SignedInPanel';
 import { useAuthState } from '../auth/useAuthState';
 import { ChatShell } from '../chat/ChatShell';
 import { AppUpdateNotice } from '../chat/UpdateNotice';
+import { isLocalChatActive, setLocalChatActive } from './localChatMode';
 
 export function Home() {
   const state = useAuthState();
   const navigate = useNavigate();
-  const [localChat, setLocalChat] = useState(false);
+  const [localChat, setLocalChatState] = useState(isLocalChatActive);
+  const setLocalChat = (next: boolean) => {
+    setLocalChatActive(next);
+    setLocalChatState(next);
+  };
   const chatScope = useRef('device-local');
   if (state && state.status !== 'initializing' && !state.reauthRequired) {
     chatScope.current = `${state.environment.url}:${state.user?.id ?? 'device-local'}`;
