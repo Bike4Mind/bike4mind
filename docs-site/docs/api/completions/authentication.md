@@ -58,6 +58,28 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
 
 ---
 
+## Subscription access
+
+Hosted API keys and CLI/desktop cloud access require an active paid subscription by default.
+Paid standalone plans and organization seats qualify. An organization-billed key also qualifies
+when its billing organization has a paid subscription. Administrators, developer-tagged users
+and keys provisioned by an administrator are exempt from this access switch.
+
+An administrator can change **Admin Settings > SecOps > API Rate Limiting > API Key Access**:
+`all` opens access, `paid` requires a subscription, and `disabled` permits only the exemptions.
+Self-hosted installations default to `all`. Changes apply within 30 seconds and also affect
+existing keys and CLI/desktop sessions.
+
+Federated apps using the AI-token exchange follow the same policy. A refused exchange returns
+HTTP 403 with `error: "subscription_required"`, so your app can direct users to upgrade.
+
+### Troubleshooting subscription access
+
+If a valid key receives **"API keys require an active paid subscription"**, check your active
+subscription and the administrator's access setting. Replacing the key does not change eligibility.
+An organization-billed key must name the subscribed organization. A 5xx response means the server
+could not complete verification; retry with backoff instead of discarding the credential.
+
 ## Obtaining an API Key
 
 Follow these steps to create an API key:

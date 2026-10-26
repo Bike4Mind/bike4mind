@@ -98,7 +98,8 @@ export const generateTools = (
   sessionId?: string,
   codeMinifier?: ToolContext['codeMinifier'],
   availableModels?: import('@bike4mind/common').ModelInfo[],
-  onToolLlmUsage?: ToolContext['onToolLlmUsage']
+  onToolLlmUsage?: ToolContext['onToolLlmUsage'],
+  servingModel?: ToolContext['servingModel']
 ): Record<string, ICompletionOptionTools> => {
   assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
   const context: ToolContext = {
@@ -143,6 +144,7 @@ export const generateTools = (
     decide,
     getAbortSignal,
     numberCitables,
+    servingModel,
   };
 
   return Object.entries(tools).reduce(

@@ -1414,3 +1414,30 @@ describe('isEnforceCreditsLocked', () => {
     expect(isEnforceCreditsLocked()).toBe(true);
   });
 });
+
+describe('apiKeyAccess default', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('is paid on hosted, so the paid-only gate is live without an admin write', async () => {
+    vi.stubEnv('B4M_SELF_HOST', '');
+    vi.resetModules();
+    const { settingsMap: fresh } = await import('./settings');
+    expect(fresh.apiKeyAccess.defaultValue).toBe('paid');
+  });
+
+  it('is all on self-host, which has no billing stack', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.resetModules();
+    const { settingsMap: fresh } = await import('./settings');
+    expect(fresh.apiKeyAccess.defaultValue).toBe('all');
+  });
+
+  it('accepts only all, paid and disabled', () => {
+    const schema = settingsMap.apiKeyAccess.schema;
+    expect(['all', 'paid', 'disabled'].every(v => schema.safeParse(v).success)).toBe(true);
+    expect(schema.safeParse('anyone').success).toBe(false);
+  });
+});

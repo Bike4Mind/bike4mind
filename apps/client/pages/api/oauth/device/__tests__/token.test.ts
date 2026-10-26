@@ -25,10 +25,17 @@ vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 3600 }
 
 const repo = vi.hoisted(() => ({ findByDeviceCode: vi.fn(), recordPollIfDue: vi.fn(), claimApproved: vi.fn() }));
 const tryIncrement = vi.hoisted(() => vi.fn());
+const userFindById = vi.hoisted(() => vi.fn());
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown) => true));
 vi.mock('@bike4mind/database', () => ({
   deviceAuthorizationRepository: repo,
   cacheRepository: { tryIncrementWithinLimitFixedWindow: tryIncrement },
-  userRepository: {},
+  userRepository: { findById: userFindById },
+}));
+vi.mock('@server/utils/apiKeyAccessGate', () => ({
+  CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',
+  SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
+  isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
 }));
 
 import '../token';
@@ -130,6 +137,32 @@ describe('POST /api/oauth/device/token global poll ceiling', () => {
     const { req, res } = request('dc-1');
     await mockRefs.handler!(req, res);
     expect(res.body).toMatchObject({ error: 'slow_down' });
+    expect(repo.claimApproved).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/device/token paid-only access switch', () => {
+  it('refuses to issue a session for an approved code when the setting denies the user', async () => {
+    tryIncrement.mockResolvedValue({ success: true });
+    repo.findByDeviceCode.mockResolvedValue({
+      id: 'auth-1',
+      status: 'approved',
+      userId: 'u1',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    repo.recordPollIfDue.mockResolvedValue({ id: 'auth-1' });
+    repo.claimApproved.mockClear();
+    userFindById.mockResolvedValue({ id: 'u1' });
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+
+    const { req, res } = request('dc-1');
+    await mockRefs.handler!(req, res);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({
+      error: 'subscription_required',
+      error_description: 'The CLI and desktop app require an active paid subscription',
+    });
     expect(repo.claimApproved).not.toHaveBeenCalled();
   });
 });

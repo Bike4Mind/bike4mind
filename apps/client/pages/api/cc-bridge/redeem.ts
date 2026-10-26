@@ -16,6 +16,7 @@ import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 
 const RedeemRequestSchema = z.object({
   pairingToken: z.string().min(16).max(200),
@@ -81,6 +82,10 @@ const handler = baseApi({ auth: false })
       const owner = await userRepository.findById(record.userId);
       if (!owner) {
         return res.status(401).json({ error: 'Invalid or expired pairing token' });
+      }
+      // Enforce paid access before assessing the separate mint trust constraints.
+      if (!(await isApiKeyAccessAllowed(owner))) {
+        return res.status(403).json({ error: API_KEY_ACCESS_DENIED_MESSAGE });
       }
       const { assessment: trust } = await resolveApiKeyTrust(owner);
 

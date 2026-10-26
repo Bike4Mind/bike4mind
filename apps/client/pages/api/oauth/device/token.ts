@@ -4,6 +4,11 @@ import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS } from '@server/utils/oauth/deviceAuthHelpers';
+import {
+  CLI_ACCESS_DENIED_MESSAGE,
+  SUBSCRIPTION_REQUIRED_ERROR,
+  isApiKeyAccessAllowed,
+} from '@server/utils/apiKeyAccessGate';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { LEGACY_DEVICE_CLIENT_ID, OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
@@ -102,6 +107,13 @@ const handler = baseApi({ auth: false })
         const authorizedUser = await userRepository.findById(authorization.userId);
         if (!authorizedUser) {
           throw new BadRequestError('Authorization approved but user no longer exists');
+        }
+
+        // Re-checked here for approvals made before the switch was flipped.
+        if (!(await isApiKeyAccessAllowed(authorizedUser, undefined, req))) {
+          return res
+            .status(403)
+            .json({ error: SUBSCRIPTION_REQUIRED_ERROR, error_description: CLI_ACCESS_DENIED_MESSAGE });
         }
 
         const claimed = await deviceAuthorizationRepository.claimApproved(authorization.id);

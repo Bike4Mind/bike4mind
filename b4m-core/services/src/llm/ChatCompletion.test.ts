@@ -51,6 +51,7 @@ import {
   MAX_FULL_TOOL_RESULT_CHARS,
   ResponsesStreamTruncatedError,
   createAnthropicStreamTimeoutError,
+  bedrockEmptyResponseMessage,
   type ICompletionBackend,
   federatedSharedKeyProviders,
 } from '@bike4mind/llm-adapters';
@@ -272,6 +273,9 @@ const baseOptions = {
   workspaceDeniedTools: { 'denied-surface': ['notion__search'], 'delegation-denied-surface': ['delegate_to_agent'] },
   workspaceSessionSettings: {},
 };
+
+// The constant countTokens mock would also count the auto-offered tool schema.
+const NO_AUTO_OFFERS = { skipAutoOffers: true } as const;
 
 describe('ChatCompletionProcess', () => {
   let service: ChatCompletionProcess;
@@ -2903,7 +2907,7 @@ describe('ChatCompletionProcess', () => {
       });
     });
 
-    describe('Research Mode cancellation', () => {
+    describe('Research Mode', () => {
       const RESEARCH_MODEL = 'gpt-4-research';
 
       function availableModels() {
@@ -3023,6 +3027,28 @@ describe('ChatCompletionProcess', () => {
           content: `${TURN_CONTEXT_HEADER}MEMENTO-FACT${TURN_CONTEXT_END}Hello`,
         });
         expect(JSON.stringify(messages.filter((m: IMessage) => m.role === 'system'))).not.toContain('MEMENTO-FACT');
+      });
+
+      it('gives each configuration its own identity line, not the primary-bound tool', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Answer']);
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn().mockResolvedValue([]) } as any);
+        mockedGetAvailableModels.mockResolvedValue(availableModels().map(m => ({ ...m, supportsTools: true })) as any);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({ body: researchBody() as any, logger: mockLogger });
+
+        const opts = complete.mock.calls[0][2];
+        const names = (opts.tools ?? []).map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
+        expect(names).not.toContain('current_model_details');
+        expect(opts.identityViaTool).toBe(false);
+        expect(opts.omitIdentityReminder).toBe(false);
       });
     });
 
@@ -3657,6 +3683,179 @@ describe('ChatCompletionProcess', () => {
         // raw has to reach through and turn that off too, or "empty stack" is off by 17 tokens.
         const completeOpts = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2];
         expect(completeOpts.omitIdentityReminder).toBe(true);
+      });
+
+      describe('current_model_details and the identity line', () => {
+        const turnBody = (extra: Record<string, unknown> = {}) => ({
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          ...extra,
+        });
+        const lastCompleteOpts = () => vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2];
+        const offered = () =>
+          (lastCompleteOpts().tools ?? []).map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
+        const setModel = (extra: Record<string, unknown>) => {
+          mockTextModel();
+          mockedGetAvailableModels.mockResolvedValue([
+            {
+              id: ChatModels.GPT4,
+              type: 'text',
+              name: 'GPT-4',
+              backend: ModelBackend.OpenAI,
+              max_tokens: 100,
+              contextWindow: 1000,
+              can_stream: false,
+              pricing: {},
+              supportsImageVariation: false,
+              ...extra,
+            },
+          ]);
+        };
+
+        it('offers the tool unselected and drops the identity line', async () => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody(), logger: mockLogger });
+          expect(offered()).toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(true);
+        });
+
+        it.each(['grounded', 'surface'] as const)('keeps the identity line under promptMode %s', async promptMode => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody({ promptMode }), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it('offers nothing under an explicit skipAutoOffers', async () => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody({ skipAutoOffers: true }), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+          expect(lastCompleteOpts().omitIdentityReminder).toBe(false);
+        });
+
+        it('keeps the identity line on an Ollama model', async () => {
+          setModel({ supportsTools: true, backend: ModelBackend.Ollama });
+          await service.process({ body: turnBody(), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it('keeps the identity line when the tool is deny-listed', async () => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody({ deniedTools: ['current_model_details'] }), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it.each([{ supportsTools: false }, {}])(
+          'keeps the identity line on a model that cannot call tools (%j)',
+          async extra => {
+            setModel(extra);
+            await service.process({ body: turnBody(), logger: mockLogger });
+            expect(offered()).not.toContain('current_model_details');
+            expect(lastCompleteOpts().identityViaTool).toBe(false);
+            // The per-attempt override masks the primary-turn trim above, so check the recorded list too.
+            const saved = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+              promptMeta?: { offeredTools?: string[] };
+            };
+            expect(saved?.promptMeta?.offeredTools).toBeDefined();
+            expect(saved.promptMeta!.offeredTools).not.toContain('current_model_details');
+          }
+        );
+
+        it('does not cost a GPT-5.4 turn its reasoning effort when the tool would be the only one', async () => {
+          setModel({ id: ChatModels.GPT5_4, supportsTools: true });
+          await service.process({
+            body: turnBody({ params: { ...startQuestParams.params, model: ChatModels.GPT5_4 } }),
+            logger: mockLogger,
+          });
+          expect(offered()).toEqual([]);
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it('withholds the lone tool from a registry-only model routed to the Responses transport by its profile', async () => {
+          const id = 'registry-only-responses-model';
+          setModel({ id, supportsTools: true, dispatchProfile: { toolTransport: 'responses' } });
+          await service.process({
+            body: turnBody({ params: { ...startQuestParams.params, model: id } }),
+            logger: mockLogger,
+          });
+          expect(offered()).toEqual([]);
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it('keeps the tool on a GPT-5.4 turn that already carries another tool', async () => {
+          setModel({ id: ChatModels.GPT5_4, supportsTools: true });
+          await service.process({
+            body: turnBody({
+              tools: ['current_datetime'],
+              params: { ...startQuestParams.params, model: ChatModels.GPT5_4 },
+            }),
+            logger: mockLogger,
+          });
+          expect(offered()).toContain('current_datetime');
+          expect(offered()).toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(true);
+        });
+
+        // The last case would carry the tool alone onto a GPT-5.4 model, which the primary trim also prevents.
+        it.each([{ supportsTools: false }, {}, { id: ChatModels.GPT5_4_MINI, supportsTools: true }])(
+          'hands a fallback hop that withholds the tool its identity line, and does not require tools for it (%j)',
+          async hopCaps => {
+            setModel({ supportsTools: true });
+            mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+            mockedShouldTriggerFallback.mockReturnValue(true);
+            mockedIsOverloadedError.mockReturnValue(false);
+            const primaryComplete = vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+            mockedGetLlmByModel.mockReturnValue({
+              complete: primaryComplete,
+              getModelInfo: vi.fn().mockResolvedValue([]),
+            } as any);
+            const fallbackComplete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+              await cb(['Hello from fallback']);
+            });
+            mockedGetLlmWithFallback.mockResolvedValue({
+              model: {
+                id: 'fallback-no-tools',
+                type: 'text',
+                name: 'No Tools',
+                backend: ModelBackend.OpenAI,
+                max_tokens: 100,
+                contextWindow: 1000,
+                can_stream: false,
+                pricing: {},
+                supportsImageVariation: false,
+                ...hopCaps,
+              },
+              backend: { complete: fallbackComplete, getModelInfo: vi.fn().mockResolvedValue([]) },
+              attempt: 1,
+            } as any);
+
+            await service.process({ body: turnBody(), logger: mockLogger });
+
+            // Precondition: the primary carried the tool, so the hop override below has something to undo.
+            const primaryOpts = primaryComplete.mock.calls[0][2];
+            expect(primaryOpts.identityViaTool).toBe(true);
+            expect(primaryOpts.tools.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toContain(
+              'current_model_details'
+            );
+
+            expect(mockedGetLlmWithFallback.mock.calls[0][5]).toMatchObject({ requireTools: false });
+            expect(fallbackComplete).toHaveBeenCalledTimes(1);
+            expect(mockDb.quests.update).toHaveBeenCalledWith(
+              expect.objectContaining({
+                replies: ['Hello from fallback'],
+                fallbackInfo: expect.objectContaining({ fallbackModel: hopCaps.id ?? 'fallback-no-tools' }),
+              })
+            );
+            const hopOpts = fallbackComplete.mock.calls[0][2];
+            expect(hopOpts.identityViaTool).toBe(false);
+            expect(hopOpts.tools ?? []).toEqual([]);
+          }
+        );
       });
 
       // A session's first turn used to keep the in-flight quest in history, so the caller's message
@@ -4341,7 +4540,13 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       const logger = mockLogger;
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = {
+        ...startQuestParams,
+        tools: [],
+        ...NO_AUTO_OFFERS,
+        projectId: undefined,
+        organizationId: undefined,
+      };
 
       await service.process({ body, logger });
 
@@ -5164,6 +5369,53 @@ describe('ChatCompletionProcess', () => {
         'text_generation_usage',
         expect.objectContaining({ model: 'claude-opus-4-8' })
       );
+    });
+
+    // The tool is built once, before the fallback loop; it must report the hop that is answering.
+    it('current_model_details reports the fallback model after a failover', async () => {
+      reservationOrgSetup({ supportsTools: true });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: try again')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 128_000,
+        contextWindow: 200_000,
+        can_stream: true,
+        supportsTools: true,
+        pricing: { 200000: { input: 0, output: 60 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      let reported: string | undefined;
+      mockedGetLlmWithFallback.mockResolvedValue({
+        model: fallbackModel,
+        backend: {
+          complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+            const tool = opts.tools.find(
+              (t: { toolSchema: { name: string } }) => t.toolSchema.name === 'current_model_details'
+            );
+            reported = await tool.toolFn({});
+            await cb(['x'], { inputTokens: 1, outputTokens: 1 });
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: fallbackModel.id,
+        },
+        attempt: 1,
+      } as any);
+
+      await service.process({ body: { ...reservationBody(), tools: [] }, logger: mockLogger });
+
+      expect(JSON.parse(reported ?? '{}')).toMatchObject({ id: 'claude-opus-4-8', servedVia: 'direct Anthropic API' });
     });
 
     // Cache reads and writes are priced at their own rates, as the main settlement prices them, not
@@ -6936,7 +7188,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], ...NO_AUTO_OFFERS, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -6981,6 +7233,7 @@ describe('ChatCompletionProcess', () => {
       ...startQuestParams,
       params: { ...startQuestParams.params, model: ChatModels.CLAUDE_5_SONNET_BEDROCK },
       tools: [],
+      ...NO_AUTO_OFFERS,
       projectId: undefined,
       organizationId: undefined,
     };
@@ -7096,7 +7349,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], ...NO_AUTO_OFFERS, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -7148,7 +7401,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], ...NO_AUTO_OFFERS, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -7360,7 +7613,13 @@ describe('ChatCompletionProcess', () => {
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
         await service.process({
-          body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+          body: {
+            ...startQuestParams,
+            tools: [],
+            ...NO_AUTO_OFFERS,
+            projectId: undefined,
+            organizationId: undefined,
+          },
           logger: mockLogger,
         });
         const updateCall = mockDb.quests.update.mock.calls.find(
@@ -11406,6 +11665,50 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({ replies: ['Hello from fallback'], status: 'done', type: 'message' })
       );
+    });
+
+    it('retries a stalled-empty Bedrock stream once on the same model, then falls back', async () => {
+      setupStreamIdleTimeoutMocks();
+      mockQuest.promptMeta.model = { name: ChatModels.CLAUDE_5_SONNET_BEDROCK, backend: ModelBackend.Bedrock };
+      const primaryComplete = vi
+        .fn()
+        .mockRejectedValue(
+          new Error(bedrockEmptyResponseMessage(ChatModels.CLAUDE_5_SONNET_BEDROCK, 'us-east-1', true))
+        );
+      mockedGetLlmByModel.mockReturnValue({
+        complete: primaryComplete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      });
+      const fallbackModel = {
+        id: 'claude-sonnet-4-8',
+        type: 'text' as const,
+        name: 'Claude Sonnet 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: {},
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['Hello from fallback']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-sonnet-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(primaryComplete).toHaveBeenCalledTimes(2);
+      expect(fallbackBackend.complete).toHaveBeenCalledTimes(1);
     });
 
     describe('preview stall marker', () => {

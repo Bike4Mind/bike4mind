@@ -10,6 +10,7 @@ import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authS
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import passport from 'passport';
@@ -36,6 +37,7 @@ const handler = baseApi({ auth: false })
     next();
   })
   .use(checkBlockedIP())
+  .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }))
   .get(async (req: Request<{}, unknown, unknown, { strategy: AuthStrategy; state: string }>, res, next) => {
     const { strategy } = req.query;
 
@@ -81,8 +83,15 @@ const handler = baseApi({ auth: false })
           // Raw info (which may embed another user's email or DB error text via
           // info.message) is logged here for CloudWatch only. The audit reason and
           // redirect below must never read anything but the whitelisted code.
-          console.error('Passport Authenticate User Not Found Info:', info);
-          const reason = resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
+          // A whitelisted reason is an expected outcome (invite gate, stale or replayed state), so
+          // only an unrecognized failure logs at error, the level the alert channel pages on.
+          // passport-oauth2 turns a cancelled consent (`?error=access_denied`) into a code-less fail().
+          const reason =
+            (req.query as { error?: unknown }).error === 'access_denied'
+              ? 'access_denied'
+              : resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
+          const logFailure = reason === 'internal' ? console.error : console.warn;
+          logFailure('Passport Authenticate User Not Found Info:', info);
           try {
             await authFailLogRepository.create({
               strategy,

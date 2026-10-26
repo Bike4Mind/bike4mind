@@ -26,6 +26,7 @@ import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAcce
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageCreditHolds } from '@server/billing/imageCreditHolds';
 
 let _imageEdit: ImageEditService | undefined;
 export const getImageEdit = (): ImageEditService => {
@@ -54,6 +55,7 @@ export const getImageEdit = (): ImageEditService => {
       // Owner-wide lake arms for the reference-image lookup, parity with imageGeneration - a
       // lake-only anchor the workbench admitted must still resolve as an edit input.
       resolveLakeAccess: (user: IUserDocument, logger: Logger) => createAttachmentLakeAccess(user, logger)(),
+      creditHolds: imageCreditHolds,
       startImageEditProcess: async body => {
         const queue = new SQSService();
         const queueUrl = getSourceQueueUrl('imageEditQueue');
