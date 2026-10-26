@@ -59,6 +59,14 @@ describe('ToolCallList', () => {
       expect(attribution(html)).toEqual([text]);
     });
 
+    it('reads a redirect recorded as done by its outcome, not its status', () => {
+      const decidedBy = { kind: 'user', answer: 'redirect', option: 'Start a session' } as const;
+      const html = markup([
+        bash({ status: 'done', approval: { outcome: 'denied', decidedBy, asked: true, decidedAt } }),
+      ]);
+      expect(attribution(html)).toEqual(['Redirected by you - Start a session']);
+    });
+
     it.each([
       [{ kind: 'mode', mode: 'auto' } as const],
       [{ kind: 'rule', rule: 'Bash(git commit:*)', source: 'Claude Code settings' } as const],

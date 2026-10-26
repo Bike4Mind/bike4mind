@@ -80,6 +80,18 @@ describe('the local history row', () => {
     expect(find('chat-browser-history-toggle')).not.toBeNull();
   });
 
+  it('answers the space bar', async () => {
+    const { onHistory } = await openMenu(true);
+    const row = find('chat-browser-history-toggle');
+    await act(async () => {
+      row?.focus();
+      row?.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+      row?.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
+    });
+    expect(onHistory).toHaveBeenCalledWith(false);
+    expect(find('chat-browser-history-toggle')).not.toBeNull();
+  });
+
   it('is absent with no open conversation', async () => {
     await openMenu(null);
     expect(find('chat-browser-import-cookies')).not.toBeNull();
