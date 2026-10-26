@@ -45,8 +45,8 @@ beforeEach(() => {
 });
 
 describe('modelReferenceReport', () => {
-  it('audits configured defaults and application pins with the system key table', async () => {
-    const report = await modelReferenceReport({ 'application.primaryModel': 'missing' });
+  it('audits configured defaults with the system key table', async () => {
+    const report = await modelReferenceReport();
     expect(report).toEqual(
       expect.arrayContaining([
         {
@@ -55,7 +55,6 @@ describe('modelReferenceReport', () => {
           referencedId: 'missing',
           problem: 'unknown',
         },
-        { surface: 'configured-model', key: 'application.primaryModel', referencedId: 'missing', problem: 'unknown' },
       ])
     );
     expect(mocks.getAvailableModels).toHaveBeenCalledWith(

@@ -46,7 +46,7 @@ export async function configuredModelReferences(): Promise<Record<string, string
 }
 
 /** Reused by the operator API and watchdog; callers connect the database first. */
-export async function modelReferenceReport(additionalPins: Readonly<Record<string, string>> = {}) {
+export async function modelReferenceReport() {
   if (!(await whenCatalogSeeded())) throw new Error('Catalog bootstrap failed before the model reference audit');
   const keys = await apiKeyService.getEffectiveLLMApiKeys(null, {
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
@@ -63,6 +63,6 @@ export async function modelReferenceReport(additionalPins: Readonly<Record<strin
     fallbackChains: FALLBACK_PREFERENCES,
     defaultChain: DEFAULT_FALLBACK_CHAIN,
     agentModels: builtInAgentModelReferences(),
-    configuredModels: { ...configuredModels, ...additionalPins },
+    configuredModels,
   });
 }
