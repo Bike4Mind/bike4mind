@@ -637,7 +637,7 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
 
 /**
  * Who let the group's calls run, or stopped them, one muted line per distinct answer. A group of
- * seven commands the user approved "always" reads as one line, not seven of the same.
+ * seven commands an earlier "Allow in this chat" let through reads as one line, not seven of the same.
  */
 function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
   const lines = new Map<string, ChatToolApproval>();
