@@ -363,7 +363,7 @@ export async function defaultBaseBranch(directory: string): Promise<string> {
 /** How long one fetch of a base serves every branch cut from it; see fetchRemoteFor. */
 const FETCH_FRESH_MS = 2 * 60_000;
 
-const recentFetches = new Map<string, { at: number; done: Promise<void> }>();
+const recentFetches = new Map<string, { at: number; done: Promise<void>; verified: Promise<void> }>();
 
 /**
  * Best-effort freshening so a new branch forks from an up-to-date base, as the shell helper does.
@@ -373,28 +373,28 @@ const recentFetches = new Map<string, { at: number; done: Promise<void> }>();
  * ref begun within FETCH_FRESH_MS is shared rather than repeated, which is what lets the one
  * prefetchBase starts while a card is read or a first message typed be the one the cut uses.
  */
-export function fetchRemoteFor(directory: string, baseRef: string): Promise<void> {
+export function fetchRemoteFor(directory: string, baseRef: string, requireFresh = false): Promise<void> {
   const slash = baseRef.indexOf('/');
   if (slash <= 0) return Promise.resolve();
   const key = `${directory}\u0000${baseRef}`;
   const recent = recentFetches.get(key);
-  if (recent && Date.now() - recent.at < FETCH_FRESH_MS) return recent.done;
-  const done = gitNetwork(directory, [
+  if (recent && Date.now() - recent.at < FETCH_FRESH_MS) return requireFresh ? recent.verified : recent.done;
+  const verified = gitNetwork(directory, [
     'fetch',
     '--quiet',
     '--no-tags',
     baseRef.slice(0, slash),
-    `refs/heads/${baseRef.slice(slash + 1)}`,
+    `+refs/heads/${baseRef.slice(slash + 1)}:refs/remotes/${baseRef}`,
   ]).then(
     () => undefined,
-    // Offline, no such remote, or a base that only exists locally. Branching from the stale
-    // ref beats refusing to start.
-    () => {
-      if (recentFetches.get(key)?.done === done) recentFetches.delete(key);
+    error => {
+      if (recentFetches.get(key)?.verified === verified) recentFetches.delete(key);
+      throw error;
     }
   );
-  recentFetches.set(key, { at: Date.now(), done });
-  return done;
+  const done = verified.catch(() => undefined);
+  recentFetches.set(key, { at: Date.now(), done, verified });
+  return requireFresh ? verified : done;
 }
 
 /**
