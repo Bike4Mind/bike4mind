@@ -7,8 +7,8 @@ interface IRateLimitOptions {
   /**
    * Max requests allowed in the time window. Either a static number, or a
    * resolver evaluated per request against the authenticated user, used for
-   * per-tier limits. A non-finite/non-positive resolved value (e.g.
-   * `Infinity`) means "no limit" and skips enforcement (admins, dev server).
+   * per-tier limits. `Infinity` means "no limit" and skips enforcement (admins,
+   * dev server); `0` (or any non-positive/NaN value) blocks every request.
    */
   limit: number | ((req: Parameters<RequestHandler>[0]) => number | Promise<number>);
   /** How long to remember requests for, in milliseconds */
@@ -40,9 +40,15 @@ export const rateLimit =
     // Resolve the limit per request when a resolver is supplied (per-tier limits).
     const resolvedLimit = typeof limit === 'function' ? await limit(req) : limit;
 
-    // A non-finite/non-positive limit means "no limit" - skip enforcement
-    // entirely (admins/developers, and the local dev server).
-    if (!Number.isFinite(resolvedLimit) || resolvedLimit <= 0) return next();
+    // Only Infinity skips enforcement (admins/developers, local dev server).
+    if (resolvedLimit === Infinity) return next();
+
+    // Fail closed before touching the bucket: 0, negative and NaN all block.
+    if (!(resolvedLimit > 0)) {
+      const retryAfterSeconds = Math.max(1, Math.ceil(windowMs / 1000));
+      res.setHeader('Retry-After', retryAfterSeconds);
+      return next(new TooManyRequestsError(`Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`));
+    }
 
     // Extract pathname from URL, excluding query params to prevent bypass.
     // Next.js API routes don't have req.path (Express-only), so we parse req.url.

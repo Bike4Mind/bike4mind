@@ -207,6 +207,11 @@ describe('resolveUserRateLimitPerMin', () => {
     expect(getSettingsValueMock).toHaveBeenCalledWith('apiRateLimitFreePerMin', expect.anything());
   });
 
+  it('keeps an explicit 0 Free-tier limit instead of the fallback', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => (key === 'apiRateLimitFreePerMin' ? 0 : TIER_LIMITS[key]));
+    expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(0);
+  });
+
   it('reads the Basic-tier setting for a Basic subscriber', async () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_basic' }]);
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(30);

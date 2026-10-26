@@ -34,7 +34,7 @@ export interface RateTierUser {
 /**
  * Fail-safe floor if a tier setting somehow resolves to `undefined`. The
  * schema's `.prefault` makes this practically unreachable, but coalescing to
- * the most-restrictive tier default (never `0`/`Infinity`) guarantees we fail
+ * the most-restrictive tier default (never `Infinity`) guarantees we fail
  * CLOSED rather than accidentally disabling the limit. Mirrors the Free-tier
  * default in `settings.ts`.
  */
@@ -118,6 +118,7 @@ export async function resolveUserRateLimitPerMin(
     if (tier === 'bypass') return Infinity;
 
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    // `??` keeps an explicit 0, which the middleware treats as "block".
     return getSettingsValue(TIER_SETTING_KEY[tier], settings) ?? FALLBACK_RATE_LIMIT_PER_MIN;
   } catch (error) {
     // This runs in the rate-limit middleware, BEFORE the handler. A transient
