@@ -232,6 +232,47 @@ describe.runIf(HF)('live Hugging Face Hub', () => {
     expect([head.status, head.headers.get('x-error-code')]).toEqual([401, 'GatedRepo']);
     await expect(hub().getModel('b4m-nobody/no-such-repo-GGUF')).rejects.toBeInstanceOf(ModelNotFoundError);
   });
+
+  it('plans and verifies a tag that reaches F16 past the BF16 file that sorts before it', async () => {
+    const repo = 'unsloth/Llama-3.2-1B-Instruct-GGUF';
+    const detail = await hub().getModel(repo);
+    const f16 = detail.builds.find(build => build.quant === 'F16');
+    const bf16 = detail.builds.find(build => build.quant === 'BF16');
+    expect(f16?.ollamaRef).toBe(`hf.co/${repo}:Instruct-F16`);
+    expect(f16 && (await hub().verifyOllamaRef(detail, f16))).toBe(`hf.co/${repo}:Instruct-F16`);
+    expect(bf16 && (await hub().verifyOllamaRef(detail, bf16))).toBe(`hf.co/${repo}:BF16`);
+    const bare = await rawJson<{ layers: { mediaType: string; digest: string }[] }>(
+      `${hub().endpoint}/v2/${repo}/manifests/F16`,
+      { headers: { accept: 'application/vnd.docker.distribution.manifest.v2+json' } }
+    );
+    expect(bare.layers.find(layer => layer.mediaType.endsWith('.model'))?.digest).toBe(
+      `sha256:${bf16?.files[0]?.sha256}`
+    );
+  });
+
+  it('verifies main builds and refuses files the registry skips or a revision behind main', async () => {
+    const repo = 'ggml-org/gpt-oss-20b-GGUF';
+    const detail = await hub().getModel(repo);
+    const main = detail.builds.find(build => build.quant === 'MXFP4' && !/eagle3/i.test(build.id));
+    const eagle = detail.builds.filter(build => /eagle3/i.test(build.id) && build.ollamaRef);
+    expect(main && (await hub().verifyOllamaRef(detail, main))).toBe(main?.ollamaRef);
+    expect(eagle.length).toBeGreaterThan(0);
+    for (const build of eagle) expect(await hub().verifyOllamaRef(detail, build)).toBeNull();
+
+    const old = await hub().getModel(repo, { revision: '4fec29804e3af052b602946deec2d3e62a6015e0' });
+    const oldMain = old.builds.find(build => build.quant === 'MXFP4' && !/eagle3/i.test(build.id));
+    expect(oldMain).toMatchObject({ ollamaRef: null, ollamaRefIssue: 'pinned-revision' });
+    expect(oldMain?.files[0]?.sha256).not.toBe(main?.files[0]?.sha256);
+    expect(oldMain && (await hub().verifyOllamaRef(old, oldMain))).toBeNull();
+
+    for (const other of ['ggml-org/Qwen3-8B-GGUF', 'ggml-org/gemma-4-31B-it-GGUF']) {
+      const info = await hub().getModel(other);
+      const build = info.builds.find(
+        entry => entry.ollamaRef && !/^(?:.*\/)?(?:dflash|dspark|mtp|eagle3)/i.test(entry.id)
+      );
+      expect(build && (await hub().verifyOllamaRef(info, build))).toBe(build?.ollamaRef);
+    }
+  });
 });
 
 describe.runIf(HF && OLLAMA)('live Hugging Face pull through Ollama', () => {

@@ -1,4 +1,5 @@
 import type { ServerResponse } from 'node:http';
+import { inspect } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   HubAccessError,
@@ -67,9 +68,9 @@ async function caught(promise: Promise<unknown>): Promise<Error> {
   return error as Error;
 }
 
-function expectNoToken(error: Error): void {
-  const text = `${error.message} ${String(error.cause)} ${JSON.stringify(error)}`;
-  expect(text).not.toContain(TOKEN);
+function expectNoToken(error: Error, token = TOKEN): void {
+  const text = `${error.message} ${String(error.cause)} ${JSON.stringify(error)} ${inspect(error, { depth: 10 })}`;
+  expect(text).not.toContain(token);
   expect(text).not.toMatch(/Bearer hf_/);
 }
 
@@ -293,7 +294,7 @@ describe('HuggingFaceHub.getModel', () => {
     ]);
   });
 
-  it('flags missing shards and quant labels Ollama could resolve to two builds', async () => {
+  it('flags missing shards and picks a tag no earlier file name ends with', async () => {
     const repo = 'someone/odd-GGUF';
     const sha = 'a'.repeat(40);
     const file = (path: string, size: number) => ({ type: 'file', path, size, lfs: { oid: 'b'.repeat(64), size } });
@@ -306,19 +307,26 @@ describe('HuggingFaceHub.getModel', () => {
         file('odd-Q4_K_XL.gguf', 1),
         file('odd-UD-Q4_K_XL.gguf', 1),
         file('odd-Q6_K.gguf', 4),
+        file('a/odd-Q2_K.gguf', 1),
+        file('b/odd-Q2_K.gguf', 1),
+        file('odd-Q5_0-imat.gguf', 5),
         file('vision/odd.mmproj-q8_0.gguf', 5),
         file('../escape-Q5_0.gguf', 7),
         { type: 'file', path: 'odd.imatrix', size: 9 },
       ])
     );
     const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
-    expect(detail.builds.map(build => [build.id, build.ollamaRefIssue])).toEqual([
-      ['odd-Q4_K_XL', 'ambiguous'],
-      ['odd-UD-Q4_K_XL', 'ambiguous'],
-      ['odd-128k-Q4_K_M', 'ambiguous'],
-      ['odd-Q4_K_M', 'ambiguous'],
-      ['odd-Q6_K', null],
-      ['odd-Q8_0', 'incomplete'],
+    expect(detail.builds.map(build => [build.id, build.ollamaRef, build.ollamaRefIssue])).toEqual([
+      ['a/odd-Q2_K', `hf.co/${repo}:Q2_K`, null],
+      // Same file name in another folder: the registry matches names only, so every tag reaches a/ first.
+      ['b/odd-Q2_K', null, 'ambiguous'],
+      ['odd-Q4_K_XL', `hf.co/${repo}:Q4_K_XL`, null],
+      ['odd-UD-Q4_K_XL', `hf.co/${repo}:UD-Q4_K_XL`, null],
+      ['odd-128k-Q4_K_M', `hf.co/${repo}:Q4_K_M`, null],
+      ['odd-Q4_K_M', `hf.co/${repo}:odd-Q4_K_M`, null],
+      ['odd-Q6_K', `hf.co/${repo}:Q6_K`, null],
+      ['odd-Q5_0-imat', `hf.co/${repo}:Q5_0-imat`, null],
+      ['odd-Q8_0', null, 'incomplete'],
     ]);
     expect(detail.builds.at(-1)).toMatchObject({ split: true, complete: false, sizeBytes: 6 });
     expect(detail.projectors.map(projector => [projector.path, projector.quant])).toEqual([
@@ -348,6 +356,125 @@ describe('HuggingFaceHub.getModel', () => {
     const error = await caught(new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).getModel('a/b'));
     expect(error).toBeInstanceOf(RuntimeProtocolError);
     expect(elsewhere.requests).toEqual([]);
+  });
+});
+
+describe('HuggingFaceHub Ollama refs', () => {
+  const lfsFile = (path: string, size: number, oid: string) => ({ type: 'file', path, size, lfs: { oid, size } });
+  const BF16_OID = 'f5d05e90d179fa27c01a049be1574a0201bdc09ba0b345eb85e1dbf3b87610f3';
+  const F16_OID = '7e2a46fe01895b16776ed927aac8f56c5661a06d47c8a6f87ec297c805fbe3c2';
+  const Q4_OID = '3f5a22426976ab26cfe84dba63c1d08391717abb1af893e10f1b2968d862dcc1';
+  const llama = 'unsloth/Llama-3.2-1B-Instruct-GGUF';
+  const llamaSha = 'b69aef112e9f895e6f98d7ae0949f72ff09aa401';
+  const llamaTree = [
+    lfsFile('Llama-3.2-1B-Instruct-BF16.gguf', 2479595264, BF16_OID),
+    lfsFile('Llama-3.2-1B-Instruct-F16.gguf', 2479595168, F16_OID),
+    lfsFile('Llama-3.2-1B-Instruct-Q4_K_M.gguf', 807694368, Q4_OID),
+  ];
+  const manifest = (oid: string) =>
+    json({
+      schemaVersion: 2,
+      layers: [
+        { mediaType: 'application/vnd.ollama.image.model', digest: `sha256:${oid}`, size: 1 },
+        { mediaType: 'application/vnd.ollama.image.template', digest: `sha256:${'0'.repeat(64)}`, size: 1 },
+      ],
+    });
+
+  it('does not hand out :F16 when the registry resolves that tag to the earlier BF16 file', async () => {
+    // Live, /v2/<this repo>/manifests/F16 answers with the BF16 blob and Instruct-F16 with the F16 one.
+    const server = await serve(repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree));
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(llama);
+    const f16 = detail.builds.find(build => build.quant === 'F16');
+    expect(f16?.files[0]?.sha256).toBe(F16_OID);
+    expect(f16?.ollamaRef).not.toBe(`hf.co/${llama}:F16`);
+    expect(f16?.ollamaRef).toBe(`hf.co/${llama}:Instruct-F16`);
+    expect(detail.builds.find(build => build.quant === 'BF16')?.ollamaRef).toBe(`hf.co/${llama}:BF16`);
+  });
+
+  it('keeps HubGgufBuild.id unique when a merged file sits next to its shards', async () => {
+    const repo = 'someone/model-GGUF';
+    const sha = 'd'.repeat(40);
+    const server = await serve(
+      repoRoutes(repo, sha, { id: repo, sha }, [
+        lfsFile('model-Q8_0.gguf', 30, 'e'.repeat(64)),
+        lfsFile('model-Q8_0-00001-of-00002.gguf', 15, 'f'.repeat(64)),
+        lfsFile('model-Q8_0-00002-of-00002.gguf', 15, '1'.repeat(64)),
+      ])
+    );
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    const ids = detail.builds.map(build => build.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(detail.builds.map(build => [build.id, build.ollamaRefIssue])).toEqual([
+      // The first shard sorts first, so every tag that matches the merged file reaches the shard.
+      ['model-Q8_0', 'ambiguous'],
+      ['model-Q8_0-00001-of-00002', 'split'],
+    ]);
+  });
+
+  it('gives no ref for a revision other than main, or a repo id Ollama cannot name', async () => {
+    const server = await serve({
+      ...repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree),
+      ...repoRoutes('org.name/model-GGUF', llamaSha, { id: 'org.name/model-GGUF', sha: llamaSha }, llamaTree),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const pinned = await hub.getModel(llama, { revision: llamaSha });
+    expect(pinned.builds.map(build => [build.ollamaRef, build.ollamaRefIssue])).toEqual([
+      [null, 'pinned-revision'],
+      [null, 'pinned-revision'],
+      [null, 'pinned-revision'],
+    ]);
+    const dotted = await hub.getModel('org.name/model-GGUF');
+    expect(new Set(dotted.builds.map(build => build.ollamaRefIssue))).toEqual(new Set(['unsupported-name']));
+  });
+
+  it('verifies a ref against the registry manifest before a pull', async () => {
+    const server = await serve({
+      ...repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree),
+      [`GET /v2/${llama}/manifests/Instruct-F16`]: manifest(F16_OID),
+      [`GET /v2/${llama}/manifests/BF16`]: manifest(BF16_OID),
+      [`GET /v2/${llama}/manifests/Q4_K_M`]: json({ error: 'The requested GGUF file is not available' }, 400),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN });
+    const detail = await hub.getModel(llama);
+    const byQuant = (quant: string) => detail.builds.find(build => build.quant === quant)!;
+    expect(await hub.verifyOllamaRef(detail, byQuant('F16'))).toBe(`hf.co/${llama}:Instruct-F16`);
+    expect(await hub.verifyOllamaRef(detail, byQuant('BF16'))).toBe(`hf.co/${llama}:BF16`);
+    expect(await hub.verifyOllamaRef(detail, byQuant('Q4_K_M'))).toBeNull();
+    const manifestRequest = server.requests.find(request => request.path.startsWith('/v2/'));
+    expect(manifestRequest?.headers).toMatchObject({
+      accept: 'application/vnd.docker.distribution.manifest.v2+json',
+      authorization: `Bearer ${TOKEN}`,
+    });
+
+    // A pinned build verifies when main still serves the same bytes, and a different file under the tag does not.
+    const pinned = await hub.getModel(llama, { revision: llamaSha });
+    const f16 = pinned.builds.find(build => build.quant === 'F16')!;
+    expect(f16.ollamaRefIssue).toBe('pinned-revision');
+    expect(await hub.verifyOllamaRef(pinned, f16)).toBe(`hf.co/${llama}:Instruct-F16`);
+    const changed = { ...f16, files: [{ ...f16.files[0]!, sha256: Q4_OID }] };
+    expect(await hub.verifyOllamaRef(pinned, changed)).toBeNull();
+  });
+
+  it('skips the request for builds no tag can pull and maps registry access errors', async () => {
+    const server = await serve({
+      ...repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree),
+      [`GET /v2/${llama}/manifests/BF16`]: (_request, response) =>
+        reply(response, 401, { 'x-error-code': 'GatedRepo', 'x-error-message': gatedMessage }),
+      [`GET /v2/${llama}/manifests/Q4_K_M`]: json({ error: 'Invalid username or password.' }, 401),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const detail = await hub.getModel(llama);
+    const byQuant = (quant: string) => detail.builds.find(build => build.quant === quant)!;
+    const before = server.requests.length;
+    expect(await hub.verifyOllamaRef(detail, { ...byQuant('F16'), split: true })).toBeNull();
+    const unhashed = { ...byQuant('F16'), files: [{ ...byQuant('F16').files[0]!, sha256: null }] };
+    expect(await hub.verifyOllamaRef(detail, unhashed)).toBeNull();
+    expect(server.requests.length).toBe(before);
+    expect(await caught(hub.verifyOllamaRef(detail, byQuant('BF16')))).toMatchObject({
+      name: 'HubAccessError',
+      reason: 'gated',
+    });
+    expect(await caught(hub.verifyOllamaRef(detail, byQuant('Q4_K_M')))).toBeInstanceOf(ModelNotFoundError);
   });
 });
 
@@ -419,15 +546,16 @@ describe('HuggingFaceHub errors', () => {
     expect(error).toMatchObject({ model: 'a/b', runtimeId: 'huggingface:' + server.baseUrl.slice(7) });
   });
 
-  it('maps a 401 or 403 with a token to HubAccessError', async () => {
-    for (const status of [401, 403]) {
-      const server = await serve({
-        [infoPath]: json({ error: 'Invalid credentials in Authorization header' }, status),
-      });
-      const error = await caught(new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).getModel('a/b'));
-      expect(error).toBeInstanceOf(HubAccessError);
-      expect(error).toMatchObject({ status, reason: 'unauthorized', repo: 'a/b' });
-    }
+  it('maps a bare 401 with a token to ModelNotFoundError and a 403 to HubAccessError', async () => {
+    const server = await serve({
+      [infoPath]: json({ error: 'Invalid username or password.' }, 401),
+      'GET /api/models/a/c/revision/main': json({ error: 'Invalid credentials in Authorization header' }, 403),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN });
+    expect(await caught(hub.getModel('a/b'))).toMatchObject({ name: 'ModelNotFoundError', model: 'a/b' });
+    const error = await caught(hub.getModel('a/c'));
+    expect(error).toBeInstanceOf(HubAccessError);
+    expect(error).toMatchObject({ status: 403, reason: 'unauthorized', repo: 'a/c' });
   });
 
   it('maps a missing revision and a missing repo to ModelNotFoundError', async () => {
@@ -512,7 +640,40 @@ describe('HuggingFaceHub errors', () => {
       }).search()
     );
     expect(thrown).toBeInstanceOf(RuntimeConnectionError);
-    expect(thrown.message).not.toContain(TOKEN);
+    expectNoToken(thrown);
+    expect(inspect(hub, { depth: 10, showHidden: true })).not.toContain(TOKEN);
+  });
+
+  it('keeps the token out of a nested fetch cause', async () => {
+    const thrown = await caught(
+      new HuggingFaceHub({
+        token: TOKEN,
+        fetch: async (_url, init) => {
+          const inner = Object.assign(new Error(`socket said Bearer ${TOKEN}`), { code: 'ECONNRESET' });
+          throw new TypeError('fetch failed', {
+            cause: new Error(`headers ${JSON.stringify(init?.headers)}`, { cause: inner }),
+          });
+        },
+      }).search()
+    );
+    expect(thrown).toBeInstanceOf(RuntimeConnectionError);
+    expectNoToken(thrown);
+    const cause = thrown.cause as Error;
+    expect(cause).toMatchObject({ name: 'TypeError', message: 'fetch failed' });
+    expect((cause.cause as Error).cause).toMatchObject({ code: 'ECONNRESET' });
+  });
+
+  it('rejects a token with whitespace or control characters without echoing it', () => {
+    const secret = 'hf_FirstHalfOfSecret\nSecondHalfOfSecret';
+    let error: unknown;
+    try {
+      new HuggingFaceHub({ endpoint: 'http://127.0.0.1:9', token: secret });
+    } catch (reason) {
+      error = reason;
+    }
+    expect(error).toBeInstanceOf(LocalRuntimeError);
+    expectNoToken(error as Error, 'SecondHalfOfSecret');
+    expectNoToken(error as Error, 'FirstHalfOfSecret');
   });
 
   it('times out with RuntimeConnectionError and passes a caller abort through', async () => {

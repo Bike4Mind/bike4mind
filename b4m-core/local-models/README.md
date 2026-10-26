@@ -28,7 +28,7 @@ console.log(await probeHardware());
 
 Discovery omits unavailable hosts and returns authentication failures with `health.ok: false` (on a default port, only when the 401/403 carries an OpenAI/Ollama-style JSON `error` body, so a secured non-LLM service there is not reported); pass `{ url, apiKey }` in `hosts` to authenticate. Runtime operations reject with typed errors, and cancelling a pull rejects with the signal's abort reason (`AbortError` by default). Unmeasurable disk and GPU memory are `null`, and `confidence: 'low'` indicates the GPU may be unmeasured. Pass an existing model directory to `probeHardware({ modelDir })` to measure its free disk space.
 
-`HuggingFaceHub` searches the Hugging Face Hub for GGUF repos and reads a repo's builds pinned to one commit: each quant with its files (split shards grouped, subfolders included), sizes, sha256, resolve URLs and the `hf.co/<repo>:<quant>` ref Ollama pulls, plus vision projectors, license, base models and gated status. Pass `token` for gated or private repos; it is sent only to the configured endpoint and never appears in errors.
+`HuggingFaceHub` searches the Hugging Face Hub for GGUF repos and reads a repo's builds pinned to one commit: each quant with its files (split shards grouped, subfolders included), sizes, sha256, resolve URLs and a planned `hf.co/<repo>:<tag>` ref for Ollama, plus vision projectors, license, base models and gated status. The registry behind those refs serves the first file in path order whose name ends with the tag and skips some draft and assistant models that the file list cannot reveal, so call `verifyOllamaRef` right before a pull: it asks the registry for the tag's manifest and returns the ref only when the model layer is the build's sha256. Pass `token` for gated or private repos; it is sent only to the configured endpoint and never appears in errors.
 
 ```ts
 import { HuggingFaceHub, OllamaRuntime } from '@bike4mind/local-models';
@@ -36,8 +36,9 @@ import { HuggingFaceHub, OllamaRuntime } from '@bike4mind/local-models';
 const hub = new HuggingFaceHub();
 const { models } = await hub.search({ query: 'qwen2.5 0.5b', sort: 'downloads' });
 const detail = await hub.getModel(models[0].id);
-const build = detail.builds.find(entry => entry.ollamaRef);
-if (build?.ollamaRef) await new OllamaRuntime().pull(build.ollamaRef);
+const build = detail.builds.find(entry => entry.quant === 'Q4_K_M');
+const ref = build && (await hub.verifyOllamaRef(detail, build));
+if (ref) await new OllamaRuntime().pull(ref);
 ```
 
 Live check against real runtimes (skipped unless the variables are set; set either runtime alone, `LOCAL_MODELS_LIVE_OPENAI_KEY` only for a server started with a key, `LOCAL_MODELS_LIVE_OLLAMA_MODELS` to pull something other than `qwen2.5:0.5b`, and `LOCAL_MODELS_LIVE_HF` to query the Hub, which with Ollama also pulls and removes a 105 MB SmolLM2 build): `LOCAL_MODELS_LIVE_OLLAMA=http://127.0.0.1:11434 LOCAL_MODELS_LIVE_OPENAI=http://127.0.0.1:8080 LOCAL_MODELS_LIVE_OPENAI_KEY=<key> LOCAL_MODELS_LIVE_HF=https://huggingface.co pnpm --filter @bike4mind/local-models test live`

@@ -80,7 +80,10 @@ export interface HubModelSummary {
 }
 
 export interface HubModelOptions {
-  /** Branch, tag or commit sha; default `main`. The result is pinned to the commit it resolves to. */
+  /**
+   * Branch, tag or commit sha; default `main`. Files, sizes and URLs are pinned to the commit it resolves to, but
+   * Ollama refs always pull from `main`, so any other revision gets `ollamaRefIssue: 'pinned-revision'`.
+   */
   revision?: string;
   signal?: AbortSignal;
 }
@@ -99,13 +102,18 @@ export interface HubGgufProjector extends HubGgufFile {
 }
 
 /**
- * Why a build has no Ollama ref: Hugging Face's registry refuses sharded GGUFs, resolves a tag only through the
- * quant label in a file name, and cannot tell apart two builds with the same label.
+ * Why a build has no Ollama ref. Hugging Face's registry refuses sharded GGUFs, needs a quant scheme in the tag,
+ * serves the first file in path order whose name ends with the tag (`ambiguous`: no tag reaches this one), and
+ * resolves only `main`. `unsupported-name`: the repo id, or every tail of the file name, breaks Ollama's name rules.
  */
-export type OllamaRefIssue = 'split' | 'incomplete' | 'no-quant-label' | 'ambiguous';
+export type OllamaRefIssue =
+  'split' | 'incomplete' | 'no-quant-label' | 'unsupported-name' | 'pinned-revision' | 'ambiguous';
 
 export interface HubGgufBuild {
-  /** Path without `.gguf` and the shard suffix; unique within the repo. */
+  /**
+   * Path without `.gguf` and the shard suffix; unique within the repo. A split build whose merged file sits next to
+   * it keeps its first shard's path instead.
+   */
   id: string;
   /** Upper-case quant label as the Hub reads it from the file name, e.g. `Q4_K_M` or `UD-Q4_K_XL`. */
   quant: string | null;
@@ -115,6 +123,11 @@ export interface HubGgufBuild {
   split: boolean;
   /** False when a split build is missing shards. */
   complete: boolean;
+  /**
+   * `hf.co/<repo>:<tag>` as planned from the file list. The registry also skips some files the list cannot tell
+   * apart (draft and assistant models), and then the tag fails or falls through to a later file, so confirm with
+   * `HuggingFaceHub.verifyOllamaRef` before pulling.
+   */
   ollamaRef: string | null;
   ollamaRefIssue: OllamaRefIssue | null;
 }
@@ -126,7 +139,7 @@ export interface HubGgufInfo {
 }
 
 export interface HubModelDetail extends HubModelSummary {
-  /** Commit sha that every path, size, sha256 and URL here was read at. */
+  /** Commit sha that every path, size, sha256 and URL here was read at; Ollama refs resolve against `main`. */
   revision: string;
   licenseName: string | null;
   licenseLink: string | null;
@@ -154,6 +167,13 @@ const QUANT_RE = new RegExp(
   `(?:UD-)?(?:${QUANT_SCHEMES.sort((a, b) => b.length - a.length).join('|')})(?:_[A-Z]+)?`,
   'g'
 );
+const QUANT_SCHEME_RE = new RegExp(QUANT_SCHEMES.join('|'));
+
+// Ollama's tag rule (name.go): alphanumeric or `_` first, then `_ . -`, at most 80 characters.
+const OLLAMA_TAG_RE = /^[A-Za-z0-9_][\w.-]{0,79}$/;
+const OLLAMA_NAME_PART_MAX = 80;
+const OLLAMA_MODEL_LAYER = 'application/vnd.ollama.image.model';
+const REGISTRY_MANIFEST_ACCEPT = 'application/vnd.docker.distribution.manifest.v2+json';
 
 const SHARD_RE = /-(\d{5})-of-(\d{5})\.gguf$/i;
 const REPO_ID_RE = /^[A-Za-z0-9][\w.-]{0,95}\/[A-Za-z0-9][\w.-]{0,95}$/;
@@ -211,6 +231,10 @@ const treeEntrySchema = z.object({
 
 const errorBodySchema = z.object({ error: z.string() });
 
+const manifestSchema = z.object({
+  layers: z.array(z.object({ mediaType: z.string(), digest: z.string() })),
+});
+
 type ModelEntry = z.infer<typeof modelEntrySchema>;
 type TreeEntry = z.infer<typeof treeEntrySchema>;
 
@@ -219,15 +243,65 @@ interface RequestContext {
   signal?: AbortSignal;
   repo?: string;
   revision?: string;
+  accept?: string;
 }
 
-/** The quant label Hugging Face's Ollama registry matches a `hf.co/<repo>:<tag>` tag against, case-insensitively. */
+/** The quant label the Hub shows for a GGUF file name. */
 export function ggufQuantLabel(fileName: string): string | null {
-  const base = fileName
+  return ggufStem(fileName).toUpperCase().match(QUANT_RE)?.at(-1) ?? null;
+}
+
+/** File name without folders, shard suffix and `.gguf`: what the registry matches a tag's end against. */
+function ggufStem(path: string): string {
+  return path
     .replace(/^.*\//, '')
     .replace(SHARD_RE, '')
     .replace(/\.gguf$/i, '');
-  return base.toUpperCase().match(QUANT_RE)?.at(-1) ?? null;
+}
+
+interface OllamaTagPlan {
+  /** Best tag to try; when not `unique`, it only works if the registry skips the earlier files that match it. */
+  tag: string | null;
+  unique: boolean;
+}
+
+/** Tails of the stem that Ollama and the registry accept as a tag, the quant label first, then shortest first. */
+function ollamaTagCandidates(path: string, quant: string | null): string[] {
+  if (!quant) return [];
+  const stem = ggufStem(path);
+  const starts = [0];
+  for (let i = 0; i < stem.length; i++) if ('-._'.includes(stem.charAt(i))) starts.push(i + 1);
+  const tags = starts
+    .reverse()
+    .map(start => stem.slice(start))
+    .filter(tail => OLLAMA_TAG_RE.test(tail) && QUANT_SCHEME_RE.test(tail.toUpperCase()))
+    .map(tail => (tail.toUpperCase() === quant ? quant : tail));
+  return tags.includes(quant) ? [quant, ...tags.filter(tag => tag !== quant)] : tags;
+}
+
+/**
+ * The registry answers `hf.co/<repo>:<tag>` with the first non-projector GGUF, in path order, whose stem ends with
+ * the tag (case-insensitive), so a tag reaches a file only if no earlier stem ends with it too.
+ */
+function planOllamaTags(builds: readonly Pick<HubGgufBuild, 'id' | 'quant' | 'files'>[]): Map<string, OllamaTagPlan> {
+  const ordered = builds
+    .flatMap(build => (build.files[0] ? [{ build, path: build.files[0].path }] : []))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const plans = new Map<string, OllamaTagPlan>();
+  const earlier: string[] = [];
+  for (const { build, path } of ordered) {
+    const candidates = ollamaTagCandidates(path, build.quant);
+    const unique = candidates.find(tag => !earlier.some(stem => stem.endsWith(tag.toUpperCase())));
+    plans.set(build.id, { tag: unique ?? candidates[0] ?? null, unique: unique !== undefined });
+    earlier.push(ggufStem(path).toUpperCase());
+  }
+  return plans;
+}
+
+/** Ollama caps each name part at 80 characters and allows no `.` in the namespace. */
+function ollamaAcceptsRepo(repo: string): boolean {
+  const [owner = '', name = ''] = repo.split('/');
+  return !owner.includes('.') && owner.length <= OLLAMA_NAME_PART_MAX && name.length <= OLLAMA_NAME_PART_MAX;
 }
 
 export function isHubRepoId(repo: string): boolean {
@@ -311,7 +385,8 @@ function toGgufInfo(value: unknown): HubGgufInfo | null {
 function groupGgufFiles(
   repo: string,
   entries: TreeEntry[],
-  url: (path: string) => string
+  url: (path: string) => string,
+  pinned: boolean
 ): { builds: HubGgufBuild[]; projectors: HubGgufProjector[] } {
   const groups = new Map<string, { id: string; total: number; shards: { index: number; file: HubGgufFile }[] }>();
   const projectors: HubGgufProjector[] = [];
@@ -336,39 +411,43 @@ function groupGgufFiles(
     groups.set(key, group);
   }
 
-  const builds = [...groups.values()].map(group => {
+  const builds = [...groups.entries()].map(([key, group]) => {
     const shards = group.shards.sort((a, b) => a.index - b.index);
+    const files = shards.map(shard => shard.file);
     const split = group.total > 1 || shards.length > 1;
     const complete = shards.length === group.total && shards.every((shard, i) => shard.index === i + 1);
+    const collides = key.startsWith('split:') && groups.has(`single:${group.id}`);
     return {
-      id: group.id,
+      id: collides && files[0] ? files[0].path.replace(/\.gguf$/i, '') : group.id,
       quant: ggufQuantLabel(group.id),
-      files: shards.map(shard => shard.file),
+      files,
       sizeBytes: shards.reduce((sum, shard) => sum + shard.file.sizeBytes, 0),
       split,
       complete,
     };
   });
-  const labelCounts = new Map<string, number>();
-  for (const build of builds) {
-    const key = build.quant?.replace(/^UD-/, '');
-    if (key) labelCounts.set(key, (labelCounts.get(key) ?? 0) + 1);
-  }
+  const plans = planOllamaTags(builds);
+  const repoOk = ollamaAcceptsRepo(repo);
   return {
     builds: builds
       .map((build): HubGgufBuild => {
+        const plan = plans.get(build.id);
         const issue: OllamaRefIssue | null = !build.complete
           ? 'incomplete'
           : build.split
             ? 'split'
             : !build.quant
               ? 'no-quant-label'
-              : (labelCounts.get(build.quant.replace(/^UD-/, '')) ?? 0) > 1
-                ? 'ambiguous'
-                : null;
+              : !repoOk || !plan?.tag
+                ? 'unsupported-name'
+                : pinned
+                  ? 'pinned-revision'
+                  : !plan.unique
+                    ? 'ambiguous'
+                    : null;
         return {
           ...build,
-          ollamaRef: issue ? null : `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${build.quant}`,
+          ollamaRef: issue || !plan?.tag ? null : `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${plan.tag}`,
           ollamaRefIssue: issue,
         };
       })
@@ -439,6 +518,9 @@ export class HuggingFaceHub {
         ? 'huggingface'
         : `huggingface:${runtimeEndpointId(this.endpoint)}`;
     this.#token = options.token?.trim() || undefined;
+    // A token with spaces or control characters would break the header and land in fetch's error text.
+    if (this.#token && !/^[\x21-\x7e]+$/.test(this.#token))
+      throw new LocalRuntimeError('Invalid Hugging Face token', 'huggingface');
     this.#requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.#client = { runtimeId: this.id, baseUrl: this.endpoint, fetch: options.fetch ?? fetch };
   }
@@ -467,7 +549,8 @@ export class HuggingFaceHub {
 
   /**
    * Repo metadata and its GGUF builds, pinned to one commit. A missing repo, and a private one the token cannot
-   * read, both reject with `ModelNotFoundError`, since the Hub answers both the same way.
+   * read, both reject with `ModelNotFoundError`, since the Hub answers both with a bare 401; a token the Hub
+   * rejects outright (403) gives `HubAccessError` with reason `unauthorized`.
    */
   async getModel(repo: string, options: HubModelOptions = {}): Promise<HubModelDetail> {
     assertRepoId(repo);
@@ -488,7 +571,12 @@ export class HuggingFaceHub {
     const canonical = info.id;
     const revision = info.sha;
     const tree = await this.#listTree(canonical, revision, options.signal);
-    const { builds, projectors } = groupGgufFiles(canonical, tree, path => this.resolveUrl(canonical, revision, path));
+    const { builds, projectors } = groupGgufFiles(
+      canonical,
+      tree,
+      path => this.resolveUrl(canonical, revision, path),
+      requested !== 'main'
+    );
     const summary = toSummary(info);
     const card = info.cardData ?? {};
     const cardBaseModels = strings(card.base_model).filter(isHubRepoId).slice(0, MAX_BASE_MODELS);
@@ -511,6 +599,34 @@ export class HuggingFaceHub {
     return hubResolveUrl(repo, revision, path, this.endpoint);
   }
 
+  /**
+   * The Ollama ref that pulls exactly `build`'s file, asked of the registry itself (one manifest request); null when
+   * no tag does. Call it right before a pull: it also clears `ambiguous` and `pinned-revision` builds whose file the
+   * registry serves byte for byte, and catches files the registry skips.
+   */
+  async verifyOllamaRef(
+    detail: Pick<HubModelDetail, 'id' | 'builds'>,
+    build: HubGgufBuild,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<string | null> {
+    assertRepoId(detail.id);
+    const sha256 = build.files[0]?.sha256;
+    const tag = planOllamaTags(detail.builds).get(build.id)?.tag;
+    if (build.split || !build.complete || !sha256 || !tag || !ollamaAcceptsRepo(detail.id)) return null;
+    const context = { signal: options.signal, repo: detail.id, accept: REGISTRY_MANIFEST_ACCEPT };
+    let manifest: z.infer<typeof manifestSchema>;
+    try {
+      ({ data: manifest } = await this.#getJson(`/v2/${detail.id}/manifests/${tag}`, manifestSchema, context));
+    } catch (error) {
+      // 400 is the registry's "not available", "sharded" and "not a valid quantization scheme".
+      if (error instanceof RuntimeHttpError && !(error instanceof HubAccessError) && [400, 404].includes(error.status))
+        return null;
+      throw error;
+    }
+    const model = manifest.layers.find(layer => layer.mediaType === OLLAMA_MODEL_LAYER);
+    return model?.digest === `sha256:${sha256}` ? `${OLLAMA_HUGGING_FACE_HOST}/${detail.id}:${tag}` : null;
+  }
+
   async #canDownload(
     repo: string,
     revision: string,
@@ -525,7 +641,7 @@ export class HuggingFaceHub {
       await this.#request(resolvePath(repo, revision, path), { method: 'HEAD', signal, repo, revision });
       return true;
     } catch (error) {
-      if (error instanceof HubAccessError) return false;
+      if (error instanceof HubAccessError || error instanceof ModelNotFoundError) return false;
       throw error;
     }
   }
@@ -580,7 +696,10 @@ export class HuggingFaceHub {
       try {
         response = await this.#client.fetch(url, {
           method: context.method ?? 'GET',
-          headers: { accept: 'application/json', ...(this.#token ? { authorization: `Bearer ${this.#token}` } : {}) },
+          headers: {
+            accept: context.accept ?? 'application/json',
+            ...(this.#token ? { authorization: `Bearer ${this.#token}` } : {}),
+          },
           signal,
           redirect: 'manual',
         });
@@ -618,22 +737,36 @@ export class HuggingFaceHub {
       return new HubAccessError(message, this.id, status, repo, 'gated');
     if (status === 404 && code === 'RevisionNotFound')
       return new ModelNotFoundError(this.id, `${repo}@${revision}`, { cause: message });
-    if (status === 404 || (status === 401 && (!this.#token || code === 'RepoNotFound')))
-      return new ModelNotFoundError(this.id, repo, { cause: message });
-    if (status === 401 || status === 403) return new HubAccessError(message, this.id, status, repo, 'unauthorized');
+    // The Hub ignores a bad token on a public repo and answers a missing or unreadable one with a bare 401.
+    if (status === 404 || status === 401) return new ModelNotFoundError(this.id, repo, { cause: message });
+    if (status === 403) return new HubAccessError(message, this.id, status, repo, 'unauthorized');
     return new RuntimeHttpError(message, this.id, status);
   }
 
   #connectionError(path: string, error: unknown, signal: AbortSignal | undefined): unknown {
     if (error instanceof LocalRuntimeError || signal?.aborted) return error;
     const reason = this.#redact(describeError(error, this.#requestTimeoutMs));
-    return new RuntimeConnectionError(`${this.id} ${path} failed: ${reason}`, this.id, { cause: error });
+    return new RuntimeConnectionError(`${this.id} ${path} failed: ${reason}`, this.id, {
+      cause: redactedError(error, text => this.#redact(text)),
+    });
   }
 
   #redact(text: string): string {
     const withoutToken = this.#token ? text.split(this.#token).join('[redacted]') : text;
     return withoutToken.replace(/Bearer\s+[^\s"',;]+/gi, 'Bearer [redacted]').replace(/\bhf_\w{8,}/g, '[redacted]');
   }
+}
+
+/** A copy of a fetch failure and its causes with only name, message, code and stack, each passed through `redact`. */
+function redactedError(error: unknown, redact: (text: string) => string, depth = 0): Error {
+  const source = error instanceof Error ? error : new Error(String(error));
+  const cause = depth < 3 && source.cause !== undefined ? redactedError(source.cause, redact, depth + 1) : undefined;
+  const copy = new Error(redact(source.message), cause ? { cause } : undefined);
+  copy.name = redact(source.name);
+  copy.stack = redact(source.stack ?? `${copy.name}: ${copy.message}`);
+  const code: unknown = Reflect.get(source, 'code');
+  if (typeof code === 'string') Object.assign(copy, { code: redact(code) });
+  return copy;
 }
 
 function safeJsonParse(text: string): unknown {
