@@ -105,7 +105,7 @@ describe('getCallerModelList free-tier gate', () => {
   const ungated = ['priced', 'free', 'image-model'];
 
   beforeEach(() => {
-    mocks.getAvailableModels.mockResolvedValue([priced, free, image]);
+    mocks.getAvailableModels.mockResolvedValue([priced, unpriced, free, image]);
     mocks.loadFreeTierAllowedModels.mockResolvedValue(allowed);
   });
 
