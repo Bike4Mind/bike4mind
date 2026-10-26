@@ -46,11 +46,19 @@ export async function handler(): Promise<void> {
         ],
       })
     );
-    await auditModelReferences(stage);
   } catch (error) {
     logger.error('[model-discovery] staleness check failed', {
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;
+  }
+
+  // Isolated: an audit failure must not fail the watchdog or trip its errors alarm.
+  try {
+    await auditModelReferences(stage);
+  } catch (error) {
+    logger.error('[model-discovery] model reference audit failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
