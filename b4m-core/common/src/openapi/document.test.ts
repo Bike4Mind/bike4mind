@@ -263,6 +263,18 @@ describe('buildOpenApiDocument', () => {
     expect(doc.info.description).not.toContain('ai.completions:write');
   });
 
+  it('publishes every scope any operation requires', () => {
+    const required = new Set<string>();
+    for (const item of Object.values(doc.paths)) {
+      for (const op of Object.values(item)) {
+        for (const scope of op?.['x-required-scopes'] ?? []) required.add(scope);
+      }
+    }
+    expect(required.size).toBeGreaterThan(0);
+    const published = new Set<string>(PUBLIC_DOC_API_KEY_SCOPES);
+    expect([...required].filter(scope => !published.has(scope))).toEqual([]);
+  });
+
   it('quotes the enforced rate-limit defaults and every published rate-limit header in info.description', () => {
     const { requestsPerMinute, requestsPerDay } = API_KEY_RATE_LIMIT_DEFAULTS;
     expect(doc.info.description).toContain(`${requestsPerMinute} requests/minute`);

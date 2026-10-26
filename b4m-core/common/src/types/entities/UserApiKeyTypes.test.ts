@@ -119,7 +119,6 @@ describe('public API reference scope classification', () => {
     ApiKeyScope.EMBED_CHAT,
     ApiKeyScope.OVERWATCH_INGEST_WRITE,
     ApiKeyScope.QA_INGEST,
-    ApiKeyScope.SKILLS_READ,
     ApiKeyScope.RELEASE_NOTES_WRITE,
     ApiKeyScope.OPTIHASHI_READ,
     ApiKeyScope.OPTIHASHI_COMPUTE,
@@ -149,6 +148,7 @@ describe('public API reference scope classification', () => {
     ApiKeyScope.OVERWATCH_READ,
     ApiKeyScope.BOB_READ,
     ApiKeyScope.BOB_RUN,
+    ApiKeyScope.SKILLS_READ,
   ]);
 
   it('classifies every ApiKeyScope as public or undocumented, so a new scope fails here until decided', () => {
@@ -162,8 +162,8 @@ describe('public API reference scope classification', () => {
     expect(new Set(UNDOCUMENTED_API_KEY_SCOPES)).toEqual(EXPECTED_UNDOCUMENTED);
   });
 
-  it('never publishes a confined scope', () => {
-    for (const scope of CONFINED_API_KEY_SCOPES) {
+  it('publishes no confined scope except the customer-minted skills:read', () => {
+    for (const scope of CONFINED_API_KEY_SCOPES.filter(s => s !== ApiKeyScope.SKILLS_READ)) {
       expect(PUBLIC_DOC_API_KEY_SCOPES).not.toContain(scope);
     }
   });

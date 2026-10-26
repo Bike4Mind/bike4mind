@@ -215,12 +215,12 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
 
 /**
  * Built-in scopes left out of the public API reference: platform administration, every confined
- * scope, and tooling scopes a customer key is not minted with. Documentation only - it never
+ * scope except the customer-minted `skills:read`, and tooling scopes a customer key is not minted with. Documentation only - it never
  * affects which scopes a key may hold or what the runtime accepts.
  */
 export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.ADMIN,
-  ...CONFINED_API_KEY_SCOPES,
+  ...CONFINED_API_KEY_SCOPES.filter(scope => scope !== ApiKeyScope.SKILLS_READ),
   ApiKeyScope.OPTIHASHI_READ,
   ApiKeyScope.OPTIHASHI_COMPUTE,
 ];
