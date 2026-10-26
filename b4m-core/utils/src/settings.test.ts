@@ -1,5 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
-import { getSettingsValue, getSettingByName, getSettingsByNames, loadTeamPlanSettings } from './settings';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  getSettingsValue,
+  getSettingByName,
+  getSettingsByNames,
+  getSettingsMap,
+  shutdownSettingsCache,
+  loadTeamPlanSettings,
+} from './settings';
 import { KNOWLEDGE_BASE_RETRIEVAL_PROMPT, WEB_SEARCH_FRESHNESS_PROMPT } from '@bike4mind/common';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
 import { Logger } from '@bike4mind/observability';
@@ -165,6 +172,36 @@ describe('getSettingsByNames - stored falsy values survive the cached path', () 
     expect(values.valuelessRowRegression).toBeNull();
     expect(values.absentRegression).toBeNull();
     expect(db.adminSettings.findAll).not.toHaveBeenCalled();
+  });
+});
+
+// The per-process cache only invalidates locally, so a long-lived process can serve a value an
+// admin replaced in another process. This pins the contract every billing/security read relies on:
+// `skipCache` sees the new row on the next call, while the plain read keeps serving the warm one.
+describe('getSettingsMap - skipCache reads past a warm per-process cache', () => {
+  const dbReturning = (value: string) => ({
+    adminSettings: {
+      findAll: vi.fn().mockResolvedValue([{ settingName: 'enforceCredits', settingValue: value }]),
+      findBySettingNames: vi.fn(async (names: string[]) =>
+        names.map(name => ({ settingName: name, settingValue: value }))
+      ),
+    },
+  });
+
+  beforeEach(() => shutdownSettingsCache());
+  afterEach(() => shutdownSettingsCache());
+
+  it('serves the flipped flag to skipCache while the cached read still returns the warmed value', async () => {
+    expect(await getSettingsMap(dbReturning('true'))).toEqual({ enforceCredits: 'true' });
+
+    // The admin's write lands in another process; this one's cache knows nothing about it.
+    const flipped = dbReturning('false');
+    expect(await getSettingsMap(flipped)).toEqual({ enforceCredits: 'true' });
+
+    const fresh = await getSettingsMap(flipped, { names: ['enforceCredits'], skipCache: true });
+    expect(fresh).toEqual({ enforceCredits: 'false' });
+    expect(flipped.adminSettings.findBySettingNames).toHaveBeenCalledWith(['enforceCredits']);
+    expect(flipped.adminSettings.findAll).not.toHaveBeenCalled();
   });
 });
 

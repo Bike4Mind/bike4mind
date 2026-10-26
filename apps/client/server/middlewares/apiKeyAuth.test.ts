@@ -12,9 +12,10 @@ import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { logEvent } from '@server/utils/analyticsLog';
 
-const { validateUserApiKeyMock, findByIdMock } = vi.hoisted(() => ({
+const { validateUserApiKeyMock, findByIdMock, applyUntrustedRateLimitMock } = vi.hoisted(() => ({
   validateUserApiKeyMock: vi.fn(),
   findByIdMock: vi.fn(),
+  applyUntrustedRateLimitMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit),
 }));
 
 vi.mock('@bike4mind/services', async importOriginal => ({
@@ -26,6 +27,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({ User: { findById: findByIdMock } }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
+vi.mock('@server/utils/apiKeyTrust', () => ({ applyUntrustedRateLimit: applyUntrustedRateLimitMock }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: vi.fn().mockResolvedValue(undefined) },
@@ -222,6 +224,26 @@ describe('apiKeyAuth preauthorizedLakeIds binding', () => {
     expect((await run(undefined, req)).passed).toBe(true);
     expect(bindingOf(req)).toBeUndefined();
   });
+
+  it("puts the trust-adjusted rate limit on req.apiKeyInfo, judged against the key's owner", async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation({ billingOwnerType: CreditHolderType.User }));
+    applyUntrustedRateLimitMock.mockResolvedValueOnce({ requestsPerMinute: 20, requestsPerDay: 1000 });
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(applyUntrustedRateLimitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      {
+        rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+        billingOwnerType: CreditHolderType.User,
+      },
+      req
+    );
+    expect((req as Request & { apiKeyInfo?: { rateLimit?: unknown } }).apiKeyInfo?.rateLimit).toEqual({
+      requestsPerMinute: 20,
+      requestsPerDay: 1000,
+    });
+  });
 });
 
 describe('apiKeyAuth usage log stamping', () => {
@@ -380,5 +402,60 @@ describe('apiKeyAuth infrastructure failures', () => {
     const { error } = await run(undefined, makeReq());
     expect(error).toBeInstanceOf(UnauthorizedError);
     expect(error?.message).toBe('Invalid API key');
+  });
+});
+
+describe('apiKeyAuth admin role', () => {
+  const keyWith = (scopes: ApiKeyScope[]) =>
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'admin-1',
+      scopes,
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findByIdMock.mockResolvedValue({ id: 'admin-1', isBanned: false, isAdmin: true });
+  });
+
+  it('treats the owner as a regular user when the key lacks the admin scope', async () => {
+    keyWith([ApiKeyScope.AI_CHAT]);
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(false);
+  });
+
+  it('judges the trust rate limit against the stored admin role, not the withheld one', async () => {
+    keyWith([ApiKeyScope.AI_CHAT]);
+    const seenIsAdmin: boolean[] = [];
+    applyUntrustedRateLimitMock.mockImplementationOnce(async (owner: unknown, key: { rateLimit: unknown }) => {
+      seenIsAdmin.push((owner as { isAdmin?: boolean }).isAdmin === true);
+      return key.rateLimit;
+    });
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(seenIsAdmin).toEqual([true]);
+    expect(req.user?.isAdmin).toBe(false);
+  });
+
+  it('keeps the admin role for a key holding the admin scope', async () => {
+    keyWith([ApiKeyScope.ADMIN]);
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(true);
+  });
+
+  it('leaves a session-authenticated admin alone', async () => {
+    const req = makeReq();
+    req.user = { id: 'admin-1', isAdmin: true } as unknown as Request['user'];
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(true);
+    expect(validateUserApiKeyMock).not.toHaveBeenCalled();
   });
 });

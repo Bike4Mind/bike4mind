@@ -140,11 +140,11 @@ export interface paths {
     put?: never;
     /**
      * Create a chat completion
-     * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
-     *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` and `backend: "anthropic"`, a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model, Bedrock-served Claude included, `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
+     *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
-     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, a body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
     delete?: never;
@@ -223,7 +223,7 @@ export interface paths {
     };
     /**
      * Get the authenticated caller
-     * @description Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Gate on `tier != "free"` for "does this caller hold a paid plan (own or org seat)" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's organization) confers that org plan's tier and `subscription`, even when the caller pays nothing personally, so `tier != "free"` does not by itself mean the caller is billed. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.
+     * @description Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. `credits.monthly_allowance` totals monthly personal plan grants, including custom grants; it is null when unavailable and may be omitted by older servers. Gate on `tier != "free"` for "does this caller hold a paid plan (own or org seat)" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's organization) confers that org plan's tier and `subscription`, even when the caller pays nothing personally, so `tier != "free"` does not by itself mean the caller is billed. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.
      */
     get: operations['getMe'];
     put?: never;
@@ -285,7 +285,7 @@ export interface paths {
     put?: never;
     /**
      * Generate an image
-     * @description Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images (4 for Klein), including images attached through `fabFileIds`. Unsupported models and an oversized reference list are rejected with a 400. The combined FLUX.2 input limit is checked when the render resolves attachments; exceeding it fails the polled quest. Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: "error"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.
      */
@@ -384,6 +384,26 @@ export interface paths {
      * @description Returns one embedding vector per input string. The request and success bodies follow the OpenAI embeddings API shape; error bodies use the standard B4M error envelope. `model` is any embedding model this deployment supports (OpenAI, Voyage AI, Amazon Bedrock, or a self-hosted Ollama model); `input` is a string or up to 2048 strings, at most 300000 tokens in total and each within the model context window. The input count is further capped so inputs x output width stays within 196608 values (128 inputs at 1536 dimensions) - page larger jobs across requests. Pre-tokenized input (arrays of token ids) is not accepted; clients that send it by default, such as LangChain's Python `OpenAIEmbeddings`, must be set to send strings (`check_embedding_ctx_length=False`). `dimensions` shortens the vector on models that support it (OpenAI `text-embedding-3-*`, and Voyage models with several published widths). Billed in credits per input token from the per-model embedding rate, reserved before the provider call and refunded if it fails. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
      */
     post: operations['createEmbeddings'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/text-refinements': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Refine text
+     * @description Rewrites `text` to be more concise, clear and detailed while keeping its intent. `context` is optional background that steers the rewrite. `text` is at most 10000 characters and `context` at most 10000. Output is capped at about 800 tokens, and identical requests are served from a cache for about five minutes. Not billed in credits. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
+     */
+    post: operations['createTextRefinement'];
     delete?: never;
     options?: never;
     head?: never;
@@ -830,6 +850,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/whats-new/media/{id}/{asset}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get release note media
+     * @description Redirects to one file of a published release note video or still image: `landscape` and `portrait` are the 16:9 and 9:16 MP4s, the `-poster` assets their still images, and `image-landscape` and `image-portrait` the 16:9 and 9:16 still images of the note's `image`. The `video` and `image` URLs that listWhatsNew returns for uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable for up to 10 minutes and its target is signed for 1 hour, longer than that, so follow it rather than storing the target. Rate limited per client IP.
+     */
+    get: operations['getWhatsNewMedia'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/projects': {
     parameters: {
       query?: never;
@@ -1158,7 +1198,7 @@ export interface components {
       };
     };
     /**
-     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, and a reference image that is missing, not an image, or still in moderation. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
+     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, a reference image that is missing, not an image, or still in moderation, and the combined FLUX.2 input-image limit after attachments are resolved. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "sessionId": "664f1c2b9a1e4d0012ab34aa",
@@ -1190,7 +1230,7 @@ export interface components {
       images?: string[];
     };
     /**
-     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, and a reference image that is missing, not an image, or still in moderation. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
+     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, a reference image that is missing, not an image, or still in moderation, and the combined FLUX.2 input-image limit after attachments are resolved. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "sessionId": "664f1c2b9a1e4d0012ab34aa",
@@ -1420,6 +1460,8 @@ export interface components {
       enable_mementos?: boolean;
       enable_lattice?: boolean;
       enable_artifacts?: boolean;
+      /** @description Admin only. Scripted per-iteration confidence scores (0 to 1) that replace the real score at the confidence gate: entry i scores iteration i + 1, and iterations past the end use the real score. The gate pauses the run for review on a streak of consecutive evaluated iterations below its threshold (currently 2), so script one low entry per iteration you want in the streak. Only iterations that ran tools are evaluated, scripted or not, and a finished run never pauses. A non-admin caller gets 403. */
+      confidence_overrides?: number[];
     };
     getAgentExecutionResponse200: {
       id: string;
@@ -1669,7 +1711,12 @@ export interface components {
           requestId?: string;
           /** @enum {string} */
           code?:
-            'insufficient_credits' | 'spend_cap_exceeded' | 'provider_error' | 'provider_rejected' | 'content_blocked';
+            | 'insufficient_credits'
+            | 'spend_cap_exceeded'
+            | 'invalid_request'
+            | 'provider_error'
+            | 'provider_rejected'
+            | 'content_blocked';
         };
     createCompletionResponse400: {
       error: string;
@@ -1681,7 +1728,9 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?:
+        | 'invalid_request'
         | 'unknown_model'
+        | 'assistant_prefill_unsupported'
         | 'tool_search_unsupported'
         | 'all_tools_deferred'
         | 'deferred_tool_cache_control'
@@ -1728,7 +1777,7 @@ export interface components {
       messages: {
         /** @enum {string} */
         role: 'user' | 'assistant' | 'system';
-        /** @description A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / `tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in `tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose `supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with `errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). */
+        /** @description A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / `tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in `tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose `supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with `errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). A final non-blank assistant turn is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. It is accepted only when the selected model has `supports_assistant_prefill: true`; otherwise the request returns `400` with `errorCode: "assistant_prefill_unsupported"` without changing the message. */
         content: string | unknown[];
         cache?: boolean;
       }[];
@@ -1768,7 +1817,7 @@ export interface components {
                 [key: string]: unknown;
               };
               strict?: boolean;
-              /** @description Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`). */
+              /** @description Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. Honoured only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; on every other model it is ignored and the tool is sent as usual. At least one tool, or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`). */
               defer_loading?: boolean;
               /** @description Accepted for validation only and not forwarded. Rejected on a deferred tool (`errorCode: "deferred_tool_cache_control"`). */
               cache_control?: unknown;
@@ -1776,7 +1825,7 @@ export interface components {
             _isMcpTool?: boolean;
           }
         | {
-            /** @description A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it. */
+            /** @description A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; any other model is refused with `errorCode: "tool_search_unsupported"` rather than run without it. */
             serverTool:
               | {
                   /** @enum {string} */
@@ -1815,7 +1864,7 @@ export interface components {
                   [key: string]: unknown;
                 };
                 strict?: boolean;
-                /** @description Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`). */
+                /** @description Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. Honoured only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; on every other model it is ignored and the tool is sent as usual. At least one tool, or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`). */
                 defer_loading?: boolean;
                 /** @description Accepted for validation only and not forwarded. Rejected on a deferred tool (`errorCode: "deferred_tool_cache_control"`). */
                 cache_control?: unknown;
@@ -1823,7 +1872,7 @@ export interface components {
               _isMcpTool?: boolean;
             }
           | {
-              /** @description A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it. */
+              /** @description A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; any other model is refused with `errorCode: "tool_search_unsupported"` rather than run without it. */
               serverTool:
                 | {
                     /** @enum {string} */
@@ -2219,7 +2268,8 @@ export interface components {
      *         "current_period_ends_at": "2026-10-18T00:00:00.000Z"
      *       },
      *       "credits": {
-     *         "balance": 31667
+     *         "balance": 31667,
+     *         "monthly_allowance": 50000
      *       },
      *       "entitlements": [
      *         "base"
@@ -2240,6 +2290,7 @@ export interface components {
       } | null;
       credits: {
         balance: number;
+        monthly_allowance?: number | null;
       };
       entitlements: string[];
     };
@@ -2276,6 +2327,7 @@ export interface components {
      *           "supports_tools": true,
      *           "supports_tool_search": true,
      *           "supports_tool_changes": false,
+     *           "supports_assistant_prefill": false,
      *           "supports_vision": true,
      *           "deprecation_date": null,
      *           "replaced_by": null,
@@ -2301,6 +2353,7 @@ export interface components {
      *           "supports_tools": false,
      *           "supports_tool_search": false,
      *           "supports_tool_changes": false,
+     *           "supports_assistant_prefill": true,
      *           "supports_vision": false,
      *           "deprecation_date": null,
      *           "replaced_by": null,
@@ -2370,10 +2423,12 @@ export interface components {
         /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
         reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
         supports_tools: boolean;
-        /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`. A `bedrock` model with this flag set is not served with tool search there yet: a `serverTool` entry is refused with `errorCode: "tool_search_unsupported"` and `defer_loading` is ignored. */
+        /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is `anthropic` or `bedrock`. */
         supports_tool_search: boolean;
-        /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not accept these blocks yet, and will accept them first for models whose `backend` is `anthropic`. */
+        /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: "tool_changes_unsupported"`. */
         supports_tool_changes: boolean;
+        /** @description Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, a text prefill returns `400` with `errorCode: "assistant_prefill_unsupported"`; server-tool continuations are allowed. On Claude models that accept assistant prefill, it cannot be combined with `thinking`. */
+        supports_assistant_prefill: boolean;
         supports_vision: boolean;
         /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
         deprecation_date: string | null;
@@ -2537,6 +2592,13 @@ export interface components {
             | 'flux-pro-1.0-fill'
             | 'flux-kontext-pro'
             | 'flux-kontext-max'
+            | 'flux-2-max'
+            | 'flux-2-pro'
+            | 'flux-2-pro-preview'
+            | 'flux-2-flex'
+            | 'flux-2-klein-9b'
+            | 'flux-2-klein-9b-preview'
+            | 'flux-2-klein-4b'
             | 'grok-imagine-image-quality'
             | 'gemini-2.5-flash-image'
             | 'gemini-3-pro-image-preview'
@@ -2629,6 +2691,10 @@ export interface components {
       )[];
       /** @default 2 */
       safety_tolerance?: number;
+      /**
+       * @description Let the provider rewrite and expand the prompt before rendering. Applies to Black Forest Labs (FLUX) models only; other models ignore it. Defaults to false.
+       * @default false
+       */
       prompt_upsampling?: boolean;
       seed?: number | null;
       /** @enum {string|null} */
@@ -2710,6 +2776,13 @@ export interface components {
             | 'flux-pro-1.0-fill'
             | 'flux-kontext-pro'
             | 'flux-kontext-max'
+            | 'flux-2-max'
+            | 'flux-2-pro'
+            | 'flux-2-pro-preview'
+            | 'flux-2-flex'
+            | 'flux-2-klein-9b'
+            | 'flux-2-klein-9b-preview'
+            | 'flux-2-klein-4b'
             | 'grok-imagine-image-quality'
             | 'gemini-2.5-flash-image'
             | 'gemini-3-pro-image-preview'
@@ -2988,6 +3061,46 @@ export interface components {
        * @enum {string}
        */
       encoding_format?: 'float' | 'base64';
+    };
+    /**
+     * @example {
+     *       "text": "A golden retriever running along a sunlit beach at sunset, waves breaking behind it."
+     *     }
+     */
+    createTextRefinementResponse200: {
+      text: string;
+    };
+    createTextRefinementResponse401: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'provider_not_configured' | 'provider_rejected';
+    };
+    createTextRefinementResponse503: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'provider_not_configured' | 'provider_rejected';
+    };
+    /**
+     * @example {
+     *       "text": "a dog on a beach",
+     *       "context": "prompt for an image generator"
+     *     }
+     */
+    createTextRefinementRequest: {
+      text: string;
+      context?: string;
     };
     /**
      * @example {
@@ -3416,6 +3529,32 @@ export interface components {
       attachmentNotices?: string[];
       attachmentDelivery?: {
         [key: string]: unknown;
+      };
+      turnTiming?: {
+        queueMs: number;
+        contextBuildMs?: number;
+        semaphoreWaitMs: number;
+        totalMs?: number;
+        fallbackHops: number;
+        retries: {
+          /** @enum {string} */
+          reason:
+            | 'stream_idle_timeout'
+            | 'stream_truncated'
+            | 'request_timeout'
+            | 'rate_limit'
+            | 'overloaded'
+            | 'server_error'
+            | 'transport'
+            | 'tool_pairing'
+            | 'other';
+          status?: number;
+          retryAfterMs?: number;
+          requestId?: string;
+          delayMs: number;
+          model: string;
+          at: string;
+        }[];
       };
       executionTracking?: unknown;
     };
@@ -3851,6 +3990,7 @@ export interface components {
         | 'unsupported_mode'
         | 'missing_input_image'
         | 'unexpected_input_image'
+        | 'unsupported_input_role'
         | 'unsupported_audio_option'
         | 'invalid_request'
         | 'model_disabled'
@@ -3876,6 +4016,7 @@ export interface components {
         | 'unsupported_mode'
         | 'missing_input_image'
         | 'unexpected_input_image'
+        | 'unsupported_input_role'
         | 'unsupported_audio_option'
         | 'invalid_request'
         | 'model_disabled'
@@ -3896,7 +4037,7 @@ export interface components {
       model: string;
       prompt: string;
       /**
-       * @description Defaults to image_to_video when input_image_file_id is set, else text_to_video.
+       * @description Defaults to image_to_video when a first_frame input (or input_image_file_id) is set, else text_to_video.
        * @enum {string}
        */
       mode?: 'text_to_video' | 'image_to_video';
@@ -3906,7 +4047,13 @@ export interface components {
       aspect_ratio?: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '3:2' | '2:3' | '21:9';
       /** @enum {string} */
       resolution?: '360p' | '480p' | '720p' | '1080p' | '4k';
-      /** @description An image file you own, for image_to_video. */
+      /** @description Image files you own, each tagged with what it is for. image_to_video needs a first_frame. The roles a model accepts, and how many of each, are its input_roles in GET /api/v1/video-models. */
+      inputs?: {
+        file_id: string;
+        /** @enum {string} */
+        role: 'first_frame' | 'last_frame' | 'reference' | 'style';
+      }[];
+      /** @description Deprecated: send inputs with role first_frame instead. Cannot be combined with inputs. */
       input_image_file_id?: string;
       audio?: boolean;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
@@ -4050,6 +4197,11 @@ export interface components {
         display_name: string;
         provider: string;
         modes: ('text_to_video' | 'image_to_video')[];
+        /** @description The inputs[] roles this model accepts and the most of each one request may carry. Roles today: first_frame, last_frame, reference, style; ignore any you do not know. */
+        input_roles?: {
+          role: string;
+          max: number;
+        }[];
         duration:
           | {
               /** @enum {string} */
@@ -4643,6 +4795,16 @@ export interface components {
           text: string;
           importance: number;
         }[];
+        video?: {
+          landscape_url?: string | null;
+          landscape_poster_url?: string | null;
+          portrait_url?: string | null;
+          portrait_poster_url?: string | null;
+        } | null;
+        image?: {
+          landscape_url?: string | null;
+          portrait_url?: string | null;
+        } | null;
       }[];
       next_cursor: string | null;
     };
@@ -5572,7 +5734,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -6599,7 +6761,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message (`errorCode: "assistant_prefill_unsupported"`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -7205,6 +7367,37 @@ export interface operations {
           'application/json': components['schemas']['generateMusicResponse422'];
         };
       };
+      /** @description The API key exceeded its rate limit, or the provider stayed at its concurrency limit for longer than the request could wait. `Retry-After` says when to try again; reserved credits are refunded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description The provider failed to generate the track; reserved credits are refunded. */
       502: {
         headers: {
@@ -7481,6 +7674,31 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['generateSoundEffectResponse422'];
+        };
+      };
+      /** @description The API key exceeded its rate limit, or the provider stayed at its concurrency limit for longer than the request could wait. `Retry-After` says when to try again; reserved credits are refunded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description The provider failed to generate the effect; reserved credits are refunded. */
@@ -7869,7 +8087,7 @@ export interface operations {
           'application/json': components['schemas']['generateImageResponse200'];
         };
       };
-      /** @description `referenceImageFabFileIds` is set for a non-gpt-image model, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
+      /** @description `referenceImageFabFileIds` is set for an unsupported model or its distinct ids alone exceed the model's reference limit, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -9068,6 +9286,218 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['createEmbeddingsResponse503'];
+        };
+      };
+    };
+  };
+  createTextRefinement: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createTextRefinementRequest'];
+      };
+    };
+    responses: {
+      /** @description The refined text. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createTextRefinementResponse200'];
+        };
+      };
+      /** @description Missing/invalid credentials, or the text-refinement provider refused the configured key (`errorCode: "provider_rejected"`). */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createTextRefinementResponse401'];
+        };
+      };
+      /** @description The API key does not hold `ai:generate`, or AI features are disabled on this account by an administrator. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-key rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unexpected server error (for example the refinement cache is unavailable). */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The model call failed for a reason other than a rejected credential, or returned no refined text. */
+      502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description This deployment has no operations model configured (`errorCode: "provider_not_configured"`). */
+      503: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createTextRefinementResponse503'];
         };
       };
     };
@@ -11340,7 +11770,7 @@ export interface operations {
           'application/json': components['schemas']['createVideoGenerationResponse403'];
         };
       };
-      /** @description `input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
+      /** @description An `inputs` file (or `input_image_file_id`) does not name an image you own (`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -11376,7 +11806,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -12925,6 +13355,88 @@ export interface operations {
         };
       };
       /** @description `limit` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given. On a deployment that proxies an upstream feed, a cursor issued by that upstream which can no longer be served there ends the list (200 with empty `data`) rather than returning 422. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-IP rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unexpected server error. */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getWhatsNewMedia: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+        asset: 'landscape' | 'landscape-poster' | 'portrait' | 'portrait-poster' | 'image-landscape' | 'image-portrait';
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description `Location` is a time-limited signed GET for the file. */
+      303: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Signed URL of the file. */
+          Location?: string;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description No published note has this id, or the note has no such file, or the file is not an upload this deployment serves (a linked URL is listed as is, not through this route). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

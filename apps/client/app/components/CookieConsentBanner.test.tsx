@@ -494,12 +494,12 @@ describe('CookieConsentBanner', () => {
 
       renderAndReopen();
 
-      expect(screen.getByText('Cookie settings.')).toBeInTheDocument();
+      expect(screen.getByText('Cookie settings')).toBeInTheDocument();
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
         'You are currently allowing advertising (Meta, Reddit) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('Declining reloads the page');
-      expect(screen.getByTestId('cookie-consent-cancel-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('cookie-consent-close-btn')).toBeInTheDocument();
       expect(screen.queryByText(/By clicking/)).not.toBeInTheDocument();
     });
 
@@ -510,7 +510,7 @@ describe('CookieConsentBanner', () => {
 
       renderAndReopen();
 
-      expect(screen.getByTestId('cookie-consent-cancel-btn')).toHaveFocus();
+      expect(screen.getByTestId('cookie-consent-close-btn')).toHaveFocus();
       expect(screen.getByRole('region', { name: 'Cookie settings' })).toBe(screen.getByTestId('cookie-consent-banner'));
     });
 
@@ -603,14 +603,14 @@ describe('CookieConsentBanner', () => {
       expect(reload).toHaveBeenCalledTimes(1);
     });
 
-    it('Cancel closes it and changes nothing', () => {
+    it('Close closes it and changes nothing', () => {
       localStorageMock.setItem('cookie_consent', 'granted');
       renderAndReopen();
       mockGtag.mockClear();
       mockLoadRedditPixel.mockClear();
       mockLoadMetaPixel.mockClear();
 
-      fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+      fireEvent.click(screen.getByTestId('cookie-consent-close-btn'));
 
       expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
       expect(useCookieSettings.getState().isOpen).toBe(false);
@@ -624,8 +624,8 @@ describe('CookieConsentBanner', () => {
       renderAndReopen();
 
       expect(screen.getByText(/By clicking/)).toBeInTheDocument();
-      expect(screen.queryByText('Cookie settings.')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('cookie-consent-cancel-btn')).not.toBeInTheDocument();
+      expect(screen.queryByText('Cookie settings')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('cookie-consent-close-btn')).not.toBeInTheDocument();
     });
 
     // Pairs each loader the grant fires with the vendor the ask names. A loader added outside
@@ -729,12 +729,12 @@ describe('CookieConsentBanner', () => {
         return trigger;
       };
 
-      it('returns focus to the trigger when the manage screen is cancelled', () => {
+      it('returns focus to the trigger when the manage screen is closed', () => {
         localStorageMock.setItem('cookie_consent', 'granted');
         const trigger = renderWithTrigger();
-        expect(screen.getByTestId('cookie-consent-cancel-btn')).toHaveFocus();
+        expect(screen.getByTestId('cookie-consent-close-btn')).toHaveFocus();
 
-        fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+        fireEvent.click(screen.getByTestId('cookie-consent-close-btn'));
 
         expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
         expect(trigger).toHaveFocus();
@@ -757,7 +757,7 @@ describe('CookieConsentBanner', () => {
         const elsewhere = screen.getByTestId('elsewhere');
         elsewhere.focus();
 
-        fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+        fireEvent.click(screen.getByTestId('cookie-consent-close-btn'));
 
         expect(elsewhere).toHaveFocus();
       });

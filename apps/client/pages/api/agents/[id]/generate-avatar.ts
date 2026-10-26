@@ -23,6 +23,7 @@ import { fabFileRepository } from '@bike4mind/database';
 import axios from 'axios';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 // System prompt for creating visual prompts from agent descriptions
 const AGENT_AVATAR_PROMPT_SYSTEM = `You are an expert at translating rich personality descriptions and agent metadata into detailed visual prompts for AI image generation.
@@ -125,6 +126,7 @@ const downloadImageBuffer = async (imageUrl: string): Promise<Buffer> => {
 const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{ id: string }, AgentAvatarResponse, AgentAvatarRequest>
 >(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { id } = req.query;
   const userId = req.user!.id;
   const { imageModel: userImageModel } = req.body;

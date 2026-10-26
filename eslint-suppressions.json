@@ -74,16 +74,6 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/admin/identity-providers/[id].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/identity-providers/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
   "apps/client/pages/api/admin/integration-audit-logs/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -111,7 +101,7 @@
   },
   "apps/client/pages/api/admin/model-prices.ts": {
     "b4m/no-raw-entity-response": {
-      "count": 2
+      "count": 1
     }
   },
   "apps/client/pages/api/admin/partner-signup-rules/[id].ts": {
@@ -255,21 +245,6 @@
     }
   },
   "apps/client/pages/api/admin/system-prompts/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/team-members.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 3
-    }
-  },
-  "apps/client/pages/api/admin/users/[userId]/user-api-keys.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/users/email-verification.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }

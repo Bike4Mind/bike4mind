@@ -35,6 +35,7 @@ import {
   type ParserRowShift,
 } from './lifecyclePlan';
 import {
+  consensusPricedModelIds,
   describePriceRows,
   isAdapterLiteralRow,
   perTokenRatesInForce,
@@ -397,6 +398,7 @@ async function executeRun(
         effectiveAt: new Date(startedAt.getTime() + pass - 1),
         statesBeforeRun: passes[0]?.plan.statesBeforeRun,
         priceRowsAtRunStart: passes[0]?.plan.priceRowsAtRunStart,
+        catalogModelIdsAtRunStart: passes[0]?.plan.catalogModelIdsAtRunStart,
       });
 
       let catalogWrites: AppendOutcome = { appended: 0, failed: 0 };
@@ -742,6 +744,8 @@ interface PassInput {
   statesBeforeRun?: ReadonlyMap<string, IModelDiscoveryState>;
   /** Pass 1's price read, which the band measures against; see PricePlanInput.baselineRowsInForce. */
   priceRowsAtRunStart?: readonly IModelPrice[];
+  /** Pass 1's catalog ids: a model a later pass sees only because pass 1 added it is still new. */
+  catalogModelIdsAtRunStart?: ReadonlySet<string>;
 }
 
 interface PassPlan {
@@ -751,6 +755,7 @@ interface PassPlan {
   absence: AbsencePlan;
   statesBeforeRun: ReadonlyMap<string, IModelDiscoveryState>;
   priceRowsAtRunStart: readonly IModelPrice[];
+  catalogModelIdsAtRunStart: ReadonlySet<string>;
   joinCoverage: IDiscoveryJoinCoverage[];
   unmatchedIds: string[];
   rejected: number;
@@ -783,16 +788,23 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     kind: source.kind,
     records: (results.get(source.name)?.result as DiscoverySourceOk).records ?? [],
   }));
-  const signals = planLifecycleSignals({ contributions, droppedDocsSources: input.droppedDocsSources });
-
   const { rows: inForce, rejected } = await db.catalog.rowsInForceWithRejects(effectiveAt);
   const base = resolveCatalogRecords(inForce.filter(row => row.source !== 'operator'));
+  const staticModelIds = await adapterModelIds();
+  // Static models with no row are in the catalog too: counting them as new lets one aggregator sunset them.
+  const catalogModelIdsAtRunStart =
+    input.catalogModelIdsAtRunStart ?? new Set([...staticModelIds, ...inForce.map(row => row.modelId)]);
+  const signals = planLifecycleSignals({
+    contributions,
+    droppedDocsSources: input.droppedDocsSources,
+    catalogModelIds: catalogModelIdsAtRunStart,
+  });
   // The catalog as the runtime sees it. The catalog plan diffs against `base` so
   // it can never propose over an operator row, but the lifecycle constraints
   // have to read what an operator decided (sec 8 auto-remap).
   const resolvedInForce = resolveCatalogRecords(inForce);
   const operatorOwnedModelIds = new Set(inForce.filter(row => row.source === 'operator').map(row => row.modelId));
-  const presentationOwnedElsewhere = presentationOwnedOutsideDiscovery(inForce, await adapterModelIds());
+  const presentationOwnedElsewhere = presentationOwnedOutsideDiscovery(inForce, staticModelIds);
   const priorDiscoveryGroups = discoveryGroupsInForce(inForce);
   const priorContributors = discoveryContributorsInForce(inForce);
 
@@ -838,6 +850,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     credentials,
     policy: ctx.autoEnable,
     knownPricedModelIds,
+    consensusPricedModelIds: consensusPricedModelIds(contributions),
     buildPricedModelIds: await adapterBuildPricedModelIds(),
     runStartedAt: effectiveAt,
     runId,
@@ -875,10 +888,12 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     base,
     resolvedInForce,
     docs: signals.docs,
+    aggregatorSunsets: signals.aggregatorSunsets,
     missed: absence.missed,
     statesBeforeRun,
     ratesInForce: perTokenRatesInForce(priceRowsInForce),
     priorDiscoveryGroups,
+    priorContributors,
     autoRemap: ctx.autoRemap,
     operatorOwnedModelIds,
     runStartedAt: effectiveAt,
@@ -892,6 +907,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     absence,
     statesBeforeRun,
     priceRowsAtRunStart,
+    catalogModelIdsAtRunStart,
     joinCoverage: computeJoinCoverage(contributions, base),
     unmatchedIds: unmatchedIds(contributions, base),
     rejected,
@@ -1166,8 +1182,10 @@ function logParserShifts(shifts: readonly ParserRowShift[], logger: DiscoveryLog
  * The groups the discovery row in force claims, per model. rowsInForce is
  * newest-first and holds one non-operator row per (modelId, source), so the
  * first discovery row seen for a model is the one an appended row supersedes.
+ * Exported with its contributors sibling: anything replaying a stored catalog
+ * into planCatalogWrites needs the same two maps this run derives.
  */
-function discoveryGroupsInForce(rows: readonly IModelCatalogRow[]): Map<string, FieldGroup[]> {
+export function discoveryGroupsInForce(rows: readonly IModelCatalogRow[]): Map<string, FieldGroup[]> {
   const groups = new Map<string, FieldGroup[]>();
   for (const row of rows) {
     if (row.source !== 'discovery' || groups.has(row.modelId)) continue;
@@ -1192,7 +1210,7 @@ export function presentationOwnedOutsideDiscovery(
 }
 
 /** Contributors on that same superseded row, so a re-claimed group keeps its provenance. */
-function discoveryContributorsInForce(rows: readonly IModelCatalogRow[]): Map<string, ICatalogContributor[]> {
+export function discoveryContributorsInForce(rows: readonly IModelCatalogRow[]): Map<string, ICatalogContributor[]> {
   const contributors = new Map<string, ICatalogContributor[]>();
   for (const row of rows) {
     if (row.source !== 'discovery' || contributors.has(row.modelId)) continue;

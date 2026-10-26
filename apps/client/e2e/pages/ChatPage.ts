@@ -1,7 +1,14 @@
 import { expect } from '@playwright/test';
 import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
-import { describeStall, isStreamComplete, StreamingTimeoutError, type StreamSnapshot } from '../ai-latency-budget';
+import {
+  describeStall,
+  hasFirstAnswerText,
+  isStreamComplete,
+  StreamingTimeoutError,
+  TurnTimer,
+  type StreamSnapshot,
+} from '../ai-latency-budget';
 
 export class ChatPage extends BasePage {
   readonly chatInput = this.page.getByTestId('lexical-chat-input-container');
@@ -41,6 +48,17 @@ export class ChatPage extends BasePage {
     return target.innerText({ timeout: TIMEOUTS.ELEMENT_STATE }).catch(() => '');
   }
 
+  /** Text of the newest reply's markdown answer, or '' before its first answer token. Same count() guards as above. */
+  private async newestAnswerText(): Promise<string> {
+    if ((await this.aiResponseRoot.count()) === 0) return '';
+    const answer = this.aiResponseRoot.last().getByTestId('ai-response-markdown');
+    if ((await answer.count()) === 0) return '';
+    return answer
+      .first()
+      .innerText({ timeout: TIMEOUTS.ELEMENT_STATE })
+      .catch(() => '');
+  }
+
   async sendMessage(text: string) {
     await this.typeAndWaitForSendReady(text);
     await this.page.keyboard.press('Enter');
@@ -71,7 +89,11 @@ export class ChatPage extends BasePage {
     }
   }
 
-  async sendMessageAndWaitForResponse(text: string, timeout: number = TIMEOUTS.AI_RESPONSE) {
+  /**
+   * `timer`, when given, is marked at Enter and at the first answer text (see TurnTimer for how
+   * the resend below is timed).
+   */
+  async sendMessageAndWaitForResponse(text: string, timeout: number = TIMEOUTS.AI_RESPONSE, timer?: TurnTimer) {
     const maxAttempts = 2;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Never anchor on a pre-send index. ChatHistory renders the reply list through
@@ -85,7 +107,9 @@ export class ChatPage extends BasePage {
       // the text-only completion path is live, so a prior reply that gains chrome while the turn
       // is still being prepared must already be in the baseline.
       const previousResponse = await this.newestResponseText();
+      const previousAnswerText = await this.newestAnswerText();
       await this.page.keyboard.press('Enter');
+      timer?.markSent();
 
       // Waits for the first container to mount in a fresh chat; in a resumed chat the prior
       // turn's container already satisfies it. Newness is proven by the streaming lifecycle
@@ -93,7 +117,7 @@ export class ChatPage extends BasePage {
       await expect(this.aiResponseRoot.last()).toBeVisible({ timeout });
 
       // Wait for streaming to complete by watching for "Stop Generation" button to disappear
-      await this.waitForStreamingComplete(timeout, previousResponse);
+      await this.waitForStreamingComplete(timeout, previousResponse, { timer, previousAnswerText });
 
       const responseText = await this.newestResponseText();
 
@@ -115,8 +139,15 @@ export class ChatPage extends BasePage {
    * `previousResponse` is the newest reply's text captured before sending. It proves a new reply
    * exists when the stop button flashed by between polls (a short reply can finish in one chunk);
    * chats are resumed across tests, so a prior turn's reply is normally already mounted.
+   *
+   * `firstText.timer` is marked on the first poll that sees new answer text, so time to first token
+   * is resolved to the 250ms poll interval (plus the reads inside one poll).
    */
-  private async waitForStreamingComplete(timeout: number = TIMEOUTS.AI_RESPONSE, previousResponse = '') {
+  private async waitForStreamingComplete(
+    timeout: number = TIMEOUTS.AI_RESPONSE,
+    previousResponse = '',
+    firstText?: { timer?: TurnTimer; previousAnswerText: string }
+  ) {
     const stopButton = this.page.getByTestId('stop-generation-btn');
     let sawStopButton = false;
     let snapshot: StreamSnapshot = { stopVisible: false, text: '' };
@@ -130,6 +161,13 @@ export class ChatPage extends BasePage {
               text: await this.newestResponseText(),
             };
             sawStopButton ||= snapshot.stopVisible;
+            // Skip the extra read once it has fired: on a long reply it is a full innerText per poll,
+            // which would delay seeing the stop button hide and inflate the timed stream.
+            if (firstText?.timer && firstText.timer.firstTokenMs() === undefined) {
+              if (hasFirstAnswerText(await this.newestAnswerText(), firstText.previousAnswerText)) {
+                firstText.timer.markFirstText();
+              }
+            }
             return isStreamComplete(snapshot, previousResponse, sawStopButton);
           },
           { timeout, intervals: [250] }
@@ -185,15 +223,15 @@ export class ChatPage extends BasePage {
 
   /**
    * Send a message, wait for the AI response, and return timing + credits.
-   * Timer starts just before the message is sent.
+   * Timer starts when the message is sent (Enter), not before typing.
    */
   async sendMessageAndMeasure(
     text: string,
     timeout: number = TIMEOUTS.AI_RESPONSE
   ): Promise<{ responseText: string; durationSecs: number; credits: number | null }> {
-    const startMs = Date.now();
-    const responseText = await this.sendMessageAndWaitForResponse(text, timeout);
-    const durationSecs = (Date.now() - startMs) / 1000;
+    const timer = new TurnTimer();
+    const responseText = await this.sendMessageAndWaitForResponse(text, timeout, timer);
+    const durationSecs = timer.elapsedSinceSendMs() / 1000;
     const credits = await this.getCreditsUsed();
     return { responseText, durationSecs, credits };
   }
@@ -209,7 +247,11 @@ export class ChatPage extends BasePage {
    * streaming timeout would always time out. The new-response assertion is therefore
    * deferred to {@link waitForImageResponse}, which holds the full IMAGE_GENERATION budget.
    */
-  async sendImageMessageAndWaitForResponse(text: string, timeout: number = TIMEOUTS.IMAGE_GENERATION) {
+  async sendImageMessageAndWaitForResponse(
+    text: string,
+    timeout: number = TIMEOUTS.IMAGE_GENERATION,
+    timer?: TurnTimer
+  ) {
     // Baseline the newest reply before sending: when the stop button flashes by unseen,
     // waitForStreamingComplete accepts any reply that differs from this, so without it
     // a prior chat's leftover reply (navigateToNewChat does not await DOM clearing) could be
@@ -217,8 +259,10 @@ export class ChatPage extends BasePage {
     // during preparation is part of the baseline, not read as this turn's reply.
     await this.typeAndWaitForSendReady(text);
     const previousResponse = await this.newestResponseText();
+    const previousAnswerText = await this.newestAnswerText();
     await this.page.keyboard.press('Enter');
-    await this.waitForStreamingComplete(timeout, previousResponse);
+    timer?.markSent();
+    await this.waitForStreamingComplete(timeout, previousResponse, { timer, previousAnswerText });
   }
 
   /**
@@ -261,6 +305,27 @@ export class ChatPage extends BasePage {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Whether the newest reply carries an artifact the model built instead of a chat answer: a
+   * mounted html or react renderer, or either pending placeholder. Deliberately not "any
+   * artifact-renderer-*": code fences are promoted into artifact cards after the stream (server
+   * and client convertCodeBlocksToArtifacts), so an ordinary chat answer with a python, mermaid
+   * or recharts snippet renders those cards too. Chat answers that still match: an html fence
+   * (document or fragment) or a bare <html> document, a tsx/jsx fence, a js/ts fence that looks
+   * like React, and any promoted card still showing artifact-loading while its ID resolves.
+   * Model artifacts of other types (code, markdown, svg, ...) are missed once they resolve.
+   *
+   * One-shot: same caveat as waitForArtifactSettled - it only sees what the stream has delivered.
+   */
+  async hasArtifact(): Promise<boolean> {
+    const root = this.aiResponseRoot.last();
+    const artifact = root.locator(
+      '[data-testid="artifact-renderer-html"], [data-testid="artifact-renderer-react"], ' +
+        '[data-testid="generating-artifact-indicator"], [data-testid="artifact-loading"]'
+    );
+    return (await artifact.count()) > 0;
   }
 
   /**

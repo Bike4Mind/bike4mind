@@ -13,6 +13,7 @@
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, RETRYABLE_STATUSES } from '@bike4mind/database';
 import { SreSourceType, SreClassification, SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';
@@ -22,7 +23,7 @@ import {
   dispatchIssueToSre,
   parseIssueNumberFromUrl,
   type SreIssuePayload,
-} from '@server/integrations/github/sreWebhookDispatch';
+} from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
@@ -49,6 +50,9 @@ const handler = baseApi().post(
     const logger = new Logger({ metadata: { component: 'sre-retry', userId: req.user.id } });
     const { errorFingerprint: fingerprint, source, status: previousStatus, repoSlug } = doc;
     const effectiveRepoSlug = repoSlug || SRE_DEFAULT_REPO_SLUG;
+
+    let dispatched = true;
+    let reason: string | null = null;
 
     if (source === 'GITHUB_ISSUE') {
       // Check if GitHub issue is closed before retrying
@@ -102,7 +106,9 @@ const handler = baseApi().post(
 
       // Clear dispatch dedup before re-dispatch (repo-scoped)
       await cacheRepository.deleteByKey(`sre-dispatch-${effectiveRepoSlug}:${fingerprint}`);
-      await dispatchIssueToSre(payload, logger);
+      const dispatchResult = await dispatchIssueToSre(payload, logger);
+      dispatched = dispatchResult.dispatched;
+      reason = dispatchResult.reason ?? null;
 
       // Delete terminal docs after successful queue send
       const { deletedCount } = await sreErrorTrackingRepository.deleteTerminalByFingerprint(
@@ -146,6 +152,15 @@ const handler = baseApi().post(
       fingerprint,
       source,
       previousStatus,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.sre.tracking_retried',
+      target: { kind: 'system', id, displayName: `SRE tracking ${fingerprint}` },
+      summary: dispatched
+        ? `retried SRE tracking ${fingerprint}`
+        : `retry of SRE tracking ${fingerprint} blocked (${reason ?? 'unknown'})`,
+      details: { previousStatus, source, repoSlug: effectiveRepoSlug, dispatched, reason },
     });
 
     res.status(200).json({ success: true, fingerprint });

@@ -41,6 +41,25 @@ describe('SessionStore', () => {
 
     const loaded = await store.get(created.id);
     expect(loaded?.messages).toEqual([]);
+    expect(loaded?.historyEnabled).toBeUndefined();
+  });
+
+  it('persists per-session local history consent', async () => {
+    const created = await store.create();
+    await store.setHistoryEnabled(created.id, true);
+    expect((await new SessionStore(directory, MODEL).get(created.id))?.historyEnabled).toBe(true);
+  });
+
+  it('keeps a title given at creation over the first prompt, in one write', async () => {
+    const { id } = await store.create(MODEL, { title: 'Tidy imports' });
+    await store.appendMessage(id, {
+      id: 'm1',
+      role: 'user',
+      content: 'seed text',
+      createdAt: new Date().toISOString(),
+    });
+
+    expect((await store.get(id))?.title).toBe('Tidy imports');
   });
 
   it('returns null for a session that does not exist rather than throwing', async () => {

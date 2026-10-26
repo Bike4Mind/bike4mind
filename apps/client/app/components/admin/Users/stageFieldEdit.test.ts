@@ -13,6 +13,18 @@ const savedUser = (overrides: Partial<AdminUserListItem> = {}) =>
   }) as AdminUserListItem;
 
 describe('stageFieldEdit', () => {
+  it('stages clearing a legacy quota even before its override is backfilled', () => {
+    expect(stageFieldEdit({}, 'storageLimitOverride', null, savedUser({ storageLimit: 2500 }))).toEqual({
+      storageLimitOverride: true,
+    });
+  });
+
+  it('keeps a cleared default quota clean', () => {
+    expect(stageFieldEdit({}, 'storageLimitOverride', null, savedUser({ storageLimit: 1000 }))).toEqual({
+      storageLimitOverride: false,
+    });
+  });
+
   it('marks a field that differs from the saved value', () => {
     expect(stageFieldEdit({}, 'name', 'Grace', savedUser())).toEqual({ name: true });
   });

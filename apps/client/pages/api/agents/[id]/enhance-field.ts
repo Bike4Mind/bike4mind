@@ -7,6 +7,7 @@ import { IMessage } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 interface EnhanceFieldRequest {
   fieldName: string;
@@ -129,6 +130,7 @@ const FIELD_DESCRIPTIONS: Record<string, { label: string; description: string; s
 const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{ id: string }, EnhanceFieldResponse, EnhanceFieldRequest>
 >(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { id } = req.query;
   const userId = req.user!.id;
   const { fieldName, currentValue, agentName } = req.body;

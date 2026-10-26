@@ -74,6 +74,17 @@ beforeEach(() => {
 });
 
 describe('POST /api/test/create-user', () => {
+  it('may mint a reserved test-persona username, since test tooling creates its accounts here', async () => {
+    const { res, status } = makeRes();
+    await handler(makeReq({ email: 'qa-ari-1-e2e@test.com', username: 'persona-ari-1' }) as never, res);
+
+    expect(status).toHaveBeenCalledWith(201);
+    expect(h.createUser).toHaveBeenCalledWith(
+      expect.objectContaining({ username: 'persona-ari-1', allowReservedUsername: true }),
+      expect.anything()
+    );
+  });
+
   it('still requires the -e2e@test.com pattern when an email is given', async () => {
     const { res, status } = makeRes();
     await handler(makeReq({ email: 'someone@example.com' }) as never, res);

@@ -21,7 +21,9 @@ vi.mock('@server/security/tokenEncryption', () => ({
   encryptToken: h.encryptToken,
   decryptToken: h.decryptToken,
 }));
-vi.mock('./lakeAppClient', () => ({ revokeInstallerToken: h.revokeInstallerToken }));
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
+  revokeInstallerToken: h.revokeInstallerToken,
+}));
 
 import {
   requireGitHubLakeFlowNonce,
@@ -30,7 +32,7 @@ import {
   consumeGitHubLakeAuthGrant,
   GITHUB_LAKE_AUTH_GRANT_TTL_MS,
 } from './githubLakeAuthGrant';
-import type { GitHubLakeAppConfig } from './lakeAppClient';
+import type { GitHubLakeAppConfig } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 
 const CONFIG: GitHubLakeAppConfig = {
   appId: 'app-1',

@@ -188,6 +188,16 @@ shown in the startup banner (`🌍 API Environment: …`).
 > For a one-off custom/self-hosted URL, use the in-session `/set-api <url>` command
 > (see [API Configuration](#api-configuration) below).
 
+### Typing while the agent works
+
+You can keep typing while a turn is running. Nothing you send is dropped, and a second turn never starts in parallel with the first.
+
+- **Enter** steers the running turn. The message is added to the agent's next model request, which is sent after the current batch of tool calls finishes. If the agent has just answered and has iterations left, it reopens to take the message into account. A message the turn never reaches runs as the next turn.
+- **Tab** queues the message as a follow-up. It runs as a new turn once the current one ends. Everything still queued at that point runs together as a single turn, in the order you sent it.
+- **Esc** cancels the turn and moves any queued messages back into the input, where you can edit and resend them or clear them with Ctrl+C. Any message you send while the cancelled turn is still shutting down runs once the turn has stopped.
+
+Queued messages appear above the input. Follow-ups are labelled `[next turn]`.
+
 ## Commands
 
 While in interactive mode. This mirrors the registry in `src/config/commands.ts` — run `/help` in a session for the live list (which also includes any custom and project commands).
@@ -435,9 +445,11 @@ You can also run any MCP server via npx or custom executables:
 
 #### Serve Bike4Mind itself as an MCP server (`b4m mcp serve`)
 
-The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises nineteen tools (`list_notebooks`, `get_notebook`, `create_notebook`, `rename_notebook`, `clone_notebook`, `delete_notebook`, `list_projects`, `get_project`, `create_project`, `send_message`, `search_knowledge_base`, `list_lakes`, `list_files`, `get_file`, `generate_sound_effect`, `text_to_speech`, `generate_image`, `create_artifact`, `publish_artifact`) plus four resource templates (`b4m://notebook/{id}`, `b4m://file/{id}`, `b4m://project/{id}`, `b4m://artifact/{id}`), each listable and readable as JSON, and `b4m://agent-quest` - the credential-free manifest for The Open Door, the onboarding quest for agents.
+The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises twenty-six tools (`list_notebooks`, `get_notebook`, `create_notebook`, `rename_notebook`, `clone_notebook`, `delete_notebook`, `list_projects`, `get_project`, `create_project`, `send_message`, `search_knowledge_base`, `list_lakes`, `list_files`, `get_file`, `generate_sound_effect`, `text_to_speech`, `generate_image`, `create_artifact`, `publish_artifact`, `bob_read_site`, `bob_compare_sites`, `bob_recheck`, `get_bob_report`, `get_bob_comparison`, `list_bob_reports`, `bob_runs_left`) plus four resource templates (`b4m://notebook/{id}`, `b4m://file/{id}`, `b4m://project/{id}`, `b4m://artifact/{id}`), each listable and readable as JSON, and `b4m://agent-quest` - the credential-free manifest for The Open Door, the onboarding quest for agents.
 
 To get answers grounded in a data lake, call `list_lakes`, then `create_notebook { dataLakeId }` with a lake's id, then `send_message { notebookId }` on that notebook: the result carries the `reply` plus the `citables` it was grounded in. `list_lakes` needs a key with `datalake:read` (and data lakes enabled on the instance).
+
+The seven Bob tools read websites with Bob on an instance that serves it. `bob_read_site` and `bob_compare_sites` spend the key owner's credits and publish each report, as a run started in the app does; they wait up to `waitSeconds` (default 600, at most 900) with progress, then return the report as Markdown with its in-app and published links, or the id to read back with `get_bob_report` / `get_bob_comparison` when Bob is still reading. `bob_recheck` re-scans one finding against the live site; it costs no credits and adds the reading to the existing report. Bob's routes enforce their scopes: starting work needs `bob:run`, which can also read back, and reading needs `bob:read`.
 
 ```bash
 b4m mcp serve                        # stdio (default) - for local clients that spawn the process
@@ -446,7 +458,19 @@ b4m mcp serve --http --port 7000     # stateless streamable HTTP at http://127.0
 
 Over stdio only, when the caller is entitled to OptiHashi and the key carries `optihashi:read` and `optihashi:compute`, the server also offers `optihashi_solvers` and `optihashi_solve` (a free, bounded classical solver race). With an API key, the CLI first checks the key's own scopes and offers them only when it holds both. The solve input schema comes from the server at startup, with a 5 second discovery budget; restart the session to pick up changed family ids, solver ids or limits. `optihashi_solvers` fetches the current roster on every call. With no entitlement, scopes or feature, they are simply not listed. No paid compute is exposed, and HTTP mode never offers them.
 
-Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool _listing_ needs no credentials, apart from the optional stdio-only tools above, which are fetched once at startup; tool _calls_ authenticate. Prefer `B4M_API_KEY` over `--api-key` (a flag value shows up in process listings). HTTP mode binds loopback only (`127.0.0.1`, `/mcp` path) and has no per-request auth, so do not expose it off-host. The advertised scopes are the recommended key configuration, not per-route hard gates. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and details.
+Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool _listing_ needs no credentials, apart from the optional stdio-only tools above, which are fetched once at startup; tool _calls_ authenticate. Prefer `B4M_API_KEY` over `--api-key` (a flag value shows up in process listings). HTTP mode binds loopback only (`127.0.0.1`, `/mcp` path) and requires an `Authorization: Bearer <token>` header on every request. The token is `--token`, else `B4M_MCP_TOKEN`, else a random one generated at startup and printed to stderr (a token you set yourself is printed masked). Prefer `B4M_MCP_TOKEN` over `--token`, which shows up in process listings. The advertised scopes are the recommended key configuration, not per-route hard gates, apart from Bob's, which its routes enforce. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and details. Point an HTTP client at it like this:
+
+```json
+{
+  "mcpServers": {
+    "bike4mind": {
+      "type": "http",
+      "url": "http://127.0.0.1:7000/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
 
 ## Plugins
 
@@ -633,6 +657,32 @@ tail -f ~/.bike4mind/debug/[session-id].txt
 
 - Without `--verbose`: Debug logs only written to file (clean console output)
 - With `--verbose`: Debug logs shown in console AND written to file
+
+### Hearth hook troubleshooting
+
+If the standalone `bin/hearth-hook.mjs` reporter is not reaching Hearth, enable its diagnostic:
+
+```bash
+export B4M_HEARTH_DEBUG=1
+echo '{}' | node packages/cli/bin/hearth-hook.mjs
+```
+
+Set `B4M_API_URL` and `B4M_API_KEY` first. With missing credentials the hook makes no request.
+Diagnostics are off by default; an empty `B4M_HEARTH_DEBUG` or exactly `0` also disables them.
+Other nonempty values enable one stderr line on failure:
+
+- `POST /api/hearth/events failed: HTTP 401`: check whether the API key is valid.
+- `POST /api/hearth/events error: ECONNREFUSED`: check the endpoint and server availability.
+- `POST /api/hearth/events error: TimeoutError`: check connectivity and server responsiveness.
+- `stdin payload error: SyntaxError`: the hook received malformed JSON.
+- `configuration error: ERR_INVALID_URL`: check that `B4M_API_URL` is a valid absolute URL.
+- `configuration error: missing B4M_API_URL or B4M_API_KEY`: set both variables before running the hook.
+
+Each line starts with `hearth-hook:`. Errors expose a native error code or name, never the error
+message, API key, URL, or hook payload. The hook still exits `0` on reporting failures. With debugging
+enabled, the request gets 2.75 seconds and the diagnostic flush gets up to 250 ms within the 3-second
+request/diagnostic budget. A closed or stalled stderr can lose the diagnostic; reporting remains
+best-effort. Unset `B4M_HEARTH_DEBUG` after troubleshooting to keep routine hook events quiet.
 
 ## Development
 
@@ -855,6 +905,19 @@ Mirrors claude's hook contract for the host's `action_required` signal: a
 interactive permission prompt blocks; `PostToolUse` / `Stop` / `UserPromptSubmit`
 commands remove it. Each hook command runs via a real shell with its stdin piped
 then closed (EOF), so a blocking `cat > <file>` hook returns immediately.
+
+### Folder trust on a host launch
+
+A launch with a positional prompt **and** at least one host flag (`--mcp-config`,
+`--append-system-prompt`, `--allowedTools`, `--settings`, `--session-id` or
+`--resume`) does not show the folder-trust prompt or the repo MCP-approval prompt,
+since no hook fires for either and the auto-fired turn would wait behind it. An
+untrusted folder's repo config (`CLAUDE.md`, `AGENTS.md`, `.mcp.json`, `.claude/`,
+`.bike4mind/`) stays inert for that session, exactly as if "Not now" had been
+chosen, and nothing is persisted. A one-line notice says so; run `/trust folder`
+to trust it. Pending repo MCP servers stay off with the usual warning. Context the
+host needs should reach the session through `--append-system-prompt` and
+`--mcp-config`.
 
 ## License
 

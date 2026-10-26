@@ -1,13 +1,17 @@
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
+import { getQuestErrorCode } from '@bike4mind/common';
 import {
+  discardEnrolledMission,
   enrollMissionForAgent,
   findAgentsByName,
   formatMissionStatusReport,
   listMissionsForAgent,
 } from '@server/deepAgent/missions';
+import { canCreateMissions } from '@server/deepAgent/missionAccess';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { runMissionFirstWake } from '@server/deepAgent/firstWake';
+import { assertOwnerCanFundWake } from '@server/deepAgent/wakeMetering';
 
 /**
  * Chat-native missions - injected as externalTools into the agent executor so
@@ -66,18 +70,39 @@ export const missionChatTools: Record<string, ToolDefinition> = {
         if (!params?.agentName || !params?.goal) {
           throw new Error('create_mission: agentName and goal are required');
         }
+        if (!canCreateMissions(context.user)) {
+          return 'Missions are currently available to admins and developers only.';
+        }
         const resolved = await resolveAgentByName(context.userId, params.agentName);
         if ('error' in resolved) return resolved.error;
         const { agent } = resolved;
+        try {
+          await assertOwnerCanFundWake(context.user, logger);
+        } catch (error) {
+          if (getQuestErrorCode(error) === 'insufficient_credits')
+            return 'You are out of credits, so the mission was not started.';
+          throw error;
+        }
         const store = new MongoDeepAgentStore();
         const { missionId } = await enrollMissionForAgent(
-          { b4mAgentId: agent.id, callerUserId: context.userId, goal: params.goal },
+          {
+            b4mAgentId: agent.id,
+            callerUserId: context.userId,
+            callerIsAdmin: Boolean(context.user.isAdmin),
+            goal: params.goal,
+          },
           store
         );
         const outcome = await runMissionFirstWake(missionId, {
           logger,
           timeoutMs: CHAT_FIRST_WAKE_STEP_TIMEOUT_MS,
           userId: context.userId,
+        }).catch(async (error: unknown) => {
+          // The charter exists but the mission never went live (e.g. 422 credits or a refusal).
+          await discardEnrolledMission(missionId).catch((cleanupError: unknown) =>
+            logger.error('create_mission: failed to discard mission after first-wake failure', cleanupError as Error)
+          );
+          throw error;
         });
         return [
           `🚀 Mission launched for **${agent.name}**.`,

@@ -69,7 +69,7 @@ import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
 import { moderateImageOrThrow } from './imageModerationGate';
-import { startQuestHeartbeat } from './questHeartbeat';
+import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 // Aliased: this module also has a private method named validateUserCredits.
 import { validateUserCredits as validateImageUserCredits } from './tools/base/utils';
 import { getQuestErrorCode } from '@bike4mind/common';
@@ -479,17 +479,12 @@ export class ImageEditService {
 
     const quest = await this.db.quests.findById(questId);
     if (!quest) throw new NotFoundError('Quest not found');
+    // A duplicate delivery of an already-settled job must not flip it back to running.
+    if (isSettledQuestStatus(quest.status)) {
+      logger.warn('Image edit skipped: quest already settled', { questId, status: quest.status });
+      return;
+    }
     quest.status = 'running';
-
-    // Fetch user and organization in parallel
-    const [user, organization] = await Promise.all([
-      this.db.users.findById(userId),
-      organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
-    ]);
-    if (!user) throw new NotFoundError('User not found');
-
-    const settings = await getSettingsMap(this.db);
-    const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
     const parseQuestToStreamPayload = (quest: IChatHistoryItemDocument) => {
       return {
@@ -516,6 +511,18 @@ export class ImageEditService {
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-edit-heartbeat');
+
+      // Fetch user and organization in parallel
+      const [user, organization] = await Promise.all([
+        this.db.users.findById(userId),
+        organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
+      ]);
+      if (!user) throw new NotFoundError('User not found');
+
+      // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
+      // and this host may outlive the admin's write to either.
+      const settings = await getSettingsMap(this.db, { skipCache: true });
+      const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
       // Owner-wide lake access for scoping every fabFile lookup on this path - the mask below and
       // the anchors further down. Resolved unconditionally, mirroring ImageGenerationService: the
@@ -618,8 +625,6 @@ export class ImageEditService {
         quest: parseQuestToStreamPayload(quest),
         statusMessage: 'Preparing to paint...',
       });
-
-      const settings = await getSettingsMap(this.db);
 
       if (getSettingsValue('ModerationEnabled', settings)) {
         await clientMessageSender.sendToClient(userId, wsEndpoint, {
@@ -926,6 +931,23 @@ export class ImageEditService {
           .catch(err => logger.warn('Failed to record usage event', err));
       }
 
+      // Parameters only: the source is a URL and the mask files are deleted below, so neither is recorded.
+      const request = {
+        model,
+        prompt,
+        ...(size && { size }),
+        ...(quality && { quality }),
+        ...(aspect_ratio && { aspect_ratio }),
+        ...(seed != null && { seed }),
+        safety_tolerance,
+        prompt_upsampling,
+        ...(output_format && { output_format }),
+        ...(background && { background }),
+      };
+      const derivedFrom = referenceImages.flatMap(reference =>
+        reference.id ? [{ fileId: reference.id, role: 'reference' as const }] : []
+      );
+
       // Last, so a run that fails anywhere above (quest update, billing) leaves no file.
       await saveGeneratedImage(
         this.saveGeneratedAsset,
@@ -939,7 +961,9 @@ export class ImageEditService {
             modelId: model,
             ...(generationId && { jobId: generationId }),
             prompt,
+            request,
           },
+          ...(derivedFrom.length > 0 && { derivedFrom }),
           sessionId,
           questId,
         },

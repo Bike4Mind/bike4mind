@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
+import { firstQueryValue } from '@bike4mind/server-utils/dataLakes/firstQueryValue';
 
 const GrantInput = z.object({
   principalType: z.enum(DATA_LAKE_PRINCIPAL_TYPES),

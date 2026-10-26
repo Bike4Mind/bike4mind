@@ -1,14 +1,16 @@
 import { useAnimatedText } from '@client/app/hooks/useAnimate';
 import { Box, Typography, IconButton, Stack, Dropdown, MenuButton, MenuItem, ListItemDecorator, Menu } from '@mui/joy';
 import React, { useCallback, useEffect, useId, useState } from 'react';
-import { KeyboardArrowUp, KeyboardArrowDown } from '@mui/icons-material';
+import KeyboardArrowUp from '@mui/icons-material/KeyboardArrowUp';
+import KeyboardArrowDown from '@mui/icons-material/KeyboardArrowDown';
 import CopyTextButton from './CopyTextButton';
 import DownloadMenu from '../common/DownloadMenu';
 import MenuIcon from '@mui/icons-material/Menu';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { toast } from 'sonner';
 import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
-import { Save as SaveIcon, ContentCopy as ContentCopyIcon } from '@mui/icons-material';
+import SaveIcon from '@mui/icons-material/Save';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { detectChatContentType } from '@client/app/utils/contentTypes';

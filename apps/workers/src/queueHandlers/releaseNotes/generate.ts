@@ -45,7 +45,8 @@ const TriageSchema = z.object({
   ),
 });
 
-type Validation<T> = { ok: true; value: T } | { ok: false; errors: string[] };
+// fallback: a usable value to keep if the repair call fails or still does not validate.
+type Validation<T> = { ok: true; value: T } | { ok: false; errors: string[]; fallback?: T };
 
 /** Pulls the JSON object out of a reply that may wrap it in a code fence or prose. */
 export function extractJson(text: string): unknown {
@@ -63,12 +64,23 @@ async function completeValidated<T>(
   prompt: string,
   validate: (raw: unknown, attempt: number) => Validation<T>,
   usage: TokenUsage,
-  label: string
+  label: string,
+  logger?: Pick<Logger, 'warn'>
 ): Promise<T> {
   let currentPrompt = prompt;
   let lastErrors: string[] = [];
+  let fallback: T | undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const reply = await complete(currentPrompt);
+    let reply: string;
+    try {
+      reply = await complete(currentPrompt);
+    } catch (error) {
+      if (fallback === undefined) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      logger?.warn(`[releaseNotes] ${label} repair call failed (${reason}); keeping the first draft`);
+      return fallback;
+    }
+    // Only completed calls are counted; one that throws may have reached the provider uncounted.
     usage.inputTokens += Math.ceil(currentPrompt.length / CHARS_PER_TOKEN);
     usage.outputTokens += Math.ceil(reply.length / CHARS_PER_TOKEN);
 
@@ -83,6 +95,7 @@ async function completeValidated<T>(
     }
     if (result.ok) return result.value;
 
+    fallback ??= result.fallback;
     lastErrors = result.errors;
     currentPrompt = [
       prompt,
@@ -92,6 +105,10 @@ async function completeValidated<T>(
       reply.slice(0, REPAIR_ECHO_CHARS),
       'Return only the corrected JSON object.',
     ].join('\n');
+  }
+  if (fallback !== undefined) {
+    logger?.warn(`[releaseNotes] ${label} repair invalid (${lastErrors.join('; ')}); keeping the first draft`);
+    return fallback;
   }
   throw new Error(`[releaseNotes] ${label} output invalid after one repair: ${lastErrors.join('; ')}`);
 }
@@ -224,8 +241,7 @@ export async function writeReleaseNotes(
 
   const titles = new Map(prs.map(pr => [pr.number, pr.title]));
   const input = [...notes].map(([number, note]) => ({ number, title: titles.get(number) ?? '', note }));
-  const strays = new Set<number>();
-  const draft = await completeValidated(
+  const written = await completeValidated(
     complete,
     buildEditorialPrompt(input, editorialFeedback),
     (raw, attempt) => {
@@ -234,21 +250,26 @@ export async function writeReleaseNotes(
       const overLong = parsed.data.items.flatMap((item, i) =>
         item.text.length > MAX_ITEM_CHARS ? [`items.${i}.text: must be at most ${MAX_ITEM_CHARS} characters`] : []
       );
-      // A repair that still runs long is kept whole: a long item beats a cut sentence or a failed release.
-      if (overLong.length && attempt === 0) return { ok: false, errors: overLong };
-      if (overLong.length) logger?.warn(`[releaseNotes] kept ${overLong.length} item(s) over ${MAX_ITEM_CHARS} chars`);
-      // sourcePrs is provenance only (never served publicly), so a stray cited number (e.g. an issue read
-      // in a PR description) is dropped with a warning rather than failing the release.
-      const items = parsed.data.items.map(item => {
-        const sourcePrs = item.sourcePrs.filter(n => notes.has(n));
-        item.sourcePrs.filter(n => !notes.has(n)).forEach(n => strays.add(n));
-        return { ...item, sourcePrs };
-      });
-      return { ok: true, value: { ...parsed.data, items } };
+      // An over-long item is kept whole if the repair fails or still runs long: a long item beats a cut
+      // sentence or a failed release.
+      if (overLong.length && attempt === 0) return { ok: false, errors: overLong, fallback: parsed.data };
+      return { ok: true, value: parsed.data };
     },
     usage,
-    'editorial'
+    'editorial',
+    logger
   );
+  const overLong = written.items.filter(item => item.text.length > MAX_ITEM_CHARS).length;
+  if (overLong) logger?.warn(`[releaseNotes] kept ${overLong} item(s) over ${MAX_ITEM_CHARS} chars`);
+  // sourcePrs is provenance only (never served publicly), so a stray cited number (e.g. an issue read
+  // in a PR description) is dropped with a warning rather than failing the release.
+  const strays = new Set<number>();
+  const items = written.items.map(item => {
+    const sourcePrs = item.sourcePrs.filter(n => notes.has(n));
+    item.sourcePrs.filter(n => !notes.has(n)).forEach(n => strays.add(n));
+    return { ...item, sourcePrs };
+  });
+  const draft = { ...written, items };
   if (strays.size) logger?.warn(`[releaseNotes] dropped sourcePrs not in the release: ${[...strays].join(', ')}`);
   return { draft, usage };
 }

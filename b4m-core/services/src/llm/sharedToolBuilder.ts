@@ -27,6 +27,7 @@ import type {
   SubagentHandoffSignal,
   SubagentToolPermissions,
 } from './agents/ServerSubagentOrchestrator';
+import type { ModelAdmission } from './modelAdmission';
 import { b4mTools, generateTools, type LlmTools } from './tools/index';
 import type { ToolContext } from './tools/base/types';
 import type { ToolDefinition } from './tools/base/types';
@@ -189,6 +190,12 @@ export interface ToolBuilderDeps {
    * `ServerOrchestratorDeps.toolPermissions`. Omitted by ungated callers.
    */
   toolPermissions?: SubagentToolPermissions;
+
+  /**
+   * The user's model admission, forwarded to `delegate_to_agent` and `coordinate_task` so an
+   * in-process subagent's model is admitted; see `ServerOrchestratorDeps.modelAdmission`.
+   */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
 }
 
 /**
@@ -250,6 +257,7 @@ export interface ToolBuilderCallbacks {
   /** Quest (turn) id, for lake-access audit rows to join back to their turn - see
    * ToolContext['questId']'s own doc comment for the agent-mode caveat. */
   questId?: string;
+  slackDestination?: ToolContext['slackDestination'];
 
   /** See ToolContext['numberCitables']; the chat path supplies it for indexed-citation sessions. */
   numberCitables?: ToolContext['numberCitables'];
@@ -422,6 +430,8 @@ export function buildSharedTools(
       authOrigin,
       apiKeyId,
       questId: callbacks.questId,
+      requestConfirmation: callbacks.onPendingAction,
+      slackDestination: callbacks.slackDestination,
       numberCitables: callbacks.numberCitables,
       decide: deps.decide,
       getAbortSignal,
@@ -536,13 +546,15 @@ export function buildSharedTools(
     const isAgentOnly = agentOnlyMcpServers.includes(serverName);
 
     for (const item of serverTools) {
-      // artifactType and endsTurnAfterText are dropped: an MCP server is untrusted output and must
-      // not unlock artifact markup or cut the model's follow-up round short.
+      // artifactType, endsTurnAfterText and validateResult are dropped: an MCP server is untrusted
+      // output and must not unlock artifact markup, cut the model's follow-up round short, or
+      // score its own results past the agent confidence gate.
       const {
         name,
         toolFn: originalToolFn,
         artifactType: _ignored,
         endsTurnAfterText: _ignoredEndsTurn,
+        validateResult: _ignoredValidator,
         ...rest
       } = item;
       // Denied by name, not by server: a session may forbid one tool of a server it otherwise
@@ -643,6 +655,7 @@ export function buildSharedTools(
     checkMemberCreditCap: deps.checkMemberCreditCap,
     checkInsufficientCredits: deps.checkInsufficientCredits,
     toolPermissions: deps.toolPermissions,
+    modelAdmission: deps.modelAdmission,
   });
   tools.push(delegateTool);
 
@@ -674,6 +687,7 @@ export function buildSharedTools(
       checkMemberCreditCap: deps.checkMemberCreditCap,
       checkInsufficientCredits: deps.checkInsufficientCredits,
       toolPermissions: deps.toolPermissions,
+      modelAdmission: deps.modelAdmission,
     });
     tools.push(coordinateTool);
   }

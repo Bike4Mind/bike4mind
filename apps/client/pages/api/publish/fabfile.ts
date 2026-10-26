@@ -163,6 +163,7 @@ const handler = baseApi().post(async (req, res) => {
   const settled = await settlePublication({
     ownerId: userId,
     isAdmin: req.user.isAdmin,
+    ownerCreatedAt: req.user.createdAt,
     source: { kind: 'fabfile', fabFileId: body.fabFileId },
     tier,
     scopeId,

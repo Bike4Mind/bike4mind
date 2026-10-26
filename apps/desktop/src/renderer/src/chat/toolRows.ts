@@ -306,6 +306,14 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Changed browser tabs ${n} times`,
     active: 'Switching tabs...',
   },
+  screen_capture: {
+    did: 'Captured',
+    didAlone: 'Listed open windows',
+    to: 'capture',
+    toAlone: 'list open windows',
+    many: n => `Captured the screen ${n} times`,
+    active: 'Capturing the screen...',
+  },
   browser_scroll: {
     did: 'Scrolled to',
     didAlone: 'Scrolled the page',
@@ -352,6 +360,7 @@ const ARGUMENT_PRIORITY: Record<string, readonly string[]> = {
   glob_files: ['pattern', 'path'],
   explore: ['question'],
   web_search: ['query'],
+  screen_capture: ['target'],
   // The title if it was given one, never the seed prompt: that is a paragraph, and a row
   // showing its first 56 characters names the task less well than "Started a session" does.
   session_spawn: ['title'],

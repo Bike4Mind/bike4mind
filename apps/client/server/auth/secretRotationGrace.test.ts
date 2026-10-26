@@ -37,7 +37,7 @@ describe('isRotatedSecretWithinGraceWindow', () => {
 
   // Not expected operationally (rotatedAt is always set to "now"), but documents that the
   // recency check alone doesn't reject a future timestamp - it's still "after now - grace".
-  it('accepts a future-dated rotation timestamp', () => {
-    expect(isRotatedSecretWithinGraceWindow(hoursAgo(-1))).toBe(true);
+  it('rejects a future-dated rotation timestamp', () => {
+    expect(isRotatedSecretWithinGraceWindow(hoursAgo(-1))).toBe(false);
   });
 });

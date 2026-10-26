@@ -60,6 +60,24 @@ describe('useStreamingArtifactPersistence', () => {
     ]);
   });
 
+  it('hands persistence each identifier, in document order, without renumbering the ids', async () => {
+    // The parser returns artifacts last-to-first, so the block written second comes back first.
+    const later = { ...codeArtifact, type: 'react', identifier: 'app', title: 'App v2' };
+    const earlier = { ...codeArtifact, type: 'react', identifier: 'app', title: 'App v1' };
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [later, earlier], cleanedContent: '' });
+    const { result } = renderHook(() => useStreamingArtifactPersistence());
+
+    act(() => {
+      result.current.persistArtifactsFromQuest({ id: 'q1', sessionId: 's1', replies: ['r'] });
+    });
+
+    await waitFor(() => expect(persistArtifacts).toHaveBeenCalledTimes(1));
+    expect(persistArtifacts.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ id: 'react-app-1', title: 'App v1', identifier: 'app' }),
+      expect.objectContaining({ id: 'react-app-0', title: 'App v2', identifier: 'app' }),
+    ]);
+  });
+
   it('does not persist the same quest twice (dedup by quest id)', async () => {
     parseArtifactsWithFallback.mockReturnValue({ artifacts: [codeArtifact], cleanedContent: '' });
     const { result } = renderHook(() => useStreamingArtifactPersistence());

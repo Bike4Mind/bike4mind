@@ -50,6 +50,11 @@ vi.mock('@server/analytics/funnel', () => ({
   emitSignupFunnelEvents: (...a: any[]) => mockEmitSignupFunnelEvents(...a),
 }));
 
+const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: (...a: any[]) => mockRecordSignupNetwork(...a),
+}));
+
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
@@ -188,6 +193,7 @@ describe('[strategy]/callback - banned user gate', () => {
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(res._getRedirectUrl()).not.toContain('firstSignupSession');
   });
 });
 
@@ -242,6 +248,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       method: 'github',
     });
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   it("persists a new account's acquisition with the provider as the signup method", async () => {
@@ -249,6 +256,14 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
     expect(mockRecordSignupAcquisition).toHaveBeenCalledWith(
       expect.objectContaining({ user: expect.objectContaining({ id: 'u-new' }), method: 'github' })
+    );
+  });
+
+  it("stamps a new account's signup network with the provider as the method", async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockRecordSignupNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-new', method: 'github' })
     );
   });
 
@@ -260,6 +275,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
     expect(mockEmitSignup).not.toHaveBeenCalled();
     expect(res._getRedirectUrl()).not.toMatch(/isNewUser=1/);
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   it('sends nothing for a returning user', async () => {
@@ -268,6 +284,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
     expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
+    expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
   });
 
   // The REGISTER log and the emit are separate statements; folding the emit into the log's
@@ -281,6 +298,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-new', method: 'github' }));
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   // The account exists once verifyCallback returns, and a retry sees isNewUser false, so a
@@ -372,6 +390,7 @@ describe('[strategy]/callback - second factor gate', () => {
     expect(res._getRedirectUrl()).not.toContain('#token=');
     expect(mockIssueBrowserSession).not.toHaveBeenCalled();
     expect(mockLogSignInSuccess).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).not.toContain('firstSignupSession');
   });
 
   it('keeps the requested redirectTo ahead of the MFA handoff fragment', async () => {
@@ -422,6 +441,7 @@ describe('[strategy]/callback - second factor gate', () => {
     const redirectUrl = res._getRedirectUrl();
     expect(redirectUrl).toContain('#mfaToken=pending-tok&userId=u-new&mfa=setup');
     expect(redirectUrl).toContain('isNewUser=1&signupMethod=github');
+    expect(redirectUrl).toContain('firstSignupSession=1');
     expect(mockIssueBrowserSession).not.toHaveBeenCalled();
     expect(mockLogSignInSuccess).not.toHaveBeenCalled();
   });

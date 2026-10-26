@@ -1,3 +1,7 @@
+import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { resolveNotificationDestination } from '@bike4mind/slack';
+initializeSlackPackage();
+
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { User, Session, Agent, Project } from '@bike4mind/database';
@@ -34,11 +38,6 @@ const SlackSettingsSchema = z.object({
   githubNotifications: z
     .object({
       enabled: z.boolean(),
-      githubUsername: z
-        .string()
-        .max(39)
-        .transform(s => s.toLowerCase())
-        .optional(),
       prOpened: z.boolean().optional(),
       prReviewRequested: z.boolean().optional(),
       prApproved: z.boolean().optional(),
@@ -155,23 +154,30 @@ const handler = baseApi()
           }
         }
 
-        // Check if Slack ID is already in use by another user
         if (slackSettings.slackUserId) {
-          const existingUser = await User.findOne({
-            'slackSettings.slackUserId': slackSettings.slackUserId,
-            _id: { $ne: userId },
-          });
+          const linkedUser = await User.findById(userId).select('slackSettings');
+          // Only the OAuth callback may write a Slack identity, so a submitted id that differs
+          // from the stored one is a manual claim and is refused.
+          if (linkedUser?.slackSettings?.slackUserId !== slackSettings.slackUserId) {
+            return res.status(400).json({ error: 'Use Connect with Slack to verify your Slack identity' });
+          }
+        }
 
-          if (existingUser) {
-            Logger.warn(`Slack ID already in use`, {
-              slackUserId: slackSettings.slackUserId,
-              requestingUserId: userId,
-              existingUserId: existingUser.id,
-            });
-            return res.status(409).json({
-              error:
-                'This Slack Member ID is already linked to another account. Each Slack ID can only be linked to one account.',
-            });
+        // A disabled preference is not delivered anywhere, and re-verifying stale channels would
+        // block the user from turning it off. Only channels that will actually be used are checked.
+        const githubChannels =
+          slackSettings.githubNotifications?.enabled === false
+            ? []
+            : Object.values(slackSettings.githubNotifications?.channels ?? {});
+
+        for (const channelId of githubChannels) {
+          if (channelId) {
+            try {
+              await resolveNotificationDestination(userId!, channelId);
+            } catch (error) {
+              Logger.warn('Slack notification destination verification failed', { userId, channelId, error });
+              return res.status(400).json({ error: 'Choose a channel you belong to in your linked Slack workspace' });
+            }
           }
         }
 
@@ -192,11 +198,40 @@ const handler = baseApi()
           }
         }
 
-        const updatedUser = await User.findByIdAndUpdate(
-          userId,
-          { $set: { slackSettings } },
-          { new: true, runValidators: true }
-        );
+        // Preference keys a PATCH may clear. A key missing from the body is removed, so clearing a
+        // field in the profile UI clears it here too. The OAuth identity fields are excluded: they
+        // are written by the callback and removed only by an explicit unlink below.
+        // githubNotifications is excluded too: its own settings section always sends the whole
+        // object, so only an unlink clears it and a Slack settings save cannot wipe it.
+        const $set: Record<string, unknown> = {};
+        const $unset: Record<string, 1> = {};
+        const providedKeys = new Set<string>();
+        for (const [key, value] of Object.entries(slackSettings)) {
+          if (value === undefined) continue;
+          providedKeys.add(key);
+          if (key !== 'slackUserId') $set[`slackSettings.${key}`] = value;
+        }
+        for (const key of [
+          'defaultNotebookId',
+          'autoCreateNotebook',
+          'notebookNamePrefix',
+          'defaultProjectId',
+          'agentNotebookRouting',
+          'keywordRouting',
+          'customAgentId',
+        ]) {
+          if (!providedKeys.has(key)) $unset[`slackSettings.${key}`] = 1;
+        }
+        if (slackSettings.slackUserId === '') {
+          $unset['slackSettings.githubNotifications'] = 1;
+          $unset['slackSettings.slackUserId'] = 1;
+          $unset['slackSettings.slackTeamId'] = 1;
+          $unset['slackSettings.slackUserToken'] = 1;
+          $unset['slackSettings.slackUserScopes'] = 1;
+        }
+        for (const path of Object.keys($unset)) delete $set[path];
+
+        const updatedUser = await User.findByIdAndUpdate(userId, { $set, $unset }, { new: true, runValidators: true });
 
         if (!updatedUser) {
           return res.status(404).json({ error: 'User not found' });
@@ -216,7 +251,7 @@ const handler = baseApi()
         }
 
         // Handle MongoDB duplicate key error (from unique index)
-        if ((error as any).code === 11000) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 11000) {
           return res.status(409).json({
             error:
               'This Slack Member ID is already linked to another account. Each Slack ID can only be linked to one account.',

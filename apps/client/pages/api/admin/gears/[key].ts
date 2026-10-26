@@ -1,5 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { GearOverride } from '@bike4mind/database';
 
@@ -7,7 +8,15 @@ import { GearOverride } from '@bike4mind/database';
  *  its code-defined defaults. */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(async (req, res) => {
   if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
-  await GearOverride.deleteOne({ key: String(req.query.key) });
+  const key = String(req.query.key);
+  const { deletedCount } = await GearOverride.deleteOne({ key });
+  if (deletedCount > 0) {
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.gear_override.deleted',
+      target: { kind: 'settings', id: key, displayName: `${key} gear override` },
+      summary: `deleted gear override ${key}`,
+    });
+  }
   return res.status(200).json({ ok: true });
 });
 

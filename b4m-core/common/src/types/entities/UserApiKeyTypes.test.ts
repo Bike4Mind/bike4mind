@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from './UserApiKeyTypes';
+import { ApiKeyScope, CONFINED_API_KEY_SCOPES, isBuiltInApiKeyScope, isWellFormedApiKeyScope } from './UserApiKeyTypes';
 
 /**
  * Exhaustiveness guard for CONFINED_API_KEY_SCOPES. The confined list is hand-maintained, so a
@@ -14,6 +14,7 @@ const EXPECTED_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
   ApiKeyScope.QA_INGEST,
   ApiKeyScope.SKILLS_READ,
+  ApiKeyScope.RELEASE_NOTES_WRITE,
 ]);
 
 const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
@@ -41,6 +42,8 @@ const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.DATALAKE_SHARE,
   ApiKeyScope.DATALAKE_QUERY,
   ApiKeyScope.OVERWATCH_READ,
+  ApiKeyScope.BOB_READ,
+  ApiKeyScope.BOB_RUN,
 ]);
 
 describe('CONFINED_API_KEY_SCOPES', () => {
@@ -63,5 +66,41 @@ describe('CONFINED_API_KEY_SCOPES', () => {
 
   it('never confines admin:* (broad by design)', () => {
     expect(CONFINED_API_KEY_SCOPES).not.toContain(ApiKeyScope.ADMIN);
+  });
+});
+
+describe('API-key scope value predicates', () => {
+  it('accepts every built-in scope as well formed and built in', () => {
+    for (const scope of Object.values(ApiKeyScope)) {
+      expect(isWellFormedApiKeyScope(scope), scope).toBe(true);
+      expect(isBuiltInApiKeyScope(scope), scope).toBe(true);
+    }
+  });
+
+  it('accepts a contributed shape as well formed but not built in', () => {
+    expect(isWellFormedApiKeyScope('acme:read')).toBe(true);
+    expect(isWellFormedApiKeyScope('acme-2:bulk-write')).toBe(true);
+    expect(isBuiltInApiKeyScope('acme:read')).toBe(false);
+  });
+
+  it.each([
+    [''],
+    ['acme'],
+    ['acme:'],
+    [':read'],
+    ['Acme:read'],
+    ['acme:Read'],
+    ['acme:read:extra'],
+    ['acme:*'],
+    ['-acme:read'],
+    ['acme :read'],
+    ['acme:read\n'],
+    [`acme:${'r'.repeat(100)}`],
+    [42],
+    [null],
+    [undefined],
+  ])('rejects %j', value => {
+    expect(isWellFormedApiKeyScope(value)).toBe(false);
+    expect(isBuiltInApiKeyScope(value)).toBe(false);
   });
 });

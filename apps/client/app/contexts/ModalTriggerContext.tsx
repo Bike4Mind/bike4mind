@@ -5,6 +5,7 @@ import { useModalsWithReleaseNotes } from '@client/app/hooks/data/modalsWithRele
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
 import { filterModals } from '@client/app/components/modals/modalHelpers';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
+import { useFirstSignupSession } from '@client/app/hooks/useFirstSignupSession';
 import { isAnyModalDialogOpen } from '@client/app/utils/anyDialogOpen';
 
 type ModalType = 'WhatsNewSlider';
@@ -40,6 +41,7 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
 
   // Access modal data and counters for threshold checking
   const currentUser = useUser(s => s.currentUser);
+  const firstSignupSession = useFirstSignupSession(currentUser?.id);
   const modals = useModalsWithReleaseNotes();
   const counters = useGetUserActivityCounters(currentUser?.id);
 
@@ -85,6 +87,8 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
         if (hiddenDuration >= FIVE_MINUTES && timeSinceLastTrigger >= FIVE_MINUTES) {
           // Refetch to pick up modals created while the tab was hidden.
           const checkAndTriggerModals = async () => {
+            if (firstSignupSession) return;
+
             if (process.env.NODE_ENV === 'development') {
               console.log('ModalTriggerContext: Refreshing modal data...');
             }
@@ -172,7 +176,15 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [triggerModalByTag, modals.data, currentUser, counters.isPending, counters.data, refetchModals]);
+  }, [
+    triggerModalByTag,
+    modals.data,
+    currentUser,
+    counters.isPending,
+    counters.data,
+    refetchModals,
+    firstSignupSession,
+  ]);
 
   const contextValue = useMemo(
     () => ({ triggerModalByTag, resetTrigger, tagToTrigger, triggerCounter }),

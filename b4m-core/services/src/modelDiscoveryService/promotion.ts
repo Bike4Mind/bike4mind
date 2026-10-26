@@ -1,16 +1,19 @@
-import { ModelBackend, type ModelRecord } from '@bike4mind/common';
+import { DISCOVERY_VERDICT_PREFIX, ModelBackend, type ModelRecord } from '@bike4mind/common';
 import { DISPATCHABLE_ADAPTER_FAMILIES } from '@bike4mind/llm-adapters';
 import type { DiscoveryAutoEnablePolicy, DiscoveryCredentials, PromotionBlocker } from './types';
 
-/** Set on a record discovery will not promote, so pickers stay closed until it can. */
-export const AWAITING_PRICE_REASON = 'discovered, awaiting price';
+/**
+ * Set on a record discovery will not promote, so pickers stay closed until it can. Every one is
+ * worded off DISCOVERY_VERDICT_PREFIX (shared with the catalog merge via @bike4mind/common) so the
+ * read path can recognise a disable discovery invented without parsing this module.
+ */
+export const AWAITING_PRICE_REASON = `${DISCOVERY_VERDICT_PREFIX}awaiting price`;
 /** An aggregator quoted a price but it is not corroborated: a lone quote, or quotes that disagree. */
-export const UNCORROBORATED_PRICE_REASON = 'discovered, awaiting price (aggregator quote not corroborated)';
+export const UNCORROBORATED_PRICE_REASON = `${DISCOVERY_VERDICT_PREFIX}awaiting price (aggregator quote not corroborated)`;
 /** This build ships a price for the model, but a per-image or per-minute one, which is not a trusted per-token price. */
-export const PRICED_IN_BUILD_REASON =
-  'discovered, priced in this build per image or minute, no trusted per-token price';
-export const AWAITING_APPROVAL_REASON = 'discovered, awaiting admin approval';
-export const NOT_INVOCABLE_REASON = 'discovered, not invocable by this build';
+export const PRICED_IN_BUILD_REASON = `${DISCOVERY_VERDICT_PREFIX}priced in this build per image or minute, no trusted per-token price`;
+export const AWAITING_APPROVAL_REASON = `${DISCOVERY_VERDICT_PREFIX}awaiting admin approval`;
+export const NOT_INVOCABLE_REASON = `${DISCOVERY_VERDICT_PREFIX}not invocable by this build`;
 
 /**
  * Which backends a deployment credential unlocks. Bedrock and AWS are IAM-only,
@@ -46,7 +49,7 @@ export const CREDENTIAL_OF_BACKEND: Readonly<Record<ModelBackend, (creds: Discov
 export type AwaitingPriceKind = 'none' | 'aggregator-quote' | 'build-literal';
 
 export interface PromotionInput {
-  record: Pick<ModelRecord, 'backend' | 'adapterFamily' | 'dispatchProfile' | 'reasoning' | 'freeToRun'>;
+  record: Pick<ModelRecord, 'type' | 'backend' | 'adapterFamily' | 'dispatchProfile' | 'reasoning' | 'freeToRun'>;
   policy: DiscoveryAutoEnablePolicy;
   credentials: DiscoveryCredentials;
   /** A price from a trusted tier: a provider API, two aggregators that agree, or a price row in force or adapter literal. */
@@ -116,8 +119,10 @@ export function evaluatePromotion({
   blockedBy.push(...dispatchProfileGaps(record));
 
   // A model that costs nothing cannot be mispriced, so 'priced' does not strand
-  // the local models a self-host install exists to run.
-  const priceSatisfied = policy === 'all' || hasTrustedPrice || record.freeToRun === true;
+  // the local models a self-host install exists to run. 'all' waives the price
+  // for every type but text: an unpriced text model settles at $0 per token.
+  const priced = hasTrustedPrice || record.freeToRun === true;
+  const priceSatisfied = priced || (policy === 'all' && record.type !== 'text');
   if (policy === 'manual') blockedBy.push('manual-approval-required');
   else if (!priceSatisfied) blockedBy.push('no-trusted-price');
 
@@ -150,5 +155,5 @@ function reasonFor(blockedBy: readonly PromotionBlocker[], awaitingPrice: Awaiti
     if (awaitingPrice === 'build-literal') return PRICED_IN_BUILD_REASON;
     return awaitingPrice === 'aggregator-quote' ? UNCORROBORATED_PRICE_REASON : AWAITING_PRICE_REASON;
   }
-  return `discovered, ${blockedBy.join(', ')}`;
+  return `${DISCOVERY_VERDICT_PREFIX}${blockedBy.join(', ')}`;
 }

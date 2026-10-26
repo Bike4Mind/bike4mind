@@ -1,0 +1,186 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { ModelInfo } from '@bike4mind/common';
+import {
+  hasReportedUsage,
+  meterCompletionBackend,
+  type CompletionMeter,
+  type CompletionUsage,
+} from './completionMeter';
+
+const modelInfo = { id: 'm', backend: 'anthropic' } as ModelInfo;
+
+function setup(
+  completeImpl: (cb: (t: string[], info?: object) => Promise<void>) => Promise<void>,
+  models?: ModelInfo[]
+) {
+  const settle = vi.fn().mockResolvedValue(1);
+  const refund = vi.fn().mockResolvedValue(undefined);
+  const meter = vi.fn<CompletionMeter>().mockResolvedValue({ settle, refund });
+  const llm = {
+    currentModel: 'm',
+    complete: vi.fn(async (_m: string, _msgs: unknown, _o: unknown, cb: never) => completeImpl(cb)),
+    other: function (this: { currentModel: string }) {
+      return this.currentModel;
+    },
+  };
+  return {
+    llm,
+    meter,
+    settle,
+    refund,
+    metered: meterCompletionBackend(llm as never, meter, modelInfo, models) as typeof llm,
+  };
+}
+
+describe('meterCompletionBackend', () => {
+  it('reserves before the provider call and settles the latched usage once', async () => {
+    const { llm, meter, settle, refund, metered } = setup(async cb => {
+      await cb(['a'], { inputTokens: 10 });
+      await cb(['b'], { outputTokens: 5 });
+    });
+    const seen: string[] = [];
+    await metered.complete('m', [], { maxTokens: 100 }, async (t: string[]) => void seen.push(...t));
+    expect(meter).toHaveBeenCalledWith(modelInfo, [], 100, undefined, 1, undefined);
+    expect(meter.mock.invocationCallOrder[0]).toBeLessThan(llm.complete.mock.invocationCallOrder[0]);
+    expect(settle).toHaveBeenCalledExactlyOnceWith({ inputTokens: 10, outputTokens: 5 });
+    expect(refund).not.toHaveBeenCalled();
+    expect(seen).toEqual(['a', 'b']);
+  });
+
+  it('caps the provider at the reserved output budget when the caller names none', async () => {
+    const { llm, meter, metered } = setup(async () => {});
+    await metered.complete('m', [], {}, async () => {});
+    expect(meter).toHaveBeenCalledWith(modelInfo, [], 4096, undefined, 1, undefined);
+    expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 4096 });
+  });
+
+  it('sizes the hold and the cap for a model that reasons inside its output budget', async () => {
+    const adaptive = { id: 'a', backend: 'anthropic', thinkingStyle: 'adaptive', max_tokens: 128_000 } as ModelInfo;
+    const { llm, meter, metered } = setup(async () => {}, [adaptive]);
+    await metered.complete('a', [], {}, async () => {});
+    const reserved = meter.mock.calls[0][2];
+    expect(reserved).toBe(64_000);
+    expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: reserved });
+  });
+
+  it('holds the cap the Gemini adapter sends for a thinking model, not the requested budget', async () => {
+    const thinking = { id: 'g', backend: 'gemini', can_think: true, max_tokens: 65_536 } as ModelInfo;
+    const { llm, meter, metered } = setup(async () => {}, [thinking]);
+    await metered.complete('g', [], { maxTokens: 2000 }, async () => {});
+    expect(meter.mock.calls[0][2]).toBe(18_000);
+    expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 2000 });
+  });
+
+  it('clamps the Gemini thinking hold to a declared model cap', async () => {
+    const thinking = { id: 'g', backend: 'gemini', can_think: true, max_tokens: 10_000 } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [thinking]);
+    await metered.complete('g', [], { maxTokens: 2000 }, async () => {});
+    expect(meter.mock.calls[0][2]).toBe(10_000);
+  });
+
+  it('holds the full thinking headroom when the Gemini model cap is derived', async () => {
+    const thinking = {
+      id: 'g',
+      backend: 'gemini',
+      can_think: true,
+      max_tokens: 8192,
+      maxOutputTokensDerived: true,
+    } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [thinking]);
+    await metered.complete('g', [], { maxTokens: 2000 }, async () => {});
+    expect(meter.mock.calls[0][2]).toBe(18_000);
+  });
+
+  it('defaults an unset Gemini thinking budget to the declared cap and holds that', async () => {
+    const thinking = { id: 'g', backend: 'gemini', can_think: true, max_tokens: 65_536 } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [thinking]);
+    await metered.complete('g', [], {}, async () => {});
+    expect(meter.mock.calls[0][2]).toBe(65_536);
+  });
+
+  it('keys the Gemini thinking hold on the adapter family, not the backend', async () => {
+    const viaFamily = { id: 'a', backend: 'openai', adapterFamily: 'gemini', can_think: true } as ModelInfo;
+    const otherFamily = { id: 'b', backend: 'gemini', adapterFamily: 'openai', can_think: true } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [viaFamily, otherFamily]);
+    await metered.complete('a', [], { maxTokens: 2000 }, async () => {});
+    await metered.complete('b', [], { maxTokens: 2000 }, async () => {});
+    expect(meter.mock.calls.map(call => call[2])).toEqual([18_000, 2000]);
+  });
+
+  it('keeps the requested budget for a Gemini model that honors the cap', async () => {
+    const flash = { id: 'f', backend: 'gemini', can_think: false, max_tokens: 8192 } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [flash]);
+    await metered.complete('f', [], { maxTokens: 2000 }, async () => {});
+    expect(meter.mock.calls[0][2]).toBe(2000);
+  });
+
+  it('holds one turn per tool round-trip the adapter may run, plus the final turn', async () => {
+    const { meter, metered } = setup(async () => {});
+    const tools = [{ toolSchema: { name: 't' } }] as never;
+    await metered.complete('m', [], { maxTokens: 100, tools }, async () => {});
+    await metered.complete('m', [], { maxTokens: 100, tools, _internal: { maxToolCalls: 3 } } as never, async () => {});
+    await metered.complete('m', [], { maxTokens: 100, tools, executeTools: false }, async () => {});
+    expect(meter.mock.calls.map(call => call[4])).toEqual([11, 4, 1]);
+    for (const call of meter.mock.calls) expect(call[5]).toBe(tools);
+  });
+
+  it('never calls the provider when the reservation is refused', async () => {
+    const { llm, meter, metered } = setup(async () => {});
+    meter.mockRejectedValue(Object.assign(new Error('insufficient'), { statusCode: 422 }));
+    await expect(metered.complete('m', [], {}, async () => {})).rejects.toThrow('insufficient');
+    expect(llm.complete).not.toHaveBeenCalled();
+  });
+
+  it('refunds and rethrows when the provider call fails', async () => {
+    const { settle, refund, metered } = setup(async () => {
+      throw new Error('provider down');
+    });
+    await expect(metered.complete('m', [], {}, async () => {})).rejects.toThrow('provider down');
+    expect(refund).toHaveBeenCalledOnce();
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it('settles the reported usage instead of refunding when the stream callback throws', async () => {
+    const { settle, refund, metered } = setup(async cb => {
+      await cb(['a'], { inputTokens: 10, outputTokens: 5 });
+    });
+    const failingCallback = async () => {
+      throw new Error('client gone');
+    };
+    await expect(metered.complete('m', [], {}, failingCallback)).rejects.toThrow('client gone');
+    expect(settle).toHaveBeenCalledExactlyOnceWith({ inputTokens: 10, outputTokens: 5 });
+    expect(refund).not.toHaveBeenCalled();
+  });
+
+  it('prices a call by the bound model set entry for its id', async () => {
+    const other = { id: 'o', backend: 'openai' } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [modelInfo, other]);
+    await metered.complete('o', [], { maxTokens: 10 }, async () => {});
+    expect(meter).toHaveBeenCalledWith(other, [], 10, [modelInfo, other], 1, undefined);
+  });
+
+  it('refuses a model id outside the bound model set without reserving or calling the provider', async () => {
+    const { llm, meter, metered } = setup(async () => {}, [modelInfo]);
+    await expect(metered.complete('unlisted', [], {}, async () => {})).rejects.toThrow('not in the metered model set');
+    expect(meter).not.toHaveBeenCalled();
+    expect(llm.complete).not.toHaveBeenCalled();
+  });
+
+  it('passes other members through to the backend', () => {
+    const { metered } = setup(async () => {});
+    expect(metered.other()).toBe('m');
+    expect(metered.currentModel).toBe('m');
+  });
+});
+
+describe('hasReportedUsage', () => {
+  it.each<[CompletionUsage, boolean]>([
+    [{}, false],
+    [{ inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }, false],
+    [{ cacheReadInputTokens: 1 }, true],
+    [{ cacheCreationInputTokens: 1 }, true],
+    [{ turnUsage: [{ inputTokens: 1, outputTokens: 0 }] }, true],
+  ])('classifies %j as reported=%s', (usage, reported) => {
+    expect(hasReportedUsage(usage)).toBe(reported);
+  });
+});

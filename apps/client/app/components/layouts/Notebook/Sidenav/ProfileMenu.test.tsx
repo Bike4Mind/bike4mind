@@ -23,6 +23,10 @@ vi.mock('@client/app/components/inbox/Badge', () => ({
 }));
 const billing = vi.hoisted(() => ({ openView: vi.fn(), creditsEnabled: false }));
 const analytics = vi.hoisted(() => ({ mutate: vi.fn() }));
+const user = vi.hoisted(() => ({
+  current: { id: 'u1', name: 'Jane' } as { id: string; name: string; photoUrl?: string | null },
+}));
+const config = vi.hoisted(() => ({ cdnUrl: 'https://cdn.example.test' as string | undefined }));
 vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
   useBillingView: () => ({ view: undefined, openView: billing.openView, closeView: vi.fn() }),
 }));
@@ -30,10 +34,13 @@ vi.mock('@client/app/contexts/InboxContext', () => ({
   useInbox: { getState: () => ({ setOpen: vi.fn() }) },
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (select: (s: unknown) => unknown) => select({ currentUser: { id: 'u1', name: 'Jane' }, isAdmin: false }),
+  useUser: (select: (s: unknown) => unknown) => select({ currentUser: user.current, isAdmin: false }),
 }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: analytics.mutate }) }));
-vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => billing.creditsEnabled }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: () => billing.creditsEnabled,
+  useConfig: () => ({ data: config.cdnUrl === undefined ? undefined : { cdnUrl: config.cdnUrl } }),
+}));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetFriendRequests: () => ({ data: [] }),
   useReturnToAdmin: () => vi.fn(),
@@ -43,6 +50,8 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: (select: (s: unknown) => unknown) => select({ impersonating: false }),
 }));
 vi.mock('@client/app/hooks/useAppVersion', () => ({ useAppVersion: () => ({ data: undefined }) }));
+const desktopPromo = vi.hoisted(() => ({ enabled: false }));
+vi.mock('@client/app/hooks/useDesktopPromoEnabled', () => ({ useDesktopPromoEnabled: () => desktopPromo.enabled }));
 const features = vi.hoisted(() => ({ enabled: new Set<string>() }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: (key: string) => features.enabled.has(key) }),
@@ -110,6 +119,67 @@ describe('ProfileMenu AccountCard - semantics', () => {
   it('hides the radio decoration from the accessibility tree', () => {
     renderCard({ bare: false });
     expect(screen.getAllByRole('menuitemradio')).toHaveLength(1);
+  });
+});
+
+describe('ProfileMenu - avatar', () => {
+  afterEach(() => {
+    user.current = { id: 'u1', name: 'Jane' };
+    config.cdnUrl = 'https://cdn.example.test';
+    delete process.env.NEXT_PUBLIC_CDN_URL;
+  });
+
+  // The stored photoUrl is a bare storage key; used as a src it resolved against the route
+  // (`/notebooks/profile-photos/...`) and 404'd on any page below the root.
+  it('loads the photo from the CDN rather than relative to the current route', () => {
+    user.current = { id: 'u1', name: 'Jane', photoUrl: 'profile-photos/u1/abc.png' };
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+    const img = screen.getByTestId('profile-menu-avatar').querySelector('img');
+    expect(img?.getAttribute('src')).toBe('https://cdn.example.test/profile-photos/u1/abc.png');
+  });
+
+  it('shows the initial when there is no photo', () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+    const avatar = screen.getByTestId('profile-menu-avatar');
+    expect(avatar.querySelector('img')).toBeNull();
+    expect(avatar.textContent).toBe('J');
+  });
+
+  it('treats a null photo like no photo', () => {
+    user.current = { id: 'u1', name: 'Jane', photoUrl: null };
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+    const avatar = screen.getByTestId('profile-menu-avatar');
+    expect(avatar.querySelector('img')).toBeNull();
+    expect(avatar.textContent).toBe('J');
+  });
+
+  it('uses the build-time CDN while the runtime config is still loading', () => {
+    process.env.NEXT_PUBLIC_CDN_URL = 'https://build-cdn.example.test';
+    config.cdnUrl = undefined;
+    user.current = { id: 'u1', name: 'Jane', photoUrl: 'profile-photos/u1/abc.png' };
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+    const img = screen.getByTestId('profile-menu-avatar').querySelector('img');
+    expect(img?.getAttribute('src')).toBe('https://build-cdn.example.test/profile-photos/u1/abc.png');
   });
 });
 
@@ -393,6 +463,40 @@ describe('ProfileMenu - focus after navigating', () => {
     fireEvent.click(screen.getByTestId('profile-menu-connections'));
     expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { source: 'profile_menu' } });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProfileMenu - desktop app link', () => {
+  beforeEach(() => {
+    router.pathname = '/new';
+    router.navigate.mockClear();
+  });
+
+  afterEach(() => {
+    desktopPromo.enabled = false;
+  });
+
+  const openMenu = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+  };
+
+  it('opens the desktop download page and closes the menu', () => {
+    desktopPromo.enabled = true;
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-desktop-app'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/desktop' });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+
+  it('is absent when the deployment turned the desktop promo off', () => {
+    openMenu();
+    expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('profile-menu-desktop-app')).not.toBeInTheDocument();
   });
 });
 

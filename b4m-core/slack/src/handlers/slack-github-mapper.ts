@@ -1,3 +1,5 @@
+import type { IUserDocument } from '@bike4mind/common';
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 /**
  * Slack to GitHub Username Mapper
  * Maps Slack User IDs to GitHub usernames for auto-assignment
@@ -22,7 +24,10 @@ export async function mapSlackUserIdToGithubUsername(slackUserId: string): Promi
   try {
     const { User, McpServer } = getSlackDb();
     // Find user by Slack User ID
-    const user = await (User as any).findOne({ 'slackSettings.slackUserId': slackUserId });
+    const user = await (User as { findOne(filter: Record<string, unknown>): Promise<IUserDocument | null> }).findOne({
+      'slackSettings.slackUserId': slackUserId,
+      ...VERIFIED_SLACK_IDENTITY_FILTER,
+    });
 
     if (!user) {
       Logger.info(`[slack-github-mapper] No user found for Slack User ID: ${slackUserId}`);
@@ -232,6 +237,7 @@ export async function findUsersByDisplayName(
           { name: { $regex: `\\b${escapedTerm}\\b`, $options: 'i' } }, // Word boundary match
         ],
         'slackSettings.slackUserId': { $exists: true, $ne: null },
+        ...VERIFIED_SLACK_IDENTITY_FILTER,
       })
       .limit(5);
 

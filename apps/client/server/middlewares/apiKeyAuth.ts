@@ -1,14 +1,9 @@
 import { userApiKeyService, userService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { User } from '@bike4mind/database';
-import { ApiKeyScope, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
-import {
-  UnauthorizedError,
-  ForbiddenError,
-  InternalServerError,
-  ServiceUnavailableError,
-} from '@bike4mind/server-utils/utils/errors';
-import { isConnectionLostError } from '@bike4mind/db-core';
+import { ApiKeyScopeValue, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
+import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { logEvent } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import ability from '@server/auth/ability';
@@ -23,6 +18,8 @@ import type { z } from 'zod';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+import { apiKeyGrantsAdmin, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { applyUntrustedRateLimit } from '@server/utils/apiKeyTrust';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -32,17 +29,14 @@ type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'req
  * leaked key should not enumerate. A confined key on a scope-less route gets neither.
  */
 function scopeForbiddenDetail(
-  requiredScopes: ApiKeyScope[] | undefined,
-  alsoRequiredScopes: ApiKeyScope[] | undefined
+  requiredScopes: ApiKeyScopeValue[] | undefined,
+  alsoRequiredScopes: ApiKeyScopeValue[] | undefined
 ): ScopeForbiddenDetail {
   return {
     ...(requiredScopes?.length ? { required_scopes: requiredScopes } : {}),
     ...(alsoRequiredScopes?.length ? { also_required_scopes: alsoRequiredScopes } : {}),
   };
 }
-
-/** Seconds a client should wait before retrying when the database is unreachable. */
-const AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS = 5;
 
 /** Staging is irrelevant to a route that declares no gate; reuse one empty set. */
 const NO_STAGED_SCOPES: ReadonlySet<string> = new Set<string>();
@@ -66,7 +60,7 @@ const hashApiKeyForLogging = (apiKey: string): string => {
  *   requiredScopes resolves. No staging grace period - see decideScopeGate's
  *   doc comment (apiKeyScopeGate.ts).
  */
-export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: ApiKeyScope[]) => {
+export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScopes?: ApiKeyScopeValue[]) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // If already authenticated via JWT, skip API key auth
     if (req.user) {
@@ -169,11 +163,24 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
 
+      // Subscription trust uses the authenticated owner through the request memo.
       req.user = user;
+
+      // Judged before the admin role is withheld: trust is about the account, not the key's
+      // authority, so an admin's key without the admin scope is still an admin-owned key.
+      const rateLimit = await applyUntrustedRateLimit(
+        user,
+        { rateLimit: validation.rateLimit!, billingOwnerType: validation.billingOwnerType },
+        req
+      );
+
+      // Admin authority over an API key comes from the key's scope, not from who minted it.
+      if (!apiKeyGrantsAdmin(validation.scopes)) withholdAdminRole(user);
+
       req.apiKeyInfo = {
         keyId: validation.keyId!,
         scopes: validation.scopes!,
-        rateLimit: validation.rateLimit!,
+        rateLimit,
         expiresAt: validation.expiresAt,
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,
@@ -282,13 +289,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
       // A 401 here would tell a machine client its key is bad and stop it retrying an infra blip.
       // warn: errorHandler logs the resulting 5xx at error, which is the one line that should alarm.
       req.logger?.warn('API key authentication error', error);
-      // Fixed messages: this runs before auth, so driver text (hosts, ports) must not reach the caller.
-      if (isConnectionLostError(error)) {
-        throw new ServiceUnavailableError('Authentication temporarily unavailable', {
-          retryAfter: AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS,
-        });
-      }
-      throw new InternalServerError('Authentication failed');
+      throw toApiKeyAuthError(error);
     }
   };
 };
@@ -303,6 +304,6 @@ export const isApiKeyAuth = (req: Request): boolean => {
 /**
  * Helper function to get API key scopes from request
  */
-export const getApiKeyScopes = (req: Request): ApiKeyScope[] => {
+export const getApiKeyScopes = (req: Request): ApiKeyScopeValue[] => {
   return req.apiKeyInfo?.scopes || [];
 };

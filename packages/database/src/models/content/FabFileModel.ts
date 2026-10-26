@@ -19,6 +19,7 @@ import {
   type LakeSupersession,
   DocumentDateSource,
   FabFileSourceType,
+  GENERATED_ASSET_LINEAGE_ROLES,
   KnowledgeType,
   countTagPathsByTagSet,
   normalizeTagPrefix,
@@ -143,6 +144,16 @@ const unlabeledVectorChunkFilter = (fabFileId: string) => ({
   'vector.0': { $exists: true },
   $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }],
 });
+
+/** Atlas `$vectorSearch` rejects a `numCandidates` above this. */
+const ATLAS_MAX_NUM_CANDIDATES = 10_000;
+
+/** Cosine similarity is undefined for a zero vector, so a probe query needs a real direction. */
+const randomUnitVector = (dimensions: number): number[] => {
+  const raw = Array.from({ length: dimensions }, () => Math.random() * 2 - 1);
+  const norm = Math.hypot(...raw) || 1;
+  return raw.map(v => v / norm);
+};
 
 export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument> implements IFabFileChunkRepository {
   constructor(private fabFileChunkModel: IFabFileChunkModel) {
@@ -581,7 +592,7 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     // pool wide enough for a highly selective query; the per-file multiplier is a starting point,
     // not a measured constant - retune against a real lake if recall still looks low in practice.
     // Floored at 100, capped at Atlas's 10_000 max.
-    const numCandidates = Math.min(10_000, Math.max(limit * 10, fileIds.length * 50, 100));
+    const numCandidates = Math.min(ATLAS_MAX_NUM_CANDIDATES, Math.max(limit * 10, fileIds.length * 50, 100));
 
     const pipeline = [
       {
@@ -615,6 +626,35 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
       text: d.text ?? '',
       score: d.score,
     }));
+  }
+
+  /**
+   * One wide `$vectorSearch` over `model`'s whole index partition, so mongot keeps the index's
+   * pages resident between lake turns (see apps/workers/src/cron/dataLakeVectorIndexKeepWarm.ts).
+   * It walks as many candidates as a large-lake forced-retrieval pick does, and each run's random
+   * query vector lands in a different region of the graph. Returns null when `model` has no
+   * registered Atlas index.
+   */
+  async warmVectorIndex(model: string): Promise<{ hits: number } | null> {
+    const target = getAtlasIndexForModel(model);
+    if (!target) return null;
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index: target.name,
+          path: 'vector',
+          queryVector: randomUnitVector(target.numDimensions),
+          numCandidates: ATLAS_MAX_NUM_CANDIDATES,
+          limit: 1,
+          filter: { embeddingModel: model },
+        },
+      },
+      { $project: { _id: 1 } },
+    ];
+    // any: Atlas-only aggregation syntax, same boundary as vectorSearch above.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const docs = await this.fabFileChunkModel.aggregate(pipeline as any);
+    return { hits: docs.length };
   }
 
   async getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null> {
@@ -3965,7 +4005,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // ETag of the object version the moderation verdict covers - see IFabFile.moderationETag.
     moderationETag: { type: String, required: false },
     moderationRevision: { type: Number, required: false },
-    // See IFabFile.clientUpload and apps/client/server/s3/uploadSizeGate.ts.
+    // See IFabFile.clientUpload and packages/server-utils/src/s3/uploadSizeGate.ts.
     clientUpload: { type: Boolean, required: false },
     uploadRejectedAt: { type: Date, required: false },
     // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
@@ -4004,6 +4044,20 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
     sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
     sourceMetadata: { type: Schema.Types.Mixed, required: false },
+    // Generated-asset lineage, see IFabFile.derivedFrom. `default: undefined` so files without it store nothing.
+    derivedFrom: {
+      type: [
+        new Schema(
+          {
+            fileId: { type: String, required: true },
+            jobId: { type: String },
+            role: { type: String, enum: GENERATED_ASSET_LINEAGE_ROLES, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     // The document's own vintage plus where it came from (#3048) - see IFabFile's field docs. Both
     // stay unset unless a source actually offered one; there is deliberately no createdAt fallback.
     documentDate: { type: Date },
@@ -4159,6 +4213,13 @@ FabFileSchema.index({ batchId: 1 });
 // findToolGeneratedBySessionId. Partial so only tool-generated rows carry an entry.
 FabFileSchema.index(
   { 'sourceMetadata.sessionId': 1, deletedAt: 1 },
+  { partialFilterExpression: { sourceType: FabFileSourceType.TOOL_GENERATED } }
+);
+
+// Reverse lineage lookup ("what was made from this file"). Partial like the sessionId index above.
+// Pre-built by 20260921235976_ensure-fabfile-derived-from-index.
+FabFileSchema.index(
+  { 'derivedFrom.fileId': 1, deletedAt: 1 },
   { partialFilterExpression: { sourceType: FabFileSourceType.TOOL_GENERATED } }
 );
 

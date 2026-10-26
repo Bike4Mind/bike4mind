@@ -81,6 +81,39 @@ describe('SeatbeltRuntime', () => {
       expect(profile).toContain(`(allow file-read* (subpath "${home}/.npmrc"))`);
     });
 
+    it('denies writes to protected workspace paths after the cwd allow', () => {
+      const profile = runtime.generateProfile({
+        command: 'touch x',
+        cwd: '/Users/test/project',
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: false,
+      });
+
+      const allowIdx = profile.indexOf('(allow file-write* (subpath "/Users/test/project"))');
+      expect(allowIdx).toBeGreaterThan(-1);
+      for (const p of ['.git', '.bike4mind']) {
+        const denyIdx = profile.indexOf(`(deny file-write* (subpath "/Users/test/project/${p}"))`);
+        expect(denyIdx).toBeGreaterThan(allowIdx);
+      }
+    });
+
+    it('applies credential denies after overlapping read allowances', () => {
+      const home = os.homedir();
+      const profile = runtime.generateProfile({
+        command: 'cat ~/.npmrc',
+        cwd: '/Users/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: ['$HOME', '~/.npmrc'],
+          deniedPaths: ['$HOME/.npmrc'],
+        },
+        networkEnabled: false,
+      });
+      const denyIndex = profile.indexOf(`(deny file-read* file-write* (subpath "${home}/.npmrc"))`);
+      expect(denyIndex).toBeGreaterThan(profile.indexOf(`(allow file-read* (subpath "${home}"))`));
+      expect(denyIndex).toBeGreaterThan(profile.indexOf(`(allow file-read* (subpath "${home}/.npmrc"))`));
+    });
+
     it('allows writes to temp directories', () => {
       const profile = runtime.generateProfile({
         command: 'npm install',
@@ -138,7 +171,7 @@ describe('SeatbeltRuntime', () => {
       expect(profile).toContain('(allow network-bind (local unix-socket))');
     });
 
-    it('does not emit the unix-socket re-allows when network is enabled', () => {
+    it('denies all IP network when network is enabled without a proxy port', () => {
       const profile = runtime.generateProfile({
         command: 'curl https://example.com',
         cwd: '/Users/test/project',
@@ -150,22 +183,66 @@ describe('SeatbeltRuntime', () => {
         networkEnabled: true,
       });
 
-      expect(profile).not.toContain('unix-socket');
+      expect(profile).toContain('(deny network*)');
+      expect(profile).toContain('(allow network-outbound (remote unix-socket))');
+      expect(profile).not.toContain('(local ip');
+      expect(profile).not.toContain('(remote ip');
     });
 
-    it('does not deny network when network is enabled', () => {
-      const profile = runtime.generateProfile({
-        command: 'curl https://example.com',
-        cwd: '/Users/test/project',
-        filesystemConfig: {
-          writeOnlyToWorkingDir: true,
-          allowedReadPaths: [],
-          deniedPaths: [],
-        },
-        networkEnabled: true,
+    describe('with a filtering proxy', () => {
+      const proxiedProfile = (proxyPort: number) =>
+        runtime.generateProfile({
+          command: 'curl https://example.com',
+          cwd: '/Users/test/project',
+          filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+          networkEnabled: true,
+          proxyPort,
+        });
+
+      it('denies network and re-allows only loopback IP', () => {
+        const profile = proxiedProfile(43123);
+        const denyIdx = profile.indexOf('(deny network*)');
+        const loopbackRules = [
+          '(allow network-bind (local ip "localhost:*"))',
+          '(allow network-inbound (local ip "localhost:*"))',
+          '(allow network-outbound (remote ip "localhost:*"))',
+        ];
+
+        expect(denyIdx).toBeGreaterThan(profile.indexOf('(allow default)'));
+        for (const rule of loopbackRules) expect(profile.indexOf(rule)).toBeGreaterThan(denyIdx);
+        expect(profile.match(/ ip "/g)).toHaveLength(loopbackRules.length);
       });
 
-      expect(profile).not.toContain('(deny network*)');
+      it('keeps local unix sockets but blocks the DNS resolver socket', () => {
+        const profile = proxiedProfile(43123);
+        const unixAllowIdx = profile.indexOf('(allow network-outbound (remote unix-socket))');
+        const resolverDenyIdx = profile.indexOf(
+          '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))'
+        );
+
+        expect(unixAllowIdx).toBeGreaterThan(profile.indexOf('(deny network*)'));
+        expect(resolverDenyIdx).toBeGreaterThan(unixAllowIdx);
+        expect(profile).toContain('(allow network-inbound (local unix-socket))');
+        expect(profile).toContain('(allow network-bind (local unix-socket))');
+      });
+
+      it.each([0, -1, 65536, 1.5, Number.NaN])('rejects invalid proxy port %s', port => {
+        expect(() => proxiedProfile(port)).toThrow('Invalid sandbox proxy port');
+      });
+
+      it('ignores the proxy port when network is disabled', () => {
+        const profile = runtime.generateProfile({
+          command: 'curl https://example.com',
+          cwd: '/Users/test/project',
+          filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+          networkEnabled: false,
+          proxyPort: 43123,
+        });
+
+        expect(profile).toContain('(deny network*)');
+        expect(profile).not.toContain('remote ip');
+        expect(profile).not.toContain('mDNSResponder');
+      });
     });
 
     it('expands $HOME and $USER in paths', () => {

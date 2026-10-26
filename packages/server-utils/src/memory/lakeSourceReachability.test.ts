@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createReachableSourcesResolver,
+  createLakeMemberSourcesResolver,
   createSurvivingSourcesResolver,
   isFabFileCitable,
   type CitableFileFields,
@@ -131,5 +132,34 @@ describe('createSurvivingSourcesResolver', () => {
     const resolve = createSurvivingSourcesResolver({ fabfiles: { findExistingIdsByIds } as never });
     expect([...(await resolve([]))]).toEqual([]);
     expect(findExistingIdsByIds).not.toHaveBeenCalled();
+  });
+});
+
+describe('source lake membership', () => {
+  it('excludes a removed source even while its document still exists elsewhere', async () => {
+    const findAllByIds = vi.fn(async () => [
+      { id: 'retained', userId: 'owner', tags: [{ name: 'datalake:test' }] },
+      { id: 'removed', userId: 'owner', tags: [{ name: 'datalake:other' }] },
+    ]);
+    const findByDatalakeTag = vi.fn(async () => ({
+      id: 'lake-id',
+      datalakeTag: 'datalake:test',
+      createdByUserId: 'owner',
+      fileTagPrefix: 'test:',
+    }));
+    const resolve = createLakeMemberSourcesResolver({
+      fabfiles: { findAllByIds } as never,
+      dataLakes: { findByDatalakeTag } as never,
+    });
+    expect(await resolve('datalake:test', ['retained', 'removed'])).toEqual(new Set(['retained']));
+    expect(findByDatalakeTag).toHaveBeenCalledWith('datalake:test');
+    expect(findAllByIds).toHaveBeenCalledWith(['retained', 'removed']);
+  });
+  it('propagates a failed membership read instead of exposing unverified facts', async () => {
+    const resolve = createLakeMemberSourcesResolver({
+      fabfiles: { findAllByIds: vi.fn().mockRejectedValue(new Error('database unavailable')) } as never,
+      dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue({ datalakeTag: 'datalake:test' }) } as never,
+    });
+    await expect(resolve('datalake:test', ['source'])).rejects.toThrow('database unavailable');
   });
 });

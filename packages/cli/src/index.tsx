@@ -45,7 +45,7 @@ import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
 import { RemoteSkillSource } from './storage/RemoteSkillSource.js';
 import { ReActAgent } from '@bike4mind/agents';
-import { ToolCatalog, type PermissionPromptKind } from './tools/gateway/index.js';
+import { ToolCatalog, type PermissionPromptKind, type PermissionPromptOptions } from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
 import {
@@ -129,7 +129,7 @@ function renderBanner(startupLog: string[] = []): void {
     const right = startupLog[i] || '';
     const coloredLeft = leftText ? `${leftAnsi}${leftText}\x1b[0m` : '';
     const gap = ' '.repeat(bannerWidth - leftText.length + 2);
-    console.log(coloredLeft + gap + truncate(right, rightColWidth));
+    console.log(coloredLeft + gap + truncate(sanitizeTerminalText(right), rightColWidth));
   }
 }
 
@@ -148,6 +148,7 @@ import { runBangCommand, killRunningBangCommands } from './utils/runBangCommand.
 import { whenTurnIdle } from './session/whenTurnIdle.js';
 import { isAxiosError } from 'axios';
 import { logger } from './utils/Logger';
+import { sanitizeTerminalText } from './utils/sanitizeTerminalText.js';
 import { startPeonNotifier, emitPeonSessionEnd } from './utils/peonNotifier';
 import packageJson from '../package.json';
 import type { ICreditTransactionResponse, ModelInfo } from '@bike4mind/common';
@@ -193,6 +194,12 @@ import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
 import { buildAgent } from './bootstrap/buildAgent.js';
 import { buildToolSearch } from './bootstrap/buildToolSearch.js';
 import { wireAgentEvents } from './bootstrap/wireAgentEvents.js';
+import {
+  decideFolderTrustGate,
+  hostInertNotice,
+  isHostLaunchWithQueuedPrompt,
+  shouldPromptMcpApproval,
+} from './bootstrap/startupTrustGates.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
 import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCommand.js';
@@ -213,6 +220,7 @@ interface PermissionPromptState {
   args: unknown;
   preview?: string;
   canBeTrusted: boolean;
+  sessionScope?: string[] | null;
   kind?: PermissionPromptKind;
   resolve: (response: { action: PermissionResponse }) => void;
 }
@@ -471,20 +479,18 @@ function CliApp() {
         store.clearPaste();
         return;
       }
+      // ESC means "stop everything", not "skip this one and continue with
+      // the next": queued messages go back into the input, where the user can
+      // edit and resend them or clear them with Ctrl+C. Restored before the
+      // abort so no steer can be delivered to the turn being cancelled.
+      store.restoreQueueToInput();
       if (state.abortController) {
         logger.debug('[ABORT] ESC pressed - aborting current operation...');
         state.abortController.abort();
         setState(prev => ({ ...prev, abortController: null }));
-        // Clear thinking state immediately so UI updates
-        useCliStore.getState().setIsThinking(false);
-        // Drop any queued messages - ESC means "stop everything", not
-        // "skip this one and continue with the next".
-        useCliStore.getState().clearMessageQueue();
-      } else {
-        // No active operation, but the user may still want to clear a
-        // pending queue (e.g. they queued messages, the current finished
-        // before they pressed ESC, and now the queue is about to drain).
-        useCliStore.getState().clearMessageQueue();
+        // Clear thinking state immediately so UI updates. The turn may still
+        // be unwinding; runTurn queues anything submitted meanwhile.
+        store.setIsThinking(false);
       }
       return;
     }
@@ -548,14 +554,22 @@ function CliApp() {
       // Folder-trust gate: when an untrusted project ships repo-committed b4m
       // files, prompt ONCE (interactive TTY only) before anything repo-sourced
       // loads. Non-interactive stays untrusted (fail-safe). The ref guard keeps
-      // re-runs of init() (login/env-picker) from re-showing the prompt.
-      if (
-        !folderTrustResolvedRef.current &&
-        !state.configStore.isProjectTrusted() &&
-        state.configStore.projectHasB4mFiles() &&
-        Boolean(process.stdin.isTTY) &&
-        Boolean(process.stdout.isTTY)
-      ) {
+      // re-runs of init() (login/env-picker) from re-showing the prompt. A host
+      // launch with a queued prompt gets the "Not now" outcome without the
+      // prompt, so the queued turn is not left waiting on an unseen question.
+      const isTty = Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
+      const hostLaunch = isHostLaunchWithQueuedPrompt();
+      const folderTrustGate = decideFolderTrustGate({
+        alreadyResolved: folderTrustResolvedRef.current,
+        projectTrusted: state.configStore.isProjectTrusted(),
+        projectHasB4mFiles: state.configStore.projectHasB4mFiles(),
+        isTty,
+        hostLaunch,
+      });
+      if (folderTrustGate === 'inert') {
+        folderTrustResolvedRef.current = true;
+        console.log(`\n${hostInertNotice(state.configStore.getProjectRealPath() ?? process.cwd())}\n`);
+      } else if (folderTrustGate === 'prompt') {
         folderTrustResolvedRef.current = true;
         setState(prev => ({
           ...prev,
@@ -571,10 +585,12 @@ function CliApp() {
       // they stay off and we warn.
       const pendingMcp = state.configStore.getPendingMcpApprovals();
       if (
-        pendingMcp.length > 0 &&
-        !mcpApprovalResolvedRef.current &&
-        Boolean(process.stdin.isTTY) &&
-        Boolean(process.stdout.isTTY)
+        shouldPromptMcpApproval({
+          alreadyResolved: mcpApprovalResolvedRef.current,
+          pendingCount: pendingMcp.length,
+          isTty,
+          hostLaunch,
+        })
       ) {
         mcpApprovalResolvedRef.current = true;
         setState(prev => ({
@@ -785,14 +801,21 @@ function CliApp() {
 
       // Create permission prompt function (queue-based for concurrent agent support)
       let permissionPromptCounter = 0;
-      const promptFn = (toolName: string, args: unknown, preview?: string, kind?: PermissionPromptKind) => {
+      const promptFn = (
+        toolName: string,
+        args: unknown,
+        preview?: string,
+        kind?: PermissionPromptKind,
+        options?: PermissionPromptOptions
+      ) => {
         return new Promise<{ action: PermissionResponse }>(resolve => {
           // Process-hook (host action_required signal): an interactive permission
           // prompt is now blocking - fire Notification/permission_prompt (writes sentinel).
           void getProcessHooks()?.fireNotificationPermissionPrompt(toolName);
           const canBeTrusted = permissionManager.canBeTrusted(toolName);
           const id = `perm-${++permissionPromptCounter}`;
-          const prompt = { id, toolName, args, preview, canBeTrusted, kind, resolve };
+          const sessionScope = options?.sessionScope;
+          const prompt = { id, toolName, args, preview, canBeTrusted, sessionScope, kind, resolve };
           setState(prev => ({
             ...prev,
             permissionManager,
@@ -1917,11 +1940,9 @@ function CliApp() {
       const prefixWidth = 2 + nameWidth + 3; // "  " + name + " - "
       const maxDescLength = Math.max(20, terminalWidth - prefixWidth);
       agents.forEach(agent => {
-        const desc =
-          agent.description.length > maxDescLength
-            ? agent.description.slice(0, maxDescLength - 3) + '...'
-            : agent.description;
-        console.log(`  ${agent.name.padEnd(nameWidth)} - ${desc}`);
+        const description = sanitizeTerminalText(agent.description);
+        const desc = description.length > maxDescLength ? description.slice(0, maxDescLength - 3) + '...' : description;
+        console.log(`  ${sanitizeTerminalText(agent.name).padEnd(nameWidth)} - ${desc}`);
       });
       console.log('');
     }
@@ -2230,12 +2251,12 @@ function CliApp() {
 
         // Log any file reference errors
         if (processed.errors.length > 0) {
-          processed.errors.forEach(error => console.warn(`Warning: ${error}`));
+          processed.errors.forEach(error => console.warn(`Warning: ${sanitizeTerminalText(String(error))}`));
         }
 
         // Show the expanded command in verbose mode
         if (process.env.B4M_VERBOSE === '1') {
-          console.log('📝 Expanded command:\n', substitutedBody);
+          console.log('📝 Expanded command:\n', sanitizeTerminalText(substitutedBody));
         }
 
         // Create a concise display message for the user
@@ -2248,12 +2269,12 @@ function CliApp() {
           // Validate agent exists
           if (!state.agentStore.hasAgent(agentName)) {
             const available = state.agentStore.getAgentNames().join(', ');
-            console.error(`❌ Unknown agent "${agentName}" specified in command.`);
-            console.error(`   Available agents: ${available}`);
+            console.error(`❌ Unknown agent "${sanitizeTerminalText(agentName)}" specified in command.`);
+            console.error(`   Available agents: ${sanitizeTerminalText(available)}`);
             return;
           }
 
-          console.log(`🤖 Delegating to ${agentName} agent...\n`);
+          console.log(`🤖 Delegating to ${sanitizeTerminalText(agentName)} agent...\n`);
 
           // Delegate to the specified agent
           const result = await state.orchestrator.delegateToAgent({
@@ -2265,13 +2286,13 @@ function CliApp() {
           });
 
           // Display the agent result summary
-          console.log('\n' + result.summary + '\n');
+          console.log('\n' + sanitizeTerminalText(result.summary) + '\n');
           return;
         }
 
         // Apply model override if specified
         if (customCommand.model && state.agent) {
-          console.log(`🔄 Using model override: ${customCommand.model}`);
+          console.log(`🔄 Using model override: ${sanitizeTerminalText(customCommand.model)}`);
 
           // Execute the command - send full template to agent but show concise message to user
           await runWithModelOverride(
@@ -2892,10 +2913,10 @@ function CliApp() {
               } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
                 console.log('\n❌ Cannot connect to server. Check your API configuration with /api-info\n');
               } else {
-                console.log(`\n❌ Error fetching usage data: ${error.message}\n`);
+                console.log(`\n\u274C Error fetching usage data: ${sanitizeTerminalText(error.message)}\n`);
               }
             } else if (error instanceof Error) {
-              console.log(`\n❌ Error: ${error.message}\n`);
+              console.log(`\n\u274C Error: ${sanitizeTerminalText(error.message)}\n`);
             } else {
               console.log('\n❌ Unexpected error fetching usage data. Please try again.\n');
             }
@@ -3074,7 +3095,7 @@ function CliApp() {
           console.log('\nMCP Tools (deferred):');
           console.log(`  Schemas:           load on demand via tool_search (${mcpTools.length} tools available)`);
           for (const { serverName, count } of mcpToolCount) {
-            console.log(`    ${serverName}: ${count} tools`);
+            console.log(`    ${sanitizeTerminalText(serverName)}: ${count} tools`);
           }
         }
         if (agentTools.length > 0) {
@@ -3126,13 +3147,15 @@ function CliApp() {
           if (projectConfig) {
             console.log('Team Config (.bike4mind/config.json):');
             if (projectConfig.defaultModel) {
-              console.log(`  Default Model: ${projectConfig.defaultModel}`);
+              console.log(`  Default Model: ${sanitizeTerminalText(projectConfig.defaultModel)}`);
             }
             if (projectConfig.tools?.denied && projectConfig.tools.denied.length > 0) {
-              console.log(`  Denied Tools: ${projectConfig.tools.denied.join(', ')}`);
+              console.log(`  Denied Tools: ${sanitizeTerminalText(projectConfig.tools.denied.join(', '))}`);
             }
             if (projectConfig.mcpServers && projectConfig.mcpServers.length > 0) {
-              console.log(`  MCP Servers: ${projectConfig.mcpServers.map(s => s.name).join(', ')}`);
+              console.log(
+                `  MCP Servers: ${sanitizeTerminalText(projectConfig.mcpServers.map(s => s.name).join(', '))}`
+              );
             }
             console.log('');
           }
@@ -3140,10 +3163,10 @@ function CliApp() {
           if (localConfig) {
             console.log('Local Config (.bike4mind/local.json):');
             if (localConfig.trustedTools && localConfig.trustedTools.length > 0) {
-              console.log(`  Trusted Tools: ${localConfig.trustedTools.join(', ')}`);
+              console.log(`  Trusted Tools: ${sanitizeTerminalText(localConfig.trustedTools.join(', '))}`);
             }
             if (localConfig.mcpServers && localConfig.mcpServers.length > 0) {
-              console.log(`  MCP Servers: ${localConfig.mcpServers.map(s => s.name).join(', ')}`);
+              console.log(`  MCP Servers: ${sanitizeTerminalText(localConfig.mcpServers.map(s => s.name).join(', '))}`);
             }
             console.log('');
           }
@@ -3189,9 +3212,9 @@ function CliApp() {
           if (globalCommands.length > 0) {
             console.log('🏠 Global Commands (~/.bike4mind/commands/):');
             globalCommands.forEach(cmd => {
-              const argHint = cmd.argumentHint ? ` ${cmd.argumentHint}` : '';
-              const prefix = `  /${cmd.name}${argHint}`;
-              const desc = truncateDescription(cmd.description, prefix.length);
+              const argHint = cmd.argumentHint ? ` ${sanitizeTerminalText(cmd.argumentHint)}` : '';
+              const prefix = `  /${sanitizeTerminalText(cmd.name)}${argHint}`;
+              const desc = truncateDescription(sanitizeTerminalText(cmd.description), prefix.length);
               console.log(`${prefix} - ${desc}`);
             });
             console.log('');
@@ -3200,9 +3223,9 @@ function CliApp() {
           if (projectCommands.length > 0) {
             console.log('📁 Project Commands (.bike4mind/commands/):');
             projectCommands.forEach(cmd => {
-              const argHint = cmd.argumentHint ? ` ${cmd.argumentHint}` : '';
-              const prefix = `  /${cmd.name}${argHint}`;
-              const desc = truncateDescription(cmd.description, prefix.length);
+              const argHint = cmd.argumentHint ? ` ${sanitizeTerminalText(cmd.argumentHint)}` : '';
+              const prefix = `  /${sanitizeTerminalText(cmd.name)}${argHint}`;
+              const desc = truncateDescription(sanitizeTerminalText(cmd.description), prefix.length);
               console.log(`${prefix} - ${desc}`);
             });
             console.log('');
@@ -3626,10 +3649,12 @@ function CliApp() {
           const time = new Date(v.timestamp).toLocaleTimeString();
           const typeColor = v.type === 'filesystem' ? '\x1b[33m' : '\x1b[36m';
           const typeLabel = v.type === 'filesystem' ? 'FS ' : 'NET';
-          const target = v.path ?? v.domain ?? '';
-          console.log(`  ${typeColor}${typeLabel}\x1b[0m ${time} \x1b[90m${v.blockedBy}\x1b[0m ${target}`);
+          const target = sanitizeTerminalText(v.path ?? v.domain ?? '');
+          console.log(
+            `  ${typeColor}${typeLabel}\x1b[0m ${time} \x1b[90m${sanitizeTerminalText(v.blockedBy)}\x1b[0m ${target}`
+          );
           if (v.detail) {
-            console.log(`       \x1b[90m${v.detail.slice(0, 120)}\x1b[0m`);
+            console.log(`       \x1b[90m${sanitizeTerminalText(v.detail).slice(0, 120)}\x1b[0m`);
           }
         }
         console.log('');
@@ -3748,7 +3773,9 @@ function CliApp() {
       rewireReservedNames(state, rebuiltRegistry);
 
       for (const skippedPlugin of rebuilt.skipped) {
-        console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);
+        console.error(
+          `\n\x1b[33m\u26A0\uFE0F Plugin ${sanitizeTerminalText(skippedPlugin.name)} skipped: ${sanitizeTerminalText(skippedPlugin.reason)}\x1b[0m`
+        );
       }
 
       // Register new WS handlers. The feature-event socket is only opened at

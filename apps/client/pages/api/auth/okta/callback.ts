@@ -54,6 +54,7 @@ import {
   emitSignupFunnelEvents,
   recordSignupAcquisition,
 } from '@server/analytics/funnel';
+import { recordSignupNetwork } from '@server/auth/networkMeta';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -496,6 +497,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     user.password = null;
 
     if (isNewUser) {
+      await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.Okta });
       const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
       await emitSignupFunnelEvents({
         user: { id: user.id, ...signupFunnel },
@@ -520,6 +522,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // /auth/success applies sanitizeRedirectTo before navigating, so it is
     // passed through as an opaque, URL-encoded query value.
     const successQuery = authSuccessRedirectQuery(redirectTo);
+    const signupFragment = isNewUser ? '&firstSignupSession=1' : '';
 
     // An Okta IdP record is bound to its org's email domain (checked above), so that IdP owns
     // MFA. The unbound SST-secret fallback has no such binding and is challenged like a
@@ -534,7 +537,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         mode: secondFactor.kind === 'challenge' ? 'verify' : 'setup',
         passkeyAvailable: secondFactor.kind === 'challenge' && secondFactor.passkeyAvailable,
       });
-      return res.redirect(`/auth/success${successQuery}${handoff}`);
+      return res.redirect(`/auth/success${successQuery}${handoff}${signupFragment}`);
     }
 
     // Generate our session tokens (distinct from the Okta IdP accessToken/refreshToken above).
@@ -566,7 +569,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // Redirect to the application with tokens in URL fragment (not query string)
     // Using fragments prevents tokens from being logged in server access logs,
     // sent in Referer headers, or stored in browser history as query params
-    const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}`;
+    const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
     return res.redirect(redirectUrl);
   } catch (error) {
     Logger.error('[Okta Callback] Processing error:', error);

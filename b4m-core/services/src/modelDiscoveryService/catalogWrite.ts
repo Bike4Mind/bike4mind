@@ -8,6 +8,7 @@ import {
   ModelBackend,
   ModelRecordWrite,
   groupsTouchedByPatch,
+  isDiscoveryVerdict,
   lifecycleStatusRank,
   type FieldGroup,
   type ICatalogContributor,
@@ -127,6 +128,12 @@ export interface CatalogWriteInput {
   credentials: DiscoveryCredentials;
   policy: DiscoveryAutoEnablePolicy;
   knownPricedModelIds?: ReadonlySet<string>;
+  /**
+   * pricePlan's consensusPricedModelIds over the same contributions. When given it
+   * REPLACES the source-quote half of hasTrustedPrice, so a model promotes only on
+   * a price row that is in force or that this run's price plan will write.
+   */
+  consensusPricedModelIds?: ReadonlySet<string>;
   /** Models the build's adapter tables price in any unit; changes the denial wording only, never a verdict. */
   buildPricedModelIds?: ReadonlySet<string>;
   runStartedAt: Date;
@@ -378,6 +385,28 @@ function sourceDisabledReasonOf(contributed: ReadonlyMap<string, unknown>): stri
 }
 
 /**
+ * The disable reason in force, when it is a provider's answer this run could not re-ask. A Bedrock
+ * availability call that fails arrives as null by contract, so such a run contributes nothing about
+ * availability; replacing the reason with promotion's verdict would erase a fact discovery only
+ * reported, and the read path would then reclaim the group as a placeholder of its own.
+ */
+function providerDisableInForce(
+  contributed: ReadonlyMap<string, unknown>,
+  base: Record<string, unknown>,
+  prior: readonly ICatalogContributor[] | undefined
+): string | undefined {
+  if (contributed.has('autoDisabled') || contributed.has('autoDisabledReason')) return undefined;
+  if (base.autoDisabled !== true) return undefined;
+  const reason = base.autoDisabledReason;
+  const supplier = prior?.find(entry => entry.group === 'availability')?.source;
+  // A legacy writer could restamp a provider disable with discovery's wording while keeping its
+  // supplier. The credit takes precedence; only uncredited rows rely on the wording.
+  if (supplier === DISCOVERY_CONTRIBUTOR) return undefined;
+  if (supplier) return typeof reason === 'string' && reason.length > 0 ? reason : 'disabled by its source';
+  return typeof reason === 'string' && reason.length > 0 && !isDiscoveryVerdict(reason) ? reason : undefined;
+}
+
+/**
  * Does this run's `autoDisabled: false` lift a disable the same source put on the row? Only a disable
  * credited to that source counts: the row in force holds it (discovery outranks seed for
  * `availability`), and the superseded discovery row names the source as the group's contributor. A
@@ -605,17 +634,20 @@ function planOne(
   // uncorroborated docs kind first - so the status is a source's claim rather
   // than a parse artifact.
   if (decides && !LIFECYCLE_SUNSET_STATUSES.has(record.lifecycle?.status ?? '')) {
+    const sourceDisabledReason =
+      sourceDisabledReasonOf(contributed) ??
+      providerDisableInForce(contributed, base, input.priorContributors?.get(candidate.modelId));
     decision = evaluatePromotion({
       record,
       policy: input.policy,
       credentials: input.credentials,
-      hasTrustedPrice: hasTrustedPrice(candidate, input.knownPricedModelIds),
+      hasTrustedPrice: hasTrustedPrice(candidate, input.knownPricedModelIds, input.consensusPricedModelIds),
       awaitingPrice: input.buildPricedModelIds?.has(candidate.modelId)
         ? 'build-literal'
         : candidate.pricesByKind.some(entry => entry.kind === 'aggregator')
           ? 'aggregator-quote'
           : 'none',
-      sourceDisabledReason: sourceDisabledReasonOf(contributed),
+      sourceDisabledReason,
     });
     // autoDisabledReason is omitted rather than set to undefined so a promotion
     // reads as a removed key in the diff instead of a key that is still there.
@@ -643,6 +675,15 @@ function planOne(
         };
     ownedGroups.add('lifecycle');
     ownedGroups.add('availability');
+    // The read path reads the `availability` credit as who disabled the model, so a verdict is
+    // credited to discovery only when this run decided the disable: the row was not disabled
+    // before, or this run cleared the source's own disable first (whose clearance would otherwise
+    // take the credit). A row already disabled that got no availability answer keeps its carried
+    // credit, whatever its wording: a pre-change writer restamped provider disables to verdicts.
+    const decidedThisRun = base.autoDisabled !== true || clearsSourceDisable;
+    if (record.autoDisabled === true && decidedThisRun && isDiscoveryVerdict(record.autoDisabledReason)) {
+      derivedGroups.add('availability');
+    }
   }
 
   if (ownedGroups.size === 0) return { unchanged: true };
@@ -650,7 +691,22 @@ function planOne(
   const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId)).filter(
     group => !(presentationElsewhere && group === 'presentation')
   );
+  const priorContributors = input.priorContributors?.get(candidate.modelId);
+  const contributors = contributorsFor(candidate, contributed, owned, priorContributors, derivedGroups);
   const changedKeys = changedWithinGroups(base, record, owned);
+  // Availability provenance changes what the read path serves: a provider's disable stands,
+  // while discovery's own verdict yields to curation. A clearance followed by the same promotion
+  // refusal can leave every record field unchanged, so persist the changed credit as well.
+  const availabilitySource = (credits: readonly ICatalogContributor[] | undefined) =>
+    credits?.find(entry => entry.group === 'availability')?.source;
+  if (
+    existing &&
+    record.autoDisabled === true &&
+    availabilitySource(contributors) !== availabilitySource(priorContributors)
+  ) {
+    changedKeys.push('contributors');
+    changedKeys.sort();
+  }
   if (existing && changedKeys.length === 0) return { unchanged: true };
 
   const lifecycleStatus = record.lifecycle?.status ?? 'discovered';
@@ -671,13 +727,7 @@ function planOne(
     patch: record,
     ownedGroups: owned,
     effectiveFrom: input.runStartedAt,
-    contributors: contributorsFor(
-      candidate,
-      contributed,
-      owned,
-      input.priorContributors?.get(candidate.modelId),
-      derivedGroups
-    ),
+    contributors,
     note: `discovery:${candidate.sourceNames.join('+')}@${input.runStartedAt.toISOString()}`,
     runId: input.runId,
   };
@@ -906,14 +956,15 @@ function contributorsFor(
   // A group re-claimed but not re-observed keeps the provenance of the row it
   // supersedes; crediting discovery would erase which feed the data came from.
   const carried = new Map((prior ?? []).map(entry => [entry.group, entry.source] as const));
-  return owned.map(group => ({
-    group,
-    source: derived?.has(group)
-      ? DISCOVERY_CONTRIBUTOR
-      : (bySource.get(group) ??
-        carried.get(group) ??
-        (group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR)),
-  }));
+  return owned.flatMap(group => {
+    if (derived?.has(group)) return [{ group, source: DISCOVERY_CONTRIBUTOR }];
+    const source = bySource.get(group) ?? carried.get(group);
+    if (source) return [{ group, source }];
+    // An unknown `availability` supplier is left uncredited: the read path takes a discovery credit
+    // as proof discovery invented the disable, and without one it falls back to the reason's wording.
+    if (group === 'availability') return [];
+    return [{ group, source: group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR }];
+  });
 }
 
 /**
@@ -976,12 +1027,16 @@ export function claimedGroups(
  * agreement band, or a price row in force or an adapter price literal (both
  * arriving as `knownPricedModelIds`). A lone
  * aggregator is a flag, not a price; promotion words that denial separately.
+ * With `consensusPricedModelIds` the source-quote clauses defer to pricePlan's
+ * consensus, which also refuses a provider quote no mirror corroborates.
  */
 export function hasTrustedPrice(
   candidate: Pick<Candidate, 'modelId' | 'pricesByKind'>,
-  knownPricedModelIds?: ReadonlySet<string>
+  knownPricedModelIds?: ReadonlySet<string>,
+  consensusPricedModelIds?: ReadonlySet<string>
 ): boolean {
   if (knownPricedModelIds?.has(candidate.modelId)) return true;
+  if (consensusPricedModelIds) return consensusPricedModelIds.has(candidate.modelId);
   if (candidate.pricesByKind.some(entry => entry.kind === 'provider')) return true;
 
   const aggregated = candidate.pricesByKind.filter(entry => entry.kind === 'aggregator').map(entry => entry.price);

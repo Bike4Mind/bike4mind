@@ -19,8 +19,10 @@ import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(generateImageContract).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const body = req.validated;
 
   req.logger.updateMetadata({
@@ -43,7 +45,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     promptResolution: body.prompt_resolution ?? 'auto',
   });
 
-  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
+  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds, 'generate');
 
   // Loud rejection before any session or billing work: the schemas strip unknown keys, so a
   // billing-org-shaped stray would otherwise vanish and bill the caller's home org.

@@ -6,7 +6,11 @@ is consistent across endpoints rather than per-endpoint improvisation.
 
 **Public** means API-key-callable: it appears in `CONTRACTS`, is registered into the
 OpenAPI spec, and someone outside the SPA can call it. Internal SPA-backend routes under
-`pages/api/*` are out of scope and stay plain handlers.
+`pages/api/*` are out of scope and stay plain handlers, but a new one must declare
+`auth: 'jwtOnly'` (the api-key chain is not installed in that mode). Otherwise it is
+treated as potentially API-key-callable and must be a contract under `/api/v1`. A route
+that is deliberately unauthenticated (`auth: false`) has no jwtOnly form, so it needs a
+last-resort entry in `scripts/contract-gate-api-key-allowlist.txt` with a `# reason`.
 
 Anything marked **[gated]** is asserted structurally by
 `assertContractConventions.ts`, which runs at spec-generation time - a violation fails
@@ -147,6 +151,7 @@ re-deciding per endpoint:
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
 | Model id unknown or not available to the caller | `400` | `unknown_model` |
+| Assistant prefill sent for a model that does not support it | `400` | `assistant_prefill_unsupported` |
 | Tool search server tool, `tool_reference` or tool search block sent for a model that cannot serve it on this route | `400` | `tool_search_unsupported` |
 | Every tool is `defer_loading: true` and no tool search server tool is sent (native tool search models only) | `400` | `all_tools_deferred` |
 | A deferred tool also carries `cache_control` (native tool search models only) | `400` | `deferred_tool_cache_control` |
@@ -325,6 +330,9 @@ for the whole window. Removing an alias is a major-version change.
   old path stays and keeps working.
 - The other roots in the tree (`/api/ai/v1`, `/api/voice/v2`, `/api/overwatch/v1`) are
   frozen, as is unversioned `/api/*`. They keep serving; nothing new is added to them.
+  `scripts/check-contract-gate.sh` enforces this for every handler outside `pages/api/v1`
+  (these roots included): it must declare `auth: 'jwtOnly'` or be listed in
+  `scripts/contract-gate-api-key-allowlist.txt`.
 - `LEGACY_PUBLIC_PATHS` in `assertContractConventions.ts` is the baseline: the seven paths
   already shipped in `apps/client/public/openapi.json` when this rule landed. **The list is
   frozen - entries are only ever removed.** Adding to it is the thing this convention

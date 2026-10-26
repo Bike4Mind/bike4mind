@@ -2,7 +2,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import SelectInput from 'ink-select-input';
 import type { PendingMcpApproval } from '../storage/ConfigStore';
-import { escapeTerminalControlChars } from './PermissionPrompt';
+import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
 
 export type McpApprovalChoice = 'approve' | 'skip';
 

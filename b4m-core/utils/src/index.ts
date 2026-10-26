@@ -84,6 +84,7 @@ export type { ImageEditResponse } from './imageGeneration';
 export * from './voiceGeneration';
 export * from './soundGeneration';
 export * from './musicGeneration';
+export * from './providerRateLimitError';
 export * from './analytics';
 export * from './user';
 export * from './pricing';
@@ -107,7 +108,7 @@ export {
   getRetryAfterMs,
   calculateRetryDelay,
 } from '@bike4mind/common';
-export type { RetryOptions, RetryResult } from '@bike4mind/common';
+export type { RetryEvent, RetryOptions, RetryResult } from '@bike4mind/common';
 export * from './circuitBreaker';
 export * from './rateLimitHeaders';
 export * from './voiceHistory';

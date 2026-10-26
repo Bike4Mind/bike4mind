@@ -51,6 +51,9 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+}));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
   // checkApiKeyRateLimit is stubbed.
@@ -103,7 +106,7 @@ vi.mock('@bike4mind/database', async orig => {
 const mockGetGenerationCallbackQueueUrl = vi.fn(
   () => 'https://sqs.example.com/generationCallbackQueue' as string | undefined
 );
-vi.mock('@server/generationCallback/dispatchQuestCallback', async orig => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   getGenerationCallbackQueueUrl: () => mockGetGenerationCallbackQueueUrl(),
 }));

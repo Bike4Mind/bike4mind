@@ -12,6 +12,7 @@ import {
   type GenerationJobRef,
   type CitableSource,
   usdToCreditsStochastic,
+  type UsagePriceStamp,
 } from '@bike4mind/common';
 import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -48,6 +49,7 @@ import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
 import { usageEventStatusForFinish } from '../earlyStopStamp';
+import type { ModelAdmission } from '../modelAdmission';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
@@ -65,6 +67,8 @@ export function buildToolUsageEvent(params: {
   cacheWriteTokens?: number;
   /** Provider stop reason of the underlying completion, when the tool wraps one (e.g. delegate_to_agent). */
   finishReason?: string;
+  /** Rate provenance for costUsd (buildUsagePriceStamp), from a caller that priced a text model. */
+  priceStamp?: UsagePriceStamp;
   /**
    * Defaults to 'tool'. The audio tool passes the feature its direct endpoint
    * writes (sound_effects, text_to_speech), so a track counts as a track
@@ -89,6 +93,7 @@ export function buildToolUsageEvent(params: {
     units: params.units,
     costUsd: params.costUsd,
     creditsCharged: params.creditsCharged,
+    ...params.priceStamp,
     // Same refund key the chat/CLI completion paths record: see usageEventStatusForFinish.
     status: usageEventStatusForFinish(params.finishReason),
   };
@@ -180,6 +185,8 @@ export interface ToolBuilderConfig {
    * preamble while the tool executes. No-op when omitted.
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
+  /** The turn's model admission, forwarded to the delegation tools (see ToolBuilderDeps.modelAdmission). */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
   /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
   decide?: ToolContext['decide'];
 }
@@ -500,6 +507,15 @@ export interface BuildToolPromptArgs {
 const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image', 'audio_generation']);
 // Reuse one async context store for the process; each tool invocation gets a unique token.
 const gatedToolInvocation = new AsyncLocalStorage<symbol>();
+
+/**
+ * The tool prompt, split by who shares it. `guidance` depends only on which tools are offered and
+ * on admin settings, so it is identical across users and belongs in the shareable cached prefix
+ * (source `toolPrompt`); `context` carries the user's timezone, their MCP integrations, the
+ * session's conversation entities and the agent roster (source `toolContext`), and must sit
+ * behind that prefix - see PER_CALLER_AUTHORED_SOURCES in systemPromptSources.ts.
+ */
+export type ToolPromptMessages = { guidance: IMessage | null; context: IMessage | null };
 
 export class ToolBuilder {
   constructor(private readonly deps: ToolBuilderConfig) {}
@@ -974,6 +990,7 @@ export class ToolBuilder {
         apiKeyTable,
         thinking,
         agentStore,
+        modelAdmission: this.deps.modelAdmission,
       },
       {
         onStatusUpdate: async (changes, status) => {
@@ -1017,7 +1034,7 @@ export class ToolBuilder {
 
           // video_generation and music_generation bill in their job's create step, not here.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
-            this.deps.logger.info(`Tool ${toolName} started with data: ${JSON.stringify(data)}`);
+            this.deps.logger.info(`Tool ${toolName} started`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
             await this.gateImageCredits(
               toolName,
@@ -1036,7 +1053,7 @@ export class ToolBuilder {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolFinish: async (toolName: string, data: any) => {
           if (toolName === 'deep_research') {
-            this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
+            this.deps.logger.info(`Tool ${toolName} finished`);
             quest.deepResearchState = data;
             await saveQuest(quest);
           }
@@ -1062,7 +1079,7 @@ export class ToolBuilder {
           }
           // Settle image billing HERE, like audio: a provider error returns before onFinish.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
-            this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
+            this.deps.logger.info(`Tool ${toolName} finished`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
             this.settleImageCredits(
               toolName,
@@ -1097,7 +1114,10 @@ export class ToolBuilder {
           });
         },
         onPendingAction: async action => {
-          quest.pendingAction = action;
+          // Monotonic so a Confirm button's ts always identifies the action it was rendered for.
+          quest.pendingAction = quest.pendingAction
+            ? { ...action, ts: Math.max(action.ts, quest.pendingAction.ts + 1) }
+            : action;
           await saveQuest(quest);
           this.deps.logger.debug(`[MCP] pendingAction saved to quest ${quest.id}`);
         },
@@ -1108,6 +1128,13 @@ export class ToolBuilder {
         },
         sessionId: quest.sessionId,
         questId: quest.id,
+        slackDestination: quest.slackNotification
+          ? {
+              workspaceId: quest.slackNotification.workspaceId,
+              channelId: quest.slackNotification.channelId,
+              threadTs: quest.slackNotification.threadTs,
+            }
+          : undefined,
         // Synchronous so parallel tool calls cannot claim the same numbers: the stamped citables
         // land on the live quest before the next call reads its length.
         numberCitables:
@@ -1145,6 +1172,7 @@ export class ToolBuilder {
                 cachedInputTokens: meta.cacheReadTokens,
                 cacheWriteTokens: meta.cacheWriteTokens,
                 finishReason: meta.finishReason,
+                priceStamp: meta.priceStamp,
               })
             );
           }
@@ -1181,9 +1209,9 @@ export class ToolBuilder {
   }
 
   /**
-   * Build a single tool-related system prompt combining: tool prompt from DB, blog draft workflow,
-   * MCP integration guidance, conversation context, and agent delegation guidance.
-   * Returns a single IMessage or null if there's nothing to add.
+   * Build the tool-related system prompts: tool prompt from DB, blog draft workflow, MCP integration
+   * guidance, conversation context, and agent delegation guidance, split into the shareable
+   * `guidance` and the per-caller `context` (see ToolPromptMessages). Either is null when empty.
    *
    * NOTE: not pure. Every invocation writes to the session via
    * `extractAndSaveEntitiesFromUserMessage` to persist entities for later reference resolution
@@ -1207,8 +1235,9 @@ export class ToolBuilder {
     processStartTime,
     agentStore,
     extraContextMessages,
-  }: BuildToolPromptArgs): Promise<IMessage | null> {
+  }: BuildToolPromptArgs): Promise<ToolPromptMessages> {
     const sections: string[] = [];
+    const contextSections: string[] = [];
 
     // 1. Tool prompt from DB (custom prompt attached to tool)
     if (toolPromptId) {
@@ -1312,14 +1341,17 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
     // it deliberately omits the time of day, so the model must call the tool for
     // anything clock-level.
     if (hasCurrentDateTime) {
-      const timezoneHint = userTimezone
-        ? ` The user's timezone is \`${userTimezone}\` — pass it as the \`timezone\` parameter.`
-        : '';
       sections.push(
         `# CURRENT TIME\n\n` +
           `For the current time of day, or to timestamp an action at the moment it executes, ` +
-          `call the \`current_datetime\` tool — never guess or invent the time.${timezoneHint}`
+          `call the \`current_datetime\` tool \u2014 never guess or invent the time.`
       );
+      // Per user, so it lives in the context half rather than in the shared guidance above.
+      if (userTimezone) {
+        contextSections.push(
+          `The user's timezone is \`${userTimezone}\` - pass it as the \`timezone\` parameter to \`current_datetime\`.`
+        );
+      }
     }
 
     // 3c. Web-search freshness nudge. Gated on the tool actually being enabled: the ambient
@@ -1365,7 +1397,7 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
         })
         .join('\n');
 
-      sections.push(`## Connected Integrations
+      contextSections.push(`## Connected Integrations
 
 You have access to the following external integrations:
 
@@ -1395,7 +1427,7 @@ ${integrationList}
 
       const contextMessage = await getConversationContextSystemMessage(sessionId, this.deps.db.sessions);
       if (contextMessage) {
-        sections.push(contextMessage.content);
+        contextSections.push(contextMessage.content);
         logger.info('🧠 [ConversationContext] Added context to tool prompt');
       }
     } catch (contextErr) {
@@ -1418,7 +1450,7 @@ ${integrationList}
       const agents = agentStore.getAllAgents();
       const agentList = agents.map(a => `- **${a.name}**: ${a.description}`).join('\n');
 
-      sections.push(`## Agent Delegation
+      contextSections.push(`## Agent Delegation
 
 You have the \`delegate_to_agent\` tool which lets you delegate tasks to specialized autonomous agents. Each agent runs independently with its own reasoning loop and tools.
 
@@ -1436,10 +1468,8 @@ ${agentList}
       });
     }
 
-    if (sections.length === 0) {
-      return null;
-    }
-
-    return { role: 'system', content: sections.join('\n\n') };
+    const toMessage = (parts: string[]): IMessage | null =>
+      parts.length === 0 ? null : { role: 'system', content: parts.join('\n\n') };
+    return { guidance: toMessage(sections), context: toMessage(contextSections) };
   }
 }

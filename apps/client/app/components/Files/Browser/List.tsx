@@ -1,5 +1,5 @@
 import { IFabFileDocument, IFileTag, matchTagDocument, resolveFileTagDocs } from '@bike4mind/common';
-import { SwapVert } from '@mui/icons-material';
+import SwapVert from '@mui/icons-material/SwapVert';
 import { Box, Grid, IconButton, LinearProgress, Typography, Select, Option, Button } from '@mui/joy';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';

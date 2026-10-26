@@ -22,22 +22,27 @@ import List from '@mui/joy/List';
 import ListDivider from '@mui/joy/ListDivider';
 import ListItem from '@mui/joy/ListItem';
 import ListItemButton from '@mui/joy/ListItemButton';
+import ListItemContent from '@mui/joy/ListItemContent';
 import ListItemDecorator from '@mui/joy/ListItemDecorator';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { Theme } from '@mui/joy/styles';
 import {
+  awaitsWorktree,
   normalizeSessionTitle,
   SESSION_TITLE_MAX_LENGTH,
   type ChatSessionMode,
   type ChatSessionStatus,
   type ChatSessionSummary,
 } from '@shared/chat';
+import { useLocalHistory } from './localHistory';
 import type { PrSummary } from '@shared/pullRequest';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
 import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
+import { ImportedBadge } from './ImportedBadge';
+import { useImportedInline } from './importedInline';
 import {
   ArrowLeftIcon,
   ArtifactIcon,
@@ -53,6 +58,7 @@ import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
 import { thinScrollbarSx } from './layout';
 import { SessionBadge } from './SessionBadge';
+import { PREPARING_WORKTREE } from './chipState';
 import {
   clampSidebarWidth,
   readSidebarWidth,
@@ -316,6 +322,8 @@ const SessionRow = memo(function SessionRow({
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
   const [editing, setEditing] = useState(false);
   const needsAction = status === 'needs-action';
+  // Main pushes the project once the worktree exists, which is what ends this.
+  const preparing = status === 'processing' && awaitsWorktree(session.project);
   const { ref: titleRef, clipped } = useTitleClipped(session.title, editing);
 
   const onRenameDone = (next: string | null) => {
@@ -484,6 +492,18 @@ const SessionRow = memo(function SessionRow({
               {session.title}
             </Typography>
           )}
+          {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
+          {preparing && !editing && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 0, fontSize: '0.75rem' }}
+              data-testid="chat-session-preparing"
+            >
+              {PREPARING_WORKTREE}
+            </Typography>
+          )}
         </Stack>
       </ListItemButton>
     </ListItem>
@@ -532,7 +552,8 @@ function ProjectHeader({
 
 /**
  * A user section's header: its name, then a "+" for a new session in it and a menu to start one,
- * rename or delete it, both showing on hover like a row's.
+ * rename or delete it, both showing on hover like a row's. Double-clicking the name renames it, as
+ * it does a session row's title.
  */
 function CustomSectionHeader({
   section,
@@ -562,6 +583,7 @@ function CustomSectionHeader({
         level="body-xs"
         noWrap
         sx={{ flex: 1, minWidth: 0, fontWeight: 'lg' }}
+        onDoubleClick={() => onRename(section)}
         data-testid="sidebar-section-name"
       >
         {section.name}
@@ -770,6 +792,7 @@ export function SessionList({
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
+  const { results: historyResults, error: historyError } = useLocalHistory(query, sessions);
   // Declared above the collapsed rail's early return, so collapsing and re-expanding comes back
   // to the width the user set rather than to the default.
   const [width, setWidth] = useState(readSidebarWidth);
@@ -782,29 +805,40 @@ export function SessionList({
   }, [sessions, query]);
 
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const [importedOpen, setImportedOpen] = useState(false);
+  const [importedInline] = useImportedInline();
 
-  // `section` is set when the right-click landed in a user section, which then offers a new session in it.
+  // `section` is set when the right-click landed in a user section, which then offers a new session in
+  // it and a rename.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; section?: SidebarSection } | null>(null);
   const [draggedSession, setDraggedSession] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [revealId, setRevealId] = useState<string | null>(null);
   const dragFrame = useRef(0);
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
+  const requestRename = (section: SidebarSection) =>
+    setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name });
 
   const searching = query.trim() !== '';
   const sections = useMemo(() => {
-    const grouped = groupSessions(matching, mode, userSections);
+    const grouped = groupSessions(matching, mode, userSections, importedInline);
     // An empty section under a search is only noise; with no query it stays so it can be found.
     return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
-  }, [matching, mode, userSections, searching]);
+  }, [matching, mode, userSections, searching, importedInline]);
   const empty =
     sections.pinned.length === 0 &&
     sections.custom.length === 0 &&
     sections.projects.length === 0 &&
     sections.loose.length === 0 &&
-    sections.archived.length === 0;
+    sections.archived.length === 0 &&
+    sections.imported.length === 0;
 
-  const ordered = useMemo(() => orderedSessions(sections), [sections]);
+  // Also open while it holds the open session, so clearing a search does not hide the selection.
+  const importedShown = importedOpen || searching || sections.imported.some(session => session.id === activeId);
+  const ordered = useMemo(
+    () => (importedShown ? [...orderedSessions(sections), ...sections.imported] : orderedSessions(sections)),
+    [sections, importedShown]
+  );
 
   // Read inside the key handler so the listener is bound once rather than rebuilt on every
   // keystroke in the search box, which re-orders this list. The row actions read it for the
@@ -976,7 +1010,7 @@ export function SessionList({
       <CustomSectionHeader
         section={group.section}
         onCreateSession={section => onCreateInSection(section.id)}
-        onRename={section => setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name })}
+        onRename={requestRename}
         onDelete={section => sectionActions.remove(section.id)}
       />
       {group.sessions.length > 0 ? (
@@ -1115,6 +1149,33 @@ export function SessionList({
             startDecorator={<SearchIcon />}
             slotProps={{ input: { 'data-testid': 'chat-search-input' } }}
           />
+          {historyError && (
+            <Alert size="sm" color="danger" data-testid="local-history-error">
+              {historyError}
+            </Alert>
+          )}
+          {historyResults.length > 0 && (
+            <List
+              size="sm"
+              sx={{ maxHeight: '30vh', overflowY: 'auto', ...thinScrollbarSx }}
+              data-testid="local-history-results"
+            >
+              {historyResults.map(result => (
+                <ListItem key={result.id}>
+                  <ListItemButton onClick={() => onSelect(result.sessionId)} data-testid="local-history-result">
+                    <ListItemContent>
+                      <Typography level="body-xs">
+                        {result.kind === 'page' ? 'Page' : 'Conversation'}: {result.title}
+                      </Typography>
+                      <Typography level="body-xs" textColor="text.tertiary" noWrap>
+                        {result.snippet.replace(/<\/?mark>/g, '')}
+                      </Typography>
+                    </ListItemContent>
+                  </ListItemButton>
+                </ListItem>
+              ))}
+            </List>
+          )}
         </Box>
         {renameError && (
           <Alert
@@ -1223,6 +1284,30 @@ export function SessionList({
               </Box>
             )}
 
+            {/* Shut by default so a first sync of hundreds of transcripts does not bury the
+                user's own work; a search opens it, since a match hidden behind it is no match. */}
+            {sections.imported.length > 0 && (
+              <Box data-testid="sidebar-imported">
+                <Button
+                  fullWidth
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  onClick={() => setImportedOpen(open => !open)}
+                  endDecorator={<ChevronIcon open={importedShown} />}
+                  sx={{ justifyContent: 'flex-start', mt: 1, fontWeight: 'md' }}
+                  data-testid="sidebar-imported-toggle-btn"
+                >
+                  <Box sx={{ flex: 1, textAlign: 'left' }}>Imported from Claude ({sections.imported.length})</Box>
+                </Button>
+                {importedShown && (
+                  <List size="sm" sx={SESSION_LIST_SX}>
+                    {sections.imported.map(row)}
+                  </List>
+                )}
+              </Box>
+            )}
+
             {/* Shut by default, and counted on the header: an archived conversation is still
                 there to get back, which is the whole difference from deleting one. */}
             {sections.archived.length > 0 && (
@@ -1276,6 +1361,14 @@ export function SessionList({
               data-testid="sidebar-context-new-in-section-btn"
             >
               New session in {contextMenu.section.name}
+            </MenuItem>
+          )}
+          {contextMenu?.section && (
+            <MenuItem
+              onClick={() => contextMenu.section && requestRename(contextMenu.section)}
+              data-testid="sidebar-context-rename-section-btn"
+            >
+              Rename section
             </MenuItem>
           )}
           <MenuItem onClick={onCreate} data-testid="sidebar-context-new-session-btn">

@@ -1,4 +1,5 @@
 import NetworkStatus from '@client/app/components/NetworkStatus';
+import DesktopAppPromoButton from '@client/app/components/DesktopAppPromo/DesktopAppPromoButton';
 import { useIsPWA } from '@client/app/hooks/useIsPWA';
 import { isLocalhost } from '@client/app/utils/isLocalhost';
 import { Box } from '@mui/joy';
@@ -24,6 +25,8 @@ const SidenavFooter = () => {
           <NetworkStatus />
         </Box>
       )}
+
+      <DesktopAppPromoButton />
 
       {/* Account + account menu */}
       <ProfileMenu />

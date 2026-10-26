@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -38,7 +39,7 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 
@@ -77,6 +78,13 @@ import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@server/security/tokenEncryption';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
+import {
+  buildSlackVideoToolConfig,
+  type PendingSlackNotification,
+} from '@server/videoGenerations/slackVideoToolConfig';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 
 // Cache static ChatCompletion options that don't change between invocations
 type ChatCompletionOptions = ConstructorParameters<typeof ChatCompletionProcess>[0];
@@ -283,6 +291,16 @@ async function resolveSlackClient(workspaceId: string, questId: string, logger: 
   return new SlackClient(decryptedToken, logger);
 }
 
+export const getSlackVideoToolConfigResolver = (questId: string, userId: string) => () =>
+  buildSlackVideoToolConfig(questId, userId, {
+    findSlackNotification: async id => {
+      const quest = await Quest.findById(id);
+      return (quest?.slackNotification as PendingSlackNotification | undefined) ?? null;
+    },
+    buildConfig: id =>
+      buildVideoToolConfig(id, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() }),
+  });
+
 const SLACK_PROCESSING_FAILURE_TEXT = 'Sorry, something went wrong while processing your request. Please try again.';
 
 /**
@@ -416,6 +434,8 @@ export const handler = withEventContext(async (event, logger) => {
     tokenizer: getSharedTokenizer(logger),
     sessionId: params.sessionId,
     user,
+    createCompletionMeter: ({ organizationId, featureLabel }) =>
+      createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
   });
   console.log(`⏱️ [TIMING] ChatCompletionProcess instantiation: ${Date.now() - optionsStartTime}ms`);
 
@@ -446,6 +466,7 @@ export const handler = withEventContext(async (event, logger) => {
       body: requestBody,
       logger,
       externalTools,
+      videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
     });
   } catch (processError) {
     logger.error('[SLACK-NOTIFY] Chat processing failed before a reply was delivered', {

@@ -71,8 +71,8 @@ describe('InsufficientCreditsNotice', () => {
       </TestWrapper>
     );
 
-    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Add Credits');
-    expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent(/^Subscribe$/);
+    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Top up');
+    expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent(/^Get Pro$/);
   });
 
   it('opens the purchase modal when the CTA is clicked', () => {

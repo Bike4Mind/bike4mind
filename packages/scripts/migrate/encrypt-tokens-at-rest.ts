@@ -24,42 +24,13 @@
  *   pnpm --filter scripts migrate:encrypt-tokens -- --reencrypt
  */
 
+import { pathToFileURL } from 'node:url';
 import { connectDB } from '@bike4mind/database';
 import { Resource } from 'sst';
 import mongoose from 'mongoose';
-import crypto from 'crypto';
+import { encryptSecret, decryptSecret, isEncrypted, mcpEnvSecretContext } from '@bike4mind/utils/security';
 
-// Inline encryption utilities (can't import from @server).
-// IMPORTANT: Must stay in sync with apps/client/server/utils/secretEncryption.ts
-
-const ALGORITHM = 'aes-256-gcm' as const;
-const IV_LENGTH = 16;
 const KEY_LENGTH = 32;
-
-function encryptSecret(plaintext: string, key: string): string {
-  const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(key, 'hex'), iv);
-  let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  const authTag = cipher.getAuthTag();
-  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
-}
-
-function decryptSecret(encrypted: string, key: string): string {
-  const parts = encrypted.split(':');
-  if (parts.length !== 3) throw new Error('Invalid encrypted format');
-  const [ivHex, authTagHex, encryptedData] = parts;
-  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(key, 'hex'), Buffer.from(ivHex, 'hex'));
-  decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
-  let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
-}
-
-function isEncrypted(value: string): boolean {
-  if (!value) return false;
-  return /^[a-f0-9]{32}:[a-f0-9]{32}:[a-f0-9]+$/i.test(value);
-}
 
 // Main
 
@@ -141,12 +112,17 @@ async function run() {
  * For --reencrypt mode: decrypts with previous key, re-encrypts with new key.
  * Returns 'error' if the value could not be decrypted with either key.
  */
-function reencryptValue(value: string, newKey: string, oldKey: string): string | null | 'error' {
+export function reencryptValue(
+  value: string,
+  newKey: string,
+  oldKey: string,
+  context?: string
+): string | null | 'error' {
   if (!isEncrypted(value)) return null; // plaintext, not our concern in reencrypt mode
 
   // Already encrypted with the new key; nothing to do
   try {
-    decryptSecret(value, newKey);
+    decryptSecret(value, newKey, context);
     return null;
   } catch {
     /* not the new key */
@@ -154,19 +130,24 @@ function reencryptValue(value: string, newKey: string, oldKey: string): string |
 
   // Decrypt with old key and re-encrypt with new key
   try {
-    const plaintext = decryptSecret(value, oldKey);
-    return encryptSecret(plaintext, newKey);
+    const plaintext = decryptSecret(value, oldKey, context);
+    return encryptSecret(plaintext, newKey, context);
   } catch (err) {
     console.error(`    ERROR: value could not be decrypted with either key:`, err instanceof Error ? err.message : err);
     return 'error';
   }
 }
 
-function encryptIfNeeded(value: string | undefined | null, newKey: string, oldKey?: string): string | null | 'error' {
+export function encryptIfNeeded(
+  value: string | undefined | null,
+  newKey: string,
+  oldKey?: string,
+  context?: string
+): string | null | 'error' {
   if (!value) return null;
-  if (REENCRYPT && oldKey) return reencryptValue(value, newKey, oldKey);
+  if (REENCRYPT && oldKey) return reencryptValue(value, newKey, oldKey, context);
   if (isEncrypted(value)) return null; // already encrypted
-  return encryptSecret(value, newKey);
+  return encryptSecret(value, newKey, context);
 }
 
 async function migrateUsers(db: mongoose.mongo.Db, key: string, oldKey?: string): Promise<MigrationStats> {
@@ -250,7 +231,12 @@ async function migrateMcpServers(db: mongoose.mongo.Db, key: string, oldKey?: st
       let anyChanged = false;
       let envError = false;
       const newEnvVars = doc.envVariables.map((ev: { key: string; value: string }) => {
-        const encrypted = encryptIfNeeded(ev.value, key, oldKey);
+        const encrypted = encryptIfNeeded(
+          ev.value,
+          key,
+          oldKey,
+          mcpEnvSecretContext(doc.userId, String(doc._id), ev.key)
+        );
         if (encrypted === 'error') {
           console.error(`  ERROR McpServer ${doc._id}: failed to decrypt envVariable "${ev.key}"`);
           envError = true;
@@ -387,7 +373,9 @@ async function migrateSlackDevWorkspaces(db: mongoose.mongo.Db, key: string, old
   return stats;
 }
 
-run().catch(err => {
-  console.error('Migration failed:', err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run().catch(err => {
+    console.error('Migration failed:', err);
+    process.exit(1);
+  });
+}

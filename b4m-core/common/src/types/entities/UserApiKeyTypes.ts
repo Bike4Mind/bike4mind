@@ -137,11 +137,65 @@ export enum ApiKeyScope {
    * so it must reach nothing else. Minted from the Skill Market's "Use in Claude Code" dialog.
    */
   SKILLS_READ = 'skills:read',
+  /**
+   * Release-note automation: find a release note and set its video, and upload the What's New
+   * media for it. Admin-provisioned and confined so the job needs no `admin:*`
+   * key: it reaches only the routes that name it, and those still require a platform-admin owner.
+   */
+  RELEASE_NOTES_WRITE = 'release-notes:write',
+  /**
+   * Read the key owner's own Bob results: single-site reads, two-site comparisons and
+   * re-checks, the recent-reports list, and how many runs are left. It starts nothing and
+   * spends nothing, so the `:read` suffix that puts it in the New-Key modal's Read-only
+   * preset is deliberate, and safe there because every read is scoped to the key's owner.
+   * Split from {@link BOB_RUN} so an agent can be handed the read half alone.
+   *
+   * Like every scope, it authorizes but never entitles. The Bob routes, and the gate that
+   * decides which of the two scopes each one accepts, live in the Bob overlay package and
+   * have no implementation in this repository, so nothing here verifies either claim.
+   */
+  BOB_READ = 'bob:read',
+  /**
+   * Start a Bob site read, a two-site comparison or a re-check. This is the spend half of
+   * the Bob pair: it spends the key owner's credits and publishes a report as them, so it
+   * is never implied by {@link BOB_READ}, and it is deliberately unsuffixed so it stays out
+   * of the Read-only and Read & write presets, as {@link OPTIHASHI_COMPUTE} does. Nor does
+   * it imply {@link BOB_READ} at this repository's scope gate.
+   *
+   * Authorizes without entitling, like {@link BOB_READ}: the gate that enforces it lives in
+   * the Bob overlay package, with no implementation here.
+   */
+  BOB_RUN = 'bob:run',
 }
 
 /**
+ * A scope value as stored on a key: a built-in {@link ApiKeyScope} or one an overlay contributes at
+ * build time. Whether a value is known is decided by the app's merged catalog, not by this type.
+ */
+export type ApiKeyScopeValue = ApiKeyScope | (string & {});
+
+// Matches the codegen's API_KEY_SCOPE_VALUE_RE (apps/client/scripts/generate-premium-glue.mjs); only a
+// built-in scope may carry the `*` action.
+const API_KEY_SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$/;
+export const API_KEY_SCOPE_VALUE_MAX_LENGTH = 100;
+const BUILT_IN_API_KEY_SCOPES: ReadonlySet<string> = new Set(Object.values(ApiKeyScope));
+
+/** True for a built-in {@link ApiKeyScope} value. */
+export const isBuiltInApiKeyScope = (value: unknown): value is ApiKeyScope =>
+  typeof value === 'string' && BUILT_IN_API_KEY_SCOPES.has(value);
+
+/**
+ * Shape check only (`<resource>:<action>`, lowercase): any built-in scope, or a value an overlay
+ * could contribute. For storage, where the contributed catalog may not be loaded; it says nothing
+ * about whether the value is offered or authorizes anything.
+ */
+export const isWellFormedApiKeyScope = (value: unknown): value is ApiKeyScopeValue =>
+  isBuiltInApiKeyScope(value) ||
+  (typeof value === 'string' && value.length <= API_KEY_SCOPE_VALUE_MAX_LENGTH && API_KEY_SCOPE_VALUE_RE.test(value));
+
+/**
  * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
- * Overwatch ingest, QA run ingest. A key carrying ANY of these is *confined* and
+ * Overwatch ingest, QA run ingest, release-note automation. A key carrying ANY of these is *confined* and
  * both ends of the system say the same thing about it in the same words:
  *  - at mint (createUserApiKey): a confined scope must be the key's only scope, so
  *    a confined key is never persisted alongside reach it would then lose;
@@ -156,6 +210,7 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
   ApiKeyScope.QA_INGEST,
   ApiKeyScope.SKILLS_READ,
+  ApiKeyScope.RELEASE_NOTES_WRITE,
 ];
 
 export enum ApiKeyStatus {
@@ -266,7 +321,7 @@ export interface IUserApiKey {
    */
   keyDigest?: string;
   keyPrefix: string; // First 16 chars for lookup (e.g., "b4m_live_xxxxxxx")
-  scopes: ApiKeyScope[]; // Permissions array
+  scopes: ApiKeyScopeValue[]; // Permissions array
   status: ApiKeyStatus;
   expiresAt?: Date; // Optional expiration
   lastUsedAt?: Date;
@@ -360,10 +415,11 @@ export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
  * Which per-user active-key cap a key counts against. Federated-exchange keys
  * (`createdFrom === 'oauth-exchange'`) are short-lived, at most one per (user, client),
  * and minted by a relying party rather than the user, so they get their own pool
- * instead of eating the user's dashboard/admin key slots. Caps live in
- * b4m-core/services/src/userApiKeyService/create.ts.
+ * instead of eating the user's dashboard/admin key slots. `personal` is the user-billed subset
+ * of `standard`, which the API key trust gate caps for untrusted owners (org-billed keys are not
+ * limited by trust). Caps live in b4m-core/services/src/userApiKeyService/create.ts.
  */
-export type ApiKeyCapPool = 'standard' | 'oauth-exchange';
+export type ApiKeyCapPool = 'standard' | 'personal' | 'oauth-exchange';
 
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;

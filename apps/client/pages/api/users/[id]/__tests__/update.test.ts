@@ -76,6 +76,7 @@ vi.mock('@bike4mind/server-utils/utils/ip', () => ({
 }));
 
 vi.mock('@bike4mind/services', async orig => ({
+  adminAuditService: { REDACTED_PLACEHOLDER: '[REDACTED]' },
   userService: {
     // The real block-state rules, so a snapshot missing any block field is caught.
     entersBlockedState: (await orig<typeof import('@bike4mind/services')>()).userService.entersBlockedState,
@@ -108,6 +109,7 @@ vi.mock('@bike4mind/services', async orig => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: { findBySettingName: vi.fn() },
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: {
     findById: (...a: unknown[]) => {
@@ -158,6 +160,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 // The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
 
+import { adminSettingsRepository } from '@bike4mind/database';
 import handler from '../update';
 
 const run = ({
@@ -409,9 +412,9 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { tags: ['opti'] } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    // The audit target read, the in-transaction snapshot and the post-update refetch; the
-    // guard's isAdmin count is skipped entirely.
-    expect(mockUserFindById).toHaveBeenCalledTimes(3);
+    // The audit target read, the in-transaction snapshot, the post-update refetch and the
+    // before/after profile-audit snapshots; the guard's isAdmin count is skipped entirely.
+    expect(mockUserFindById).toHaveBeenCalledTimes(5);
     expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
@@ -577,6 +580,17 @@ describe('PUT /api/users/:id/update - self-service admin-only field discard', ()
     const json = res._getJSONData();
     expect(json.ignoredFields).toBeUndefined();
     expect(mockUpdateUser).toHaveBeenCalledWith(SELF.id, { name: 'New Name' }, expect.anything());
+  });
+
+  it('hands the self-service update the admin settings that decide a reserved username', async () => {
+    const { promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name' } });
+    await promise;
+
+    expect(mockUpdateUser).toHaveBeenCalledWith(
+      SELF.id,
+      { name: 'New Name' },
+      { db: expect.objectContaining({ adminSettings: adminSettingsRepository }) }
+    );
   });
 
   it('reports an empty-body update with no admin-only fields sent as having none ignored', async () => {
@@ -767,10 +781,11 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     name: 'Existing Name',
     securityQuestions: [{ question: 'Pet name?', answer: 'Fluffy' }],
     userNotes: [{ note: 'admin note', timestamp: '2026-01-01', userName: 'admin' }],
+    signupMeta: { ip: '203.0.113.7', asn: 16509, isDatacenter: true },
     notInSchema: 'x',
   };
 
-  it('admin branch keeps ignoredFields, securityQuestions and userNotes and strips an undeclared key', async () => {
+  it('admin branch keeps ignoredFields, securityQuestions, userNotes and signupMeta and strips an undeclared key', async () => {
     mockUserFindById.mockReturnValue(profile);
     const { res, promise } = run({ user: ADMIN, userId: 'u1', body: { name: 'New Name', adminNote: 'x' } });
     await promise;
@@ -778,8 +793,9 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     expect(res._getStatusCode()).toBe(200);
     const json = res._getJSONData();
     expect(json.ignoredFields).toEqual(['adminNote']);
-    expect(json.securityQuestions).toEqual(profile.securityQuestions);
+    expect(json.securityQuestions).toEqual([{ question: 'Pet name?', answer: '' }]);
     expect(json.userNotes).toEqual(profile.userNotes);
+    expect(json.signupMeta).toEqual(profile.signupMeta);
     expect(json).not.toHaveProperty('notInSchema');
   });
 
@@ -795,8 +811,9 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     expect(res._getStatusCode()).toBe(200);
     const json = res._getJSONData();
     expect(json.ignoredFields).toEqual(['tags']);
-    expect(json.securityQuestions).toEqual(profile.securityQuestions);
+    expect(json.securityQuestions).toEqual([{ question: 'Pet name?', answer: '' }]);
     expect(json).not.toHaveProperty('userNotes');
+    expect(json).not.toHaveProperty('signupMeta');
     expect(json).not.toHaveProperty('notInSchema');
   });
 });
@@ -904,6 +921,7 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       previousBalance,
       resultingBalance: previousBalance + credits,
       note: CREDIT_REASON,
+      creditTransactionId: 'ctx-1',
     });
 
     it.each([
@@ -931,8 +949,24 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
           reason: CREDIT_REASON,
           details: { credits },
           changes: [{ field: 'currentCredits', before: 100, after: 100 + credits }],
+          related: { creditTransactionId: 'ctx-1' },
         })
       );
+    });
+
+    it('omits related when the adjustment carries no ledger transaction id', async () => {
+      mockUserFindById.mockReturnValue(target());
+      mockAdminUpdateUser.mockResolvedValue({
+        user: target(),
+        creditAdjustment: { ...adjustment(50), creditTransactionId: undefined },
+      });
+      await run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { creditDelta: 50, creditReason: CREDIT_REASON },
+      }).promise;
+
+      expect(mockRecord.mock.calls[0][1].related).toBeUndefined();
     });
 
     it('records nothing when the service applied no adjustment', async () => {
@@ -1034,5 +1068,100 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
     expect(mockAdminUpdateUser).toHaveBeenCalledTimes(1);
     expect(mockRecord).not.toHaveBeenCalled();
     expect(mockDeny).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id/update - user.profile.updated audit', () => {
+  // The stored doc the mocked reads see; the mocked writers mutate it like a real commit would.
+  const stored: Record<string, unknown> = {};
+  const profileCalls = () => mockRecord.mock.calls.filter(([, entry]) => entry.action === 'user.profile.updated');
+
+  beforeEach(() => {
+    Object.assign(stored, { id: 'other-user', name: 'Old Name', tags: ['a'], isAdmin: false });
+    mockUserFindById.mockImplementation(() => ({ ...stored }));
+    mockAdminUpdateUser.mockImplementation(async (_actor: unknown, body: Record<string, unknown>) => {
+      Object.assign(stored, body);
+      return { user: { ...stored }, creditAdjustment: undefined };
+    });
+    mockUpdateUser.mockImplementation(async (_id: string, body: Record<string, unknown>) => {
+      Object.assign(stored, body);
+    });
+  });
+
+  it("records the before and after of an admin editing another user's name", async () => {
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { name: 'New Name' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(profileCalls()).toHaveLength(1);
+    expect(profileCalls()[0][1]).toMatchObject({
+      action: 'user.profile.updated',
+      target: { kind: 'user', id: 'other-user' },
+      changes: [{ field: 'name', before: 'Old Name', after: 'New Name' }],
+    });
+  });
+
+  it('records nothing when the sent values equal the stored ones', async () => {
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { name: 'Old Name' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(profileCalls()).toHaveLength(0);
+  });
+
+  it('records nothing for an admin editing their own profile', async () => {
+    Object.assign(stored, { id: ADMIN.id, name: 'Admin Old' });
+    const { res, promise } = run({ user: ADMIN, userId: ADMIN.id, body: { name: 'Admin New' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdminUpdateUser).toHaveBeenCalledTimes(1);
+    expect(profileCalls()).toHaveLength(0);
+  });
+
+  it('records an impersonated self-service edit', async () => {
+    Object.assign(stored, { id: 'u1' });
+    const { res, promise } = run({
+      user: { id: 'u1', isAdmin: false, impersonatedBy: 'admin9' },
+      userId: 'u1',
+      body: { name: 'Impersonated Edit' },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateUser).toHaveBeenCalledTimes(1);
+    expect(profileCalls()).toHaveLength(1);
+    expect(profileCalls()[0][1]).toMatchObject({
+      action: 'user.profile.updated',
+      target: { kind: 'user', id: 'u1' },
+      changes: [{ field: 'name', before: 'Old Name', after: 'Impersonated Edit' }],
+    });
+  });
+
+  it('records nothing for a plain self-service edit with no impersonation', async () => {
+    Object.assign(stored, { id: 'u1' });
+    const { res, promise } = run({ user: { id: 'u1', isAdmin: false }, userId: 'u1', body: { name: 'Mine' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(profileCalls()).toHaveLength(0);
+  });
+
+  it('redacts a changed password and never reads it', async () => {
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { password: 'new-secret-pw' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(profileCalls()[0][1].changes).toEqual([{ field: 'password', before: '[REDACTED]', after: '[REDACTED]' }]);
+    expect(JSON.stringify(mockRecord.mock.calls.map(([, entry]) => entry))).not.toContain('new-secret-pw');
+  });
+
+  it('still responds 200 when the best-effort audit write resolves null', async () => {
+    mockRecord.mockResolvedValue(null);
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { name: 'New Name' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(profileCalls()).toHaveLength(1);
   });
 });

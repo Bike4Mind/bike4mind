@@ -46,6 +46,9 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+}));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it.
   ...(await orig<Record<string, unknown>>()),
@@ -141,6 +144,7 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
+import { adminSettingsRepository } from '@bike4mind/database';
 import voicesHandler from '../voices';
 import sessionsHandler from '../sessions';
 import endHandler from '../sessions/[id]/end';
@@ -320,6 +324,16 @@ describe('GET /api/v1/voice/voices', () => {
 describe('POST /api/v1/voice/sessions', () => {
   const fireSessions = (opts: { apiKey?: string | null; body?: Record<string, unknown> } = {}) =>
     fire(sessionsHandler, { url: '/api/v1/voice/sessions', body: { sessionId: SESSION_ID }, ...opts });
+
+  it('reads all voice and credit settings directly before provisioning', async () => {
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: adminSettingsRepository },
+      { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'], skipCache: true }
+    );
+  });
 
   it('rejects a key lacking ai:generate (403) before taking a credit hold', async () => {
     validateWithScopes([ApiKeyScope.READ_FILES]);

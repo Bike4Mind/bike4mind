@@ -10,7 +10,9 @@ import {
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
 } from '@client/lib/subscriptions/types';
-import { Add as AddIcon, Business as BusinessIcon, Search as SearchIcon } from '@mui/icons-material';
+import AddIcon from '@mui/icons-material/Add';
+import BusinessIcon from '@mui/icons-material/Business';
+import SearchIcon from '@mui/icons-material/Search';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import {
   AspectRatio,
@@ -50,7 +52,12 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
   const isManager = !!currentUser && (organization.adminUserIds ?? []).includes(currentUser.id) && !isOwner;
 
   return (
-    <Card variant="outlined" sx={{ height: '100%', borderColor: isOwner ? 'primary.solidBg' : undefined }}>
+    <Card
+      variant="outlined"
+      data-testid="organization-card"
+      data-org-id={organization.id}
+      sx={{ height: '100%', borderColor: isOwner ? 'primary.solidBg' : undefined }}
+    >
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
           <AspectRatio ratio="1" sx={{ width: 48, borderRadius: 'sm' }}>
@@ -120,6 +127,7 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
           size="sm"
           fullWidth
           onClick={() => navigate({ to: `/organizations/${organization.id}` })}
+          data-testid="organization-card-view-btn"
         >
           {t('organization.view_details')}
         </Button>
@@ -232,6 +240,7 @@ const OrganizationListPage: FC = () => {
           placeholder={t('organization.search')}
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
+          slotProps={{ input: { 'data-testid': 'organizations-search-input' } }}
           sx={{ width: '100%', maxWidth: '400px' }}
         />
       </Box>
@@ -263,7 +272,7 @@ const OrganizationListPage: FC = () => {
       </Grid>
 
       {!isLoading && filteredOrganizations.length === 0 && (
-        <Box sx={{ textAlign: 'center', py: 8 }}>
+        <Box sx={{ textAlign: 'center', py: 8 }} data-testid="organizations-empty-state">
           <Typography level="body-lg" color="neutral">
             {t('organization.no_organizations')}
           </Typography>

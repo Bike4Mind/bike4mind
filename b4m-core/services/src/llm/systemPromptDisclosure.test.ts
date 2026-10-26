@@ -26,6 +26,8 @@ describe('buildSystemPromptText', () => {
     const { blocks } = buildSystemPromptText(tagged);
 
     expect(blocks).toEqual([
+      { source: 'admin', name: 'artifact_emission', redacted: false, placement: 'system' },
+      { source: 'admin', name: 'help_center', text: 'the help center exists', redacted: false, placement: 'system' },
       {
         source: 'hardcoded',
         name: 'date_time_context',
@@ -33,8 +35,6 @@ describe('buildSystemPromptText', () => {
         redacted: false,
         placement: 'system',
       },
-      { source: 'admin', name: 'artifact_emission', redacted: false, placement: 'system' },
-      { source: 'admin', name: 'help_center', text: 'the help center exists', redacted: false, placement: 'system' },
       { source: 'admin', name: 'format_prompt', redacted: false, placement: 'system' },
       { source: 'hardcoded', name: 'image_prompt', redacted: false, placement: 'system' },
     ]);
@@ -47,8 +47,8 @@ describe('buildSystemPromptText', () => {
     });
 
     expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual([
-      'date_time_context',
       ...FLOOR_NAMES,
+      'date_time_context',
       'attached_files',
       ...INJECTED_NAMES,
     ]);
@@ -64,8 +64,8 @@ describe('buildSystemPromptText', () => {
     const tagged = buildTaggedContextMessages({ dateContext: [sys('today')], mementos: [] });
 
     expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual([
-      'date_time_context',
       ...FLOOR_NAMES,
+      'date_time_context',
       ...INJECTED_NAMES,
     ]);
   });
@@ -78,7 +78,7 @@ describe('buildSystemPromptText', () => {
 
     const { blocks } = buildSystemPromptText(tagged);
 
-    expect(blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES, ...INJECTED_NAMES]);
+    expect(blocks.map(b => b.name)).toEqual([...FLOOR_NAMES, 'date_time_context', ...INJECTED_NAMES]);
     expect(blockNamed({ blocks, sizeCapped: false }, 'artifact_emission')).toEqual({
       source: 'admin',
       name: 'artifact_emission',
@@ -132,7 +132,7 @@ describe('buildSystemPromptText', () => {
     const { blocks } = buildSystemPromptText(tagged, new Set([kept]));
 
     // The row survives so the payload still joins to the breakdown, which is where wasIncluded lives.
-    expect(blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES, 'mementos', ...INJECTED_NAMES]);
+    expect(blocks.map(b => b.name)).toEqual([...FLOOR_NAMES, 'date_time_context', 'mementos', ...INJECTED_NAMES]);
     expect(blockNamed({ blocks, sizeCapped: false }, 'mementos')).toEqual({
       source: 'user',
       name: 'mementos',
@@ -162,8 +162,8 @@ describe('buildSystemPromptText', () => {
     const tagged = buildTaggedContextMessages({ dateContext: [sys('today')], mementos: [sys('memory')] });
 
     expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual([
-      'date_time_context',
       ...FLOOR_NAMES,
+      'date_time_context',
       'mementos',
       ...INJECTED_NAMES,
     ]);

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMocks } from 'node-mocks-http';
@@ -102,6 +102,7 @@ import { attachMarketStatus } from './marketStatus';
 import { serializeListing, withdrawAuthorListings } from './market';
 import { MAX_SLA_REMINDERS, runSkillMarketReviewSla } from './reviewSla';
 import type { ClassifierLlm } from './classifySkill';
+import skillHandler from '@pages/api/skills/[id]/index';
 import importHandler from '@pages/api/skills/market/[id]/import';
 import ratingHandler from '@pages/api/skills/market/[id]/rating';
 import detailHandler from '@pages/api/skills/market/[id]/index';
@@ -1484,5 +1485,114 @@ describe('Skill Market (real mongod)', () => {
     const stored = (await SkillListingVersion.findById(version.id))!;
     expect(stored.reminderCount).toBe(MAX_SLA_REMINDERS);
     expect(stored.reviewStatus).toBe('pending');
+  });
+});
+
+describe('global-skill write races (real mongod)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe('skillRepository.updateIfNonGlobal', () => {
+    it('updates a non-global skill', async () => {
+      const skill = await makeSkill(AUTHOR, 'original');
+      const updated = await skillRepository.updateIfNonGlobal({ id: skill.id, body: 'changed' }, { new: true });
+      expect(updated).toMatchObject({ id: skill.id, body: 'changed' });
+      expect((await skillRepository.findById(skill.id))!.body).toBe('changed');
+    });
+
+    it.each(['isGlobalRead', 'isGlobalWrite'] as const)(
+      'throws a 409 and keeps the body when the skill is %s',
+      async flag => {
+        const skill = await makeSkill(AUTHOR, 'original', { [flag]: true });
+        await expect(skillRepository.updateIfNonGlobal({ id: skill.id, body: 'unscanned' })).rejects.toMatchObject({
+          statusCode: 409,
+        });
+        expect((await skillRepository.findById(skill.id))!.body).toBe('original');
+      }
+    );
+
+    it('resolves null for a nonexistent skill', async () => {
+      const result = await skillRepository.updateIfNonGlobal({
+        id: new mongoose.Types.ObjectId().toString(),
+        body: 'x',
+      });
+      expect(result).toBeNull();
+    });
+  });
+
+  it('PUT /skills/[id]: 409s when the skill went global after the handler read it', async () => {
+    const skill = await makeSkill(AUTHOR, 'original');
+    const stale = (await skillRepository.findById(skill.id))!;
+    await Skill.updateOne({ _id: skill.id }, { $set: { isGlobalRead: true } });
+    vi.spyOn(skillRepository, 'findById').mockResolvedValueOnce(stale);
+
+    await expect(call(skillHandler, 'PUT', AUTHOR, { id: skill.id }, { body: 'unscanned' })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    vi.restoreAllMocks();
+    expect((await skillRepository.findById(skill.id))!.body).toBe('original');
+  });
+
+  it('market import: 409s a super-admin update into a global copy whose __v advanced after the read', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
+    const { listing } = await publish(source, 'public');
+    const copyId = (await call(importHandler, 'POST', ADMIN, { id: listing.id }, {}, true))._getJSONData().skill.id;
+    await skillRepository.update({ id: copyId, isGlobalRead: true });
+    await skillRepository.update({ id: source.id, body: 'Rewrite as bullets v2.' });
+    await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
+
+    const stale = (await skillRepository.findById(copyId))!;
+    await skillRepository.updateGuarded({
+      id: copyId,
+      __v: (stale as { __v?: number }).__v,
+      description: 'concurrent',
+    });
+    vi.spyOn(skillRepository, 'findById').mockResolvedValueOnce(stale);
+
+    await expect(
+      call(importHandler, 'POST', ADMIN, { id: listing.id }, { targetSkillId: copyId }, true)
+    ).rejects.toMatchObject({ statusCode: 409 });
+    vi.restoreAllMocks();
+    expect(await skillRepository.findById(copyId)).toMatchObject({
+      body: 'Rewrite as bullets v1.',
+      description: 'concurrent',
+    });
+  });
+
+  it('market import: 409s an update into a non-global copy that went global after the read', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
+    const { listing } = await publish(source, 'public');
+    const copyId = (await call(importHandler, 'POST', OTHER, { id: listing.id }))._getJSONData().skill.id;
+    await skillRepository.update({ id: source.id, body: 'Rewrite as bullets v2.' });
+    await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
+
+    const stale = (await skillRepository.findById(copyId))!;
+    await skillRepository.update({ id: copyId, isGlobalRead: true });
+    vi.spyOn(skillRepository, 'findById').mockResolvedValueOnce(stale);
+
+    await expect(
+      call(importHandler, 'POST', OTHER, { id: listing.id }, { targetSkillId: copyId })
+    ).rejects.toMatchObject({ statusCode: 409 });
+    vi.restoreAllMocks();
+    expect(await skillRepository.findById(copyId)).toMatchObject({ body: 'Rewrite as bullets v1.' });
+  });
+
+  it('a guarded write from a global-era read conflicts with content written while the skill was non-global', async () => {
+    const skill = await makeSkill(AUTHOR, 'original');
+    await skillRepository.update({ id: skill.id, isGlobalRead: true });
+    const globalRead = (await skillRepository.findById(skill.id))!;
+
+    await skillRepository.update({ id: skill.id, isGlobalRead: false });
+    await skillRepository.updateIfNonGlobal({ id: skill.id, body: 'unscanned' });
+    await skillRepository.update({ id: skill.id, isGlobalRead: true });
+
+    await expect(
+      skillRepository.updateGuarded({
+        id: skill.id,
+        __v: (globalRead as { __v?: number }).__v,
+        description: 'scanned against the old body',
+      })
+    ).rejects.toMatchObject({ name: 'ConcurrencyConflictError', statusCode: 409 });
   });
 });

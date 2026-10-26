@@ -63,8 +63,14 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
 }));
 
+const mockRevokeKey = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 vi.mock('@bike4mind/database/auth', () => ({
-  userApiKeyRepository: {},
+  userApiKeyRepository: { revokeIfNotDisabled: (...a: unknown[]) => mockRevokeKey(...a) },
+}));
+
+const mockRecordAdminAction = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...a: unknown[]) => mockRecordAdminAction(...a),
 }));
 
 const mockCreateKey = vi.hoisted(() =>
@@ -87,6 +93,28 @@ vi.mock('@server/utils/analyticsLog', () => ({
       // swallowed, including a synchronous throw from a mockImplementation
     }
   },
+}));
+
+vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+  premiumApiKeyScopes: [
+    {
+      value: 'acme:read',
+      label: 'Acme: Read',
+      description: 'Read Acme records',
+      endpoints: ['GET /api/acme'],
+      requiredEntitlement: 'acme:pro',
+    },
+  ],
+}));
+
+const targetAccess = vi.hoisted(() => ({ entitlements: new Set<string>(), bypass: false }));
+const mockResolveTargetAccess = vi.hoisted(() => vi.fn());
+vi.mock('@server/entitlements', () => ({ toEntitlementUser: (user: unknown) => user }));
+vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
+  resolveApiKeyScopeAccessForUser: mockResolveTargetAccess.mockImplementation(async () => ({
+    bypass: targetAccess.bypass,
+    entitlements: targetAccess.entitlements,
+  })),
 }));
 
 import '../generate-api-key';
@@ -112,6 +140,65 @@ function post(body: unknown, opts: { isAdmin?: boolean; userId?: string } = {}) 
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
+
+describe('POST /api/admin/users/:userId/generate-api-key - contributed scope entitlement', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    targetAccess.entitlements = new Set();
+    targetAccess.bypass = false;
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser' });
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'key', scopes: ['acme:read'] });
+    mockLogEvent.mockResolvedValue(undefined);
+  });
+
+  it('refuses a contributed scope the target does not hold the entitlement for, without minting', async () => {
+    const { req, res } = post({ name: 'acme', scopes: ['acme:read', 'notebooks:read'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/not available on the target account: acme:read/);
+    expect(mockResolveTargetAccess).toHaveBeenCalledWith(expect.objectContaining({ id: 'target-user' }));
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('mints a contributed scope for a target holding its entitlement', async () => {
+    targetAccess.entitlements = new Set(['acme:pro']);
+    const { req, res } = post({ name: 'acme', scopes: ['acme:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ scopes: ['acme:read'] }),
+      expect.objectContaining({ isKnownScope: expect.any(Function) })
+    );
+    const adapters = mockCreateKey.mock.calls[0][2] as { isKnownScope: (value: string) => boolean };
+    expect(adapters.isKnownScope('acme:read')).toBe(true);
+    expect(adapters.isKnownScope('acme:write')).toBe(false);
+  });
+
+  it('does not mint when the target entitlement lookup fails', async () => {
+    const failure = new Error('entitlement lookup unavailable');
+    mockResolveTargetAccess.mockRejectedValueOnce(failure);
+    const { req, res } = post({ name: 'acme', scopes: ['acme:read'] });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBe(failure);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('honors the target admin/developer bypass without its entitlement', async () => {
+    targetAccess.bypass = true;
+    const { req, res } = post({ name: 'acme', scopes: ['acme:read'] });
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalled();
+  });
+
+  it('does not resolve the target access for built-in scopes only', async () => {
+    const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockResolveTargetAccess).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard', () => {
   beforeEach(() => {
@@ -154,6 +241,24 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
       expect.objectContaining({ scopes: ['overwatch-ingest:write'] }),
       expect.anything()
     );
+  });
+
+  it('allows release-notes:write for a platform-admin target', async () => {
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', isAdmin: true });
+    const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ scopes: ['release-notes:write'] }),
+      expect.anything()
+    );
+  });
+
+  it('refuses release-notes:write for a target who is not a platform admin, since the routes would refuse the key', async () => {
+    const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/platform admin/i);
+    expect(mockCreateKey).not.toHaveBeenCalled();
   });
 
   it('allows standard user scopes (notebooks:read) through the admin endpoint', async () => {
@@ -596,5 +701,75 @@ describe('POST /api/admin/users/:userId/generate-api-key - canonical target id',
     const logged = ((req as any).logger.info as any).mock.calls[0][0] as string;
     expect(logged).not.toContain('\n');
     expect(logged).toContain('\\n');
+  });
+});
+
+describe('POST /api/admin/users/:userId/generate-api-key - admin audit', () => {
+  const RAW_KEY = 'b4m_live_secret_value';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', email: 'target@example.com' });
+    mockCreateKey.mockResolvedValue({
+      id: 'k1',
+      name: 'key',
+      key: RAW_KEY,
+      keyPrefix: 'b4m_live',
+      scopes: ['notebooks:read'],
+    });
+    mockRecordAdminAction.mockResolvedValue(null);
+  });
+
+  it('records user.api_key.generated against the key owner with the key id but never the key', async () => {
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res.statusCode).toBe(201);
+    expect(mockRecordAdminAction).toHaveBeenCalledTimes(1);
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.api_key.generated',
+        target: { kind: 'user', id: 'target-user', displayName: 'target@example.com' },
+        details: expect.objectContaining({ keyId: 'k1', keyPrefix: 'b4m_live', scopes: ['notebooks:read'] }),
+      })
+    );
+    expect(JSON.stringify(mockRecordAdminAction.mock.calls[0][1])).not.toContain(RAW_KEY);
+    expect(mockRevokeKey).not.toHaveBeenCalled();
+  });
+
+  it('revokes the unseen key and fails the request when the audit write fails', async () => {
+    mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('audit down');
+
+    expect(mockCreateKey).toHaveBeenCalled();
+    expect(mockRevokeKey).toHaveBeenCalledWith('k1', 'caller', expect.any(String));
+    expect(res._getData()).toBe('');
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
+
+  it('attributes the revoke to the real admin when acting under impersonation', async () => {
+    mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] });
+    (req as any).user.impersonatedBy = 'real-admin';
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('audit down');
+
+    expect(mockRevokeKey).toHaveBeenCalledWith('k1', 'real-admin', expect.any(String));
+  });
+
+  it('still surfaces the audit failure and logs the live key when the revoke also fails', async () => {
+    mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+    mockRevokeKey.mockRejectedValueOnce(new Error('revoke down'));
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('audit down');
+
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ keyId: 'k1' })
+    );
   });
 });

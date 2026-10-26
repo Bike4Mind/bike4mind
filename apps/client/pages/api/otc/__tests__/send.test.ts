@@ -19,6 +19,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
+const turnstileActions = vi.hoisted(() => [] as string[]);
+const turnstileGate = vi.hoisted(() => vi.fn((_req: unknown, _res: unknown, next: () => void) => next()));
+vi.mock('@server/middlewares/requireTurnstile', () => ({
+  requireTurnstile: (action: string) => {
+    turnstileActions.push(action);
+    return turnstileGate;
+  },
+}));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({ getLogoUrl: () => undefined }));
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-pending-token' } }));
@@ -87,8 +95,7 @@ const EMAIL = 'someone@example.com';
 
 function makeReqRes(email: string = EMAIL, ip = '81.2.69.160') {
   const { req, res } = createMocks({ method: 'POST', headers: { 'x-real-ip': ip } });
-  (req as any).body = { email };
-  return { req, res };
+  return { req: Object.assign(req, { body: { email }, logger: { info: vi.fn() } }), res };
 }
 
 const resetCache = () => {
@@ -111,6 +118,11 @@ describe('/api/otc/send limiter wiring', () => {
     vi.clearAllMocks();
     resetCache();
     mockIsE2EEnabled.mockReturnValue(false);
+  });
+
+  it('gates the route on the otc-send Turnstile challenge before any limiter runs', () => {
+    expect(turnstileActions).toEqual(['otc-send']);
+    expect(wiring.uses[1]).toBe(turnstileGate);
   });
 
   it('counts every request against the per-IP and distinct-email-per-IP limits, but not the per-email ones', async () => {
@@ -335,6 +347,69 @@ describe('/api/otc/send', () => {
       otcHash: 'code-hash',
       code: '123456',
     });
+  });
+
+  const dispatchThroughMailer = () => {
+    mockSendOTC.mockImplementation(
+      async (
+        _params: unknown,
+        adapters: { mailer: { sendOTCEmail: (email: string, code: string) => Promise<void> } }
+      ) => {
+        await adapters.mailer.sendOTCEmail(EMAIL, '123456');
+        return { pendingToken: 'pending-token', nonce: 'real-nonce', otcHash: 'code-hash' };
+      }
+    );
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt: new Date('2026-01-01T00:00:00.000Z') });
+    mockConfirmReservation.mockResolvedValue(true);
+  };
+
+  it('logs one code dispatch only after the email event is accepted', async () => {
+    dispatchThroughMailer();
+    const { req, res } = makeReqRes();
+    vi.mocked(EmailEvents.Send.publish).mockImplementationOnce(async () => {
+      expect(req.logger.info).not.toHaveBeenCalled();
+    });
+
+    await handler(req, res);
+
+    expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+    expect(req.logger.info).toHaveBeenCalledExactlyOnceWith('otc-code-dispatched');
+  });
+
+  it('does not log a dispatch when email publication rejects', async () => {
+    dispatchThroughMailer();
+    vi.mocked(EmailEvents.Send.publish).mockRejectedValueOnce(new Error('email unavailable'));
+    const { req, res } = makeReqRes();
+
+    await expect(handler(req, res)).rejects.toThrow('email unavailable');
+
+    expect(req.logger.info).not.toHaveBeenCalled();
+  });
+
+  it('counts a dispatched email even when token confirmation later loses the race', async () => {
+    dispatchThroughMailer();
+    mockConfirmReservation.mockResolvedValueOnce(false);
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(429);
+    expect(req.logger.info).toHaveBeenCalledExactlyOnceWith('otc-code-dispatched');
+  });
+
+  it('does not count an invalid request as a dispatch', async () => {
+    const { req, res } = makeReqRes('invalid');
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(req.logger.info).not.toHaveBeenCalled();
+  });
+
+  it('does not count a cooldown refusal as a dispatch', async () => {
+    mockTryReserveSlot.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 12 });
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(req.logger.info).not.toHaveBeenCalled();
   });
 
   it('passes cooldownMs 0 to tryReserveSlot when E2E is enabled, and the prod cooldown otherwise', async () => {

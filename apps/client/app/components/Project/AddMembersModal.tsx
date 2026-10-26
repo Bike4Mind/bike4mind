@@ -6,7 +6,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import AddIcon from '@mui/icons-material/Add';
 import { useQueryClient } from '@tanstack/react-query';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import { useTranslation } from 'react-i18next';
 import GenericAddItemsModal from './GenericAddItemsModal';
 import UserCard from '../common/UserCard';

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  ARTIFACT_EMISSION_PROMPT,
   settingsMap,
   publicSafeSettingKeys,
   userReadableSettingKeys,
@@ -198,8 +199,6 @@ describe('other object settings use makeObjectSetting', () => {
     'logoSettings',
     'RapidReplySettings',
     'releaseNotesConfig',
-    'whatsNewConfig',
-    'whatsNewSyncConfig',
   ] as const;
 
   it.each(objectSettings)('%s should parse JSON strings', settingKey => {
@@ -896,6 +895,23 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
   });
 });
 
+describe('Credits System group', () => {
+  // The group's `settings` index is hand-maintained (see the EMBEDDING note above), so keep it
+  // matching the settings that actually carry the group.
+  it('indexes exactly the settings that carry the group', () => {
+    const indexed = API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.key).sort();
+    const carried = Object.values(settingsMap)
+      .filter(setting => setting.group === API_SERVICE_GROUPS.CREDITS.id)
+      .map(setting => setting.key)
+      .sort();
+    expect(indexed).toEqual(carried);
+  });
+
+  it('is not repeated in the User Management index', () => {
+    expect(API_SERVICE_GROUPS.USER_MANAGEMENT.settings.map(entry => entry.key)).not.toContain('enforceCredits');
+  });
+});
+
 describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fallback (#1831)', () => {
   // Same drift class as forcedRetrievalCharBudget above: before this setting existed,
   // KB_SEARCH_DEFAULT_RESULTS was a hand-copied literal (5) local to the tool's own file. Both now
@@ -1344,5 +1360,29 @@ describe('SimulatorComputeCreditsPerRound', () => {
     expect(setting.order).toBeGreaterThan(settingsMap.HardwareComputeMaxUsdPerUserPerDay.order);
     expect(setting.order).toBeLessThan(settingsMap.EnableDataLakeSlackAdd.order);
     expect(setting.order).toBeLessThan(settingsMap.EnableQuestMaster.order);
+  });
+});
+
+describe('ARTIFACT_EMISSION_PROMPT multi-file wording', () => {
+  it('keeps single-file as the default and strict for non-React types', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('ONE <artifact> = ONE file, and that is the strong default');
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('For every type except React, NEVER use a relative/sibling import');
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('No sibling files (./app.js), no second artifact.');
+  });
+
+  it('allows React splits only with identifier equal to the import basename in the same reply', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('REACT MULTI-FILE');
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('SAME reply');
+    expect(ARTIFACT_EMISSION_PROMPT).toContain("each sibling's identifier must equal its import basename exactly");
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('must still be a single file');
+  });
+
+  it('ties export default to the entry file so the React rules do not contradict the split', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('exactly ONE entry file, the one nothing else imports, has');
+    expect(ARTIFACT_EMISSION_PROMPT).not.toContain('REACT ARTIFACTS: ONE file with ONE');
+  });
+
+  it('no longer claims the publish transpiler rejects TypeScript', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).not.toContain('has no TS preset');
   });
 });

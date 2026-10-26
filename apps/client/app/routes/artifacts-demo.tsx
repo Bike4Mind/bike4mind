@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Box, Typography, Stack, Button, Modal, ModalDialog, ModalClose, Divider, Alert, Chip } from '@mui/joy';
-import { AutoAwesome as MagicIcon, Visibility as ViewIcon, Create as CreateIcon } from '@mui/icons-material';
+import MagicIcon from '@mui/icons-material/AutoAwesome';
+import ViewIcon from '@mui/icons-material/Visibility';
+import CreateIcon from '@mui/icons-material/Create';
 import {
   ArtifactGallery,
   ArtifactCreator,

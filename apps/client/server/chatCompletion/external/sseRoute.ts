@@ -1,7 +1,9 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
+  BadRequestError,
   HTTPError,
   LEGACY_REQUEST_ID_HEADER,
   REQUEST_ID_HEADER,
@@ -51,6 +53,7 @@ import { emitProcessingFailed } from '../processingFailedMetric';
 import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
+import { getUserEntitlements } from '@server/entitlements';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -75,6 +78,26 @@ const checkCompletionsMethod = createMethodGuard([createCompletionContract.metho
 // Periodic SSE comment so an intermediary (CloudFront / socket layer) doesn't close the
 // connection during a token-less gap (e.g. extended thinking). Matches the v1 cadence.
 const HEARTBEAT_INTERVAL_MS = 10_000;
+const UPSTREAM_CALLER_ERROR_STATUSES = new Set([400, 404, 413, 422]);
+// Model availability, provider credentials and provider credit are deployment faults even
+// when the provider reports 400/404. Keep their diagnostics and operator-failure metric.
+const OPERATOR_SIDE_4XX_PATTERNS = [
+  /no longer available/i,
+  /is not available/i,
+  /does not exist or you do not have access/i,
+  /\bmodel\s+[`'"]?[\w./:-]+[`'"]?\s+does not exist\b/i,
+  /model not (?:found|available)/i,
+  /model identifier is invalid/i,
+  /api key (?:not valid|is invalid|has expired|is missing)/i,
+  /invalid api key/i,
+  /credit balance/i,
+];
+
+function isUpstreamCallerError(error: unknown): error is Error {
+  if (!(error instanceof Error) || error instanceof HTTPError) return false;
+  if (!UPSTREAM_CALLER_ERROR_STATUSES.has(getHttpStatus(error) ?? 0)) return false;
+  return !OPERATOR_SIDE_4XX_PATTERNS.some(pattern => pattern.test(error.message));
+}
 
 function requestIdFrom(headers: Record<string, string | undefined>): string {
   return resolveRequestId(headers[REQUEST_ID_HEADER.toLowerCase()], headers[LEGACY_REQUEST_ID_HEADER.toLowerCase()]);
@@ -91,6 +114,12 @@ function toJsonError(
     return httpErrorToResponse(new UnprocessableEntityError(message, { errorCode: questCode }), requestId);
   }
   if (error instanceof HTTPError) return httpErrorToResponse(error, requestId);
+  if (isUpstreamCallerError(error)) {
+    return httpErrorToResponse(
+      new BadRequestError('The model provider rejected the request', { errorCode: 'invalid_request' }),
+      requestId
+    );
+  }
   return { status: 500, headers: {}, body: buildErrorBody({ error: 'Internal error', requestId }) };
 }
 
@@ -105,6 +134,9 @@ function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
     if (error instanceof Error && isSafetyRefusalError(error)) {
       frameError = new Error('The model declined this request');
       code = 'content_blocked';
+    } else if (isUpstreamCallerError(error)) {
+      frameError = new Error('The model provider rejected the request');
+      code = 'invalid_request';
     } else if (status === 401 || status === 403) {
       frameError = new Error(
         status === 401 ? 'Model provider rejected our credentials' : 'Model provider denied access to this model'
@@ -217,7 +249,13 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
 
       const parsed = CompletionRequestSchema.safeParse(req.body);
-      if (!parsed.success) throw new UnprocessableEntityError(fromZodError(parsed.error).message);
+      if (!parsed.success) {
+        const errorMessage = fromZodError(parsed.error).message;
+        const emptyMessages = parsed.error.issues.some(
+          issue => issue.code === 'too_small' && issue.path.length === 1 && issue.path[0] === 'messages'
+        );
+        throw emptyMessages ? new BadRequestError(errorMessage) : new UnprocessableEntityError(errorMessage);
+      }
       body = normalizeCompletionRequest(parsed.data);
 
       let authResult;
@@ -271,6 +309,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       timing?.phase('completionStarted');
       await executeCompletion({
+        getEntitlements: getUserEntitlements,
         creditHolds: createCompletionCreditHolds(logger),
         userId,
         model: body.model,
@@ -289,6 +328,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           organizations: organizationRepository,
         },
         apiKeyInfo: apiKeyInfoForCompletion,
+        scopeActor: actorScopeForKey(apiKeyInfo),
         // Org-billed API keys route spend to the org's shared pool (invariant:
         // organizationId is set iff the key's billingOwnerType is Organization).
         billingOrganizationId: apiKeyInfo?.organizationId,
@@ -341,7 +381,8 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       const level = jsonError.status < 500 ? 'warn' : 'error';
       const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
       logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
-      track(emitProcessingFailed('cli-sse', error));
+      // Provider caller errors are not operator failures, including SDK errors that are not HTTPErrors.
+      if (!isUpstreamCallerError(error)) track(emitProcessingFailed('cli-sse', error));
 
       try {
         if (res.headersSent) {

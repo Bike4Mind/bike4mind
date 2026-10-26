@@ -14,6 +14,7 @@ export default defineConfig({
     'src/llm/evals/toolCalling/index.ts',
     'src/apiKeyService/index.ts',
     'src/creditService/index.ts',
+    'src/billing/completionMeter.ts',
     'src/generationJobs/index.ts',
     'src/videoJobs/index.ts',
     'src/musicJobs/index.ts',
@@ -33,6 +34,9 @@ export default defineConfig({
     'src/llm/SmallLLMService.ts',
     'src/llm/reranker/index.ts',
     'src/llm/intentClassifier.ts',
+    'src/llm/modelAdmission.ts',
+    // Pure account-state predicates; route gates import them without the services barrel.
+    'src/userService/accountState.ts',
     'src/llm/refineText.ts',
     'src/llm/artifactGating.ts',
     'src/llm/agents/ServerAgentStore.ts',

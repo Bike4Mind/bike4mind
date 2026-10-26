@@ -307,6 +307,12 @@ describe('shouldEndTurnAfterTools', () => {
     expect(shouldEndTurnAfterTools(['suggest_links'], tools, undefined)).toBe(false);
   });
 
+  it('requires visible prose beyond inline reasoning before ending the turn', () => {
+    expect(shouldEndTurnAfterTools(['suggest_links'], tools, '<think>Plan first.</think>')).toBe(false);
+    expect(shouldEndTurnAfterTools(['suggest_links'], tools, '<think>Unfinished thought')).toBe(false);
+    expect(shouldEndTurnAfterTools(['suggest_links'], tools, '<think>Plan first.</think>Answer.')).toBe(true);
+  });
+
   it('keeps recursing when any called tool is unflagged, explicitly false, or unknown', () => {
     expect(shouldEndTurnAfterTools(['suggest_links', 'web_search'], tools, 'Answer')).toBe(false);
     expect(shouldEndTurnAfterTools(['off'], tools, 'Answer')).toBe(false);

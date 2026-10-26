@@ -5,6 +5,7 @@ import {
   estimateVideoCostUsd,
   MAX_INLINE_PROVIDER_OUTPUT_BYTES,
   MAX_VIDEO_OUTPUT_BYTES,
+  type VideoInput,
 } from '@bike4mind/common';
 import {
   createVideoProviderRegistry,
@@ -376,7 +377,7 @@ describe('video job end to end with the test provider', () => {
     expect(t.jobOf(created).state).toBe('succeeded');
     expect(submit).toHaveBeenCalledWith(
       expect.objectContaining({ inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('img'), mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('img'), mimeType: 'image/png' }] },
       expect.objectContaining({ apiKey: 'key' })
     );
   });
@@ -399,9 +400,51 @@ describe('video job end to end with the test provider', () => {
     expect(loadInputImage).toHaveBeenNthCalledWith(2, user.id, { kind: 'generated', key });
     expect(submit).toHaveBeenCalledWith(
       expect.anything(),
-      { inputImage: { bytes: Buffer.from('gen'), mimeType: 'image/webp' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('gen'), mimeType: 'image/webp' }] },
       expect.anything()
     );
+  });
+
+  it('loads every role-tagged input and hands them to the provider in request order', async () => {
+    const loadInputImage = vi.fn<VideoJobDeps['loadInputImage']>(async (_userId, ref) => ({
+      bytes: Buffer.from(ref.kind === 'file' ? ref.id : ref.key),
+      mimeType: 'image/png',
+    }));
+    const base = new TestVideoProvider();
+    const submit = vi.fn<VideoProvider['submit']>((req, inputs, ctx) => base.submit(req, inputs, ctx));
+    const t = setup({ loadInputImage, providers: createVideoProviderRegistry([stubProvider({ submit })]) });
+    const inputs: VideoInput[] = [
+      { role: 'first_frame', fileId: 'f1' },
+      { role: 'last_frame', fileId: 'f2' },
+      { role: 'reference', generatedImageKey: 'k.png' },
+    ];
+    const created = await createVideoJob(
+      { user, request: { ...request(), mode: 'image_to_video', inputs }, source: 'studio' },
+      t.deps
+    );
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(loadInputImage).toHaveBeenLastCalledWith(user.id, { kind: 'generated', key: 'k.png' });
+    expect(submit).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        images: [
+          { role: 'first_frame', bytes: Buffer.from('f1'), mimeType: 'image/png' },
+          { role: 'last_frame', bytes: Buffer.from('f2'), mimeType: 'image/png' },
+          { role: 'reference', bytes: Buffer.from('k.png'), mimeType: 'image/png' },
+        ],
+      },
+      expect.anything()
+    );
+  });
+
+  it('gives a text_to_video job no input images', async () => {
+    const base = new TestVideoProvider();
+    const submit = vi.fn<VideoProvider['submit']>((req, inputs, ctx) => base.submit(req, inputs, ctx));
+    const t = setup({ providers: createVideoProviderRegistry([stubProvider({ submit })]) });
+    await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(submit).toHaveBeenCalledWith(expect.anything(), { images: [] }, expect.anything());
   });
 
   it('fails with input_image_not_found when the image disappears before submit', async () => {
@@ -791,9 +834,84 @@ describe('video job end to end with the test provider', () => {
         jobId: created.job.id,
         prompt: 'a cat',
         durationSeconds: 4,
+        request: expect.objectContaining({ model: 'test-video', prompt: 'a cat', durationSeconds: 4 }),
       },
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it('records a legacy file input image as a first_frame lineage edge', async () => {
+    const fileId = 'a'.repeat(24);
+    const t = setup();
+    await createVideoJob(
+      { user, request: { ...request(), mode: 'image_to_video', inputImageFileId: fileId }, source: 'studio' },
+      t.deps
+    );
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ derivedFrom: [{ fileId, role: 'first_frame' }] })
+    );
+  });
+
+  it('records an uppercase-hex file input under its canonical lowercase id', async () => {
+    const t = setup();
+    const inputs: VideoInput[] = [{ role: 'first_frame', fileId: 'A'.repeat(24) }];
+    await createVideoJob({ user, request: { ...request(), mode: 'image_to_video', inputs }, source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ derivedFrom: [{ fileId: 'a'.repeat(24), role: 'first_frame' }] })
+    );
+  });
+
+  it('records a lineage edge per role-tagged file input, and none for a generated key', async () => {
+    const [first, last, reference, style] = ['a', 'b', 'c', 'd'].map(c => c.repeat(24));
+    const t = setup();
+    const inputs: VideoInput[] = [
+      { role: 'first_frame', fileId: first },
+      { role: 'last_frame', fileId: last },
+      { role: 'reference', fileId: reference },
+      { role: 'reference', generatedImageKey: 'k.png' },
+      { role: 'style', fileId: style },
+    ];
+    await createVideoJob({ user, request: { ...request(), mode: 'image_to_video', inputs }, source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        derivedFrom: [
+          { fileId: first, role: 'first_frame' },
+          { fileId: last, role: 'last_frame' },
+          { fileId: reference, role: 'reference' },
+          { fileId: style, role: 'style' },
+        ],
+      })
+    );
+  });
+
+  it('records no lineage when every input is a generated key, or there are none', async () => {
+    const generatedOnly = setup();
+    await createVideoJob(
+      {
+        user,
+        request: {
+          ...request(),
+          mode: 'image_to_video',
+          inputs: [{ role: 'first_frame', generatedImageKey: 'k.png' }],
+        },
+        source: 'studio',
+      },
+      generatedOnly.deps
+    );
+    await generatedOnly.runToCompletion();
+    expect(generatedOnly.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.not.objectContaining({ derivedFrom: expect.anything() })
+    );
+
+    const plain = setup();
+    await createVideoJob({ user, request: request(), source: 'studio' }, plain.deps);
+    await plain.runToCompletion();
+    expect(plain.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.not.objectContaining({ derivedFrom: expect.anything() })
+    );
   });
 
   it("passes a chat job's quest so the saved clip joins that notebook", async () => {

@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   ),
   loadActiveLakeGrants: vi.fn().mockResolvedValue([]),
   toAccessContext: vi.fn(),
+  assertRequestCanAfford: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -67,6 +68,7 @@ vi.mock('@bike4mind/services', () => ({
 // Real toAccessContext pulls in entitlements/subscription lookups that are out of scope here;
 // stub it to the caller identity, same shape the route previously built inline.
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertRequestCanAfford: h.assertRequestCanAfford }));
 
 import handler from '../reanalyze-taxonomy';
 
@@ -98,6 +100,14 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
     h.toAccessContext.mockImplementation((req: { user: { id: string; isAdmin: boolean } }) =>
       Promise.resolve({ userId: req.user.id, isAdmin: req.user.isAdmin })
     );
+  });
+
+  it('refuses a caller who cannot afford the inference before claiming the batch', async () => {
+    h.assertRequestCanAfford.mockRejectedValueOnce(Object.assign(new Error('no credits'), { statusCode: 422 }));
+
+    await expect(run('b1', makeRes().res)).rejects.toMatchObject({ statusCode: 422 });
+    expect(h.claimBatchForAnalysis).not.toHaveBeenCalled();
+    expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
   });
 
   it('rejects a non-owner, non-admin caller before touching the taxonomy phase', async () => {
@@ -145,7 +155,11 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
       'lake1',
       'u1',
       expect.objectContaining({ error: expect.any(Function) }),
-      { claimHeldByCaller: true, context: 'legal docs' }
+      {
+        claimHeldByCaller: true,
+        context: 'legal docs',
+        req: expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) }),
+      }
     );
     expect(h.claimBatchForAnalysis).toHaveBeenCalledWith('b1', ['ready', 'failed']);
   });

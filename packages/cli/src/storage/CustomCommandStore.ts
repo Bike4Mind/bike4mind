@@ -19,6 +19,19 @@ export interface CustomCommandStoreOptions {
    *  merges them with the lowest precedence (local files always win on name
    *  collision). When omitted, the store is local-only. */
   remoteSource?: RemoteSkillSource;
+  /** Parsed files kept across stores by a long-lived caller, so an unchanged file is neither
+   *  re-parsed nor re-warned about on every scan. Keyed by file path. */
+  fileCache?: Map<string, CachedCommandFile>;
+}
+
+/** One file's parse, valid while its mtime and size hold. `command` is null when it was skipped.
+ *  Rejected reads or parses are evicted so a transient failure can recover on the next scan. */
+export interface CachedCommandFile {
+  source: 'global' | 'project';
+  mtimeMs: number;
+  size: number;
+  command: CustomCommand | null;
+  pending?: Promise<CustomCommand | null>;
 }
 
 export class CustomCommandStore {
@@ -27,6 +40,7 @@ export class CustomCommandStore {
   private projectCommandsDirs: string[];
   private projectRoot: string;
   private remoteSource?: RemoteSkillSource;
+  private fileCache?: Map<string, CachedCommandFile>;
   // Live feature/plugin command names, injected once the FeatureModuleRegistry is
   // built (post-bootstrap). Lets the load gate reject a project command that
   // shadows a runtime plugin command, not just the static reserved set.
@@ -41,6 +55,7 @@ export class CustomCommandStore {
 
   constructor(projectRoot?: string, options: CustomCommandStoreOptions = {}) {
     this.remoteSource = options.remoteSource;
+    this.fileCache = options.fileCache;
     const home = os.homedir();
     const root = projectRoot || process.cwd();
     this.projectRoot = root;
@@ -178,7 +193,8 @@ export class CustomCommandStore {
   }
 
   /**
-   * Recursively scans a directory for .md files and loads them as commands
+   * Recursively scans a directory for .md files and loads them as commands. A
+   * folder holding SKILL.md yields that one skill; its other Markdown is not a command.
    *
    * @param directory - Directory to scan
    * @param source - Source identifier ('global' or 'project')
@@ -194,6 +210,7 @@ export class CustomCommandStore {
       // target escapes the project root. Global dirs stay unconstrained.
       const commandFiles = await findMarkdownFiles(directory, source === 'project' ? this.projectRoot : undefined, {
         skipHiddenDirectories: true,
+        stopAtSkillFile: true,
       });
 
       for (const filePath of commandFiles) {
@@ -245,21 +262,62 @@ export class CustomCommandStore {
       return;
     }
 
+    const command = this.fileCache
+      ? await this.parseCached(filePath, commandName, source, isSkillFile)
+      : await this.parseFile(filePath, commandName, source, isSkillFile);
+    if (!command) return;
+
+    // Since global commands load first, later commands (from project directories
+    // or later global directories) naturally override earlier ones by simply
+    // replacing the map entry
+    this.commands.set(commandName, command);
+  }
+
+  private async parseFile(
+    filePath: string,
+    commandName: string,
+    source: 'global' | 'project',
+    isSkillFile: boolean
+  ): Promise<CustomCommand | null> {
     const fileContent = await fs.readFile(filePath, 'utf-8');
 
     // A SKILL.md exported from Bike4Mind is a Claude Code copy of an account skill. Loading it here
     // would run market text as a trusted local command and shadow the account copy (local wins).
     if (isSkillFile && frontmatterHasSourceStamp(fileContent)) {
       logger.debug(`Skipping ${filePath}: exported from Bike4Mind; the account skill is used instead`);
-      return;
+      return null;
     }
 
-    const command = parseCommandFile(fileContent, filePath, commandName, source);
+    return parseCommandFile(fileContent, filePath, commandName, source);
+  }
 
-    // Since global commands load first, later commands (from project directories
-    // or later global directories) naturally override earlier ones by simply
-    // replacing the map entry
-    this.commands.set(commandName, command);
+  private async parseCached(
+    filePath: string,
+    commandName: string,
+    source: 'global' | 'project',
+    isSkillFile: boolean
+  ): Promise<CustomCommand | null> {
+    const cache = this.fileCache!;
+    const stats = await fs.stat(filePath);
+    const cached = cache.get(filePath);
+    if (cached && cached.source === source && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+      return cached.pending ?? cached.command;
+    }
+    const entry: CachedCommandFile = { source, mtimeMs: stats.mtimeMs, size: stats.size, command: null };
+    const parsing = this.parseFile(filePath, commandName, source, isSkillFile);
+    // Other stores share this cache; an unfinished parse is not a skipped file.
+    entry.pending = parsing.catch(() => null);
+    cache.set(filePath, entry);
+    try {
+      entry.command = await parsing;
+    } catch (error) {
+      // A newer scan may already own this path after a file edit; leave its result intact.
+      if (cache.get(filePath) === entry) cache.delete(filePath);
+      throw error;
+    } finally {
+      delete entry.pending;
+    }
+    return entry.command;
   }
 
   /**

@@ -21,6 +21,7 @@ import {
   resolveIdentityReminder,
   markShareablePrefixBoundary,
   SHAREABLE_PREFIX_SOURCES,
+  PER_CALLER_AUTHORED_SOURCES,
   SIDE_EFFECT_ONLY_FEATURES,
   SYSTEM_PROMPT_PRIORITY,
   TURN_CONTEXT_END,
@@ -40,7 +41,7 @@ describe('buildTaggedContextMessages', () => {
       helpCenter: [sys('help center')],
     });
 
-    expect(tagged.map(t => t.source)).toEqual(['dateContext', 'helpCenter', 'mementos']);
+    expect(tagged.map(t => t.source)).toEqual(['helpCenter', 'dateContext', 'mementos']);
   });
 
   it('tags every message with the source that contributed it', () => {
@@ -121,7 +122,9 @@ describe('SYSTEM_PROMPT_PRIORITY', () => {
 describe('SHAREABLE_PREFIX_SOURCES', () => {
   it('is the contiguous leading run of deployment-wide sources', () => {
     const firstPerCaller = PROMPT_SOURCE_ORDER.findIndex(
-      source => !['hardcoded', 'admin'].includes(PROMPT_SOURCE_METADATA[source].origin)
+      source =>
+        !['hardcoded', 'admin'].includes(PROMPT_SOURCE_METADATA[source].origin) ||
+        PER_CALLER_AUTHORED_SOURCES.includes(source)
     );
 
     expect(SHAREABLE_PREFIX_SOURCES).toEqual(PROMPT_SOURCE_ORDER.slice(0, firstPerCaller));
@@ -129,7 +132,9 @@ describe('SHAREABLE_PREFIX_SOURCES', () => {
 
   it('carries no per-caller source, which would make the region unshareable', () => {
     const perCaller = SHAREABLE_PREFIX_SOURCES.filter(
-      source => !['hardcoded', 'admin'].includes(PROMPT_SOURCE_METADATA[source].origin)
+      source =>
+        !['hardcoded', 'admin'].includes(PROMPT_SOURCE_METADATA[source].origin) ||
+        PER_CALLER_AUTHORED_SOURCES.includes(source)
     );
 
     expect(perCaller).toEqual([]);
@@ -141,9 +146,20 @@ describe('SHAREABLE_PREFIX_SOURCES', () => {
     expect(SHAREABLE_PREFIX_SOURCES).not.toContain('recentImages');
   });
 
+  // Each of these is text we author, so `origin` alone would admit it, but each varies by caller:
+  // the date per timezone-day, the admin view appendix per role, the tool context per user and
+  // session, agent prompts per mention. dateContext used to LEAD the run, which made the whole
+  // "shared" head a per-timezone-day cache write.
+  it.each(['dateContext', 'viewRegistryAdmin', 'toolContext', 'agentDetection'] as const)(
+    'keeps the per-caller %s out of the shared run',
+    source => {
+      expect(SHAREABLE_PREFIX_SOURCES).not.toContain(source);
+    }
+  );
+
   it('is wide enough to be worth a breakpoint at all', () => {
-    // A one-source prefix is the failure this table exists to prevent: extraContext sitting at
-    // position 2 cut the run down to dateContext alone, and a ~13-token head can never clear
+    // A one-source prefix is the failure this table exists to prevent: extraContext once sat at
+    // position 2 and cut the run down to the date line alone, and a ~13-token head can never clear
     // Anthropic's 1024-token minimum cacheable block, so the breakpoint would never materialise.
     expect(SHAREABLE_PREFIX_SOURCES.length).toBeGreaterThan(1);
   });
@@ -162,9 +178,9 @@ describe('markShareablePrefixBoundary', () => {
     markShareablePrefixBoundary(tagged);
 
     expect(tagged.map(t => [t.source, t.message.cache === true])).toEqual([
-      ['dateContext', false],
       ['artifactEmission', false],
       ['abstention', true],
+      ['dateContext', false],
       ['sessionPrompt', false],
       ['mementos', false],
     ]);
@@ -191,7 +207,7 @@ describe('markShareablePrefixBoundary', () => {
   it('lands on the last SURVIVING shareable block when a gate dropped the one behind it', () => {
     // The boundary is applied after the promptMode filter for this reason: marking a block that
     // does not ship declares a breakpoint the request never carries.
-    const tagged = buildTaggedContextMessages({ dateContext: [sys('date')], mementos: [sys('per user')] });
+    const tagged = buildTaggedContextMessages({ artifactEmission: [sys('artifacts')], mementos: [sys('per user')] });
 
     markShareablePrefixBoundary(tagged);
 

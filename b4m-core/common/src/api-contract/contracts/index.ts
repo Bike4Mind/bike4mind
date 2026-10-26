@@ -23,6 +23,7 @@ import {
   deleteFileContract,
 } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
+import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract, listQuestFilesContract } from './quest.contract';
 import {
@@ -37,7 +38,7 @@ import {
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
-import { listWhatsNewContract } from './whatsNew.contract';
+import { getWhatsNewMediaContract, listWhatsNewContract } from './whatsNew.contract';
 import {
   listDataLakesContract,
   getDataLakeContract,
@@ -107,6 +108,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   updateFileContract,
   deleteFileContract,
   createEmbeddingsContract,
+  createTextRefinementContract,
   createDecisionContract,
   listDecisionModelsContract,
   getQuestContract,
@@ -133,6 +135,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createVoiceSessionContract,
   endVoiceSessionContract,
   listWhatsNewContract,
+  getWhatsNewMediaContract,
   listProjectsContract,
   getProjectContract,
   createProjectContract,

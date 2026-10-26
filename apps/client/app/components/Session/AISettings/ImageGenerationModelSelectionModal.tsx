@@ -16,7 +16,7 @@ import {
   Alert,
   useTheme,
 } from '@mui/joy';
-import { Settings as SettingsIcon } from '@mui/icons-material';
+import SettingsIcon from '@mui/icons-material/Settings';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useShallow } from 'zustand/react/shallow';
 import ModelSelection from '../ModelSelection';
@@ -37,6 +37,7 @@ import {
   isGPTImageModel,
   isGPTImage25Model,
   supportsTransparentBackground,
+  supportsPromptUpsampling,
   isKontextModel as isKontextImageModel,
   EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
@@ -61,6 +62,7 @@ import {
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
 import { defaultImageSize, getAvailableImageSizes, showsImageSizeRow } from './imageSizeOptions';
+import { IMAGE_TOOL_PRICE_TOOLTIP, useImageToolPrice } from './useImageToolPrice';
 interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
@@ -183,6 +185,8 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     if (!selectedModelInfo) return { tier: 'Low', variant: 'green' as const };
     return getModelPriceTier(selectedModelInfo);
   }, [selectedModelInfo]);
+
+  const imageToolPrice = useImageToolPrice(selectedModel);
 
   const modelSpeed = getModelSpeedFromStats(selectedModelInfo?.id || '', stats?.avgResponseTime ?? {});
   const isNew = selectedModelInfo ? isNewModel(selectedModelInfo) : false;
@@ -525,6 +529,11 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                 <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1, mb: 2 }}>
                   {isNew && <MetadataChip label="New" mode={mode} variant="blue" />}
                   <MetadataChip label={priceTierInfo.tier} mode={mode} variant={priceTierInfo.variant} />
+                  {imageToolPrice && (
+                    <Box data-testid="image-model-credit-price" sx={{ display: 'contents' }}>
+                      <MetadataChip label={imageToolPrice.label} mode={mode} tooltip={IMAGE_TOOL_PRICE_TOOLTIP} />
+                    </Box>
+                  )}
                   {modelSpeed && (
                     <MetadataChip
                       label={modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)}
@@ -639,21 +648,23 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             {/* BFL-specific Prompt Upsampling & Safety controls */}
             {(BFL_IMAGE_MODELS as readonly string[]).includes(contextImageModel) && (
               <Grid container spacing={2}>
-                <Grid xs={12} md={6}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Tooltip title="Enhances prompt quality for better image generation">
-                      <Typography level="body-sm" sx={{ mb: 0.5 }}>
-                        Prompt Upsampling
-                      </Typography>
-                    </Tooltip>
-                    <Switch
-                      checked={_prompt_upsampling ?? false}
-                      onChange={(e: any) => setLLM({ prompt_upsampling: e.target.checked })}
-                      color={_prompt_upsampling ? 'success' : 'neutral'}
-                      data-testid="prompt-upsampling-switch"
-                    />
-                  </Box>
-                </Grid>
+                {supportsPromptUpsampling(contextImageModel) && (
+                  <Grid xs={12} md={6}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Tooltip title="Enhances prompt quality for better image generation">
+                        <Typography level="body-sm" sx={{ mb: 0.5 }}>
+                          Prompt Upsampling
+                        </Typography>
+                      </Tooltip>
+                      <Switch
+                        checked={_prompt_upsampling ?? false}
+                        onChange={event => setLLM({ prompt_upsampling: event.target.checked })}
+                        color={_prompt_upsampling ? 'success' : 'neutral'}
+                        data-testid="prompt-upsampling-switch"
+                      />
+                    </Box>
+                  </Grid>
+                )}
                 <Grid xs={12} md={6}>
                   <Box>
                     <Tooltip title="Controls content filtering: 0=Strictest, 2=Most permissive (hard-capped)">

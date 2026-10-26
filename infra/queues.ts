@@ -1,4 +1,10 @@
-import { appFilesBucket, fabFileBucket, generatedImagesBucket, slackExportBucket } from './buckets';
+import {
+  appFilesBucket,
+  fabFileBucket,
+  generatedImagesBucket,
+  publishedArtifactsBucket,
+  slackExportBucket,
+} from './buckets';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   PRODUCTION_STAGES,
@@ -759,6 +765,77 @@ const questExportQueueSubscription = questExportQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Publish Thumbnail Queue
+// Owner-only thumbnails of published bundles: one message per artifact version, enqueued by publish
+// finalize, restore and AI revise (enqueuePublishThumbnail in packages/server-utils). Hosted only -
+// the self-host worker image ships no browser (see selfhostParityPolicy.ts and
+// manifestCoverage.test.ts).
+//
+// Two functions. The queue handler (orchestrator) has the database and the private bucket: it
+// loads the artifact, checks the version, builds the fully inlined document, stages it under
+// drafts/ and invokes the renderer, then stores and records the WebP it gets back. The renderer
+// runs the page in headless Chromium (@sparticuz/chromium) and has no application credentials or
+// permissions: no link, no secrets, no VPC, no environment of its own, only the logging role. It reads
+// the staged document through a short-lived presigned link and returns the image inline.
+// infra/__tests__/publishThumbnailRenderer.test.ts holds both sides of that split.
+// Each invocation also ends its own execution environment once its answer is delivered
+// (apps/workers/src/media/lambdaRuntimeExit.ts), so every render starts in a fresh runtime and
+// each REPORT line records that exit as Runtime.ExitError by design; the orchestrator still
+// receives an ordinary result.
+const publishThumbnailRenderer = new sst.aws.Function('PublishThumbnailRenderer', {
+  handler: 'apps/workers/src/media/publishThumbnailRenderer.handler',
+  runtime: 'nodejs24.x',
+  // Runtime start (every invocation) + document fetch (15 s) + browser extraction and launch + the
+  // 35 s render deadline + encode, close and the teardown check (up to 5 s).
+  timeout: '75 seconds',
+  // Chromium needs the headroom; @sparticuz/chromium documents ~1.6 GB as its floor.
+  memory: '2048 MB',
+  nodejs: {
+    // @sparticuz/chromium resolves its brotli-packed binary relative to its own package dir, so it
+    // cannot be bundled; playwright-core loads its protocol/driver files the same way. sharp is a
+    // native addon (sst externalizes it by default but only ships it when installed). install
+    // runs npm for the Lambda's linux platform, so the right prebuilds land in the zip.
+    install: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
+    esbuild: {
+      external: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
+    },
+  },
+});
+const publishThumbnailQueueDLQ = new sst.aws.Queue('publishThumbnailQueueDLQ', {});
+const publishThumbnailQueue = new sst.aws.Queue('publishThumbnailQueue', {
+  visibilityTimeout: '4 minutes', // > the 150-second handler timeout + margin
+  dlq: {
+    queue: publishThumbnailQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const publishThumbnailQueueSubscription = publishThumbnailQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/publishThumbnail.dispatch',
+    runtime: 'nodejs24.x',
+    // Document build + the renderer invoke (aborted client-side at 90 s) + the upload and record.
+    timeout: '150 seconds',
+    memory: '1024 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, publishedArtifactsBucket],
+    permissions: [{ actions: ['lambda:InvokeFunction'], resources: [publishThumbnailRenderer.arn] }],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // Origin the blessed /static/lib scripts load from inside the render (renderSandboxedBundle).
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+      // Read by apps/workers/src/media/invokeThumbnailRenderer.ts.
+      PUBLISH_THUMBNAIL_RENDERER_FUNCTION: publishThumbnailRenderer.name,
+    },
+  },
+  {
+    ...SINGLE_RECORD_BATCH,
+    // Each render holds a 2 GB Chromium for up to a minute, and a backfill can enqueue the whole
+    // library at once; cap the fan-out without reserving account concurrency. The renderer is
+    // only ever invoked from here, so this caps it too.
+    transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 5 } } },
+  }
+);
+
 // Data Lake Cleanup Queue
 // Background phase-2 hard-delete sweep for a soft-deleted lake, offloaded off the request path.
 // Links fabFileBucket because the sweep deletes each purged file's stored objects; no websocket.
@@ -949,7 +1026,8 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
 );
 
 // What's New Highlights Queue
-// Generates weekly highlights summary from What's New modals and posts to Slack
+// Generates a highlights summary from What's New modals and posts to Slack.
+// Fed only by the admin generate-highlights route; there is no scheduled trigger.
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
   transform: {
     queue: {
@@ -1430,7 +1508,7 @@ const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
 //   2. Publishes a continuation message to this queue with `checkpointDepth` incremented
 //   3. A new Lambda invocation CAS-claims the execution and resumes from the checkpoint
 //
-// Self-dispatch safety constraints (see agentExecutor.ts for constants):
+// Self-dispatch safety constraints (see agentExecutor.checkpointDepth.ts for constants):
 //   - CHECKPOINT_DEPTH_WARNING = 25: emits `CheckpointDepthWarning` metric to catch runaway agents early
 //   - MAX_CHECKPOINT_DEPTH    = 50: hard ceiling; Lambda refuses to process and marks the execution failed
 //
@@ -1460,7 +1538,7 @@ const agentContinuationQueue = new sst.aws.Queue('agentContinuationQueue', {
 // where the Agent Executor Lambda is defined, since it needs a reference to that Lambda.
 
 // OptiHashi Run Completion Queue
-// Handles async credit settlement when OptiHashi reports run completion/failure
+// Handles async follow-up work, including credit settlement, when OptiHashi reports run completion/failure
 const optihashiRunCompletionQueueDLQ = new sst.aws.Queue('optihashiRunCompletionQueueDLQ', {
   transform: {
     queue: {
@@ -1493,6 +1571,8 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
   permissions: [
     { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     { actions: ['execute-api:ManageConnections'], resources: ['*'] },
+    // Model calls follow the user's model choice, which can be a Bedrock provider outside the anthropic/amazon ARNs used elsewhere.
+    { actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], resources: ['*'] },
   ],
 });
 
@@ -1598,6 +1678,7 @@ export {
   githubWebhookQueue,
   webhookDeliveryQueue,
   questExportQueue,
+  publishThumbnailQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
   dataLakeResearchQueue,
@@ -1634,6 +1715,7 @@ export {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
@@ -1672,6 +1754,8 @@ export {
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
+  publishThumbnailQueueSubscription,
+  publishThumbnailRenderer,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
   dataLakeResearchQueueSubscription,

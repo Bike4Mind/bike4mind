@@ -147,6 +147,7 @@ describe('ProxyManager', () => {
       expect(env.https_proxy).toBe(env.HTTP_PROXY);
       expect(env.NO_PROXY).toBe('localhost,127.0.0.1,::1');
       expect(env.no_proxy).toBe('localhost,127.0.0.1,::1');
+      expect(env.NODE_USE_ENV_PROXY).toBe('1');
     });
 
     it('returns empty when not running', () => {

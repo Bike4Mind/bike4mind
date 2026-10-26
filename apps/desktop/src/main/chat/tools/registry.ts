@@ -26,6 +26,7 @@ import {
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { requestDirectory } from './requestDirectoryTool';
+import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
 import { skillTool } from './skillTool';
 import { todoWrite } from './todoTool';
@@ -141,6 +142,7 @@ const BY_NAME = new Map(
     ...HOST_TOOLS,
     ...SUGGESTION_TOOLS,
     ...BROWSER_TOOLS,
+    screenCapture,
     ...MEMORY_TOOLS,
     ...SKILL_TOOLS,
     askUser,
@@ -191,6 +193,11 @@ export function toolsForRequest(options: {
   modelId?: string;
   /** A hidden browser for this session. Every conversation gets one; it needs no project. */
   browser?: boolean;
+  /**
+   * The app can see other apps' windows. Like the browser it needs no folder or project: it reads
+   * the user's screen, which is gated per capture rather than by a grant.
+   */
+  screen?: boolean;
   /** A resolved memory store. Needs a project, which is what the store is keyed on. */
   memory?: boolean;
   /** A skill catalog for this session. No folder grant needed; a global skill is the user's own file. */
@@ -230,6 +237,7 @@ export function toolsForRequest(options: {
     ...(options.host ? HOST_TOOLS : []),
     ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
     ...(options.browser ? BROWSER_TOOLS : []),
+    ...(options.screen ? [screenCapture] : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
     ...(options.web ? WEB_TOOLS : []),

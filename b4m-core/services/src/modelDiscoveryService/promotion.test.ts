@@ -1,4 +1,4 @@
-import { ModelBackend } from '@bike4mind/common';
+import { ModelBackend, isDiscoveryVerdict } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { testCredentials, testRecord } from './__fixtures__/fakes';
 import {
@@ -114,11 +114,32 @@ describe('evaluatePromotion', () => {
     expect(decision.autoDisabledReason).toBe(AWAITING_APPROVAL_REASON);
   });
 
+  it('still requires a price for an unpriced text model under the all policy', () => {
+    const decision = evaluate({ policy: 'all', hasTrustedPrice: false, record: testRecord({ type: 'text' }) });
+
+    expect(decision.promote).toBe(false);
+    expect(decision.blockedBy).toEqual(['no-trusted-price']);
+    expect(decision.autoDisabledReason).toBe(AWAITING_PRICE_REASON);
+  });
+
+  it('promotes a priced or free text model under the all policy', () => {
+    expect(evaluate({ policy: 'all', hasTrustedPrice: true, record: testRecord({ type: 'text' }) }).promote).toBe(true);
+    expect(
+      evaluate({ policy: 'all', hasTrustedPrice: false, record: testRecord({ type: 'text', freeToRun: true }) }).promote
+    ).toBe(true);
+  });
+
+  it('waives the price for a non-text model under the all policy', () => {
+    expect(evaluate({ policy: 'all', hasTrustedPrice: false, record: testRecord({ type: 'image' }) }).promote).toBe(
+      true
+    );
+  });
+
   it('still refuses a missing dispatch profile under the all policy', () => {
     const decision = evaluate({
       policy: 'all',
       hasTrustedPrice: false,
-      record: testRecord({ dispatchProfile: undefined }),
+      record: testRecord({ type: 'image', dispatchProfile: undefined }),
     });
 
     expect(decision.blockedBy).toEqual(['no-dispatch-profile']);
@@ -162,5 +183,23 @@ describe('evaluatePromotion', () => {
       'no-trusted-price',
       'no-credential-for-backend',
     ]);
+  });
+
+  // mergeCatalog recognises discovery's own disable by this prefix; a reworded verdict keeps the
+  // disable in force over a curated record and the model stays disabled.
+  it('words every denial off the prefix the catalog merge recognises as discovery-owned', () => {
+    const constants = [
+      AWAITING_PRICE_REASON,
+      UNCORROBORATED_PRICE_REASON,
+      PRICED_IN_BUILD_REASON,
+      AWAITING_APPROVAL_REASON,
+      NOT_INVOCABLE_REASON,
+    ];
+    for (const reason of constants) expect(isDiscoveryVerdict(reason), reason).toBe(true);
+
+    // The fallback branch, reached when no named clause explains the denial.
+    const decision = evaluate({ credentials: testCredentials({ openai: null }) });
+    expect(decision.blockedBy).toEqual(['no-credential-for-backend']);
+    expect(isDiscoveryVerdict(decision.autoDisabledReason)).toBe(true);
   });
 });

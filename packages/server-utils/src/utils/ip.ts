@@ -1,12 +1,16 @@
 import { isPrivateIP } from '@bike4mind/fab-pipeline';
 import {
+  type CloudFrontViewerNetwork,
   getCloudFrontViewerIp,
+  getCloudFrontViewerNetwork,
   getTrustedForwardedForIp,
   type HeaderReader,
   isSelfHost,
   readTrustedProxyHops,
   stripPort,
 } from './trustedClientIpHeaders';
+
+export type { CloudFrontViewerNetwork };
 
 // Extracts the most accurate client IP behind proxies/CDNs.
 //
@@ -63,6 +67,11 @@ const UNTRUSTED_HEADER_ORDER = [
   'x-forwarded-for',
   'fly-client-ip',
 ] as const;
+
+/** The viewer ASN and country CloudFront forwarded for this request; nulls when absent or self-hosted. */
+export function getClientNetwork(req: ClientIpRequest): CloudFrontViewerNetwork {
+  return getCloudFrontViewerNetwork(headerReader(req));
+}
 
 export function getClientIp(req: ClientIpRequest): string {
   const readHeader = headerReader(req);

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/observability",
-  "version": "0.2.3",
+  "version": "1.0.0",
   "publishConfig": {
     "access": "restricted"
   },
