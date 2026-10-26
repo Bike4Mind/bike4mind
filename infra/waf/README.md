@@ -2,15 +2,58 @@
 
 ## Sample policy and deployment-owned policies
 
-The two JSON files in this directory are a sample policy with round example
-rate limits. They are not tuned for any particular deployment. A deployment
-supplies its own policy in one of two ways:
+The JSON file in this directory is a sample policy with round example rate
+limits. It is not tuned for any particular deployment, and it is used by the
+stage-owned ACLs only (dev, staging and PR previews without `WAF_WEB_ACL_NAME`).
+Any stage that sets `WAF_WEB_ACL_NAME` attaches an ACL managed outside this
+stack, found by name, and production requires it; see `infra/wafAssociation.ts`. A deployment supplies its own non-production policy
+in one of two ways:
 
-- overwrite `bike4mind-api-protection-prod.json` and
-  `bike4mind-api-protection-dev.json` here before SST runs, or
-- set `WAF_POLICY_DIR` to a directory holding files with those same two names
+- overwrite `bike4mind-api-protection-dev.json` here before SST runs, or
+- set `WAF_POLICY_DIR` to a directory holding a file with that same name
   (absolute, or relative to the repo root). See `resolveWafPolicyDir` in
   `infra/wafPolicy.ts`.
+
+## External ACL contract and handoff
+
+Set `ENABLE_WAF=true` and `WAF_WEB_ACL_NAME` to attach an existing
+CloudFront-scope ACL in us-east-1. Production requires both settings and fails
+deployment when either is missing. Other stages use their own ACL when no
+external name is supplied.
+
+The external ACL must already have logging enabled to one CloudWatch log group
+in us-east-1 whose name starts with `aws-waf-logs-`. This stack reads the logging
+configuration without managing it. Missing logging, failed lookups, and S3 or
+Firehose destinations fail deployment: the dashboard and production signup
+edge-signal alarm require CloudWatch Logs. The dashboard IAM policy and the
+signup filter follow the selected destination, including custom group names.
+
+Before production adopts the external ACL:
+
+1. Deploy the retention change in PR #5805 to the existing production stack.
+   Confirm the deployed state retains the ACL, IP set, log group, logging
+   configuration and rate-limit alarm topic before removing their declarations.
+2. Prepare external ownership of those retained resources. Avoid concurrent
+   writes from two stacks; remove retained resources from the original stack
+   before importing them into the new owner's state.
+3. Create and verify replacement rate-limit alarms under distinct physical names
+   before deploying this association change. The six old rate-limit alarms are
+   deliberately **not retained** by #5805 and will be deleted. Importing those
+   same alarms into another stack first does not prevent the original stack
+   from deleting them.
+4. Keep the production rate-limit SNS topic at its existing name,
+   `<app>-production-waf-ai-rate-limit-alarm`, and set `WAF_WEB_ACL_NAME` in the
+   deploy environment. The topic lookup must succeed before deployment.
+
+This stack continues to own production alert delivery, its DLQ and alarms, the
+out-of-band email topic, and the signup edge-signal filter and alarm. Only
+production creates these resources. Other stages using an external ACL read
+its logging configuration but do not look up the production alarm topic.
+
+If deployment fails while reading the external logging configuration, verify
+the selected ACL's logging destination and the deployer's read permissions.
+If signup alerts stop after moving logging, redeploy this stack to refresh the
+filter and dashboard IAM policy against the new destination.
 
 To check a deployment-owned policy against the structural invariants (rule
 order, priorities, shadow rules staying in Count), point the suite at it:
@@ -44,7 +87,7 @@ An ASN-keyed rule shares one counter across every client on a network, so size i
 
 ## Bot Control telemetry
 
-Both stage policies run `AWSManagedRulesBotControlRuleSet` at the `COMMON`
+The policy runs `AWSManagedRulesBotControlRuleSet` at the `COMMON`
 inspection level, last at priority 30, with the group return action overridden
 to `Count`. It cannot block, challenge, or CAPTCHA requests.
 
@@ -61,21 +104,11 @@ from earlier security rules.
 
 ## Capacity and cost
 
-Read-only AWS WAFv2 `CheckCapacity` measurements on 2026-10-23, in `us-east-1`
-with `CLOUDFRONT` scope, compared the policies before and after Bot Control:
-
-| Policy                          | Before (WCU) | With Bot Control (WCU) | Increase |
-| ------------------------------- | -----------: | ---------------------: | -------: |
-| dev (also staging and previews) |        1,442 |                  1,496 |       54 |
-| production                      |        1,418 |                  1,472 |       54 |
-
-The API measured the complete rule lists, replacing the emergency IPSet ARN
-placeholder with an existing CloudFront IPSet ARN. AWS optimizes combined rule
-capacity, so summing individual statement costs overestimates these policies.
-These are historical measurements from before the additional path-scoped rate
-rules. They do not describe the current policy's capacity or pricing tier.
-Re-run `CheckCapacity` after policy changes or managed-rule updates;
-these measurements are not a permanent capacity guarantee.
+Re-run the read-only AWS
+WAFv2 `CheckCapacity` API (`us-east-1`, `CLOUDFRONT` scope, with the emergency
+IPSet ARN placeholder replaced by an existing IPSet ARN) after policy changes or
+managed-rule updates. AWS optimizes combined rule capacity, so summing
+individual statement costs overestimates it.
 
 [WAF pricing](https://aws.amazon.com/waf/pricing/) adds a per-request charge for
 each additional 500 WCU above 1,500. Bot Control also has its own per-ACL monthly
