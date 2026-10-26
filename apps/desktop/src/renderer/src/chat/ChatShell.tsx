@@ -22,7 +22,7 @@ import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
-import { GlobeIcon, PanelRightIcon, TerminalIcon } from './icons';
+import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
@@ -682,6 +682,24 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   </Typography>
                 )}
               </Box>
+              {!opening && conversation.session?.historyEnabled === true && (
+                <Tooltip
+                  size="sm"
+                  variant="soft"
+                  placement="bottom-end"
+                  title="Local history is on. Change it in the browser's ... menu."
+                >
+                  <Box
+                    component="span"
+                    role="img"
+                    aria-label="Local history is on"
+                    data-testid="chat-history-indicator"
+                    sx={{ display: 'inline-flex', color: 'text.tertiary', px: 0.5 }}
+                  >
+                    <SearchIcon />
+                  </Box>
+                </Tooltip>
+              )}
               {panelProject && (
                 <Tooltip
                   size="sm"

@@ -242,4 +242,39 @@ describe('local model and history reachability', () => {
     );
     expect(el('browser-pane-history').dataset.enabled).toBe('true');
   });
+
+  it.each([true, false])('shows the header indicator only while history is on (on: %s)', async on => {
+    getSession.mockImplementation(
+      async id =>
+        ({
+          ...SESSIONS.find(entry => entry.id === id),
+          model,
+          messages: [],
+          historyEnabled: on,
+        }) as unknown as ChatSession
+    );
+    await renderShell();
+    expect(document.querySelector('[data-testid="chat-history-indicator"]') !== null).toBe(on);
+  });
+
+  it('hides the header indicator while a picked session is loading', async () => {
+    getSession.mockImplementation(
+      async id =>
+        ({
+          ...SESSIONS.find(entry => entry.id === id),
+          model,
+          messages: [],
+          historyEnabled: true,
+        }) as unknown as ChatSession
+    );
+    await renderShell();
+    expect(el('chat-history-indicator')).toBeTruthy();
+    getSession.mockReturnValue(new Promise(() => undefined));
+    await act(async () => typeInto('chat-search-input', 'needle'));
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 150));
+    });
+    await act(async () => el('local-history-result').click());
+    expect(document.querySelector('[data-testid="chat-history-indicator"]')).toBeNull();
+  });
 });
