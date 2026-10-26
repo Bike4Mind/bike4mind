@@ -186,7 +186,7 @@ export async function domainHoldReason(
     youngerThanDays: number;
     timeoutMs: number;
     adminBlockedDomains: ReadonlySet<string>;
-    lookup?: Partial<Omit<DomainLookupOptions, 'timeoutMs' | 'isRejectTier'>>;
+    lookup?: Partial<Omit<DomainLookupOptions, 'timeoutMs'>>;
   }
 ): Promise<string | null> {
   const { repository } = options;
