@@ -83,6 +83,8 @@ const MFASchema = new Schema(
     totpSecret: { type: String, required: true, select: false },
     totpEnabled: { type: Boolean, default: false },
     backupCodes: { type: [String], default: [], select: false },
+    // Encrypted like totpSecret; only present between setup and enable.
+    pendingBackupCodes: { type: String, select: false },
     setupAt: { type: Date, required: true },
     lastUsedAt: { type: Date, default: null },
     // Server-side attempt tracking (can't be bypassed by refresh/cancel)
@@ -417,15 +419,20 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   /**
    * Loads a user WITH the select:false MFA secrets - for server-side MFA verification only.
-   * `mfa.totpSecret` comes back decrypted; writing the snapshot back re-encrypts it (see
-   * encryptTotpSecretInUpdate), so snapshot writers never persist the plaintext.
+   * `mfa.totpSecret` and `mfa.pendingBackupCodes` come back decrypted; writing the snapshot back
+   * re-encrypts them (see encryptTotpSecretInUpdate), so snapshot writers never persist the plaintext.
    */
   async findByIdWithMfaSecrets(id: string): Promise<IUserDocument | null> {
-    const result = await this.model.findOne({ _id: id }).select('+mfa.totpSecret +mfa.backupCodes');
+    const result = await this.model
+      .findOne({ _id: id })
+      .select('+mfa.totpSecret +mfa.backupCodes +mfa.pendingBackupCodes');
     if (!result) return null;
     const user: IUserDocument = result.toJSON();
     if (user.mfa?.totpSecret) {
       user.mfa.totpSecret = decryptAtRest(user.mfa.totpSecret);
+    }
+    if (user.mfa?.pendingBackupCodes) {
+      user.mfa.pendingBackupCodes = decryptAtRest(user.mfa.pendingBackupCodes);
     }
     return user;
   }
@@ -543,7 +550,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'mfa.lastUsedAt': new Date(),
           updatedAt: new Date(),
         },
-        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1 },
+        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1, 'mfa.pendingBackupCodes': 1 },
       },
       { new: true }
     );
@@ -1366,28 +1373,32 @@ function stripSecretlessMfaFromUpdate(this: Query<unknown, IUserDocument>) {
 }
 
 /**
- * Encrypts `mfa.totpSecret` on every update that writes it, so a read-only DB or backup exposure
- * cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
+ * Encrypts `mfa.totpSecret` (and `mfa.pendingBackupCodes`) on every update that writes it, so a
+ * read-only DB or backup exposure cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
  * that setupMFA and the snapshot writers (passkey authenticate, regenerate-backup-codes) use, and the
  * dotted `mfa.totpSecret` form. encryptAtRest leaves ciphertext untouched, so re-writing an
  * already-encrypted value is a no-op. Must stay in sync with the decrypt in findByIdWithMfaSecrets.
  */
+const MFA_ENCRYPTED_FIELDS = ['totpSecret', 'pendingBackupCodes'] as const;
+
 function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
   const update = this.getUpdate() as Record<string, unknown> | null;
   if (!update || Array.isArray(update)) return;
 
+  const encrypt = (value: string) => (isEncrypted(value) ? value : encryptAtRest(value));
   const encryptIn = (container: Record<string, unknown> | undefined) => {
     if (!container) return;
-    const mfa = container.mfa as { totpSecret?: unknown } | null | undefined;
-    if (mfa && typeof mfa === 'object' && typeof mfa.totpSecret === 'string') {
-      container.mfa = {
-        ...mfa,
-        totpSecret: isEncrypted(mfa.totpSecret) ? mfa.totpSecret : encryptAtRest(mfa.totpSecret),
-      };
+    const mfa = container.mfa as Record<string, unknown> | null | undefined;
+    if (mfa && typeof mfa === 'object') {
+      const encrypted = { ...mfa };
+      for (const field of MFA_ENCRYPTED_FIELDS) {
+        if (typeof encrypted[field] === 'string') encrypted[field] = encrypt(encrypted[field]);
+      }
+      container.mfa = encrypted;
     }
-    const dotted = container['mfa.totpSecret'];
-    if (typeof dotted === 'string') {
-      container['mfa.totpSecret'] = isEncrypted(dotted) ? dotted : encryptAtRest(dotted);
+    for (const field of MFA_ENCRYPTED_FIELDS) {
+      const dotted = container[`mfa.${field}`];
+      if (typeof dotted === 'string') container[`mfa.${field}`] = encrypt(dotted);
     }
   };
 
@@ -1432,6 +1443,10 @@ UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], encryptTotpSecre
 UserSchema.pre('save', function (next) {
   if (this.mfa?.totpSecret && !isEncrypted(this.mfa.totpSecret) && this.isModified('mfa.totpSecret')) {
     this.mfa.totpSecret = encryptAtRest(this.mfa.totpSecret);
+  }
+  const pendingCodes = this.mfa?.pendingBackupCodes;
+  if (pendingCodes && !isEncrypted(pendingCodes) && this.isModified('mfa.pendingBackupCodes')) {
+    this.mfa!.pendingBackupCodes = encryptAtRest(pendingCodes);
   }
   next();
 });
