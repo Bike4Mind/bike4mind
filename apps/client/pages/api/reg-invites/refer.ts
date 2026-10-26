@@ -1,5 +1,5 @@
 import { RegInviteEvents, inboxAliasKey, requireEnv } from '@bike4mind/common';
-import { IRegistrationInvite, RegInviteStatusType } from '@bike4mind/common';
+import { IRegistrationInvite, RegInviteSource, RegInviteStatusType } from '@bike4mind/common';
 import { registrationInviteRepository, User, userRepository } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { createRegInvite, generateCode } from '@server/managers/regInviteManager';
@@ -121,11 +121,18 @@ const handler = baseApi().post(
             email: target,
             code: inviteCode,
             status: RegInviteStatusType.open,
+            source: RegInviteSource.referral,
           };
           const savedInvite = await createRegInvite(newRegInvite);
           hasUsableInvite = true;
           newInviteIds.push(savedInvite.id);
           user.regInvites.push(savedInvite.id);
+        } else if (existingInvite.userId !== userId) {
+          // Someone else already invited this address; reusing their code would credit them while
+          // this sender is charged. Skipped silently like an existing account, so the response
+          // does not reveal it and the reservation stays spent.
+          slackErrorMessages.push(`Email ${target} already has an invite from another sender. Skipping invite.`);
+          continue;
         } else {
           hasUsableInvite = true;
           inviteCode = existingInvite.code;
