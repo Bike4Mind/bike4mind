@@ -21,9 +21,17 @@ const threshold = Number(process.env.OAUTH_SIGNUP_REFUSED_ALARM_PER_5MIN) || DEF
 export const oauthSignupsRefusedAlarm =
   isMonitoredStage && web.nodes.server
     ? (() => {
+        // Same stage gate as dlqAlarms.ts; narrows the conditional export without a non-null assertion.
+        if (!dlqAlarmTopic) {
+          throw new Error('alarm routing requires dlqAlarmTopic');
+        }
+
         new aws.cloudwatch.LogMetricFilter('oauthSignupsRefusedFilter', {
           name: `${$app.name}-${$app.stage}-oauth-signups-refused`,
-          logGroupName: web.nodes.server.nodes.logGroup.apply(lg => lg?.name ?? ''),
+          logGroupName: web.nodes.server.nodes.logGroup.apply(lg => {
+            if (!lg) throw new Error('server function is missing its CloudWatch log group');
+            return lg.name;
+          }),
           // The server Lambda keeps the default text format (`ts\treqId\tLEVEL\t{json}`), so a JSON `{ $.field = ... }`
           // selector never matches. Match the quoted key and value: a caller-controlled field (requestId, path)
           // is JSON-escaped, so it cannot contain this sequence unescaped.
