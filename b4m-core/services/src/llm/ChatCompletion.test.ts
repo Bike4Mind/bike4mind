@@ -6223,12 +6223,17 @@ describe('ChatCompletionProcess', () => {
         expect(incrementCredits).toHaveBeenCalledTimes(2);
         expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - TOOL_CHARGE);
         expect(state.balance).toBe(BALANCE - TOOL_CHARGE);
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
+          expect.objectContaining({ balanceAfter: BALANCE - TOOL_CHARGE })
+        );
       });
 
       it('refuses the next turn while the balance is negative, without calling the model', async () => {
         const { state, incrementCredits } = fakeBalance(-250);
         const complete = vi.fn();
         setupPersonalTurn(incrementCredits, complete);
+        (service as any).user = { ...mockUser, currentCredits: -250 };
 
         await service.process({ body: personalBody(), logger: mockLogger });
 
@@ -6238,6 +6243,16 @@ describe('ChatCompletionProcess', () => {
         expect(state.balance).toBe(-250);
         expect(mockQuest.type).toBe('error');
         expect(mockQuest.reply).toMatch(/250 credits owed/);
+      });
+
+      it('does not report a debt when a concurrent hold, not an earlier overshoot, drained the balance', async () => {
+        const { incrementCredits } = fakeBalance(BALANCE - 500);
+        setupPersonalTurn(incrementCredits, vi.fn());
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(mockQuest.type).toBe('error');
+        expect(mockQuest.reply).not.toMatch(/owed/);
       });
     });
 

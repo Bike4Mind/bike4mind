@@ -4498,7 +4498,9 @@ export class ChatCompletionProcess {
           await reservationMethods.incrementCredits(reservationOwnerId, requiredCredits);
           const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + requiredCredits;
           const errorMessage = buildInsufficientCreditsMessage({
-            available: actualBalance,
+            // Only a balance that was already negative before this hold is debt; otherwise a
+            // sibling hold still in flight is what pushed it below zero.
+            available: reservationUserCredits < 0 ? actualBalance : Math.max(0, actualBalance),
             required: requiredCredits,
             organizationName: organization?.name,
           });
