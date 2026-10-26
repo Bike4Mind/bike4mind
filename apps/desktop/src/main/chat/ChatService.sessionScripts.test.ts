@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/chat';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
@@ -20,6 +20,11 @@ function toolTurn(id: string, name: string, input: Record<string, unknown>): str
 }
 
 type Round = [string, Record<string, unknown>];
+
+// npm and npx stubs first on PATH. What is checked here is whether a command is asked about, and a
+// real npm boot plus the vitest or prettier it runs can outlast the 5 s settle wait on a loaded runner.
+const stub = vi.hoisted(() => ({ bin: '' }));
+vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}` }));
 
 describe('ChatService running a script written in the same session', () => {
   let service: ChatService;
@@ -41,6 +46,14 @@ describe('ChatService running a script written in the same session', () => {
       timeout: 5000,
       interval: 10,
     });
+
+  beforeAll(async () => {
+    stub.bin = await realpath(await mkdtemp(join(tmpdir(), 'b4m-scripts-bin-')));
+    for (const tool of ['npm', 'npx']) {
+      await writeFile(join(stub.bin, tool), '#!/bin/sh\nexit 0\n', 'utf8');
+      await chmod(join(stub.bin, tool), 0o755);
+    }
+  });
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-scripts-')));
