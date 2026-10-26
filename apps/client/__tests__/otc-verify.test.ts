@@ -70,6 +70,7 @@ vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
 }));
 
 vi.mock('@server/auth/networkMeta', () => ({ recordSignupNetwork: vi.fn(), recordLoginEvent: vi.fn() }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
