@@ -78,5 +78,13 @@ describe('signup fingerprint observations', () => {
   it('rejects invalid windows and unbounded result sizes before querying', async () => {
     await expect(findSignupFingerprintClusters({ ...query, windowEnd: start })).rejects.toThrow();
     await expect(findSignupFingerprintClusters({ ...query, limit: 1001 })).rejects.toThrow();
+    const ninetyDaysMs = 90 * 24 * 60 * 60_000;
+    await expect(
+      findSignupFingerprintClusters({ ...query, windowEnd: new Date(start.getTime() + ninetyDaysMs + 1) })
+    ).rejects.toThrow();
+    await expect(
+      findSignupFingerprintClusters({ ...query, windowEnd: new Date(start.getTime() + ninetyDaysMs) })
+    ).resolves.toEqual([]);
+    await expect(findSignupFingerprintClusters({ ...query, minimumSignups: 0 })).rejects.toThrow();
   });
 });

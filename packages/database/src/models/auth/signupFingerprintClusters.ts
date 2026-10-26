@@ -34,12 +34,10 @@ export async function findSignupFingerprintClusters(
     { $sort: { signupCount: -1, _id: 1 } },
     { $limit: query.limit },
   ]).option({ maxTimeMS: 30_000, allowDiskUse: true });
-  return rows
-    .filter(row => ja4FingerprintSchema.safeParse(row._id).success)
-    .map(row => ({
-      ja4: row._id,
-      signupCount: row.signupCount,
-      windowStart: query.windowStart,
-      windowEnd: query.windowEnd,
-    }));
+  return rows.map(row => ({
+    ja4: row._id,
+    signupCount: row.signupCount,
+    windowStart: query.windowStart,
+    windowEnd: query.windowEnd,
+  }));
 }

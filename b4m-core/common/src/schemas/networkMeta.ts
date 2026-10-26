@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { INetworkMeta, ISignupMeta } from '../types/entities/UserTypes';
 
 export const JA4_PATTERN = /^[tqd][0-9a-z]{2}[di][0-9]{4}[0-9a-z]{2}_[0-9a-f]{12}_[0-9a-f]{12}$/;
 export const ja4FingerprintSchema = z.string().length(36).regex(JA4_PATTERN);
@@ -11,9 +12,9 @@ export const networkMetaSchema = z.object({
   country: z.string().nullable(),
   isDatacenter: z.boolean().nullable(),
   ja4: ja4FingerprintSchema.nullable().optional(),
-});
+}) satisfies z.ZodType<INetworkMeta>;
 
-export const signupMetaSchema = networkMetaSchema.extend({ capturedAt: z.date() });
+export const signupMetaSchema = networkMetaSchema.extend({ capturedAt: z.date() }) satisfies z.ZodType<ISignupMeta>;
 
 /** Server/admin-only observation; a shared fingerprint is not an access decision. */
 export const signupFingerprintClusterSchema = z.object({

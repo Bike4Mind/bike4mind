@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { resolvePyodideMirrorOrigin } from '@client/app/utils/pyodideDistribution';
-import { getTrustedHeaderClientIp } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
+import {
+  CLOUDFRONT_VIEWER_JA4_HEADER,
+  getTrustedHeaderClientIp,
+} from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import {
   resolveFilesOrigin,
   resolveObjectStoreOrigin,
@@ -103,12 +106,12 @@ export function proxy(request: NextRequest) {
   if (originSecret) {
     const headers = new Headers(request.headers);
     headers.delete(ORIGIN_VERIFY_HEADER);
-    if (process.env.B4M_SELF_HOST === 'true') headers.delete('cloudfront-viewer-ja4-fingerprint');
+    if (process.env.B4M_SELF_HOST === 'true') headers.delete(CLOUDFRONT_VIEWER_JA4_HEADER);
     response = NextResponse.next({ request: { headers } });
-  } else if (request.headers.has('cloudfront-viewer-ja4-fingerprint')) {
+  } else if (request.headers.has(CLOUDFRONT_VIEWER_JA4_HEADER)) {
     // Without origin verification a direct client can supply this observation header.
     const headers = new Headers(request.headers);
-    headers.delete('cloudfront-viewer-ja4-fingerprint');
+    headers.delete(CLOUDFRONT_VIEWER_JA4_HEADER);
     response = NextResponse.next({ request: { headers } });
   } else {
     response = NextResponse.next();

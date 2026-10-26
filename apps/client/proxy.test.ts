@@ -480,6 +480,18 @@ describe('proxy origin verification', () => {
     ) as unknown as Forwarded;
     expect(response.forwardedRequestHeaders?.get('cloudfront-viewer-ja4-fingerprint')).toBe('synthetic');
   });
+
+  it('strips the fingerprint on self-host even after origin verification', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'x-b4m-origin-verify': SECRET,
+        'cloudfront-viewer-ja4-fingerprint': 'synthetic',
+      })
+    ) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders?.has('cloudfront-viewer-ja4-fingerprint')).toBe(false);
+  });
 });
 
 describe('proxy server-action probes', () => {
