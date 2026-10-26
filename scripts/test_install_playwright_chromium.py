@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -196,6 +197,25 @@ class ChromiumActionTests(unittest.TestCase):
                 ])
 
 
+def live_state_after(pid, deadline=5.0):
+    """Return the pid's /proc state if it is still alive after the deadline, else None.
+
+    timeout's group SIGKILL only marks the child; on a loaded runner it can still
+    read 'R' when timeout exits, until the scheduler lets it run do_exit.
+    """
+    stop = time.monotonic() + deadline
+    while True:
+        try:
+            state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError):
+            return None  # Already reaped.
+        if state in ('Z', 'X'):
+            return None
+        if time.monotonic() >= stop:
+            return state
+        time.sleep(0.01)
+
+
 @unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('timeout'), 'GNU timeout requires Linux')
 class TimeoutProcessGroupTests(unittest.TestCase):
     def test_action_deadlines_kill_term_resistant_child(self):
@@ -214,14 +234,12 @@ class TimeoutProcessGroupTests(unittest.TestCase):
                 for parent_script in ('"$@" & wait', 'trap "" TERM; "$@" & wait'):
                     with tempfile.TemporaryDirectory() as directory:
                         pid_file = Path(directory) / 'child-pid'
-                        child = (
-                            'import os, pathlib, signal, time; '
-                            'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
-                            f'pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); '
-                            'time.sleep(20)'
-                        )
+                        # A shell child starts well inside the 0.5s deadline even on a loaded
+                        # runner (Python's startup did not), and SIG_IGN survives the exec.
+                        pid_tmp = shlex.quote(f'{pid_file}.tmp')
+                        child = f'trap "" TERM; echo $$ > {pid_tmp}; mv {pid_tmp} {shlex.quote(str(pid_file))}; exec sleep 20'
                         process = subprocess.Popen(
-                            ['timeout', *options, 'bash', '-c', parent_script, 'bash', sys.executable, '-c', child],
+                            ['timeout', *options, 'bash', '-c', parent_script, 'bash', 'sh', '-c', child],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
                         )
                         try:
@@ -229,13 +247,7 @@ class TimeoutProcessGroupTests(unittest.TestCase):
                             self.assertIn(process.returncode, (-signal.SIGKILL, 137))
                             self.assertTrue(pid_file.exists(), 'child did not start')
                             child_pid = int(pid_file.read_text())
-                            child_stat = Path(f'/proc/{child_pid}/stat')
-                            try:
-                                state = child_stat.read_text().split()[2]
-                            except (FileNotFoundError, ProcessLookupError):
-                                pass  # Already reaped between checking the path and reading it.
-                            else:
-                                self.assertEqual(state, 'Z', 'child survived hard deadline')
+                            self.assertIsNone(live_state_after(child_pid), 'child survived hard deadline')
                         finally:
                             try:
                                 os.killpg(process.pid, signal.SIGKILL)
