@@ -133,7 +133,7 @@ function fakeHub(overrides: Partial<HubClient> = {}): HubClient {
           pipelineTag: 'text-generation',
           gated: false,
           private: false,
-          licenses: ['apache-2.0'],
+          licenses: ['apache-2.0', 'mit'],
           baseModels: [],
           tags: [],
         },
@@ -294,6 +294,7 @@ describe('licenseFor', () => {
       label: 'apache-2.0',
       link: `${ENDPOINT}/${REPO}`,
       restricted: false,
+      plural: false,
     });
   });
 
@@ -302,11 +303,27 @@ describe('licenseFor', () => {
       detail({ licenses: ['other'], licenseName: 'qwen-research', licenseLink: 'LICENSE' }),
       ENDPOINT
     );
-    expect(info).toEqual({ label: 'qwen-research', link: `${ENDPOINT}/${REPO}/blob/main/LICENSE`, restricted: true });
+    expect(info).toEqual({
+      label: 'qwen-research',
+      link: `${ENDPOINT}/${REPO}/blob/main/LICENSE`,
+      restricted: true,
+      plural: false,
+    });
   });
 
   it('treats a missing license as restricted', () => {
     expect(licenseFor(detail({ licenses: [] }), ENDPOINT)).toMatchObject({ label: 'none declared', restricted: true });
+  });
+
+  it('is permissive only when every declared license is', () => {
+    expect(licenseFor(detail({ licenses: ['apache-2.0', 'mit'] }), ENDPOINT)).toMatchObject({
+      label: 'apache-2.0, mit',
+      restricted: false,
+    });
+    expect(licenseFor(detail({ licenses: ['apache-2.0', 'gemma'] }), ENDPOINT)).toMatchObject({
+      label: 'apache-2.0, gemma',
+      restricted: true,
+    });
   });
 });
 
@@ -341,14 +358,16 @@ describe('models search', () => {
     await runModelsCommand('search', { _: [], query: ['qwen2.5', '0.5b'] }, h.deps);
     expect(h.hub.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'qwen2.5 0.5b', limit: 20 }));
     expect(h.lines[0]).toMatch(/^REPO\s+DOWNLOADS\s+LIKES\s+LICENSE\s+GATED$/);
-    expect(h.lines[1]).toMatch(/^Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF\s+123\.5k\s+200\s+apache-2\.0\s+no$/);
+    expect(h.lines[1]).toMatch(/^Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF\s+123\.5k\s+200\s+apache-2\.0, mit\s+no$/);
     expect(h.lines[2]).toMatch(/llama3\.2\s+yes \(manual approval\)$/);
   });
 
   it('prints the page as JSON', async () => {
     const h = harness();
     await runModelsCommand('search', { _: [], query: 'qwen', 'output-format': 'json' }, h.deps);
-    expect(JSON.parse(h.lines.join('\n')).models).toHaveLength(2);
+    const { models } = JSON.parse(h.lines.join('\n'));
+    expect(models).toHaveLength(2);
+    expect(models[0].licenses).toEqual(['apache-2.0', 'mit']);
   });
 
   it('requires a query', async () => {
@@ -504,6 +523,34 @@ describe('models pull (Hugging Face)', () => {
     expect(await runModelsCommand('pull', { _: [], ref: REPO }, h.deps)).toBe(EXIT_CANCELLED);
     expect(h.progress).toEqual(['pulling abc123  12%  50 B / 400 B', '<end>']);
     expect(h.lines[h.lines.length - 1]).toMatch(/^Pull cancelled\. Nothing was installed/);
+  });
+
+  it('asks when any declared license is restricted and names every one', async () => {
+    const mixed = detail({ licenses: ['apache-2.0', 'gemma'] });
+    const noTty = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(mixed) }), isTTY: false });
+    await expect(pullModel(REPO, noTty.deps, { ...OPTS, yes: true })).rejects.toThrow(/--accept-license/);
+    expect(noTty.lines).toContain(
+      'This model is under the apache-2.0, gemma licenses, which are not all permissive open-source licenses.'
+    );
+    expect(noTty.runtime.pull).not.toHaveBeenCalled();
+
+    const tty = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(mixed) }), answers: [false] });
+    expect(await pullModel(REPO, tty.deps, { ...OPTS, yes: true })).toBe('declined');
+    expect(tty.questions).toEqual(['Do you accept the apache-2.0, gemma licenses? [y/N] ']);
+  });
+
+  it('does not ask about the license when every declared one is permissive', async () => {
+    const both = detail({ licenses: ['apache-2.0', 'mit'] });
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(both) }), isTTY: false });
+    expect(await pullModel(REPO, h.deps, { ...OPTS, yes: true })).toBe('pulled');
+    expect(h.questions).toEqual([]);
+  });
+
+  it('asks when no license is declared', async () => {
+    const none = detail({ licenses: [] });
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(none) }), isTTY: false });
+    await expect(pullModel(REPO, h.deps, { ...OPTS, yes: true })).rejects.toThrow(/--accept-license/);
+    expect(h.lines).toContain('This model does not declare a license.');
   });
 
   it('checks the license of a repo spelled with another Hugging Face host form', async () => {
