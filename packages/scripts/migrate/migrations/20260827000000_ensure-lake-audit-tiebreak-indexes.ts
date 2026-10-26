@@ -13,8 +13,8 @@ import { type MigrationFile } from './index';
  * worst on the 2000-row compliance-export path.
  *
  * Superseded keys are dropped by key pattern rather than by auto-derived name, since the name
- * is not guaranteed (an index may have been built under a different name) and a mismatch would let safeDropIndex swallow the drop as "not found" while
- * this migration is still recorded as applied. Each drop is guarded on its replacement actually
+ * is not guaranteed (an index may have been built under a different name) and a mismatch would
+ * let safeDropIndex swallow the drop as "not found" while this migration is still recorded as applied. Each drop is guarded on its replacement actually
  * existing, so a failed build can never leave the collection without an index for that read.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist, and a drop whose target is

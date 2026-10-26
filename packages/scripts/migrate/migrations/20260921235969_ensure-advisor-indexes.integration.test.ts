@@ -20,9 +20,19 @@ const NEW_INDEXES = [
 
 const indexNames = async (collection: mongoose.Collection) => (await collection.indexes()).map(index => index.name);
 
-/** Index names the winning plan reads, so a test can prove the planner picks the new index. */
-const winningIndexes = (explain: unknown): string[] =>
-  [...JSON.stringify(explain).matchAll(/"indexName":"([^"]+)"/g)].map(match => match[1]);
+type ExecutionExplain = {
+  queryPlanner: { winningPlan: unknown };
+  executionStats: { nReturned: number; totalDocsExamined: number };
+};
+
+/**
+ * The winning plan only (rejectedPlans also name every candidate index, which would let a test pass
+ * when the new index lost), serialized so stage and index names can be matched under SBE or classic.
+ */
+function winner(raw: unknown) {
+  const explain = (Array.isArray(raw) ? raw[0] : raw) as ExecutionExplain;
+  return { winningPlan: JSON.stringify(explain.queryPlanner.winningPlan), stats: explain.executionStats };
+}
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -89,11 +99,30 @@ describe('ensure-advisor-indexes migration (real DB)', () => {
         if (covering?.name) await model.collection.dropIndex(covering.name);
         await model.collection.createIndex(key, { name: 'stale_prefix' });
 
-        await migration.up();
+        try {
+          await migration.up();
 
-        expect(await indexNames(model.collection)).toContain('stale_prefix');
-        await model.collection.dropIndex('stale_prefix');
+          expect(await indexNames(model.collection)).toContain('stale_prefix');
+        } finally {
+          await safeDropIndex(model.collection, 'stale_prefix');
+          await model.collection.createIndex(coveredBy);
+        }
+      }
+    );
+
+    it.each(REDUNDANT_INDEXES.map(entry => [entry.model.collection.collectionName, entry] as const))(
+      'keeps a constrained index on %s with the same key',
+      async (_name, { model, key, coveredBy }) => {
         await model.collection.createIndex(coveredBy);
+        await model.collection.createIndex(key, { name: 'stale_prefix', sparse: true });
+
+        try {
+          await migration.up();
+
+          expect(await indexNames(model.collection)).toContain('stale_prefix');
+        } finally {
+          await safeDropIndex(model.collection, 'stale_prefix');
+        }
       }
     );
   });
@@ -113,9 +142,12 @@ describe('ensure-advisor-indexes migration (real DB)', () => {
         { userId, deletedAt: null, slackMetadata: { channelId: 'C1', createdFromSlack: true } },
       ]);
 
-      const explain = await Session.find({ userId, 'slackMetadata.channelId': { $exists: true } }).explain();
+      const { winningPlan, stats } = winner(
+        await Session.find({ userId, 'slackMetadata.channelId': { $exists: true } }).explain('executionStats')
+      );
 
-      expect(winningIndexes(explain)).toContain('userId_1_slackNotebook');
+      expect(winningPlan).toContain('userId_1_slackNotebook');
+      expect(stats.totalDocsExamined).toBe(stats.nReturned);
     });
 
     it('findAllWithKnowledgeId uses knowledgeIds_1_deletedAt_1', async () => {
@@ -123,9 +155,12 @@ describe('ensure-advisor-indexes migration (real DB)', () => {
         Array.from({ length: 50 }, (_, i) => ({ userId, deletedAt: null, knowledgeIds: [`file-${i}`] }))
       );
 
-      const explain = await Session.find({ knowledgeIds: { $in: ['file-7'] } }).explain();
+      const { winningPlan, stats } = winner(
+        await Session.find({ knowledgeIds: { $in: ['file-7'] } }).explain('executionStats')
+      );
 
-      expect(winningIndexes(explain)).toContain('knowledgeIds_1_deletedAt_1');
+      expect(winningPlan).toContain('knowledgeIds_1_deletedAt_1');
+      expect(stats.totalDocsExamined).toBe(stats.nReturned);
     });
 
     it('the telemetry opt-out delete uses contextTelemetry_anonymousSessionHash', async () => {
@@ -138,13 +173,16 @@ describe('ensure-advisor-indexes migration (real DB)', () => {
         },
       ]);
 
-      const explain = await Quest.find({
-        'promptMeta.contextTelemetry.anonymousSessionId.hash': { $in: ['h1', 'h2'] },
-      })
-        .setOptions({ includeDeleted: true })
-        .explain();
+      const { winningPlan, stats } = winner(
+        await Quest.find({ 'promptMeta.contextTelemetry.anonymousSessionId.hash': { $in: ['h1', 'h2'] } })
+          .setOptions({
+            includeDeleted: true,
+          })
+          .explain('executionStats')
+      );
 
-      expect(winningIndexes(explain)).toContain('contextTelemetry_anonymousSessionHash');
+      expect(winningPlan).toContain('contextTelemetry_anonymousSessionHash');
+      expect(stats.totalDocsExamined).toBe(stats.nReturned);
     });
 
     it('findRecentByUserIdAndHasMetadata uses userId_1_createdAt_-1', async () => {
@@ -159,12 +197,16 @@ describe('ensure-advisor-indexes migration (real DB)', () => {
         }))
       );
 
-      const explain = await CounterLog.find({ userId, metadata: { $exists: true } })
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .explain();
+      const { winningPlan } = winner(
+        await CounterLog.find({ userId, metadata: { $exists: true } })
+          .sort({ createdAt: -1 })
+          .limit(10)
+          .explain('executionStats')
+      );
 
-      expect(winningIndexes(explain)).toContain('userId_1_createdAt_-1');
+      expect(winningPlan).toContain('userId_1_createdAt_-1');
+      // The index supplies the order; a blocking SORT stage means the read still sorts in memory.
+      expect(winningPlan).not.toMatch(/"stage":"SORT"/);
     });
   });
 });

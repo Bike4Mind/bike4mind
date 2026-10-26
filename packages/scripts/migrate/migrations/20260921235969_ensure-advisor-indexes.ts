@@ -27,7 +27,16 @@ async function dropRedundantIndex({ model, key, coveredBy }: RedundantIndex): Pr
   if ((await db.listCollections({ name: collectionName }).toArray()).length === 0) return;
 
   const indexes = await model.collection.indexes();
-  const redundant = indexes.find(index => sameKey(index.key, key));
+  // Only a plain index is redundant by key: a unique, TTL, partial or sparse one carries a constraint
+  // or a narrower scope its covering index does not.
+  const redundant = indexes.find(
+    index =>
+      sameKey(index.key, key) &&
+      !index.unique &&
+      index.expireAfterSeconds === undefined &&
+      !index.partialFilterExpression &&
+      !index.sparse
+  );
   // Never leave the collection without the prefix: drop only once the covering index exists.
   if (!redundant?.name || !indexes.some(index => sameKey(index.key, coveredBy))) return;
   await model.collection.dropIndex(redundant.name);
@@ -47,8 +56,9 @@ async function dropRedundantIndex({ model, key, coveredBy }: RedundantIndex): Pr
  * would start on whichever Lambda cold-boots onto the collection first after deploy. Redundant
  * indexes are found by key pattern, since the name they were built under is not guaranteed.
  *
- * Idempotent: createIndexes is a no-op for existing indexes, and a missing collection or already
- * dropped index is skipped. Id backdated below BackfillOAuthClientTokenEndpointAuthMethod
+ * Idempotent: createIndexes is a no-op for an index that already exists with the same options (it
+ * throws on an options conflict; prod's existing indexes on these three collections match their
+ * schemas), and a missing collection or already dropped index is skipped. Id backdated below BackfillOAuthClientTokenEndpointAuthMethod
  * (20260922000001), which must stay last.
  */
 const migration: MigrationFile = {
