@@ -501,6 +501,25 @@ describe('POST /api/embed/chat', () => {
     });
   }
 
+  it('denies an opaque origin on the session-token path using the live key allow-list', async () => {
+    // The token carries no allow-list; the gate must read the re-loaded key's.
+    mockVerifyEmbedSessionToken.mockReturnValue({
+      keyId: 'key-1',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      sessionId: 'sess-1',
+      allowedOrigins: [],
+    });
+    mockVerifyEmbedKeyById.mockResolvedValue(VALID_INFO);
+    const res = await fetch(`${baseUrl}/api/embed/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer session.jwt.token', origin: 'null' },
+      body: JSON.stringify(CHAT),
+    });
+    expect(res.status).toBe(403);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
   it('rejects a session token whose bound agent no longer matches the live key (post-rebind replay)', async () => {
     mockVerifyEmbedSessionToken.mockReturnValue({
       keyId: 'key-1',
