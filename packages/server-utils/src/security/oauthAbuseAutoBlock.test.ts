@@ -121,7 +121,7 @@ describe('runOauthAbuseAutoBlock', () => {
     const swept = {
       active: false,
       expiresAt: ago(11 * MIN),
-      unblockedAt: ago(10 * MIN),
+      unblockedAt: ago(5 * MIN),
       source: 'auto' as const,
       escalationLevel: 1,
     };
