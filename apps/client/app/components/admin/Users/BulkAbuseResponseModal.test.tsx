@@ -247,15 +247,17 @@ describe('BulkAbuseResponseModal', () => {
 
   it('shows an execute failure and keeps the selection', () => {
     resolvePreviewWith(preview());
-    executeMutate.mockImplementation((_req: unknown, options?: MutateOptions<BulkAbuseExecuteResult>) => {
-      mutationState.executeError = new Error('token expired');
-      options?.onError?.(mutationState.executeError);
-    });
+    mutationState.executeError = new Error('token expired');
+    executeMutate.mockImplementation((_req: unknown, options?: MutateOptions<BulkAbuseExecuteResult>) =>
+      options?.onError?.(mutationState.executeError as Error)
+    );
     const { onExecuted } = renderModal([USER_ID]);
 
     fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
     applyWithReason();
 
+    expect(executeMutate).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('bulk-abuse-error')).toHaveTextContent('token expired');
     expect(onExecuted).not.toHaveBeenCalled();
     expect(screen.queryByTestId('bulk-abuse-result-summary')).not.toBeInTheDocument();
   });
