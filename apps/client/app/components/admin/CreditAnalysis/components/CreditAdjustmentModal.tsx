@@ -110,6 +110,9 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
 
               <Typography level="body-md" mb={1}>
                 Current Balance: <strong>{selectedUser.currentCredits?.toLocaleString() || 0} credits</strong>
+                <Typography component="span" level="body-sm" sx={{ color: 'text.tertiary', ml: 1 }}>
+                  (as of list load)
+                </Typography>
               </Typography>
 
               <RadioGroup
@@ -208,9 +211,9 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                         </Typography>
                         <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
                           {new Date(adj.createdAt).toLocaleString()}
-                          {adj.actorName ? ` • by ${adj.actorName}` : ''}
+                          {adj.actorName ? ` \u2022 by ${adj.actorName}` : ''}
                           {typeof adj.resultingBalance === 'number'
-                            ? ` • balance ${adj.resultingBalance.toLocaleString()}`
+                            ? ` \u2022 balance ${adj.resultingBalance.toLocaleString()}`
                             : ''}
                         </Typography>
                       </Box>
