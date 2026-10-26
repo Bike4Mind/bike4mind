@@ -71,17 +71,28 @@ describe('adminService.loginAs — MFA secret loading', () => {
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { isAdmin: true, adminPermissions: [] },
-    { isAdmin: false, adminPermissions: [...ADMIN_PERMISSIONS] },
-  ])('preserves full administrator impersonation behavior for privileged targets', async actorAccess => {
+  it('preserves full administrator impersonation behavior for privileged targets', async () => {
     mockVerifyMFA.mockResolvedValue({ verified: true });
-    const actor = { ...freshAdminWithSecret(), ...actorAccess } as IUserDocument;
+    const actor = { ...freshAdminWithSecret(), isAdmin: true, adminPermissions: [] } as IUserDocument;
     const target = { ...targetUser, isAdmin: true } as IUserDocument;
     const { adapters, mocks } = makeAdapters(actor);
     mocks.findById.mockResolvedValue(target);
     await expect(loginAs(actor, { targetUserId: 'target1', mfaToken: 'token' }, adapters as never)).resolves.toEqual(
       target
+    );
+  });
+
+  it('refuses privileged impersonation to an actor holding every explicit grant without the full-admin flag', async () => {
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const actor = {
+      ...freshAdminWithSecret(),
+      isAdmin: false,
+      adminPermissions: [...ADMIN_PERMISSIONS],
+    } as IUserDocument;
+    const { adapters, mocks } = makeAdapters(actor);
+    mocks.findById.mockResolvedValue({ ...targetUser, isAdmin: true } as IUserDocument);
+    await expect(loginAs(actor, { targetUserId: 'target1', mfaToken: 'token' }, adapters as never)).rejects.toThrow(
+      'Only full administrators'
     );
   });
 

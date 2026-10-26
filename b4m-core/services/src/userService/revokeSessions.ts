@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import {
+  assertCanActOnAdminTarget,
   hasAdminPermission,
   IAuthSessionRepository,
   IRealtimeConnectionRepository,
@@ -67,6 +68,7 @@ export const adminRevokeUserSessions = async (
 
   const target = await db.users.findById(id);
   if (!target) throw new NotFoundError(`User ${id} not found`);
+  assertCanActOnAdminTarget(admin, target, 'revoke sessions of');
 
   return revokeUserSessions(id, { db, logger });
 };

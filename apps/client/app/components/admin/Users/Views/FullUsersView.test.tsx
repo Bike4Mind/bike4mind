@@ -373,17 +373,23 @@ describe('privileged impersonation targets', () => {
     fireEvent.click(screen.getByTestId('login-as-user-btn'));
     expect(screen.getByTestId('login-as-mfa-modal')).toBeInTheDocument();
   });
-  it.each([true, false])('allows full actors with legacy isAdmin=%s to impersonate admin targets', legacy => {
+  const adminTarget = () => ({ ...savedUser(), adminPermissions: ['settings:manage'] }) as AdminUserListItem;
+  it('allows a legacy isAdmin=true actor to impersonate admin targets', () => {
+    actor.currentUser = { id: 'full', isAdmin: true, adminPermissions: [], mfa: { totpEnabled: true } };
+    render(<FullUsersView index={0} user={adminTarget()} />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('login-as-user-btn')).toBeEnabled();
+  });
+  it('blocks an actor holding every explicit permission but isAdmin=false from impersonating admin targets', () => {
     actor.currentUser = {
-      id: 'full',
-      isAdmin: legacy,
-      adminPermissions: legacy ? [] : [...ADMIN_PERMISSIONS],
+      id: 'all-permissions',
+      isAdmin: false,
+      adminPermissions: [...ADMIN_PERMISSIONS],
       mfa: { totpEnabled: true },
     };
-    render(
-      <FullUsersView index={0} user={{ ...savedUser(), adminPermissions: ['settings:manage'] } as AdminUserListItem} />,
-      { wrapper: TestWrapper }
-    );
-    expect(screen.getByTestId('login-as-user-btn')).toBeEnabled();
+    render(<FullUsersView index={0} user={adminTarget()} />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('login-as-user-btn')).toBeDisabled();
+    expect(
+      screen.getByText('Full admin access is required to impersonate users with admin access.')
+    ).toBeInTheDocument();
   });
 });

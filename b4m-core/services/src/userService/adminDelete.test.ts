@@ -33,6 +33,30 @@ describe('adminDeleteUser', () => {
     expect(users.delete).toHaveBeenCalledWith('user-1');
   });
 
+  it.each([
+    ['a full admin', { isAdmin: true }],
+    ['a delegated admin', { adminPermissions: ['support:read'] }],
+  ])('refuses a delegated deleter against %s', async (_label, privileges) => {
+    const { adapters, users, endConnections } = makeAdapters();
+    users.findById.mockImplementation(async (id: string) =>
+      id === 'admin-1'
+        ? { id, isAdmin: false, adminPermissions: ['users:delete', 'support:read'] }
+        : { id, name: 'Admin', email: 'a@example.com', ...privileges }
+    );
+    await expect(adminDeleteUser('admin-1', { id: 'user-1' }, adapters)).rejects.toThrow(
+      'Only full administrators can delete users with admin access'
+    );
+    expect(users.delete).not.toHaveBeenCalled();
+    expect(endConnections).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin delete another admin', async () => {
+    const { adapters, users } = makeAdapters();
+    users.findById.mockImplementation(async (id: string) => ({ id, isAdmin: true }));
+    await adminDeleteUser('admin-1', { id: 'user-1' }, adapters);
+    expect(users.delete).toHaveBeenCalledWith('user-1');
+  });
+
   it("ends the deleted user's realtime connections after the delete", async () => {
     const { adapters, users, endConnections } = makeAdapters();
 

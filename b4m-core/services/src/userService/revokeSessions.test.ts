@@ -65,4 +65,19 @@ describe('adminRevokeUserSessions', () => {
     expect(db.users.incrementTokenVersion).toHaveBeenCalledWith('target');
     expect(result).toBe(2);
   });
+
+  it('refuses a delegated moderator revoking an admin and does not bump', async () => {
+    const db = makeDb();
+    db.users.findById.mockImplementation((id: string) =>
+      Promise.resolve(
+        (id === 'moderator'
+          ? { id, isAdmin: false, adminPermissions: ['users:moderate'] }
+          : { id: 'target', isAdmin: true }) as never
+      )
+    );
+    await expect(adminRevokeUserSessions('moderator', { id: 'target' }, { db })).rejects.toThrow(
+      'Only full administrators can revoke sessions of users with admin access'
+    );
+    expect(db.users.incrementTokenVersion).not.toHaveBeenCalled();
+  });
 });

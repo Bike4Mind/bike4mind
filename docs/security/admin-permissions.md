@@ -20,6 +20,14 @@ are independent: granting a write permission does not grant support read access.
 User profile updates and deletion also require `support:read` because their
 responses include user details.
 Treat `settings:manage` as privileged because its holder can grant permissions.
+A delegated `settings:manage` holder can only grant permissions it holds itself,
+cannot grant the full-admin flag (on the permissions endpoint, the profile update
+or account creation), and cannot change the permissions of an account that
+already has admin access.
+
+"Full admin" means exactly the legacy `isAdmin: true` flag. Holding every explicit
+permission is still delegated access: it does not satisfy the full-admin checks
+below and does not count toward the final-full-admin protection.
 
 Open **Admin > Users**, open a user's full details, and use the admin permissions
 editor to save the desired grants with a reason. Permission changes record the
@@ -29,8 +37,11 @@ demoted or deleted, including when concurrent requests attempt those operations.
 Creating a full administrator also requires a reason. Assigning positive starting
 credits during account creation requires `credits:adjust` in addition to the
 creation permission.
-Delegated operators cannot impersonate administrator accounts or introduce login
-blocks on them; those operations require a full administrator.
+Delegated operators cannot impersonate, delete, revoke the sessions of, generate
+API keys for, introduce login blocks on, or change the permissions of accounts
+that have admin access; those operations require a full administrator.
+Generating an API key on behalf of a user requires `users:impersonate`, since the
+key authenticates as that user.
 
 ## Troubleshooting
 
@@ -42,9 +53,9 @@ blocks on them; those operations require a full administrator.
 - **API key denied despite user grants**: admin routes require the API key's
   admin scope in addition to user grants. The release-note automation endpoints
   retain their dedicated `release-notes:write` credential path.
-- **Final full admin cannot be removed**: first grant full access to another
-  account. Both the legacy flag and the complete explicit permission set count
-  as full access.
+- **Final full admin cannot be removed**: first set the full-admin flag on another
+  account. Only the legacy `isAdmin` flag counts; an account holding every
+  explicit permission does not.
 
 ## Adding admin routes
 

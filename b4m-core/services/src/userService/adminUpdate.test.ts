@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { adminUpdateUser, adminUpdateUserSchema, type AdminUpdateUserParameters } from './adminUpdate';
 import { ADMIN_PERMISSIONS } from '@bike4mind/common';
 import { checkStorageLimit } from '@bike4mind/utils';
+import { hashSync } from 'bcryptjs';
 
 vi.mock('../friendshipService/sendFriendRequest', () => ({ sendFriendRequest: vi.fn() }));
 
@@ -690,16 +691,27 @@ describe('adminUpdateUser privileged moderation targets', () => {
     expect(update).toHaveBeenCalled();
   });
 
-  it.each([{ isAdmin: true }, { isAdmin: false, adminPermissions: [...ADMIN_PERMISSIONS] }])(
-    'preserves full actor authority over privileged targets: %s',
-    async actorPrivileges => {
-      const { adapters, target, update } = makeAdapters(100);
-      target.isAdmin = true;
-      adapters.db.users.findById.mockResolvedValue({ id: ADMIN_ID, ...actorPrivileges });
-      await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters);
-      expect(update).toHaveBeenCalled();
-    }
-  );
+  it('preserves full actor authority over privileged targets', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    target.isAdmin = true;
+    adapters.db.users.findById.mockResolvedValue({ id: ADMIN_ID, isAdmin: true });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters);
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('refuses blocking a privileged target to an actor holding every explicit grant without the flag', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    target.isAdmin = true;
+    adapters.db.users.findById.mockResolvedValue({
+      id: ADMIN_ID,
+      isAdmin: false,
+      adminPermissions: [...ADMIN_PERMISSIONS],
+    });
+    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters)).rejects.toThrow(
+      'Only full administrators'
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
 
   it('uses fresh actor authority when a former full administrator is downgraded', async () => {
     const { adapters, target, update } = makeAdapters(100);
@@ -721,6 +733,41 @@ describe('adminUpdateUser privileged moderation targets', () => {
     Object.assign(target, { isAdmin: true, isBanned: true });
     adapters.db.users.findById.mockResolvedValue({ id: ADMIN_ID, adminPermissions: ['users:moderate'] });
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: false }, adapters);
+    expect(update).toHaveBeenCalled();
+  });
+});
+
+describe('adminUpdateUser credentials of privileged targets', () => {
+  const credentialChanges: Pick<AdminUpdateUserParameters, 'email' | 'password'>[] = [
+    { email: 'new-address@example.com' },
+    { password: 'a-brand-new-password' },
+  ];
+  const withAdminTarget = (actor: { isAdmin?: boolean; adminPermissions?: string[] }) => {
+    const made = makeAdapters(100);
+    Object.assign(made.target, { isAdmin: true, email: 'admin@example.com', password: hashSync('old-password', 4) });
+    made.adapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === ADMIN_ID ? { id, ...actor } : { ...made.target }
+    );
+    return made;
+  };
+
+  it.each(credentialChanges)('refuses a settings:manage delegate changing a full admin: %j', async change => {
+    const { adapters, update } = withAdminTarget({ isAdmin: false, adminPermissions: ['settings:manage'] });
+    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...change }, adapters)).rejects.toThrow(
+      'Only full administrators can change credentials of users with admin access'
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it.each(credentialChanges)('lets a full admin change a full admin: %j', async change => {
+    const { adapters, update } = withAdminTarget({ isAdmin: true });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...change }, adapters);
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('lets a settings:manage delegate re-send an admin target its unchanged email', async () => {
+    const { adapters, update } = withAdminTarget({ isAdmin: false, adminPermissions: ['settings:manage'] });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, email: 'admin@example.com', name: 'Renamed' }, adapters);
     expect(update).toHaveBeenCalled();
   });
 });

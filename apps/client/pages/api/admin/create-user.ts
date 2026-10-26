@@ -1,4 +1,4 @@
-import { canAccessAdmin } from '@bike4mind/common';
+import { assertCanGrantAdminAccess, canAccessAdmin } from '@bike4mind/common';
 import { ApiKeyScope, usernameSchema, MAX_STORAGE_LIMIT_MB, DEFAULT_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import {
@@ -71,6 +71,7 @@ const handler = api.post(
     }
 
     if (validatedData.initialCredits > 0) requireAdminPermission(req, 'credits:adjust');
+    assertCanGrantAdminAccess(req.user, { isAdmin: validatedData.isAdmin });
     const roleChangeReason = validatedData.isAdmin ? parseAdminActionReason(validatedData.roleChangeReason) : undefined;
 
     // A new admin account is an admin-role grant: session-only, and a browser session must have

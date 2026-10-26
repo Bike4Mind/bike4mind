@@ -1,4 +1,4 @@
-import { canAccessAdmin } from '@bike4mind/common';
+import { assertCanActOnAdminTarget } from '@bike4mind/common';
 import { userApiKeyService, dataLakeService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import {
@@ -169,18 +169,16 @@ async function screenPreauthorizedLakeIds(
  *
  * Admin-only endpoint to generate an API key on behalf of any user.
  * Useful for creating service account keys without logging in as the target user.
+ * Minting a key that authenticates as another user is impersonation, so it shares that permission
+ * and the full-admin rule for privileged targets with loginAs.
  */
 const api = adminApi({
-  adminPermissions: { POST: 'settings:manage' },
+  adminPermissions: { POST: 'users:impersonate' },
   auth: true,
   requiredScopes: [ApiKeyScope.ADMIN],
 });
 const handler = api.use(csrfProtection()).post(
   asyncHandler(async (req, res) => {
-    if (!canAccessAdmin(req.user)) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { userId } = req.query as RequestQuery;
 
     if (typeof userId !== 'string' || !userId) {
@@ -191,6 +189,7 @@ const handler = api.use(csrfProtection()).post(
     if (!targetUser) {
       throw new BadRequestError('User not found');
     }
+    assertCanActOnAdminTarget(req.user, targetUser, 'generate API keys for');
     // Canonical target id for everything below, NOT the `userId` URL segment: findById casts to
     // ObjectId and resolves the user under any hex casing, but every field this id is compared
     // against afterwards is a `type: String` matched by byte equality - the key's own `userId`,

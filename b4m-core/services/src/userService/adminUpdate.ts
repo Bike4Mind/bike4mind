@@ -9,8 +9,9 @@ import {
 } from './update';
 import {
   hasAdminPermission,
-  canAccessAdmin,
+  assertCanActOnAdminTarget,
   isFullAdmin,
+  missingAdminPermissionMessage,
   type AdminPermissionId,
   ConflictError,
   MAX_STORAGE_LIMIT_MB,
@@ -155,7 +156,9 @@ export function assertAdminUpdatePermissions(
     ([field, value]) => !['id', 'roleChangeReason', 'creditReason'].includes(field) && value !== undefined
   );
   if (actionableFields.length === 0) {
-    throw new ForbiddenError('Admin permission required: settings:manage; no actionable update fields supplied');
+    throw new ForbiddenError(
+      `${missingAdminPermissionMessage('settings:manage')}; no actionable update fields supplied`
+    );
   }
   for (const [field, value] of Object.entries(parameters)) {
     if (field === 'id' || field === 'roleChangeReason' || value === undefined) continue;
@@ -164,7 +167,7 @@ export function assertAdminUpdatePermissions(
       : MODERATION_UPDATE_FIELDS.has(field)
         ? 'users:moderate'
         : 'settings:manage';
-    if (!hasAdminPermission(actor, permission)) throw new ForbiddenError(`Admin permission required: ${permission}`);
+    if (!hasAdminPermission(actor, permission)) throw new ForbiddenError(missingAdminPermissionMessage(permission));
   }
 }
 
@@ -189,9 +192,15 @@ export async function adminUpdateUser(
     disputePending: params.disputePending ?? user.disputePending,
     moderation: { status: params.moderationStatus ?? user.moderation?.status },
   });
-  if (enteringBlockedState && canAccessAdmin(user) && !isFullAdmin(admin)) {
-    throw new ForbiddenError('Only full administrators can block users with admin access');
+  if (enteringBlockedState) assertCanActOnAdminTarget(admin, user, 'block');
+  // settings:manage alone must not mint or remove full admins through this general update path.
+  if (params.isAdmin !== undefined && params.isAdmin !== !!user.isAdmin && !isFullAdmin(admin)) {
+    throw new ForbiddenError('Only full administrators can change the full-admin flag');
   }
+  // Rewriting an admin's sign-in credentials is an account takeover, so delegates are held off it.
+  const changesEmail = params.email !== undefined && params.email !== user.email;
+  const changesPassword = params.password !== undefined && params.password !== null;
+  if (changesEmail || changesPassword) assertCanActOnAdminTarget(admin, user, 'change credentials of');
   await validateUsernameChange(user, params, db.users, { allowReservedUsername: true });
   if (params.email !== undefined && params.email !== user.email) {
     if (await db.users.existsOtherUserWithEmail(params.email, user.id)) {

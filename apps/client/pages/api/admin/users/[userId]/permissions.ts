@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { AdminPermissionsSchema, ApiKeyScope, ForbiddenError, isFullAdmin } from '@bike4mind/common';
+import {
+  AdminPermissionsSchema,
+  ApiKeyScope,
+  ForbiddenError,
+  assertCanActOnAdminTarget,
+  assertCanGrantAdminAccess,
+  isFullAdmin,
+} from '@bike4mind/common';
 import {
   User,
   withTransaction,
@@ -35,7 +42,9 @@ const handler = api.put(
       await lockAdminMutations();
       const target = await User.findById(userId).select('isAdmin adminPermissions name username email').lean();
       if (!target) throw new NotFoundError('User not found');
+      assertCanActOnAdminTarget(req.user, target, 'change permissions of');
       const after = { isAdmin: body.isAdmin, adminPermissions: [...new Set(body.adminPermissions)] };
+      assertCanGrantAdminAccess(req.user, after);
       if (!isFullAdmin(after)) await assertCanRemoveFullAdmin(userId);
       await User.updateOne({ _id: userId }, { $set: after });
       await recordAdminActionFromRequest(req, {

@@ -22,14 +22,18 @@ export function canRenderAdminTab(tab: AdminTab, visibility: AdminTabVisibility 
 }
 
 export const permissionForAdminTab = (tab: AdminTab): AdminPermissionId => {
-  if (tab === AdminTab.Users) return 'support:read';
+  if (
+    tab === AdminTab.Users ||
+    tab === AdminTab.CreditAnalytics ||
+    tab === AdminTab.Organizations ||
+    tab === AdminTab.PublishedPages
+  ) {
+    return 'support:read';
+  }
   if (tab === AdminTab.EmbedKeys) return 'keys:revoke';
   return 'settings:manage';
 };
 
 export const canAccessAdminTab = (user: IUserDocument | null, tab: AdminTab): boolean =>
   hasAdminPermission(user, permissionForAdminTab(tab)) ||
-  (tab === AdminTab.EmbedKeys && hasAdminPermission(user, 'settings:manage')) ||
-  ((tab === AdminTab.CreditAnalytics || tab === AdminTab.Organizations) &&
-    hasAdminPermission(user, 'credits:adjust')) ||
-  (tab === AdminTab.PublishedPages && hasAdminPermission(user, 'users:moderate'));
+  (tab === AdminTab.EmbedKeys && hasAdminPermission(user, 'settings:manage'));

@@ -30,7 +30,7 @@ vi.mock('@server/utils/adminAudit', () => ({
 import errorHandler from '@server/middlewares/errorHandler';
 import handler from '../recalculate-storage';
 
-async function call(user: { id: string; isAdmin?: boolean }) {
+async function call(user: { id: string; isAdmin?: boolean; adminPermissions?: string[] }) {
   const { req, res } = createMocks({ method: 'POST', query: { id: 'target1' } });
   (req as any).user = user;
   await (handler as any)(req, res);
@@ -63,18 +63,24 @@ describe('POST /api/users/:id/recalculate-storage', () => {
   });
 
   it('records nothing for a non-admin or a failed recalculation', async () => {
-    await call({ id: 'u1', isAdmin: false });
+    await expect(call({ id: 'u1', isAdmin: false })).rejects.toThrow('Missing permission: settings:manage');
     mockRecalculate.mockRejectedValue(new ConflictError('storage counter kept changing'));
     await expect(call({ id: 'admin1', isAdmin: true })).rejects.toThrow();
 
     expect(mockRecordAdminAction).not.toHaveBeenCalled();
   });
 
-  it('rejects a non-admin without touching the counter', async () => {
-    const res = await call({ id: 'u1', isAdmin: false });
-
-    expect(res._getStatusCode()).toBe(403);
+  it.each([
+    ['a non-admin', { id: 'u1', isAdmin: false }],
+    ['a support-only delegate', { id: 'u2', adminPermissions: ['support:read'] }],
+  ])('rejects %s with a 403 without touching the counter', async (_label, user) => {
+    await expect(call(user)).rejects.toMatchObject({ statusCode: 403 });
     expect(mockRecalculate).not.toHaveBeenCalled();
+  });
+
+  it('allows a settings:manage delegate without the legacy admin flag', async () => {
+    const res = await call({ id: 'u3', adminPermissions: ['settings:manage'] });
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('returns the recomputed truth, not a re-read counter a concurrent charge may have moved', async () => {

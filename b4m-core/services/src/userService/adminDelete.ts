@@ -1,4 +1,5 @@
 import {
+  assertCanActOnAdminTarget,
   hasAdminPermission,
   IAdminSettingsRepository,
   IRealtimeConnectionRepository,
@@ -43,6 +44,7 @@ export const adminDeleteUser = async (
 
   const user = await db.users.findById(id);
   if (!user) throw new NotFoundError(`User ${id} not found`);
+  assertCanActOnAdminTarget(admin, user, 'delete');
 
   await db.users.delete(id);
   await endRealtimeConnections({ userId: id }, { db });

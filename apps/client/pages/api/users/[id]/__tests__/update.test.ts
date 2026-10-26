@@ -368,20 +368,27 @@ describe("PUT /api/users/:id/update - an admin changing another user's credentia
     additionalInfo: { code: 'step_up_required' },
   });
   const API_KEY = { keyId: 'k1', scopes: [ApiKeyScope.ADMIN] };
-  const gatedBodies: Array<[string, Record<string, unknown>]> = [
-    ['password', { password: 'reset-value' }],
-    ['email', { email: 'other@example.com' }],
-    ['an admin-role grant', { isAdmin: true, roleChangeReason: 'Promoted to run support' }],
+  // [label, body, whether the target is currently a full admin]
+  const gatedBodies: Array<[string, Record<string, unknown>, boolean]> = [
+    ['password', { password: 'reset-value' }, false],
+    ['email', { email: 'other@example.com' }, false],
+    ['an admin-role grant', { isAdmin: true, roleChangeReason: 'Promoted to run support' }, false],
+    ['an admin-role revocation', { isAdmin: false, roleChangeReason: 'Left the support team' }, true],
   ];
 
-  it.each(gatedBodies)('requires recent verification for %s and does not write without it', async (_label, body) => {
-    mockRequireStepUp.mockRejectedValue(stepUpRequired);
-    const { promise } = run({ user: ADMIN, userId: 'other-user', body });
-    await expect(promise).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: 'step_up_required' } });
-    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
-  });
+  it.each(gatedBodies)(
+    'requires recent verification for %s and does not write without it',
+    async (_label, body, targetIsAdmin) => {
+      mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: targetIsAdmin });
+      mockRequireStepUp.mockRejectedValue(stepUpRequired);
+      const { promise } = run({ user: ADMIN, userId: 'other-user', body });
+      await expect(promise).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: 'step_up_required' } });
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    }
+  );
 
-  it.each(gatedBodies)('writes %s once recently verified', async (_label, body) => {
+  it.each(gatedBodies)('writes %s once recently verified', async (_label, body, targetIsAdmin) => {
+    mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: targetIsAdmin });
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body });
     await promise;
     expect(mockRequireStepUp).toHaveBeenCalledTimes(1);
@@ -389,7 +396,8 @@ describe("PUT /api/users/:id/update - an admin changing another user's credentia
     expect(mockAdminUpdateUser).toHaveBeenCalledTimes(1);
   });
 
-  it.each(gatedBodies)('refuses %s from an API key before any write', async (_label, body) => {
+  it.each(gatedBodies)('refuses %s from an API key before any write', async (_label, body, targetIsAdmin) => {
+    mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: targetIsAdmin });
     const { promise } = run({ user: ADMIN, userId: 'other-user', body, apiKeyInfo: API_KEY });
     await expect(promise).rejects.toMatchObject({
       statusCode: 403,
@@ -399,16 +407,18 @@ describe("PUT /api/users/:id/update - an admin changing another user's credentia
     expect(mockAdminUpdateUser).not.toHaveBeenCalled();
   });
 
-  it('does not gate setting isAdmin: true on a user who is already an admin', async () => {
-    mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: true });
-    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin: true } });
+  it.each([
+    ['isAdmin: true on a user who is already an admin', true],
+    ['isAdmin: false on a user who is not an admin', false],
+  ])('does not gate re-sending %s', async (_label, isAdmin) => {
+    mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin });
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin }, apiKeyInfo: API_KEY });
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(mockRequireStepUp).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['revoking the admin role', { isAdmin: false, roleChangeReason: 'Left the support team' }],
     ['a ban', { isBanned: true }],
     ['an unrelated field', { name: 'Renamed' }],
   ])('leaves %s ungated, including with an API key', async (_label, body) => {
@@ -884,30 +894,34 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
 
   describe('role changes', () => {
     it.each([
-      ['grants', true, false, 'user.role.admin_granted'],
-      ['revokes', false, true, 'user.role.admin_revoked'],
-    ])('records %s with the reason and an isAdmin change row', async (_label, after, before, action) => {
-      mockUserFindById.mockReturnValue(target({ isAdmin: before }));
-      mockAdminUpdateUser.mockResolvedValue({ user: target({ isAdmin: after }), creditAdjustment: undefined });
-      const { res, promise } = run({
-        user: ADMIN,
-        userId: 'other-user',
-        body: { isAdmin: after, roleChangeReason: `  ${ROLE_REASON}  ` },
-      });
-      await promise;
+      ['grants', true, false, 'granted full admin access'],
+      ['revokes', false, true, 'revoked full admin access'],
+    ])(
+      'records %s as user.permissions.updated with the reason and an isAdmin change row',
+      async (_label, after, before, summary) => {
+        mockUserFindById.mockReturnValue(target({ isAdmin: before }));
+        mockAdminUpdateUser.mockResolvedValue({ user: target({ isAdmin: after }), creditAdjustment: undefined });
+        const { res, promise } = run({
+          user: ADMIN,
+          userId: 'other-user',
+          body: { isAdmin: after, roleChangeReason: `  ${ROLE_REASON}  ` },
+        });
+        await promise;
 
-      expect(res._getStatusCode()).toBe(200);
-      expect(mockRecord).toHaveBeenCalledTimes(1);
-      expect(mockRecord).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          action,
-          target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
-          reason: ROLE_REASON,
-          changes: [{ field: 'isAdmin', before, after }],
-        })
-      );
-    });
+        expect(res._getStatusCode()).toBe(200);
+        expect(mockRecord).toHaveBeenCalledTimes(1);
+        expect(mockRecord).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            action: 'user.permissions.updated',
+            summary,
+            target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
+            reason: ROLE_REASON,
+            changes: [{ field: 'isAdmin', before, after }],
+          })
+        );
+      }
+    );
 
     it('records inside the commitWithSessionEnd transaction', async () => {
       mockUserFindById.mockReturnValue(target({ isAdmin: true }));

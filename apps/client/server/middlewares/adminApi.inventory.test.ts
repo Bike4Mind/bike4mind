@@ -23,24 +23,74 @@ const listRoutes = (directory: string): string[] =>
     return entry.name.endsWith('.ts') && !entry.name.includes('.test.') ? [path] : [];
   });
 
-function isAdminChain(node: ts.Expression): boolean {
-  if (ts.isIdentifier(node)) return node.text === 'api';
+const findCall = (tree: ts.SourceFile, matches: (call: ts.CallExpression) => boolean): boolean => {
+  const search = (node: ts.Node): boolean =>
+    (ts.isCallExpression(node) && matches(node)) || (ts.forEachChild(node, search) ?? false);
+  return search(tree);
+};
+
+const isFactoryCall = (node: ts.CallExpression, factory: string): boolean =>
+  ts.isIdentifier(node.expression) && node.expression.text === factory;
+
+function variableInitializers(tree: ts.SourceFile): Map<string, ts.Expression> {
+  const initializers = new Map<string, ts.Expression>();
+  const collect = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      initializers.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, collect);
+  };
+  collect(tree);
+  return initializers;
+}
+
+/** True when `node` is an `adminApi(...)` call, a method chain on one, or a same-file variable bound to either. */
+function isAdminChain(
+  node: ts.Expression,
+  initializers: Map<string, ts.Expression>,
+  resolving: ReadonlySet<string> = new Set()
+): boolean {
+  if (ts.isIdentifier(node)) {
+    const initializer = initializers.get(node.text);
+    if (!initializer || resolving.has(node.text)) return false;
+    return isAdminChain(initializer, initializers, new Set([...resolving, node.text]));
+  }
   if (!ts.isCallExpression(node)) return false;
   if (ts.isIdentifier(node.expression)) return node.expression.text === 'adminApi';
-  return ts.isPropertyAccessExpression(node.expression) && isAdminChain(node.expression.expression);
+  return (
+    ts.isPropertyAccessExpression(node.expression) && isAdminChain(node.expression.expression, initializers, resolving)
+  );
 }
+
+/** A credential route opts out of session auth with a literal `auth: false` on its baseApi options, not in a comment. */
+const disablesSessionAuth = (tree: ts.SourceFile): boolean =>
+  findCall(tree, call => {
+    const options = call.arguments[0];
+    return (
+      isFactoryCall(call, 'baseApi') &&
+      options !== undefined &&
+      ts.isObjectLiteralExpression(options) &&
+      options.properties.some(
+        property =>
+          ts.isPropertyAssignment(property) &&
+          property.name.getText(tree) === 'auth' &&
+          property.initializer.kind === ts.SyntaxKind.FalseKeyword
+      )
+    );
+  });
 
 function inspectRoute(path: string, source = readFileSync(path, 'utf8')): string[] {
   const route = relative(routesDirectory, path);
-  if (credentialRoutes.has(route)) {
-    return source.includes('auth: false') ? [] : [`${route}: credential exception must authenticate independently`];
-  }
   const tree = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  if (credentialRoutes.has(route)) {
+    return disablesSessionAuth(tree) ? [] : [`${route}: credential exception must authenticate independently`];
+  }
+  const initializers = variableInitializers(tree);
   const declared = new Map<string, string>();
   const served = new Set<string>();
   let wrappers = 0;
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'adminApi') {
+    if (ts.isCallExpression(node) && isFactoryCall(node, 'adminApi')) {
       wrappers += 1;
       const options = node.arguments[0];
       if (options && ts.isObjectLiteralExpression(options)) {
@@ -59,7 +109,7 @@ function inspectRoute(path: string, source = readFileSync(path, 'utf8')): string
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      isAdminChain(node.expression.expression)
+      isAdminChain(node.expression.expression, initializers)
     ) {
       const method = node.expression.name.text.toUpperCase();
       if (['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(method)) served.add(method);
@@ -95,5 +145,32 @@ describe('admin route permission inventory', () => {
     const path = join(routesDirectory, 'activity-summary.ts');
     const source = readFileSync(path, 'utf8').replaceAll('adminApi', 'baseApi');
     expect(inspectRoute(path, source)).toContain('activity-summary.ts: must use adminApi exactly once');
+  });
+});
+
+describe('admin route inventory matcher', () => {
+  const fixture = join(routesDirectory, 'fixture.ts');
+  const credentialFixture = join(routesDirectory, 'emergency-login.ts');
+  const handler = 'async (_req, res) => res.json({})';
+
+  it('accepts handlers served through a variable bound to adminApi', () => {
+    const source = `const api = adminApi({ adminPermissions: { GET: 'support:read' } });\nexport default api.get(${handler});`;
+    expect(inspectRoute(fixture, source)).toEqual([]);
+  });
+
+  it('does not treat a variable named api as admin-guarded when it is bound to baseApi', () => {
+    const source = [
+      `adminApi({ adminPermissions: { GET: 'support:read' } });`,
+      'const api = baseApi();',
+      `export default api.get(${handler});`,
+    ].join('\n');
+    expect(inspectRoute(fixture, source)).toContain('fixture.ts: no protected HTTP handlers found');
+  });
+
+  it('exempts a credential route only for a literal auth: false on its baseApi options', () => {
+    expect(inspectRoute(credentialFixture, `export default baseApi({ auth: false }).post(${handler});`)).toEqual([]);
+    expect(inspectRoute(credentialFixture, `// auth: false\nexport default baseApi().post(${handler});`)).toEqual([
+      'emergency-login.ts: credential exception must authenticate independently',
+    ]);
   });
 });

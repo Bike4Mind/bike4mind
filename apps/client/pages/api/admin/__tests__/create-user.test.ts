@@ -305,6 +305,24 @@ describe('admin/create-user', () => {
       expect(mockCreateUser).not.toHaveBeenCalled();
       expect(mockRequireStepUp).not.toHaveBeenCalled();
     });
+    it('refuses a delegated settings manager creating an administrator', async () => {
+      const req = {
+        ...makeReq({ ...body, roleChangeReason: 'Approved administrator onboarding' }),
+        user: { isAdmin: false, adminPermissions: ['settings:manage', 'support:read'] },
+      };
+      await expect(runHandler(req, makeRes())).rejects.toThrow('Only full administrators can grant full admin access');
+      expect(mockRequireStepUp).not.toHaveBeenCalled();
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+    it('lets a delegated settings manager create a regular user', async () => {
+      mockCreateUser.mockResolvedValue({ id: 'regular', email: 'regular@example.com', username: 'regular' });
+      const req = {
+        ...makeReq({ username: 'regular', email: 'regular@example.com', name: 'Regular' }),
+        user: { isAdmin: false, adminPermissions: ['settings:manage'] },
+      };
+      await runHandler(req, makeRes());
+      expect(mockCreateUser).toHaveBeenCalledWith(expect.objectContaining({ isAdmin: false }), expect.any(Object));
+    });
     it('records the full admin grant reason and before/after in the creation transaction', async () => {
       mockCreateUser.mockResolvedValue({ id: 'new-admin', email: body.email, username: body.username, isAdmin: true });
       await runHandler(makeReq({ ...body, roleChangeReason: 'Approved administrator onboarding' }), makeRes());

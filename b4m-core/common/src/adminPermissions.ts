@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ForbiddenError } from './errors';
 
 export const ADMIN_PERMISSIONS = [
   'support:read',
@@ -27,6 +28,40 @@ export function canAccessAdmin(user: AdminIdentity | null | undefined): boolean 
   return ADMIN_PERMISSIONS.some(permission => hasAdminPermission(user, permission));
 }
 
+/** Full admin is exactly the legacy `isAdmin` flag; holding every explicit permission is still delegated access. */
 export function isFullAdmin(user: AdminIdentity | null | undefined): boolean {
-  return ADMIN_PERMISSIONS.every(permission => hasAdminPermission(user, permission));
+  return user?.isAdmin === true;
+}
+
+export function missingAdminPermissionMessage(permission: AdminPermissionId): string {
+  return `Missing permission: ${permission}`;
+}
+
+/**
+ * Delegated admins must not act on accounts that themselves hold admin access, or they could
+ * escalate through the target. `action` completes "Only full administrators can <action> users with admin access".
+ */
+export function assertCanActOnAdminTarget(
+  actor: AdminIdentity | null | undefined,
+  target: AdminIdentity | null | undefined,
+  action: string
+): void {
+  if (canAccessAdmin(target) && !isFullAdmin(actor)) {
+    throw new ForbiddenError(`Only full administrators can ${action} users with admin access`);
+  }
+}
+
+/** A delegated settings manager may only hand out grants it holds, and never the full-admin flag. */
+export function assertCanGrantAdminAccess(
+  actor: AdminIdentity | null | undefined,
+  grant: { isAdmin?: boolean; adminPermissions?: readonly AdminPermissionId[] }
+): void {
+  if (isFullAdmin(actor)) return;
+  if (grant.isAdmin === true) throw new ForbiddenError('Only full administrators can grant full admin access');
+  const unheld = (grant.adminPermissions ?? []).filter(permission => !hasAdminPermission(actor, permission));
+  if (unheld.length > 0) {
+    throw new ForbiddenError(`Cannot grant permissions you do not hold: ${unheld.join(', ')}`, {
+      unheld_permissions: unheld,
+    });
+  }
 }

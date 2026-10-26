@@ -430,14 +430,14 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
           onFieldChange={handleFormFieldChange}
           handleDeleteUser={handleDeleteUser}
         />
-        <AdminPermissionBoundary permission="settings:manage">
+        <AdminPermissionBoundary permission="support:read">
           <Button
             data-testid="compliance-btn"
             size="sm"
             variant="outlined"
             color="neutral"
             onClick={() => {
-              if (hasAdminPermission(currentUser, 'settings:manage')) setComplianceUserId(formState.id);
+              if (hasAdminPermission(currentUser, 'support:read')) setComplianceUserId(formState.id);
             }}
           >
             Compliance

@@ -21,10 +21,12 @@ const LAKE_B = '89abcdef0123456789abcdef';
 
 const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
+  adminApiOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
-  adminApi: () => {
+  adminApi: (options: unknown) => {
+    mockRefs.adminApiOptions = options;
     const chain: any = {
       use: () => chain,
       post: (fn: any) => {
@@ -118,12 +120,11 @@ vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
 }));
 
 import '../generate-api-key';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 
 const activeLake = (id: string) => ({ id, status: 'active', createdByUserId: 'someone', name: id, slug: id });
 
-function post(body: unknown, opts: { isAdmin?: boolean; userId?: string } = {}) {
+function post(body: unknown, opts: { isAdmin?: boolean; adminPermissions?: string[]; userId?: string } = {}) {
   const { req, res } = createMocks({
     method: 'POST',
     query: { userId: opts.userId ?? 'target-user' },
@@ -132,6 +133,7 @@ function post(body: unknown, opts: { isAdmin?: boolean; userId?: string } = {}) 
   (req as any).user = {
     id: 'caller',
     isAdmin: opts.isAdmin ?? true,
+    adminPermissions: opts.adminPermissions,
     username: 'admin-user',
   };
   (req as any).ability = {};
@@ -208,10 +210,29 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
     mockLogEvent.mockResolvedValue(undefined);
   });
 
-  it('rejects non-admin callers with ForbiddenError before touching the service', async () => {
-    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] }, { isAdmin: false });
-    await expect(mockRefs.postHandler!(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+  it('gates minting on the impersonation permission', () => {
+    expect(mockRefs.adminApiOptions).toMatchObject({ adminPermissions: { POST: 'users:impersonate' } });
+  });
+
+  it('refuses a delegated impersonator minting for a user with admin access', async () => {
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', adminPermissions: ['support:read'] });
+    const { req, res } = post(
+      { name: 'key', scopes: ['notebooks:read'] },
+      { isAdmin: false, adminPermissions: ['users:impersonate'] }
+    );
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(
+      'Only full administrators can generate API keys for users with admin access'
+    );
     expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegated impersonator mint for a regular user', async () => {
+    const { req, res } = post(
+      { name: 'key', scopes: ['notebooks:read'] },
+      { isAdmin: false, adminPermissions: ['users:impersonate'] }
+    );
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
   });
 
   it('rejects admin:* even from an admin caller with Scope not allowed', async () => {

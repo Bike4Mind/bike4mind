@@ -91,7 +91,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // non-admins require a minimum search term to prevent blind pagination over all
     // users, downloadAll is admin-only, and the page size is hard-capped.
     const hasAdminReadAccess = hasAdminPermission(req.user, 'support:read');
-    const viewer = { userId: String(req.user?.id), isAdmin: !!req.user?.isAdmin };
+    const viewer = { userId: String(req.user?.id), isAdmin: hasAdminReadAccess };
     const isPicker = publicView && !hasAdminReadAccess;
     if (isPicker) {
       // projectId-scoped requests show members of one specific project rather than the whole

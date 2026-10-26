@@ -18,14 +18,14 @@ describe('admin tab access', () => {
     ).toBe(true);
   });
 
-  it('routes credits and moderation delegates to the matching administration panels', () => {
+  it('keeps credits and moderation delegates out of panels whose reads need support:read', () => {
     const credits = { isAdmin: false, adminPermissions: ['credits:adjust'] } as IUserDocument;
     const moderator = { isAdmin: false, adminPermissions: ['users:moderate'] } as IUserDocument;
-    expect(canAccessAdminTab(credits, AdminTab.CreditAnalytics)).toBe(true);
-    expect(canAccessAdminTab(credits, AdminTab.Organizations)).toBe(true);
-    expect(canAccessAdminTab(moderator, AdminTab.PublishedPages)).toBe(true);
-    expect(canAccessAdminTab(credits, AdminTab.PublishedPages)).toBe(false);
-    expect(canAccessAdminTab(moderator, AdminTab.CreditAnalytics)).toBe(false);
+    for (const tab of [AdminTab.CreditAnalytics, AdminTab.Organizations, AdminTab.PublishedPages]) {
+      expect(canAccessAdminTab(credits, tab)).toBe(false);
+      expect(canAccessAdminTab(moderator, tab)).toBe(false);
+      expect(canAccessAdminTab(supportUser, tab)).toBe(true);
+    }
   });
 
   it('retains full admin access and denies users without grants', () => {

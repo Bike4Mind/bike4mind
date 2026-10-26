@@ -72,7 +72,22 @@ describe('admin update field permissions', () => {
           isBanned: true,
         }
       )
-    ).toThrow('users:moderate');
+    ).toThrow('Missing permission: users:moderate');
+  });
+  it.each([
+    ['grant', { isAdmin: false }, true],
+    ['revoke', { isAdmin: true }, false],
+  ])('refuses a delegated settings manager trying to %s the full-admin flag', async (_label, target, isAdmin) => {
+    const users = {
+      findById: vi.fn().mockResolvedValue({ id: 'manager', adminPermissions: ['settings:manage'] }),
+      findByIdWithPassword: vi.fn().mockResolvedValue({ id: 'target', ...target }),
+      update: vi.fn(),
+    };
+    const adapters = { db: { users } } as unknown as Parameters<typeof adminUpdateUser>[2];
+    await expect(adminUpdateUser('manager', { id: 'target', isAdmin }, adapters)).rejects.toThrow(
+      'Only full administrators can change the full-admin flag'
+    );
+    expect(users.update).not.toHaveBeenCalled();
   });
   it('denies a support-only actor any admin mutation', () => {
     expect(() =>

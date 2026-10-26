@@ -97,12 +97,21 @@ describe('privileged target ban controls', () => {
     fireEvent.click(checkbox);
     expect(changed).toHaveBeenCalledWith('isBanned', true);
   });
-  it.each([true, false])('allows a full actor with legacy isAdmin=%s to ban admin targets', legacy => {
-    actor.currentUser = { isAdmin: legacy, adminPermissions: legacy ? [] : [...ADMIN_PERMISSIONS] };
+  it('allows a legacy isAdmin=true actor to ban admin targets', () => {
+    actor.currentUser = { isAdmin: true, adminPermissions: [] };
     const changed = renderActions({ ...user, isAdmin: true });
     const checkbox = screen.getByTestId('admin-user-ban-checkbox').querySelector('input')!;
     expect(checkbox).toBeEnabled();
     fireEvent.click(checkbox);
     expect(changed).toHaveBeenCalledWith('isBanned', true);
+  });
+  it('blocks an actor holding every explicit permission but isAdmin=false from banning admin targets', () => {
+    actor.currentUser = { isAdmin: false, adminPermissions: [...ADMIN_PERMISSIONS] };
+    const changed = renderActions({ ...user, isAdmin: true });
+    const checkbox = screen.getByTestId('admin-user-ban-checkbox').querySelector('input')!;
+    expect(checkbox).toBeDisabled();
+    expect(screen.getByText(/Full admin access is required to ban/)).toBeInTheDocument();
+    fireEvent.click(checkbox);
+    expect(changed).not.toHaveBeenCalled();
   });
 });

@@ -212,12 +212,15 @@ const handler = baseApi().put(
 
       // Another user's credentials and the admin role are session-only changes: an API key is
       // refused, a browser session must have recently re-verified. Both run before any write.
-      // Revoking the role, bans and every other field stay ungated.
+      // The role is gated in both directions, matching pages/api/admin/users/[userId]/permissions.ts;
+      // bans and every other field stay ungated.
       if (!isSelf) {
-        const grantsAdminRole =
-          (req.body as Record<string, unknown> | undefined)?.isAdmin === true &&
-          !((await User.findById(userId).select('isAdmin').lean()) as { isAdmin?: boolean } | null)?.isAdmin;
-        if (writesCredentialFields(req.body) || grantsAdminRole) {
+        const requestedIsAdmin = (req.body as Record<string, unknown> | undefined)?.isAdmin;
+        const changesAdminRole =
+          typeof requestedIsAdmin === 'boolean' &&
+          requestedIsAdmin !==
+            !!((await User.findById(userId).select('isAdmin').lean()) as { isAdmin?: boolean } | null)?.isAdmin;
+        if (writesCredentialFields(req.body) || changesAdminRole) {
           if (req.apiKeyInfo) {
             throw new ForbiddenError('Credential and admin-role changes require a signed-in session.');
           }
@@ -315,12 +318,13 @@ const handler = baseApi().put(
           );
 
           // Both entries are strict: a failed audit write aborts this transaction, so neither the
-          // role change nor the balance change can commit without its record.
+          // role change nor the balance change can commit without its record. The role change uses
+          // the same action as pages/api/admin/users/[userId]/permissions.ts, so one filter finds both.
           if (changesRoleInTransaction && snapshot?.isAdmin !== updated?.isAdmin) {
             await recordAdminActionFromRequest(req, {
-              action: updated?.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
+              action: 'user.permissions.updated',
               target: auditTarget,
-              summary: updated?.isAdmin ? 'granted the admin role' : 'revoked the admin role',
+              summary: updated?.isAdmin ? 'granted full admin access' : 'revoked full admin access',
               reason: roleChangeReason,
               changes: [{ field: 'isAdmin', before: !!snapshot?.isAdmin, after: !!updated?.isAdmin }],
             });

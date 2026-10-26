@@ -37,6 +37,7 @@ vi.mock('@server/utils/adminAudit', async original => ({
   ...(await original<typeof import('@server/utils/adminAudit')>()),
   recordAdminActionFromRequest: mocks.record,
 }));
+import { ADMIN_PERMISSIONS } from '@bike4mind/common';
 import handler from '../permissions';
 const targetId = '123456789012345678901234';
 const actorId = 'abcdefabcdefabcdefabcdef';
@@ -53,14 +54,14 @@ const invoke = (
     body: options.body ?? { isAdmin: false, adminPermissions: ['support:read'], reason: 'Assign support duties' },
   });
   Object.assign(req, {
-    user: options.user ?? { id: actorId, adminPermissions: ['settings:manage'] },
+    user: options.user ?? { id: actorId, adminPermissions: ['settings:manage', 'support:read'] },
     apiKeyInfo: options.apiKeyInfo,
   });
   return { res, result: (handler as unknown as Handler)(req, res) };
 };
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.findById.mockResolvedValue({ _id: targetId, name: 'Target', isAdmin: true, adminPermissions: [] });
+  mocks.findById.mockResolvedValue({ _id: targetId, name: 'Target', isAdmin: false, adminPermissions: [] });
   mocks.updateOne.mockResolvedValue({ matchedCount: 1 });
   mocks.record.mockResolvedValue(undefined);
   mocks.guard.mockResolvedValue(undefined);
@@ -80,7 +81,7 @@ describe('PUT admin user permissions', () => {
         reason: 'Assign support duties',
         target: expect.objectContaining({ id: targetId }),
         changes: [
-          { field: 'isAdmin', before: true, after: false },
+          { field: 'isAdmin', before: false, after: false },
           { field: 'adminPermissions', before: [], after: ['support:read'] },
         ],
       })
@@ -92,6 +93,41 @@ describe('PUT admin user permissions', () => {
   it('allows legacy administrators without explicit grants', async () => {
     await invoke({ user: { id: actorId, isAdmin: true } }).result;
     expect(mocks.updateOne).toHaveBeenCalled();
+  });
+
+  it('lets a full admin demote another full admin through the last-admin guard', async () => {
+    mocks.findById.mockResolvedValue({ _id: targetId, name: 'Target', isAdmin: true, adminPermissions: [] });
+    await invoke({ user: { id: actorId, isAdmin: true } }).result;
+    expect(mocks.guard).toHaveBeenCalledWith(targetId);
+    expect(mocks.updateOne).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a full admin', { isAdmin: true, adminPermissions: [] }],
+    ['a delegated admin', { isAdmin: false, adminPermissions: ['support:read'] }],
+  ])('refuses a settings:manage-only actor changing %s', async (_label, target) => {
+    mocks.findById.mockResolvedValue({ _id: targetId, name: 'Target', ...target });
+    await expect(
+      invoke({ user: { id: actorId, adminPermissions: [...ADMIN_PERMISSIONS] } }).result
+    ).rejects.toMatchObject({ statusCode: 403, message: expect.stringContaining('Only full administrators') });
+    expect(mocks.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegated actor granting the full-admin flag', async () => {
+    const body = { isAdmin: true, adminPermissions: [], reason: 'Promote' };
+    await expect(
+      invoke({ user: { id: actorId, adminPermissions: [...ADMIN_PERMISSIONS] }, body }).result
+    ).rejects.toMatchObject({ statusCode: 403, message: 'Only full administrators can grant full admin access' });
+    expect(mocks.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegated actor granting a permission it does not hold', async () => {
+    const body = { isAdmin: false, adminPermissions: ['support:read', 'users:delete'], reason: 'Escalate' };
+    await expect(invoke({ body }).result).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'Cannot grant permissions you do not hold: users:delete',
+    });
+    expect(mocks.updateOne).not.toHaveBeenCalled();
   });
 
   it('denies support-only actors before writing', async () => {

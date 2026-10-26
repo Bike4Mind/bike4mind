@@ -56,10 +56,11 @@ describe('full administrator membership serialization', () => {
     expect(await User.countDocuments({ isAdmin: true })).toBe(1);
   });
 
-  it('recognizes a full explicit grant set as a remaining administrator', async () => {
+  it('does not count a complete explicit grant set as a remaining full administrator', async () => {
     const legacy = await seed('legacy');
     await seed('delegated-full', false, ADMIN_PERMISSIONS);
-    await expect(demote(String(legacy._id))).resolves.toBeUndefined();
+    await expect(demote(String(legacy._id))).rejects.toThrow('last remaining');
+    expect(await User.countDocuments({ isAdmin: true })).toBe(1);
   });
 
   it('does not count partial delegated grants as full administrators', async () => {
@@ -69,10 +70,10 @@ describe('full administrator membership serialization', () => {
     expect(await User.countDocuments({ isAdmin: true })).toBe(1);
   });
 
-  it('allows removing the legacy flag when a complete grant set remains', async () => {
+  it('refuses removing the last legacy flag even when the holder keeps every explicit grant', async () => {
     const legacy = await seed('both', true, ADMIN_PERMISSIONS);
-    await expect(demote(String(legacy._id))).resolves.toBeUndefined();
-    expect(await User.countDocuments({ isAdmin: false })).toBe(1);
+    await expect(demote(String(legacy._id))).rejects.toThrow('last remaining');
+    expect(await User.countDocuments({ isAdmin: true })).toBe(1);
   });
 
   it('rolls back the protected change when a subsequent strict audit fails', async () => {

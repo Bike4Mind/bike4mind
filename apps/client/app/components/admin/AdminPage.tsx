@@ -211,11 +211,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
       ? AdminTab.Users
       : hasAdminPermission(currentUser, 'settings:manage')
         ? AdminTab.AdminSettings
-        : hasAdminPermission(currentUser, 'keys:revoke')
-          ? AdminTab.EmbedKeys
-          : hasAdminPermission(currentUser, 'credits:adjust')
-            ? AdminTab.CreditAnalytics
-            : AdminTab.PublishedPages
+        : AdminTab.EmbedKeys
   );
 
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -283,16 +279,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
     );
   }
 
-  if (
-    ![
-      AdminTab.Users,
-      AdminTab.AdminSettings,
-      AdminTab.EmbedKeys,
-      AdminTab.CreditAnalytics,
-      AdminTab.Organizations,
-      AdminTab.PublishedPages,
-    ].some(tab => canAccessAdminTab(currentUser, tab))
-  ) {
+  if (![AdminTab.Users, AdminTab.AdminSettings, AdminTab.EmbedKeys].some(tab => canAccessAdminTab(currentUser, tab))) {
     return <Typography color="warning">Missing permission: support:read</Typography>;
   }
 

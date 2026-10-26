@@ -1,5 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
-import { ADMIN_PERMISSIONS, isFullAdmin } from '@bike4mind/common';
+import { isFullAdmin } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { User } from '../models/auth/UserModel';
 
@@ -40,9 +40,7 @@ export async function assertCanRemoveFullAdmin(
 ): Promise<void> {
   const target = await User.findById(userId).select('isAdmin adminPermissions').lean();
   if (!isFullAdmin(target) || (after && isFullAdmin({ ...target, ...after }))) return;
-  const remaining = await User.countDocuments({
-    _id: { $ne: userId },
-    $or: [{ isAdmin: true }, { adminPermissions: { $all: [...ADMIN_PERMISSIONS] } }],
-  });
+  // Full admin means the legacy flag only (see isFullAdmin); explicit grant sets do not count.
+  const remaining = await User.countDocuments({ _id: { $ne: userId }, isAdmin: true });
   if (remaining === 0) throw new BadRequestError('Cannot remove the last remaining full administrator.');
 }
