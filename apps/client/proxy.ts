@@ -209,10 +209,13 @@ export function proxy(request: NextRequest) {
   const desktopReleasesApiHost = ' https://api.github.com';
   // Social post thumbnails, loaded straight from each network's image CDN: Bluesky images
   // (cdn.bsky.app) and video poster frames (video.bsky.app), Facebook (*.fbcdn.net) and YouTube
-  // (i.ytimg.com). Facebook serves images from per-region edge hosts (scontent-<edge>.xx.fbcdn.net
-  // and the like) that no fixed list covers, hence its wildcard; the other three are single
-  // hosts. connect-src too, for the service worker's re-fetch (see mapTileHost).
-  const socialImageHosts = ' https://cdn.bsky.app https://video.bsky.app https://*.fbcdn.net https://i.ytimg.com';
+  // (i.ytimg.com). video.bsky.app answers every poster with a redirect to video.cdn.bsky.app, and
+  // CSP checks each hop of a redirect, so both are listed. Facebook serves images from per-region
+  // edge hosts (scontent-<edge>.xx.fbcdn.net and the like) that no fixed list covers, hence its
+  // wildcard; the others are single hosts. connect-src too, for the service worker's re-fetch
+  // (see mapTileHost).
+  const socialImageHosts =
+    ' https://cdn.bsky.app https://video.bsky.app https://video.cdn.bsky.app https://*.fbcdn.net https://i.ytimg.com';
 
   const cspHeader = `
     default-src 'self';
