@@ -99,6 +99,15 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_cancelled': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.sessions.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  // Bulk abuse response (apps/client/pages/api/admin/abuse/bulk-*.ts): one strict entry per user and
+  // step, written in that user's transaction, plus a summary per execute. The summary is bestEffort
+  // because the per-user entries are the record and the work is already committed when it is written.
+  'abuse.bulk.executed': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  'abuse.bulk.ban': { category: 'access', severity: 'critical', write: 'strict' },
+  'abuse.bulk.revoke_keys': { category: 'access', severity: 'notice', write: 'strict' },
+  'abuse.bulk.revoke_sessions': { category: 'identity', severity: 'notice', write: 'strict' },
+  'abuse.bulk.clawback': { category: 'credits', severity: 'notice', write: 'strict' },
+  'abuse.bulk.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 
