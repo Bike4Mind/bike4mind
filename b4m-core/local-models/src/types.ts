@@ -33,7 +33,7 @@ export interface AttentionGroup {
   valueLength: number;
 }
 
-/** Same shape as `ModelArch` in b4m-core/common/src/schemas/modelHub.ts; keep the two in sync. */
+/** Cache and recurrent-state layout used to estimate model memory requirements. */
 export interface ModelArch {
   contextMax: number;
   blockCount: number;
@@ -50,7 +50,7 @@ export interface ModelArch {
   kvProbe?: { bytesPerToken: number; fixedBytes: number; source: 'llama-fit-params'; runtime: string };
 }
 
-/** Same shape as a build's `tensorStats` in b4m-core/common/src/schemas/modelHub.ts. */
+/** Weight split used to estimate partially offloaded MoE models. */
 export interface TensorStats {
   expertBytesPerLayer: number;
   nonExpertBytes: number;
@@ -96,7 +96,10 @@ export interface ModelInspection {
 }
 
 export interface LocalRuntime {
-  /** `'ollama'` for the default daemon, otherwise `'<kind>:<host:port>'`. */
+  /**
+   * `'ollama'` for the default daemon, otherwise `'<kind>:<host:port>'` for HTTP server roots.
+   * HTTPS and reverse-proxy paths use `'<kind>:<canonical base URL>'` to keep distinct endpoints unique.
+   */
   readonly id: string;
   readonly kind: RuntimeKind;
   readonly baseUrl: string;

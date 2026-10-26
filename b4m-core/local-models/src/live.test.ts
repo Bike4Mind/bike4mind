@@ -175,8 +175,16 @@ describe.runIf(OLLAMA || OPENAI)('live host', () => {
       expect(profile).toMatchObject({ memoryKind: 'unified', gpuCount: 1, confidence: 'high' });
       expect(profile.chip).toMatch(/^Apple /);
     } else if (nvidiaGpus > 0) {
-      expect(profile).toMatchObject({ memoryKind: 'discrete', gpuCount: nvidiaGpus, confidence: 'high' });
-      expect(profile.gpuMemoryBytes).toBeGreaterThan(0);
+      const memoryTotals = run('nvidia-smi', ['--query-gpu=memory.total', '--format=csv,noheader,nounits']);
+      expect(memoryTotals).not.toBeNull();
+      const hasSharedMemory = memoryTotals?.split(/\r?\n/).some(line => /^\[?N\/A\]?$/i.test(line.trim()));
+      expect(profile).toMatchObject({
+        memoryKind: hasSharedMemory ? 'unified' : 'discrete',
+        gpuCount: nvidiaGpus,
+        confidence: 'high',
+      });
+      if (hasSharedMemory) expect(profile.gpuMemoryBytes).toBeNull();
+      else expect(profile.gpuMemoryBytes).toBeGreaterThan(0);
     } else {
       expect(profile).toMatchObject({ memoryKind: 'cpu', gpuCount: 0, gpuMemoryBytes: null, confidence: 'low' });
     }

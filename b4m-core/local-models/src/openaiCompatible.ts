@@ -4,7 +4,7 @@ import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   HEALTH_TIMEOUT_MS,
   describeError,
-  hostPort,
+  runtimeEndpointId,
   isAuthError,
   requireBaseUrl,
   requestJson,
@@ -102,7 +102,7 @@ export class OpenAICompatibleRuntime implements LocalRuntime {
 
   constructor(options: OpenAICompatibleRuntimeOptions) {
     this.baseUrl = requireBaseUrl(options.baseUrl, 'openai-compatible');
-    this.id = `openai-compatible:${hostPort(this.baseUrl)}`;
+    this.id = `openai-compatible:${runtimeEndpointId(this.baseUrl)}`;
     this.product = options.product ?? null;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.healthTimeoutMs = options.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;

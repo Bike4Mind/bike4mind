@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { LocalRuntimeError, ModelNotFoundError, RuntimeUnsupportedError } from './errors';
 import { OpenAICompatibleRuntime } from './openaiCompatible';
+import { OllamaRuntime } from './ollama';
 import { closedPort, json, sendJson, startFakeServer, type FakeServer } from './__test__/fakeServer';
 
 let server: FakeServer | undefined;
@@ -182,5 +183,35 @@ describe('OpenAICompatibleRuntime', () => {
       version: null,
       error: 'connection refused',
     });
+  });
+});
+
+// Both adapters share URL validation and endpoint identity, including reverse-proxy roots.
+describe.each([
+  ['ollama', (baseUrl: string) => new OllamaRuntime({ baseUrl })],
+  ['openai-compatible', (baseUrl: string) => new OpenAICompatibleRuntime({ baseUrl })],
+] as const)('%s endpoint identity and credentials', (kind, createRuntime) => {
+  it.each([
+    ['http://example.test:1234', 'example.test:1234'],
+    ['http://example.test:1234/v1/', 'example.test:1234'],
+    ['http://example.test:1234/first', 'http://example.test:1234/first'],
+    ['http://example.test:1234/second/v1/', 'http://example.test:1234/second'],
+    ['https://example.test:1234', 'https://example.test:1234'],
+    ['https://example.test:1234/first', 'https://example.test:1234/first'],
+  ])('identifies %s without conflating another endpoint', (baseUrl, address) => {
+    expect(createRuntime(baseUrl).id).toBe(`${kind}:${address}`);
+  });
+
+  it.each([
+    'http://user:example-password@example.test:1234',
+    'http://user:example-password@example.test:invalid',
+    'http://user:example-password@',
+    'ftp://user:example-password@example.test',
+    'user:example-password@example.test:invalid',
+  ])('never discloses credentials when rejecting %s', baseUrl => {
+    const create = () => createRuntime(baseUrl);
+    expect(create).toThrow(LocalRuntimeError);
+    expect(create).not.toThrow(/example-password/);
+    expect(create).not.toThrow(/user:/);
   });
 });

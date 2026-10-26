@@ -20,7 +20,7 @@ const SWA_DEFAULTS: Record<string, SwaDefault> = {
   cohere2moe: { every: 4, denseFirst: true },
   exaone4: { every: 4 },
   'exaone-moe': { every: 4 },
-  gemma2: { every: 2 },
+  gemma2: { every: 2, window: 4096 },
   gemma3: { every: 6 },
   gemma3n: { every: 5 },
   'gemma-embedding': { every: 6 },
@@ -40,6 +40,7 @@ const SWA_DEFAULTS: Record<string, SwaDefault> = {
 
 // llama.cpp hardcodes where gemma3n's KV-sharing layers start; gemma4 states it in `attention.shared_kv_layers`.
 const KV_LAYER_LIMIT: Record<string, number> = { gemma3n: 20 };
+const FIXED_SWA_WINDOW: Record<string, number> = { llama4: 8192, smallthinker: 4096 };
 
 export function positiveInt(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
@@ -68,6 +69,7 @@ function perLayer(value: unknown, blockCount: number): number[] | undefined {
 // llama.cpp `llm_arch_is_recurrent`: every layer carries state and none has attention.
 const PURE_RECURRENT = new Set(['mamba', 'mamba2', 'rwkv6', 'rwkv6qwen2', 'rwkv7', 'arwkv7']);
 const NEMOTRON_H = new Set(['nemotron_h', 'nemotron_h_moe']);
+const DEFAULT_RECURRENT_INTERVAL = new Set(['qwen35', 'qwen35moe', 'qwen3next']);
 
 /** Reads `ModelArch` from GGUF metadata as llama.cpp b11889 sizes its caches; null if a key is missing or blanked.
  * Verbose `/api/show` tensors, when given, decide which layers hold experts. */
@@ -183,9 +185,11 @@ function recurrentLayers(
   hasState: boolean
 ): boolean[] {
   if (arch === 'falcon-h1') return Array.from({ length: trunk }, () => hasState);
-  const flags = boolArray(field('attention.recurrent_layers'), trunk);
+  const rawFlags = field('attention.recurrent_layers');
+  if (typeof rawFlags === 'boolean') return Array.from({ length: trunk }, () => rawFlags);
+  const flags = boolArray(rawFlags, trunk);
   if (flags) return flags;
-  const every = positiveInt(field('full_attention_interval'));
+  const every = positiveInt(field('full_attention_interval')) ?? (DEFAULT_RECURRENT_INTERVAL.has(arch) ? 4 : undefined);
   if (every) return Array.from({ length: trunk }, (_, i) => (i + 1) % every !== 0);
   // Nemotron-H also has FFN-only layers, with neither KV nor state.
   if (ffByLayer) return kvByLayer.slice(0, trunk).map((heads, i) => hasState && heads === 0 && ffByLayer[i] === 0);
@@ -227,9 +231,14 @@ function slidingLayers(
   trunk: number
 ): { window: number | undefined; flags: boolean[] } | null {
   const none = { window: undefined, flags: [] };
+  // Only EXAONE 4's 64-layer variant enables SWA, independently of the window key.
+  if (arch === 'exaone4' && trunk !== 64) return none;
   const defaults = SWA_DEFAULTS[arch];
   const rawWindow = field('attention.sliding_window');
-  const window = rawWindow === undefined ? defaults?.window : positiveInt(rawWindow);
+  const defaultWindow = arch === 'exaone4' ? 4096 : defaults?.window;
+  const configuredWindow = rawWindow === undefined ? defaultWindow : positiveInt(rawWindow);
+  // These loaders use the key as an enable switch and then set a fixed cache window.
+  const window = configuredWindow ? (FIXED_SWA_WINDOW[arch] ?? configuredWindow) : undefined;
   if (!window) return none;
   const pattern = field('attention.sliding_window_pattern');
   if (Array.isArray(pattern) || pattern === null) {

@@ -186,3 +186,26 @@ describe('detectRuntimes', () => {
     expect(await detectRuntimes({ fetch: routedFetch({}) })).toEqual([]);
   });
 });
+
+describe('detectRuntimes endpoint identities', () => {
+  it('keeps distinct proxy roots and HTTP/TLS endpoints separately addressable', async () => {
+    const hosts = [
+      'http://example.test:1234',
+      'http://example.test:1234/first',
+      'http://example.test:1234/second/v1/',
+      'https://example.test:1234',
+    ];
+    const fetchImpl: FetchLike = async url =>
+      url.endsWith('/v1/models')
+        ? new Response(JSON.stringify({ data: [{ id: 'm', owned_by: 'vllm' }] }))
+        : new Response('{}', { status: 404 });
+    const found = await detectRuntimes({ hosts, defaultHosts: [], fetch: fetchImpl });
+    expect(found.map(entry => entry.runtime.id)).toEqual([
+      'openai-compatible:example.test:1234',
+      'openai-compatible:http://example.test:1234/first',
+      'openai-compatible:http://example.test:1234/second',
+      'openai-compatible:https://example.test:1234',
+    ]);
+    expect(new Set(found.map(entry => entry.runtime.id)).size).toBe(hosts.length);
+  });
+});

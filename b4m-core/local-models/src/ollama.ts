@@ -6,7 +6,7 @@ import {
   HEALTH_TIMEOUT_MS,
   connectionError,
   describeError,
-  hostPort,
+  runtimeEndpointId,
   mapLimit,
   requireBaseUrl,
   parseJson,
@@ -178,7 +178,7 @@ export class OllamaRuntime implements LocalRuntime {
 
   constructor(options: OllamaRuntimeOptions = {}) {
     this.baseUrl = requireBaseUrl(options.baseUrl ?? DEFAULT_OLLAMA_URL, 'ollama');
-    this.id = this.baseUrl === DEFAULT_OLLAMA_URL ? 'ollama' : `ollama:${hostPort(this.baseUrl)}`;
+    this.id = this.baseUrl === DEFAULT_OLLAMA_URL ? 'ollama' : `ollama:${runtimeEndpointId(this.baseUrl)}`;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.healthTimeoutMs = options.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;
     this.client = {

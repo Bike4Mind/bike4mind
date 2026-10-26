@@ -55,8 +55,7 @@ export function requireBaseUrl(hostOrUrl: string, runtimeKind: string): string {
       runtimeKind
     );
   const baseUrl = parseBaseUrl(hostOrUrl);
-  if (!baseUrl)
-    throw new LocalRuntimeError(`Invalid ${runtimeKind} base URL: ${JSON.stringify(hostOrUrl)}`, runtimeKind);
+  if (!baseUrl) throw new LocalRuntimeError(`Invalid ${runtimeKind} base URL`, runtimeKind);
   return baseUrl;
 }
 
@@ -64,6 +63,12 @@ export function hostPort(baseUrl: string): string {
   const url = new URL(baseUrl);
   const port = url.port || (url.protocol === 'https:' ? '443' : '80');
   return `${url.hostname}:${port}`;
+}
+
+/** Preserve the familiar HTTP root identity while distinguishing TLS and reverse-proxy roots. */
+export function runtimeEndpointId(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  return url.protocol === 'http:' && url.pathname === '/' ? hostPort(baseUrl) : baseUrl;
 }
 
 function combinedSignal(signal: AbortSignal | undefined, timeoutMs: number | undefined): AbortSignal | undefined {

@@ -108,8 +108,61 @@ describe('archFromModelInfo', () => {
     expect(archFromModelInfo(info)).toEqual(liveArch['qwen3.5:0.8b']);
   });
 
+  it.each(['qwen35', 'qwen35moe', 'qwen3next'])('uses the optional interval default for %s', architecture => {
+    const info = Object.fromEntries(
+      Object.entries(liveModelInfo['qwen3.5:0.8b']).map(([key, value]) => [
+        key.replace('qwen35.', `${architecture}.`),
+        key === 'general.architecture' ? architecture : value,
+      ])
+    );
+    delete info[`${architecture}.attention.recurrent_layers`];
+    delete info[`${architecture}.full_attention_interval`];
+    expect(archFromModelInfo(info)).toEqual(liveArch['qwen3.5:0.8b']);
+    expect(archFromModelInfo({ ...info, [`${architecture}.full_attention_interval`]: 3 })?.full.layers).toBe(8);
+  });
+
+  it.each([true, false])('applies a scalar recurrent flag of %s to every layer', recurrent => {
+    const info = { ...liveModelInfo['qwen3.5:0.8b'], 'qwen35.attention.recurrent_layers': recurrent };
+    const arch = archFromModelInfo(info);
+    expect(arch?.full.layers).toBe(recurrent ? 0 : 24);
+    expect(arch?.recurrent?.layers).toBe(recurrent ? 24 : undefined);
+  });
+
   describe('sliding-window attention', () => {
     const gemma3 = liveModelInfo['gemma3:270m'];
+
+    it.each([
+      ['gemma2', 26, undefined, 13, 4096],
+      ['gemma2', 26, 0, 0, undefined],
+      ['gemma2', 26, 1024, 13, 1024],
+      ['exaone4', 64, undefined, 48, 4096],
+      ['exaone4', 64, 1024, 48, 1024],
+      ['exaone4', 64, 0, 0, undefined],
+      ['exaone4', 30, undefined, 0, undefined],
+      ['exaone4', 30, 1024, 0, undefined],
+      ['llama4', 48, undefined, 36, 8192],
+      ['llama4', 48, 1024, 36, 8192],
+      ['llama4', 48, 0, 0, undefined],
+      ['smallthinker', 32, undefined, 0, undefined],
+      ['smallthinker', 32, 1024, 24, 4096],
+      ['smallthinker', 32, 0, 0, undefined],
+    ] as const)(
+      'matches %s cache policy with %i layers and window %s',
+      (architecture, blockCount, window, slidingCount, expectedWindow) => {
+        const arch = archFromModelInfo({
+          'general.architecture': architecture,
+          [`${architecture}.block_count`]: blockCount,
+          [`${architecture}.context_length`]: 32768,
+          [`${architecture}.attention.head_count`]: 8,
+          [`${architecture}.attention.head_count_kv`]: 4,
+          [`${architecture}.attention.key_length`]: 128,
+          [`${architecture}.attention.sliding_window`]: window,
+        });
+        expect(arch?.full.layers).toBe(blockCount - slidingCount);
+        expect(arch?.swa?.layers ?? 0).toBe(slidingCount);
+        expect(arch?.swa?.window).toBe(expectedWindow);
+      }
+    );
 
     it('uses llama.cpp per-architecture pattern when the GGUF has none', () => {
       const gptOss = {

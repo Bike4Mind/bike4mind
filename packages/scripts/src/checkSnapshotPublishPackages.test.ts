@@ -38,7 +38,6 @@ const WORKFLOW = path.join(REPO_ROOT, '.github', 'workflows', 'snapshot-publish.
 const KNOWN_UNMAPPED = [
   'b4m-core/client-auth',
   'b4m-core/hearth',
-  'b4m-core/local-models',
   'b4m-core/memory',
   'b4m-core/resource',
   'b4m-core/voice',
