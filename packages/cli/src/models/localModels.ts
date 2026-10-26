@@ -458,10 +458,3 @@ export async function planPull(
     projectorBytes: Math.max(0, ...detail.projectors.map(entry => entry.sizeBytes)),
   };
 }
-
-const NOT_RECOMMENDED_RE = /abliterat|uncensor/i;
-
-/** Abliterated and uncensored builds are never suggested to the user, by name or by tag. */
-export function isNotRecommended(model: { id: string; tags: string[] }): boolean {
-  return NOT_RECOMMENDED_RE.test(model.id) || model.tags.some(tag => NOT_RECOMMENDED_RE.test(tag));
-}

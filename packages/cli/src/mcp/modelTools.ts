@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { HuggingFaceHub, type InstalledModel, type PullOptions } from '@bike4mind/local-models';
+import { HuggingFaceHub, isAbliteratedModel, type InstalledModel, type PullOptions } from '@bike4mind/local-models';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type {
@@ -14,10 +14,11 @@ import {
   abortable,
   clean,
   formatBytes,
+  hiddenAbliteratedMessage,
   hubAccessMessage,
-  isNotRecommended,
   listInstalled,
   planPull,
+  rankSearchHits,
   removeInstalled,
   requireRemovable,
   resolveRuntimeTarget,
@@ -99,7 +100,7 @@ function pullSummary(plan: PullPlan) {
     acknowledgementRequired: license.restricted,
     gated: detail.gated,
     runtime,
-    ...(isNotRecommended(detail) && { caution: 'This is an abliterated or uncensored build.' }),
+    ...(isAbliteratedModel(detail) && { caution: 'This is an abliterated or uncensored build.' }),
     ...(detail.ollamaNeedsSshKey && {
       sshKeyNote: `Ollama downloads ${detail.private ? 'private' : 'gated'} repos with its own key: the Ollama host's ~/.ollama/id_ed25519.pub must be added to the Hugging Face account.`,
     }),
@@ -261,11 +262,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
     (args, extra) =>
       run(async () => {
         const page = await deps.hub().search({ query: args.query, limit: args.limit, signal: extra.signal });
-        const flagged = page.models.filter(isNotRecommended);
-        const hits = [
-          ...page.models.filter(model => !isNotRecommended(model)),
-          ...(args.includeAbliterated ? flagged : []),
-        ];
+        const { hits, hidden } = rankSearchHits(page.models, Boolean(args.includeAbliterated));
         return toResult({
           query: args.query,
           models: hits.map(model => ({
@@ -276,12 +273,9 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
             likes: model.likes,
             updatedAt: model.updatedAt,
             baseModels: model.baseModels,
-            ...(isNotRecommended(model) && { notRecommended: 'abliterated or uncensored build' }),
+            ...(model.notRecommended && { notRecommended: model.notRecommended }),
           })),
-          ...(!args.includeAbliterated &&
-            flagged.length > 0 && {
-              hidden: `${flagged.length} abliterated or uncensored ${flagged.length === 1 ? 'build was' : 'builds were'} left out.`,
-            }),
+          ...(hidden > 0 && { hidden: hiddenAbliteratedMessage(hidden) }),
           next: 'models_pull shows the build, size and every license, and asks the user before downloading.',
         });
       })

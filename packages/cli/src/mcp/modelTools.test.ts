@@ -183,6 +183,25 @@ describe('model tools', () => {
     expect(data).not.toHaveProperty('hidden');
   });
 
+  it('also catches heretic and decensored builds and base models, but not heretical', async () => {
+    const base = detail();
+    const hub: HubClient = {
+      ...fakeHub(),
+      search: vi.fn().mockResolvedValue({
+        models: [
+          { ...base, id: 'someone/gemma-heretic-GGUF' },
+          { ...base, id: 'someone/Heretical-Poems-GGUF' },
+          { ...base, id: 'someone/Plain-GGUF', baseModels: ['x/Qwen3-decensored'] },
+        ],
+        nextCursor: null,
+      }),
+    };
+    const { call } = await setup({ hub });
+    const { data } = await call('models_search', { query: 'gemma' });
+    expect((data.models as Array<{ id: string }>).map(model => model.id)).toEqual(['someone/Heretical-Poems-GGUF']);
+    expect(data.hidden).toBe('2 abliterated or uncensored builds were left out.');
+  });
+
   describe('models_pull without elicitation', () => {
     it('downloads nothing and returns the preview and the terminal command', async () => {
       const { call, runtime, hub } = await setup();
