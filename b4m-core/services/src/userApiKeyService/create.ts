@@ -25,6 +25,7 @@ import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit'
 import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
 import { computeKeyDigest } from './keyDigest';
+import { ApiKeyTrustAssessment, apiKeyTrustRequiredError, untrustedOwnerMayMint } from './trust';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
@@ -134,6 +135,13 @@ interface CreateUserApiKeyAdapters {
   isKnownScope?: (value: string) => boolean;
   /** Expiry of the calling API key, when it has one. A key may not mint a child that outlives it. */
   callerExpiresAt?: Date;
+  /**
+   * The owner's standing with the API key trust gate (trust.ts). Ignored for the system user,
+   * org-billed keys and the exchange pool; every other mint without one fails closed, so a
+   * creation path that forgot it cannot silently mint for an untrusted account. Optional only so
+   * system-user callers that predate the gate keep compiling.
+   */
+  trust?: ApiKeyTrustAssessment;
 }
 
 export interface CreateUserApiKeyResult {
@@ -330,8 +338,18 @@ const mintUserApiKey = async (
   // Skip only for the shared system user - keyed on userId === systemUserId (NOT on
   // scope) to prevent rogue-admin bypass.
   const isSystemUser = systemUserId && userId === systemUserId;
-  const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
-  const cap = isExchangeKey ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER : MAX_ACTIVE_KEYS_PER_USER;
+  const untrusted = isSystemUser || isExchangeKey || billsOrg ? null : untrustedAssessment(adapters.trust);
+  // Refuse up front when there is no allowance at all; createIfUnderCap enforces the count atomically.
+  if (untrusted && !untrustedOwnerMayMint(untrusted, 0)) {
+    throw apiKeyTrustRequiredError(untrusted);
+  }
+  // An untrusted owner's allowance counts personal keys only: org-billed keys are not trust-limited.
+  const pool = isExchangeKey ? 'oauth-exchange' : untrusted ? 'personal' : 'standard';
+  const cap = isExchangeKey
+    ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER
+    : untrusted?.reason === 'not_yet_trusted'
+      ? Math.min(untrusted.maxActiveKeys, MAX_ACTIVE_KEYS_PER_USER)
+      : MAX_ACTIVE_KEYS_PER_USER;
 
   const { key, keyPrefix, keyDigest } = generateApiKey();
   const callbackSigningSecret = generateCallbackSigningSecret();
@@ -374,6 +392,7 @@ const mintUserApiKey = async (
   } else {
     const result = await db.userApiKeys.createIfUnderCap(docToCreate, cap, pool);
     if (result === 'at_cap') {
+      if (untrusted) throw apiKeyTrustRequiredError(untrusted);
       const message = isExchangeKey
         ? `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`
         : `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`;
@@ -404,4 +423,10 @@ const mintUserApiKey = async (
     preauthorizedLakeIds: apiKeyDocument.preauthorizedLakeIds,
     createdAt: apiKeyDocument.createdAt,
   };
+};
+
+/** Narrows the caller's assessment to the untrusted case; fails closed when a JS caller omitted it. */
+const untrustedAssessment = (trust: ApiKeyTrustAssessment | undefined) => {
+  if (!trust) throw new Error('createUserApiKey requires a trust assessment');
+  return trust.status === 'untrusted' ? trust : null;
 };

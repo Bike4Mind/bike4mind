@@ -79,6 +79,14 @@ describe('proxy CSP header', () => {
     expect(sources('connect-src')).toContain('https://www.facebook.com');
   });
 
+  it('allows the Turnstile script, widget frame and verification calls', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/login')).headers.get('Content-Security-Policy') ?? '';
+    const sources = (name: string) => (csp.match(new RegExp(`${name} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    for (const directive of ['script-src', 'frame-src', 'connect-src']) {
+      expect(sources(directive)).toContain('https://challenges.cloudflare.com');
+    }
+  });
+
   // connect-src too: the service worker's image cache re-fetches tiles, and a worker fetch is
   // checked against connect-src, so img-src alone leaves the map blank once the SW is active.
   it.each(['img-src', 'connect-src'])('%s allows the OpenStreetMap tiles the inline location map loads', directive => {
