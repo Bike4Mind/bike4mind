@@ -3766,6 +3766,17 @@ describe('ChatCompletionProcess', () => {
           expect(lastCompleteOpts().identityViaTool).toBe(false);
         });
 
+        it('withholds the lone tool from a registry-only model routed to the Responses transport by its profile', async () => {
+          const id = 'registry-only-responses-model';
+          setModel({ id, supportsTools: true, dispatchProfile: { toolTransport: 'responses' } });
+          await service.process({
+            body: turnBody({ params: { ...startQuestParams.params, model: id } }),
+            logger: mockLogger,
+          });
+          expect(offered()).toEqual([]);
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
         it('keeps the tool on a GPT-5.4 turn that already carries another tool', async () => {
           setModel({ id: ChatModels.GPT5_4, supportsTools: true });
           await service.process({

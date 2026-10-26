@@ -561,12 +561,18 @@ export const FORCE_STREAM_STALL_TEST_MARKER = '[[force-stream-stall]]';
  * keeps its identity line (unset counts as unsupported, matching canServeChat in the fallback
  * selector). Alone, the tool would make a plain turn carry tools: the 5.4 family then loses
  * reasoning_effort on chat completions, and the rest of the set moves onto the Responses
- * transport. Shared by the primary-turn trim and the per-hop fallback override so they cannot drift.
+ * transport, as does a dispatch profile with toolTransport 'responses' (the adapter honours it first:
+ * openaiBackend usesResponsesToolTransport). Shared by the primary-turn trim and the per-hop fallback
+ * override so they cannot drift.
  */
-function withholdIdentityTool(model: { id: string; supportsTools?: boolean }, toolNames: string[]): boolean {
+function withholdIdentityTool(
+  model: { id: string; supportsTools?: boolean; dispatchProfile?: { toolTransport?: string } },
+  toolNames: string[]
+): boolean {
   return (
     !model.supportsTools ||
-    (REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model.id) &&
+    ((REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model.id) ||
+      model.dispatchProfile?.toolTransport === 'responses') &&
       toolNames.length === 1 &&
       toolNames[0] === 'current_model_details')
   );
