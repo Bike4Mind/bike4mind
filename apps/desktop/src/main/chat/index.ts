@@ -31,6 +31,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest } from '@shared/browserCookies';
+import type { CapabilitySubject } from '@shared/capabilities';
 import type {
   SkillMarketFilters,
   SkillMarketImportRequest,
@@ -132,10 +133,7 @@ const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
 const TURN_TIMING = process.env.B4M_DESKTOP_TURN_TIMING === '1';
 
-function sameSubject(
-  left: import('@shared/capabilities').CapabilitySubject,
-  right: import('@shared/capabilities').CapabilitySubject
-): boolean {
+function sameSubject(left: CapabilitySubject, right: CapabilitySubject): boolean {
   if (left.kind !== right.kind) return false;
   if (left.kind === 'desktop-user') return true;
   if (left.kind === 'project' && right.kind === 'project') return left.directory === right.directory;
