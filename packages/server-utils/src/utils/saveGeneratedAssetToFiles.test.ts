@@ -23,7 +23,7 @@ vi.mock('./storage/index', () => ({
 
 import { saveGeneratedAssetToFiles } from './saveGeneratedAssetToFiles';
 
-const logger = { info: vi.fn(), error: vi.fn() };
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 const params = (signal?: AbortSignal): SaveGeneratedAssetParams => ({
   userId: 'u1',
