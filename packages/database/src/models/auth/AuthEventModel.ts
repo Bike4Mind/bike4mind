@@ -43,6 +43,8 @@ const AuthEventSchema = new Schema<IAuthEventDocument>(
 );
 
 AuthEventSchema.index({ userId: 1, createdAt: -1 });
+AuthEventSchema.index({ type: 1, ip: 1, createdAt: -1 });
+AuthEventSchema.index({ type: 1, asn: 1, createdAt: -1 });
 
 /**
  * TTL on createdAt: raw signup/login IPs are kept for 90 days.
@@ -69,6 +71,48 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
 
   async findByUser(userId: string, limit = 50): Promise<IAuthEventDocument[]> {
     return this.model.find({ userId }).sort({ createdAt: -1 }).limit(limit);
+  }
+
+  /** Counts other accounts, not login events. A truncated scan is unknown, never a low count. */
+  async recentDistinctSignups(input: {
+    userId: string;
+    since: Date;
+    until: Date;
+    ip: string | null;
+    asn: number | null;
+    maxRows: number;
+  }): Promise<{ ipSignups: number | null; asnSignups: number | null; prefixSignups: number | null }> {
+    const { since, until, maxRows } = input;
+    if (
+      !Number.isFinite(since.getTime()) ||
+      !Number.isFinite(until.getTime()) ||
+      since >= until ||
+      until.getTime() - since.getTime() > AUTH_EVENT_RETENTION_SECONDS * 1000 ||
+      !Number.isInteger(maxRows) ||
+      maxRows < 1 ||
+      maxRows > 10_000
+    )
+      throw new Error('Invalid signup window');
+
+    const count = async (network: Record<string, unknown>): Promise<number | null> => {
+      const rows = await this.model
+        .find({ ...network, type: 'signup', createdAt: { $gte: since, $lt: until } })
+        .select({ userId: 1, _id: 0 })
+        .limit(maxRows + 1)
+        .maxTimeMS(2000)
+        .lean();
+      if (rows.length > maxRows) return null;
+      return new Set(rows.map(row => row.userId).filter(id => id !== input.userId)).size;
+    };
+    const ipv4 = input.ip?.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    const validIp = ipv4 && ipv4.slice(1).every(octet => Number(octet) <= 255);
+    const prefix = validIp ? `${ipv4[1]}.${ipv4[2]}.${ipv4[3]}.` : null;
+    const [ipSignups, asnSignups, prefixSignups] = await Promise.all([
+      input.ip ? count({ ip: input.ip }) : null,
+      Number.isSafeInteger(input.asn) && input.asn !== null && input.asn > 0 ? count({ asn: input.asn }) : null,
+      prefix ? count({ ip: { $gte: prefix, $lt: `${prefix}~` } }) : null,
+    ]);
+    return { ipSignups, asnSignups, prefixSignups };
   }
 
   async deleteAllForUser(userId: string): Promise<number> {
