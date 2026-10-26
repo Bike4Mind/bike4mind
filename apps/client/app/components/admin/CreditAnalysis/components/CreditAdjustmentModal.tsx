@@ -133,7 +133,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                   />
                 </FormControl>
               ) : (
-                <FormControl sx={{ mb: 1 }} error={!canSet && setDelta === 0}>
+                <FormControl sx={{ mb: 1 }} error={targetBalance !== null && !canSet && setDelta === 0}>
                   <FormLabel>New balance</FormLabel>
                   <Input
                     type="number"

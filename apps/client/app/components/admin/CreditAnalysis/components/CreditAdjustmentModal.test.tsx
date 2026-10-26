@@ -136,6 +136,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
       expect(screen.getByTestId('credit-adjust-set-btn')).toBeEnabled();
       fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '' } });
       expect(screen.getByTestId('credit-adjust-set-btn')).toBeDisabled();
+      expect(screen.getByTestId('credit-adjust-set-input')).not.toHaveAttribute('aria-invalid', 'true');
     });
 
     it('stays disabled when the target equals the current balance', () => {
