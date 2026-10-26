@@ -98,8 +98,9 @@ five. Loading the model list can add time before generation starts.
 
 ## Local history and offline models
 
-Turn on **Local history** in a conversation to index its messages and visited browser pages
-on this device. Use **Search conversations** in the sidebar to search opted-in history while
+Turn on **Local history** for a conversation to index its messages and visited browser pages
+on this device. The switch is in the browser pane's **...** menu (open the pane with the globe
+button in the conversation header); an icon in the header shows while it is on. Use **Search conversations** in the sidebar to search opted-in history while
 offline. Turning the switch off removes that conversation from the index. Settings -> General ->
 Local history -> **Clear local history** clears the current account's index; it does not delete
 the original conversations or disable future capture in opted-in sessions.
