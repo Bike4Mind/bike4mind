@@ -1,3 +1,4 @@
+import { UrlBlockedError } from '@bike4mind/common';
 import axios from 'axios';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent, validateUrlForFetch } from './ssrfProtection';
 
@@ -36,7 +37,7 @@ export async function ssrfSafeDownload(url: string, options: SsrfSafeDownloadOpt
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const validation = await validateUrlForFetch(currentUrl);
     if (!validation.valid) {
-      throw new Error(`URL blocked for security reasons: ${validation.error}`);
+      throw new UrlBlockedError(`URL blocked for security reasons: ${validation.error}`);
     }
 
     const remainingMs = deadline - Date.now();
