@@ -3,6 +3,8 @@
  * the localStorage helpers; the hook is app/hooks/useGearsDiscovery.ts.
  */
 
+import type { GearKey } from '@client/lib/gears/keys';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const DISCOVERY_COOLDOWN_MS = DAY_MS;
@@ -12,7 +14,7 @@ export const DISCOVERY_SETTLE_MS = 5000;
 export const DISCOVERY_RECHECK_MS = 10_000;
 
 /** Most valuable first. Keys not listed still appear, after these. */
-export const DISCOVERY_PRIORITY: readonly string[] = [
+export const DISCOVERY_PRIORITY: readonly GearKey[] = [
   'models',
   'agents',
   'projects',
