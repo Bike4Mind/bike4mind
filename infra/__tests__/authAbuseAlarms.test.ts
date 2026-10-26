@@ -26,7 +26,9 @@ describe('oauth signups refused alarm', () => {
   it('feeds Lumina5/AuthSecurity OAuthSignupsRefused, summed over 5 minutes', () => {
     expect(ALARMS).toMatch(/NAMESPACE = 'Lumina5\/AuthSecurity'/);
     expect(ALARMS).toMatch(/METRIC_NAME = 'OAuthSignupsRefused'/);
-    expect(ALARMS).toMatch(/metricName: METRIC_NAME,\s*namespace: NAMESPACE,\s*period: 300,[^\n]*\n\s*statistic: 'Sum'/);
+    expect(ALARMS).toMatch(
+      /metricName: METRIC_NAME,\s*namespace: NAMESPACE,\s*period: 300,[^\n]*\n\s*statistic: 'Sum'/
+    );
     expect(ALARMS).toMatch(/treatMissingData: 'notBreaching'/);
   });
 
