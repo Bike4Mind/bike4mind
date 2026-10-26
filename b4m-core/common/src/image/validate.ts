@@ -6,6 +6,7 @@ import {
   type AspectRatioCapability,
   type ImageInputRole,
   type ImageMode,
+  type ImageModeCapabilities,
   type ImageModelCatalogEntry,
 } from './types';
 
@@ -73,12 +74,12 @@ const parseRatio = (ratio: string): number | null => {
 
 const listOrNone = (values: readonly string[]): string => (values.length > 0 ? values.join(', ') : 'none');
 
-function checkInputs(request: ImageCapabilityRequest, caps: ImageModelCatalogEntry): ImageValidationFailure[] {
+function checkInputs(request: ImageCapabilityRequest, modeCaps: ImageModeCapabilities): ImageValidationFailure[] {
   const inputs = request.inputs ?? [];
   const failures: ImageValidationFailure[] = [];
   for (const role of IMAGE_INPUT_ROLES) {
     const count = inputs.filter(input => input.role === role).length;
-    const accepted = caps.inputs[role];
+    const accepted = modeCaps.inputs[role];
     const isRequired = request.mode === 'edit' && (role === 'edit_source' || accepted?.required === true);
     if (count === 0) {
       if (isRequired)
@@ -125,7 +126,8 @@ function isSizeAllowed(size: string, sizing: ImageSizing): boolean {
       return edges !== null && satisfiesGptImage2Constraints(edges, sizing.constraints);
     }
     case 'dimensions': {
-      // Presets are honoured even off-step (resolveImageDimensions snaps them); a custom size must already be on it.
+      // Presets pass as declared, though resolveImageDimensions snaps the off-step ones (1440x810, 800x600,
+      // 600x800) to the grid. A custom size must already be on it.
       if (sizing.presets.includes(size)) return true;
       const edges = parseSizeEdges(size);
       if (!edges) return false;
@@ -176,23 +178,59 @@ const describeAspectRatios = (aspectRatios: AspectRatioCapability): string =>
     ? `allowed: ${aspectRatios.values.join(', ')}`
     : `allowed: ${aspectRatios.tallest} to ${aspectRatios.widest}`;
 
-function checkOutput(request: ImageCapabilityRequest, caps: ImageModelCatalogEntry): ImageValidationFailure[] {
+function checkModeOutput(
+  request: ImageCapabilityRequest,
+  caps: ImageModelCatalogEntry,
+  modeCaps: ImageModeCapabilities
+): ImageValidationFailure[] {
   const failures: ImageValidationFailure[] = [];
-  const { size, aspectRatio, quality, style, outputFormat, count, transparentBackground, seed } = request;
+  const { aspectRatio, outputFormat, count, transparentBackground } = request;
+  const { aspectRatios, outputFormats, maxOutputs } = modeCaps;
+  if (aspectRatio !== undefined && !(aspectRatios && isAspectRatioAllowed(aspectRatio, aspectRatios))) {
+    failures.push({
+      code: 'unsupported_aspect_ratio',
+      field: 'aspectRatio',
+      message: aspectRatios
+        ? `aspect ratio ${aspectRatio} is not supported (${describeAspectRatios(aspectRatios)})`
+        : `aspect ratio is not supported for ${request.mode}`,
+    });
+  }
+  if (outputFormat !== undefined && !outputFormats.includes(outputFormat)) {
+    failures.push({
+      code: 'unsupported_output_format',
+      field: 'outputFormat',
+      message: `output format ${outputFormat} is not supported (allowed: ${listOrNone(outputFormats)})`,
+    });
+  } else if (
+    transparentBackground &&
+    caps.transparentBackground &&
+    outputFormat !== undefined &&
+    !ALPHA_FORMATS.has(outputFormat)
+  ) {
+    failures.push({
+      code: 'unsupported_output_format',
+      field: 'outputFormat',
+      message: `output format ${outputFormat} cannot carry a transparent background`,
+    });
+  }
+  if (count !== undefined && (!Number.isInteger(count) || count < 1 || count > maxOutputs)) {
+    failures.push({
+      code: 'unsupported_output_count',
+      field: 'count',
+      message: `${count} images per request is not supported for ${request.mode} (allowed: 1-${maxOutputs})`,
+    });
+  }
+  return failures;
+}
+
+function checkModelParams(request: ImageCapabilityRequest, caps: ImageModelCatalogEntry): ImageValidationFailure[] {
+  const failures: ImageValidationFailure[] = [];
+  const { size, quality, style, transparentBackground, seed } = request;
   if (size !== undefined && !isSizeAllowed(size, caps.sizing)) {
     failures.push({
       code: 'unsupported_size',
       field: 'size',
       message: `size ${size} is not supported (${describeSizing(caps.sizing)})`,
-    });
-  }
-  if (aspectRatio !== undefined && !(caps.aspectRatios && isAspectRatioAllowed(aspectRatio, caps.aspectRatios))) {
-    failures.push({
-      code: 'unsupported_aspect_ratio',
-      field: 'aspectRatio',
-      message: caps.aspectRatios
-        ? `aspect ratio ${aspectRatio} is not supported (${describeAspectRatios(caps.aspectRatios)})`
-        : 'aspect ratio is not supported',
     });
   }
   if (quality !== undefined && !caps.qualities.includes(quality)) {
@@ -207,26 +245,6 @@ function checkOutput(request: ImageCapabilityRequest, caps: ImageModelCatalogEnt
       code: 'unsupported_style',
       field: 'style',
       message: `style ${style} is not supported (allowed: ${listOrNone(caps.styles)})`,
-    });
-  }
-  if (outputFormat !== undefined && !caps.outputFormats.includes(outputFormat)) {
-    failures.push({
-      code: 'unsupported_output_format',
-      field: 'outputFormat',
-      message: `output format ${outputFormat} is not supported (allowed: ${listOrNone(caps.outputFormats)})`,
-    });
-  } else if (transparentBackground && outputFormat !== undefined && !ALPHA_FORMATS.has(outputFormat)) {
-    failures.push({
-      code: 'unsupported_output_format',
-      field: 'outputFormat',
-      message: `output format ${outputFormat} cannot carry a transparent background`,
-    });
-  }
-  if (count !== undefined && (!Number.isInteger(count) || count < 1 || count > caps.maxOutputs)) {
-    failures.push({
-      code: 'unsupported_output_count',
-      field: 'count',
-      message: `${count} images per request is not supported (allowed: 1-${caps.maxOutputs})`,
     });
   }
   if (transparentBackground && !caps.transparentBackground) {
@@ -244,21 +262,24 @@ function checkOutput(request: ImageCapabilityRequest, caps: ImageModelCatalogEnt
 
 /**
  * Checks a request against one model's declared capabilities and reports every field it cannot honour, so a
- * caller can explain each disabled option. Never rounds, clamps or swaps the model.
+ * caller can explain each disabled option. Never rounds, clamps or swaps the model. On an unsupported mode
+ * the mode-scoped fields (inputs, aspect ratio, format, count) are not checked, since no mode limits apply.
  */
 export function validateImageRequest<T extends ImageCapabilityRequest>(
   request: T,
   caps: ImageModelCatalogEntry
 ): ImageValidationResult<T> {
-  const failures: ImageValidationFailure[] = [];
-  if (!caps.modes.includes(request.mode)) {
-    failures.push({
-      code: 'unsupported_mode',
-      field: 'mode',
-      message: `${request.mode} is not supported (allowed: ${caps.modes.join(', ')})`,
-    });
-  }
-  failures.push(...checkInputs(request, caps), ...checkOutput(request, caps));
+  const modeCaps = caps.modes[request.mode];
+  const failures: ImageValidationFailure[] = modeCaps
+    ? [...checkInputs(request, modeCaps), ...checkModeOutput(request, caps, modeCaps)]
+    : [
+        {
+          code: 'unsupported_mode',
+          field: 'mode',
+          message: `${request.mode} is not supported (allowed: ${listOrNone(Object.keys(caps.modes))})`,
+        },
+      ];
+  failures.push(...checkModelParams(request, caps));
   const [first, ...rest] = failures;
   return first ? { ok: false, failures: [first, ...rest] } : { ok: true, request };
 }

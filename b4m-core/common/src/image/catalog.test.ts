@@ -1,17 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { IMAGE_MODELS, ImageModels } from '../models';
 import { getImageModelCapabilities } from '../utils/imageCapabilities';
-import { isKontextModel, rejectsTransparentBackground, supportsImageEdit } from '../utils/modelHelpers';
-import { getImageModelCatalogEntry, maxImageInputs } from './catalog';
-import { validateImageRequest } from './validate';
+import {
+  isGeminiImageModel,
+  isKontextModel,
+  rejectsTransparentBackground,
+  supportsImageEdit,
+} from '../utils/modelHelpers';
+import { getImageModelCatalogEntry } from './catalog';
+import { validateImageRequest, type ImageCapabilityRequest } from './validate';
 
 // The catalog is declared separately from the predicate-derived block GET /api/models advertises, which is
 // what the request path enforces today. These pin every fact the two share so neither drifts alone.
 describe.each(IMAGE_MODELS)('IMAGE_MODEL_CATALOG[%s]', model => {
   const entry = getImageModelCatalogEntry(model);
+  const { generate, edit } = entry.modes;
   const advertised = getImageModelCapabilities(model);
 
   it('sizes the model the way the request path does', () => {
+    // Gemini is advertised as aspect-ratio sized, but its generateContent path sends no imageConfig.
+    if (isGeminiImageModel(model)) {
+      expect(entry.sizing).toEqual({ kind: 'fixed' });
+      expect(advertised.sizing).toEqual({ kind: 'aspectRatio' });
+      return;
+    }
     expect(entry.sizing).toEqual(advertised.sizing);
   });
 
@@ -19,57 +31,51 @@ describe.each(IMAGE_MODELS)('IMAGE_MODEL_CATALOG[%s]', model => {
     expect(entry.transparentBackground).toBe(advertised.supports.transparentBackground);
     expect(entry.seed).toBe(advertised.supports.seed);
     expect(entry.qualities).toEqual(advertised.supports.qualities);
-    expect(entry.maxOutputs).toBe(advertised.supports.maxImages);
-    expect(entry.inputs.reference?.max ?? 0).toBe(advertised.supports.maxReferenceImages);
-    expect(!entry.modes.includes('generate')).toBe(advertised.supports.requiresInputImage);
+    expect(generate === undefined).toBe(advertised.supports.requiresInputImage);
+    expect((generate ?? edit)?.maxOutputs).toBe(advertised.supports.maxImages);
+    // referenceImageFabFileIds are style anchors carried alongside an edit_source, so they map to edit references.
+    expect(edit?.inputs.reference?.max ?? 0).toBe(advertised.supports.maxReferenceImages);
   });
 
   it('offers edit exactly where an edit dispatcher (the edit path or the Kontext transform) serves it', () => {
-    expect(entry.modes.includes('edit')).toBe(supportsImageEdit(model) || isKontextModel(model));
+    expect(edit !== undefined).toBe(supportsImageEdit(model) || isKontextModel(model));
   });
 
-  it('declares an edit_source input exactly when it offers edit', () => {
-    expect(entry.inputs.edit_source !== undefined).toBe(entry.modes.includes('edit'));
+  it('takes an edit_source in edit and never in generate', () => {
+    if (edit) expect(edit.inputs.edit_source).toEqual({ max: 1 });
+    expect(generate?.inputs.edit_source).toBeUndefined();
+    expect(generate?.inputs.mask).toBeUndefined();
+  });
+
+  it('renders one image per edit, as every edit provider does', () => {
+    if (edit) expect(edit.maxOutputs).toBe(1);
   });
 
   it('declares aspect ratios exactly when its sizing takes one', () => {
     const takesRatio =
       entry.sizing.kind === 'aspectRatio' || (entry.sizing.kind === 'inputImage' && entry.sizing.aspectRatio);
-    expect(entry.aspectRatios !== null).toBe(takesRatio);
+    const declaresRatio = [generate, edit].some(mode => mode?.aspectRatios);
+    expect(declaresRatio).toBe(takesRatio);
   });
 
   it('accepts its own default request', () => {
-    const mode = entry.modes.includes('generate') ? 'generate' : 'edit';
-    const inputs =
-      mode === 'edit'
-        ? [{ role: 'edit_source' as const }, ...(entry.inputs.mask?.required ? [{ role: 'mask' as const }] : [])]
-        : [];
     const defaultSize = 'defaultSize' in entry.sizing ? entry.sizing.defaultSize : undefined;
-    expect(validateImageRequest({ mode, inputs, size: defaultSize, count: 1 }, entry)).toMatchObject({ ok: true });
+    const request: ImageCapabilityRequest = generate
+      ? { mode: 'generate', size: defaultSize, count: 1 }
+      : {
+          mode: 'edit',
+          inputs: [{ role: 'edit_source' }, ...(edit?.inputs.mask?.required ? [{ role: 'mask' as const }] : [])],
+          count: 1,
+        };
+    expect(validateImageRequest(request, entry)).toMatchObject({ ok: true });
   });
 });
 
 describe('transparent background', () => {
-  it('is declared unsupported on exactly the models the request path steps down', () => {
-    for (const model of IMAGE_MODELS) {
-      if (rejectsTransparentBackground(model)) {
-        expect(getImageModelCatalogEntry(model).transparentBackground).toBe(false);
-      }
-    }
-    expect(getImageModelCatalogEntry(ImageModels.GPT_IMAGE_2).transparentBackground).toBe(false);
+  it('is declared unsupported on every model the request path steps down', () => {
+    const steppedDown = IMAGE_MODELS.filter(model => rejectsTransparentBackground(model));
+    expect(steppedDown).toContain(ImageModels.GPT_IMAGE_2);
+    for (const model of steppedDown) expect(getImageModelCatalogEntry(model).transparentBackground).toBe(false);
     expect(getImageModelCatalogEntry(ImageModels.GPT_IMAGE_2_5_FLARE).transparentBackground).toBe(true);
-  });
-});
-
-describe('maxImageInputs', () => {
-  it('reads the declared limit for a catalogued model', () => {
-    expect(maxImageInputs(ImageModels.GPT_IMAGE_1, 'reference')).toBe(15);
-    expect(maxImageInputs(ImageModels.FLUX_PRO_FILL, 'mask')).toBe(1);
-  });
-
-  it('is 0 for an undeclared role or an uncatalogued model id', () => {
-    expect(maxImageInputs(ImageModels.GEMINI_3_PRO_IMAGE, 'reference')).toBe(0);
-    expect(maxImageInputs('local-image/sdxl.safetensors', 'reference')).toBe(0);
-    expect(maxImageInputs('toString', 'reference')).toBe(0);
   });
 });

@@ -2,7 +2,7 @@ import { IMAGE_SIZE_CONSTRAINTS, ImageModels } from '../models';
 import { MAX_IMAGES_PER_REQUEST, type ImageOutputFormat, type OpenAIImageQuality } from '../schemas/openai';
 import type { ImageSizing } from '../utils/imageCapabilities';
 import { IMAGES_PER_EDIT_REQUEST, MAX_REFERENCE_IMAGES } from '../utils/modelHelpers';
-import type { AspectRatioCapability, ImageInputRole, ImageModelCatalogEntry } from './types';
+import type { AspectRatioCapability, ImageModeCapabilities, ImageModelCatalogEntry } from './types';
 
 const GPT_IMAGE_QUALITIES = ['low', 'medium', 'high', 'auto'] as const satisfies readonly OpenAIImageQuality[];
 const GPT_IMAGE_25_QUALITIES = [
@@ -14,16 +14,11 @@ const GPT_IMAGE_25_QUALITIES = [
   'auto',
 ] as const satisfies readonly OpenAIImageQuality[];
 const ALL_FORMATS = ['png', 'jpeg', 'webp'] as const satisfies readonly ImageOutputFormat[];
-// BFL and Gemini have no webp; toNonWebpOutputFormat rewrites it to png today, which the table does not promise.
+// BFL has no webp; toNonWebpOutputFormat rewrites it to png today, which the table does not promise.
 const PNG_JPEG = ['png', 'jpeg'] as const satisfies readonly ImageOutputFormat[];
 
 // BFL documents aspect_ratio for Ultra and Kontext as anything between 21:9 and 9:21.
 const BFL_ASPECT_RATIOS: AspectRatioCapability = { kind: 'range', tallest: '9:21', widest: '21:9' };
-// Gemini's documented imageConfig.aspectRatio values.
-const GEMINI_ASPECT_RATIOS: AspectRatioCapability = {
-  kind: 'discrete',
-  values: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'],
-};
 
 const GPT_IMAGE_1_SIZING: ImageSizing = {
   kind: 'presets',
@@ -48,55 +43,74 @@ const BFL_SIZING: ImageSizing = {
   step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
 };
 
-// gpt-image edits through images.edit: one edit_source, an optional mask (bound to the first image) and up to
-// MAX_REFERENCE_IMAGES style anchors, which generation carries too by routing through the same endpoint.
-const gptImage = (overrides: Pick<ImageModelCatalogEntry, 'sizing' | 'qualities' | 'transparentBackground'>) =>
-  ({
-    provider: 'openai',
-    modes: ['generate', 'edit'],
-    inputs: { edit_source: { max: 1 }, mask: { max: 1 }, reference: { max: MAX_REFERENCE_IMAGES } },
-    aspectRatios: null,
-    styles: [],
-    outputFormats: ALL_FORMATS,
-    maxOutputs: MAX_IMAGES_PER_REQUEST,
-    seed: false,
-    ...overrides,
-  }) satisfies ImageModelCatalogEntry;
+// Every edit provider resolves to a single image whatever `n` asks for (IMAGES_PER_EDIT_REQUEST).
+const editMode = (mode: Omit<ImageModeCapabilities, 'maxOutputs'>): ImageModeCapabilities => ({
+  ...mode,
+  maxOutputs: IMAGES_PER_EDIT_REQUEST,
+});
 
-const bfl = (overrides: Pick<ImageModelCatalogEntry, 'sizing' | 'aspectRatios'> & Partial<ImageModelCatalogEntry>) =>
-  ({
-    provider: 'bfl',
-    modes: ['generate'],
-    inputs: {},
-    qualities: [],
-    styles: [],
-    outputFormats: PNG_JPEG,
-    maxOutputs: MAX_IMAGES_PER_REQUEST,
-    transparentBackground: false,
-    seed: true,
-    ...overrides,
-  }) satisfies ImageModelCatalogEntry;
+// gpt-image takes up to MAX_REFERENCE_IMAGES style anchors in either mode (generation routes them through
+// images.edit), and an optional mask that binds to the edit_source.
+const gptImage = (
+  overrides: Pick<ImageModelCatalogEntry, 'sizing' | 'qualities' | 'transparentBackground'>
+): ImageModelCatalogEntry => ({
+  provider: 'openai',
+  modes: {
+    generate: {
+      inputs: { reference: { max: MAX_REFERENCE_IMAGES } },
+      maxOutputs: MAX_IMAGES_PER_REQUEST,
+      aspectRatios: null,
+      outputFormats: ALL_FORMATS,
+    },
+    edit: editMode({
+      inputs: { edit_source: { max: 1 }, mask: { max: 1 }, reference: { max: MAX_REFERENCE_IMAGES } },
+      aspectRatios: null,
+      outputFormats: ALL_FORMATS,
+    }),
+  },
+  styles: [],
+  seed: false,
+  ...overrides,
+});
 
-// Gemini edits one image through generateContent, with no mask and no reference images.
-const gemini = (): ImageModelCatalogEntry => ({
-  provider: 'gemini',
-  modes: ['generate', 'edit'],
-  inputs: { edit_source: { max: 1 } },
-  sizing: { kind: 'aspectRatio' },
-  aspectRatios: GEMINI_ASPECT_RATIOS,
+// Flux Pro, 1.1 and Ultra forward one input image as BFL's `image_prompt` (Redux), which guides the
+// generation without editing it: a reference, not an edit_source.
+const bflGenerate = (aspectRatios: AspectRatioCapability | null): ImageModeCapabilities => ({
+  inputs: { reference: { max: 1 } },
+  maxOutputs: MAX_IMAGES_PER_REQUEST,
+  aspectRatios,
+  outputFormats: PNG_JPEG,
+});
+
+const bfl = (overrides: Pick<ImageModelCatalogEntry, 'modes' | 'sizing'>): ImageModelCatalogEntry => ({
+  provider: 'bfl',
   qualities: [],
   styles: [],
-  outputFormats: PNG_JPEG,
-  maxOutputs: MAX_IMAGES_PER_REQUEST,
+  transparentBackground: false,
+  seed: true,
+  ...overrides,
+});
+
+// The gemini-*-image models are not served by the Imagen-style generateImages call GeminiImageService tries
+// first, so both modes land on generateContent with no imageConfig: no aspect ratio or format reaches Gemini.
+// This is narrower than the `aspectRatio` sizing getImageModelCapabilities advertises (catalog.test.ts).
+const gemini = (): ImageModelCatalogEntry => ({
+  provider: 'gemini',
+  modes: {
+    generate: { inputs: {}, maxOutputs: MAX_IMAGES_PER_REQUEST, aspectRatios: null, outputFormats: [] },
+    edit: editMode({ inputs: { edit_source: { max: 1 } }, aspectRatios: null, outputFormats: [] }),
+  },
+  sizing: { kind: 'fixed' },
+  qualities: [],
+  styles: [],
   transparentBackground: false,
   seed: false,
 });
 
 /**
  * Every ImageModels member, so adding one forces a declaration here. Each entry states what the model
- * honours, not what the request path happens to coerce today: a value outside it is a validation
- * failure, never a silent step-down. `styles` is empty everywhere because `style` only reaches
- * dall-e-2, which ignores it.
+ * honours, not what the request path coerces: a request outside it is meant to fail validation rather
+ * than be stepped down. `styles` is empty everywhere because `style` only reaches dall-e-2, which ignores it.
  */
 export const IMAGE_MODEL_CATALOG: Record<ImageModels, ImageModelCatalogEntry> = {
   [ImageModels.GPT_IMAGE_1]: gptImage({
@@ -135,59 +149,54 @@ export const IMAGE_MODEL_CATALOG: Record<ImageModels, ImageModelCatalogEntry> = 
   // It drops output_format and returns png. Its variation endpoint is not modelled.
   [ImageModels.DALL_E_2]: {
     provider: 'openai',
-    modes: ['generate'],
-    inputs: {},
+    modes: { generate: { inputs: {}, maxOutputs: MAX_IMAGES_PER_REQUEST, aspectRatios: null, outputFormats: ['png'] } },
     sizing: {
       kind: 'presets',
       presets: IMAGE_SIZE_CONSTRAINTS.DALL_E_2.sizes,
       defaultSize: IMAGE_SIZE_CONSTRAINTS.DALL_E_2.defaultSize,
     },
-    aspectRatios: null,
     qualities: [],
     styles: [],
-    outputFormats: ['png'],
-    maxOutputs: MAX_IMAGES_PER_REQUEST,
     transparentBackground: false,
     seed: false,
   },
-  [ImageModels.FLUX_PRO]: bfl({ sizing: BFL_SIZING, aspectRatios: null }),
-  [ImageModels.FLUX_PRO_1_1]: bfl({ sizing: BFL_SIZING, aspectRatios: null }),
-  // Ultra's image_prompt input is not wired by the dispatcher, so it takes no reference.
-  [ImageModels.FLUX_PRO_ULTRA]: bfl({ sizing: { kind: 'aspectRatio' }, aspectRatios: BFL_ASPECT_RATIOS }),
+  [ImageModels.FLUX_PRO]: bfl({ modes: { generate: bflGenerate(null) }, sizing: BFL_SIZING }),
+  [ImageModels.FLUX_PRO_1_1]: bfl({ modes: { generate: bflGenerate(null) }, sizing: BFL_SIZING }),
+  [ImageModels.FLUX_PRO_ULTRA]: bfl({
+    modes: { generate: bflGenerate(BFL_ASPECT_RATIOS) },
+    sizing: { kind: 'aspectRatio' },
+  }),
   // Inpainting only: the mask is mandatory and the output takes the edit_source's size.
   [ImageModels.FLUX_PRO_FILL]: bfl({
-    modes: ['edit'],
-    inputs: { edit_source: { max: 1 }, mask: { max: 1, required: true } },
+    modes: {
+      edit: editMode({
+        inputs: { edit_source: { max: 1 }, mask: { max: 1, required: true } },
+        aspectRatios: null,
+        outputFormats: PNG_JPEG,
+      }),
+    },
     sizing: { kind: 'inputImage', aspectRatio: false },
-    aspectRatios: null,
-    maxOutputs: IMAGES_PER_EDIT_REQUEST,
   }),
   // Image-to-image instruction edits, dispatched through BFL's transform path rather than the edit endpoint.
   [ImageModels.FLUX_KONTEXT_PRO]: bfl({
-    modes: ['edit'],
-    inputs: { edit_source: { max: 1 } },
+    modes: {
+      edit: editMode({ inputs: { edit_source: { max: 1 } }, aspectRatios: BFL_ASPECT_RATIOS, outputFormats: PNG_JPEG }),
+    },
     sizing: { kind: 'inputImage', aspectRatio: true },
-    aspectRatios: BFL_ASPECT_RATIOS,
-    maxOutputs: IMAGES_PER_EDIT_REQUEST,
   }),
   [ImageModels.FLUX_KONTEXT_MAX]: bfl({
-    modes: ['edit'],
-    inputs: { edit_source: { max: 1 } },
+    modes: {
+      edit: editMode({ inputs: { edit_source: { max: 1 } }, aspectRatios: BFL_ASPECT_RATIOS, outputFormats: PNG_JPEG }),
+    },
     sizing: { kind: 'inputImage', aspectRatio: true },
-    aspectRatios: BFL_ASPECT_RATIOS,
-    maxOutputs: IMAGES_PER_EDIT_REQUEST,
   }),
   // xAI receives only the prompt and n; it takes no size, ratio or format and has no edit endpoint.
   [ImageModels.GROK_IMAGINE_IMAGE_QUALITY]: {
     provider: 'xai',
-    modes: ['generate'],
-    inputs: {},
+    modes: { generate: { inputs: {}, maxOutputs: MAX_IMAGES_PER_REQUEST, aspectRatios: null, outputFormats: [] } },
     sizing: { kind: 'fixed' },
-    aspectRatios: null,
     qualities: [],
     styles: [],
-    outputFormats: [],
-    maxOutputs: MAX_IMAGES_PER_REQUEST,
     transparentBackground: false,
     seed: false,
   },
@@ -197,12 +206,4 @@ export const IMAGE_MODEL_CATALOG: Record<ImageModels, ImageModelCatalogEntry> = 
   [ImageModels.GEMINI_3_PRO_IMAGE]: gemini(),
 };
 
-const isCatalogedImageModel = (model: string): model is ImageModels => Object.hasOwn(IMAGE_MODEL_CATALOG, model);
-
 export const getImageModelCatalogEntry = (model: ImageModels): ImageModelCatalogEntry => IMAGE_MODEL_CATALOG[model];
-
-/** How many inputs of `role` a model accepts; 0 for an uncatalogued id such as a `local-image/...` checkpoint. */
-export function maxImageInputs(model: string, role: ImageInputRole): number {
-  if (!isCatalogedImageModel(model)) return 0;
-  return IMAGE_MODEL_CATALOG[model].inputs[role]?.max ?? 0;
-}

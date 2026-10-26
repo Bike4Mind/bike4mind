@@ -66,6 +66,14 @@ describe('validateImageRequest', () => {
       );
       expect(codesOf(result)).toEqual(['unsupported_output_format']);
     });
+
+    it('reports only the missing transparency, not jpeg, on a model with no alpha at all', () => {
+      const result = validateImageRequest(
+        { mode: 'generate', transparentBackground: true, outputFormat: 'jpeg' },
+        fluxPro
+      );
+      expect(codesOf(result)).toEqual(['unsupported_transparent_background']);
+    });
   });
 
   describe('inputs', () => {
@@ -95,6 +103,15 @@ describe('validateImageRequest', () => {
       expect(result).toMatchObject({ ok: false, failures: [{ code: 'unsupported_input_role', role: 'reference' }] });
     });
 
+    it('takes a BFL image_prompt as a single generate reference', () => {
+      expect(validateImageRequest({ mode: 'generate', inputs: [{ role: 'reference' }] }, ultra).ok).toBe(true);
+      const two = validateImageRequest(
+        { mode: 'generate', inputs: [{ role: 'reference' }, { role: 'reference' }] },
+        ultra
+      );
+      expect(codesOf(two)).toEqual(['too_many_inputs']);
+    });
+
     it('caps each role at its declared max', () => {
       const inputs = Array.from({ length: 16 }, () => ({ role: 'reference' as const }));
       expect(codesOf(validateImageRequest({ mode: 'generate', inputs }, gptImage1))).toEqual(['too_many_inputs']);
@@ -108,7 +125,12 @@ describe('validateImageRequest', () => {
 
     it('rejects edit on a generate-only model', () => {
       const result = validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }] }, grok);
-      expect(codesOf(result)).toEqual(['unsupported_mode', 'unsupported_input_role']);
+      expect(result).toMatchObject({ ok: false, failures: [{ code: 'unsupported_mode', field: 'mode' }] });
+    });
+
+    it('still reports model-level fields when the mode is unsupported', () => {
+      const result = validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }], seed: 1 }, grok);
+      expect(codesOf(result)).toEqual(['unsupported_mode', 'unsupported_seed']);
     });
   });
 
@@ -121,7 +143,7 @@ describe('validateImageRequest', () => {
       ]);
     });
 
-    it('accepts BFL presets and on-step custom sizes, never rounding one', () => {
+    it('accepts BFL presets as declared and only on-step custom sizes', () => {
       expect(validateImageRequest({ mode: 'generate', size: '1440x810' }, fluxPro).ok).toBe(true);
       expect(validateImageRequest({ mode: 'generate', size: '640x480' }, fluxPro).ok).toBe(true);
       expect(codesOf(validateImageRequest({ mode: 'generate', size: '650x480' }, fluxPro))).toEqual([
@@ -153,23 +175,26 @@ describe('validateImageRequest', () => {
       ]);
     });
 
-    it('checks a Gemini list exactly', () => {
-      expect(validateImageRequest({ mode: 'generate', aspectRatio: '4:5' }, gemini).ok).toBe(true);
-      expect(codesOf(validateImageRequest({ mode: 'generate', aspectRatio: '5:7' }, gemini))).toEqual([
-        'unsupported_aspect_ratio',
-      ]);
+    it('is checked per mode: Kontext edits honour one', () => {
+      const request = { mode: 'edit', inputs: [{ role: 'edit_source' }], aspectRatio: '16:9' } as const;
+      expect(validateImageRequest(request, kontext).ok).toBe(true);
     });
 
-    it('rejects a ratio on a model that takes none', () => {
-      expect(codesOf(validateImageRequest({ mode: 'generate', aspectRatio: '1:1' }, gptImage1))).toEqual([
-        'unsupported_aspect_ratio',
-      ]);
+    it('rejects a ratio on a model that sends none, including Gemini', () => {
+      for (const caps of [gptImage1, gemini]) {
+        expect(codesOf(validateImageRequest({ mode: 'generate', aspectRatio: '1:1' }, caps))).toEqual([
+          'unsupported_aspect_ratio',
+        ]);
+      }
     });
   });
 
   describe('output', () => {
     it('rejects webp where the provider has none, and any format where it takes none', () => {
-      expect(codesOf(validateImageRequest({ mode: 'generate', outputFormat: 'webp' }, gemini))).toEqual([
+      expect(codesOf(validateImageRequest({ mode: 'generate', outputFormat: 'webp' }, fluxPro))).toEqual([
+        'unsupported_output_format',
+      ]);
+      expect(codesOf(validateImageRequest({ mode: 'generate', outputFormat: 'png' }, gemini))).toEqual([
         'unsupported_output_format',
       ]);
       expect(codesOf(validateImageRequest({ mode: 'generate', outputFormat: 'png' }, grok))).toEqual([
@@ -184,8 +209,14 @@ describe('validateImageRequest', () => {
           'unsupported_output_count',
         ]);
       }
-      const editCount = validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }], count: 2 }, kontext);
-      expect(codesOf(editCount)).toEqual(['unsupported_output_count']);
+    });
+
+    it('caps an edit at one image even where generate takes ten', () => {
+      expect(validateImageRequest({ mode: 'generate', count: 4 }, gptImage1).ok).toBe(true);
+      for (const caps of [gptImage1, gemini, kontext]) {
+        const result = validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }], count: 2 }, caps);
+        expect(codesOf(result)).toEqual(['unsupported_output_count']);
+      }
     });
 
     it('accepts a seed only where the model honours one', () => {
