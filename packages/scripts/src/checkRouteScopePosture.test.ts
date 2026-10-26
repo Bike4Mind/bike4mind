@@ -1,17 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { RouteAnalysis } from './apiRouteInventory';
 import { analyzeApiRoutes, read } from './apiRouteSources';
 import {
   classifyScopePosture,
+  legacyDigest,
   scopePostureFailures,
   UNCLASSIFIED_REASONS,
   type PostureRoute,
   type ScopeBaseline,
 } from './routeScopePosture';
 import { ROUTE_SCOPE_BASELINE } from './routeScopePostureBaseline';
-
-// New routes go to reviewedUnscoped with a reason, never here, so this only ever goes down.
-const LEGACY_UNSCOPED_LIMIT = 376;
 
 const analysis = (overrides: Partial<RouteAnalysis>): RouteAnalysis => ({
   methods: ['GET'],
@@ -38,9 +36,10 @@ describe('classifyScopePosture', () => {
       { methods: ['GET' as const], scopes: ['a:read'] },
       { methods: ['POST' as const], scopes: [] },
     ];
-    expect(classifyScopePosture(analysis({ scopes: ['a:read'], methodScopes, contracted: true }), '').kind).toBe(
-      'unscoped'
-    );
+    expect(classifyScopePosture(analysis({ scopes: ['a:read'], methodScopes, contracted: true }), '')).toEqual({
+      kind: 'unscoped',
+      verbs: ['POST'],
+    });
   });
 
   it('fails closed when the posture cannot be read', () => {
@@ -57,7 +56,8 @@ describe('classifyScopePosture', () => {
 });
 
 describe('scopePostureFailures', () => {
-  const empty: ScopeBaseline = { legacyUnscoped: [], reviewedUnscoped: {}, unclassified: {} };
+  const empty: ScopeBaseline = { legacyUnscoped: [], legacySeed: new Set(), reviewedUnscoped: {}, unclassified: {} };
+  const seeded = (...routes: string[]) => ({ legacyUnscoped: routes, legacySeed: new Set(routes.map(legacyDigest)) });
   const route = (name: string, posture: PostureRoute['posture']): PostureRoute => ({
     route: name,
     file: `apps/client/pages${name}.ts`,
@@ -76,14 +76,34 @@ describe('scopePostureFailures', () => {
   it('passes a listed route', () => {
     const routes = [route('/api/a', { kind: 'unscoped' }), route('/api/b', { kind: 'unscoped' })];
     expect(
-      scopePostureFailures(routes, { ...empty, legacyUnscoped: ['/api/a'], reviewedUnscoped: { '/api/b': 'x' } })
+      scopePostureFailures(routes, { ...empty, ...seeded('/api/a'), reviewedUnscoped: { '/api/b': 'x' } })
     ).toEqual([]);
+  });
+
+  it('names the verbs and the contract when only some verbs lack scopes', () => {
+    const [failure] = scopePostureFailures([route('/api/c', { kind: 'unscoped', verbs: ['POST'] })], empty);
+    expect(failure).toContain('on POST with no scopes');
+    expect(failure).toContain('contract');
+  });
+
+  it('rejects a route added to legacyUnscoped after it was seeded', () => {
+    const routes = [route('/api/a', { kind: 'unscoped' }), route('/api/new', { kind: 'unscoped' })];
+    const failures = scopePostureFailures(routes, {
+      ...empty,
+      legacyUnscoped: ['/api/a', '/api/new'],
+      legacySeed: new Set([legacyDigest('/api/a')]),
+    });
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('/api/new was added to legacyUnscoped');
+    expect(failures[0]).toContain('requiredScopes');
+    expect(failures[0]).toContain("auth: 'jwtOnly'");
+    expect(failures[0]).toContain('reviewedUnscoped');
   });
 
   it('fails stale entries: a removed route or one that gained a posture', () => {
     const failures = scopePostureFailures([route('/api/scoped', { kind: 'scoped' })], {
       ...empty,
-      legacyUnscoped: ['/api/gone', '/api/scoped'],
+      ...seeded('/api/gone', '/api/scoped'),
     });
     expect(failures).toHaveLength(2);
     expect(failures[0]).toContain('/api/gone');
@@ -100,18 +120,17 @@ describe('scopePostureFailures', () => {
 });
 
 describe('API-key scope posture of apps/client/pages/api', () => {
-  const routes: PostureRoute[] = analyzeApiRoutes().map(entry => ({
-    route: entry.route,
-    file: entry.file,
-    posture: classifyScopePosture(entry, read(entry.analyzedFile)),
-  }));
+  let routes: PostureRoute[] = [];
+  beforeAll(() => {
+    routes = analyzeApiRoutes().map(entry => ({
+      route: entry.route,
+      file: entry.file,
+      posture: classifyScopePosture(entry, read(entry.analyzedFile)),
+    }));
+  });
 
   it('gives every key-accepting route a deliberate scope posture', () => {
     expect(routes.length).toBeGreaterThan(0);
     expect(scopePostureFailures(routes, ROUTE_SCOPE_BASELINE)).toEqual([]);
-  });
-
-  it('does not grow the legacy list', () => {
-    expect(ROUTE_SCOPE_BASELINE.legacyUnscoped.length).toBeLessThanOrEqual(LEGACY_UNSCOPED_LIMIT);
   });
 });

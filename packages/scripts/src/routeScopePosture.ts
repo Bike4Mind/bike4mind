@@ -3,10 +3,15 @@
  * an API key must name the scopes a key needs (`requiredScopes`), refuse keys (`auth: 'jwtOnly'`),
  * or be listed in routeScopePostureBaseline.ts. Enforced by checkRouteScopePosture.test.ts.
  */
-import type { RouteAnalysis } from './apiRouteInventory';
+import { createHash } from 'node:crypto';
+import type { HttpMethod, RouteAnalysis } from './apiRouteInventory';
 
 export type ScopePosture =
-  { kind: 'scoped' } | { kind: 'no-key' } | { kind: 'unscoped' } | { kind: 'unclassified'; reason: string };
+  | { kind: 'scoped' }
+  | { kind: 'no-key' }
+  /** `verbs`: set when only some verbs of a contracted route lack scopes. */
+  | { kind: 'unscoped'; verbs?: HttpMethod[] }
+  | { kind: 'unclassified'; reason: string };
 
 export const UNCLASSIFIED_REASONS = {
   dynamicAuth: 'auth option is not a static literal',
@@ -23,7 +28,8 @@ export function classifyScopePosture(analysis: RouteAnalysis, source: string): S
   if (analysis.auth.includes('unknown')) return { kind: 'unclassified', reason: UNCLASSIFIED_REASONS.dynamicAuth };
   if (!analysis.auth.some(mode => mode === 'jwt+key' || mode === 'optional')) return { kind: 'no-key' };
   if (analysis.scopes.length === 0) return { kind: 'unscoped' };
-  if (analysis.methodScopes?.some(group => group.scopes.length === 0)) return { kind: 'unscoped' };
+  const verbs = analysis.methodScopes?.filter(group => group.scopes.length === 0).flatMap(group => group.methods);
+  if (verbs?.length) return { kind: 'unscoped', verbs };
   if (!analysis.contracted && (source.match(BASE_API_CALL)?.length ?? 0) > 1) {
     return { kind: 'unclassified', reason: UNCLASSIFIED_REASONS.routerUnion };
   }
@@ -33,6 +39,8 @@ export function classifyScopePosture(analysis: RouteAnalysis, source: string): S
 export type ScopeBaseline = {
   /** Routes that accepted any API key when this check was introduced. Only ever shrinks. */
   legacyUnscoped: readonly string[];
+  /** legacyDigest() of every route legacyUnscoped was seeded with, so an added entry is rejected. */
+  legacySeed: ReadonlySet<string>;
   /** Routes reviewed to accept any API key, each with the reason. */
   reviewedUnscoped: Readonly<Record<string, string>>;
   /** Routes whose posture static analysis cannot read, each with the classifier's reason. */
@@ -43,6 +51,13 @@ export type PostureRoute = { route: string; file: string; posture: ScopePosture 
 
 const BASELINE_FILE = 'packages/scripts/src/routeScopePostureBaseline.ts';
 
+export const legacyDigest = (route: string) => createHash('sha256').update(route).digest('hex').slice(0, 12);
+
+const fixes = (route: string) =>
+  `Do one of: add requiredScopes to its baseApi options (or its contract); set auth: 'jwtOnly' if API ` +
+  `keys should not reach it; or, if any key may call it, add '${route}' to reviewedUnscoped in ` +
+  `${BASELINE_FILE} with the reason.`;
+
 /** Human-readable failures; empty when every route has a deliberate posture and no entry is stale. */
 export function scopePostureFailures(routes: readonly PostureRoute[], baseline: ScopeBaseline): string[] {
   const failures: string[] = [];
@@ -52,9 +67,11 @@ export function scopePostureFailures(routes: readonly PostureRoute[], baseline: 
   for (const { route, file, posture } of routes) {
     if (posture.kind === 'unscoped' && !legacy.has(route) && !(route in baseline.reviewedUnscoped)) {
       failures.push(
-        `${route} (${file}) accepts API keys but declares no requiredScopes. Do one of: add requiredScopes ` +
-          `to its baseApi options (or its contract); set auth: 'jwtOnly' if API keys should not reach it; ` +
-          `or, if any key may call it, add it to reviewedUnscoped in ${BASELINE_FILE} with the reason.`
+        posture.verbs
+          ? `${route} (${file}) accepts API keys on ${posture.verbs.join(', ')} with no scopes. Its contract ` +
+              `declares scopes for the other verbs (methodScopes), so add scopes for ${posture.verbs.join(', ')} ` +
+              `in that contract. ${fixes(route)}`
+          : `${route} (${file}) accepts API keys but declares no requiredScopes. ${fixes(route)}`
       );
     }
     if (posture.kind === 'unclassified' && baseline.unclassified[route] !== posture.reason) {
@@ -77,6 +94,13 @@ export function scopePostureFailures(routes: readonly PostureRoute[], baseline: 
     }
   };
   for (const route of baseline.legacyUnscoped) {
+    if (!baseline.legacySeed.has(legacyDigest(route))) {
+      failures.push(
+        `${route} was added to legacyUnscoped, which only lists routes from when this check was introduced ` +
+          `and can only shrink. Remove it from legacyUnscoped. ${fixes(route)}`
+      );
+      continue;
+    }
     stale(route, 'legacyUnscoped', 'unscoped');
     if (route in baseline.reviewedUnscoped) failures.push(`${route} is in both legacyUnscoped and reviewedUnscoped.`);
   }
