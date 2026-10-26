@@ -3037,6 +3037,7 @@ export const settingsMap = {
     defaultValue: 10,
     min: 0,
     max: 100000,
+    int: true,
     description:
       'Max requests per minute on every per-user rate-limited API route (chat and opti included) for users with no active paid subscription. Set to 0 to block all free-tier requests on those routes.',
     category: 'SecOps',
@@ -3049,6 +3050,7 @@ export const settingsMap = {
     defaultValue: 30,
     min: 1,
     max: 100000,
+    int: true,
     description:
       'Max requests per minute on every per-user rate-limited API route for Basic-tier subscribers (e.g. Professional plan).',
     category: 'SecOps',
@@ -3061,6 +3063,7 @@ export const settingsMap = {
     defaultValue: 60,
     min: 1,
     max: 100000,
+    int: true,
     description: 'Max requests per minute on every per-user rate-limited API route for Pro-tier subscribers.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
