@@ -663,7 +663,7 @@ describe('HuggingFaceHub errors', () => {
     expect((cause.cause as Error).cause).toMatchObject({ code: 'ECONNRESET' });
   });
 
-  it('rejects a token with whitespace or control characters without echoing it', () => {
+  it('rejects a token fetch would refuse as a header value without echoing it', () => {
     const secret = 'hf_FirstHalfOfSecret\nSecondHalfOfSecret';
     let error: unknown;
     try {

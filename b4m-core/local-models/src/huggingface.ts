@@ -10,6 +10,7 @@ import {
 } from './errors';
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
+  assertHeaderValues,
   combinedSignal,
   describeError,
   parseJson,
@@ -518,9 +519,7 @@ export class HuggingFaceHub {
         ? 'huggingface'
         : `huggingface:${runtimeEndpointId(this.endpoint)}`;
     this.#token = options.token?.trim() || undefined;
-    // A token with spaces or control characters would break the header and land in fetch's error text.
-    if (this.#token && !/^[\x21-\x7e]+$/.test(this.#token))
-      throw new LocalRuntimeError('Invalid Hugging Face token', 'huggingface');
+    if (this.#token) assertHeaderValues({ authorization: `Bearer ${this.#token}` }, this.id);
     this.#requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.#client = { runtimeId: this.id, baseUrl: this.endpoint, fetch: options.fetch ?? fetch };
   }
