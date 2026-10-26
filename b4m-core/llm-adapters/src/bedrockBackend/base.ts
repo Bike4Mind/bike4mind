@@ -588,21 +588,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         }
         const modelDoneAt = Date.now();
 
-        // FAIL LOUD on an empty completion. No text AND no tool call means the model produced nothing a
-        // user or the pipeline can use. Returning silently makes the chat hang with no output and no
-        // error; throwing surfaces a clear message. Token count is deliberately NOT part of the
-        // condition: an empty response can still report phantom usage, and a real assistant turn ALWAYS
-        // has text or a tool call, so this cannot false-positive.
-        // A Stop or client disconnect before the first token also ends the body cleanly with
-        // nothing emitted (see the TRUNCATED guard below), so an aborted request is excluded here
-        // too rather than logged at ERROR as an empty response.
-        // A stall before the first token arrives as zero output and no terminal event. That is a
-        // transient transport failure, so it is worded like the truncation below to get the
-        // retry-once-then-fallback path. A misrouted "global." profile fails every call, so this
-        // intermittent shape does not point at it. An empty stream that DID end with a terminal
-        // event (the max-tool-calls cap) is deterministic and must not match the retry predicates:
-        // retrying it re-runs every tool call only to fail again. Adapters that do not signal
-        // termination cannot tell the two apart and keep the non-retried wording.
+        // FAIL LOUD on an empty completion: no text and no tool call (token counts can be phantom).
+        // Aborted requests are excluded, as in the TRUNCATED guard below. A stall (no terminal event)
+        // gets the retried wording; a single call cannot tell it from a misrouted profile, so a
+        // persistent misroute also retries then falls back. See bedrockEmptyResponseMessage.
         if (
           emittedTextChars === 0 &&
           emittedProviderBlocks === 0 &&
