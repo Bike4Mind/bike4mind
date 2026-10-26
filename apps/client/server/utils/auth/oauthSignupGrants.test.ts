@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+
 const mockApplySignupDomainGrant = vi.fn();
 vi.mock('@server/entitlements/signupDomainGrant', () => ({
   applySignupDomainGrant: (...a: unknown[]) => mockApplySignupDomainGrant(...a),
@@ -26,6 +29,7 @@ describe('applyOAuthSignupDomainGrant', () => {
     expect(mockApplySignupDomainGrant).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-1', email: 'dee@partner.example', trigger: 'oauth-signup' })
     );
+    expect(refreshSignupRiskScore).toHaveBeenCalledWith('user-1', expect.anything());
   });
 
   it('logs with the user id and never throws', async () => {
@@ -36,5 +40,7 @@ describe('applyOAuthSignupDomainGrant', () => {
       subscriptionCreditsGranted: 0,
     });
     expect(mockLoggerError).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
+    // A failed grant still scores the new account.
+    expect(refreshSignupRiskScore).toHaveBeenCalledWith('user-1', expect.anything());
   });
 });

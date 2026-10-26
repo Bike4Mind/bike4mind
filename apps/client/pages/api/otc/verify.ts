@@ -29,6 +29,7 @@ import {
   resolveBootstrapAdmin,
 } from '@server/utils/auth/bootstrapAdmin';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
@@ -467,6 +468,7 @@ const handler = baseApi({ auth: false })
       trigger: 'otc-signup',
       logger: req.logger,
     });
+    await refreshSignupRiskScore(newUser.id, req.logger);
     if (domainGrant.currentCredits !== null) newUser.currentCredits = domainGrant.currentCredits;
     if (domainGrant.joinedOrganizationId) newUser.organizationId = domainGrant.joinedOrganizationId;
     if (domainGrant.tagsApplied.length > 0) {

@@ -8,6 +8,9 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  ISignupRiskScore,
+  SIGNUP_RISK_REVIEW_STATES,
+  SIGNUP_RISK_SIGNALS,
   UserModerationStatus,
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
@@ -787,6 +790,46 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
+    const settled = ['approved', 'banned'];
+    await this.model.updateOne({ _id: userId }, [
+      {
+        $set: {
+          riskScore: {
+            score: riskScore.score,
+            // $literal: a reason that happened to start with '$' would otherwise read as a field path.
+            signals: { $literal: riskScore.signals },
+            computedAt: riskScore.computedAt,
+            reviewState: {
+              $cond: [
+                { $in: [{ $ifNull: ['$riskScore.reviewState', 'none'] }, settled] },
+                '$riskScore.reviewState',
+                riskScore.reviewState,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+  }
+
+  async findRiskScoringCandidateIds(since: Date, options: { afterId?: string; limit: number }): Promise<string[]> {
+    const rows = await this.model
+      .find(
+        {
+          createdAt: { $gte: since },
+          'riskScore.reviewState': { $nin: ['approved', 'banned'] },
+          ...(options.afterId ? { _id: { $gt: new mongoose.Types.ObjectId(options.afterId) } } : {}),
+        },
+        { _id: 1 }
+      )
+      .sort({ _id: 1 })
+      .limit(options.limit)
+      .lean<{ _id: mongoose.Types.ObjectId }[]>()
+      .exec();
+    return rows.map(row => row._id.toString());
+  }
+
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores the
    * appeal text so admins can review it alongside the user's escalation state. Returns the
@@ -838,6 +881,25 @@ const SignupMetaSchema = new Schema(
   {
     ...NETWORK_META_FIELDS,
     capturedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
+const RiskScoreSchema = new Schema(
+  {
+    score: { type: Number, required: true },
+    signals: [
+      new Schema(
+        {
+          signal: { type: String, required: true, enum: [...SIGNUP_RISK_SIGNALS] },
+          points: { type: Number, required: true },
+          reason: { type: String, required: true },
+        },
+        { _id: false }
+      ),
+    ],
+    computedAt: { type: Date, required: true },
+    reviewState: { type: String, required: true, enum: [...SIGNUP_RISK_REVIEW_STATES] },
   },
   { _id: false }
 );
@@ -1109,6 +1171,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
     // Written once at signup - see IUser.signupMeta.
     signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
+    // Recomputed by userService.refreshSignupRiskScore - see IUser.riskScore.
+    riskScore: { type: RiskScoreSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },
@@ -1210,6 +1274,9 @@ UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
+// Serves findRiskScoringCandidateIds (accounts under 14 days old). Name must match migration
+// 20260921235973's createIndex name.
+UserSchema.index({ createdAt: 1 }, { name: 'user_createdAt' });
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel

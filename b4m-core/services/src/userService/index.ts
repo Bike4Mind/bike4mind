@@ -7,6 +7,7 @@ export * from './reservedUsername';
 export * from './freeCredits';
 export * from './disposableEmail';
 export * from './signupRiskScore';
+export * from './refreshSignupRiskScore';
 export * from './sourceTag';
 export * from './recordPolicyAcceptance';
 export * from './adminDelete';

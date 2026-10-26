@@ -29,6 +29,17 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return this.model.find({ userId }).sort({ createdAt: -1 }).exec();
   }
 
+  async findFirstCreatedAtByUserId(userId: string): Promise<Date | null> {
+    const [first] = await this.model
+      .find({ userId }, { createdAt: 1 })
+      .setOptions({ includeDeleted: true })
+      .sort({ createdAt: 1 })
+      .limit(1)
+      .lean<{ createdAt?: Date }[]>()
+      .exec();
+    return first?.createdAt ?? null;
+  }
+
   findByUserIdAndId(userId: string, id: string) {
     return this.model.findOne({ _id: id, userId }).exec();
   }

@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { applySignupDomainGrant, type SignupDomainGrantResult } from '@server/entitlements/signupDomainGrant';
 
 const NO_GRANT: SignupDomainGrantResult = {
@@ -16,10 +17,14 @@ const NO_GRANT: SignupDomainGrantResult = {
  * earns when it promotes emailVerified come straight from server/auth/emailVerifiedGrants.ts.
  */
 export async function applyOAuthSignupDomainGrant(userId: string, email: string): Promise<SignupDomainGrantResult> {
+  let grant: SignupDomainGrantResult;
   try {
-    return await applySignupDomainGrant({ userId, email, trigger: 'oauth-signup', logger: Logger.globalInstance });
+    grant = await applySignupDomainGrant({ userId, email, trigger: 'oauth-signup', logger: Logger.globalInstance });
   } catch (error) {
     Logger.globalInstance.error(`OAuth signup domain grant failed for user ${userId}`, error);
-    return { ...NO_GRANT, tagsApplied: [] };
+    grant = { ...NO_GRANT, tagsApplied: [] };
   }
+  // Every brand-new OAuth account passes here.
+  await refreshSignupRiskScore(userId, Logger.globalInstance);
+  return grant;
 }
