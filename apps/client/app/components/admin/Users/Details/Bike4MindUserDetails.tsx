@@ -25,6 +25,9 @@ interface Bike4MindUserDetailsProps {
 const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
   ({ user, editedFields, onFieldChange, userKey, creditReason = '', onCreditReasonChange }) => {
     const [isRecalculating, setIsRecalculating] = useState(false);
+    const [unlockReason, setUnlockReason] = useState('');
+    const [unlockError, setUnlockError] = useState('');
+    const [unlocking, setUnlocking] = useState(false);
     const queryClient = useQueryClient();
     const storage = resolveUserStorageLimit(user);
     const storagePercent = computeStoragePercent(user.currentStorageSize, storage.limitMb);
@@ -76,6 +79,46 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
 
     return (
       <Stack spacing={1}>
+        <Typography level="body-sm" data-testid="admin-user-signup-grant">
+          {user.signupGrant
+            ? `Signup grant: ${user.signupGrant.stage}; released ${user.signupGrant.creditsReleased}; next: ${user.signupGrant.nextCondition ?? 'none'}`
+            : 'Signup grant: not enrolled'}
+        </Typography>
+        {user.signupGrant?.stage === 'signup' && (
+          <Stack spacing={1}>
+            <Textarea
+              data-testid="admin-user-grant-reason-input"
+              placeholder="Reason for signup grant unlock"
+              value={unlockReason}
+              onChange={event => setUnlockReason(event.target.value)}
+            />
+            <Button
+              data-testid="admin-user-grant-unlock-btn"
+              disabled={unlockReason.trim().length < 5}
+              loading={unlocking}
+              onClick={async () => {
+                setUnlocking(true);
+                setUnlockError('');
+                try {
+                  await api.post(`/api/admin/users/${user.id}/unlock-signup-grant`, { reason: unlockReason.trim() });
+                  await queryClient.invalidateQueries({ queryKey: ['users'] });
+                  setUnlockReason('');
+                } catch {
+                  setUnlockError('Signup grant unlock failed. The account remains available for retry.');
+                } finally {
+                  setUnlocking(false);
+                }
+              }}
+            >
+              Unlock signup grant
+            </Button>
+            {unlockError && (
+              <Typography color="danger" level="body-sm">
+                {unlockError}
+              </Typography>
+            )}
+          </Stack>
+        )}
         <Tooltip title="Subscribed Until">
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px' }}>
             <WorkspacePremiumIcon />

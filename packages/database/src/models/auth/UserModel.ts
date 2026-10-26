@@ -12,6 +12,7 @@ import {
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
   MFA_ATTEMPT_RESET_WINDOW_MS,
+  SIGNUP_GRANT_UNLOCK_REASONS,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
@@ -925,6 +926,20 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },
+    signupGrant: {
+      type: new Schema(
+        {
+          stage: { type: String, enum: ['pending_email', 'signup', 'unlocked'], required: true },
+          signupCredits: { type: Number, min: 0, required: true },
+          unlockCredits: { type: Number, min: 0, required: true },
+          creditsReleased: { type: Number, min: 0, required: true },
+          nextCondition: { type: String, enum: ['email_verification', 'verification', null], default: null },
+          unlockedBy: { type: String, enum: SIGNUP_GRANT_UNLOCK_REASONS },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     lastCreditsPurchasedAt: { type: Date, default: null },
     tags: { type: [String], default: [] },
     level: { type: String, default: 'DemoUser' },

@@ -456,6 +456,9 @@ export const SettingKeySchema = z.enum([
   'freeTierDailySpendCapCredits',
   'freeTierDay1SpendCapCredits',
   'freeTierDays2To7SpendCapCredits',
+  'stagedSignupGrantEnabled',
+  'signupGrantCredits',
+  'verifiedUnlockCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
@@ -3857,6 +3860,40 @@ export const settingsMap = {
     // Plain strings so one malformed stored entry cannot fail the whole list; the update route
     // refuses invalid entries and readers filter with partitionDomainList.
     schema: z.array(z.string()),
+  }),
+  stagedSignupGrantEnabled: makeBooleanSetting({
+    key: 'stagedSignupGrantEnabled',
+    name: 'Staged Signup Grants',
+    defaultValue: false,
+    userReadable: true,
+    description:
+      'Enroll new self-serve accounts in staged grants. Existing accounts and explicit invite grants are unchanged.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantCredits: makeNumberSetting({
+    key: 'signupGrantCredits',
+    name: 'Signup Grant Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    userReadable: true,
+    description:
+      'Credits released after email verification for newly enrolled staged accounts. Migrated from the installed default grant without increasing it.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  verifiedUnlockCredits: makeNumberSetting({
+    key: 'verifiedUnlockCredits',
+    name: 'Verified Unlock Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    userReadable: true,
+    description:
+      'Additional credits available once per enrolled account after a server-validated unlock. Does not enable any verification flow.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
   }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',

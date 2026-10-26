@@ -2,7 +2,7 @@ import { Box, Typography } from '@mui/joy';
 import { useMemo } from 'react';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
-import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useSignupGrantCredits } from '@client/app/hooks/useSignupGrantCredits';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { estimateAnswerCount, typicalAnswerCredits } from '@client/app/utils/creditEstimate';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
@@ -10,7 +10,7 @@ import { formatCreditAmount } from '@client/app/utils/formatCredits';
 const CreditsExplanation = () => {
   const model = useLLM(state => state.model);
   const organizationId = useLLM(state => state.organizationId);
-  const defaultFreeCredits = Number(useGetSettingsValue('defaultFreeCredits')) || 0;
+  const defaultFreeCredits = useSignupGrantCredits();
   const showFreeCreditsNote = defaultFreeCredits > 0 && !organizationId;
   const credits = useEffectiveCredits();
   const { data: models } = useModelInfo();

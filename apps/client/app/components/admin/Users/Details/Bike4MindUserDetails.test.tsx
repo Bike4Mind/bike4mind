@@ -106,6 +106,34 @@ describe('Bike4MindUserDetails - storage usage', () => {
   });
 });
 
+describe('Bike4MindUserDetails - signup grant support', () => {
+  it('leaves existing accounts outside staged grants', () => {
+    renderDetails({});
+    expect(screen.getByTestId('admin-user-signup-grant')).toHaveTextContent('not enrolled');
+    expect(screen.queryByTestId('admin-user-grant-unlock-btn')).toBeNull();
+  });
+  it('shows the released stage and requires a reason before unlock', () => {
+    renderDetails({
+      user: {
+        ...(user as object),
+        signupGrant: {
+          stage: 'signup',
+          signupCredits: 12,
+          unlockCredits: 28,
+          creditsReleased: 12,
+          nextCondition: 'verification',
+        },
+      },
+    });
+    expect(screen.getByTestId('admin-user-signup-grant')).toHaveTextContent('released 12; next: verification');
+    expect(screen.getByTestId('admin-user-grant-unlock-btn')).toBeDisabled();
+    fireEvent.change(screen.getByTestId('admin-user-grant-reason-input').querySelector('textarea')!, {
+      target: { value: 'Support approved' },
+    });
+    expect(screen.getByTestId('admin-user-grant-unlock-btn')).not.toBeDisabled();
+  });
+});
+
 describe('Bike4MindUserDetails - storage override controls', () => {
   it('marks legacy custom quotas as overrides and stages an explicit reset', () => {
     const onFieldChange = vi.fn();

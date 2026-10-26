@@ -11,6 +11,7 @@
  */
 
 // 2. Import the file here:
+import SeedStagedSignupSettings from './20261026000000_seed-staged-signup-settings';
 import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
 import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';
@@ -407,6 +408,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureSignupFingerprintWindowIndex,
   EnsureUserSignupMetaCapturedAtIndex,
   BackfillStorageLimitOverrides,
+  SeedStagedSignupSettings,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

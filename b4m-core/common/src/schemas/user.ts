@@ -2,6 +2,7 @@ import * as z from 'zod';
 import type { IUserDocument } from '../types/entities/UserTypes';
 import type { USER_SECRET_FIELDS } from '../serializers/toSafeUser';
 import { passthroughField, passthroughShape } from './responseShape';
+import { SIGNUP_GRANT_UNLOCK_REASONS } from '../signupGrant';
 
 export const VALID_USER_TAGS = [
   '',
@@ -165,6 +166,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   currentStorageSize: true,
   tags: true,
   pendingCreditGrant: true,
+  signupGrant: true,
   level: true,
   isBanned: true,
   isModerated: true,
@@ -230,6 +232,16 @@ function redactedSubdocument<K extends string>(fields: readonly K[]) {
 // redactUserSecretsForSelf (b4m-core/common/src/serializers/toSafeUser.ts).
 export const selfUserResponseSchema = z.object({
   ...passthroughShape(SELF_VIEW_PASSTHROUGH_FIELDS),
+  signupGrant: z
+    .object({
+      stage: z.enum(['pending_email', 'signup', 'unlocked']),
+      signupCredits: z.number().int().nonnegative(),
+      unlockCredits: z.number().int().nonnegative(),
+      creditsReleased: z.number().int().nonnegative(),
+      nextCondition: z.enum(['email_verification', 'verification']).nullable(),
+      unlockedBy: z.enum(SIGNUP_GRANT_UNLOCK_REASONS).optional(),
+    })
+    .optional(),
   // Not on IUserDocument, but toJSON() emits it and admin tables key rows by it.
   _id: passthroughField,
   mfa: redactedSubdocument(['totpEnabled', 'setupAt', 'lastUsedAt']),

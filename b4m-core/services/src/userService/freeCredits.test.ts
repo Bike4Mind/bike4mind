@@ -14,7 +14,7 @@ const buildAdapters = (defaultFreeCredits: string | null = '100') => {
       },
       creditTransactions: { findOne: vi.fn().mockResolvedValue(null) },
       creditLots: {},
-      users: { claimFreeCreditGrant: vi.fn().mockResolvedValue(true) },
+      users: { claimFreeCreditGrant: vi.fn().mockResolvedValue(true), findById: vi.fn().mockResolvedValue(null) },
     },
     reason: 'test grant',
     logger,

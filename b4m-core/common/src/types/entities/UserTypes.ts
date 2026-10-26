@@ -7,6 +7,7 @@ import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
+import type { SignupGrant } from '../../signupGrant';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -288,6 +289,8 @@ export interface IUser extends ICreditHolder {
    * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
    */
   freeCreditClaimEmail?: string | null;
+  /** Absent on accounts created before staged grants were enabled. */
+  signupGrant?: SignupGrant;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;
