@@ -5,7 +5,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { collection: { createIndex: indexes.user } },
   UserApiKey: { collection: { createIndex: indexes.key } },
 }));
-import migration from './20260921235973_ensure-account-creation-indexes';
+import migration from './20260921235974_ensure-account-creation-indexes';
 
 it('builds only the two census timestamp indexes', async () => {
   await migration.up();
