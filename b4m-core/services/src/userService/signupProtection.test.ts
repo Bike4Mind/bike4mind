@@ -110,6 +110,31 @@ describe('signup protection and credit boundary', () => {
     expect(await protectSignupCredits(user.id, fixture.db)).toBe(false);
     expect(fixture.repository.observe).not.toHaveBeenCalled();
   });
+  it('leaves blocked and disposable domains to the signup email gate', async () => {
+    const fixture = buildFixture();
+    fixture.findBySettingNames.mockResolvedValue([]);
+    vi.mocked(fixture.db.adminSettings.findBySettingName).mockResolvedValue({
+      settingName: 'blockedEmailDomains',
+      settingValue: ['example.net'],
+    } as never);
+    const user = fixture.user(1);
+    expect(await protectSignupCredits(user.id, fixture.db)).toBe(false);
+    expect(fixture.db.adminSettings.findBySettingName).not.toHaveBeenCalled();
+  });
+  it('exempts regional public mailbox providers even when their domain has a hold', async () => {
+    const fixture = buildFixture();
+    fixture.setReview({
+      domain: 'bk.ru',
+      status: 'blocked',
+      reason: 'abuse',
+      triggeredAt: new Date(),
+      cohortUserIds: [],
+      sampleEmails: [],
+      signupCount: 5,
+    });
+    const user = fixture.user(1, 'someone@bk.ru');
+    expect(await protectSignupCredits(user.id, fixture.db)).toBe(false);
+  });
   it('keeps existing holds enforced when automatic detection is off', async () => {
     const fixture = buildFixture();
     fixture.findBySettingNames.mockResolvedValue([]);
