@@ -32,7 +32,8 @@ describe('archFromModelInfo', () => {
   it.each(Object.keys(ggufModels) as (keyof typeof ggufModels)[])(
     'matches what llama.cpp allocates for the real %s header',
     model => {
-      const fixture: { modelInfo: object; tensors?: readonly object[]; arch: object } = ggufModels[model];
+      const fixture: { modelInfo: Record<string, unknown>; tensors?: readonly object[]; arch: object } =
+        ggufModels[model];
       expect(archFromModelInfo(fixture.modelInfo, fixture.tensors)).toEqual(fixture.arch);
     }
   );
