@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AccessContext, IDataLakeDocument, IDataLakeProposalDocument } from '@bike4mind/common';
-import { FabFileSourceType } from '@bike4mind/common';
+import { FabFileSourceType, UrlBlockedError } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { approveDataLakeProposal, declineDataLakeProposal, restoreDataLakeProposal } from './reviewDataLakeProposal';
 import { assertCanWriteDataLakeTags } from './authorizeLakeWrite';
@@ -331,6 +331,17 @@ describe('approveDataLakeProposal', () => {
 
     await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(
       /URL blocked for security reasons: private address\. Nothing was added to the lake/
+    );
+  });
+
+  it('wraps a UrlBlockedError like any other fetch failure', async () => {
+    const admitSource = vi.fn(async () => {
+      throw new UrlBlockedError('URL blocked for security reasons: private address');
+    });
+    const { deps } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(
+      /Could not add this source: URL blocked for security reasons: private address\. Nothing was added to the lake/
     );
   });
 

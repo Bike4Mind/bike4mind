@@ -558,7 +558,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       embeddedCharCount,
     } = await fabFileChunkRepository.computeChunkVectorRollup(fabFileId, contextWindow);
     const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
-    if (!fabFile) throw new NotFoundError(`FabFile ${fabFileId} not found`);
+    if (!fabFile) {
+      // Deleted while this message was running: nothing left to finalize, and a retry cannot succeed.
+      logger.log(`FabFile ${fabFileId} was deleted during vectorization, skipping`);
+      return;
+    }
 
     // >= with chunkCount>0 guard so an under-counted chunk can't permanently block completion.
     const isFileVectorized = !!fabFile.chunkCount && vectorizedChunkCount >= fabFile.chunkCount;
