@@ -11,7 +11,7 @@ import {
   FabFileSourceType,
   GatewayTimeoutError,
   isLakeIngestable,
-  UrlBlockedError,
+  isUrlBlockedError,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
@@ -146,7 +146,7 @@ const SOURCE_NETWORK_ERROR_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ENOTF
  */
 function asReviewerFacingAdmissionError(err: unknown): unknown {
   // A blocked source is a fetch failure like any other here, not a deliberate refusal to pass through.
-  if (err instanceof HTTPError && !(err instanceof UrlBlockedError)) return err;
+  if (err instanceof HTTPError && !isUrlBlockedError(err)) return err;
   // A non-axios network error (e.g. a storage-upload ECONNRESET, which createByUrl rethrows from
   // the same catch) is passed through untouched upstream, so it keeps its 500 and error-level log.
   const { code, isAxiosError } = (err ?? {}) as { code?: string; isAxiosError?: boolean };
