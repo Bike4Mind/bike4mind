@@ -401,7 +401,7 @@ describe('ChatCompletionProcess', () => {
 
       const settings = await settingsLoader().loadAdminSettingsAsync(mockLogger, 0);
 
-      // The fabricated default is 'true'; using it would charge a deployment that disabled metering.
+      // The fabricated default is 'true'; using it would charge a self-host deployment that disabled metering.
       expect(settings.enforceCredits).toBe('false');
       expect(mockedGetSettingsMap).toHaveBeenNthCalledWith(1, mockDb, { logger: mockLogger, skipCache: true });
       expect(mockedGetSettingsMap).toHaveBeenNthCalledWith(2, mockDb, { logger: mockLogger });
@@ -4440,6 +4440,50 @@ describe('ChatCompletionProcess', () => {
 
       expect(mockDb.organizations.incrementCredits).toHaveBeenCalledWith('org1', expect.any(Number));
       expect(mockDb.organizations.incrementCredits.mock.calls[0][1]).toBeLessThan(0);
+    });
+
+    // The row is read through the real getSettingsValue, so this proves the hosted lock reaches the
+    // reservation gate rather than a mock that already says "on".
+    describe('with a stored enforceCredits=false row', () => {
+      afterEach(() => {
+        vi.unstubAllEnvs();
+      });
+
+      const arrangeStoredFalse = async () => {
+        const { complete } = capOrgSetup();
+        const actual = await vi.importActual<typeof import('@bike4mind/utils')>('@bike4mind/utils');
+        mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+          key === 'enforceCredits' ? actual.getSettingsValue(key, settings) : undefined) as typeof getSettingsValue);
+        vi.mocked((service as any).loadAdminSettingsAsync).mockResolvedValue({ enforceCredits: 'false' });
+        (service as any).user = { ...mockUser, currentCredits: 0 };
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: -5 });
+        mockDb.users = { update: vi.fn(), incrementCredits };
+        mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+        return { complete, incrementCredits };
+      };
+      const personalBody = () => ({ ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined });
+
+      it('refuses a zero-balance user before the model runs on a hosted deployment', async () => {
+        vi.stubEnv('B4M_SELF_HOST', undefined);
+        const { complete, incrementCredits } = await arrangeStoredFalse();
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(mockQuest.errorCode).toBe('insufficient_credits');
+        expect(mockQuest.reply).toMatch(/out of credits/);
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(complete).not.toHaveBeenCalled();
+      });
+
+      it('skips reservation on a self-host deployment', async () => {
+        vi.stubEnv('B4M_SELF_HOST', 'true');
+        const { incrementCredits } = await arrangeStoredFalse();
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(mockQuest.errorCode).not.toBe('insufficient_credits');
+        expect(incrementCredits).not.toHaveBeenCalled();
+      });
     });
 
     it('lets an in-cap org member through the cap guard to the org-pool debit', async () => {

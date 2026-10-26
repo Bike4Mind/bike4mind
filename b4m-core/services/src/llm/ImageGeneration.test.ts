@@ -1549,6 +1549,7 @@ describe('ImageGenerationService quest partial writes', () => {
   // Drops any queued enforceCredits value that process() did not consume, so it cannot leak.
   afterEach(() => {
     vi.mocked(getSettingsMap).mockReset().mockResolvedValue({});
+    vi.unstubAllEnvs();
   });
 
   // The promptMeta invoke() builds for the `a cat` FLUX_PRO_1_1 body below.
@@ -1722,6 +1723,8 @@ describe('ImageGenerationService quest partial writes', () => {
     // A quest that already carries a pre-flight figure: without the enforcement term the
     // settlement would draw and debit it even though billing is off.
     quest.creditsUsed = 7;
+    // Enforcement can only be off on self-host; hosted resolves it on regardless of the stored row.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     settlementDraw.mockClear();
     vi.mocked(deductCreditsWithOrgSupport).mockClear();
     // The credit gate, then moderation; enforcement off means no validateUserCredits call.

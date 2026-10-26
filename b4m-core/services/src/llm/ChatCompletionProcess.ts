@@ -7337,7 +7337,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     } catch (error) {
       logger.warn(`Background admin settings fetch failed after ${Date.now() - adminSettingsStartTime}ms:`, error);
       // A stale-but-real map beats fabricated defaults here: getDefaultAdminSettings() hardcodes
-      // enforceCredits 'true', which would charge a deployment whose admin turned metering off.
+      // enforceCredits 'true', which would charge a self-host deployment whose admin turned metering off.
       // Fall back to the cached map, and to the defaults only when there is no cached map either.
       try {
         return await getSettingsMap(this.db, { logger });

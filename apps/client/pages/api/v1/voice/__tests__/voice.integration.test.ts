@@ -9,7 +9,7 @@
  * without `ai:generate` is a 403 before any credit hold, and each error maps to the
  * CONVENTIONS.md status table.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 
@@ -223,6 +223,10 @@ beforeEach(() => {
   mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
   mocks.signVoiceSessionToken.mockReturnValue('signed-session-token');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('legacy /api/voice/v2 aliases', () => {
@@ -570,6 +574,7 @@ describe('POST /api/v1/voice/sessions', () => {
 
   it('drops the realtime marker of a prior realtime hold that had no reserve', async () => {
     // enforceCredits off when the realtime call opened: no reserve, so the prior hold is never claimed.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     settings({ enforceCredits: 'false' });
     const priorStartedAt = new Date(Date.now() - 60_000);
     mocks.findByIdAndUserId.mockResolvedValue({

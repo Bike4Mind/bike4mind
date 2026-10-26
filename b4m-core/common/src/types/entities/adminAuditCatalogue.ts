@@ -76,6 +76,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
+  'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
   'settings.whats_new.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.whats_new.synced': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.whats_new.generation_triggered': { category: 'settings', severity: 'info', write: 'bestEffort' },
