@@ -30,8 +30,20 @@ export async function collectModalChanges<T>(
   }
 }
 
-const noteModalChange = (kind: ModalChange['kind'], id: unknown, title: string | undefined | null) => {
-  modalChangeStore.getStore()?.push({ kind, id: String(id), title: title || 'Untitled' });
+const MODAL_AUDIT_TITLE_MAX = 80;
+
+// Banners have no title, so the fallback is the full body text; cap it for the audit list view.
+export const modalAuditTitle = (modal: { title?: string | null; textMessage?: string | null }): string => {
+  const name = modal.title || modal.textMessage || 'Untitled';
+  return name.length > MODAL_AUDIT_TITLE_MAX ? `${name.slice(0, MODAL_AUDIT_TITLE_MAX - 3)}...` : name;
+};
+
+const noteModalChange = (
+  kind: ModalChange['kind'],
+  id: unknown,
+  modal: { title?: string | null; textMessage?: string | null }
+) => {
+  modalChangeStore.getStore()?.push({ kind, id: String(id), title: modalAuditTitle(modal) });
 };
 
 // Modal operation functions that can be shared between server and API
@@ -82,7 +94,7 @@ export async function createModal(params: any) {
     }
 
     const modal = await ModalModel.create(modalData);
-    noteModalChange('created', modal._id, modal.title || modal.textMessage);
+    noteModalChange('created', modal._id, modal);
 
     return {
       success: true,
@@ -293,7 +305,7 @@ export async function updateModal(modalId: string | undefined, params: any) {
     if (!updatedModal) {
       return { success: false, error: 'Failed to update modal' };
     }
-    noteModalChange('updated', updatedModal._id, updatedModal.title || updatedModal.textMessage);
+    noteModalChange('updated', updatedModal._id, updatedModal);
 
     // Build descriptive message based on what was updated
     let actionDescription = 'updated';
@@ -350,7 +362,7 @@ export async function deleteModal(modalId: string | undefined) {
     if (!modal) {
       return { success: false, error: 'Modal not found' };
     }
-    noteModalChange('deleted', modal._id, modal.title || modal.textMessage);
+    noteModalChange('deleted', modal._id, modal);
 
     return {
       success: true,

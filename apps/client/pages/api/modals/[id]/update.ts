@@ -1,11 +1,12 @@
-import { recordModalChanges } from '@server/tools/recordModalChanges';
-import { definedKeys } from '@server/utils/adminAudit';
 import { ModalModel } from '@bike4mind/database/social';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { createModalVideoSchema } from '@bike4mind/common';
+import { definedKeys } from '@server/utils/adminAudit';
+import { modalAuditTitle } from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
@@ -91,7 +92,7 @@ const handler = baseApi().put(
         {
           kind: 'updated',
           id: String(updatedModal._id),
-          title: updatedModal.title || updatedModal.textMessage || 'Untitled',
+          title: modalAuditTitle(updatedModal),
           fields: definedKeys(updateData),
         },
       ],

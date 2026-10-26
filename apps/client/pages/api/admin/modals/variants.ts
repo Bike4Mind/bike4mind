@@ -6,6 +6,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { ensureAdmin, NotFoundError, BadRequestError, isZodError } from '@bike4mind/server-utils/utils/errors';
 import { ModalModel } from '@bike4mind/database/social';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { modalAuditTitle } from '@client/server/tools/modalOperations';
 import { MODAL_AUDIENCE_KEY_SET, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 
 /**
@@ -57,9 +58,6 @@ const UpdateVariantsSchema = z.object({
 
 const ModalIdBodySchema = z.object({ modalId: z.string().min(1, 'modalId is required') });
 
-const modalDisplayName = (modal: { title?: string | null; textMessage?: string | null }): string =>
-  modal.title || modal.textMessage || 'Untitled';
-
 function zodResponse(res: Response, error: unknown): Response | null {
   if (!isZodError(error)) return null;
   const issues = (error as { issues: Array<{ path: (string | number)[]; message: string }> }).issues.map(i => {
@@ -108,8 +106,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       await recordAdminActionFromRequest(req, {
         action: 'settings.modal.variants_updated',
-        target: { kind: 'settings', id: modalId, displayName: modalDisplayName(updated) },
-        summary: `updated audience variants of modal ${modalDisplayName(updated)}`,
+        target: { kind: 'settings', id: modalId, displayName: modalAuditTitle(updated) },
+        summary: `updated audience variants of modal ${modalAuditTitle(updated)}`,
         details: { audienceKeys: Object.keys(variants) },
       });
 
@@ -147,8 +145,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       if (existingVariants) {
         await recordAdminActionFromRequest(req, {
           action: 'settings.modal.variants_cleared',
-          target: { kind: 'settings', id: modalId, displayName: modalDisplayName(existing) },
-          summary: `cleared audience variants of modal ${modalDisplayName(existing)}`,
+          target: { kind: 'settings', id: modalId, displayName: modalAuditTitle(existing) },
+          summary: `cleared audience variants of modal ${modalAuditTitle(existing)}`,
           details: { clearedAudienceKeys: Object.keys(existingVariants), contentFieldsReset: !hadCustomerVariant },
         });
       }

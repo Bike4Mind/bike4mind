@@ -14,7 +14,7 @@ vi.mock('@bike4mind/database/social', () => ({ ModalModel: model }));
 vi.mock('./modalImageHandler', () => ({ ModalImageHandler: { processModalImageUrl: vi.fn() } }));
 vi.mock('@server/utils/cacheExternalImage', () => ({ cacheExternalImage: vi.fn() }));
 
-import { collectModalChanges, createModal, deleteModal, updateModal } from './modalOperations';
+import { collectModalChanges, createModal, deleteModal, modalAuditTitle, updateModal } from './modalOperations';
 
 const ID = '64b7f0c2a1b2c3d4e5f60718';
 
@@ -77,6 +77,20 @@ describe('collectModalChanges', () => {
   it('is a no-op outside a collector', async () => {
     model.findByIdAndDelete.mockResolvedValue({ _id: 'x', title: 'X' });
     await expect(deleteModal('x')).resolves.toMatchObject({ success: true });
+  });
+});
+
+describe('modalAuditTitle', () => {
+  it('prefers the title and falls back to the body, then Untitled', () => {
+    expect(modalAuditTitle({ title: 'Launch', textMessage: 'Body' })).toBe('Launch');
+    expect(modalAuditTitle({ title: null, textMessage: 'Banner body' })).toBe('Banner body');
+    expect(modalAuditTitle({})).toBe('Untitled');
+  });
+
+  it('caps long banner bodies at 80 characters', () => {
+    const title = modalAuditTitle({ textMessage: 'x'.repeat(500) });
+    expect(title).toHaveLength(80);
+    expect(title.endsWith('...')).toBe(true);
   });
 });
 
