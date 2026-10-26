@@ -1,5 +1,6 @@
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
 
@@ -20,6 +21,7 @@ export type ApiKeyEligibilityResponse = {
  * with the same explanation POST /api/user-api-keys would return as a 403.
  */
 const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
+  if (!req.user) throw new UnauthorizedError('Authentication required');
   const { assessment } = await resolveApiKeyTrust(req.user, req);
   if (assessment.status !== 'untrusted') {
     return res.json({ canCreate: true, message: null } satisfies ApiKeyEligibilityResponse);
