@@ -105,7 +105,7 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 0, creditReason: 'Reset balance' }, adapters);
 
     expect(createTransaction.mock.calls[0][0]).toBe('generic_add');
-    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 40);
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 40, expect.anything());
   });
 
   it('routes a credit decrease through a generic_deduct transaction', async () => {
