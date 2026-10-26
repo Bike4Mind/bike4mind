@@ -43,6 +43,8 @@ const POLL_FALLBACK_MS = 60_000;
 const FIRST_SYNC_DELAY_MS = 5000;
 const SESSIONS_CHANGED_DEBOUNCE_MS = 500;
 const SAVE_EVERY = 25;
+/** Linux mtimes can trail Date.now() slightly, so an export landing right after the watch starts still counts. */
+const WATCH_SINCE_SLACK_MS = 2000;
 
 export interface ClaudeImportLogger {
   warn(message: string): void;
@@ -234,7 +236,11 @@ export class ClaudeImportService {
     // user's to import by hand.
     await this.serializeSettings(async () => {
       const current = await this.states.readSettings();
-      await this.states.writeSettings({ ...current, chatWatchFolder: folder, chatWatchSince: Date.now() });
+      await this.states.writeSettings({
+        ...current,
+        chatWatchFolder: folder,
+        chatWatchSince: Date.now() - WATCH_SINCE_SLACK_MS,
+      });
     });
     await this.applyWatchers();
     return this.state();

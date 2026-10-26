@@ -4240,6 +4240,7 @@
                     "math_evaluate",
                     "mermaid_chart",
                     "current_datetime",
+                    "current_model_details",
                     "deep_research",
                     "prompt_enhancement",
                     "recharts",
@@ -5269,6 +5270,32 @@
             "enum": [
               "provider_not_configured",
               "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "createTextRefinementResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "spend_cap_exceeded"
             ]
           }
         },
@@ -21056,7 +21083,7 @@
       "post": {
         "operationId": "createTextRefinement",
         "summary": "Refine text",
-        "description": "Rewrites `text` to be more concise, clear and detailed while keeping its intent. `context` is optional background that steers the rewrite. `text` is at most 10000 characters and `context` at most 10000. Output is capped at about 800 tokens, and identical requests are served from a cache for about five minutes. Not billed in credits. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.",
+        "description": "Rewrites `text` to be more concise, clear and detailed while keeping its intent. `context` is optional background that steers the rewrite. `text` is at most 10000 characters and `context` at most 10000. Output is capped at about 800 tokens, and identical requests are served from a cache for about five minutes. A refinement the model runs is billed in credits for the tokens it used; a cached answer is free. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.",
         "tags": [
           "AI"
         ],
@@ -21085,6 +21112,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/createTextRefinementResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -21266,11 +21347,11 @@
             }
           },
           "422": {
-            "description": "Request failed validation.",
+            "description": "Request body failed validation, or the caller cannot afford the refinement - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/createTextRefinementResponse422"
                 }
               }
             },

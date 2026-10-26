@@ -8,6 +8,22 @@ import {
 } from '@bike4mind/server-utils/utils/errors';
 
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+const assertCliSessionAllowedMock = vi.hoisted(() =>
+  vi.fn(async (_user: unknown, _sid?: string, _options?: { requireApiAccess?: boolean }) => undefined)
+);
+vi.mock('@server/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertCliSessionAllowed: assertCliSessionAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    },
+  };
+});
 vi.mock('@server/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
@@ -287,6 +303,8 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
 
   beforeEach(() => {
     vi.mocked(User.findById).mockReset();
+    assertCliSessionAllowedMock.mockReset().mockResolvedValue(undefined);
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
     mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
   });
 
@@ -753,6 +771,125 @@ describe('API-key verification failures (credential miss vs infra failure)', () 
       const rejection = verifyEmbedKeyById('key-1');
       await expect(rejection).rejects.toBeInstanceOf(UnauthorizedError);
       await expect(rejection).rejects.toMatchObject({ statusCode: 401 });
+    });
+  });
+});
+
+describe('api-key paid-only access switch (mirrors apiKeyAuth)', () => {
+  const orgKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.EMBED_CHAT],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    billingOwnerType: CreditHolderType.Organization,
+    organizationId: 'org-1',
+    agentId: 'agent-1',
+  };
+
+  beforeEach(() => {
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+    applyUntrustedRateLimit.mockClear();
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_key');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(orgKey);
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue(orgKey);
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('403s verifyApiKey (CLI, WebSocket and contract routes) when the setting denies the owner', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    await expect(verifyApiKey({})).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'API keys require an active paid subscription',
+    });
+    expect(applyUntrustedRateLimit).not.toHaveBeenCalled();
+  });
+
+  it('preserves the trust ceiling for a personal key accepted by the access switch', async () => {
+    const { billingOwnerType: _billing, organizationId: _organization, ...personalKey } = orgKey;
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValueOnce(personalKey);
+    const clamped = { requestsPerMinute: 3, requestsPerDay: 100 };
+    applyUntrustedRateLimit.mockResolvedValueOnce(clamped);
+
+    expect((await verifyApiKey({})).rateLimit).toEqual(clamped);
+    expect(isApiKeyAccessAllowedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      applyUntrustedRateLimit.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('gates the embed raw-key and session-token paths by the key owner and paying org', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    await expect(verifyEmbedApiKey({})).rejects.toMatchObject({ statusCode: 403 });
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    await expect(verifyEmbedKeyById('k1')).rejects.toMatchObject({ statusCode: 403 });
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), {
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+      createdByUserId: undefined,
+    });
+  });
+
+  it('preserves trusted admin-provisioned provenance on raw and by-id key validation', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValueOnce({ ...orgKey, createdByUserId: 'admin-1' });
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValueOnce({
+      ...orgKey,
+      createdByUserId: 'admin-1',
+    });
+    const raw = await verifyEmbedApiKey({});
+    const byId = await verifyEmbedKeyById('k1');
+    expect(raw.createdByUserId).toBe('admin-1');
+    expect(byId.createdByUserId).toBe('admin-1');
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }), {
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+      createdByUserId: 'admin-1',
+    });
+  });
+
+  it('turns an access-check read failure into a 5xx, never a pass', async () => {
+    isApiKeyAccessAllowedMock.mockRejectedValueOnce(new Error('db down'));
+    await expect(verifyApiKey({})).rejects.toMatchObject({ statusCode: 500 });
+  });
+});
+
+describe('verifyJwtToken paid-only switch for CLI sessions', () => {
+  beforeEach(() => {
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', aupAcceptedVersion: 'v1' });
+    mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
+    assertCliSessionAllowedMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('checks the session the token names, so pre-existing CLI sessions are covered', async () => {
+    await verifyJwtToken(jwt.sign({ id: 'u1', sid: 'sid-1' }, 'test-secret'));
+    expect(assertCliSessionAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'sid-1', {});
+  });
+
+  it('requires access for dedicated CLI surfaces even for a legacy JWT without a session id', async () => {
+    await verifyJwtToken(jwt.sign({ id: 'u1' }, 'test-secret'), { requireApiAccess: true });
+    expect(assertCliSessionAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), undefined, {
+      requireApiAccess: true,
+    });
+  });
+
+  it('maps session and subscription lookup failures to server errors', async () => {
+    assertCliSessionAllowedMock.mockRejectedValueOnce(new Error('database down'));
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', sid: 'sid-1' }, 'test-secret'))).rejects.toMatchObject({
+      statusCode: 500,
+    });
+  });
+
+  it('refuses a CLI session the setting denies with the subscription message', async () => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+    assertCliSessionAllowedMock.mockRejectedValueOnce(
+      new ForbiddenError('The CLI and desktop app require an active paid subscription')
+    );
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', sid: 'sid-1' }, 'test-secret'))).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'The CLI and desktop app require an active paid subscription',
     });
   });
 });

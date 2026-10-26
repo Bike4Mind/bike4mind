@@ -1,10 +1,10 @@
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
-import { LOCAL_MODEL_PREFIX, type ChatModelOption } from '@shared/chat';
+import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
 import type { CompletionMessage, CompletionRequest } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
-export { LOCAL_MODEL_PREFIX } from '@shared/chat';
+export const OLLAMA_RUNTIME_ID = 'ollama';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 const TIMEOUT_MS = 1_000;
 const DEFAULT_CONTEXT_TOKENS = 4_096;
@@ -35,7 +35,8 @@ export class OllamaLocal {
     onEvent: (event: CompletionStreamEvent) => void,
     signal?: AbortSignal
   ): Promise<void> {
-    const model = request.model.startsWith(LOCAL_MODEL_PREFIX) ? request.model.slice(LOCAL_MODEL_PREFIX.length) : '';
+    const parsed = parseLocalModelId(request.model);
+    const model = parsed?.runtimeId === OLLAMA_RUNTIME_ID ? parsed.model : '';
     if (!model) throw new Error('Invalid local model id.');
     const inspection = showSchema.parse(await this.json('/api/show', { name: model }, signal));
     // A localhost daemon can proxy cloud models, including aliases without a cloud suffix.
@@ -93,9 +94,9 @@ export class OllamaLocal {
     if (!show.success || usesRemoteModel(show.data) || !show.data.capabilities.includes('completion')) return null;
     const capabilities = show.data.capabilities;
     return {
-      id: `${LOCAL_MODEL_PREFIX}${name}`,
+      id: localModelId(OLLAMA_RUNTIME_ID, name),
       name,
-      backend: 'local-ollama',
+      backend: localBackend(OLLAMA_RUNTIME_ID),
       supportsTools: capabilities.includes('tools'),
       supportsVision: capabilities.includes('vision'),
       contextWindow: contextWindow(show.data),

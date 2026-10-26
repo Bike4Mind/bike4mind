@@ -146,7 +146,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         }
         const token = headers.authorization?.replace('Bearer ', '');
         try {
-          const user = await verifyJwtToken(token);
+          const user = await verifyJwtToken(token, { requireApiAccess: true });
           userId = user.id;
           logger.info('[CLI_WS_HTTP] Authenticated via JWT', { userId });
           await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
@@ -156,6 +156,11 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           // 401 makes the CLI report an expired session and tell the user to sign in again, which
           // cannot help.
           // The message is server-authored guidance (sanitizeErrorMessage would blank it).
+          if (isAuthInfraFailure(authError)) {
+            setAuthInfraFailureHeaders(res, authError);
+            res.status(authError.statusCode).json({ error: authError.message });
+            return;
+          }
           if (authError instanceof ForbiddenError) {
             res.status(403).json({ error: authError.message });
             return;

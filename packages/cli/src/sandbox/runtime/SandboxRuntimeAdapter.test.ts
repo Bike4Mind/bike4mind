@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   detectPlatform,
   expandPath,
+  getContainerSocketPaths,
   getProtectedWorkspacePaths,
   isBinaryAvailable,
   resolveSandboxPath,
@@ -84,6 +85,70 @@ describe('SandboxRuntimeAdapter', () => {
     expect(getProtectedWorkspacePaths(cwd)).toEqual(
       expect.arrayContaining([path.join(cwd, '.git'), resolveSandboxPath(target)])
     );
+  });
+
+  describe('getContainerSocketPaths', () => {
+    const vars = ['XDG_RUNTIME_DIR', 'DOCKER_HOST', 'CONTAINER_HOST', 'COLIMA_HOME', 'LIMA_HOME', 'XDG_CONFIG_HOME'];
+    const saved = Object.fromEntries(vars.map(name => [name, process.env[name]]));
+    const withEnv = (values: Record<string, string>) => {
+      for (const name of vars) delete process.env[name];
+      Object.assign(process.env, values);
+      return getContainerSocketPaths();
+    };
+    afterEach(() => {
+      for (const name of vars) {
+        if (saved[name] === undefined) delete process.env[name];
+        else process.env[name] = saved[name];
+      }
+    });
+
+    it('covers the Docker Desktop config and data directories', () => {
+      const home = os.homedir();
+      expect(withEnv({})).toEqual(
+        expect.arrayContaining([
+          { path: path.join(home, '.docker'), directory: true },
+          { path: path.join(home, 'Library/Containers/com.docker.docker/Data'), directory: true },
+        ])
+      );
+    });
+
+    it('adds unix sockets from DOCKER_HOST and CONTAINER_HOST', () => {
+      expect(withEnv({ DOCKER_HOST: 'unix:///srv/docker.sock', CONTAINER_HOST: 'unix:///srv/podman.sock' })).toEqual(
+        expect.arrayContaining([
+          { path: '/srv/docker.sock', directory: false },
+          { path: '/srv/podman.sock', directory: false },
+        ])
+      );
+    });
+
+    it('ignores non-unix and relative host values', () => {
+      const paths = withEnv({ DOCKER_HOST: 'tcp://127.0.0.1:2375', CONTAINER_HOST: 'unix://relative.sock' }).map(
+        entry => entry.path
+      );
+      expect(paths.some(p => p.includes('2375') || p.endsWith('relative.sock'))).toBe(false);
+    });
+
+    it.each([
+      ['COLIMA_HOME', '/srv/colima'],
+      ['LIMA_HOME', '/srv/lima'],
+    ])('adds %s as a directory', (name, value) => {
+      expect(withEnv({ [name]: value })).toContainEqual({ path: value, directory: true });
+    });
+
+    it('adds the colima config directory under XDG_CONFIG_HOME, defaulting to ~/.config', () => {
+      expect(withEnv({ XDG_CONFIG_HOME: '/srv/config' })).toContainEqual({
+        path: '/srv/config/colima',
+        directory: true,
+      });
+      expect(withEnv({})).toContainEqual({ path: path.join(os.homedir(), '.config', 'colima'), directory: true });
+    });
+
+    it('ignores relative directory variables', () => {
+      const paths = withEnv({ XDG_RUNTIME_DIR: 'run', COLIMA_HOME: 'colima', LIMA_HOME: 'lima' }).map(e => e.path);
+      expect(paths).not.toContain('colima');
+      expect(paths).not.toContain('lima');
+      expect(paths.some(p => p.startsWith('run'))).toBe(false);
+    });
   });
 
   describe('detectPlatform', () => {

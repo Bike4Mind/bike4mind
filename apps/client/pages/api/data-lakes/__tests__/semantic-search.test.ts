@@ -53,6 +53,10 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: unknown, _res: unknown) => undefined }));
 vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({ resolveRetrievalLakeScope: mockResolveScope }));
+// Paying by default, so the toggle tests below are not changed by the free-tier carve-out.
+vi.mock('@server/entitlements/activeSubscriptions', () => ({
+  activePlanResolver: { hasActivePlan: async () => true },
+}));
 // getProviderFromModel is stubbed so a test can choose the provider, but resolveEmbeddingConfig
 // is the real one: which credential a provider needs is the behaviour under test here.
 vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
@@ -164,9 +168,9 @@ vi.mock('@bike4mind/services', async () => ({
   recordOperationalUsage: mockRecordOperationalUsage,
   // Real gate, so the settings-driven billing behaviour these tests assert stays the behaviour
   // the route actually gets - it reads through the mocked getSettingsMap/getSettingsValue above.
-  isOperationalBillingEnabled: (
+  memoizeOperationalBillingCheck: (
     await import('../../../../../../b4m-core/services/src/billing/isOperationalBillingEnabled')
-  ).isOperationalBillingEnabled,
+  ).memoizeOperationalBillingCheck,
   // Real per-member cap predicate - it is the shared billing decision under test, so a
   // reimplementation here would prove nothing.
   creditService: await import('../../../../../../b4m-core/services/src/creditService/memberCreditCap'),

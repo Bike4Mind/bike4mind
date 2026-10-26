@@ -1,3 +1,4 @@
+import { adminPalette } from './admin';
 import {
   brand,
   gray,
@@ -194,6 +195,7 @@ export const colorSchemes = {
       inbox: inboxTheme.dark,
       chatbox: chatboxTheme.dark,
       reading: readingTheme.dark,
+      admin: adminPalette.dark,
       common: commonTheme.dark,
       credits: creditsTheme.dark,
       searchbar: searchbarTheme.dark,
@@ -312,6 +314,7 @@ export const colorSchemes = {
       inbox: inboxTheme.light,
       chatbox: chatboxTheme.light,
       reading: readingTheme.light,
+      admin: adminPalette.light,
       common: commonTheme.light,
       credits: creditsTheme.light,
       searchbar: searchbarTheme.light,

@@ -1,3 +1,4 @@
+import { INTEGRATION_DEMAND_TAB_PARAMS } from './integrationDemandSearch';
 import {
   ADMIN_AUDIT_LOG_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
@@ -29,6 +30,7 @@ export const ADMIN_SETTINGS_SEARCH_PARAM = 'q';
 // Slugs that are not in @bike4mind/common, shared with adminTabSlugs.ts.
 export const ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG = 'webhook-audit-logs';
 export const ADMIN_MODEL_LOGS_TAB_SLUG = 'model-logs';
+export const ADMIN_INTEGRATION_DEMAND_TAB_SLUG = 'integration-demand';
 
 const EMERGENCY_ACCESS_PARAM = 'emergency_access';
 
@@ -50,6 +52,7 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_SETTINGS_TAB_SLUG]: [ADMIN_SETTINGS_SECTION_PARAM, ADMIN_SETTINGS_SEARCH_PARAM],
   [ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG]: WEBHOOK_AUDIT_LOGS_TAB_PARAMS,
   [ADMIN_MODEL_LOGS_TAB_SLUG]: MODEL_LOGS_TAB_PARAMS,
+  [ADMIN_INTEGRATION_DEMAND_TAB_SLUG]: INTEGRATION_DEMAND_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];

@@ -1,7 +1,7 @@
 import type { IUserDocument, WithOrgRef } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -118,5 +118,46 @@ describe('SlimUsersContainer', () => {
       expect(progress).toHaveAttribute('aria-valuenow', '100');
       expect(progress.className).toContain('MuiLinearProgress-colorDanger');
     });
+  });
+});
+
+describe('SlimUsersContainer selection', () => {
+  const makeSelection = (selectedIds: string[] = []) => ({
+    selectedIds: new Set(selectedIds),
+    onToggle: vi.fn(),
+    onTogglePage: vi.fn(),
+  });
+
+  it('renders no checkboxes without a selection', () => {
+    render(<SlimUsersContainer users={users} />, { wrapper: TestWrapper });
+    expect(screen.queryByTestId('admin-user-select-checkbox')).not.toBeInTheDocument();
+  });
+
+  it('toggles one row and the whole page', () => {
+    const selection = makeSelection([users[0].id]);
+    render(<SlimUsersContainer users={users} selection={selection} />, { wrapper: TestWrapper });
+
+    const rows = screen.getAllByTestId('admin-user-select-checkbox');
+    expect(rows[0]).toBeChecked();
+    expect(rows[1]).not.toBeChecked();
+    fireEvent.click(rows[1]);
+    expect(selection.onToggle).toHaveBeenCalledWith(users[1].id);
+
+    fireEvent.click(screen.getByTestId('admin-user-select-page-checkbox'));
+    expect(selection.onTogglePage).toHaveBeenCalledWith([users[0].id, users[1].id], true);
+  });
+
+  it('clears the page when every row on it is selected', () => {
+    const selection = makeSelection(users.map(user => user.id));
+    render(<SlimUsersContainer users={users} selection={selection} />, { wrapper: TestWrapper });
+
+    fireEvent.click(screen.getByTestId('admin-user-select-page-checkbox'));
+    expect(selection.onTogglePage).toHaveBeenCalledWith([users[0].id, users[1].id], false);
+  });
+
+  it('shows the row checkbox on the mobile card', () => {
+    mockIsMobile.mockReturnValue(true);
+    render(<SlimUsersContainer users={users} selection={makeSelection()} />, { wrapper: TestWrapper });
+    expect(screen.getAllByTestId('admin-user-select-checkbox')).toHaveLength(2);
   });
 });

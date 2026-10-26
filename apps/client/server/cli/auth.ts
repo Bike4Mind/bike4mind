@@ -14,11 +14,17 @@ import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcce
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import {
+  API_KEY_ACCESS_DENIED_MESSAGE,
+  assertCliSessionAllowed,
+  isApiKeyAccessAllowed,
+} from '@server/utils/apiKeyAccessGate';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { resolveUntrustedKeyLimits } from '@server/utils/apiKeyTrust';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
 
 /** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */
 export type RateLimitErrorInfo = {
@@ -59,13 +65,18 @@ export interface ApiKeyInfo {
   currentSpend?: number;
   /** The owner's API key trust standing as judged at verification (see apiKeyTrust.ts). */
   ownerUntrusted?: boolean;
+  /** The admin who provisioned the key for its owner; exempts it from the paid-only switch. */
+  createdByUserId?: string;
 }
 
 /**
  * Verify JWT token from Authorization header
  * @throws Error if token is invalid or expired
  */
-export async function verifyJwtToken(token: string | undefined): Promise<VerifiedUser> {
+export async function verifyJwtToken(
+  token: string | undefined,
+  options: { requireApiAccess?: boolean } = {}
+): Promise<VerifiedUser> {
   if (!token) {
     throw new Error('No authorization token provided');
   }
@@ -74,6 +85,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     // Pin HS256 to match the REST strategy / verifyRefreshToken (no algorithm-confusion surface).
     const decoded = jwt.verify(token, Config.JWT_SECRET, { algorithms: ['HS256'] }) as {
       id: string;
+      sid?: string;
       tokenVersion?: number;
       mfaPending?: boolean;
       typ?: string;
@@ -141,6 +153,14 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       throw new ForbiddenError(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
     }
 
+    // Shared web surfaces identify device sessions from trusted server metadata;
+    // dedicated CLI/API surfaces apply the policy to every JWT.
+    try {
+      await assertCliSessionAllowed(user, decoded.sid, options);
+    } catch (error) {
+      throw toApiKeyAuthError(error);
+    }
+
     return {
       id: user.id,
       email: user.email,
@@ -192,6 +212,7 @@ function toApiKeyInfo(v: {
   branding?: IEmbedBranding;
   spendCap?: number;
   currentSpend?: number;
+  createdByUserId?: string;
 }): ApiKeyInfo {
   return {
     keyId: v.keyId!,
@@ -206,6 +227,7 @@ function toApiKeyInfo(v: {
     branding: v.branding,
     spendCap: v.spendCap,
     currentSpend: v.currentSpend,
+    createdByUserId: v.createdByUserId,
   };
 }
 
@@ -228,12 +250,25 @@ function toApiKeyInfo(v: {
  * suspension lands *after* the key exists and must take effect on the surfaces
  * that spend money.
  */
-async function assertOwnerAccountUsable(userId: string) {
-  const user = await User.findById(userId);
+async function assertOwnerAccountUsable(info: ApiKeyInfo) {
+  const user = await User.findById(info.userId);
   if (!user) {
     throw new UnauthorizedError('User not found or banned');
   }
   assertAccountStateUsable(user);
+  // The admin paid-only switch, mirroring apiKeyAuth so every key surface shares it.
+  const accessAllowed = await isApiKeyAccessAllowed(user, {
+    billingOwnerType: info.billingOwnerType,
+    organizationId: info.organizationId,
+    createdByUserId: info.createdByUserId,
+  });
+  if (!accessAllowed) {
+    Logger.globalInstance.warn('API key rejected: apiKeyAccess setting denies this owner', {
+      keyId: info.keyId,
+      userId: info.userId,
+    });
+    throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
+  }
   return user;
 }
 
@@ -274,9 +309,9 @@ export async function verifyApiKey(
       });
     }
 
-    const owner = await assertOwnerAccountUsable(validation.userId);
     const info = toApiKeyInfo(validation);
-    // Same untrusted-owner ceiling apiKeyAuth applies, so these surfaces meter the clamped limit too.
+    const owner = await assertOwnerAccountUsable(info);
+    // Apply the trust ceiling only after the access policy has accepted the owner; same ceiling apiKeyAuth applies.
     const { rateLimit, ownerUntrusted } = await resolveUntrustedKeyLimits(owner, info);
     return { ...info, rateLimit, ownerUntrusted };
   } catch (error) {
@@ -353,7 +388,7 @@ export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
 
     const info = toApiKeyInfo(validation);
     assertEmbedCredential(info);
-    await assertOwnerAccountUsable(info.userId);
+    await assertOwnerAccountUsable(info);
     return info;
   } catch (error) {
     throw toApiKeyAuthError(error);

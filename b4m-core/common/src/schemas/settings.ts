@@ -602,6 +602,7 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
   'apiRateLimitCreditsPerMin',
+  'apiKeyAccess',
 
   // OVERWATCH ROLLUP CRON SETTINGS
   'overwatchRollupSync',
@@ -2159,6 +2160,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitBasicPerMin', order: 2 },
       { key: 'apiRateLimitProPerMin', order: 3 },
       { key: 'apiRateLimitCreditsPerMin', order: 4 },
+      { key: 'apiKeyAccess', order: 5 },
     ],
   },
   API_KEY_TRUST: {
@@ -2199,6 +2201,9 @@ export const API_SERVICE_GROUPS = {
     settings: { key: SettingKey; order: number }[];
   };
 };
+
+/** Hosted deployments always meter credits (self-host may turn it off); read per call so tests can flip the env. */
+export const isEnforceCreditsLocked = (): boolean => process.env.B4M_SELF_HOST !== 'true';
 
 export const settingsMap = {
   DefaultAPIModel: makeStringSetting({
@@ -3068,6 +3073,21 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 4,
   }),
+  // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
+  // tightening it also cuts off keys that already exist.
+  apiKeyAccess: makeStringSetting({
+    key: 'apiKeyAccess',
+    name: 'API Key Access',
+    // Self-host has no billing stack (see enforceCredits), so keys stay open there; hosted
+    // defaults to paid-only so the gate is live without an admin write.
+    defaultValue: process.env.B4M_SELF_HOST === 'true' ? 'all' : 'paid',
+    description:
+      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
+    options: ['all', 'paid', 'disabled'],
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 5,
+  }),
   tagLineMain: makeStringSetting({
     key: 'tagLineMain',
     name: 'Tag Line Main',
@@ -3433,12 +3453,12 @@ export const settingsMap = {
   billOperationalUsage: makeBooleanSetting({
     key: 'billOperationalUsage',
     name: 'Bill Operational Usage',
-    // Default OFF: operational-model and embedding spend (auto-naming, summarization,
-    // tagging, context summarization, KB query embeddings) is recorded as platform COGS
-    // but not deducted from the user/org. Turn ON to also debit credits for that spend.
+    // Default OFF on hosted and self-host alike: free-tier accounts are billed for this spend
+    // whenever Enforce Credits is on (isOperationalBillingEnabled), so the toggle only decides
+    // whether paying accounts are billed for it too, and turning it on is a pricing change.
     defaultValue: false,
     description:
-      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings) is billed to the user/org. Off = recorded as platform cost only.',
+      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings, file indexing) is billed to every user/org. Off = billed only to free-tier users paying for themselves (no credit purchase or active plan) and recorded as platform cost for everyone else. Requires Enforce Credits.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
