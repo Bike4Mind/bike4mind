@@ -24,6 +24,12 @@ export const DEFAULT_HUGGING_FACE_ENDPOINT = 'https://huggingface.co';
 /** Registry host Ollama pulls Hugging Face GGUFs from, as `hf.co/<repo>:<quant>`. */
 export const OLLAMA_HUGGING_FACE_HOST = 'hf.co';
 
+/** Manifest requests one `verifyOllamaRef` call may send. */
+export const MAX_VERIFY_TAGS = 4;
+
+/** Where a Hugging Face account adds the SSH key Ollama uses to pull gated and private repos. */
+export const HUGGING_FACE_SSH_KEYS_URL = 'https://huggingface.co/settings/keys';
+
 export const MAX_HUB_SEARCH_LIMIT = 100;
 const DEFAULT_HUB_SEARCH_LIMIT = 20;
 const MAX_QUERY_LENGTH = 200;
@@ -155,6 +161,12 @@ export interface HubModelDetail extends HubModelSummary {
    * otherwise the answer of a resolve HEAD. Null for a gated repo with no GGUF file to try.
    */
   canDownload: boolean | null;
+  /**
+   * True for a gated or private repo. Ollama pulls from hf.co with its own SSH key and never sees `token`, so the
+   * Ollama host's public key (`~/.ollama/id_ed25519.pub`) must first be added at `HUGGING_FACE_SSH_KEYS_URL`
+   * (Hugging Face Hub docs, "Use Ollama with any GGUF Model on Hugging Face Hub").
+   */
+  ollamaNeedsSshKey: boolean;
 }
 
 // The Hub labels a GGUF by the last quant scheme in its upper-cased file name (scheme list from huggingface.js
@@ -245,6 +257,8 @@ interface RequestContext {
   repo?: string;
   revision?: string;
   accept?: string;
+  /** A registry manifest read, where 404 means "no such tag" rather than "no such repo". */
+  manifest?: boolean;
 }
 
 /** The quant label the Hub shows for a GGUF file name. */
@@ -261,17 +275,23 @@ function ggufStem(path: string): string {
 }
 
 interface OllamaTagPlan {
-  /** Best tag to try; when not `unique`, it only works if the registry skips the earlier files that match it. */
-  tag: string | null;
+  /** Tags to try, best first; when not `unique`, one works only if the registry skips the earlier files it matches. */
+  tags: string[];
   unique: boolean;
 }
 
-/** Tails of the stem that Ollama and the registry accept as a tag, the quant label first, then shortest first. */
+const byCodeUnits = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const reversed = (text: string) => [...text].reverse().join('');
+
+/**
+ * Tails of the stem that Ollama and the registry accept as a tag, the quant label first, then shortest first. A tail
+ * starts at a separator or after a character Ollama's tag charset lacks, e.g. the space in `Gemma3-270M Q8_0`.
+ */
 function ollamaTagCandidates(path: string, quant: string | null): string[] {
   if (!quant) return [];
   const stem = ggufStem(path);
   const starts = [0];
-  for (let i = 0; i < stem.length; i++) if ('-._'.includes(stem.charAt(i))) starts.push(i + 1);
+  for (let i = 0; i < stem.length; i++) if (!/[A-Za-z0-9]/.test(stem.charAt(i))) starts.push(i + 1);
   const tags = starts
     .reverse()
     .map(start => stem.slice(start))
@@ -281,23 +301,63 @@ function ollamaTagCandidates(path: string, quant: string | null): string[] {
 }
 
 /**
+ * For stems in path order, a lookup from a tag to the first stem that ends with it (case-insensitive), or Infinity:
+ * reversed stems sorted so the ones ending with a tag form one range, and a sparse table for that range's minimum.
+ */
+function firstStemEndingWith(stems: readonly string[]): (tag: string) => number {
+  const entries = stems
+    .map((stem, index) => ({ key: reversed(stem.toUpperCase()), index }))
+    .sort((a, b) => byCodeUnits(a.key, b.key));
+  const keys = entries.map(entry => entry.key);
+  const levels: number[][] = [entries.map(entry => entry.index)];
+  for (let span = 1; span * 2 <= entries.length; span *= 2) {
+    const previous = levels[levels.length - 1] ?? [];
+    levels.push(
+      previous.slice(0, previous.length - span).map((value, i) => Math.min(value, previous[i + span] ?? value))
+    );
+  }
+  const lowerBound = (target: string) => {
+    let [lo, hi] = [0, keys.length];
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((keys[mid] ?? '') < target) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  return tag => {
+    const key = reversed(tag.toUpperCase());
+    const [lo, hi] = [lowerBound(key), lowerBound(`${key}￿`)];
+    if (lo >= hi) return Infinity;
+    const level = 31 - Math.clz32(hi - lo);
+    const row = levels[level] ?? [];
+    return Math.min(row[lo] ?? Infinity, row[hi - (1 << level)] ?? Infinity);
+  };
+}
+
+/**
  * The registry answers `hf.co/<repo>:<tag>` with the first non-projector GGUF, in path order, whose stem ends with
  * the tag (case-insensitive), so a tag reaches a file only if no earlier stem ends with it too.
  */
 function planOllamaTags(builds: readonly Pick<HubGgufBuild, 'id' | 'quant' | 'files'>[]): Map<string, OllamaTagPlan> {
   const ordered = builds
     .flatMap(build => (build.files[0] ? [{ build, path: build.files[0].path }] : []))
-    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    .sort((a, b) => byCodeUnits(a.path, b.path));
+  const firstOwner = firstStemEndingWith(ordered.map(({ path }) => ggufStem(path)));
   const plans = new Map<string, OllamaTagPlan>();
-  const earlier: string[] = [];
-  for (const { build, path } of ordered) {
+  ordered.forEach(({ build, path }, index) => {
     const candidates = ollamaTagCandidates(path, build.quant);
-    const unique = candidates.find(tag => !earlier.some(stem => stem.endsWith(tag.toUpperCase())));
-    plans.set(build.id, { tag: unique ?? candidates[0] ?? null, unique: unique !== undefined });
-    earlier.push(ggufStem(path).toUpperCase());
-  }
+    const unique = candidates.find(tag => firstOwner(tag) === index);
+    plans.set(build.id, {
+      tags: unique ? [unique, ...candidates.filter(tag => tag !== unique)] : candidates,
+      unique: unique !== undefined,
+    });
+  });
   return plans;
 }
+
+// Plans of the builds arrays getModel returned, so verifyOllamaRef does not plan again.
+const tagPlans = new WeakMap<readonly HubGgufBuild[], Map<string, OllamaTagPlan>>();
 
 /** Ollama caps each name part at 80 characters and allows no `.` in the namespace. */
 function ollamaAcceptsRepo(repo: string): boolean {
@@ -429,32 +489,31 @@ function groupGgufFiles(
   });
   const plans = planOllamaTags(builds);
   const repoOk = ollamaAcceptsRepo(repo);
-  return {
-    builds: builds
-      .map((build): HubGgufBuild => {
-        const plan = plans.get(build.id);
-        const issue: OllamaRefIssue | null = !build.complete
-          ? 'incomplete'
-          : build.split
-            ? 'split'
-            : !build.quant
-              ? 'no-quant-label'
-              : !repoOk || !plan?.tag
-                ? 'unsupported-name'
-                : pinned
-                  ? 'pinned-revision'
-                  : !plan.unique
-                    ? 'ambiguous'
-                    : null;
-        return {
-          ...build,
-          ollamaRef: issue || !plan?.tag ? null : `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${plan.tag}`,
-          ollamaRefIssue: issue,
-        };
-      })
-      .sort((a, b) => a.sizeBytes - b.sizeBytes || a.id.localeCompare(b.id)),
-    projectors,
-  };
+  const planned = builds
+    .map((build): HubGgufBuild => {
+      const tag = plans.get(build.id)?.tags[0];
+      const issue: OllamaRefIssue | null = !build.complete
+        ? 'incomplete'
+        : build.split
+          ? 'split'
+          : !build.quant
+            ? 'no-quant-label'
+            : !repoOk || !tag
+              ? 'unsupported-name'
+              : pinned
+                ? 'pinned-revision'
+                : !plans.get(build.id)?.unique
+                  ? 'ambiguous'
+                  : null;
+      return {
+        ...build,
+        ollamaRef: issue || !tag ? null : `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${tag}`,
+        ollamaRefIssue: issue,
+      };
+    })
+    .sort((a, b) => a.sizeBytes - b.sizeBytes || a.id.localeCompare(b.id));
+  tagPlans.set(planned, plans);
+  return { builds: planned, projectors };
 }
 
 /** The `cursor` of a `Link: <...>; rel="next"` header, so the next page goes to our endpoint even behind a mirror. */
@@ -591,6 +650,7 @@ export class HuggingFaceHub {
       builds,
       projectors,
       canDownload: await this.#canDownload(canonical, revision, summary.gated, probe?.path, options.signal),
+      ollamaNeedsSshKey: summary.gated !== false || summary.private,
     };
   }
 
@@ -599,9 +659,10 @@ export class HuggingFaceHub {
   }
 
   /**
-   * The Ollama ref that pulls exactly `build`'s file, asked of the registry itself (one manifest request); null when
-   * no tag does. Call it right before a pull: it also clears `ambiguous` and `pinned-revision` builds whose file the
-   * registry serves byte for byte, and catches files the registry skips.
+   * The Ollama ref that pulls exactly `build`'s file, asked of the registry itself (one manifest request per tag
+   * tried, at most `MAX_VERIFY_TAGS`); null when no tag does. Call it right before a pull: it also clears `ambiguous`
+   * and `pinned-revision` builds whose file the registry serves byte for byte, and catches files the registry skips.
+   * The pull itself carries no token; see `ollamaNeedsSshKey`.
    */
   async verifyOllamaRef(
     detail: Pick<HubModelDetail, 'id' | 'builds'>,
@@ -610,20 +671,22 @@ export class HuggingFaceHub {
   ): Promise<string | null> {
     assertRepoId(detail.id);
     const sha256 = build.files[0]?.sha256;
-    const tag = planOllamaTags(detail.builds).get(build.id)?.tag;
-    if (build.split || !build.complete || !sha256 || !tag || !ollamaAcceptsRepo(detail.id)) return null;
-    const context = { signal: options.signal, repo: detail.id, accept: REGISTRY_MANIFEST_ACCEPT };
-    let manifest: z.infer<typeof manifestSchema>;
-    try {
-      ({ data: manifest } = await this.#getJson(`/v2/${detail.id}/manifests/${tag}`, manifestSchema, context));
-    } catch (error) {
-      // 400 is the registry's "not available", "sharded" and "not a valid quantization scheme".
-      if (error instanceof RuntimeHttpError && !(error instanceof HubAccessError) && [400, 404].includes(error.status))
-        return null;
-      throw error;
+    if (build.split || !build.complete || !sha256 || !ollamaAcceptsRepo(detail.id)) return null;
+    const plan = (tagPlans.get(detail.builds) ?? planOllamaTags(detail.builds)).get(build.id);
+    const context = { signal: options.signal, repo: detail.id, accept: REGISTRY_MANIFEST_ACCEPT, manifest: true };
+    for (const tag of plan?.tags.slice(0, MAX_VERIFY_TAGS) ?? []) {
+      let manifest: z.infer<typeof manifestSchema>;
+      try {
+        ({ data: manifest } = await this.#getJson(`/v2/${detail.id}/manifests/${tag}`, manifestSchema, context));
+      } catch (error) {
+        // 400 is the registry's "not available", "sharded" and "not a valid quantization scheme".
+        if (error instanceof RuntimeHttpError && [400, 404].includes(error.status)) continue;
+        throw error;
+      }
+      const model = manifest.layers.find(layer => layer.mediaType === OLLAMA_MODEL_LAYER);
+      if (model?.digest === `sha256:${sha256}`) return `${OLLAMA_HUGGING_FACE_HOST}/${detail.id}:${tag}`;
     }
-    const model = manifest.layers.find(layer => layer.mediaType === OLLAMA_MODEL_LAYER);
-    return model?.digest === `sha256:${sha256}` ? `${OLLAMA_HUGGING_FACE_HOST}/${detail.id}:${tag}` : null;
+    return null;
   }
 
   async #canDownload(
@@ -734,6 +797,7 @@ export class HuggingFaceHub {
     if (!repo) return new RuntimeHttpError(message, this.id, status);
     if ((status === 401 || status === 403) && code === 'GatedRepo')
       return new HubAccessError(message, this.id, status, repo, 'gated');
+    if (status === 404 && context.manifest) return new RuntimeHttpError(message, this.id, status);
     if (status === 404 && code === 'RevisionNotFound')
       return new ModelNotFoundError(this.id, `${repo}@${revision}`, { cause: message });
     // The Hub ignores a bad token on a public repo and answers a missing or unreadable one with a bare 401.

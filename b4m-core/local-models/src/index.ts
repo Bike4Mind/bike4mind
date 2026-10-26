@@ -33,6 +33,8 @@ export {
   HuggingFaceHub,
   MAX_HUB_SEARCH_LIMIT,
   OLLAMA_HUGGING_FACE_HOST,
+  HUGGING_FACE_SSH_KEYS_URL,
+  MAX_VERIFY_TAGS,
   ggufQuantLabel,
   hubResolveUrl,
   isHubRepoId,

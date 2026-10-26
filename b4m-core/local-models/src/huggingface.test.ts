@@ -10,7 +10,7 @@ import {
   RuntimeHttpError,
   RuntimeProtocolError,
 } from './errors';
-import { HuggingFaceHub, ggufQuantLabel, hubResolveUrl, type HubModelDetail } from './huggingface';
+import { HuggingFaceHub, MAX_VERIFY_TAGS, ggufQuantLabel, hubResolveUrl, type HubModelDetail } from './huggingface';
 import { closedPort, hang, json, startFakeServer, type FakeServer, type Handler } from './__test__/fakeServer';
 import {
   gatedInfo,
@@ -476,6 +476,112 @@ describe('HuggingFaceHub Ollama refs', () => {
     });
     expect(await caught(hub.verifyOllamaRef(detail, byQuant('Q4_K_M')))).toBeInstanceOf(ModelNotFoundError);
   });
+
+  const sha = 'c'.repeat(40);
+  const oid = (n: number) => n.toString(16).padStart(64, '0');
+  const numbered = (path: string, n: number) => lfsFile(path, 1, oid(n));
+  const simpleRoutes = (repo: string, tree: unknown): Record<string, Handler> =>
+    repoRoutes(repo, sha, { id: repo, sha }, tree);
+
+  /** The registry rule, plus the skipping of draft files, modeled as an `mtp-` file name prefix. */
+  const registry =
+    (tree: { path: string; lfs: { oid: string } }[]): Handler =>
+    (request, response) => {
+      const tag = decodeURIComponent(request.path.split('/manifests/')[1] ?? '').toUpperCase();
+      const hit = [...tree]
+        .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+        .find(entry => {
+          const name = entry.path.replace(/^.*\//, '');
+          const stem = name.replace(/\.gguf$/i, '').toUpperCase();
+          return !/mmproj/i.test(name) && !/^mtp-/i.test(name) && stem.endsWith(tag);
+        });
+      return (hit ? manifest(hit.lfs.oid) : json({ error: 'The specified tag is not available' }, 400))(
+        request,
+        response
+      );
+    };
+
+  it('starts a tag after a character Ollama tags do not allow, such as a space', async () => {
+    // Live, hf.co/<a repo>:Q8_0 pulls "Gemma3-270M Q8_0.gguf" through Ollama 0.40.11.
+    const repo = 'someone/spaced-GGUF';
+    const tree = [numbered('Gemma3-270M Q8_0.gguf', 1), numbered('SmolLM2-135m Q8_0.gguf', 2)];
+    const server = await serve({ ...simpleRoutes(repo, tree), [`GET /v2/${repo}/manifests/Q8_0`]: registry(tree) });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const detail = await hub.getModel(repo);
+    const gemma = detail.builds.find(build => build.id === 'Gemma3-270M Q8_0');
+    expect(gemma).toMatchObject({ ollamaRef: `hf.co/${repo}:Q8_0`, ollamaRefIssue: null });
+    expect(gemma && (await hub.verifyOllamaRef(detail, gemma))).toBe(`hf.co/${repo}:Q8_0`);
+    expect(detail.builds.find(build => build.id === 'SmolLM2-135m Q8_0')?.ollamaRefIssue).toBe('ambiguous');
+  });
+
+  it('plans a 4000-file repo in well under a second', async () => {
+    // Each odd file's tails are all blocked by the even file just before it.
+    const repo = 'someone/many-GGUF';
+    const tree = Array.from({ length: 4000 }, (_, i) => {
+      const pair = `${Array.from({ length: 12 }, () => `p${i >> 1}`).join('-')}-Q4_K_M`;
+      return numbered(`v${String(i).padStart(5, '0')}/${i % 2 ? pair : `y-${pair}`}.gguf`, i + 1);
+    });
+    const server = await serve(simpleRoutes(repo, tree));
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl, requestTimeoutMs: 120_000 });
+    const started = performance.now();
+    const detail = await hub.getModel(repo);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(detail.builds.filter(build => build.ollamaRefIssue === 'ambiguous')).toHaveLength(2000);
+  }, 120_000);
+
+  it('answers null for a 404 manifest', async () => {
+    const repo = 'someone/model-GGUF';
+    const tree = [numbered('model-Q4_K_M.gguf', 1)];
+    const server = await serve({
+      ...simpleRoutes(repo, tree),
+      [`GET /v2/${repo}/manifests/Q4_K_M`]: json({ error: 'not found' }, 404),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const detail = await hub.getModel(repo);
+    expect(detail.builds[0] && (await hub.verifyOllamaRef(detail, detail.builds[0]))).toBeNull();
+  });
+
+  it('tries the next tag when a skipped draft blocks the first, up to MAX_VERIFY_TAGS requests', async () => {
+    const repo = 'someone/drafty-GGUF';
+    const tree = [
+      numbered('MTP/mtp-m-BF16.gguf', 1),
+      numbered('MTP/mtp-m-F16.gguf', 2),
+      numbered('m-BF16.gguf', 3),
+      numbered('m-F16.gguf', 4),
+      numbered('MTP/mtp-a-b-c-d-e-Q8_0.gguf', 5),
+      numbered('a-b-c-d-e-Q8_0.gguf', 6),
+    ];
+    const tags = ['F16', 'm-F16', 'Q8_0', 'e-Q8_0', 'd-e-Q8_0', 'c-d-e-Q8_0', 'b-c-d-e-Q8_0'];
+    const server = await serve({
+      ...simpleRoutes(repo, tree),
+      ...Object.fromEntries(tags.map(tag => [`GET /v2/${repo}/manifests/${tag}`, registry(tree)])),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const detail = await hub.getModel(repo);
+    const f16 = detail.builds.find(build => build.id === 'm-F16');
+    expect(f16?.ollamaRefIssue).toBe('ambiguous');
+    // :F16 reaches m-BF16.gguf; :m-F16 reaches m-F16.gguf because the draft is skipped.
+    expect(f16 && (await hub.verifyOllamaRef(detail, f16))).toBe(`hf.co/${repo}:m-F16`);
+
+    // Every tail of the skipped draft reaches the main file instead, so no tag pulls the draft.
+    const draft = detail.builds.find(build => build.id === 'MTP/mtp-a-b-c-d-e-Q8_0');
+    const before = server.requests.length;
+    expect(draft && (await hub.verifyOllamaRef(detail, draft))).toBeNull();
+    expect(server.requests.slice(before).map(request => request.path.split('/').at(-1))).toEqual(
+      tags.slice(2, 2 + MAX_VERIFY_TAGS)
+    );
+  });
+
+  it('flags gated and private repos, whose Ollama pull needs the Ollama SSH key on the account', async () => {
+    const server = await serve({
+      ...repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree),
+      ...simpleRoutes('a/private-GGUF', llamaTree),
+      'GET /api/models/a/private-GGUF/revision/main': json({ id: 'a/private-GGUF', sha, private: true }),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN });
+    expect((await hub.getModel(llama)).ollamaNeedsSshKey).toBe(false);
+    expect((await hub.getModel('a/private-GGUF')).ollamaNeedsSshKey).toBe(true);
+  });
 });
 
 describe('HuggingFaceHub gated repos', () => {
@@ -485,7 +591,7 @@ describe('HuggingFaceHub gated repos', () => {
   it('reports a gated repo as not downloadable without a token, and does not probe it', async () => {
     const server = await serve(repoRoutes(repo, gatedSha, gatedInfo, gatedTree));
     const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
-    expect(detail).toMatchObject({ gated: 'manual', canDownload: false, license: 'gemma' });
+    expect(detail).toMatchObject({ gated: 'manual', canDownload: false, license: 'gemma', ollamaNeedsSshKey: true });
     expect(detail.builds).toEqual([
       expect.objectContaining({
         quant: 'Q4_0',

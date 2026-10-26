@@ -226,7 +226,7 @@ describe.runIf(HF)('live Hugging Face Hub', () => {
   it('reports a gated repo as gated and not downloadable without a token', async () => {
     const repo = 'google/gemma-3-1b-it-qat-q4_0-gguf';
     const detail = await hub().getModel(repo);
-    expect(detail).toMatchObject({ gated: 'manual', canDownload: false, license: 'gemma' });
+    expect(detail).toMatchObject({ gated: 'manual', canDownload: false, license: 'gemma', ollamaNeedsSshKey: true });
     expect(detail.builds[0]?.files[0]?.sha256).toBeNull();
     const head = await fetch(detail.builds[0]?.files[0]?.url ?? '', { method: 'HEAD', redirect: 'manual' });
     expect([head.status, head.headers.get('x-error-code')]).toEqual([401, 'GatedRepo']);
