@@ -74,6 +74,15 @@ describe('Users tab params', () => {
     });
   });
 
+  it('keeps the default page when every view param is invalid, so the URL still describes a view', () => {
+    expect(parseAdminSearch({ tab: 'users', limit: 7, sort: 'bogus' })).toMatchObject({
+      page: 1,
+      limit: undefined,
+      sort: undefined,
+    });
+    expect(parseAdminSearch({ tab: 'users', userId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }).page).toBeUndefined();
+  });
+
   it('never accepts the free-text search', () => {
     expect(parseAdminSearch({ search: 'someone@example.com' })).not.toHaveProperty('search');
   });

@@ -62,11 +62,21 @@ describe('Users tab URL precedence', () => {
     expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
   });
 
-  it('falls back to the stored view when every URL view param is invalid', () => {
-    act(() => fakeAdminRouter.reset({ tab: 'users', page: 'abc', order: 'sideways' }));
-    renderUsersTab();
+  it('reads a URL whose view params are all invalid as the default view, not the stored one', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'users', limit: 7, sort: 'bogus' }));
+    const { result } = renderUsersTab();
 
-    expect(fakeAdminRouter.search).toMatchObject({ page: 3, sort: 'name', order: 'asc' });
+    const defaultView = {
+      page: 1,
+      limit: DEFAULT_USERS_PARAMS.limit,
+      sortField: DEFAULT_USERS_PARAMS.sortField,
+      sortOrder: DEFAULT_USERS_PARAMS.sortOrder,
+      orgSearch: DEFAULT_USERS_PARAMS.orgSearch,
+      tags: [],
+    };
+    expect(result.current[0]).toMatchObject(defaultView);
+    expect(useUsersTab.getState().params).toMatchObject({ ...defaultView, search: STORED.search });
+    expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1 });
   });
 
   it('leaves another tab URL alone', () => {

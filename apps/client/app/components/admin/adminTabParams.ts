@@ -64,7 +64,7 @@ type TypedAdminSearch = UsersSearch & FeedbackSearch & WebhookAuditLogsSearch & 
 export type AdminSearch = Partial<Record<Exclude<AdminSearchParam, keyof TypedAdminSearch>, string>> & TypedAdminSearch;
 
 // A Map so a key read from the registry can never resolve to an inherited object member.
-const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown) => unknown> = new Map(
+const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown, search: Record<string, unknown>) => unknown> = new Map(
   Object.entries({
     ...USERS_SEARCH_PARSERS,
     ...FEEDBACK_SEARCH_PARSERS,
@@ -73,8 +73,8 @@ const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown) => unknown> = ne
   })
 );
 
-const parseAdminSearchValue = (key: AdminSearchParam, value: unknown): unknown =>
-  (TYPED_PARAM_PARSERS.get(key) ?? optionalStringSearchValue)(value);
+const parseAdminSearchValue = (key: AdminSearchParam, search: Record<string, unknown>): unknown =>
+  (TYPED_PARAM_PARSERS.get(key) ?? optionalStringSearchValue)(search[key], search);
 
 // A Map for the same reason as adminTabSlugs.ts: the slug comes from the query string, and an
 // object lookup would resolve `?tab=constructor` to an inherited member.
@@ -91,7 +91,7 @@ const ALL_ADMIN_SEARCH_PARAMS: readonly AdminSearchParam[] = [
  */
 export function parseAdminSearch(search: Record<string, unknown>): AdminSearch {
   return Object.fromEntries(
-    ALL_ADMIN_SEARCH_PARAMS.map(key => [key, parseAdminSearchValue(key, search[key])])
+    ALL_ADMIN_SEARCH_PARAMS.map(key => [key, parseAdminSearchValue(key, search)])
   ) as AdminSearch;
 }
 
@@ -103,7 +103,7 @@ export function parseAdminSearch(search: Record<string, unknown>): AdminSearch {
 export function adminSearchForTab(previous: Record<string, unknown>, slug: string): AdminSearch {
   const kept = new Set<string>([...ADMIN_GLOBAL_PARAMS, ...(PARAMS_BY_TAB_SLUG.get(slug) ?? [])]);
   const search = Object.fromEntries(
-    ALL_ADMIN_SEARCH_PARAMS.map(key => [key, kept.has(key) ? parseAdminSearchValue(key, previous[key]) : undefined])
+    ALL_ADMIN_SEARCH_PARAMS.map(key => [key, kept.has(key) ? parseAdminSearchValue(key, previous) : undefined])
   ) as AdminSearch;
   return { ...search, [ADMIN_TAB_PARAM]: slug };
 }
