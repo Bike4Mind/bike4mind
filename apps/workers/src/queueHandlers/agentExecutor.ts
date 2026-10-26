@@ -287,7 +287,8 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
 
 /**
  * Confidence-gate threshold for the web agent execution flow.
- * Iteration-average confidence below this triggers a pause for human review.
+ * An iteration whose every non-failed tool call scores below this counts toward a
+ * pause for human review (see `evaluateConfidenceGate`).
  * Shared default across autonomous agent flows - the value below
  * which a run is considered "not autonomous-safe". A persisted gate stalls
  * the execution in `paused` until the client responds via `gate_response`,

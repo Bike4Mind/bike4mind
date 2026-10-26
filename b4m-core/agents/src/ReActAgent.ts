@@ -34,6 +34,7 @@ import {
   type ToolUseInfo,
 } from './toolParallelizer';
 import { RepeatedCallGuard, repeatedCallWarning, repeatedCallBlockedObservation } from './repeatedCallGuard';
+import { usableEvidenceConfidence } from './iterationConfidence';
 
 /**
  * Placeholder tool_result content for a tool_use that never ran because the run
@@ -2036,7 +2037,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   }
 
   /**
-   * Read and clear the average confidence of every observation pushed since the
+   * Read and clear the confidence of every observation pushed since the
    * last call (or the last `runIteration()`, whichever is more recent) - `null`
    * if nothing has been scored yet.
    *
@@ -2051,15 +2052,17 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * have gotten - resetting `iterationConfidences` here is a no-op for the next
    * `runIteration()`, which resets it again anyway.
    *
-   * Scores from calls that failed to run (`toolFailed`) are left out, matching the
-   * web executor's iteration gate (`evaluateConfidenceGate`); `null` when every
-   * scored call failed.
+   * Aggregated by `usableEvidenceConfidence`, the rule the web executor's iteration
+   * gate (`evaluateConfidenceGate`) also uses: the strongest score among calls that
+   * ran; `null` when every scored call failed.
    */
   takeIterationConfidence(): number | null {
-    const scores = this.iterationConfidences.filter((_, i) => !this.iterationToolFailed[i]);
+    const calls = this.iterationConfidences.map((confidence, i) => ({
+      confidence,
+      toolFailed: this.iterationToolFailed[i],
+    }));
     this.resetIterationConfidences();
-    if (scores.length === 0) return null;
-    return scores.reduce((a, b) => a + b, 0) / scores.length;
+    return usableEvidenceConfidence(calls);
   }
 
   private resetIterationConfidences(): void {

@@ -56,22 +56,54 @@ describe('evaluateConfidenceGate', () => {
     });
   });
 
+  it('does not flag a mixed iteration: one empty result beside a usable one', () => {
+    // The mean (0.5) would be below 0.6; the usable 0.7 result is what the gate decides on.
+    expect(evaluateConfidenceGate(input([observation(0.3), observation(0.7)]))).toEqual({
+      iteration: 2,
+      confidence: 0.7,
+      belowThreshold: false,
+      pausable: true,
+    });
+    expect(evaluateConfidenceGate(input([observation(0.3), observation(0.3), observation(0.7)]))?.belowThreshold).toBe(
+      false
+    );
+  });
+
+  it('flags an iteration where every call that ran came back empty', () => {
+    expect(evaluateConfidenceGate(input([observation(0.3), observation(0.3)]))).toEqual({
+      iteration: 2,
+      confidence: 0.3,
+      belowThreshold: true,
+      pausable: true,
+    });
+  });
+
   it('counts a low-scored result that did not fail (e.g. text starting with "Error:")', () => {
-    const gate = evaluateConfidenceGate(input([observation(0.1), observation(0.7)]));
-    expect(gate?.confidence).toBeCloseTo(0.4);
+    const gate = evaluateConfidenceGate(input([observation(0.1), observation(0.3)]));
+    expect(gate?.confidence).toBe(0.3);
     expect(gate?.belowThreshold).toBe(true);
   });
 
   it("falls back to the agent's own confidence when the steps do not reproduce it", () => {
-    const steps = [failed(), observation(0.7)];
+    const steps = [failed(), observation(0.3)];
     expect(evaluateConfidenceGate(input(steps, { gate: { iteration: 2, confidence: 0.25 } }))).toEqual({
       iteration: 2,
-      confidence: 0.25,
+      confidence: 0.3,
       belowThreshold: true,
       pausable: true,
       overridden: false,
     });
     expect(evaluateConfidenceGate(input([], { gate: { iteration: 2, confidence: 0.25 } }))?.confidence).toBe(0.25);
+    expect(evaluateConfidenceGate(input([failed()], { gate: { iteration: 2, confidence: 0.25 } }))?.confidence).toBe(
+      0.25
+    );
+  });
+
+  it('trusts a visible usable result even when the steps do not cover the whole iteration', () => {
+    const steps = [failed(), observation(0.7)];
+    expect(evaluateConfidenceGate(input(steps, { gate: { iteration: 2, confidence: 0.25 } }))?.belowThreshold).toBe(
+      false
+    );
   });
 
   it('evaluates but cannot pause a completed or iteration-capped run', () => {
