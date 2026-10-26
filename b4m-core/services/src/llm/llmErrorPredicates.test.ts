@@ -48,4 +48,20 @@ describe('timeout predicates', () => {
     }
     expect(isTruncatedStreamError(createAnthropicStreamTimeoutError('stream_idle', 90_000))).toBe(false);
   });
+
+  // Mirrors the stalled-empty wording in bedrockBackend/base.ts, which cannot import these
+  // predicates (services depends on llm-adapters, not the reverse).
+  it('retries a stalled empty Bedrock stream but not a deterministic empty one', () => {
+    const stalled = new Error(
+      '[BaseBedrockBackend] stream timeout - model "m" in region r returned an EMPTY response (no text, no tool call) without a terminal event.'
+    );
+    const deterministic = new Error(
+      '[BaseBedrockBackend] model "m" returned an EMPTY response in region r (no text, no tool call, no output tokens).'
+    );
+
+    expect(isStreamIdleTimeoutError(stalled)).toBe(true);
+    expect(isTruncatedStreamError(stalled)).toBe(true);
+    expect(isStreamIdleTimeoutError(deterministic)).toBe(false);
+    expect(isTruncatedStreamError(deterministic)).toBe(false);
+  });
 });
