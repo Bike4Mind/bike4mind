@@ -70,12 +70,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       codeDefaultContent
     );
 
-    await recordAdminActionFromRequest(req, {
-      action: 'settings.system_prompt.version_switched',
-      target: { kind: 'settings', id: promptId, displayName: prompt.name },
-      summary: `switched system prompt ${promptId} to ${targetVersion === 0 ? 'code default' : `version ${targetVersion}`}`,
-      changes: [{ field: 'activeVersion', before: prompt.activeVersion ?? prompt.version ?? 1, after: targetVersion }],
-    });
+    const previousVersion = prompt.activeVersion ?? prompt.version ?? 1;
+    if (previousVersion !== targetVersion) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.system_prompt.version_switched',
+        target: { kind: 'settings', id: promptId, displayName: prompt.name },
+        summary: `switched system prompt ${promptId} to ${targetVersion === 0 ? 'code default' : `version ${targetVersion}`}`,
+        changes: [{ field: 'activeVersion', before: previousVersion, after: targetVersion }],
+      });
+    }
 
     return res.status(200).json({
       success: true,
