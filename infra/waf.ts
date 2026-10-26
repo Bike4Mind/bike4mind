@@ -2,9 +2,10 @@
  * WAF for the Router CloudFront distribution, controlled by the ENABLE_WAF environment variable
  * (default: false).
  *
- * Non-production stages create their own CloudFront-scope WebACL in us-east-1. Production looks
- * up an externally managed WebACL by WAF_WEB_ACL_NAME (see wafAssociation.ts) and only creates
- * the alert delivery resources below.
+ * Stages create their own CloudFront-scope WebACL in us-east-1 unless an externally managed one
+ * is configured. Production always looks up an externally managed WebACL by WAF_WEB_ACL_NAME (see
+ * wafAssociation.ts) and only creates the alert delivery resources below. The staging stage does
+ * the same when WAF_WEB_ACL_NAME is set, and creates none of the alert delivery resources.
  */
 
 import { buildDevWafRuleJson, getDevWafMeta, parseWafBlockedIps } from './wafPolicy';
@@ -23,6 +24,9 @@ const externalWaf = resolveExternalWafAssociation({
   enableWaf: process.env.ENABLE_WAF,
   webAclName: process.env.WAF_WEB_ACL_NAME,
 });
+
+// Alert delivery resources exist only for the production stage, not for every external association.
+const isExternalProduction = $app.stage === 'production' && externalWaf !== undefined;
 
 // CloudFront-scope WAF resources must be created in us-east-1.
 const wafProviderUsEast1 = isWafEnabled
@@ -126,13 +130,13 @@ export const wafStageWebAcl =
     : undefined;
 
 /**
- * Production: the externally managed WebACL, looked up by name.
+ * The externally managed WebACL (production, and staging when configured), looked up by name.
  */
 const externalWebAcl = externalWaf
   ? aws.wafv2.getWebAclOutput({ name: externalWaf.webAclName, scope: 'CLOUDFRONT' }, { provider: wafProviderUsEast1 })
   : undefined;
 
-/** ARN of the WebACL attached to the CDN: the looked-up one in production, the stage-owned one elsewhere. */
+/** ARN of the WebACL attached to the CDN: the looked-up one when external, the stage-owned one otherwise. */
 export const wafWebAcl = externalWebAcl ?? wafStageWebAcl;
 const wafWebAclArnValue = wafWebAcl?.arn;
 
@@ -199,7 +203,7 @@ export const wafLoggingConfig =
  * ARN of the externally managed rate-limit alarm topic (production only). Looked up rather than
  * constructed so a missing topic fails the deploy instead of leaving a dangling subscription.
  */
-const wafAiRateLimitAlarmTopicArn = externalWaf
+const wafAiRateLimitAlarmTopicArn = isExternalProduction
   ? aws.sns.getTopicOutput(
       { name: `${$app.name}-${$app.stage}-waf-ai-rate-limit-alarm` },
       { provider: wafProviderUsEast1 }
@@ -211,7 +215,7 @@ const wafAiRateLimitAlarmTopicArn = externalWaf
  * the Slack forwarding Lambda. Separate from the OobAlarmTopic in dlqAlarms.ts because
  * CloudWatch alarm actions must be in the alarm's region, and the WAF alarms live in us-east-1.
  */
-export const wafOobAlarmTopic = externalWaf
+export const wafOobAlarmTopic = isExternalProduction
   ? new aws.sns.Topic(
       'WafOobAlarmTopic',
       { name: `${$app.name}-${$app.stage}-waf-oob-alarm` },
@@ -224,7 +228,7 @@ export const wafOobAlarmTopic = externalWaf
  * Created in the default region; SNS cross-region invocation carries the
  * alarm payload from us-east-1 to the handler.
  */
-export const wafAlarmSlackHandler = externalWaf
+export const wafAlarmSlackHandler = isExternalProduction
   ? new sst.aws.Function('WafAlarmSlackHandler', {
       handler: 'apps/workers/src/events/wafAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
@@ -233,7 +237,7 @@ export const wafAlarmSlackHandler = externalWaf
     })
   : undefined;
 
-if (externalWaf && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic && wafAlarmSlackHandler) {
+if (isExternalProduction && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic && wafAlarmSlackHandler) {
   // Allow the us-east-1 SNS topic to invoke the Lambda handler.
   // Captured in a variable so the subscription can declare a dependsOn — without it
   // Pulumi creates both resources in parallel and SNS may attempt subscription
@@ -372,7 +376,7 @@ export const WAF_OTC_EDGE_SIGNAL_FILTER_PATTERN =
   '($.labels[*].name = "awswaf:managed:aws:anonymous-ip-list:HostingProviderIPList" || ' +
   '$.labels[*].name = "awswaf:managed:aws:bot-control:signal:*") }';
 
-if (externalWaf && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic) {
+if (isExternalProduction && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic) {
   const edgeSignalThreshold = parseAlarmThreshold(
     'SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN',
     process.env.SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN,

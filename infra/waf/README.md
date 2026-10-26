@@ -4,9 +4,9 @@
 
 The JSON file in this directory is a sample policy with round example rate
 limits. It is not tuned for any particular deployment, and it is used by the
-stage-owned ACLs only (dev, staging and PR previews). The production ACL is
-managed outside this stack and attached by name through `WAF_WEB_ACL_NAME`; see
-`infra/wafAssociation.ts`. A deployment supplies its own non-production policy
+stage-owned ACLs only (PR previews, and dev when `WAF_WEB_ACL_NAME` is unset).
+The production ACL, and the dev ACL when `WAF_WEB_ACL_NAME` is set, are managed
+outside this stack and attached by name; see `infra/wafAssociation.ts`. A deployment supplies its own non-production policy
 in one of two ways:
 
 - overwrite `bike4mind-api-protection-dev.json` here before SST runs, or

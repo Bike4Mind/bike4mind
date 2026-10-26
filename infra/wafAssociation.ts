@@ -1,22 +1,30 @@
 /**
- * Production WAF association settings.
+ * External WAF association settings.
  *
- * Production ACL resources are owned by the infrastructure repo; this stack only looks the ACL up
- * by name and attaches it to the CDN.
+ * Externally managed ACL resources are owned by the infrastructure repo; this stack only looks the
+ * ACL up by name and attaches it to the CDN.
  */
 
 export type ExternalWafAssociation = { webAclName: string };
 
+/** Stage that serves the staging environment. */
+const STAGING_STAGE = 'dev';
+
 /**
- * Resolves the externally managed ACL name for production, or undefined for stages that own
- * their ACL. Throws instead of returning undefined for production: a missing name would
- * silently detach the ACL from the CDN on the next deploy.
+ * Resolves the externally managed ACL name, or undefined for stages that own their ACL.
+ * Production throws instead of returning undefined: a missing name would silently detach the ACL
+ * from the CDN on the next deploy. Staging attaches externally only when ENABLE_WAF is true and a
+ * name is set, and otherwise keeps its stage-owned ACL. All other stages own their ACL.
  */
 export function resolveExternalWafAssociation(args: {
   stage: string;
   enableWaf: string | undefined;
   webAclName: string | undefined;
 }): ExternalWafAssociation | undefined {
+  if (args.stage === STAGING_STAGE) {
+    const stagingName = args.webAclName?.trim();
+    return args.enableWaf === 'true' && stagingName ? { webAclName: stagingName } : undefined;
+  }
   if (args.stage !== 'production') return undefined;
 
   if (args.enableWaf !== 'true') {

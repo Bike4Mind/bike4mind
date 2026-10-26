@@ -21,7 +21,21 @@ describe('resolveExternalWafAssociation', () => {
     );
   });
 
-  it.each(['dev', 'staging', 'pr5655'])('leaves %s to own its ACL', stage => {
+  it('returns the trimmed ACL name for the staging stage when ENABLE_WAF is true', () => {
+    expect(resolveExternalWafAssociation({ stage: 'dev', enableWaf: 'true', webAclName: ' staging-acl ' })).toEqual({
+      webAclName: 'staging-acl',
+    });
+  });
+
+  it.each([undefined, '', '   '])('keeps the staging stage-owned ACL when WAF_WEB_ACL_NAME is %j', webAclName => {
+    expect(resolveExternalWafAssociation({ stage: 'dev', enableWaf: 'true', webAclName })).toBeUndefined();
+  });
+
+  it.each([undefined, '', 'false'])('keeps the staging stage-owned ACL when ENABLE_WAF is %j', enableWaf => {
+    expect(resolveExternalWafAssociation({ stage: 'dev', enableWaf, webAclName: 'acl' })).toBeUndefined();
+  });
+
+  it.each(['staging', 'pr5655'])('leaves %s to own its ACL', stage => {
     expect(resolveExternalWafAssociation({ stage, enableWaf: 'true', webAclName: 'acl' })).toBeUndefined();
     expect(resolveExternalWafAssociation({ stage, enableWaf: undefined, webAclName: undefined })).toBeUndefined();
   });
@@ -140,6 +154,74 @@ describe('production WAF wiring', () => {
   });
 });
 
+describe('staging WAF wiring', () => {
+  it('attaches the ACL by name and creates nothing it owns when a name is set', async () => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', 'bike4mind-api-protection-dev');
+    const waf = await loadWaf('dev');
+
+    expect(resources.lookup).toHaveBeenCalledWith(
+      { name: 'bike4mind-api-protection-dev', scope: 'CLOUDFRONT' },
+      expect.objectContaining({ provider: expect.objectContaining({ region: 'us-east-1' }) })
+    );
+    expect(waf.wafWebAcl).toBeDefined();
+    expect(waf.wafWebAclArn).toBeDefined();
+    expect(resources.resource.mock.calls.find(([n]) => n === 'WafWebAclArn')![1]).toMatchObject({
+      properties: { arn: expect.anything() },
+    });
+    expect(waf.wafStageWebAcl).toBeUndefined();
+    expect(waf.wafLoggingConfig).toBeUndefined();
+
+    const names = createdNames();
+    for (const owned of ['WafEmergencyIpBlockSet', 'WafLogGroup', 'WafWebAcl', 'WafLoggingConfiguration']) {
+      expect(names, owned).not.toContain(owned);
+    }
+  });
+
+  it('does not create or look up any production alarm resources', async () => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', 'bike4mind-api-protection-dev');
+    await loadWaf('dev');
+
+    expect(resources.topicLookup).not.toHaveBeenCalled();
+    const names = createdNames();
+    for (const prodOnly of [
+      'WafOobAlarmTopic',
+      'WafOobAlarmTopicEmailSub',
+      'WafAlarmSlackHandler',
+      'WafAlarmSlackHandlerSnsPermission',
+      'WafAlarmSlackHandlerDlq',
+      'WafAlarmSlackHandlerDlqPolicy',
+      'WafAlarmSlackHandlerSubscription',
+      'WafAlarmSlackHandlerDlqMessages',
+      'WafAlarmSlackHandlerDlqAge',
+      'wafOtcEdgeSignalFilter',
+      'wafOtcEdgeSignalRate',
+    ]) {
+      expect(names, prodOnly).not.toContain(prodOnly);
+    }
+  });
+
+  it.each(['', '   '])('keeps the stage-owned ACL when WAF_WEB_ACL_NAME is %j', async name => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', name);
+    const waf = await loadWaf('dev');
+
+    expect(createdNames()).toEqual(
+      expect.arrayContaining(['WafEmergencyIpBlockSet', 'WafLogGroup', 'WafWebAcl', 'WafLoggingConfiguration'])
+    );
+    expect(waf.wafStageWebAcl).toBeDefined();
+    expect(resources.lookup).not.toHaveBeenCalled();
+  });
+
+  it('retains the stage-owned ACL, IP set and log group on removal', async () => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', '');
+    await loadWaf('dev');
+
+    const options = (name: string) => resources.resource.mock.calls.find(([n]) => n === name)![2];
+    for (const retained of ['WafEmergencyIpBlockSet', 'WafLogGroup', 'WafWebAcl']) {
+      expect(options(retained), retained).toMatchObject({ retainOnDelete: true });
+    }
+  });
+});
+
 describe('non-production WAF wiring', () => {
   it('keeps creating a stage-owned ACL and does not look anything up', async () => {
     vi.stubEnv('WAF_WEB_ACL_NAME', '');
@@ -149,6 +231,16 @@ describe('non-production WAF wiring', () => {
       expect.arrayContaining(['WafEmergencyIpBlockSet', 'WafLogGroup', 'WafWebAcl', 'WafLoggingConfiguration'])
     );
     expect(createdNames()).not.toContain('WafAlarmSlackHandler');
+    expect(resources.lookup).not.toHaveBeenCalled();
+  });
+
+  it('ignores WAF_WEB_ACL_NAME on preview stages', async () => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', 'bike4mind-api-protection-dev');
+    await loadWaf('pr1234');
+
+    expect(createdNames()).toEqual(
+      expect.arrayContaining(['WafEmergencyIpBlockSet', 'WafLogGroup', 'WafWebAcl', 'WafLoggingConfiguration'])
+    );
     expect(resources.lookup).not.toHaveBeenCalled();
   });
 });
