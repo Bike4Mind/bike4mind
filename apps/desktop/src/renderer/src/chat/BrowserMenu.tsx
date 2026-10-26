@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useId, useMemo, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -328,11 +328,12 @@ export function BrowserMenu({
  * accessibility tree.
  */
 function LocalHistoryItem({ enabled, onChange }: { enabled: boolean; onChange: (enabled: boolean) => void }) {
+  const helpId = useId();
   return (
     <MenuItem
       role="menuitemcheckbox"
       aria-checked={enabled}
-      aria-describedby="chat-browser-history-help"
+      aria-describedby={helpId}
       onClick={event => {
         keepMenuOpen(event);
         onChange(!enabled);
@@ -342,7 +343,7 @@ function LocalHistoryItem({ enabled, onChange }: { enabled: boolean; onChange: (
     >
       <Stack sx={{ flex: 1, minWidth: 0 }}>
         <Typography level="body-sm">Local history</Typography>
-        <Typography id="chat-browser-history-help" level="body-xs" textColor="text.tertiary">
+        <Typography id={helpId} level="body-xs" textColor="text.tertiary">
           Keep this conversation&apos;s messages and the pages it visits in the local search index.
         </Typography>
       </Stack>
