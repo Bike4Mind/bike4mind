@@ -179,15 +179,11 @@ export function planLifecycleSignals({
       ) {
         providerUndated.set(record.modelId, [...(providerUndated.get(record.modelId) ?? []), contribution.name]);
       }
-      if (
-        typed &&
-        contribution.kind === 'aggregator' &&
-        (((lifecycle.status === undefined || !LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status)) &&
-          (lifecycle.deprecationDate !== undefined || lifecycle.retirementDate !== undefined)) ||
-          (lifecycle.status !== undefined &&
-            LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status) &&
-            !aggregatorSunsetCorroborated(record.modelId)))
-      ) {
+      const claimsSunsetStatus = lifecycle.status !== undefined && LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status);
+      const dateOnlyClaim =
+        !claimsSunsetStatus && (lifecycle.deprecationDate !== undefined || lifecycle.retirementDate !== undefined);
+      const uncorroboratedSunset = claimsSunsetStatus && !aggregatorSunsetCorroborated(record.modelId);
+      if (typed && contribution.kind === 'aggregator' && (dateOnlyClaim || uncorroboratedSunset)) {
         if (!aggregatorSunsets.has(record.modelId)) {
           aggregatorSunsets.set(record.modelId, {
             modelId: record.modelId,
