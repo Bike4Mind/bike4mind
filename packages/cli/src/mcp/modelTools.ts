@@ -1,4 +1,3 @@
-import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { HuggingFaceHub, type InstalledModel, type PullOptions } from '@bike4mind/local-models';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -35,12 +34,8 @@ type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 export interface ModelToolsDeps extends Omit<ModelSourceDeps, 'signal'> {
   defaultModel: () => Promise<string | undefined>;
-  now?: () => number;
-  newToken?: () => string;
 }
 
-/** How long a preview's confirmationToken stays valid (ms). */
-export const CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 /** How long the user has to answer an elicitation prompt (ms). */
 const ELICITATION_TIMEOUT_MS = 10 * 60 * 1000;
 const PROGRESS_INTERVAL_MS = 500;
@@ -53,14 +48,6 @@ const searchShape = {
   limit: z.number().int().min(1).max(50).default(SEARCH_LIMIT).describe('Maximum repos to return'),
 };
 
-const confirmationToken = z
-  .string()
-  .max(128)
-  .optional()
-  .describe(
-    'Only the token from an earlier preview of this same request, and only after the user approved that preview. Omit it to get a preview.'
-  );
-
 const pullShape = {
   ref: z
     .string()
@@ -68,93 +55,11 @@ const pullShape = {
     .min(1)
     .max(300)
     .describe('An Ollama name (model[:tag]) or a Hugging Face GGUF repo (owner/repo[:quant], Q4_K_M by default)'),
-  confirmationToken,
-  acceptLicense: z
-    .boolean()
-    .optional()
-    .describe(
-      'true only when the preview says acknowledgementRequired and the user has said they read and accept those licenses.'
-    ),
 };
 
 const removeShape = {
   name: z.string().trim().min(1).max(300).describe('The installed model name, as models_list shows it'),
-  confirmationToken,
 };
-
-interface Pending {
-  action: 'pull' | 'remove';
-  subject: string;
-  fingerprint: string;
-  expiresAt: number;
-}
-
-/**
- * Single-use approvals for clients without elicitation. A token names one action on one subject, and the
- * fingerprint of what the user was shown (size, revision, licenses), so a changed model needs a new approval.
- */
-class Confirmations {
-  private readonly pending = new Map<string, Pending>();
-
-  constructor(
-    private readonly now: () => number,
-    private readonly newToken: () => string
-  ) {}
-
-  issue(action: Pending['action'], subject: string, fingerprint: string): { token: string; expiresAt: string } {
-    const now = this.now();
-    for (const [token, entry] of this.pending) if (entry.expiresAt <= now) this.pending.delete(token);
-    const token = this.newToken();
-    const expiresAt = now + CONFIRMATION_TTL_MS;
-    this.pending.set(token, { action, subject, fingerprint, expiresAt });
-    return { token, expiresAt: new Date(expiresAt).toISOString() };
-  }
-
-  /** Why `token` does not approve exactly this, or null when it does. A mismatched fingerprint spends it. */
-  refusal(token: string, action: Pending['action'], subject: string, fingerprint: string): string | null {
-    const entry = this.pending.get(token);
-    const verb = action === 'pull' ? 'downloaded' : 'removed';
-    const tool = action === 'pull' ? 'models_pull' : 'models_remove';
-    if (!entry || entry.expiresAt <= this.now() || entry.action !== action) {
-      return `This confirmationToken is unknown, expired or already used, so nothing was ${verb}. Call ${tool} without a token for a new preview and ask the user again.`;
-    }
-    if (entry.subject !== subject) {
-      return `This confirmationToken was issued for ${clean(entry.subject)}, not ${clean(subject)}, so nothing was ${verb}.`;
-    }
-    if (entry.fingerprint !== fingerprint) {
-      this.pending.delete(token);
-      return `The model changed since the user approved it, so nothing was ${verb}. Call ${tool} without a token for a new preview and ask the user again.`;
-    }
-    return null;
-  }
-
-  spend(token: string): void {
-    this.pending.delete(token);
-  }
-}
-
-const sha256 = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-
-function pullFingerprint(plan: PullPlan): string {
-  const { baseUrl } = plan.target.runtime;
-  if (plan.kind === 'ollama') {
-    return sha256(['ollama', baseUrl, plan.name, plan.manifest.sizeBytes, plan.manifest.licenses]);
-  }
-  const { detail, build } = plan;
-  return sha256([
-    'hub',
-    baseUrl,
-    detail.id,
-    detail.revision,
-    build.ollamaRef,
-    build.sizeBytes,
-    build.files.map(file => [file.path, file.sizeBytes, file.sha256]),
-    plan.projectorBytes,
-    detail.licenses,
-    detail.licenseName,
-    detail.licenseLink,
-  ]);
-}
 
 /** What the user must see before approving a pull. */
 function pullSummary(plan: PullPlan) {
@@ -186,6 +91,7 @@ function pullSummary(plan: PullPlan) {
     licenses: detail.licenses.map(clean),
     license: { label: license.label, link: license.link, permissive: !license.restricted },
     acknowledgementRequired: license.restricted,
+    gated: detail.gated,
     runtime,
     ...(isNotRecommended(detail) && { caution: 'This is an abliterated or uncensored build.' }),
     ...(detail.ollamaNeedsSshKey && {
@@ -235,6 +141,23 @@ function pullElicitation(summary: PullSummary): ElicitRequestFormParams {
   };
 }
 
+const shellWord = (word: string) => (/^[\w.:/@-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
+
+/** The `b4m models` command that does the same on the same runtime, asking the user in their terminal. */
+function terminalCommand(target: RuntimeTarget, subcommand: 'pull' | 'rm', subject: string): string {
+  // A host from the server's environment is not in the user's shell; --ollama-host would save it to their config.
+  const host = target.source === 'env' ? `B4M_OLLAMA_HOST=${shellWord(target.runtime.baseUrl)} ` : '';
+  return `${host}b4m models ${subcommand} ${shellWord(subject)}`;
+}
+
+/** The ref `b4m models pull` resolves to the same build. */
+function pullRef(plan: PullPlan): string {
+  if (plan.kind === 'ollama') return plan.name;
+  const ref = plan.build.ollamaRef;
+  const tag = ref ? ref.slice(ref.lastIndexOf(':') + 1) : plan.build.quant;
+  return `${plan.detail.id}:${tag}`;
+}
+
 function pullProgress(extra: Extra): PullOptions['onProgress'] {
   const progressToken = extra._meta?.progressToken;
   if (progressToken === undefined) return undefined;
@@ -278,15 +201,11 @@ export function localModelToolsDeps(configStore: ConfigStore | undefined): Model
 
 /**
  * Register models_list, models_search, models_pull and models_remove: the `b4m models` operations on the
- * user's local runtime. Pull and remove act only on the user's approval, asked through MCP elicitation when the
- * client supports it, otherwise through a preview whose single-use token the caller passes back once the user
- * says yes. Stdio only: these change the machine the server runs on.
+ * user's local runtime. Pull and remove act only on an answer the user gives through MCP elicitation; no tool
+ * argument approves them, so a client without elicitation gets a preview and the terminal command instead.
+ * Stdio only: these change the machine the server runs on.
  */
 export function registerModelTools(server: McpServer, deps: ModelToolsDeps): void {
-  const confirmations = new Confirmations(
-    deps.now ?? Date.now,
-    deps.newToken ?? (() => randomBytes(18).toString('base64url'))
-  );
   const canElicit = () => Boolean(server.server.getClientCapabilities()?.elicitation?.form);
   const sources = (signal: AbortSignal): ModelSourceDeps => ({ ...deps, signal });
 
@@ -358,7 +277,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
     {
       title: 'Download a local model',
       description:
-        "Download a model to the user's local Ollama from an Ollama name (model[:tag]) or a Hugging Face GGUF repo (owner/repo[:quant], Q4_K_M by default). Nothing downloads without the user's approval. When the client supports elicitation the user is asked directly, with the size and every license. Otherwise the first call downloads nothing and returns a preview with a confirmationToken: show the user the model, size, every license and its link, ask them, and call again with the same ref and that token only if they say yes. When the preview has acknowledgementRequired, also pass acceptLicense: true, and only after the user has said they accept that license. Never approve on the user's behalf. Gated repos return the steps to get access instead. Refs to hosts other than Hugging Face and Ollama are refused.",
+        "Download a model to the user's local Ollama from an Ollama name (model[:tag]) or a Hugging Face GGUF repo (owner/repo[:quant], Q4_K_M by default). Nothing downloads without the user's own approval. When the client supports elicitation, the user is asked directly with the size, file, revision and every license, and a license that is not all permissive needs its own tick. Without elicitation nothing downloads: the result is that preview plus a `b4m models pull` command for the user to run in a terminal, where the CLI asks them. No argument of this tool approves a download. Gated repos return the steps to get access instead. Refs to hosts other than Hugging Face and Ollama are refused.",
       inputSchema: pullShape,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -366,50 +285,34 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
       run(async () => {
         const plan = await planPull(args.ref, sources(extra.signal), 'models_pull ref');
         const summary = pullSummary(plan);
-        const fingerprint = pullFingerprint(plan);
 
-        if (canElicit()) {
-          const answer = await ask(pullElicitation(summary), extra);
-          if (answer.action !== 'accept' || answer.content?.download !== true) {
-            return toResult({
-              status: 'declined',
-              downloaded: false,
-              ...summary,
-              message: 'The user declined. Nothing was downloaded.',
-            });
-          }
-          if (summary.acknowledgementRequired && answer.content?.acceptLicense !== true) {
-            return toResult({
-              status: 'license-not-accepted',
-              downloaded: false,
-              ...summary,
-              message: 'The user did not accept the license. Nothing was downloaded.',
-            });
-          }
-        } else if (!args.confirmationToken) {
-          const { token, expiresAt } = confirmations.issue('pull', args.ref, fingerprint);
+        if (!canElicit()) {
           return toResult({
-            status: 'needs-user-approval',
+            status: 'confirm-in-terminal',
             downloaded: false,
             ...summary,
-            confirmationToken: token,
-            expiresAt,
+            command: terminalCommand(plan.target, 'pull', pullRef(plan)),
             userApproval:
-              `Nothing was downloaded. The user must approve this download: show them the model, size and licenses and ask. ` +
-              `Call models_pull again with this ref and confirmationToken only if they say yes; the token works once, until ${expiresAt}.` +
-              (summary.acknowledgementRequired
-                ? ' This license is not all permissive or not declared, so the user must also say they read and accept it before you pass acceptLicense: true.'
-                : ''),
+              'Nothing was downloaded. This MCP client cannot ask the user, so the download has to be approved in a terminal: show the user the size and licenses above and give them the command. The CLI shows them again and asks before downloading' +
+              (summary.acknowledgementRequired ? ', and asks them separately to accept the license.' : '.'),
           });
-        } else {
-          const refusal = confirmations.refusal(args.confirmationToken, 'pull', args.ref, fingerprint);
-          if (refusal) return errorResult(refusal);
-          if (summary.acknowledgementRequired && args.acceptLicense !== true) {
-            return errorResult(
-              `Nothing was downloaded: ${summary.license.label} needs the user's own acceptance. Ask them to read ${summary.license.link}, then pass acceptLicense: true with the same token only if they accept it.`
-            );
-          }
-          confirmations.spend(args.confirmationToken);
+        }
+        const answer = await ask(pullElicitation(summary), extra);
+        if (answer.action !== 'accept' || answer.content?.download !== true) {
+          return toResult({
+            status: 'declined',
+            downloaded: false,
+            ...summary,
+            message: 'The user declined. Nothing was downloaded.',
+          });
+        }
+        if (summary.acknowledgementRequired && answer.content?.acceptLicense !== true) {
+          return toResult({
+            status: 'license-not-accepted',
+            downloaded: false,
+            ...summary,
+            message: 'The user did not accept the license. Nothing was downloaded.',
+          });
         }
 
         const ref =
@@ -443,7 +346,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
     {
       title: 'Remove a local model',
       description:
-        "Delete an installed model from the user's local runtime. Nothing is removed without the user's approval: when the client supports elicitation the user is asked directly; otherwise the first call removes nothing and returns a confirmationToken to pass back with the same name only after the user says yes. Never approve on the user's behalf.",
+        "Delete an installed model from the user's local runtime. Nothing is removed without the user's own approval: when the client supports elicitation the user is asked directly. Without elicitation nothing is removed: the result names the model and gives a `b4m models rm` command for the user to run in a terminal, where the CLI asks them. No argument of this tool approves a removal.",
       inputSchema: removeShape,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
@@ -460,43 +363,36 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
           size: formatBytes(model.sizeBytes),
           runtime: runtimeLabel(target),
         };
-        const fingerprint = sha256([target.runtime.baseUrl, model.name, model.sizeBytes, model.modifiedAt]);
 
-        if (canElicit()) {
-          const answer = await ask(
-            {
-              mode: 'form',
-              message: `Remove ${summary.model} (${summary.size}) from ${summary.runtime}? Its files are deleted.`,
-              requestedSchema: {
-                type: 'object',
-                properties: { remove: { type: 'boolean', title: `Remove ${summary.model}`, default: false } },
-                required: ['remove'],
-              },
-            },
-            extra
-          );
-          if (answer.action !== 'accept' || answer.content?.remove !== true) {
-            return toResult({
-              status: 'declined',
-              removed: false,
-              ...summary,
-              message: 'The user declined. Nothing was removed.',
-            });
-          }
-        } else if (!args.confirmationToken) {
-          const { token, expiresAt } = confirmations.issue('remove', args.name, fingerprint);
+        if (!canElicit()) {
           return toResult({
-            status: 'needs-user-approval',
+            status: 'confirm-in-terminal',
             removed: false,
             ...summary,
-            confirmationToken: token,
-            expiresAt,
-            userApproval: `Nothing was removed. The user must approve deleting ${summary.model}: ask them, and call models_remove again with this name and confirmationToken only if they say yes; the token works once, until ${expiresAt}.`,
+            command: terminalCommand(target, 'rm', model.name),
+            userApproval:
+              'Nothing was removed. This MCP client cannot ask the user, so the removal has to be approved in a terminal: give the user the command, and the CLI asks them before removing.',
           });
-        } else {
-          const refusal = confirmations.refusal(args.confirmationToken, 'remove', args.name, fingerprint);
-          if (refusal) return errorResult(refusal);
-          confirmations.spend(args.confirmationToken);
+        }
+        const answer = await ask(
+          {
+            mode: 'form',
+            message: `Remove ${summary.model} (${summary.size}) from ${summary.runtime}? Its files are deleted.`,
+            requestedSchema: {
+              type: 'object',
+              properties: { remove: { type: 'boolean', title: `Remove ${summary.model}`, default: false } },
+              required: ['remove'],
+            },
+          },
+          extra
+        );
+        if (answer.action !== 'accept' || answer.content?.remove !== true) {
+          return toResult({
+            status: 'declined',
+            removed: false,
+            ...summary,
+            message: 'The user declined. Nothing was removed.',
+          });
         }
 
         await removeInstalled(target, model.name, extra.signal);
