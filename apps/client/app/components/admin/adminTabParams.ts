@@ -1,3 +1,4 @@
+import { INTEGRATION_DEMAND_TAB_PARAMS } from './integrationDemandSearch';
 import {
   ADMIN_AUDIT_LOG_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
@@ -50,6 +51,7 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_SETTINGS_TAB_SLUG]: [ADMIN_SETTINGS_SECTION_PARAM, ADMIN_SETTINGS_SEARCH_PARAM],
   [ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG]: WEBHOOK_AUDIT_LOGS_TAB_PARAMS,
   [ADMIN_MODEL_LOGS_TAB_SLUG]: MODEL_LOGS_TAB_PARAMS,
+  'integration-demand': INTEGRATION_DEMAND_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];
