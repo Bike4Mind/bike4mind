@@ -217,15 +217,26 @@ ${brand ? `The ${brand} Team` : 'The Team'}`;
       </html>
     `;
 
-    await EmailEvents.Send.publish({
-      to: email,
-      subject: `Welcome${brand ? ` to ${brand}` : ''}! Your invite code is ready`,
-      body: finalEmailBody,
-    });
+    // The invite is already committed and the subscriber marked, so a failed send must still hand
+    // the admin the code; otherwise the subscriber is stuck at "Invite Sent" with no way to retry.
+    let emailSent = true;
+    try {
+      await EmailEvents.Send.publish({
+        to: email,
+        subject: `Welcome${brand ? ` to ${brand}` : ''}! Your invite code is ready`,
+        body: finalEmailBody,
+      });
+    } catch (error) {
+      emailSent = false;
+      req.logger.error(`Failed to send registration invite email to ${email}`, error);
+    }
 
     return res.status(201).json({
       success: true,
-      message: `Invite code generated and sent to ${email}`,
+      emailSent,
+      message: emailSent
+        ? `Invite code generated and sent to ${email}`
+        : `Invite code ${inviteCode} generated, but the email to ${email} failed to send. Share the code manually.`,
       inviteCode,
       registrationInvite: {
         id: registrationInvite.id,

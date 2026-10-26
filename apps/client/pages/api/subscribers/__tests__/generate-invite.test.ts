@@ -36,7 +36,7 @@ const body = { subscriberId: 'sub-1', email: 'jane@example.test', firstName: 'Ja
 
 const run = async () => {
   const { req, res } = createMocks({ method: 'POST' });
-  Object.assign(req, { body, user: { id: 'admin-1', isAdmin: true } });
+  Object.assign(req, { body, user: { id: 'admin-1', isAdmin: true }, logger: { error: vi.fn() } });
   await h.handler!(req, res);
   return { req, res };
 };
@@ -78,12 +78,11 @@ describe('POST /api/subscribers/generate-invite - admin audit', () => {
     expect(h.publish).not.toHaveBeenCalled();
   });
 
-  it('keeps the committed invite when the invite email fails to publish', async () => {
+  it('keeps the committed invite and returns the code when the invite email fails to publish', async () => {
     h.publish.mockRejectedValueOnce(new Error('bus down'));
-    const { req, res } = createMocks({ method: 'POST' });
-    Object.assign(req, { body, user: { id: 'admin-1', isAdmin: true } });
-    await expect(h.handler!(req, res)).rejects.toThrow(/bus down/);
+    const { res } = await run();
     expect(h.audit).toHaveBeenCalledTimes(1);
-    expect(res._isEndCalled()).toBe(false);
+    expect(res._getStatusCode()).toBe(201);
+    expect(res._getJSONData()).toEqual(expect.objectContaining({ emailSent: false, inviteCode: 'CODE-123' }));
   });
 });

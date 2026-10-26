@@ -116,7 +116,7 @@ Welcome aboard!
 
 The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
 
-      await generateInvite.mutateAsync({
+      const result = await generateInvite.mutateAsync({
         subscriberId: subscriber.id,
         email: subscriber.email,
         firstName: subscriber.firstName,
@@ -125,6 +125,12 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
         startingStorage,
         emailBody: emailBody || defaultEmailBody,
       });
+
+      // Leave the modal open so the admin can copy the code from the message.
+      if (result?.emailSent === false) {
+        setError(result.message);
+        return;
+      }
 
       setSuccess(`Invite code generated and sent to ${subscriber.email}!`);
 
