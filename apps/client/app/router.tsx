@@ -37,7 +37,12 @@ import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
 import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
-import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
+import {
+  isIntegrationsPageSource,
+  SUBSCRIBER_SOURCES,
+  type IntegrationsPageSource,
+  type SubscriberSource,
+} from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
 // /new and /notebooks/$id render through one shell (see notebookShellRoute).
@@ -1002,6 +1007,9 @@ const subscribeRoute = createRoute({
       <SubscribePage />
     </Suspense>
   ),
+  validateSearch: (search: Record<string, unknown>): { source?: SubscriberSource } => ({
+    source: SUBSCRIBER_SOURCES.find(source => source === search.source),
+  }),
 });
 
 // Artifacts demo route (replaces /artifacts-demo.tsx)
@@ -1387,5 +1395,9 @@ export const router = createRouter({
 declare module '@tanstack/react-router' {
   interface Register {
     router: typeof router;
+  }
+  interface HistoryState {
+    // Prefill for /subscribe; see useJoinWaitlist.
+    waitlistEmail?: string;
   }
 }
