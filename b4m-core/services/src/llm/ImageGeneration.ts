@@ -14,6 +14,7 @@ import {
   IUserRepository,
   PromptMeta,
   IFabFileDocument,
+  type GeneratedAssetLineageEntry,
   IFabFileRepository,
   IAdminSettingsRepository,
   ModelInfo,
@@ -219,6 +220,22 @@ async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin =
 // filePath + mimeType). Downstream dispatch only reads filePath and mimeType; everything
 // else is optional and used only for logging. `filePath` matches IFabFileDocument's shape.
 type SelectedImage = { filePath?: string; mimeType: string; id?: string; fileName?: string };
+
+/** FabFile inputs of a generation. A message-history input is a generated-bucket key with no FabFile id, so no lineage. */
+function lineageOf(
+  imageSource: 'workbench' | 'message_history' | 'notebook_attachment',
+  fileImage: SelectedImage | undefined,
+  referenceImages: SelectedImage[]
+): GeneratedAssetLineageEntry[] {
+  const entries: GeneratedAssetLineageEntry[] = [];
+  if (fileImage?.id && imageSource !== 'message_history') {
+    entries.push({ fileId: fileImage.id, role: 'edit_source' });
+  }
+  for (const reference of referenceImages) {
+    if (reference.id) entries.push({ fileId: reference.id, role: 'reference' });
+  }
+  return entries;
+}
 
 export class ImageGenerationService {
   private db: IImageGenerationServiceOptions['db'];
@@ -1674,6 +1691,25 @@ export class ImageGenerationService {
           .catch(err => logger.warn('Failed to record usage event', err));
       }
 
+      // The validated generation parameters, so a later take can reload them. No URLs or file ids: inputs are lineage.
+      const request = {
+        model,
+        prompt,
+        n,
+        ...(size && { size }),
+        ...(quality && { quality }),
+        ...(style && { style }),
+        ...(width !== undefined && { width }),
+        ...(height !== undefined && { height }),
+        ...(aspect_ratio && { aspect_ratio }),
+        ...(seed != null && { seed }),
+        ...(safety_tolerance !== undefined && { safety_tolerance }),
+        prompt_upsampling,
+        ...(output_format && { output_format }),
+        ...(background && { background }),
+      };
+      const derivedFrom = lineageOf(imageSource, fileImage, referenceImages);
+
       // Last, so a run that fails anywhere above (a later image blocked by moderation, billing) leaves no file.
       await Promise.all(
         storedImages.map(({ buffer, contentType }, index) =>
@@ -1689,7 +1725,9 @@ export class ImageGenerationService {
                 modelId: model,
                 ...(generationId && { jobId: `${generationId}-${index}` }),
                 prompt,
+                request,
               },
+              ...(derivedFrom.length > 0 && { derivedFrom }),
               sessionId,
               questId,
             },

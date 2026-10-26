@@ -1,5 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { gearOverrideRepository, GearOverride } from '@bike4mind/database';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
@@ -75,11 +76,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     if (!GEAR_DEFAULTS.some(d => d.key === key)) {
       return res.status(404).json({ error: `Unknown gear: ${key}` });
     }
+    const previous = await GearOverride.findOne({ key }).lean();
     const updated = await GearOverride.findOneAndUpdate(
       { key },
       { $set: { ...fields, updatedBy: String(req.user.id) } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     ).lean();
+    const previousFields: Record<string, unknown> = previous ?? {};
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.gear_override.updated',
+      target: { kind: 'settings', id: key, displayName: `${key} gear override` },
+      summary: `updated gear override ${key}`,
+      changes: Object.entries(fields)
+        .filter(([field, after]) => JSON.stringify(previousFields[field] ?? null) !== JSON.stringify(after))
+        .map(([field, after]) => ({ field: `${key}.${field}`, before: previousFields[field] ?? null, after })),
+    });
     return res.status(200).json({ override: updated });
   });
 

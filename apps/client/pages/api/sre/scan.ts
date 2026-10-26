@@ -13,6 +13,7 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -230,6 +231,13 @@ const handler = baseApi()
           scanned: issues.length,
           dispatched,
           durationMs,
+        });
+
+        await recordAdminActionFromRequest(req, {
+          action: 'ops.sre.scan_triggered',
+          target: { kind: 'system', id: 'sre-scan', displayName: 'SRE issue scan' },
+          summary: `scanned ${repoSlug} for SRE issues, dispatched ${dispatched}`,
+          details: { repoSlug, scanned: issues.length, dispatched, capReached },
         });
 
         res.status(200).json({

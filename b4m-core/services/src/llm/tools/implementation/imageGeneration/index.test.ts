@@ -93,7 +93,12 @@ function createFakeContext(): ToolContext {
 }
 
 describe('image_generation processAndStoreImages moderation gate (agent-tool serve-gate bypass)', () => {
-  const RENDER = { model: 'gpt-image-2', provider: 'openai', prompt: 'a lighthouse at dusk' };
+  const RENDER = {
+    model: 'gpt-image-2',
+    provider: 'openai',
+    prompt: 'a lighthouse at dusk',
+    request: { model: 'gpt-image-2', prompt: 'a lighthouse at dusk', n: 2, quality: 'high' },
+  };
 
   beforeEach(() => {
     mockCheckImage.mockReset();
@@ -141,6 +146,7 @@ describe('image_generation processAndStoreImages moderation gate (agent-tool ser
         modelId: 'gpt-image-2',
         prompt: RENDER.prompt,
         jobId: expect.any(String),
+        request: RENDER.request,
       },
     });
   });

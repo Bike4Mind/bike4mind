@@ -185,8 +185,8 @@ export class AdminPage extends BasePage {
   async clickUserAdminButton(name: string) {
     const row = this.getUserRow(name);
     await row.getByTestId('admin-user-admin-btn').click();
-    // Wait for FullUserViewModal to open
-    await expect(this.page.getByTestId('full-user-view-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    // Navigates to the /admin/users/$userId profile page
+    await expect(this.page.getByTestId('user-profile-header')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
   async clickUserProfileButton(name: string) {
@@ -249,6 +249,8 @@ export class AdminPage extends BasePage {
   // --- Delete User (SpicyUserActions) ---
 
   async typeDeleteConfirmation() {
+    // Delete lives on the profile page's Admin (danger zone) tab.
+    await this.page.getByTestId('user-profile-tab-admin').click();
     await this.page.getByTestId('delete-user-confirm-input').getByRole('textbox').fill('DELETE');
   }
 

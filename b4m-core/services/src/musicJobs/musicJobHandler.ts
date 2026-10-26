@@ -121,6 +121,7 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
           prompt: payload.request.prompt,
           ...(lyrics !== undefined && { lyrics }),
           durationSeconds,
+          request: payload.request,
         },
         ...(payload.sessionId !== undefined && { sessionId: payload.sessionId }),
         ...(job.questId !== undefined && { questId: job.questId }),
