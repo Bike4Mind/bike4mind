@@ -159,6 +159,21 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     expect(mocks.navigate).toHaveBeenCalledWith({ to: '/register', search: undefined });
   });
 
+  it('lets keyboard users open invite-only registration', async () => {
+    const user = userEvent.setup();
+    renderLogin({ enableRegister: false });
+    const signup = screen.getByTestId('signup-text');
+    expect(signup.tagName).toBe('BUTTON');
+    expect(signup).toHaveAttribute('type', 'button');
+    for (let tabCount = 0; tabCount < 10 && document.activeElement !== signup; tabCount += 1) {
+      await user.tab();
+    }
+    expect(signup).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/register', search: undefined });
+    expect(mocks.sendOTC).not.toHaveBeenCalled();
+  });
+
   it('hydrates currentUser with a FLAT user (not the nested {user} wrapper) after inline registration', async () => {
     const user = userEvent.setup();
     // 1st verify (code) -> email has no account yet; 2nd verify (with username) -> registration.

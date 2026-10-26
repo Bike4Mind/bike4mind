@@ -61,6 +61,11 @@ vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
   grantIndividualAdminSubscription: vi.fn(),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
+const mockWithTransaction = vi.fn(async (callback: () => Promise<unknown>) => callback());
+vi.mock('@bike4mind/db-core', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/db-core')>()),
+  withTransaction: (callback: () => Promise<unknown>) => mockWithTransaction(callback),
+}));
 
 // The one-time code is already proven by the time we reach registration; stub the
 // verify layer so the happy path lands on the new-user branch.
@@ -1007,10 +1012,30 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
     req.body.inviteCode = ' INVITE123 ';
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
+    expect(mockWithTransaction).toHaveBeenCalledTimes(1);
     expect(mockRegisterViaOTC).toHaveBeenCalledWith(
       expect.objectContaining({ inviteCode: 'INVITE123', email: NON_DOMAIN_EMAIL }),
       expect.objectContaining({ skipInviteCheck: false })
     );
+  });
+
+  it.each([undefined, '', '   '])('registers without an invite outside a transaction (%j)', async inviteCode => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.inviteCode = inviteCode;
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockWithTransaction).not.toHaveBeenCalled();
+    expect(mockRegisterViaOTC).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps existing-account sign-in outside the invite transaction', async () => {
+    mockFindByEmail.mockResolvedValue({ id: 'existing-user', emailVerified: true, tokenVersion: 0 });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.inviteCode = 'INVITE123';
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockWithTransaction).not.toHaveBeenCalled();
+    expect(mockRegisterViaOTC).not.toHaveBeenCalled();
   });
 
   it.each([123, {}, ['INVITE123'], null])(

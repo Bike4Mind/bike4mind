@@ -788,6 +788,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   <Typography sx={{ color: 'text.tertiary', fontSize: '14px' }}>
                     {t('auth.noAccount')}{' '}
                     <Link
+                      component="button"
+                      type="button"
                       className="register-link"
                       data-testid="signup-text"
                       color="primary"
