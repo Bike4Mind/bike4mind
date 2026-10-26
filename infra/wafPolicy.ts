@@ -117,6 +117,19 @@ export function buildDevWafRuleJson(args: { emergencyIpSetArn: string; stage: st
   return JSON.stringify(rules);
 }
 
+/** Metrics for enforcing rate rules in the deployment's policy, including custom metric names. */
+export function getWafRateLimitAlarmRules(stage: string): { name: string; metricName: string }[] {
+  return readExportJson(stage)
+    .Rules.filter(
+      rule =>
+        'RateBasedStatement' in rule.Statement &&
+        rule.Action !== undefined &&
+        'Block' in rule.Action &&
+        rule.VisibilityConfig.CloudWatchMetricsEnabled
+    )
+    .map(rule => ({ name: rule.Name, metricName: rule.VisibilityConfig.MetricName }));
+}
+
 const BLOCKED_IP_PLACEHOLDER = '192.0.2.0/32';
 
 /**
