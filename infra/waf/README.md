@@ -24,6 +24,24 @@ everything else is enforced. Do not copy a deployment-owned policy into this
 directory and run the suite without `WAF_POLICY_DIR`: the sample-limit pins will
 fail by design.
 
+## Count-mode rate rules
+
+Three rate rules ship in Count with round example limits (a deployment sets its own), ahead of every enforcing rate rule (priorities 4 to 6 in both stages):
+
+| Rule                      | Scope                        | Key | Limit | Window |
+| ------------------------- | ---------------------------- | --- | ----: | -----: |
+| `otc-send-rate-limit`     | `/api/otc/send` prefix       | IP  |    20 |  600 s |
+| `credits-read-rate-limit` | GET `/api/v1/credits` prefix | IP  |    50 |  300 s |
+| `otc-send-asn-rate-limit` | `/api/otc/send` prefix       | ASN |   100 |  600 s |
+
+To enforce one, change its `Action` from `{ "Count": {} }` to the 429 `Block` used by the other rate rules. The block alarm is created from the policy, so no other change is needed. WAF accepts a minimum limit of 10 per window and the windows 60, 120, 300 and 600 seconds.
+
+Each rule skips addresses in the rate-exempt IP set (`rate-exempt-ip-prod` in production). Its addresses come from the `WAF_RATE_EXEMPT_IPS` deploy variable (comma-separated IPv4 or CIDR, empty keeps a TEST-NET placeholder). The set only stops these rules from counting an address; the address still passes through every other rule.
+
+These Count rules run before all enforcing rate rules, including the blanket API limit, so rate-blocked senders still contribute to the ASN counter. Earlier terminating rules, such as the emergency IP block, still stop evaluation. Count metrics report requests above the configured threshold, not total per-ASN volume.
+
+An ASN-keyed rule shares one counter across every client on a network, so size its limit above legitimate peak traffic and read the Count metric before enforcing.
+
 ## Bot Control telemetry
 
 Both stage policies run `AWSManagedRulesBotControlRuleSet` at the `COMMON`
