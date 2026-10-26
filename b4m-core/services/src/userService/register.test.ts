@@ -3,6 +3,7 @@ import { registerUser, registerViaOTC, RegisterUserParameters } from './register
 import { BadRequestError } from '@bike4mind/utils';
 import {
   CURRENT_POLICY_VERSION,
+  RegInviteSource,
   RegInviteStatusType,
   PENDING_FREE_CREDITS_TAG,
   RESERVED_USERNAME_MESSAGE,
@@ -270,9 +271,23 @@ describe('registerUser', () => {
     const createdUser = () => mockAdapters.db.users.create.mock.calls[0][0];
 
     it('saves the sender of a referral invite on the new user', async () => {
-      mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({ ...mockInvite, email: baseParams.email });
+      mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
+        ...mockInvite,
+        email: baseParams.email,
+        source: RegInviteSource.referral,
+      });
       await registerUser(baseParams, mockAdapters);
       expect(createdUser().referredByUserId).toBe('inviterId');
+    });
+
+    it('leaves the inviter unset for an email-bound, non-unlimited invite an admin issued (no referral source)', async () => {
+      mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
+        ...mockInvite,
+        email: baseParams.email,
+        unlimitedUse: false,
+      });
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().referredByUserId).toBeNull();
     });
 
     it('leaves the inviter unset for an admin bulk code (no email)', async () => {
@@ -284,6 +299,7 @@ describe('registerUser', () => {
       mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
         ...mockInvite,
         email: baseParams.email,
+        source: RegInviteSource.referral,
         unlimitedUse: true,
       });
       await registerUser(baseParams, mockAdapters);
