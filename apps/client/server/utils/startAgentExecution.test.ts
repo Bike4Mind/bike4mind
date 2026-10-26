@@ -266,6 +266,22 @@ describe('startAgentExecution', () => {
     expect(mockCreateExecution).not.toHaveBeenCalled();
   });
 
+  it('stores confidenceOverrides from an admin key holding the admin scope', async () => {
+    mockUserFindById.mockImplementation(async (id: string) => ({ id, isAdmin: true }));
+    const result = await startAgentExecution(
+      input({
+        userId: 'overrides-admin-admin-key',
+        confidenceOverrides: [0.1],
+        apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.ADMIN, ApiKeyScope.AI_CHAT] },
+      }),
+      logger
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ confidenceOverrides: [0.1] }));
+    expect(mockCreateExecution.mock.calls[0][0]).not.toHaveProperty('adminRoleWithheld');
+  });
+
   it('skips the admin lookup for a run without confidenceOverrides', async () => {
     await startAgentExecution(input({ userId: 'no-overrides' }), logger);
 
@@ -574,6 +590,7 @@ describe('startAgentExecution', () => {
     expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('scopeDeniedTools');
     expect(mockCreateExecution.mock.calls[2][0]).not.toHaveProperty('scopeDeniedTools');
     expect(mockCreateExecution.mock.calls[0][0].adminRoleWithheld).toBe(true);
+    expect(mockCreateExecution.mock.calls[1][0].adminRoleWithheld).toBe(true);
     expect(mockCreateExecution.mock.calls[2][0]).not.toHaveProperty('adminRoleWithheld');
   });
 
