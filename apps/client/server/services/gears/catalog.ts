@@ -1,4 +1,10 @@
-import { GEAR_KEYS, type GearKey, type GearKind } from '@client/lib/gears/keys';
+import {
+  GEAR_KEYS,
+  GEAR_TRUST_MIN_AGE_DAYS,
+  type GearKey,
+  type GearKind,
+  type GearPendingReason,
+} from '@client/lib/gears/keys';
 import {
   Project,
   FabFile,
@@ -38,7 +44,7 @@ import {
  */
 
 export { GEAR_KEYS };
-export type { GearKey, GearKind };
+export type { GearKey, GearKind, GearPendingReason };
 
 /**
  * One-time rewards per gear: destinations 1,000; skills 100-1,000 by
@@ -56,11 +62,6 @@ export const GEAR_CREDITS_SCALE = (() => {
 })();
 
 export const gearTxId = (userId: string, key: GearKey) => `gear-unlock:${userId}:${key}`;
-
-// Accounts younger than this many days or without a verified email cannot
-// receive gear payouts (anti-farm: prevents rewards for actions that are
-// trivially automated on fresh unverified accounts).
-const GEAR_TRUST_MIN_AGE_DAYS = 7;
 
 /** Facts gathered once per request and shared by every gear check - keeps the
  *  endpoint at a handful of indexed queries no matter how many gears exist. */
@@ -350,8 +351,6 @@ export const GEAR_DEFAULTS: Array<{ key: GearKey; kind: GearKind; credits: numbe
   kind: g.kind,
   credits: g.credits,
 }));
-
-export type GearPendingReason = 'unverified' | 'too_new' | 'reward_check';
 
 export interface GearEvaluation {
   def: GearDef;

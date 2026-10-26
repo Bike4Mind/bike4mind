@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import type { GearKey, GearKind } from '@client/lib/gears/keys';
+import type { GearKey, GearKind, GearPendingReason } from '@client/lib/gears/keys';
 
 /**
  * Gears - each gear's unlock and reward state (see pages/api/gears/status.ts and server/services/gears/catalog.ts).
@@ -21,7 +21,7 @@ export interface GearStatus {
   claimed?: boolean;
   rewardPending?: boolean;
   /** Why rewardPending is true - drives UI copy. */
-  pendingReason?: 'unverified' | 'too_new' | 'reward_check';
+  pendingReason?: GearPendingReason;
   /** Presentation is server truth (code defaults + Manage Gears admin overrides). */
   title: string;
   tagline: string;
