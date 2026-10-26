@@ -162,13 +162,63 @@ describe('BulkAbuseResponseModal', () => {
     );
   });
 
+  it('locks revoke API keys on while Ban is checked and sends it as on', () => {
+    resolvePreviewWith(preview());
+    renderModal([USER_ID]);
+    const keys = screen.getByTestId('bulk-abuse-action-revokeApiKeys-checkbox');
+
+    expect(keys).toBeChecked();
+    expect(keys).toBeDisabled();
+    fireEvent.click(screen.getByTestId('bulk-abuse-action-ban-checkbox'));
+    expect(keys).toBeEnabled();
+    fireEvent.click(keys);
+    fireEvent.click(screen.getByTestId('bulk-abuse-action-ban-checkbox'));
+    expect(keys).toBeChecked();
+    expect(keys).toBeDisabled();
+    fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
+
+    expect(previewMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ actions: expect.objectContaining({ ban: true, revokeApiKeys: true }) }),
+      expect.anything()
+    );
+  });
+
+  it('walks a hasMore result to the next batch and passes the cursor to its preview and execute', () => {
+    resolvePreviewWith(preview({ hasMore: true, nextAfterUserId: USER_ID }));
+    resolveExecuteWith(executeResult({ hasMore: true, nextAfterUserId: NEXT_ID }));
+    renderModal();
+
+    previewDomain('kashre.com');
+    applyWithReason();
+    expect(screen.getByTestId('bulk-abuse-has-more')).toBeInTheDocument();
+
+    resolvePreviewWith(preview({ previewToken: 'token-2' }));
+    resolveExecuteWith(executeResult());
+    fireEvent.click(screen.getByTestId('bulk-abuse-next-batch-btn'));
+
+    expect(previewMutate).toHaveBeenLastCalledWith(
+      { target: { kind: 'domain', domain: 'kashre.com', afterUserId: NEXT_ID }, actions: ALL_ACTIONS },
+      expect.anything()
+    );
+    applyWithReason();
+    expect(executeMutate).toHaveBeenLastCalledWith(
+      {
+        target: { kind: 'domain', domain: 'kashre.com', afterUserId: NEXT_ID },
+        actions: ALL_ACTIONS,
+        previewToken: 'token-2',
+        reason: REASON,
+      },
+      expect.anything()
+    );
+  });
+
   it('discards the preview when the actions change', () => {
     resolvePreviewWith(preview());
     renderModal([USER_ID]);
 
     fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
     expect(screen.getByTestId('bulk-abuse-preview-summary')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('bulk-abuse-action-revokeApiKeys-checkbox'));
+    fireEvent.click(screen.getByTestId('bulk-abuse-action-revokeSessions-checkbox'));
 
     expect(screen.queryByTestId('bulk-abuse-preview-summary')).not.toBeInTheDocument();
     expect(screen.getByTestId('bulk-abuse-execute-btn')).toBeDisabled();

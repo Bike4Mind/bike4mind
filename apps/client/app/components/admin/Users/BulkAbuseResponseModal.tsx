@@ -86,7 +86,9 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
 
   const normalizedDomain = normalizeEmailDomain(domain);
   const tooManySelected = selectedUserIds.length > MAX_BULK_ABUSE_BATCH;
-  const hasAction = Object.values(actions).some(Boolean);
+  // The server revokes API keys for any ban, so the checkbox shows it as on and locked.
+  const effectiveActions: BulkAbuseActions = { ...actions, revokeApiKeys: actions.revokeApiKeys || actions.ban };
+  const hasAction = Object.values(effectiveActions).some(Boolean);
   const targetValid =
     targetKind === 'domain' ? normalizedDomain !== null : selectedUserIds.length > 0 && !tooManySelected;
   const busy = previewMutation.isPending || executeMutation.isPending;
@@ -111,7 +113,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
       targetKind === 'domain'
         ? { kind: 'domain', domain: normalizedDomain ?? domain, ...(afterUserId ? { afterUserId } : {}) }
         : { kind: 'users', userIds: selectedUserIds };
-    runPreview({ target, actions });
+    runPreview({ target, actions: effectiveActions });
   };
 
   const handleExecute = () => {
@@ -221,7 +223,8 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
                   <Checkbox
                     key={action}
                     label={ACTION_LABELS[action]}
-                    checked={actions[action]}
+                    checked={effectiveActions[action]}
+                    disabled={action === 'revokeApiKeys' && actions.ban}
                     onChange={event => {
                       setActions(current => ({ ...current, [action]: event.target.checked }));
                       resetPreview();
