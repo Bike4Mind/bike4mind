@@ -321,6 +321,7 @@ const CliConfigSchema = z.object({
   additionalDirectories: z.array(z.string()).prefault([]),
   fallbackModels: z.array(z.string()).optional(),
   ollamaHost: z.string().optional(),
+  localDefaultModel: z.string().optional(),
 });
 
 /**
@@ -1322,8 +1323,8 @@ export class ConfigStore {
   }
 
   /**
-   * `b4m models` writes defaultModel and ollamaHost from its own process, so like features they are taken
-   * from disk unless this caller's patch changed them vs its snapshot.
+   * `b4m models` writes defaultModel, ollamaHost and localDefaultModel from its own process, so like features
+   * they are taken from disk unless this caller's patch sets them.
    */
   private async mergeModelFields(
     next: CliConfig,
@@ -1336,16 +1337,22 @@ export class ConfigStore {
     } catch {
       return next;
     }
-    const changed = (key: 'defaultModel' | 'ollamaHost') =>
-      patch !== undefined && Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== snapshot[key];
+    // A patch naming a key sets it; a whole config spread back (it carries `version`) only sets what it changed.
+    const wholeConfig = patch !== undefined && Object.prototype.hasOwnProperty.call(patch, 'version');
+    const changed = (key: 'defaultModel' | 'ollamaHost' | 'localDefaultModel') =>
+      patch !== undefined &&
+      Object.prototype.hasOwnProperty.call(patch, key) &&
+      (!wholeConfig || patch[key] !== snapshot[key]);
+    const optional = (key: 'ollamaHost' | 'localDefaultModel') =>
+      changed(key) || (disk[key] !== undefined && typeof disk[key] !== 'string')
+        ? next[key]
+        : (disk[key] as string | undefined);
     return {
       ...next,
       defaultModel:
         changed('defaultModel') || typeof disk.defaultModel !== 'string' ? next.defaultModel : disk.defaultModel,
-      ollamaHost:
-        changed('ollamaHost') || (disk.ollamaHost !== undefined && typeof disk.ollamaHost !== 'string')
-          ? next.ollamaHost
-          : (disk.ollamaHost as string | undefined),
+      ollamaHost: optional('ollamaHost'),
+      localDefaultModel: optional('localDefaultModel'),
     };
   }
 
