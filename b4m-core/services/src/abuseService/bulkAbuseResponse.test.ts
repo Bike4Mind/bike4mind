@@ -114,7 +114,10 @@ describe('resolveBulkAbuseCohort', () => {
 
     expect(cohort.included.map(user => user.id)).toEqual([id(1), id(2)]);
     const [filter, options] = find.mock.calls[0];
-    expect(filter.email).toEqual({ $regex: '@(?:[^@]+[.\u3002\uff0e\uff61])?kashre[.\u3002\uff0e\uff61]com[.\u3002\uff0e\uff61]*$', $options: 'i' });
+    expect(filter.email).toEqual({
+      $regex: '@(?:[^@]+[.\u3002\uff0e\uff61])?kashre[.\u3002\uff0e\uff61]com[.\u3002\uff0e\uff61]*$',
+      $options: 'i',
+    });
     expect(new RegExp(String((filter.email as { $regex: string }).$regex), 'i').test('x@notkashre.com')).toBe(false);
     expect(options).toEqual({ sort: { _id: 1 }, limit: MAX_BULK_ABUSE_BATCH + 1 });
   });
@@ -165,13 +168,7 @@ describe('resolveBulkAbuseCohort', () => {
   });
 
   it('excludes seat members of an organization with org_member, by pointer or by users[] row', async () => {
-    const users = [
-      makeUser(1),
-      makeUser(2, { organizationId: 'a'.repeat(24) }),
-      makeUser(3),
-      makeUser(4),
-      makeUser(5),
-    ];
+    const users = [makeUser(1), makeUser(2, { organizationId: 'a'.repeat(24) }), makeUser(3), makeUser(4), makeUser(5)];
     const { adapters } = cohortAdapters({
       users,
       orgs: [
@@ -203,6 +200,12 @@ describe('resolveBulkAbuseCohort', () => {
     const { adapters } = cohortAdapters({ users: [makeUser(1)] });
     const cohort = await resolveBulkAbuseCohort({ kind: 'users', userIds: [id(1), id(9)] }, ACTOR_ID, adapters);
     expect(cohort.excluded).toEqual([{ userId: id(9), email: null, reason: 'not_found' }]);
+  });
+
+  it('looks up selected users without soft-deleted accounts', async () => {
+    const { adapters } = cohortAdapters({ users: [makeUser(1)] });
+    await resolveBulkAbuseCohort({ kind: 'users', userIds: [id(1)] }, ACTOR_ID, adapters);
+    expect(adapters.db.users.find).toHaveBeenCalledWith({ _id: { $in: [id(1)] }, deletedAt: null });
   });
 
   it('caps a domain batch and hands back a cursor that continues after the last scanned user', async () => {

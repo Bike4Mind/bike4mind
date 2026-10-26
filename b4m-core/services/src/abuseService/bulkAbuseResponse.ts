@@ -105,7 +105,7 @@ async function findTargetUsers(
 ): Promise<{ users: IUser[]; missingIds: string[]; hasMore: boolean; lastScannedId: string | null }> {
   if (target.kind === 'users') {
     const ids = [...new Set(target.userIds.map(id => id.toLowerCase()))];
-    const users = await db.users.find({ _id: { $in: ids } });
+    const users = await db.users.find({ _id: { $in: ids }, deletedAt: null });
     const found = new Set(users.map(user => user.id));
     return { users, missingIds: ids.filter(id => !found.has(id)), hasMore: false, lastScannedId: null };
   }
