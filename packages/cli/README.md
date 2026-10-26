@@ -143,7 +143,24 @@ b4m update                                # Check for and install CLI updates
 b4m doctor                                # Diagnose the CLI installation (Node, registry, ripgrep, native modules)
 b4m skills push <path>                    # Create a skill from a folder, SKILL.md, or commands/*.md
 b4m skills push <path> --update           # Update your skill with the same name without a prompt
+b4m models ls | search | show | pull | rm | use   # Find, download and use local models (see below)
 ```
+
+### Local models
+
+`b4m models` manages models on a local Ollama and finds GGUF builds on Hugging Face.
+
+```bash
+b4m models ls --ollama-host http://127.0.0.1:11434   # list installed models; the host is saved for later runs
+b4m models search qwen2.5 0.5b                       # Hugging Face GGUF repos: downloads, likes, license, gated
+b4m models show Qwen/Qwen2.5-0.5B-Instruct-GGUF      # builds with size, quant and Ollama ref, license, gating
+b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
+b4m models pull qwen2.5:0.5b                         # Ollama library names pull directly
+b4m models use hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M   # default model for chat
+b4m models rm qwen2.5:0.5b
+```
+
+Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar) is named with a link and must be accepted at a prompt or with `--accept-license`. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added to the account. Ctrl-C cancels a pull without installing anything; pulling again resumes. Without a saved host, `b4m models` uses the first local runtime it detects; `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search` and `show` as JSON.
 
 ### Pushing a local skill
 

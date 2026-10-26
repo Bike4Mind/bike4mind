@@ -21,7 +21,7 @@ export interface BuildLlmBackendInput {
   tokenGetter: () => Promise<string | null>;
   /** Startup log collected for the two-column banner; pushed into, not owned. */
   startupLog: string[];
-  /** Ollama endpoint; defaults to process.env.B4M_OLLAMA_HOST. Injectable for tests. */
+  /** Ollama endpoint; defaults to process.env.B4M_OLLAMA_HOST, then config.ollamaHost. Injectable for tests. */
   ollamaHost?: string;
 }
 
@@ -176,8 +176,8 @@ export async function buildLlmBackend(
     verifySession: () => apiClient.checkSessionValid(),
   });
 
-  // Optionally wrap with Ollama backend if --ollama-host was provided
-  const ollamaHost = input.ollamaHost ?? process.env.B4M_OLLAMA_HOST;
+  // Optionally wrap with Ollama backend if --ollama-host was provided or saved by `b4m models`
+  const ollamaHost = input.ollamaHost ?? (process.env.B4M_OLLAMA_HOST || config.ollamaHost);
   let models: ModelInfo[];
 
   if (ollamaHost) {
