@@ -91,7 +91,11 @@ export async function handler() {
         failures++;
         const message = error instanceof Error ? error.message : String(error);
         results[source] = message;
-        await disposableDomainRepository.recordDisposableSource(source, { error: message, at: runAt });
+        try {
+          await disposableDomainRepository.recordDisposableSource(source, { error: message, at: runAt });
+        } catch (recordError) {
+          console.warn('Could not record source failure', { source, error: String(recordError) });
+        }
       }
     }
     console.log(JSON.stringify({ job: 'disposable-domain-refresh', failures, results }));

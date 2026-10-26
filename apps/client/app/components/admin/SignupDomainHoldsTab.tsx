@@ -144,7 +144,7 @@ export default function SignupDomainHoldsTab() {
               <td>{source.lastSuccessAt ? new Date(source.lastSuccessAt).toLocaleString() : 'never'}</td>
               <td>
                 {source.lastError
-                  ? `${source.lastError} (${source.lastErrorAt ? new Date(source.lastErrorAt).toLocaleString() : ''})`
+                  ? `${source.lastError}${source.lastErrorAt ? ` (${new Date(source.lastErrorAt).toLocaleString()})` : ''}`
                   : '-'}
               </td>
             </tr>

@@ -88,4 +88,23 @@ describe('handler', () => {
       { name: 'SourceFailures', value: 2, dimensions: { Stage: 'test' } },
     ]);
   });
+
+  it('still refreshes later sources when recording a failure throws', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    repo.getDisposableSourceStatus.mockResolvedValue([]);
+    repo.replaceDisposableSource.mockClear();
+    repo.recordDisposableSource.mockImplementation(async (_source: string, update: { error?: string }) => {
+      if (update.error) throw new Error('db down');
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url === DISPOSABLE_LIST_SOURCES.aggregate ? new Response('down', { status: 503 }) : new Response('a.test')
+      )
+    );
+    const result = await handler();
+
+    expect(result.status).toBe('partial');
+    expect(repo.replaceDisposableSource).toHaveBeenCalledTimes(2);
+  });
 });
