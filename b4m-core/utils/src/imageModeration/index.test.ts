@@ -1,6 +1,11 @@
 import { randomBytes, randomFillSync } from 'node:crypto';
 import { describe, it, expect, vi } from 'vitest';
-import { InvalidImageFormatException } from '@aws-sdk/client-rekognition';
+import imageSize from 'image-size';
+import {
+  ImageTooLargeException,
+  InvalidImageFormatException,
+  InvalidParameterException,
+} from '@aws-sdk/client-rekognition';
 import { Logger } from '@bike4mind/observability';
 import {
   RekognitionImageModerationService,
@@ -288,6 +293,44 @@ describe('RekognitionImageModerationService.checkImage', () => {
       // Transient errors still consume the full transient-retry budget (MAX_ATTEMPTS = 3) -
       // the downscale path must not change retry semantics for genuine transient failures.
       expect(client.send).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('images over the provider dimension limit', () => {
+    it('downscales a byte-small image taller than 10000px before scanning it', async () => {
+      const { Jimp } = await import('jimp');
+      // Solid color: a few KB on disk, far under the byte budget, 21.8 MP so under the bomb guard.
+      const tall = Buffer.from(
+        await new Jimp({ width: 1960, height: 11139, color: 0xff0000ff }).getBuffer('image/png')
+      );
+      expect(tall.length).toBeLessThan(MAX_INLINE_IMAGE_BYTES);
+
+      let sentBytes: Buffer | undefined;
+      const client = {
+        send: vi.fn(async (command: { input: { Image?: { Bytes?: Uint8Array } } }) => {
+          sentBytes = Buffer.from(command.input.Image!.Bytes!);
+          return { ModerationLabels: [] };
+        }),
+      } as unknown as import('@aws-sdk/client-rekognition').RekognitionClient;
+      const svc = new RekognitionImageModerationService(Logger.globalInstance, client);
+
+      await expect(svc.checkImage(tall, 'image/png')).resolves.toBeUndefined();
+      expect(client.send).toHaveBeenCalledTimes(1);
+      const { width, height } = imageSize(sentBytes!);
+      expect(Math.max(width!, height!)).toBeLessThanOrEqual(10000);
+    });
+
+    it.each([
+      ['ImageTooLargeException', ImageTooLargeException],
+      ['InvalidParameterException', InvalidParameterException],
+    ])('treats %s as terminal instead of retrying', async (_name, Exc) => {
+      const client = fakeClient(async () => {
+        throw new Exc({ message: 'exceed maximum dimension size of 10000 pixels', $metadata: {} });
+      });
+      const svc = new RekognitionImageModerationService(Logger.globalInstance, client);
+
+      await expect(svc.checkImage(REAL_PNG, 'image/png')).rejects.toBeInstanceOf(UnsupportedImageFormatError);
+      expect(client.send).toHaveBeenCalledTimes(1);
     });
   });
 
