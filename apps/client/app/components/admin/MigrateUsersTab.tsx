@@ -19,6 +19,7 @@ import {
 } from '@mui/joy';
 import React, { ReactNode, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { toCsv } from '@client/app/utils/csv';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import SingleOrganizationSelector from '../common/SingleOrganizationSelector';
 
@@ -108,13 +109,8 @@ const MigrateUsersTab: React.FC = () => {
       header.push('Temporary Password');
     }
 
-    const rows = createdUsers.map(user => [
-      `"${user.name}"`, // Enclose in quotes to handle commas in names
-      `"${user.email}"`,
-      `"${user.tempPassword}"`,
-    ]);
-    const csvContent = [header, ...rows].map(e => e.join(',')).join('\n');
-    return csvContent;
+    const rows = createdUsers.map(user => [user.name, user.email, user.tempPassword]);
+    return toCsv([header, ...rows]);
   };
 
   const copyCSVToClipboard = async () => {

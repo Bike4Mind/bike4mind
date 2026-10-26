@@ -1,3 +1,6 @@
+/** Leading characters that make a spreadsheet evaluate a cell as a formula. */
+export const CSV_FORMULA_PREFIX = /^[=+\-@\t\r]/;
+
 /**
  * Escapes one CSV cell for spreadsheet import.
  *
