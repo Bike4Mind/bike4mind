@@ -78,6 +78,18 @@ import { useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
 import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
 import MoveSessionConfirmModal from '@client/app/components/Session/MoveSessionConfirmModal';
 
+const MENU_VIEWPORT_PADDING_PX = 8;
+
+// The actions menu can be taller than the space on either side of its button. altAxis
+// lets Popper slide it vertically back into the viewport (tether: false allows it to
+// cover the button), and the maxHeight/overflowY cap on the Menu scrolls the rest.
+const MENU_MODIFIERS = [
+  {
+    name: 'preventOverflow',
+    options: { altAxis: true, tether: false, padding: MENU_VIEWPORT_PADDING_PX },
+  },
+];
+
 /**
  * Classify message count into two tiers:
  * 'light' = 0-10 messages (neutral/subtle)
@@ -560,10 +572,13 @@ const SessionSidenavItem: FC<{
               sx={{
                 zIndex: 1400,
                 borderRadius: '10px',
+                maxHeight: `calc(100vh - ${2 * MENU_VIEWPORT_PADDING_PX}px)`,
+                overflowY: 'auto',
               }}
               variant={'outlined'}
               placement="bottom-start"
               direction="ltr"
+              modifiers={MENU_MODIFIERS}
             >
               {canUpdate && (
                 <MenuItem onClick={handleToggleFavoriteSession} className="sidenav-item-menuitem-favorite">
