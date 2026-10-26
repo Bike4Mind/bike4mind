@@ -45,7 +45,6 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   CcBridgeDevice: { deleteOne: refs.deviceDeleteOne },
-  User: { findById: async (id: string) => ({ id }) },
   agentRepository: {},
   ccBridgeDeviceRepository: { create: refs.createDevice },
   ccBridgePairingTokenRepository: {
@@ -247,6 +246,9 @@ describe('POST /api/cc-bridge/redeem - paid-only access switch', () => {
   beforeEach(() => {
     refs.findCandidates.mockResolvedValue([record()]);
     refs.createKey.mockReset();
+    refs.findUser.mockReset().mockResolvedValue({ id: 'owner-1' });
+    refs.resolveTrust.mockReset().mockResolvedValue({ assessment: { status: 'trusted' } });
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
   });
 
   it('403s and mints nothing when the setting denies the token owner', async () => {
@@ -255,5 +257,6 @@ describe('POST /api/cc-bridge/redeem - paid-only access switch', () => {
     expect(res._getStatusCode()).toBe(403);
     expect(res._getJSONData()).toEqual({ error: 'API keys require an active paid subscription' });
     expect(refs.createKey).not.toHaveBeenCalled();
+    expect(refs.resolveTrust).not.toHaveBeenCalled();
   });
 });

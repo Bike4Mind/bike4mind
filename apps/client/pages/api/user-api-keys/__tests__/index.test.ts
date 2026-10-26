@@ -769,7 +769,8 @@ describe('POST /api/user-api-keys - trust gate', () => {
 describe('POST /api/user-api-keys - paid-only access switch', () => {
   beforeEach(() => {
     createUserApiKey.mockClear();
-    isApiKeyAccessAllowedMock.mockClear();
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+    resolveApiKeyTrust.mockClear();
   });
 
   it('rejects the mint with 403 and never calls the service when the setting denies the caller', async () => {
@@ -778,6 +779,7 @@ describe('POST /api/user-api-keys - paid-only access switch', () => {
     const error = await mockRefs.postHandler!(req, res).catch((e: unknown) => e);
     expect(error).toMatchObject({ statusCode: 403, message: 'API keys require an active paid subscription' });
     expect(createUserApiKey).not.toHaveBeenCalled();
+    expect(resolveApiKeyTrust).not.toHaveBeenCalled();
   });
 
   it('answers an unauthorized org-billed mint with the org-permission 403 before reading any plan', async () => {

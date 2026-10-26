@@ -12,12 +12,14 @@ import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { logEvent } from '@server/utils/analyticsLog';
 
-const { validateUserApiKeyMock, findByIdMock, applyUntrustedRateLimitMock, isApiKeyAccessAllowedMock } = vi.hoisted(() => ({
-  validateUserApiKeyMock: vi.fn(),
-  findByIdMock: vi.fn(),
-  applyUntrustedRateLimitMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit),
-  isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown, _req?: unknown) => true),
-}));
+const { validateUserApiKeyMock, findByIdMock, applyUntrustedRateLimitMock, isApiKeyAccessAllowedMock } = vi.hoisted(
+  () => ({
+    validateUserApiKeyMock: vi.fn(),
+    findByIdMock: vi.fn(),
+    applyUntrustedRateLimitMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit),
+    isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown, _req?: unknown) => true),
+  })
+);
 
 vi.mock('@bike4mind/services', async importOriginal => ({
   // Real `userService.accountBlockReasons` drives the account-state gate; the rest of the barrel
@@ -489,11 +491,33 @@ describe('apiKeyAuth paid-only access switch', () => {
     expect(error).toBeInstanceOf(ForbiddenError);
     expect(error?.message).toBe('API keys require an active paid subscription');
     expect(req.user).toBeUndefined();
+    expect(applyUntrustedRateLimitMock).not.toHaveBeenCalled();
     const call = req.logger.warn.mock.calls.find(
       ([msg]) => msg === 'API key rejected: apiKeyAccess setting denies this owner'
     );
     expect(call?.[1]).toMatchObject({ keyId: 'key-1', userId: 'user-1' });
     expect(JSON.stringify(call)).not.toContain(KEY);
+  });
+
+  it('applies the trust ceiling after paid access succeeds', async () => {
+    validateUserApiKeyMock.mockResolvedValueOnce({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      billingOwnerType: CreditHolderType.User,
+    });
+    findByIdMock.mockResolvedValueOnce({ id: 'user-1', isBanned: false, emailVerified: false });
+    const clamped = { requestsPerMinute: 3, requestsPerDay: 1000 };
+    applyUntrustedRateLimitMock.mockResolvedValueOnce(clamped);
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.apiKeyInfo?.rateLimit).toEqual(clamped);
+    expect(isApiKeyAccessAllowedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      applyUntrustedRateLimitMock.mock.invocationCallOrder[0]!
+    );
   });
 
   it('checks the owner before the admin role is withheld, with the key billing owner', async () => {
