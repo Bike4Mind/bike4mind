@@ -23,7 +23,9 @@ export class RuntimeHttpError extends LocalRuntimeError {
   constructor(
     message: string,
     runtimeId: string,
-    readonly status: number
+    readonly status: number,
+    /** The `error` message of an OpenAI/Ollama-style JSON body; null when the body was not that shape. */
+    readonly detail: string | null = null
   ) {
     super(message, runtimeId);
     this.name = 'RuntimeHttpError';

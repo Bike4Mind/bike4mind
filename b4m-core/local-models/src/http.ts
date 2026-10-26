@@ -126,19 +126,16 @@ export async function send(client: HttpClient, path: string, options: RequestOpt
   }
   if (!response.ok) {
     const text = await response.text().catch(() => '');
+    const parsed = errorBodySchema.safeParse(safeJsonParse(text));
+    const detail = parsed.success ? parsed.data.error : null;
     throw new RuntimeHttpError(
-      httpErrorMessage(client, path, response.status, text),
+      `${client.runtimeId} ${path} returned HTTP ${response.status}${detail === null ? '' : `: ${detail}`}`,
       client.runtimeId,
-      response.status
+      response.status,
+      detail
     );
   }
   return response;
-}
-
-function httpErrorMessage(client: HttpClient, path: string, status: number, text: string): string {
-  const parsed = errorBodySchema.safeParse(safeJsonParse(text));
-  const detail = parsed.success ? `: ${parsed.data.error}` : '';
-  return `${client.runtimeId} ${path} returned HTTP ${status}${detail}`;
 }
 
 function safeJsonParse(text: string): unknown {

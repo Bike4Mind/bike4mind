@@ -101,7 +101,8 @@ async function probe(
   }
   const runtime = (product: OpenAICompatibleProduct | null) =>
     new OpenAICompatibleRuntime({ baseUrl, fetch: fetchImpl, product, apiKey });
-  if (isAuthError(models.error)) {
+  // On a default port, a bare 401/403 is just as likely a secured Jenkins or dashboard; require an API-style body.
+  if (isAuthError(models.error) && (configured || models.error.detail !== null)) {
     return {
       runtime: runtime(null),
       health: { ok: false, version: null, error: authErrorMessage(!!apiKey) },

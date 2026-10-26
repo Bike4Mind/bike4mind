@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_PROBE_HOSTS, detectRuntimes } from './detect';
 import type { FetchLike } from './types';
-import { closedPort, hang, json, startFakeServer, type FakeServer } from './__test__/fakeServer';
+import { closedPort, hang, json, startFakeServer, type FakeServer, type Handler } from './__test__/fakeServer';
 
 const servers: FakeServer[] = [];
 let deadPort: number;
@@ -174,6 +174,25 @@ describe('detectRuntimes', () => {
       fetch: routedFetch({}),
     });
     expect(found[0]?.health.error).toBe('API key was rejected');
+  });
+
+  it('reports a keyed server on a default port but not a non-LLM service that refuses with HTML', async () => {
+    const guarded = await serve({ 'GET /v1/models': json({ error: { message: 'Invalid API key' } }, 401) });
+    const html: Handler = (_request, response) =>
+      response.writeHead(403, { 'content-type': 'text/html' }).end('<html><body>Authentication required</body></html>');
+    const jenkins = await serve({ 'GET /api/version': html, 'GET /v1/models': html });
+    const found = await detectRuntimes({ fetch: routedFetch({ '8000': guarded, '8080': jenkins }) });
+    expect(found.map(entry => [entry.runtime.id, entry.health.error])).toEqual([
+      ['openai-compatible:127.0.0.1:8000', 'Requires an API key'],
+    ]);
+  });
+
+  it('reports a configured host that refuses with a non-JSON body', async () => {
+    const proxy = await serve({
+      'GET /v1/models': (_request, response) => response.writeHead(401).end('Unauthorized'),
+    });
+    const found = await detectRuntimes({ hosts: [proxy.baseUrl], defaultHosts: [], fetch: routedFetch({}) });
+    expect(found.map(entry => entry.health.error)).toEqual(['Requires an API key']);
   });
 
   it('ignores a server whose /api/version is not Ollama-shaped', async () => {
