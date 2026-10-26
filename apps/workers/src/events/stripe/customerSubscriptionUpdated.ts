@@ -1,7 +1,11 @@
 import { organizationRepository, withTransaction } from '@bike4mind/database';
 import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
 import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
-import { type ISubscription, SubscriptionMetadata, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import {
+  type ISubscription,
+  SubscriptionMetadata,
+  SubscriptionOwnerType,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import { emitBillingEvent } from '@server/analytics/signupEvents';
 import {
   planChangeDirection,

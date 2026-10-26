@@ -106,7 +106,9 @@ import handler from '../tts';
 
 const run = (
   body: Record<string, unknown>,
-  user: { id?: string; organizationId?: string | null; isAdmin?: boolean; isModerated?: boolean } | undefined = { id: 'u1' },
+  user: { id?: string; organizationId?: string | null; isAdmin?: boolean; isModerated?: boolean } | undefined = {
+    id: 'u1',
+  },
   apiKeyInfo?: unknown
 ) => {
   const { req, res } = createMocks({ method: 'POST', body });
