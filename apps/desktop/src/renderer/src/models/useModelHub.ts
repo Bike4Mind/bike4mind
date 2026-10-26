@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InstalledModelsResult, ModelPull, ModelRuntimeStatus } from '@shared/models';
 
 export interface ModelHubState {
@@ -24,16 +24,29 @@ export function useModelHub(): ModelHubState {
     );
   }, []);
 
+  const failedKeys = useRef(new Set<string>());
+  const takePulls = useCallback(
+    (next: ModelPull[]) => {
+      setPulls(next);
+      const failed = new Set(next.filter(pull => pull.phase === 'failed').map(pull => pull.key));
+      const fresh = [...failed].some(key => !failedKeys.current.has(key));
+      failedKeys.current = failed;
+      // A failure is often Ollama stopping, so re-check it and let the status bar and Download buttons follow.
+      if (fresh) void refresh();
+    },
+    [refresh]
+  );
+
   useEffect(() => {
     void refresh();
-    void window.b4m.models.listPulls().then(setPulls);
-    const offPulls = window.b4m.models.onPullsChanged(setPulls);
+    void window.b4m.models.listPulls().then(takePulls);
+    const offPulls = window.b4m.models.onPullsChanged(takePulls);
     const offInstalled = window.b4m.models.onInstalledChanged(() => void refresh());
     return () => {
       offPulls();
       offInstalled();
     };
-  }, [refresh]);
+  }, [refresh, takePulls]);
 
   return { status, installed, pulls, refresh };
 }

@@ -46,10 +46,15 @@ export function registerModels(): ModelHubService {
     const body = request && typeof request === 'object' ? (request as Record<string, unknown>) : null;
     const repo = text(body?.repo);
     const buildId = text(body?.buildId);
-    if (!repo || !buildId) return invalid;
+    const revision = text(body?.revision);
+    const sizeBytes = body?.sizeBytes;
+    if (!repo || !buildId || !revision || typeof sizeBytes !== 'number' || !Number.isSafeInteger(sizeBytes))
+      return { ...invalid, listed: false };
     return service.pull({
       repo,
       buildId,
+      revision,
+      sizeBytes,
       acceptLicense: body?.acceptLicense === true,
       confirmAccess: body?.confirmAccess === true,
     });

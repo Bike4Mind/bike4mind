@@ -15,7 +15,7 @@ import { ExternalLink } from '../chat/ExternalLink';
 import { CloseIcon } from '../chat/icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/layout';
 import { ExploreTab } from './ExploreTab';
-import { InstalledTab } from './InstalledTab';
+import { InstalledTab, type ModelsInUse } from './InstalledTab';
 import { pullLabel, pullPercent } from './pullDisplay';
 import { useModelHub } from './useModelHub';
 
@@ -111,6 +111,8 @@ function PullRow({ pull }: { pull: ModelPull }) {
         <LinearProgress
           determinate={pull.phase === 'downloading'}
           value={pullPercent(pull)}
+          aria-label={`Download of ${pull.repo} ${pull.quant ?? pull.buildId}`}
+          aria-valuetext={pullLabel(pull)}
           sx={{ mt: 1 }}
           data-testid="models-pull-progress"
         />
@@ -120,7 +122,7 @@ function PullRow({ pull }: { pull: ModelPull }) {
 }
 
 /** Local models: what is installed, and GGUF builds from Hugging Face to download through Ollama. */
-export function ModelsScreen({ onClose }: { onClose: () => void }) {
+export function ModelsScreen({ onClose, inUse }: { onClose: () => void; inUse?: ModelsInUse }) {
   const hub = useModelHub();
   const [tab, setTab] = useState<ModelsTab>(rememberedTab);
   const choose = (next: ModelsTab) => {
@@ -193,6 +195,7 @@ export function ModelsScreen({ onClose }: { onClose: () => void }) {
             <InstalledTab
               status={hub.status}
               installed={hub.installed}
+              inUse={inUse}
               onRetry={() => void hub.refresh()}
               onExplore={() => choose('explore')}
             />
@@ -200,7 +203,12 @@ export function ModelsScreen({ onClose }: { onClose: () => void }) {
         </TabPanel>
         <TabPanel value="explore" sx={{ p: 0, flex: 1, ...scrollingColumnHostSx }}>
           <Box sx={{ ...screenColumnSx, py: 1 }}>
-            <ExploreTab status={hub.status} installed={hub.installed} pulls={hub.pulls} />
+            <ExploreTab
+              status={hub.status}
+              installed={hub.installed}
+              pulls={hub.pulls}
+              onRecheck={() => void hub.refresh()}
+            />
           </Box>
         </TabPanel>
       </Tabs>

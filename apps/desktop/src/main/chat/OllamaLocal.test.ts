@@ -293,6 +293,23 @@ describe('OllamaLocal', () => {
     );
     await expect(local.stream({ model: 'gpt-4', messages: [] }, () => undefined)).rejects.toThrow('Invalid local');
   });
+
+  it('says plainly when the model was removed from Ollama', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ error: "model 'hf.co/a/b:Q4_K_M' not found" }, { status: 404 }))
+    );
+    await expect(
+      new OllamaLocal().stream({ model: `${LOCAL_MODEL_PREFIX}hf.co/a/b:Q4_K_M`, messages: [] }, () => undefined)
+    ).rejects.toThrow('This model was removed from Ollama. Pick another model.');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('404 page not found', { status: 404 }))
+    );
+    await expect(
+      new OllamaLocal().stream({ model: `${LOCAL_MODEL_PREFIX}llama`, messages: [] }, () => undefined)
+    ).rejects.toThrow('Ollama returned HTTP 404.');
+  });
 });
 
 describe('Ollama local-only inference', () => {

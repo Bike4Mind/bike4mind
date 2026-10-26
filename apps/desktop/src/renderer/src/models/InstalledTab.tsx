@@ -22,6 +22,30 @@ import {
 import { ExternalLink } from '../chat/ExternalLink';
 import { TrashIcon } from '../chat/icons';
 
+/** Ollama names of the local models chats point at, so removing one can warn first. */
+export interface ModelsInUse {
+  /** The open conversation's model, when it is a local one. */
+  active: string | null;
+  /** One entry per conversation that uses a local model, archived ones left out. */
+  conversations: readonly string[];
+}
+
+function inUseWarning(model: LocalModelEntry, inUse: ModelsInUse | undefined): string | null {
+  const lines: string[] = [];
+  if (inUse?.active === model.name)
+    lines.push('The open conversation uses this model. Pick another model there before your next message.');
+  else {
+    const count = inUse?.conversations.filter(name => name === model.name).length ?? 0;
+    if (count > 0)
+      lines.push(
+        `${count} ${count === 1 ? 'conversation uses' : 'conversations use'} this model. ` +
+          'Pick another model in them before sending again.'
+      );
+  }
+  if (model.loaded) lines.push('Ollama has it loaded right now.');
+  return lines.length ? lines.join(' ') : null;
+}
+
 const CAPABILITY_LABELS: [keyof LocalModelEntry['capabilities'], string][] = [
   ['tools', 'Tools'],
   ['vision', 'Vision'],
@@ -86,11 +110,13 @@ function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: (
 export function InstalledTab({
   status,
   installed,
+  inUse,
   onRetry,
   onExplore,
 }: {
   status: ModelRuntimeStatus | null;
   installed: InstalledModelsResult | null;
+  inUse?: ModelsInUse;
   onRetry: () => void;
   onExplore: () => void;
 }) {
@@ -141,6 +167,7 @@ export function InstalledTab({
     );
 
   const total = installed.models.reduce((sum, model) => sum + (model.sizeBytes ?? 0), 0);
+  const warning = confirming ? inUseWarning(confirming, inUse) : null;
   return (
     <Stack spacing={1}>
       {removeError && (
@@ -173,6 +200,11 @@ export function InstalledTab({
           <DialogContent>
             This deletes it from Ollama and frees {formatBytes(confirming?.sizeBytes ?? null)}. You can download it
             again later.
+            {warning && (
+              <Alert color="warning" variant="soft" sx={{ mt: 1 }} data-testid="models-remove-dialog-in-use">
+                {warning}
+              </Alert>
+            )}
           </DialogContent>
           <DialogActions>
             <Button

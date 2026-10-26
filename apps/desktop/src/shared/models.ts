@@ -13,6 +13,8 @@ export type ModelHubErrorKind =
   | 'access-required'
   | 'already-pulling'
   | 'cannot-pull'
+  | 'changed'
+  | 'interrupted'
   | 'cancelled'
   | 'invalid'
   | 'failed';
@@ -60,7 +62,8 @@ export interface HubModelCard {
   downloads: number | null;
   likes: number | null;
   updatedAt: string | null;
-  license: string | null;
+  /** Every declared license id; the repo is bound by all of them. */
+  licenses: string[];
   gated: HubGatedMode;
   private: boolean;
   abliterated: boolean;
@@ -89,9 +92,11 @@ export interface HubBuildView {
 export interface HubModelView extends HubModelCard {
   url: string;
   revision: string;
-  /** Shown name: the card's `license_name`, else the license id, else null when none is declared. */
-  licenseName: string | null;
+  /** Shown names, one per declared license (`other` replaced by the card's `license_name`); empty when none. */
+  licenseNames: string[];
   licenseUrl: string;
+  /** Where `licenseUrl` goes, shown beside the link because a card may point off Hugging Face. */
+  licenseHost: string;
   licenseKind: LicenseKind;
   baseModels: string[];
   builds: HubBuildView[];
@@ -106,6 +111,9 @@ export type HubDetailResult = { ok: true; model: HubModelView } | { ok: false; e
 export interface ModelPullRequest {
   repo: string;
   buildId: string;
+  /** The commit and size the user reviewed; main refuses with `changed` when the repo has moved on. */
+  revision: string;
+  sizeBytes: number;
   acceptLicense: boolean;
   confirmAccess: boolean;
 }
@@ -125,7 +133,8 @@ export interface ModelPull {
   error: ModelHubError | null;
 }
 
-export type ModelPullResult = { ok: true; ref: string } | { ok: false; error: ModelHubError };
+/** `listed`: the failure stays in the pull list, so the screen need not show it again. */
+export type ModelPullResult = { ok: true; ref: string } | { ok: false; error: ModelHubError; listed: boolean };
 
 export type ModelRemoveResult = { ok: true } | { ok: false; error: ModelHubError };
 
@@ -143,16 +152,22 @@ const PERMISSIVE_LICENSES = new Set([
   'isc',
 ]);
 
-/** Anything not clearly permissive, including no license at all, needs the user to accept it. */
-export function licenseKind(license: string | null): LicenseKind {
-  return license && PERMISSIVE_LICENSES.has(license.trim().toLowerCase()) ? 'permissive' : 'restricted';
+/** Permissive only when every declared license is; none at all needs the user to accept the card's terms. */
+export function licenseKind(licenses: readonly string[]): LicenseKind {
+  return licenses.length > 0 && licenses.every(license => PERMISSIVE_LICENSES.has(license.trim().toLowerCase()))
+    ? 'permissive'
+    : 'restricted';
 }
 
-/** Builds with refusal training removed. Matches only explicit markers in the repo id or its tags. */
-export function isAbliteratedModel(id: string, tags: readonly string[] = []): boolean {
-  return [id, ...tags].some(name => {
+/** Builds with refusal training removed, by explicit markers in the repo id, its tags or its base models. */
+export function isAbliteratedModel(
+  id: string,
+  tags: readonly string[] = [],
+  baseModels: readonly string[] = []
+): boolean {
+  return [id, ...tags, ...baseModels].some(name => {
     const lower = name.toLowerCase();
-    return lower.includes('abliterat') || /(^|[^a-z])uncensored([^a-z]|$)/.test(lower);
+    return lower.includes('abliterat') || /(^|[^a-z])(uncensored|decensored|heretic)([^a-z]|$)/.test(lower);
   });
 }
 

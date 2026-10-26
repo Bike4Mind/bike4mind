@@ -12,6 +12,7 @@ import type {
 } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
+import type { ModelsInUse } from './InstalledTab';
 import { ModelsScreen } from './ModelsScreen';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -40,7 +41,7 @@ function card(id: string, extra: Partial<HubModelView> = {}) {
     downloads: 12_345,
     likes: 67,
     updatedAt: null,
-    license: 'apache-2.0',
+    licenses: ['apache-2.0'],
     gated: false as const,
     private: false,
     abliterated: false,
@@ -53,8 +54,9 @@ function view(extra: Partial<HubModelView> = {}): HubModelView {
     ...card(REPO),
     url: `https://huggingface.co/${REPO}`,
     revision: 'abc',
-    licenseName: 'apache-2.0',
+    licenseNames: ['apache-2.0'],
     licenseUrl: `https://huggingface.co/${REPO}`,
+    licenseHost: 'huggingface.co',
     licenseKind: 'permissive',
     baseModels: [],
     builds: [
@@ -87,6 +89,8 @@ const calls = {
   cancelPull: vi.fn(),
   remove: vi.fn(),
   search: vi.fn(),
+  getDetail: vi.fn(),
+  getStatus: vi.fn(),
 };
 
 beforeEach(() => {
@@ -103,13 +107,19 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
     shell: { openExternal: vi.fn() },
     models: {
-      getStatus: async () => bridge.status,
+      getStatus: async () => {
+        calls.getStatus();
+        return bridge.status;
+      },
       listInstalled: async () => bridge.installed,
       search: async (request: unknown) => {
         calls.search(request);
         return bridge.search;
       },
-      getDetail: async () => bridge.detail,
+      getDetail: async () => {
+        calls.getDetail();
+        return bridge.detail;
+      },
       listPulls: async () => bridge.pulls,
       pull: calls.pull,
       cancelPull: calls.cancelPull,
@@ -136,14 +146,14 @@ afterEach(() => {
 
 const flush = () => act(async () => new Promise(resolve => setTimeout(resolve, 0)));
 
-async function mount() {
+async function mount(inUse?: ModelsInUse) {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   act(() =>
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ModelsScreen onClose={() => {}} />
+        <ModelsScreen onClose={() => {}} inUse={inUse} />
       </CssVarsProvider>
     )
   );
@@ -199,8 +209,33 @@ describe('ModelsScreen installed', () => {
     await click(q('models-installed-remove-btn'));
     expect(q('models-remove-dialog')).not.toBeNull();
     expect(calls.remove).not.toHaveBeenCalled();
+    expect(q('models-remove-dialog-in-use')?.textContent).toBe('Ollama has it loaded right now.');
     await click(q('models-remove-dialog-confirm-btn'));
     expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b');
+  });
+
+  it.each([
+    [{ active: 'qwen2.5:0.5b', conversations: ['qwen2.5:0.5b'] }, 'The open conversation uses this model.'],
+    [{ active: null, conversations: ['qwen2.5:0.5b', 'qwen2.5:0.5b', 'llama'] }, '2 conversations use this model.'],
+  ])('warns before removing a model a conversation uses: %j', async (inUse, text) => {
+    bridge.installed = {
+      ok: true,
+      models: [
+        {
+          name: 'qwen2.5:0.5b',
+          sizeBytes: 1,
+          quantization: null,
+          family: null,
+          parameterSize: null,
+          modifiedAt: null,
+          capabilities,
+          loaded: false,
+        },
+      ],
+    };
+    await mount(inUse);
+    await click(q('models-installed-remove-btn'));
+    expect(q('models-remove-dialog-in-use')?.textContent).toContain(text);
   });
 
   it('says plainly when Ollama is not running, and Explore still works without pulls', async () => {
@@ -261,23 +296,37 @@ describe('ModelsScreen explore', () => {
     expect(calls.pull).toHaveBeenCalledWith({
       repo: REPO,
       buildId: 'qwen2.5-0.5b-instruct-q4_k_m',
+      revision: 'abc',
+      sizeBytes: 491_400_032,
       acceptLicense: false,
       confirmAccess: false,
     });
   });
 
-  it('needs the restricted license acknowledged before the download is offered', async () => {
+  it('needs every declared license acknowledged before the download is offered', async () => {
     bridge.detail = {
       ok: true,
-      model: view({ license: 'llama3.2', licenseName: 'llama3.2', licenseKind: 'restricted' }),
+      model: view({
+        licenses: ['apache-2.0', 'llama3'],
+        licenseNames: ['apache-2.0', 'llama3'],
+        licenseKind: 'restricted',
+        licenseUrl: 'https://llama.meta.com/llama3/license/',
+        licenseHost: 'llama.meta.com',
+      }),
     };
     await mount();
     await openExplore();
     await click(q('models-explore-result-row'));
     expect(q('models-detail-license')?.dataset.kind).toBe('restricted');
+    expect(all('models-detail-license-chip').map(chip => chip.textContent)).toEqual(['apache-2.0', 'llama3']);
+    expect(q('models-detail-license-host')?.textContent).toBe('(llama.meta.com)');
 
     await click(q('models-build-pull-btn'));
     expect(q('models-pull-dialog-license-link')).not.toBeNull();
+    expect(q('models-pull-dialog-license')?.textContent).toContain('(llama.meta.com)');
+    expect(document.body.textContent).toContain(
+      'I have read the apache-2.0 and llama3 licenses and accept their terms.'
+    );
     expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
     await click(q('models-pull-dialog-license-checkbox'));
     expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(false);
@@ -328,6 +377,72 @@ describe('ModelsScreen explore', () => {
     await openExplore();
     await click(q('models-explore-result-row'));
     expect(q('models-build-progress')).not.toBeNull();
+    const bars = [...document.querySelectorAll('[role="progressbar"]')];
+    expect(bars).toHaveLength(2);
+    for (const bar of bars) {
+      expect(bar.getAttribute('aria-label')).toBe(`Download of ${REPO} Q4_K_M`);
+      expect(bar.getAttribute('aria-valuetext')).toBe('246 MB of 491 MB (50%)');
+    }
+  });
+
+  it('shows a pull refused because Ollama stopped, and re-checks Ollama', async () => {
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    calls.pull.mockResolvedValue({
+      ok: false,
+      error: { kind: 'runtime-unavailable', message: 'Ollama is not running. Start it, then retry.' },
+      listed: false,
+    });
+    bridge.status = DOWN;
+    const checks = calls.getStatus.mock.calls.length;
+    await click(q('models-build-pull-btn'));
+    await click(q('models-pull-dialog-confirm-btn'));
+
+    expect(q('models-detail-pull-error')?.textContent).toContain('Ollama is not running');
+    expect(calls.getStatus.mock.calls.length).toBeGreaterThan(checks);
+    expect(q('models-runtime-status')?.dataset.state).toBe('down');
+    expect(q('models-build-pull-btn')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('re-checks Ollama when a listed pull fails', async () => {
+    await mount();
+    bridge.status = DOWN;
+    act(() =>
+      pushPulls([
+        {
+          key: `${REPO}#q`,
+          repo: REPO,
+          buildId: 'q',
+          quant: 'Q4_K_M',
+          ref: null,
+          phase: 'failed',
+          completedBytes: 0,
+          totalBytes: null,
+          expectedBytes: 1,
+          error: { kind: 'runtime-unavailable', message: 'Ollama is not running. Start it, then retry.' },
+        },
+      ])
+    );
+    await flush();
+    expect(q('models-pull-status')?.textContent).toContain('Ollama is not running');
+    expect(q('models-runtime-status')?.dataset.state).toBe('down');
+  });
+
+  it('asks for a fresh review when the repo changed after the dialog', async () => {
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    const loads = calls.getDetail.mock.calls.length;
+    calls.pull.mockResolvedValue({
+      ok: false,
+      error: { kind: 'changed', message: 'This repo changed since you reviewed it. Review it again, then download.' },
+      listed: false,
+    });
+    await click(q('models-build-pull-btn'));
+    await click(q('models-pull-dialog-confirm-btn'));
+    expect(q('models-detail-pull-error')?.textContent).toContain('changed since you reviewed it');
+    expect(calls.getDetail.mock.calls.length).toBe(loads + 1);
   });
 
   it.each([

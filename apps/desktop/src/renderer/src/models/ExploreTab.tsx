@@ -78,11 +78,11 @@ function ResultRow({ model, selected, onSelect }: { model: HubModelCard; selecte
         <Typography level="body-xs" textColor="text.tertiary">
           {formatCount(model.likes)} likes
         </Typography>
-        {model.license && (
-          <Chip size="sm" variant="outlined" color="neutral">
-            {model.license}
+        {model.licenses.map(license => (
+          <Chip key={license} size="sm" variant="outlined" color="neutral" data-testid="models-explore-license-chip">
+            {license}
           </Chip>
-        )}
+        ))}
         {model.gated && (
           <Chip size="sm" variant="soft" color="warning">
             Gated
@@ -99,12 +99,14 @@ function ResultRow({ model, selected, onSelect }: { model: HubModelCard; selecte
 }
 
 function BuildRow({
+  repo,
   build,
   pull,
   installed,
   runtimeReady,
   onPull,
 }: {
+  repo: string;
   build: HubBuildView;
   pull: ModelPull | undefined;
   installed: boolean;
@@ -115,7 +117,12 @@ function BuildRow({
   if (pull && pull.phase !== 'failed') {
     action = (
       <Stack spacing={0.5} sx={{ minWidth: 160 }} data-testid="models-build-progress">
-        <LinearProgress determinate={pull.phase === 'downloading'} value={pullPercent(pull)} />
+        <LinearProgress
+          determinate={pull.phase === 'downloading'}
+          value={pullPercent(pull)}
+          aria-label={`Download of ${repo} ${build.quant ?? build.id}`}
+          aria-valuetext={pullLabel(pull)}
+        />
         <Typography level="body-xs">{pullLabel(pull)}</Typography>
       </Stack>
     );
@@ -177,11 +184,13 @@ function ModelDetail({
   status,
   installedNames,
   pulls,
+  onRecheck,
 }: {
   repo: string;
   status: ModelRuntimeStatus | null;
   installedNames: Set<string>;
   pulls: ModelPull[];
+  onRecheck: () => void;
 }) {
   const [detail, setDetail] = useState<DetailState>({ state: 'loading' });
   const [confirming, setConfirming] = useState<HubBuildView | null>(null);
@@ -225,13 +234,18 @@ function ModelDetail({
   const start = async (build: HubBuildView, consent: PullConsent) => {
     setConfirming(null);
     setPullError(null);
-    const result = await window.b4m.models.pull({ repo: model.id, buildId: build.id, ...consent });
-    // Failures after the registry check stay in the download list; only refusals up front show here.
-    if (
-      !result.ok &&
-      !['cancelled', 'unverified', 'gated', 'failed', 'runtime-unavailable'].includes(result.error.kind)
-    )
-      setPullError(hubErrorText(result.error));
+    const result = await window.b4m.models.pull({
+      repo: model.id,
+      buildId: build.id,
+      revision: model.revision,
+      sizeBytes: build.sizeBytes,
+      ...consent,
+    });
+    if (result.ok) return;
+    if (result.error.kind === 'runtime-unavailable') onRecheck();
+    if (result.listed || result.error.kind === 'cancelled') return;
+    setPullError(hubErrorText(result.error));
+    if (result.error.kind === 'changed') void load();
   };
 
   return (
@@ -262,22 +276,30 @@ function ModelDetail({
         <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 0.5 }}>
           License
         </Typography>
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <Chip
-            size="sm"
-            variant="soft"
-            color={model.licenseKind === 'permissive' ? 'success' : 'warning'}
-            data-testid="models-detail-license-chip"
-          >
-            {model.licenseName ?? 'Not declared'}
-          </Chip>
+        <Stack direction="row" alignItems="center" flexWrap="wrap" useFlexGap spacing={1}>
+          {(model.licenseNames.length ? model.licenseNames : ['Not declared']).map((name, index) => (
+            <Chip
+              key={`${index}-${name}`}
+              size="sm"
+              variant="soft"
+              color={model.licenseKind === 'permissive' ? 'success' : 'warning'}
+              data-testid="models-detail-license-chip"
+            >
+              {name}
+            </Chip>
+          ))}
           <ExternalLink href={model.licenseUrl} testId="models-detail-license-link">
             Read the license
           </ExternalLink>
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="models-detail-license-host">
+            ({model.licenseHost})
+          </Typography>
         </Stack>
         {model.licenseKind === 'restricted' && (
           <Typography level="body-xs" sx={{ mt: 0.5 }}>
-            Not a standard permissive license. You will be asked to accept it before downloading.
+            {model.licenseNames.length > 1
+              ? 'Not all of these are standard permissive licenses. You will be asked to accept them before downloading.'
+              : 'Not a standard permissive license. You will be asked to accept it before downloading.'}
           </Typography>
         )}
       </Box>
@@ -314,6 +336,7 @@ function ModelDetail({
           model.builds.map(build => (
             <BuildRow
               key={build.id}
+              repo={model.id}
               build={build}
               pull={pulls.find(entry => entry.key === pullKey(model.id, build.id))}
               installed={!!build.ollamaRef && installedNames.has(build.ollamaRef.toLowerCase())}
@@ -345,10 +368,12 @@ export function ExploreTab({
   status,
   installed,
   pulls,
+  onRecheck,
 }: {
   status: ModelRuntimeStatus | null;
   installed: InstalledModelsResult | null;
   pulls: ModelPull[];
+  onRecheck: () => void;
 }) {
   const [query, setQuery] = useState(remembered.query);
   const [search, setSearch] = useState<SearchState>({ state: 'loading' });
@@ -498,7 +523,14 @@ export function ExploreTab({
 
       <Sheet variant="outlined" sx={{ borderRadius: 'md', p: 2, position: { md: 'sticky' }, top: { md: 8 } }}>
         {selected ? (
-          <ModelDetail key={selected} repo={selected} status={status} installedNames={installedNames} pulls={pulls} />
+          <ModelDetail
+            key={selected}
+            repo={selected}
+            status={status}
+            installedNames={installedNames}
+            pulls={pulls}
+            onRecheck={onRecheck}
+          />
         ) : (
           <Box data-testid="models-detail-empty">
             <Typography level="title-sm">Pick a result</Typography>

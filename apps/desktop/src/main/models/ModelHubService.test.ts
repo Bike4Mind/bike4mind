@@ -1,6 +1,8 @@
 import {
   HubAccessError,
   HubRateLimitError,
+  HuggingFaceHub,
+  LocalRuntimeError,
   RuntimeConnectionError,
   type HubGgufBuild,
   type HubModelDetail,
@@ -84,7 +86,7 @@ function harness(options: { detail?: HubModelDetail; verified?: string | null; h
   const hub = {
     endpoint: 'https://huggingface.co',
     search: vi.fn(async (): Promise<HubSearchPage> => ({ models: [], nextCursor: null })),
-    getModel: vi.fn(async () => options.detail ?? detail()),
+    getModel: vi.fn(async (_repo: string) => options.detail ?? detail()),
     verifyOllamaRef: vi.fn(async (): Promise<string | null> =>
       options.verified === undefined ? `hf.co/${REPO}:Q4_K_M` : options.verified
     ),
@@ -101,7 +103,14 @@ function harness(options: { detail?: HubModelDetail; verified?: string | null; h
   return { service, runtime, hub, pulls, pushed, installedChanged };
 }
 
-const request = { repo: REPO, buildId: 'qwen2.5-0.5b-instruct-q4_k_m', acceptLicense: false, confirmAccess: false };
+const request = {
+  repo: REPO,
+  buildId: 'qwen2.5-0.5b-instruct-q4_k_m',
+  revision: 'b'.repeat(40),
+  sizeBytes: 491_400_032,
+  acceptLicense: false,
+  confirmAccess: false,
+};
 
 describe('ModelHubService pulls', () => {
   it('verifies the ref, then pulls it with progress, and reports the model installed', async () => {
@@ -165,19 +174,102 @@ describe('ModelHubService pulls', () => {
     await expect(retry).resolves.toMatchObject({ ok: true });
   });
 
-  it('needs the license accepted for anything not clearly permissive', async () => {
-    const { service, hub, runtime, pulls } = harness({ detail: detail({ licenses: ['llama3.2'] }) });
+  it.each([[['llama3.2']], [['apache-2.0', 'gemma']], [[]]])(
+    'needs the license accepted unless every declared one is permissive: %j',
+    async licenses => {
+      const { service, hub, runtime, pulls } = harness({ detail: detail({ licenses }) });
 
-    const refused = await service.pull(request);
+      const refused = await service.pull(request);
+      expect(refused).toMatchObject({ ok: false, error: { kind: 'license-required' }, listed: false });
+      expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+      expect(service.pulls()).toEqual([]);
+
+      const accepted = service.pull({ ...request, acceptLicense: true });
+      await vi.waitFor(() => expect(pulls).toHaveLength(1));
+      pulls[0].resolve();
+      await expect(accepted).resolves.toMatchObject({ ok: true });
+      expect(runtime.pull).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('classifies a card that lists two licenses by both, end to end through the Hub client', async () => {
+    const repo = 'someone/Gemma-Remix-GGUF';
+    const sha = 'c'.repeat(40);
+    const oid = 'd'.repeat(64);
+    const json = (body: unknown) => Response.json(body);
+    const fetchStub = vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path === `/api/models/${repo}/revision/main`)
+        return json({
+          id: repo,
+          sha,
+          gated: false,
+          private: false,
+          tags: ['gguf'],
+          cardData: { license: ['apache-2.0', 'gemma'] },
+        });
+      if (path === `/api/models/${repo}/tree/${sha}`)
+        return json([{ type: 'file', path: 'Gemma-Remix-Q4_K_M.gguf', size: 4e8, lfs: { oid, size: 4e8 } }]);
+      return new Response('{"error":"not found"}', { status: 404 });
+    });
+    const { runtime } = harness();
+    const service = new ModelHubService({
+      runtime,
+      hub: new HuggingFaceHub({ fetch: fetchStub as unknown as typeof fetch }),
+      onPullsChanged: () => {},
+      onInstalledChanged: () => {},
+    });
+
+    const view = await service.detail(repo);
+    if (!view.ok) throw new Error(view.error.message);
+    expect(view.model).toMatchObject({ licenses: ['apache-2.0', 'gemma'], licenseKind: 'restricted' });
+    const build0 = view.model.builds[0];
+    const refused = await service.pull({
+      ...request,
+      repo,
+      buildId: build0.id,
+      revision: view.model.revision,
+      sizeBytes: build0.sizeBytes,
+    });
     expect(refused).toMatchObject({ ok: false, error: { kind: 'license-required' } });
-    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
-    expect(service.pulls()).toEqual([]);
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
 
-    const accepted = service.pull({ ...request, acceptLicense: true });
+  it('refuses a pull when the repo moved on from the commit or size the user reviewed', async () => {
+    const { service, hub, runtime } = harness();
+    const moved = await service.pull({ ...request, revision: 'e'.repeat(40) });
+    expect(moved).toMatchObject({ ok: false, error: { kind: 'changed' }, listed: false });
+    const resized = await service.pull({ ...request, sizeBytes: 9_000_000_000 });
+    expect(resized).toMatchObject({ ok: false, error: { kind: 'changed' } });
+    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+    expect(runtime.pull).not.toHaveBeenCalled();
+    expect(service.pulls()).toEqual([]);
+  });
+
+  it('refuses when the reviewed detail was evicted and the repo changed meanwhile', async () => {
+    const { service, hub, runtime } = harness();
+    let revision = 'b'.repeat(40);
+    hub.getModel.mockImplementation(async (repo: string) => detail({ id: repo, revision }));
+    const shown = await service.detail(REPO);
+    if (!shown.ok) throw new Error(shown.error.message);
+    for (let i = 0; i < 16; i++) await service.detail(`someone/other${i}`);
+    revision = 'f'.repeat(40);
+
+    const result = await service.pull({ ...request, revision: shown.model.revision });
+    expect(result).toMatchObject({ ok: false, error: { kind: 'changed' } });
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('explains how to clear a download Ollama cannot resume', async () => {
+    const { service, pulls } = harness();
+    const result = service.pull(request);
     await vi.waitFor(() => expect(pulls).toHaveLength(1));
-    pulls[0].resolve();
-    await expect(accepted).resolves.toMatchObject({ ok: true });
-    expect(runtime.pull).toHaveBeenCalledTimes(1);
+    pulls[0].reject(new LocalRuntimeError(`ollama could not pull hf.co/${REPO}:Q4_K_M: EOF`, 'ollama'));
+
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'interrupted' }, listed: true });
+    const message = service.pulls()[0].error?.message ?? '';
+    expect(message).toContain(`sha256-${SHA}-partial*`);
+    expect(message).toContain('restarting Ollama does not clear it');
   });
 
   it('blocks a gated build whose file Hugging Face hides', async () => {
@@ -206,12 +298,16 @@ describe('ModelHubService pulls', () => {
     expect(runtime.pull).not.toHaveBeenCalled();
   });
 
-  it('refuses to start when Ollama is not running', async () => {
-    const { service, hub } = harness({ healthy: false });
+  it('does not start when Ollama is not running, and keeps the failure in the list', async () => {
+    const { service, hub, runtime } = harness({ healthy: false });
     const result = await service.pull(request);
 
-    expect(result).toMatchObject({ ok: false, error: { kind: 'runtime-unavailable' } });
+    expect(result).toMatchObject({ ok: false, error: { kind: 'runtime-unavailable' }, listed: true });
+    expect(service.pulls()).toEqual([
+      expect.objectContaining({ phase: 'failed', error: expect.objectContaining({ kind: 'runtime-unavailable' }) }),
+    ]);
     expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+    expect(runtime.pull).not.toHaveBeenCalled();
   });
 
   it('refuses a build that cannot be pulled, with the reason', async () => {
@@ -271,11 +367,16 @@ describe('ModelHubService reads', () => {
     const { service, hub } = harness();
     const summary = { ...detail(), tags: [] };
     hub.search.mockResolvedValueOnce({
-      models: [summary, { ...summary, id: 'someone/Qwen2.5-7B-Instruct-abliterated-GGUF' }],
+      models: [
+        summary,
+        { ...summary, id: 'someone/Qwen2.5-7B-Instruct-abliterated-GGUF' },
+        { ...summary, id: 'mudler/gemma-4-26B-A4B-it-heretic-APEX-GGUF' },
+        { ...summary, id: 'someone/Plain-GGUF', baseModels: ['someone/qwen-2.5-3b-decensored'] },
+      ],
       nextCursor: 'next',
     });
     const found = await service.search({ query: 'qwen' });
-    expect(found.ok && found.models.map(model => model.abliterated)).toEqual([false, true]);
+    expect(found.ok && found.models.map(model => model.abliterated)).toEqual([false, true, true, true]);
     expect(found).toMatchObject({ nextCursor: 'next' });
 
     hub.search.mockRejectedValueOnce(new HubRateLimitError('slow down', 'huggingface', 30_000));
@@ -297,17 +398,34 @@ describe('ModelHubService reads', () => {
     expect(relative).toMatchObject({
       ok: true,
       model: {
-        licenseName: 'qwen-research',
+        licenseNames: ['qwen-research'],
         licenseKind: 'restricted',
         licenseUrl: `https://huggingface.co/${REPO}/blob/main/LICENSE`,
+        licenseHost: 'huggingface.co',
       },
     });
 
     const plain = await service.detail(REPO);
     expect(plain).toMatchObject({
       ok: true,
-      model: { licenseName: 'apache-2.0', licenseKind: 'permissive', licenseUrl: `https://huggingface.co/${REPO}` },
+      model: {
+        licenseNames: ['apache-2.0'],
+        licenseKind: 'permissive',
+        licenseUrl: `https://huggingface.co/${REPO}`,
+      },
     });
+  });
+
+  it.each([
+    ['javascript:alert(1)', `https://huggingface.co/${REPO}`, 'huggingface.co'],
+    ['JaVaScRiPt:alert(1)', `https://huggingface.co/${REPO}`, 'huggingface.co'],
+    ['file:///etc/passwd', `https://huggingface.co/${REPO}`, 'huggingface.co'],
+    ['//elsewhere.example/x', `https://huggingface.co/${REPO}`, 'huggingface.co'],
+    ['https://llama.meta.com/llama3/license/', 'https://llama.meta.com/llama3/license/', 'llama.meta.com'],
+  ])('keeps the license link https and names its host: %s', async (licenseLink, licenseUrl, licenseHost) => {
+    const { service, hub } = harness();
+    hub.getModel.mockResolvedValueOnce(detail({ licenses: ['llama3'], licenseLink }));
+    expect(await service.detail(REPO)).toMatchObject({ ok: true, model: { licenseUrl, licenseHost } });
   });
 
   it('removes a model and announces it', async () => {

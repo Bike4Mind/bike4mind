@@ -22,6 +22,7 @@ import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
+import type { ModelsInUse } from '../models/InstalledTab';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
@@ -337,6 +338,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = catalog.models.find(model => model.id === conversation.session?.model);
+  const modelsInUse = useMemo<ModelsInUse>(() => {
+    const localName = (id: string | undefined) =>
+      catalog.models.find(model => model.id === id && model.backend === 'local-ollama')?.name ?? null;
+    return {
+      active: localName(conversation.session?.model),
+      conversations: sessions.filter(session => !session.archived).flatMap(session => localName(session.model) ?? []),
+    };
+  }, [catalog.models, conversation.session?.model, sessions]);
   const blockedReason =
     modelOption?.supportsVision === false && draft.attachments.some(attachment => attachment.kind === 'image')
       ? `${modelOption.name} cannot read images. Pick a model that can, or remove the image before sending.`
@@ -666,7 +675,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'models' ? (
-        <ModelsScreen onClose={() => setScreen('conversation')} />
+        <ModelsScreen onClose={() => setScreen('conversation')} inUse={modelsInUse} />
       ) : screen === 'skill-market' ? (
         <SkillMarketPanel initial={marketListing} onClose={() => setScreen('customize')} />
       ) : screen === 'customize' ? (

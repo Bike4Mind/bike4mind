@@ -17,6 +17,10 @@ export interface PullConsent {
   confirmAccess: boolean;
 }
 
+function joinNames(names: readonly string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : (names[0] ?? '');
+}
+
 /** Size and license before anything downloads; restricted licenses and gated repos need an explicit tick. */
 export function PullDialog({
   model,
@@ -33,14 +37,20 @@ export function PullDialog({
   const [confirmAccess, setConfirmAccess] = useState(false);
   const restricted = model.licenseKind === 'restricted';
   const ready = (!restricted || acceptLicense) && (!model.needsAccess || confirmAccess);
-  const licenseName = model.licenseName ?? 'No license declared';
+  const names = model.licenseNames;
+  const several = names.length > 1;
+  const acceptLabel =
+    names.length === 0
+      ? 'This repo declares no license. I accept the terms on its model card.'
+      : `I have read the ${joinNames(names)} license${several ? 's' : ''} and accept ${several ? 'their' : 'its'} terms.`;
 
   return (
     <Modal open onClose={onClose}>
       <ModalDialog size="md" sx={{ maxWidth: 520 }} data-testid="models-pull-dialog">
         <DialogTitle>Download {build.quant ?? build.id}?</DialogTitle>
         <DialogContent>
-          <Stack spacing={1.25}>
+          {/* Joy's checkbox hit area sits 1px outside its box, which otherwise scrolls this content both ways. */}
+          <Stack spacing={1.25} sx={{ p: '1px' }}>
             <Typography level="body-sm" fontFamily="code">
               {model.id}
             </Typography>
@@ -50,21 +60,19 @@ export function PullDialog({
               Ollama stores it with your other local models; you can remove it from Installed at any time.
             </Typography>
             <Typography level="body-sm" data-testid="models-pull-dialog-license">
-              License: <strong>{licenseName}</strong>{' '}
+              {several ? 'Licenses' : 'License'}:{' '}
+              <strong>{names.length ? names.join(', ') : 'No license declared'}</strong>{' '}
               <ExternalLink href={model.licenseUrl} testId="models-pull-dialog-license-link">
                 Read it
-              </ExternalLink>
+              </ExternalLink>{' '}
+              ({model.licenseHost})
             </Typography>
             {restricted && (
               <Checkbox
                 size="sm"
                 checked={acceptLicense}
                 onChange={event => setAcceptLicense(event.target.checked)}
-                label={
-                  model.licenseName
-                    ? `I have read the ${model.licenseName} license and accept its terms.`
-                    : 'This repo declares no license. I accept the terms on its model card.'
-                }
+                label={acceptLabel}
                 slotProps={{ input: { 'data-testid': 'models-pull-dialog-license-checkbox' } }}
               />
             )}

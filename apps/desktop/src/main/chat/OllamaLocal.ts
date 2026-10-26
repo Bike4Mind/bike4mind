@@ -17,6 +17,13 @@ const showSchema = z.object({
   ...remoteFields,
 });
 
+async function ollamaError(response: Response): Promise<Error> {
+  // Ollama answers "model '...' not found" once the model is deleted, e.g. from the Models screen.
+  if (response.status === 404 && /model .* not found/i.test(await response.text().catch(() => '')))
+    return new Error('This model was removed from Ollama. Pick another model.');
+  return new Error(`Ollama returned HTTP ${response.status}.`);
+}
+
 function usesRemoteModel(model: { remote_host?: string; remote_model?: string }): boolean {
   return !!(model.remote_host?.trim() || model.remote_model?.trim());
 }
@@ -62,7 +69,7 @@ export class OllamaLocal {
           : {}),
       }),
     });
-    if (!response.ok || !response.body) throw new Error(`Ollama returned HTTP ${response.status}.`);
+    if (!response.ok || !response.body) throw await ollamaError(response);
     const reader = response.body.getReader();
     const decoder = new StringDecoder('utf8');
     let pending = '';
@@ -110,7 +117,7 @@ export class OllamaLocal {
       body: body ? JSON.stringify(body) : undefined,
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS),
     });
-    if (!response.ok) throw new Error(`Ollama returned HTTP ${response.status}.`);
+    if (!response.ok) throw await ollamaError(response);
     return response.json();
   }
 }

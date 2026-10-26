@@ -98,6 +98,23 @@ export function toModelHubError(error: unknown): ModelHubError {
   return hubError('failed', String(error));
 }
 
+/** Ollama's resume reads one small JSON file per chunk; a pull stopped while writing one leaves it truncated. */
+function isInterruptedPull(error: unknown): boolean {
+  return (
+    error instanceof LocalRuntimeError && !error.runtimeId.startsWith('huggingface') && /: EOF$/.test(error.message)
+  );
+}
+
+function interruptedPullError(sha256: string | null): ModelHubError {
+  const files = sha256 ? `sha256-${sha256}-partial*` : 'ending in -partial';
+  return hubError(
+    'interrupted',
+    `An earlier download of this model was interrupted and Ollama cannot resume it; restarting Ollama does not ` +
+      `clear it. Delete the files named ${files} from Ollama's models folder (usually ~/.ollama/models/blobs), ` +
+      'then download again.'
+  );
+}
+
 function toCard(model: HubModelSummary): HubModelCard {
   return {
     id: model.id,
@@ -105,10 +122,10 @@ function toCard(model: HubModelSummary): HubModelCard {
     downloads: model.downloads,
     likes: model.likes,
     updatedAt: model.updatedAt,
-    license: model.licenses[0] ?? null,
+    licenses: model.licenses,
     gated: model.gated,
     private: model.private,
-    abliterated: isAbliteratedModel(model.id, model.tags),
+    abliterated: isAbliteratedModel(model.id, model.tags, model.baseModels),
   };
 }
 
@@ -140,13 +157,15 @@ function toView(endpoint: string, detail: HubModelDetail): HubModelView {
     ollamaRef: build.ollamaRef,
     blockedReason: blockedReason(detail, build),
   }));
+  const url = licenseUrl(endpoint, detail);
   return {
     ...toCard(detail),
     url: `${endpoint}/${detail.id}`,
     revision: detail.revision,
-    licenseName: detail.licenseName ?? detail.licenses[0] ?? null,
-    licenseUrl: licenseUrl(endpoint, detail),
-    licenseKind: licenseKind(detail.licenses[0] ?? null),
+    licenseNames: detail.licenses.map(id => (id === 'other' && detail.licenseName) || id),
+    licenseUrl: url,
+    licenseHost: new URL(url).host,
+    licenseKind: licenseKind(detail.licenses),
     baseModels: detail.baseModels,
     builds,
     projectorBytes: detail.projectors.length ? Math.max(...detail.projectors.map(entry => entry.sizeBytes)) : null,
@@ -228,7 +247,7 @@ export class ModelHubService {
     const key = pullKey(request.repo, request.buildId);
     const existing = this.#pulls.get(key);
     if (existing && existing.view.phase !== 'failed')
-      return { ok: false, error: hubError('already-pulling', 'This model is already downloading.') };
+      return { ok: false, error: hubError('already-pulling', 'This model is already downloading.'), listed: true };
 
     const controller = new AbortController();
     const entry: PullEntry = {
@@ -251,25 +270,30 @@ export class ModelHubService {
 
     const refuse = (error: ModelHubError): ModelPullResult => {
       this.#drop(key, entry);
-      return { ok: false, error };
+      return { ok: false, error, listed: false };
     };
 
-    let detail: HubModelDetail;
+    let sha256: string | null = null;
     let ref: string | null;
     try {
-      detail = await this.#loadDetail(request.repo, false);
+      // Cached unless evicted; either way it must still be the commit and size the dialog showed.
+      const detail = await this.#loadDetail(request.repo, false);
       const build = detail.builds.find(candidate => candidate.id === request.buildId);
       if (!build) return refuse(hubError('not-found', 'That build is no longer in this repo.'));
+      sha256 = build.files[0]?.sha256 ?? null;
+      if (detail.revision !== request.revision || build.sizeBytes !== request.sizeBytes)
+        return refuse(hubError('changed', 'This repo changed since you reviewed it. Review it again, then download.'));
       const reason = blockedReason(detail, build);
       if (reason) return refuse(hubError('cannot-pull', reason));
-      if (licenseKind(detail.licenses[0] ?? null) === 'restricted' && !request.acceptLicense)
+      if (licenseKind(detail.licenses) === 'restricted' && !request.acceptLicense)
         return refuse(hubError('license-required', 'Accept the license before downloading.'));
       if (detail.ollamaNeedsSshKey && !request.confirmAccess)
         return refuse(hubError('access-required', 'Confirm the Hugging Face access steps before downloading.'));
       entry.view = { ...entry.view, quant: build.quant, expectedBytes: build.sizeBytes };
 
       const health = await this.#deps.runtime.health();
-      if (!health.ok) return refuse(hubError('runtime-unavailable', 'Ollama is not running.'));
+      if (!health.ok)
+        return this.#fail(key, entry, hubError('runtime-unavailable', 'Ollama is not running. Start it, then retry.'));
       // The registry serves the first file whose name ends with the tag; only its manifest proves which one.
       ref = await this.#deps.hub.verifyOllamaRef(detail, build, { signal: controller.signal });
     } catch (error) {
@@ -306,7 +330,7 @@ export class ModelHubService {
       });
     } catch (error) {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
-      return this.#fail(key, entry, toModelHubError(error));
+      return this.#fail(key, entry, isInterruptedPull(error) ? interruptedPullError(sha256) : toModelHubError(error));
     }
     this.#drop(key, entry);
     this.#deps.onInstalledChanged();
@@ -359,7 +383,7 @@ export class ModelHubService {
       entry.view = { ...entry.view, phase: 'failed', error };
       this.#push(true);
     }
-    return { ok: false, error };
+    return { ok: false, error, listed: true };
   }
 
   #drop(key: string, entry: PullEntry): void {
