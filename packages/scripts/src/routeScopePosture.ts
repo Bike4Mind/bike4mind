@@ -73,8 +73,9 @@ export function scopePostureFailures(routes: readonly PostureRoute[], baseline: 
       failures.push(
         posture.verbs
           ? `${route} (${file}) accepts API keys on ${posture.verbs.join(', ')} with no scopes. Its contract ` +
-              `declares scopes for the other verbs (methodScopes), so add scopes for ${posture.verbs.join(', ')} ` +
-              `in that contract. ${fixes(route)}`
+              `declares scopes for the other verbs (methodScopes). If ${posture.verbs.join(', ')} is a jwtOnly ` +
+              `operation, this is a known false positive (verbs are grouped by scopes, not auth): list the route ` +
+              `in reviewedUnscoped saying so. ${fixes(route)}`
           : `${route} (${file}) accepts API keys but declares no requiredScopes. ${fixes(route)}`
       );
     }

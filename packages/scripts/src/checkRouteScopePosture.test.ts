@@ -91,6 +91,7 @@ describe('scopePostureFailures', () => {
     const [failure] = scopePostureFailures([route('/api/c', { kind: 'unscoped', verbs: ['POST'] })], empty);
     expect(failure).toContain('on POST with no scopes');
     expect(failure).toContain('contract');
+    expect(failure).toContain('jwtOnly operation');
   });
 
   it('rejects a route added to legacyUnscoped after it was seeded', () => {
