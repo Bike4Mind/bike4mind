@@ -9,8 +9,10 @@
 // apps/client/pages/api and cannot see a Lambda declared in infra/.
 //
 // The repo-guards CI job installs nothing, so this is a hand-written scanner
-// rather than esbuild/typescript. Known limit, shared with the other two scans: a
-// `defineLambdaRoute(` inside a string literal counts as a use.
+// rather than esbuild/typescript. Known limits: a `defineLambdaRoute(` inside a
+// string literal counts as a use (shared with the other two scans), and the import
+// walk proves a routed module is reachable from the handler, not that the exported
+// handler delegates to it, so importing any value from a routed module passes.
 //
 // Usage: node scripts/check-function-url-contracts.mjs <repo-root>
 //   stdout: violating handler files, sorted and deduped (empty when clean).
