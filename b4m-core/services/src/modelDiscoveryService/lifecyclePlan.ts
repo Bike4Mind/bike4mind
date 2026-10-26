@@ -748,8 +748,8 @@ function aggregatorSuggestions(input: PlanContext, sunsetting: ReadonlySet<strin
 
     suggestions.push({
       modelId: signal.modelId,
-      // A date-only claim must say 'active' outright: the accept handler falls back
-      // to 'deprecated' for a status-less suggestion, which would hide the model now.
+      // A date-only claim must say 'active' outright: a model with no held
+      // lifecycle would otherwise default to 'deprecated' on accept, hiding it now.
       status: signal.lifecycle.status ?? lifecycleOf(existing)?.status ?? 'active',
       deprecationDate: signal.lifecycle.deprecationDate,
       retirementDate: signal.lifecycle.retirementDate,

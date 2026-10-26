@@ -123,7 +123,7 @@ describe('planLifecycleSignals', () => {
   });
 
   it('marks a date-only aggregator suggestion active when the held model has no lifecycle status', () => {
-    // Accept falls back to 'deprecated' for a status-less suggestion, which would hide the model now.
+    // With no held lifecycle, accept would default to 'deprecated' and hide the model now.
     const result = plan({
       base: new Map([active('gpt-5', { lifecycle: {} })]),
       aggregatorSunsets: new Map([
