@@ -4,15 +4,16 @@
  *
  * Stages create their own CloudFront-scope WebACL in us-east-1 unless an externally managed one
  * is configured. Production always looks up an externally managed WebACL by WAF_WEB_ACL_NAME (see
- * wafAssociation.ts) and only creates the alert delivery resources below. The staging stage does
- * the same when WAF_WEB_ACL_NAME is set, and creates none of the alert delivery resources.
+ * wafAssociation.ts) and only creates the alert delivery resources below. The staging stage and
+ * preview stages do the same when WAF_WEB_ACL_NAME is set, and create none of the alert delivery
+ * resources.
  */
 
 import { buildDevWafRuleJson, getDevWafMeta, parseWafBlockedIps } from './wafPolicy';
 import { resolveExternalWafAssociation } from './wafAssociation';
 import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, isPreviewStage } from './constants';
 import { parseAlarmThreshold, SIGNUP_EDGE_SIGNAL_DEFAULT } from './signupAlarmThreshold';
 
 // WAF is disabled by default. Enable via ENABLE_WAF=true environment variable.
@@ -21,6 +22,7 @@ const isWafEnabled = process.env.ENABLE_WAF === 'true';
 
 const externalWaf = resolveExternalWafAssociation({
   stage: $app.stage,
+  isPreview: isPreviewStage,
   enableWaf: process.env.ENABLE_WAF,
   webAclName: process.env.WAF_WEB_ACL_NAME,
 });
@@ -130,7 +132,7 @@ export const wafStageWebAcl =
     : undefined;
 
 /**
- * The externally managed WebACL (production, and staging when configured), looked up by name.
+ * The externally managed WebACL (production, and staging and previews when configured), looked up by name.
  */
 const externalWebAcl = externalWaf
   ? aws.wafv2.getWebAclOutput({ name: externalWaf.webAclName, scope: 'CLOUDFRONT' }, { provider: wafProviderUsEast1 })

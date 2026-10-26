@@ -267,7 +267,7 @@ const routerInstance = shouldUseSharedRouter
           }
 
           // Attach the WAF if enabled (ENABLE_WAF=true): the stage-owned ACL, or the
-          // externally managed one looked up by name (production, and staging when configured).
+          // externally managed one looked up by name (production, and staging and previews when configured).
           // Uses SST v4's first-class webAclArn property on CdnArgs, which internally
           // maps to the CloudFront webAclId field — no manual transform chaining needed.
           if (wafWebAcl) {

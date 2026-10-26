@@ -13,17 +13,20 @@ const STAGING_STAGE = 'dev';
 /**
  * Resolves the externally managed ACL name, or undefined for stages that own their ACL.
  * Production throws instead of returning undefined: a missing name would silently detach the ACL
- * from the CDN on the next deploy. Staging attaches externally only when ENABLE_WAF is true and a
- * name is set, and otherwise keeps its stage-owned ACL. All other stages own their ACL.
+ * from the CDN on the next deploy. Staging and preview stages attach externally only when
+ * ENABLE_WAF is true and a name is set, and otherwise keep their stage-owned ACL. All other stages
+ * own their ACL. `isPreview` is the preview-stage flag from constants.ts, passed in so this module
+ * stays free of SST globals.
  */
 export function resolveExternalWafAssociation(args: {
   stage: string;
+  isPreview: boolean;
   enableWaf: string | undefined;
   webAclName: string | undefined;
 }): ExternalWafAssociation | undefined {
-  if (args.stage === STAGING_STAGE) {
-    const stagingName = args.webAclName?.trim();
-    return args.enableWaf === 'true' && stagingName ? { webAclName: stagingName } : undefined;
+  if (args.stage !== 'production' && (args.stage === STAGING_STAGE || args.isPreview)) {
+    const name = args.webAclName?.trim();
+    return args.enableWaf === 'true' && name ? { webAclName: name } : undefined;
   }
   if (args.stage !== 'production') return undefined;
 

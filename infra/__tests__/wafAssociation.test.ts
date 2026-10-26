@@ -5,39 +5,72 @@ import { resolveExternalWafAssociation } from '../wafAssociation';
 describe('resolveExternalWafAssociation', () => {
   it('returns the trimmed ACL name for production', () => {
     expect(
-      resolveExternalWafAssociation({ stage: 'production', enableWaf: 'true', webAclName: ' bike4mind-acl ' })
+      resolveExternalWafAssociation({
+        stage: 'production',
+        isPreview: false,
+        enableWaf: 'true',
+        webAclName: ' bike4mind-acl ',
+      })
     ).toEqual({ webAclName: 'bike4mind-acl' });
   });
 
   it.each([undefined, '', '   '])('throws in production when WAF_WEB_ACL_NAME is %j', webAclName => {
-    expect(() => resolveExternalWafAssociation({ stage: 'production', enableWaf: 'true', webAclName })).toThrow(
+    expect(() => resolveExternalWafAssociation({ stage: 'production', isPreview: false, enableWaf: 'true', webAclName })).toThrow(
       /WAF_WEB_ACL_NAME/
     );
   });
 
   it.each([undefined, '', 'false', 'TRUE'])('throws in production when ENABLE_WAF is %j', enableWaf => {
-    expect(() => resolveExternalWafAssociation({ stage: 'production', enableWaf, webAclName: 'acl' })).toThrow(
+    expect(() => resolveExternalWafAssociation({ stage: 'production', isPreview: false, enableWaf, webAclName: 'acl' })).toThrow(
       /ENABLE_WAF/
     );
   });
 
   it('returns the trimmed ACL name for the staging stage when ENABLE_WAF is true', () => {
-    expect(resolveExternalWafAssociation({ stage: 'dev', enableWaf: 'true', webAclName: ' staging-acl ' })).toEqual({
+    expect(resolveExternalWafAssociation({ stage: 'dev', isPreview: false, enableWaf: 'true', webAclName: ' staging-acl ' })).toEqual({
       webAclName: 'staging-acl',
     });
   });
 
   it.each([undefined, '', '   '])('keeps the staging stage-owned ACL when WAF_WEB_ACL_NAME is %j', webAclName => {
-    expect(resolveExternalWafAssociation({ stage: 'dev', enableWaf: 'true', webAclName })).toBeUndefined();
+    expect(resolveExternalWafAssociation({ stage: 'dev', isPreview: false, enableWaf: 'true', webAclName })).toBeUndefined();
   });
 
   it.each([undefined, '', 'false'])('keeps the staging stage-owned ACL when ENABLE_WAF is %j', enableWaf => {
-    expect(resolveExternalWafAssociation({ stage: 'dev', enableWaf, webAclName: 'acl' })).toBeUndefined();
+    expect(resolveExternalWafAssociation({ stage: 'dev', isPreview: false, enableWaf, webAclName: 'acl' })).toBeUndefined();
   });
 
-  it.each(['staging', 'pr5655'])('leaves %s to own its ACL', stage => {
-    expect(resolveExternalWafAssociation({ stage, enableWaf: 'true', webAclName: 'acl' })).toBeUndefined();
-    expect(resolveExternalWafAssociation({ stage, enableWaf: undefined, webAclName: undefined })).toBeUndefined();
+  it.each(['staging', 'shared-dev'])('leaves %s to own its ACL', stage => {
+    expect(
+      resolveExternalWafAssociation({ stage, isPreview: false, enableWaf: 'true', webAclName: 'acl' })
+    ).toBeUndefined();
+    expect(
+      resolveExternalWafAssociation({ stage, isPreview: false, enableWaf: undefined, webAclName: undefined })
+    ).toBeUndefined();
+  });
+
+  it('returns the trimmed ACL name for a preview stage when ENABLE_WAF is true', () => {
+    expect(
+      resolveExternalWafAssociation({ stage: 'pr5655', isPreview: true, enableWaf: 'true', webAclName: ' acl ' })
+    ).toEqual({ webAclName: 'acl' });
+  });
+
+  it.each([undefined, '', '   '])('keeps the preview stage-owned ACL when WAF_WEB_ACL_NAME is %j', webAclName => {
+    expect(
+      resolveExternalWafAssociation({ stage: 'pr5655', isPreview: true, enableWaf: 'true', webAclName })
+    ).toBeUndefined();
+  });
+
+  it.each([undefined, '', 'false'])('keeps the preview stage-owned ACL when ENABLE_WAF is %j', enableWaf => {
+    expect(
+      resolveExternalWafAssociation({ stage: 'pr5655', isPreview: true, enableWaf, webAclName: 'acl' })
+    ).toBeUndefined();
+  });
+
+  it('never lets the preview flag soften the production requirements', () => {
+    expect(() =>
+      resolveExternalWafAssociation({ stage: 'production', isPreview: true, enableWaf: 'true', webAclName: '' })
+    ).toThrow(/WAF_WEB_ACL_NAME/);
   });
 });
 
@@ -54,7 +87,10 @@ const resources = vi.hoisted(() => {
 });
 
 vi.mock('../secrets', () => ({ secrets: { SLACK_ERROR_REPORTING_WEBHOOK_URL: 'webhook-secret' } }));
-vi.mock('../constants', () => ({ DEFAULT_LAMBDA_ENVIRONMENT: {} }));
+vi.mock('../constants', () => ({
+  DEFAULT_LAMBDA_ENVIRONMENT: {},
+  isPreviewStage: /^pr\d+$/.test($app.stage),
+}));
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -222,25 +258,73 @@ describe('staging WAF wiring', () => {
   });
 });
 
-describe('non-production WAF wiring', () => {
-  it('keeps creating a stage-owned ACL and does not look anything up', async () => {
-    vi.stubEnv('WAF_WEB_ACL_NAME', '');
-    await loadWaf('pr5655');
+describe('preview WAF wiring', () => {
+  it('attaches the ACL by name and creates nothing it owns when a name is set', async () => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', 'bike4mind-preview-allowlist');
+    const waf = await loadWaf('pr1234');
+
+    expect(resources.lookup).toHaveBeenCalledWith(
+      { name: 'bike4mind-preview-allowlist', scope: 'CLOUDFRONT' },
+      expect.objectContaining({ provider: expect.objectContaining({ region: 'us-east-1' }) })
+    );
+    expect(waf.wafWebAcl).toBeDefined();
+    expect(waf.wafWebAclArn).toBeDefined();
+    expect(waf.wafStageWebAcl).toBeUndefined();
+    expect(waf.wafEmergencyIpSet).toBeUndefined();
+    expect(waf.wafLogGroup).toBeUndefined();
+    expect(waf.wafLoggingConfig).toBeUndefined();
+
+    const names = createdNames();
+    for (const owned of ['WafEmergencyIpBlockSet', 'WafLogGroup', 'WafWebAcl', 'WafLoggingConfiguration']) {
+      expect(names, owned).not.toContain(owned);
+    }
+  });
+
+  it('does not create or look up any production alarm resources', async () => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', 'bike4mind-preview-allowlist');
+    await loadWaf('pr1234');
+
+    expect(resources.topicLookup).not.toHaveBeenCalled();
+    const names = createdNames();
+    for (const prodOnly of [
+      'WafOobAlarmTopic',
+      'WafOobAlarmTopicEmailSub',
+      'WafAlarmSlackHandler',
+      'WafAlarmSlackHandlerSnsPermission',
+      'WafAlarmSlackHandlerDlq',
+      'WafAlarmSlackHandlerDlqPolicy',
+      'WafAlarmSlackHandlerSubscription',
+      'WafAlarmSlackHandlerDlqMessages',
+      'WafAlarmSlackHandlerDlqAge',
+      'wafOtcEdgeSignalFilter',
+      'wafOtcEdgeSignalRate',
+    ]) {
+      expect(names, prodOnly).not.toContain(prodOnly);
+    }
+  });
+
+  it.each(['', '   '])('keeps the stage-owned ACL when WAF_WEB_ACL_NAME is %j', async name => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', name);
+    const waf = await loadWaf('pr5655');
 
     expect(createdNames()).toEqual(
       expect.arrayContaining(['WafEmergencyIpBlockSet', 'WafLogGroup', 'WafWebAcl', 'WafLoggingConfiguration'])
     );
     expect(createdNames()).not.toContain('WafAlarmSlackHandler');
+    expect(waf.wafStageWebAcl).toBeDefined();
     expect(resources.lookup).not.toHaveBeenCalled();
   });
+});
 
-  it('ignores WAF_WEB_ACL_NAME on preview stages', async () => {
-    vi.stubEnv('WAF_WEB_ACL_NAME', 'bike4mind-api-protection-dev');
-    await loadWaf('pr1234');
+describe('other non-production WAF wiring', () => {
+  it('keeps creating a stage-owned ACL and does not look anything up', async () => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', 'bike4mind-preview-allowlist');
+    await loadWaf('shared-dev');
 
     expect(createdNames()).toEqual(
       expect.arrayContaining(['WafEmergencyIpBlockSet', 'WafLogGroup', 'WafWebAcl', 'WafLoggingConfiguration'])
     );
+    expect(createdNames()).not.toContain('WafAlarmSlackHandler');
     expect(resources.lookup).not.toHaveBeenCalled();
   });
 });
