@@ -26,7 +26,7 @@ jobs:
     # required "validate" check always reports (forks are excluded and can't reach
     # the merge queue anyway). The actual title lint is gated to real PRs below.
     if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     steps:
       - name: Validate PR title (Conventional Commits)

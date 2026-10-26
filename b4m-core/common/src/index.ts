@@ -34,6 +34,7 @@ export * from './soundPricing';
 export * from './musicGeneration';
 export * from './studioFeatureFlags';
 export * from './schemas';
+export * from './modelHub';
 // Transport-agnostic API endpoint contracts. Pure data (no `.openapi()`), so
 // safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately
 // NOT exported here - it runs extendZodWithOpenApi and is generate-time only.

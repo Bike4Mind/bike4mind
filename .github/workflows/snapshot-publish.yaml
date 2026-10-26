@@ -29,7 +29,7 @@ on:
 
 jobs:
   snapshot-publish:
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 20
     if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') && inputs.head-branch != 'main'
     permissions:
