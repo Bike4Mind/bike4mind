@@ -7,14 +7,17 @@ import type { IMessage, ThinkingVisibility } from '@bike4mind/common';
 type Callback = (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>;
 
 /** One turn: a tagged thinking block, inline reasoning, then the answer. */
-function reasoningLlm(answer: string): ICompletionBackend {
+/** A backend that returns reasoning separately never emits tagged frames. */
+function reasoningLlm(answer: string, tagged = true): ICompletionBackend {
   return {
     currentModel: 'deepseek-reasoner',
     getModelInfo: async () => [],
     complete: async (_model: string, _messages: IMessage[], _options: Partial<ICompletionOptions>, cb: Callback) => {
-      await cb(['<think>'], { channel: 'reasoning' });
-      await cb(['tagged trace'], { channel: 'reasoning' });
-      await cb(['</think>'], { channel: 'reasoning' });
+      if (tagged) {
+        await cb(['<think>'], { channel: 'reasoning' });
+        await cb(['tagged trace'], { channel: 'reasoning' });
+        await cb(['</think>'], { channel: 'reasoning' });
+      }
       await cb([answer], { inputTokens: 10, outputTokens: 5, toolsUsed: [] });
     },
     pushToolMessages: vi.fn(),
@@ -24,15 +27,17 @@ function reasoningLlm(answer: string): ICompletionBackend {
 function buildAgent(
   thinkingVisibility?: ThinkingVisibility,
   model = 'deepseek-reasoner',
-  answer = '<think>inline trace</think>The answer.'
+  answer = '<think>inline trace</think>The answer.',
+  modelBackend?: string
 ) {
   const context: AgentContext = {
     userId: 'u1',
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    llm: reasoningLlm(answer),
+    llm: reasoningLlm(answer, !modelBackend),
     model,
     tools: [],
     maxIterations: 3,
+    ...(modelBackend && { modelBackend }),
     ...(thinkingVisibility && { thinkingVisibility }),
   };
   const agent = new ReActAgent(context);
@@ -52,8 +57,16 @@ describe('ReActAgent thinking visibility', () => {
   it('withholds on the runIteration path too', async () => {
     const { agent, deltas } = buildAgent('none');
     const result = await agent.runIteration('q');
+    expect(deltas.join('')).toBe('The answer.');
     expect(deltas.join('')).not.toMatch(/trace/);
+    expect(JSON.stringify(result)).toContain('The answer.');
     expect(JSON.stringify(result)).not.toMatch(/trace/);
+  });
+
+  it('keeps a GPT answer that mentions the marker literally', async () => {
+    const { agent } = buildAgent('none', 'gpt-4o', 'Wrap it in <think> tags.', 'openai');
+    const result = await agent.run('q');
+    expect(result.finalAnswer).toBe('Wrap it in <think> tags.');
   });
 
   it('keeps a Claude answer that mentions the marker literally', async () => {

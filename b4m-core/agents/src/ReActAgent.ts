@@ -1065,7 +1065,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   /** One filter per provider call, or null when the caller may see all of this model's reasoning. */
   private createReasoningWithholder(): ReasoningWithholder | null {
     return withholdsReasoning(this.context.thinkingVisibility ?? 'raw', this.context.model)
-      ? createReasoningWithholder(reasoningChannelOf({ id: this.context.model }))
+      ? createReasoningWithholder(
+          reasoningChannelOf({
+            id: this.context.model,
+            backend: this.context.modelBackend,
+            adapterFamily: this.context.modelAdapterFamily,
+          })
+        )
       : null;
   }
 

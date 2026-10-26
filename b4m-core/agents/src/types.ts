@@ -169,6 +169,9 @@ export interface AgentContext {
    * Omitted means `raw`. Provider thinking blocks still ride the tool round trip either way.
    */
   thinkingVisibility?: ThinkingVisibility;
+  /** Catalog backend/adapter family of `model`; picks how reasoning is separated from the answer when it is withheld. */
+  modelBackend?: string;
+  modelAdapterFamily?: string;
   /**
    * Resolver invoked when the model calls a tool that isn't in `tools`.
    * Returning a tool schema causes the agent to push it into `tools` and

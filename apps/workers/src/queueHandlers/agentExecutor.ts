@@ -2272,6 +2272,8 @@ async function processExecution(
       ...(artifactEmissionPrompt && { artifactEmissionPrompt }),
       ...buildReActAgentRuntimeConfig(execution),
       thinkingVisibility,
+      modelBackend: modelInfo?.backend,
+      modelAdapterFamily: modelInfo?.adapterFamily,
     });
 
     // Restore from checkpoint if continuing

@@ -666,10 +666,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
   // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
+  // DeepSeek reasons unless told not to, so withheld reasoning would still be billed.
   const thinking = withOllamaThinkingDefault(
-    options?.thinking?.enabled && modelInfo?.can_think && !suppressThinking
-      ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
-      : undefined,
+    suppressThinking && modelInfo?.backend === ModelBackend.DeepSeek
+      ? { enabled: false, budget_tokens: 0 }
+      : options?.thinking?.enabled && modelInfo?.can_think && !suppressThinking
+        ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
+        : undefined,
     modelInfo
   );
   const reasoningShortfall =

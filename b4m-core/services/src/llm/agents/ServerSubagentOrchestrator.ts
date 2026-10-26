@@ -686,6 +686,7 @@ export class ServerSubagentOrchestrator {
       }
     }
 
+    const effectiveModelInfo = this.deps.availableModels?.find(m => m.id === effectiveModel);
     const agent = new ReActAgent({
       userId: this.deps.userId,
       logger: this.deps.logger,
@@ -696,6 +697,8 @@ export class ServerSubagentOrchestrator {
       systemPrompt,
       thinking: this.deps.thinking,
       thinkingVisibility: this.deps.thinkingVisibility,
+      modelBackend: effectiveModelInfo?.backend,
+      modelAdapterFamily: effectiveModelInfo?.adapterFamily,
       // Appended AFTER `systemPrompt` in getSystemPrompt(); only present when the
       // host opted into artifacts, so subagents emit <artifact> tags to bubble up.
       ...(this.deps.artifactEmissionPrompt && { artifactEmissionPrompt: this.deps.artifactEmissionPrompt }),

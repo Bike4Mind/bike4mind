@@ -194,4 +194,16 @@ describe('executeCompletion - thinking visibility', () => {
     await run(CLAUDE_4, async () => 'none', { thinking: { enabled: true } });
     expect(capturedOptions).toHaveProperty('thinking');
   });
+
+  it('turns DeepSeek reasoning off when it is withheld, so it is not billed', async () => {
+    frames = inlineStream;
+    await run(INLINE_REASONER, async () => 'none', { thinking: { enabled: true } });
+    expect(capturedOptions).toMatchObject({ thinking: { enabled: false } });
+  });
+
+  it('leaves thinking unset when a non-DeepSeek inline reasoner is withheld', async () => {
+    frames = inlineStream;
+    await run(CLAUDE_3, async () => 'none', { thinking: { enabled: true } });
+    expect(capturedOptions).not.toHaveProperty('thinking');
+  });
 });
