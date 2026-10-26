@@ -153,7 +153,8 @@ export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
 export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
 const originVerifyInjection = $interpolate`
-  // CloudFront adds computed viewer headers after this event; never forward a viewer's copy.
+  // Drops a viewer-forged copy. AWS docs show computed cloudfront-viewer-* headers already present here,
+  // so this may also drop the real JA4: remove it before adding JA4 to the origin request policy.
   delete event.request.headers["${CLOUDFRONT_VIEWER_JA4_HEADER}"];
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
