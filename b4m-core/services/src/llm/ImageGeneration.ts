@@ -1571,15 +1571,8 @@ export class ImageGenerationService {
       });
 
       // Per-image prices are exact, so the final debit is the unbiased draw on usageCostUsd
-      // (may be 0), replacing the rounded-up pre-flight figure.
-      const creditTransactions = this.db.creditTransactions;
-      const settlement =
-        adminSettingsEnforceCredits &&
-        typeof quest.creditsUsed === 'number' &&
-        Number.isFinite(quest.creditsUsed) &&
-        creditTransactions
-          ? { creditTransactions, credits: usdToCreditsStochastic(usageCostUsd) }
-          : undefined;
+      // (may be 0), replacing the rounded-up hold.
+      const settlement = creditHold ? { credits: usdToCreditsStochastic(usageCostUsd) } : undefined;
       if (settlement) quest.creditsUsed = settlement.credits;
 
       await this.db.quests.update({
@@ -1623,16 +1616,15 @@ export class ImageGenerationService {
 
       // Settle the hold after successful generation: keep the draw, refund the rest. A zero draw writes no
       // ledger row; the usage event still lands.
-      if (settlement) {
-        if (creditHold) {
-          await this.creditHolds.settle(
-            creditHold,
-            settlement.credits,
-            { type: 'image_generation_usage', sessionId, questId, model },
-            { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger }
-          );
-          creditHold = undefined;
-        }
+      if (settlement && creditHold) {
+        // Less than the draw only when the expired-hold sweep already refunded this hold.
+        const creditsCharged = await this.creditHolds.settle(
+          creditHold,
+          settlement.credits,
+          { type: 'image_generation_usage', sessionId, questId, model },
+          { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger }
+        );
+        creditHold = undefined;
 
         // Dual-write usage event: analytics only, never billing. Awaited because a write still in
         // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
@@ -1656,7 +1648,7 @@ export class ImageGenerationService {
             cacheWriteTokens: 0,
             units: billedN,
             costUsd: usageCostUsd,
-            creditsCharged: settlement.credits,
+            creditsCharged,
             status: 'ok',
             latencyMs: Date.now() - startTime,
           })

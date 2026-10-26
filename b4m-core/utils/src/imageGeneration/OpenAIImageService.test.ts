@@ -629,7 +629,7 @@ describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () 
   it.each(['low', 'medium', 'high', 'auto'] as const)(
     "forwards a '%s' quality value to the OpenAI generate call instead of stripping it",
     async quality => {
-      // ImageGeneration.ts's validateUserCredits bills this exact tier before reaching
+      // ImageGeneration.ts's estimateCredits bills this exact tier before reaching
       // here - if it's stripped, the user pays for a quality they never receive.
       const params = await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality });
 

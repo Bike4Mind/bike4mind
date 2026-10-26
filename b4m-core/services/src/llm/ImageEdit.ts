@@ -843,12 +843,8 @@ export class ImageEditService {
       });
 
       // Per-image prices are exact, so the final debit is the unbiased draw on usageCostUsd
-      // (may be 0), replacing the rounded-up pre-flight figure.
-      const creditTransactions = this.db.creditTransactions;
-      const settlement =
-        adminSettingsEnforceCredits && typeof quest.creditsUsed === 'number' && creditTransactions
-          ? { creditTransactions, credits: usdToCreditsStochastic(usageCostUsd) }
-          : undefined;
+      // (may be 0), replacing the rounded-up hold.
+      const settlement = creditHold ? { credits: usdToCreditsStochastic(usageCostUsd) } : undefined;
       if (settlement) quest.creditsUsed = settlement.credits;
 
       quest.reply = '';
@@ -875,16 +871,15 @@ export class ImageEditService {
 
       // Settle the hold after successful edit: keep the draw, refund the rest. A zero draw writes no ledger
       // row; the usage event still lands.
-      if (settlement) {
-        if (creditHold) {
-          await this.creditHolds.settle(
-            creditHold,
-            settlement.credits,
-            { type: 'image_edit_usage', sessionId, questId, model },
-            { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger }
-          );
-          creditHold = undefined;
-        }
+      if (settlement && creditHold) {
+        // Less than the draw only when the expired-hold sweep already refunded this hold.
+        const creditsCharged = await this.creditHolds.settle(
+          creditHold,
+          settlement.credits,
+          { type: 'image_edit_usage', sessionId, questId, model },
+          { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger }
+        );
+        creditHold = undefined;
 
         // Dual-write usage event: analytics only, never billing. Awaited because a write still in
         // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
@@ -908,7 +903,7 @@ export class ImageEditService {
             cacheWriteTokens: 0,
             units: IMAGES_PER_EDIT_REQUEST,
             costUsd: usageCostUsd,
-            creditsCharged: settlement.credits,
+            creditsCharged,
             status: 'ok',
           })
           .catch(err => logger.warn('Failed to record usage event', err));
