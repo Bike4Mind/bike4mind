@@ -20,7 +20,13 @@ describe('oauth signups refused alarm', () => {
     expect(read('apps/client/pages/api/auth/[strategy]/callback.ts')).toContain(
       "req.logger?.info('oauth-signup-refused')"
     );
-    expect(ALARMS).toContain(`pattern: '{ $.message = "oauth-signup-refused" }'`);
+    const pattern = /pattern: '([^']*)'/.exec(ALARMS)?.[1] ?? '';
+    // A JSON selector only evaluates lines that are JSON as a whole; the Lambda prefixes every line.
+    expect(pattern).not.toMatch(/^\s*\{/);
+    const term = /^"([^"]+)"$/.exec(pattern)?.[1];
+    const prefixedLine = '2026-01-01T00:00:00.000Z\tc0ffee\tINFO\t{"severity":"info","message":"oauth-signup-refused"}';
+    expect(term).toBeDefined();
+    expect(prefixedLine).toContain(term);
   });
 
   it('feeds Lumina5/AuthSecurity OAuthSignupsRefused, summed over 5 minutes', () => {

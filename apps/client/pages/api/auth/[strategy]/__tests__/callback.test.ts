@@ -5,9 +5,10 @@ import { createMocks } from 'node-mocks-http';
 // mirroring apps/client/pages/api/auth/okta/__tests__/callback.test.ts.
 const mockChain = vi.hoisted(() => ({ order: [] as string[] }));
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
+  type Chain = { use: () => Chain; get: (fn: unknown) => unknown };
+  const chain: Chain = {
     use: () => chain,
-    get: (fn: any) => {
+    get: fn => {
       mockChain.order.push('get');
       return fn;
     },
@@ -17,13 +18,13 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => {
     mockChain.order.push('checkBlockedIP');
-    return (_req: any, _res: any, next: any) => next?.();
+    return (_req: unknown, _res: unknown, next?: () => void) => next?.();
   },
 }));
 vi.mock('@server/middlewares/oauthIpRateLimit', () => ({
   oauthIpRateLimit: (bucket: string) => {
     mockChain.order.push(`oauthIpRateLimit:${bucket}`);
-    return (_req: any, _res: any, next: any) => next?.();
+    return (_req: unknown, _res: unknown, next?: () => void) => next?.();
   },
 }));
 const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown[] }));
@@ -331,9 +332,9 @@ describe('[strategy]/callback - guards and refusal metric line', () => {
     ['registration_closed', 1],
     ['state_expired', 0],
     ['internal', 0],
-  ])('logs oauth-signup-refused %i time(s) for %s', async (code, count) => {
+  ])('logs oauth-signup-refused for %s: %i time(s)', async (code, count) => {
     const info = vi.fn();
-    mockAuthenticate.mockImplementation((_s: string, _o: any, cb: any) => () => {
+    mockAuthenticate.mockImplementation((_s: string, _o: unknown, cb: (...args: unknown[]) => Promise<unknown>) => () => {
       pending = cb(null, undefined, { code });
     });
     let pending: Promise<unknown> | undefined;

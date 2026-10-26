@@ -32,7 +32,7 @@ export const checkBlockedIP = (): RequestHandler => {
           });
         }
 
-        return res.redirect(`/login?error=${encodeURIComponent(errorMessage)}`);
+        return res.redirect('/login?error=ip_blocked');
       }
 
       next();

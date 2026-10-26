@@ -16,16 +16,26 @@ export const oauthIpRateLimit =
     // isE2EEnabled is hard-false on production; CI draws every sign-in from one shared IP.
     if (isE2EEnabled()) return next();
 
-    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const limit = getSettingsValue('oauthRateLimitPerIp', settings, 40);
-    const windowMs = getSettingsValue('oauthRateLimitWindowMinutes', settings, 10) * 60_000;
-
-    const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-      `oauth-limit:${bucket}:${ipBucket(getClientIp(req))}`,
-      limit,
-      windowMs
-    );
+    let windowMs: number;
+    let result: { success: boolean; expiresAt: Date };
+    try {
+      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+      const limit = getSettingsValue('oauthRateLimitPerIp', settings, 40);
+      windowMs = getSettingsValue('oauthRateLimitWindowMinutes', settings, 10) * 60_000;
+      result = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+        `oauth-limit:${bucket}:${ipBucket(getClientIp(req))}`,
+        limit,
+        windowMs
+      );
+    } catch (error) {
+      // Fail open like checkBlockedIP: a cache or settings outage must not turn sign-in into a 500.
+      req.logger?.warn('Failed to check OAuth rate limit, allowing request to continue', error);
+      return next();
+    }
+    const { success, expiresAt } = result;
     if (success) return next();
+
+    req.logger?.warn('oauth-ip-rate-limited', { bucket });
 
     const timeLeftMs = expiresAt.getTime() - Date.now();
     const seconds = Math.max(1, Math.ceil((timeLeftMs > 0 ? timeLeftMs : windowMs) / 1000));
@@ -36,5 +46,5 @@ export const oauthIpRateLimit =
     if (path.startsWith('/api/') && req.headers.accept?.includes('application/json')) {
       return next(new TooManyRequestsError(`Rate limit exceeded. Try again in ${seconds} seconds.`));
     }
-    return res.redirect(`/login?error=${encodeURIComponent('Too many sign-in attempts. Please try again later.')}`);
+    return res.redirect('/login?error=oauth_rate_limited');
   };

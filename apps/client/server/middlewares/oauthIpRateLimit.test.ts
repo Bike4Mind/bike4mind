@@ -23,7 +23,9 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: h.e2e }))
 import { oauthIpRateLimit } from './oauthIpRateLimit';
 
 const makeReq = (accept = 'text/html', url = '/api/auth/google') =>
-  ({ url, headers: { accept } }) as unknown as Request;
+  ({ url, headers: { accept }, logger: { warn: vi.fn() } }) as unknown as Request & {
+    logger: { warn: ReturnType<typeof vi.fn> };
+  };
 const makeRes = () =>
   ({ setHeader: vi.fn(), redirect: vi.fn() }) as unknown as Response & {
     setHeader: ReturnType<typeof vi.fn>;
@@ -62,9 +64,11 @@ describe('oauthIpRateLimit', () => {
     h.tryIncrement.mockResolvedValue({ success: false, count: 41, expiresAt: new Date(Date.now() + 30_000) });
     const res = makeRes();
     const next = vi.fn();
-    await oauthIpRateLimit('oauth-init')(makeReq(), res, next);
+    const req = makeReq();
+    await oauthIpRateLimit('oauth-init')(req, res, next);
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', 30);
-    expect(res.redirect).toHaveBeenCalledWith(expect.stringMatching(/^\/login\?error=Too%20many/));
+    expect(res.redirect).toHaveBeenCalledWith('/login?error=oauth_rate_limited');
+    expect(req.logger.warn).toHaveBeenCalledWith('oauth-ip-rate-limited', { bucket: 'oauth-init' });
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -83,5 +87,14 @@ describe('oauthIpRateLimit', () => {
     await oauthIpRateLimit('oauth-init')(makeReq(), makeRes(), next);
     expect(h.tryIncrement).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledWith();
+  });
+
+  it('fails open with a warning when the counter throws', async () => {
+    h.tryIncrement.mockRejectedValue(new Error('cache down'));
+    const req = makeReq();
+    const next = vi.fn();
+    await oauthIpRateLimit('oauth-init')(req, makeRes(), next);
+    expect(next).toHaveBeenCalledWith();
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('OAuth rate limit'), expect.any(Error));
   });
 });
