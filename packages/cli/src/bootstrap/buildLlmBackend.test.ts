@@ -260,23 +260,42 @@ describe('attachOllama', () => {
 });
 
 describe('resolveHeadlessModel', () => {
+  const HOST = 'http://127.0.0.1:11434';
+  const listed = { ollamaHost: HOST, ollamaListingFailed: false };
+
   it('uses the default model when it is listed', () => {
-    expect(resolveHeadlessModel([model('a'), model('b')], 'b', 'http://127.0.0.1:11434')).toEqual({
+    expect(resolveHeadlessModel([model('a'), model('b')], { defaultModel: 'b' }, listed)).toEqual({
       modelInfo: model('b'),
       warning: null,
     });
   });
 
-  it('refuses to fall back to another model when an Ollama host is configured', () => {
-    expect(() => resolveHeadlessModel([model('hosted')], 'qwen2.5:0.5b', 'http://127.0.0.1:11434')).toThrow(
+  it('refuses to switch away from the model `b4m models use` chose', () => {
+    const config = { defaultModel: 'qwen2.5:0.5b', localDefaultModel: 'qwen2.5:0.5b' };
+    expect(() => resolveHeadlessModel([model('hosted')], config, listed)).toThrow(
       /Model "qwen2\.5:0\.5b" is not available from the server or from Ollama at http:\/\/127\.0\.0\.1:11434/
     );
   });
 
-  it('falls back with a warning otherwise', () => {
-    expect(resolveHeadlessModel([model('a')], 'gone', null)).toEqual({
+  it('refuses to switch away from any default when Ollama could not list its models', () => {
+    expect(() =>
+      resolveHeadlessModel([model('hosted')], { defaultModel: 'mine' }, { ...listed, ollamaListingFailed: true })
+    ).toThrow(/Model "mine" is not available/);
+  });
+
+  it('falls back with a warning from a hosted default the server no longer offers', () => {
+    const config = { defaultModel: 'retired-hosted', localDefaultModel: 'qwen2.5:0.5b' };
+    expect(resolveHeadlessModel([model('a')], config, listed)).toEqual({
       modelInfo: model('a'),
-      warning: 'Model "gone" is not available; using "a".',
+      warning: 'Model "retired-hosted" is not available; using "a".',
+    });
+  });
+
+  it('falls back silently, as before, without an Ollama host', () => {
+    const none = { ollamaHost: null, ollamaListingFailed: false };
+    expect(resolveHeadlessModel([model('a')], { defaultModel: 'gone' }, none)).toEqual({
+      modelInfo: model('a'),
+      warning: null,
     });
   });
 });

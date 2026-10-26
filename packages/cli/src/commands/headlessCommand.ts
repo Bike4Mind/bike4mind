@@ -218,9 +218,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // can't drift. Headless never opens the feature-event socket: no feature
     // modules are registered in a `-p` run.
     const sse = await createSseBackend({ apiClient, model: config.defaultModel });
-    const { llm, models, ollamaHost, warnings } = await attachOllama(sse.llm, config, {}, defaultLlmBackendDeps);
-    for (const warning of warnings) process.stderr.write(`${sanitizeTerminalText(warning)}\n`);
-    const { modelInfo, warning } = resolveHeadlessModel(models, config.defaultModel, ollamaHost);
+    const attached = await attachOllama(sse.llm, config, {}, defaultLlmBackendDeps);
+    const { llm, models } = attached;
+    for (const warning of attached.warnings) process.stderr.write(`${sanitizeTerminalText(warning)}\n`);
+    const { modelInfo, warning } = resolveHeadlessModel(models, config, attached);
     if (warning) process.stderr.write(`Warning: ${sanitizeTerminalText(warning)}\n`);
     llm.currentModel = modelInfo.id;
 

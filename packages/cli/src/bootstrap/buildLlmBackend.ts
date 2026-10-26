@@ -153,19 +153,21 @@ export function resolveModelInfo(models: ModelInfo[], defaultModel: string): Mod
 }
 
 /**
- * Model choice for headless (`-p`) runs, which have no banner to show a fallback in: with an Ollama host
- * configured a missing default model is an error, otherwise the fallback comes with a warning to print.
+ * Model choice for headless (`-p`) runs, which have no banner to show a fallback in. A missing default that is
+ * plausibly local (Ollama did not list its models, or `b4m models use` chose it) is an error rather than a silent
+ * switch to a hosted model; with Ollama configured any other fallback comes with a warning to print.
  */
 export function resolveHeadlessModel(
   models: ModelInfo[],
-  defaultModel: string,
-  ollamaHost: string | null
+  config: Pick<CliConfig, 'defaultModel' | 'localDefaultModel'>,
+  ollama: Pick<OllamaAttachment, 'ollamaHost' | 'ollamaListingFailed'>
 ): { modelInfo: ModelInfo; warning: string | null } {
+  const { defaultModel } = config;
   const modelInfo = resolveModelInfo(models, defaultModel);
-  if (modelInfo.id === defaultModel) return { modelInfo, warning: null };
-  if (ollamaHost) {
+  if (modelInfo.id === defaultModel || !ollama.ollamaHost) return { modelInfo, warning: null };
+  if (ollama.ollamaListingFailed || defaultModel === config.localDefaultModel) {
     throw new Error(
-      `Model "${defaultModel}" is not available from the server or from Ollama at ${ollamaHost}. ` +
+      `Model "${defaultModel}" is not available from the server or from Ollama at ${ollama.ollamaHost}. ` +
         'Start Ollama, or pick another model with: b4m models use <name>'
     );
   }
@@ -178,6 +180,8 @@ export interface OllamaAttachment {
   /** The Ollama host in use, or null when none is configured. */
   ollamaHost: string | null;
   ollamaModelCount: number;
+  /** Ollama's model listing failed or timed out, so its models are unknown. */
+  ollamaListingFailed: boolean;
   warnings: string[];
 }
 
@@ -196,7 +200,7 @@ export async function attachOllama(
   if (!rawHost) {
     const models = await llm.getModelInfo();
     if (models.length === 0) throw new Error('No models available from server.');
-    return { llm, models, ollamaHost: null, ollamaModelCount: 0, warnings: [] };
+    return { llm, models, ollamaHost: null, ollamaModelCount: 0, ollamaListingFailed: false, warnings: [] };
   }
 
   const ollamaHost = withDefaultOllamaPort(rawHost);
@@ -249,6 +253,7 @@ export async function attachOllama(
     models: await multi.getModelInfo(),
     ollamaHost,
     ollamaModelCount: ollamaModels.length,
+    ollamaListingFailed: ollama.error !== undefined,
     warnings,
   };
 }
