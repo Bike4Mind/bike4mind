@@ -22,11 +22,6 @@ export function escapeCsvCell(value: unknown): string {
   return `"${guarded}"`;
 }
 
-/** Quotes a cell verbatim, with no formula prefix or newline flattening, for values that must survive a copy exactly. */
-export function quoteCsvCellVerbatim(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
 /** Joins rows of already-raw values into a CSV document, escaping every cell. */
 export function toCsv(rows: unknown[][]): string {
   return rows.map(row => row.map(escapeCsvCell).join(',')).join('\n');
