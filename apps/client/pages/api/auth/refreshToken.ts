@@ -4,12 +4,12 @@ import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { refuseBlockedRotatedSession } from '@server/auth/refreshAccountGate';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import {

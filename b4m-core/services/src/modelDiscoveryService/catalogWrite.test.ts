@@ -1062,13 +1062,9 @@ describe('planCatalogWrites', () => {
 
       const providerDown = run([models], { rows: cleared.rows });
       expect(providerDown.rows).toEqual([]);
-      expect(providerDown.dropped).toContainEqual({
-        source: 'models.dev',
-        modelId: 'gpt-6',
-        reason:
-          `deprecationDate ${FUTURE} refused: openai reported the model "active" with no deprecation date ` +
-          'on an earlier run and is not reporting this run',
-      });
+      expect(providerDown.dropped).toEqual([
+        { source: 'models.dev', modelId: 'gpt-6', reason: 'record carries no usable fields' },
+      ]);
 
       const providerBack = run([openaiUndated, models], { rows: cleared.rows });
       expect(providerBack.rows).toEqual([]);
@@ -1085,19 +1081,19 @@ describe('planCatalogWrites', () => {
     const silent = { name: 'openai', kind: 'provider' as const, records: [] };
     it.each([
       {
-        name: 'does not extend a down aggregator undated word to another aggregator with no provider this run',
+        name: 'withholds an unconfirmed date when the prior contributor was another aggregator',
         contributions: [litellmDate],
         previous: creditedTo('models.dev'),
         providerSourceNames: undefined,
       },
       {
-        name: 'lets an aggregator date through when the credited provider is not configured',
+        name: 'withholds an unconfirmed date when the credited provider is not configured',
         contributions: [litellmDate],
         previous: creditedTo('openai'),
         providerSourceNames: new Set<string>(),
       },
       {
-        name: 'does not apply the down-provider fallback when the provider ran but did not list the model',
+        name: 'withholds an unconfirmed date when the provider ran but did not list the model',
         contributions: [silent, litellmDate],
         previous: creditedTo('openai'),
         providerSourceNames: undefined,
@@ -1106,7 +1102,7 @@ describe('planCatalogWrites', () => {
       const result = run(contributions, previous, providerSourceNames);
 
       expect(result.dropped.filter(d => d.reason.includes('earlier run'))).toEqual([]);
-      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'active', deprecationDate: FUTURE });
+      expect(result.rows).toEqual([]);
     });
 
     it('keeps the date when only an aggregator speaks to the lifecycle', () => {

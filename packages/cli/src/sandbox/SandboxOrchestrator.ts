@@ -110,6 +110,7 @@ export class SandboxOrchestrator {
       // Only the Seatbelt runtime confines egress to the proxy; Linux still relies on the proxy env vars.
       networkEnabled: proxyPort !== null,
       ...(proxyPort !== null && { proxyPort }),
+      allowContainerSockets: this.config.allowContainerSockets === true,
       env: proxyEnv,
       ...(this.runtime.platform === 'linux' &&
         this.config.platform.linux.seccompProfile && {

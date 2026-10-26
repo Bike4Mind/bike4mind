@@ -82,7 +82,7 @@ import {
 } from './llmTimeoutErrors';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
-import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 import {
   appendSystemText,
   buildStructuredOutputFormat,
@@ -1044,9 +1044,10 @@ export class AnthropicBackend implements ICompletionBackend {
     // append the model-identity reminder as a separate uncached block to keep
     // the cached prefix stable across requests (otherwise the suffix would
     // bust the cache key on every model identifier change).
-    // Omitted for callers whose contract is a bare completion (API promptMode raw) -
-    // with no system messages left either, the request then carries no system at all.
-    const identityReminder = options.omitIdentityReminder
+    // Omitted for a bare completion (API promptMode raw) or while current_model_details is on the
+    // request (see shouldOmitIdentityReminder) - with no system messages left either, the request
+    // then carries no system at all.
+    const identityReminder = shouldOmitIdentityReminder(options)
       ? null
       : buildIdentityReminder(model, options.modelDisplayName);
     let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;

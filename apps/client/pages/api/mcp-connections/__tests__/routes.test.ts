@@ -52,7 +52,7 @@ vi.mock('@server/middlewares/baseApi', async () => {
   };
 });
 
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: { limit: number; windowMs: number; bucket?: string }) => {
     h.rateLimitOptions.push(options);
     return (req: { user: { id: string } }, _res: unknown, next: (error?: unknown) => void) => {
@@ -90,7 +90,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerRejection: vi.fn(async () => undefined),
   recordCircuitBreakerTransition: vi.fn(async () => undefined),
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (value: string | null | undefined) => (value ? `enc:${Buffer.from(value).toString('base64')}` : null),
   decryptToken: (value: string | null | undefined) => value,
 }));

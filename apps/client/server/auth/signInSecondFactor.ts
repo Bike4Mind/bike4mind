@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { AuthEvents, type AuthSessionCreatedVia, type AuthStrategy, type IUserDocument } from '@bike4mind/common';
 import { passkeyCredentialRepository, type ITrustedDeviceDocument } from '@bike4mind/database';
 import { mfaService } from '@bike4mind/services';
-import { readEnforceMfa } from '@server/auth/mfaEnforcement';
+import { readEnforceMfa } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { logAuthAudit } from '@server/utils/authAudit';

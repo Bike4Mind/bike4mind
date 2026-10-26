@@ -23,7 +23,7 @@ import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
 import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { sendToConnection } from '@server/websocket/utils';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { func } from './cliToolExecution';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
@@ -49,6 +49,7 @@ describe('cliToolExecution websocket handler', () => {
   it('rate-limits the JWT path on the ws bucket, apart from the completions counter', async () => {
     await run();
 
+    expect(verifyJwtToken).toHaveBeenCalledWith('jwt-token', { requireApiAccess: true });
     expect(checkRateLimit).toHaveBeenCalledWith('u1', undefined, { bucket: 'ws' });
     expect(executeToolWithLogging).toHaveBeenCalled();
   });
@@ -115,4 +116,21 @@ describe('cliToolExecution websocket handler - API-key check outcome', () => {
     );
     expect(verifyJwtToken).toHaveBeenCalled();
   });
+});
+
+it('relays an authenticated CLI access refusal without executing the tool', async () => {
+  vi.clearAllMocks();
+  vi.mocked(verifyJwtToken).mockRejectedValueOnce(
+    new ForbiddenError('CLI and desktop access requires an active paid subscription')
+  );
+  await run();
+  expect(executeToolWithLogging).not.toHaveBeenCalled();
+  expect(sendToConnection).toHaveBeenCalledWith(
+    'conn-1',
+    'https://example.test/test',
+    expect.objectContaining({
+      success: false,
+      error: 'CLI and desktop access requires an active paid subscription',
+    })
+  );
 });

@@ -81,6 +81,10 @@ it('two concurrent requests sharing the same auth snapshot cannot mint or send b
   });
   expect(await RegistrationInvite.countDocuments()).toBe(1);
   expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+  const invite = await RegistrationInvite.findOne();
+  const delivery = vi.mocked(EmailEvents.Send.publish).mock.calls[0][0];
+  expect(delivery.to).toBe(invite!.email);
+  expect(delivery.body).toContain(`Invite code: <strong>${invite!.code}</strong>`);
   const after = await User.findById(user._id);
   expect(after!.numReferralsAvailable).toBe(0);
   expect(after!.regInvites.map(String)).toEqual([(await RegistrationInvite.findOne())!.id]);

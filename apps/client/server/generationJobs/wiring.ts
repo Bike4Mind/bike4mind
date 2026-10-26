@@ -59,7 +59,7 @@ import {
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverJobToSlack } from './slackJobDelivery';
 import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';

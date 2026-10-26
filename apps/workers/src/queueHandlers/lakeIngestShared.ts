@@ -27,7 +27,7 @@ import { evaluateConnectorCopyDeletion } from '@bike4mind/server-utils/integrati
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
-import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
 // Shared by the connector ingests: driveLakeIngest.ts and githubLakeIngest.ts (via githubLakeSlice.ts).
 

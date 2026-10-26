@@ -13,7 +13,7 @@ vi.mock('@bike4mind/services', () => ({
 // The real class, not a mock - `dataLakeLinkIngest.ts` now imports `DuplicateFabFileError` and
 // `isDuplicateFabFileError` from `@bike4mind/common` directly (moved there so a single package
 // owns its identity - see errors.ts), so no shim is needed to make `instanceof` agree here.
-import { DuplicateFabFileError, FabFileSourceType } from '@bike4mind/common';
+import { DuplicateFabFileError, FabFileSourceType, UrlBlockedError } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { SLACK_MOCK_USER_ID } from '@bike4mind/slack';
 import { ingestSlackLinkIntoLake, type SlackLinkIngestDeps } from './dataLakeLinkIngest';
@@ -313,6 +313,19 @@ describe('fetch failures', () => {
     expect(message).not.toMatch(/blocked for security/i);
     // The operator still gets the detail.
     expect(deps.logger.error).toHaveBeenCalled();
+  });
+
+  it('NEVER echoes the real UrlBlockedError, which is a BadRequestError subclass', async () => {
+    createLakeFileFromUrl.mockRejectedValue(
+      new UrlBlockedError('URL blocked for security reasons: Hostname resolves to private IP address (10.1.2.3)')
+    );
+
+    const outcome = await run();
+
+    expect(outcome).toMatchObject({ ok: false, reason: 'link_fetch_failed' });
+    const message = outcome.ok === false ? outcome.message : '';
+    expect(message).not.toContain('10.1.2.3');
+    expect(message).not.toMatch(/blocked for security/i);
   });
 
   it('gives one fixed sentence for any network failure', async () => {

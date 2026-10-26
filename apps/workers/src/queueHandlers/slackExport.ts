@@ -11,7 +11,7 @@ import {
   isSlackUserValidationError,
   isSlackUserValidationErrorByMessage,
 } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { escapeCsvField } from '@bike4mind/server-utils/integrations/slack/slackExportCsv';
 
 const PayloadSchema = z.object({

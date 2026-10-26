@@ -480,7 +480,7 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     const res = await postCompletion(VALID_COMPLETION, { authorization: 'Bearer jwt-token' });
     const text = await res.text();
 
-    expect(mockAuth.verifyJwtToken).toHaveBeenCalledWith('jwt-token');
+    expect(mockAuth.verifyJwtToken).toHaveBeenCalledWith('jwt-token', { requireApiAccess: true });
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
     expect(mockExecuteCompletion.mock.calls[0][0]).toMatchObject({ userId: 'u2' });
     expect(text).toContain('data: [DONE]');
