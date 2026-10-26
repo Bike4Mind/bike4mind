@@ -542,8 +542,8 @@ importers:
         specifier: ^0.13.0
         version: 0.13.0
       nodemailer:
-        specifier: ^10.1.0
-        version: 10.1.0
+        specifier: ^10.1.4
+        version: 10.1.4
       nuqs:
         specifier: ^2.10.1
         version: 2.10.1(@tanstack/react-router@1.170.44(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)
@@ -4864,6 +4864,13 @@ packages:
       '@emnapi/core': ^1.7.1 || ^2.0.0-alpha.4
       '@emnapi/runtime': ^1.7.1 || ^2.0.0-alpha.4
 
+  '@napi-rs/wasm-runtime@1.2.6':
+    resolution: {integrity: sha512-mRyDmEw9/fCDXCGfL1sbgIw/GUK0PVxRW4YwgPN61F3LQ+fSyoBFarJVzgGyhF6kRzEQZ0FejDqm4WLXSeqQmw==}
+    engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
+    peerDependencies:
+      '@emnapi/core': ^1.7.1 || 2.0.0-beta.2
+      '@emnapi/runtime': ^1.7.1 || 2.0.0-beta.2
+
   '@next/env@16.4.1':
     resolution: {integrity: sha512-5sUUrrSvs/2/2LnLoesybMGx12EtPB46fdZ6RhAw0XDGSPxU2LFyQBB7yuEiOFFJPKmBY6+q2jTr1/AMbnp0/g==}
 
@@ -5747,6 +5754,10 @@ packages:
 
   '@smithy/node-http-handler@4.12.1':
     resolution: {integrity: sha512-ThMkboGeONWXAelq9FvGsuJC4rOi+qyC4/zhUF58xYpxUg5sQKx2VXZYJmtNjr4dSuBJ1HeJXETQILCz3wOHvw==}
+    engines: {node: '>=18.0.0'}
+
+  '@smithy/node-http-handler@4.13.0':
+    resolution: {integrity: sha512-/GGcPoNJ2nzGytdAanpbx7mpp9Coa8LP+/Rpmbktr8YeLuIXs9B0SEz+X3AeonHdyzOIFJdKbN7jOZ+Tj+pMGw==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/signature-v4@5.7.4':
@@ -9755,8 +9766,8 @@ packages:
     resolution: {integrity: sha512-4OUAqU9Z1i3vCnS05hzGiFnEMDpQ+62pAD/MVQOp83fYyNC8GleCqaS0QikQBmcWCrKFiUs/B8ztRRiYOAXuCA==}
     engines: {node: '>= 12'}
 
-  ip-address@10.7.4:
-    resolution: {integrity: sha512-DWBMKyeM25D70nrIiTkgQth59/G+naKOTep6huF9j+GmeK3DMD60Zvxg5d5qQnz+38AHgou6ean2LECX+lrKDg==}
+  ip-address@10.7.5:
+    resolution: {integrity: sha512-t2v0rkILYv9WXmSL7TpAaU3HXgaFYOPUcH3QHgwQ++gpJuH3bqyMy4Fvt/DJCTKwzH3Cf+bAp5W/mFL39KPLzA==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -11082,6 +11093,10 @@ packages:
     resolution: {integrity: sha512-fXW8AulB25aOTuwfRYV6lqHyfz2VM4rr4SGXH03mE7x5znEUpzL5mu6anARUpZN7744Ziwkmr4AxSLPJsBQspg==}
     engines: {node: '>=20.0.0'}
 
+  nodemailer@10.1.4:
+    resolution: {integrity: sha512-EsMnOR2oRv4LGnWvHgcVYkkQ4O2j8KO4WTw6l+PHR4sOXo8SAgIraxtEnGDmotjbhv0hDsu3IuDIFZm8iXwO4A==}
+    engines: {node: '>=20.0.0'}
+
   nopt@9.0.0:
     resolution: {integrity: sha512-Zhq3a+yFKrYwSBluL4H9XP3m3y5uvQkB/09CwDruCiRmR/UJYnn9W4R48ry0uGC70aeTPKLynBtscP9efFFcPw==}
     engines: {node: ^20.17.0 || >=22.9.0}
@@ -11839,7 +11854,7 @@ packages:
       react-dom: '>=16.6.0'
 
   react-use-websocket@https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684:
-    resolution: {gitHosted: true, integrity: sha512-coe6cEGS+ufx7gKtme40KQnbbue1ZM0S+AeL7tlIe4T7NqAXBBeY8EB+qatMSTn0Emsrt2N15xMzIKsiwy9pnw==, tarball: https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684}
     version: 4.8.2
     peerDependencies:
       react: '>= 18.0.0'
@@ -13639,7 +13654,7 @@ packages:
     engines: {node: '>=20'}
 
   xlsx@https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz:
-    resolution: {integrity: sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA==, tarball: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz}
+    resolution: {tarball: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz}
     version: 0.20.3
     engines: {node: '>=0.8'}
     hasBin: true
@@ -14055,7 +14070,7 @@ snapshots:
       '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.12.1
+      '@smithy/node-http-handler': 4.13.0
       '@smithy/types': 4.19.0
       tslib: 2.8.1
     optional: true
@@ -14263,7 +14278,7 @@ snapshots:
       '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.12.1
+      '@smithy/node-http-handler': 4.13.0
       '@smithy/types': 4.19.0
       tslib: 2.8.1
     optional: true
@@ -14479,7 +14494,7 @@ snapshots:
       '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.12.1
+      '@smithy/node-http-handler': 4.13.0
       '@smithy/types': 4.19.0
       tslib: 2.8.1
     optional: true
@@ -16696,6 +16711,13 @@ snapshots:
       '@tybys/wasm-util': 0.10.4
     optional: true
 
+  '@napi-rs/wasm-runtime@1.2.6(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)':
+    dependencies:
+      '@emnapi/core': 1.10.0
+      '@emnapi/runtime': 1.10.0
+      '@tybys/wasm-util': 0.10.4
+    optional: true
+
   '@next/env@16.4.1': {}
 
   '@next/eslint-plugin-next@16.4.0(eslint@9.39.2(jiti@2.7.0))':
@@ -17412,7 +17434,7 @@ snapshots:
     dependencies:
       '@emnapi/core': 1.10.0
       '@emnapi/runtime': 1.10.0
-      '@napi-rs/wasm-runtime': 1.2.5(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
+      '@napi-rs/wasm-runtime': 1.2.6(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
     optional: true
 
   '@rolldown/binding-win32-arm64-msvc@1.0.0-rc.17':
@@ -17672,6 +17694,13 @@ snapshots:
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
+
+  '@smithy/node-http-handler@4.13.0':
+    dependencies:
+      '@smithy/core': 3.36.1
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+    optional: true
 
   '@smithy/signature-v4@5.7.4':
     dependencies:
@@ -22294,7 +22323,7 @@ snapshots:
 
   ip-address@10.7.1: {}
 
-  ip-address@10.7.4:
+  ip-address@10.7.5:
     optional: true
 
   ipaddr.js@1.9.1: {}
@@ -23919,6 +23948,8 @@ snapshots:
 
   nodemailer@10.1.0: {}
 
+  nodemailer@10.1.4: {}
+
   nopt@9.0.0:
     dependencies:
       abbrev: 4.0.0
@@ -25513,7 +25544,7 @@ snapshots:
 
   socks@2.8.6:
     dependencies:
-      ip-address: 10.7.4
+      ip-address: 10.7.5
       smart-buffer: 4.2.0
     optional: true
 
