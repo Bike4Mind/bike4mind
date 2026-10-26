@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import type { INetworkMeta, ISignupMeta } from '../types/entities/UserTypes';
 
-export const JA4_PATTERN = /^[tqd][0-9a-z]{2}[di][0-9]{4}[0-9a-z]{2}_[0-9a-f]{12}_[0-9a-f]{12}$/;
+// Unlike $, this end assertion also rejects a final newline in MongoDB's regex engine.
+export const JA4_PATTERN = /^[tqd][0-9a-z]{2}[di][0-9]{4}[0-9A-Za-z]{2}_[0-9a-f]{12}_[0-9a-f]{12}(?![\s\S])/;
 export const ja4FingerprintSchema = z.string().length(36).regex(JA4_PATTERN);
 
 export const networkMetaSchema = z.object({

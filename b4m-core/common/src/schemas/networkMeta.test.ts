@@ -15,6 +15,31 @@ const signupMeta = {
 };
 
 describe('optional signup fingerprints', () => {
+  it.each(['h2', 'H2', 'aZ', '00'])('preserves case in the ALPN component %s', alpn => {
+    const fingerprint = `t13d0101${alpn}_111111111111_222222222222`;
+    expect(ja4FingerprintSchema.parse(fingerprint)).toBe(fingerprint);
+  });
+
+  it.each(['t13d', 'q13d', 'dd1i', 'ts3i', 't00i'])('accepts the protocol/version prefix %s', prefix => {
+    expect(ja4FingerprintSchema.safeParse(`${prefix}0101h2_111111111111_222222222222`).success).toBe(true);
+  });
+
+  it.each([
+    '',
+    `${ja4}\n`,
+    `${ja4}\r`,
+    `${ja4},${ja4}`,
+    ja4.slice(1),
+    ja4.replace('t13d', 'x13d'),
+    ja4.replace('0101', '01x1'),
+    ja4.replace('h2', 'h_'),
+    ja4.replace('111111111111', 'AAAAAAAAAAAA'),
+    [ja4],
+    null,
+  ])('rejects malformed fingerprints %j', value => {
+    expect(ja4FingerprintSchema.safeParse(value).success).toBe(false);
+  });
+
   it('accepts the canonical format and tolerates absent legacy metadata', () => {
     expect(ja4FingerprintSchema.parse(ja4)).toBe(ja4);
     expect(signupMetaSchema.safeParse({ ...signupMeta, ja4: undefined }).success).toBe(true);

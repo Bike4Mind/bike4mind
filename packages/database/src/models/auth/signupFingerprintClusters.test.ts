@@ -42,7 +42,15 @@ describe('signup fingerprint observations', () => {
   });
 
   it('keeps Zod and both persistence schemas aligned for optional and malformed values', async () => {
-    for (const ja4 of [undefined, null, fingerprint, '', 'x'.repeat(39), [fingerprint]]) {
+    for (const ja4 of [
+      undefined,
+      null,
+      fingerprint,
+      fingerprint.replace('h2', 'H2'),
+      '',
+      'x'.repeat(39),
+      [fingerprint],
+    ]) {
       const data = { ...meta, ja4 };
       const user = new User({ username: 'sample', name: 'Sample', signupMeta: data });
       const event = new AuthEventModel({ ...data, userId: 'sample', type: 'signup', method: 'test' });
@@ -73,6 +81,63 @@ describe('signup fingerprint observations', () => {
     expect(await findSignupFingerprintClusters(query)).toEqual(expected);
     expect(await findSignupFingerprintClusters({ ...query, excludedFingerprints: [fingerprint] })).toEqual([]);
     expect(await findSignupFingerprintClusters({ ...query, minimumSignups: 3 })).toEqual([]);
+  });
+
+  it.each([
+    ['array', [fingerprint]],
+    ['mixed array', ['invalid', fingerprint]],
+    ['trailing newline', `${fingerprint}\n`],
+    ['trailing carriage return', `${fingerprint}\r`],
+    ['object', { value: fingerprint }],
+    ['number', 123],
+    ['null', null],
+  ])('rejects malformed legacy %s values before applying the limit', async (_name, ja4) => {
+    await User.collection.insertMany([
+      ...Array.from({ length: 3 }, () => ({ createdAt: start, signupMeta: { ja4 } })),
+      ...Array.from({ length: 2 }, () => ({ createdAt: start, signupMeta: { ja4: fingerprint } })),
+    ]);
+    expect(await findSignupFingerprintClusters({ ...query, limit: 1 })).toEqual([
+      { ja4: fingerprint, signupCount: 2, windowStart: start, windowEnd: end },
+    ]);
+  });
+
+  it('preserves uppercase ALPN values through persistence, grouping and exclusions', async () => {
+    const uppercaseFingerprint = fingerprint.replace('h2', 'H2');
+    for (const username of ['first', 'second']) {
+      await User.create({ username, name: username, signupMeta: { ...meta, ja4: uppercaseFingerprint } });
+    }
+    const recentQuery = {
+      ...query,
+      windowStart: new Date(Date.now() - 60_000),
+      windowEnd: new Date(Date.now() + 60_000),
+    };
+    expect(await findSignupFingerprintClusters(recentQuery)).toEqual([
+      {
+        ja4: uppercaseFingerprint,
+        signupCount: 2,
+        windowStart: recentQuery.windowStart,
+        windowEnd: recentQuery.windowEnd,
+      },
+    ]);
+    expect(
+      await findSignupFingerprintClusters({ ...recentQuery, excludedFingerprints: [uppercaseFingerprint] })
+    ).toEqual([]);
+  });
+
+  it('orders tied clusters by fingerprint and includes retained soft-deleted signups', async () => {
+    await User.collection.insertMany([
+      { createdAt: start, signupMeta: { ja4: other } },
+      { createdAt: start, signupMeta: { ja4: other } },
+      { createdAt: start, signupMeta: { ja4: fingerprint } },
+      { createdAt: start, deletedAt: start, signupMeta: { ja4: fingerprint } },
+    ]);
+    expect(await findSignupFingerprintClusters(query)).toEqual([
+      { ja4: fingerprint, signupCount: 2, windowStart: start, windowEnd: end },
+      { ja4: other, signupCount: 2, windowStart: start, windowEnd: end },
+    ]);
+    expect(await findSignupFingerprintClusters({ ...query, limit: 1 })).toEqual([
+      { ja4: fingerprint, signupCount: 2, windowStart: start, windowEnd: end },
+    ]);
   });
 
   it('rejects invalid windows and unbounded result sizes before querying', async () => {

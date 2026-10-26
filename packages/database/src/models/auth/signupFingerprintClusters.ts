@@ -17,7 +17,10 @@ const querySchema = z
 
 export type SignupFingerprintQuery = z.infer<typeof querySchema>;
 
-/** Counts user records, not auth events: retries and subsequent logins cannot inflate a cluster. */
+/**
+ * Counts user records, including retained soft-deleted accounts, rather than auth events.
+ * Retries and subsequent logins cannot inflate a cluster; purged accounts no longer contribute.
+ */
 export async function findSignupFingerprintClusters(
   input: SignupFingerprintQuery
 ): Promise<SignupFingerprintCluster[]> {
@@ -27,6 +30,8 @@ export async function findSignupFingerprintClusters(
       $match: {
         createdAt: { $gte: query.windowStart, $lt: query.windowEnd },
         'signupMeta.ja4': { $type: 'string', $regex: JA4_PATTERN.source, $nin: query.excludedFingerprints },
+        // Query $type also matches arrays containing strings; aggregation $type checks the value itself.
+        $expr: { $eq: [{ $type: '$signupMeta.ja4' }, 'string'] },
       },
     },
     { $group: { _id: '$signupMeta.ja4', signupCount: { $sum: 1 } } },
