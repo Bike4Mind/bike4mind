@@ -289,6 +289,40 @@ describe('POST /api/gears/claim', () => {
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
+  it('blocks payout as unverified when the user doc is missing', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve(null) });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('reports unverified ahead of too_new when both apply', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
+  });
+
+  it('still answers alreadyClaimed for a gear paid before the account became untrusted', async () => {
+    unlockProjects();
+    mocks.txFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects' }]);
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ key: 'projects', alreadyClaimed: true });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
   it('allows payout at exactly 7 days old (inclusive lower boundary)', async () => {
     unlockProjects();
     mocks.userFindById.mockReturnValue({

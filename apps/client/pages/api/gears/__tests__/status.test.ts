@@ -210,6 +210,41 @@ describe('GET /api/gears/status', () => {
     expect(projects.claimable).toBeUndefined();
   });
 
+  it('a verified account younger than 7 days sees pendingReason too_new', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), emailVerified: true }),
+    });
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; rewardPending?: boolean; pendingReason?: string; claimable?: boolean }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.rewardPending).toBe(true);
+    expect(projects.pendingReason).toBe('too_new');
+    expect(projects.claimable).toBeUndefined();
+  });
+
+  it('a paid gear stays claimed with no pendingReason on an untrusted account', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.txFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects' }]);
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; claimed?: boolean; rewardPending?: boolean; pendingReason?: string }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.claimed).toBe(true);
+    expect(projects.rewardPending).toBeUndefined();
+    expect(projects.pendingReason).toBeUndefined();
+  });
+
   it('unlock by receipt: project membership (not just ownership) is queried', async () => {
     const { promise } = run({ id: 'u1' });
     await promise;
