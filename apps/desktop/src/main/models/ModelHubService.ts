@@ -98,21 +98,25 @@ export function toModelHubError(error: unknown): ModelHubError {
   return hubError('failed', String(error));
 }
 
-/** Ollama's resume reads one small JSON file per chunk; a pull stopped while writing one leaves it truncated. */
-function isInterruptedPull(error: unknown): boolean {
-  return (
-    error instanceof LocalRuntimeError && !error.runtimeId.startsWith('huggingface') && /: EOF$/.test(error.message)
-  );
-}
-
-function interruptedPullError(sha256: string | null): ModelHubError {
-  const files = sha256 ? `sha256-${sha256}-partial*` : 'ending in -partial';
-  return hubError(
-    'interrupted',
-    `An earlier download of this model was interrupted and Ollama cannot resume it; restarting Ollama does not ` +
-      `clear it. Delete the files named ${files} from Ollama's models folder (usually ~/.ollama/models/blobs), ` +
-      'then download again.'
-  );
+/**
+ * Maps Ollama's EOF pull errors. A bare `EOF` comes from its resume reading a chunk file a stopped pull left
+ * truncated; `Get "...": EOF` and `Head "...": EOF` are the registry connection closing.
+ */
+function pullEofError(error: unknown, ref: string): ModelHubError | null {
+  if (!(error instanceof LocalRuntimeError) || error.runtimeId.startsWith('huggingface')) return null;
+  if (error.message.endsWith(` could not pull ${ref}: EOF`))
+    return hubError(
+      'interrupted',
+      'An earlier download of this model was interrupted and Ollama cannot resume it; restarting Ollama does not ' +
+        "clear it. While nothing else is downloading, delete the files with -partial in their names from Ollama's " +
+        'blobs folder (usually ~/.ollama/models/blobs), then download again.'
+    );
+  if (/: EOF$/.test(error.message))
+    return hubError(
+      'hub-unreachable',
+      'Ollama lost its connection to Hugging Face. Check your connection, then download again.'
+    );
+  return null;
 }
 
 function toCard(model: HubModelSummary): HubModelCard {
@@ -141,12 +145,16 @@ function blockedReason(detail: HubModelDetail, build: HubGgufBuild): string | nu
   return null;
 }
 
+/** An unparseable card link falls back to the repo page. */
 function licenseUrl(endpoint: string, detail: HubModelDetail): string {
   const link = detail.licenseLink?.trim();
-  if (link && /^https:\/\//i.test(link)) return link;
-  if (link && !/^[a-z][a-z0-9+.-]*:/i.test(link) && !link.startsWith('//'))
-    return `${endpoint}/${detail.id}/blob/main/${link.replace(/^\.?\//, '')}`;
-  return `${endpoint}/${detail.id}`;
+  const candidate =
+    link && /^https:\/\//i.test(link)
+      ? link
+      : link && !/^[a-z][a-z0-9+.-]*:/i.test(link) && !link.startsWith('//')
+        ? `${endpoint}/${detail.id}/blob/main/${link.replace(/^\.?\//, '')}`
+        : null;
+  return candidate && URL.canParse(candidate) ? candidate : `${endpoint}/${detail.id}`;
 }
 
 function toView(endpoint: string, detail: HubModelDetail): HubModelView {
@@ -273,14 +281,12 @@ export class ModelHubService {
       return { ok: false, error, listed: false };
     };
 
-    let sha256: string | null = null;
     let ref: string | null;
     try {
-      // Cached unless evicted; either way it must still be the commit and size the dialog showed.
-      const detail = await this.#loadDetail(request.repo, false);
+      // Read fresh: a card edit (say, a new license) is a new commit, and it must still be the one the dialog showed.
+      const detail = await this.#loadDetail(request.repo, true);
       const build = detail.builds.find(candidate => candidate.id === request.buildId);
       if (!build) return refuse(hubError('not-found', 'That build is no longer in this repo.'));
-      sha256 = build.files[0]?.sha256 ?? null;
       if (detail.revision !== request.revision || build.sizeBytes !== request.sizeBytes)
         return refuse(hubError('changed', 'This repo changed since you reviewed it. Review it again, then download.'));
       const reason = blockedReason(detail, build);
@@ -330,7 +336,7 @@ export class ModelHubService {
       });
     } catch (error) {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
-      return this.#fail(key, entry, isInterruptedPull(error) ? interruptedPullError(sha256) : toModelHubError(error));
+      return this.#fail(key, entry, pullEofError(error, ref) ?? toModelHubError(error));
     }
     this.#drop(key, entry);
     this.#deps.onInstalledChanged();

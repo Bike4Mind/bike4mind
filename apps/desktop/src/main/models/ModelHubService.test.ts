@@ -268,8 +268,37 @@ describe('ModelHubService pulls', () => {
 
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'interrupted' }, listed: true });
     const message = service.pulls()[0].error?.message ?? '';
-    expect(message).toContain(`sha256-${SHA}-partial*`);
+    expect(message).toContain('-partial in their names');
+    expect(message).not.toContain(SHA);
     expect(message).toContain('restarting Ollama does not clear it');
+  });
+
+  // What Ollama 0.40.11 answers when the registry closes the socket on the manifest or a blob request.
+  it.each([
+    `pull model manifest: Get "https://hf.co/v2/${REPO}/manifests/Q4_K_M": EOF`,
+    `Head "https://huggingface.co/v2/${REPO}/blobs/sha256:${SHA}": EOF`,
+  ])('reports a registry connection that closed as a connection failure: %s', async cause => {
+    const { service, pulls } = harness();
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].reject(new LocalRuntimeError(`ollama could not pull hf.co/${REPO}:Q4_K_M: ${cause}`, 'ollama'));
+
+    await expect(result).resolves.toMatchObject({
+      ok: false,
+      error: { kind: 'hub-unreachable', message: expect.stringContaining('lost its connection') },
+    });
+    expect(service.pulls()[0].error?.message).not.toContain('-partial');
+  });
+
+  it('checks the current revision at pull time, so a license change after review is refused', async () => {
+    const { service, hub, runtime } = harness();
+    const shown = await service.detail(REPO);
+    if (!shown.ok) throw new Error(shown.error.message);
+    hub.getModel.mockResolvedValue(detail({ licenses: ['cc-by-nc-4.0'], revision: 'c'.repeat(40) }));
+
+    const result = await service.pull({ ...request, revision: shown.model.revision });
+    expect(result).toMatchObject({ ok: false, error: { kind: 'changed' }, listed: false });
+    expect(runtime.pull).not.toHaveBeenCalled();
   });
 
   it('blocks a gated build whose file Hugging Face hides', async () => {
@@ -422,6 +451,9 @@ describe('ModelHubService reads', () => {
     ['file:///etc/passwd', `https://huggingface.co/${REPO}`, 'huggingface.co'],
     ['//elsewhere.example/x', `https://huggingface.co/${REPO}`, 'huggingface.co'],
     ['https://llama.meta.com/llama3/license/', 'https://llama.meta.com/llama3/license/', 'llama.meta.com'],
+    ['https://', `https://huggingface.co/${REPO}`, 'huggingface.co'],
+    ['https://[x', `https://huggingface.co/${REPO}`, 'huggingface.co'],
+    ['https:// a b', `https://huggingface.co/${REPO}`, 'huggingface.co'],
   ])('keeps the license link https and names its host: %s', async (licenseLink, licenseUrl, licenseHost) => {
     const { service, hub } = harness();
     hub.getModel.mockResolvedValueOnce(detail({ licenses: ['llama3'], licenseLink }));
