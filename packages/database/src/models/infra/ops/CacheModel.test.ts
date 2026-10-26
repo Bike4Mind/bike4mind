@@ -326,3 +326,55 @@ describe('CacheRepository.tryAddWithinLimitFixedWindow', () => {
     expect((await cacheRepository.tryIncrementWithinLimitFixedWindow(key, 3, windowMs)).success).toBe(false);
   });
 });
+
+describe('CacheRepository leases', () => {
+  const KEY = 'test:semaphore';
+
+  it('admits holders up to the limit and refuses the next', async () => {
+    expect(await cacheRepository.tryAcquireLease(KEY, 'a', 2, 60_000)).toBe(true);
+    expect(await cacheRepository.tryAcquireLease(KEY, 'b', 2, 60_000)).toBe(true);
+    expect(await cacheRepository.tryAcquireLease(KEY, 'c', 2, 60_000)).toBe(false);
+  });
+
+  it('frees a slot on release', async () => {
+    await cacheRepository.tryAcquireLease(KEY, 'a', 1, 60_000);
+    expect(await cacheRepository.tryAcquireLease(KEY, 'b', 1, 60_000)).toBe(false);
+
+    await cacheRepository.releaseLease(KEY, 'a');
+
+    expect(await cacheRepository.tryAcquireLease(KEY, 'b', 1, 60_000)).toBe(true);
+  });
+
+  it('reclaims a lapsed lease so a crashed holder cannot leak its slot', async () => {
+    await Cache.collection.insertOne({
+      key: KEY,
+      result: { holders: [{ id: 'crashed', expiresAt: new Date(Date.now() - 1000) }] },
+      expiresAt: new Date(Date.now() - 1000),
+    });
+
+    expect(await cacheRepository.tryAcquireLease(KEY, 'next', 1, 60_000)).toBe(true);
+    const row = await Cache.findOne({ key: KEY }).lean();
+    expect((row?.result as { holders: { id: string }[] }).holders.map(holder => holder.id)).toEqual(['next']);
+  });
+
+  it('keeps the row alive until its latest lease lapses', async () => {
+    const before = Date.now();
+    await cacheRepository.tryAcquireLease(KEY, 'a', 2, 10_000);
+    await cacheRepository.tryAcquireLease(KEY, 'b', 2, 60_000);
+
+    const row = await Cache.findOne({ key: KEY }).lean();
+    expect(row?.expiresAt.getTime()).toBeGreaterThanOrEqual(before + 60_000);
+  });
+
+  it('never overshoots the limit under concurrent acquires, including the first-ever upsert race', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => cacheRepository.tryAcquireLease(KEY, `h${i}`, 3, 60_000))
+    );
+
+    expect(results.filter(Boolean)).toHaveLength(3);
+  });
+
+  it('treats releasing an unknown holder as a no-op', async () => {
+    await expect(cacheRepository.releaseLease(KEY, 'ghost')).resolves.toBeUndefined();
+  });
+});

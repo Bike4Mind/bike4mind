@@ -359,6 +359,50 @@ describe('settings/update reviewer email list', () => {
   });
 });
 
+describe('settings/update blocked email domain list', () => {
+  beforeEach(() => {
+    stored = null;
+    findOneAndUpdate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it('refuses a list with an invalid domain and names the entry', async () => {
+    await expect(runHandler('blockedEmailDomains', ['kashre.com', 'not a domain'])).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('not a domain'),
+    });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([['co.uk'], ['github.io']])('refuses the bare public suffix %s', async suffix => {
+    await expect(runHandler('blockedEmailDomains', ['kashre.com', suffix])).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining(JSON.stringify(suffix)),
+    });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a subdomain under a public suffix', async () => {
+    stageWriteResult('blockedEmailDomains', ['burner.co.uk', 'np.kashre.com']);
+    await runHandler('blockedEmailDomains', ['burner.co.uk', 'np.kashre.com']);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'blockedEmailDomains' },
+      { $set: { settingValue: ['burner.co.uk', 'np.kashre.com'] } },
+      expect.anything()
+    );
+  });
+
+  it('stores a valid list normalized and deduped', async () => {
+    stageWriteResult('blockedEmailDomains', ['kashre.com', 'xzcoot.com']);
+    await runHandler('blockedEmailDomains', [' Kashre.com', '@kashre.com', '*.xzcoot.com']);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'blockedEmailDomains' },
+      { $set: { settingValue: ['kashre.com', 'xzcoot.com'] } },
+      expect.anything()
+    );
+  });
+});
+
 describe('settings/update admin audit trail', () => {
   beforeEach(() => {
     order.length = 0;

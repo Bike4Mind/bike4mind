@@ -19,8 +19,10 @@ let capturedCompleteModel: unknown;
 const { DATED_GPT_4_1 } = vi.hoisted(() => ({
   DATED_GPT_4_1: {
     id: 'gpt-4.1-2025-04-14',
+    type: 'text',
     backend: 'openai',
     max_tokens: 32_768,
+    pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
   },
 }));
 

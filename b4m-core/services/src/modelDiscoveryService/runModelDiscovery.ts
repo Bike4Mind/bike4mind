@@ -893,6 +893,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     statesBeforeRun,
     ratesInForce: perTokenRatesInForce(priceRowsInForce),
     priorDiscoveryGroups,
+    priorContributors,
     autoRemap: ctx.autoRemap,
     operatorOwnedModelIds,
     runStartedAt: effectiveAt,
@@ -1181,8 +1182,10 @@ function logParserShifts(shifts: readonly ParserRowShift[], logger: DiscoveryLog
  * The groups the discovery row in force claims, per model. rowsInForce is
  * newest-first and holds one non-operator row per (modelId, source), so the
  * first discovery row seen for a model is the one an appended row supersedes.
+ * Exported with its contributors sibling: anything replaying a stored catalog
+ * into planCatalogWrites needs the same two maps this run derives.
  */
-function discoveryGroupsInForce(rows: readonly IModelCatalogRow[]): Map<string, FieldGroup[]> {
+export function discoveryGroupsInForce(rows: readonly IModelCatalogRow[]): Map<string, FieldGroup[]> {
   const groups = new Map<string, FieldGroup[]>();
   for (const row of rows) {
     if (row.source !== 'discovery' || groups.has(row.modelId)) continue;
@@ -1207,7 +1210,7 @@ export function presentationOwnedOutsideDiscovery(
 }
 
 /** Contributors on that same superseded row, so a re-claimed group keeps its provenance. */
-function discoveryContributorsInForce(rows: readonly IModelCatalogRow[]): Map<string, ICatalogContributor[]> {
+export function discoveryContributorsInForce(rows: readonly IModelCatalogRow[]): Map<string, ICatalogContributor[]> {
   const contributors = new Map<string, ICatalogContributor[]>();
   for (const row of rows) {
     if (row.source !== 'discovery' || contributors.has(row.modelId)) continue;

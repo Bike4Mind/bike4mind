@@ -38,6 +38,7 @@ import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/
 import axios from 'axios';
 import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const CreateSessionBodySchema = z.object({
   sessionId: z.string().optional(),
@@ -63,6 +64,7 @@ function voiceUnavailableError(extra?: Record<string, unknown>) {
 }
 
 const handler = baseApi().post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { sessionId, isReconnect } = CreateSessionBodySchema.parse(req.body);
 
   const settings = await getSettingsMap(

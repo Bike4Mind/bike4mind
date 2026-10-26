@@ -45,7 +45,7 @@ import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
 import { RemoteSkillSource } from './storage/RemoteSkillSource.js';
 import { ReActAgent } from '@bike4mind/agents';
-import { ToolCatalog, type PermissionPromptKind } from './tools/gateway/index.js';
+import { ToolCatalog, type PermissionPromptKind, type PermissionPromptOptions } from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
 import {
@@ -194,6 +194,12 @@ import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
 import { buildAgent } from './bootstrap/buildAgent.js';
 import { buildToolSearch } from './bootstrap/buildToolSearch.js';
 import { wireAgentEvents } from './bootstrap/wireAgentEvents.js';
+import {
+  decideFolderTrustGate,
+  hostInertNotice,
+  isHostLaunchWithQueuedPrompt,
+  shouldPromptMcpApproval,
+} from './bootstrap/startupTrustGates.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
 import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCommand.js';
@@ -214,6 +220,7 @@ interface PermissionPromptState {
   args: unknown;
   preview?: string;
   canBeTrusted: boolean;
+  sessionScope?: string[] | null;
   kind?: PermissionPromptKind;
   resolve: (response: { action: PermissionResponse }) => void;
 }
@@ -547,14 +554,22 @@ function CliApp() {
       // Folder-trust gate: when an untrusted project ships repo-committed b4m
       // files, prompt ONCE (interactive TTY only) before anything repo-sourced
       // loads. Non-interactive stays untrusted (fail-safe). The ref guard keeps
-      // re-runs of init() (login/env-picker) from re-showing the prompt.
-      if (
-        !folderTrustResolvedRef.current &&
-        !state.configStore.isProjectTrusted() &&
-        state.configStore.projectHasB4mFiles() &&
-        Boolean(process.stdin.isTTY) &&
-        Boolean(process.stdout.isTTY)
-      ) {
+      // re-runs of init() (login/env-picker) from re-showing the prompt. A host
+      // launch with a queued prompt gets the "Not now" outcome without the
+      // prompt, so the queued turn is not left waiting on an unseen question.
+      const isTty = Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
+      const hostLaunch = isHostLaunchWithQueuedPrompt();
+      const folderTrustGate = decideFolderTrustGate({
+        alreadyResolved: folderTrustResolvedRef.current,
+        projectTrusted: state.configStore.isProjectTrusted(),
+        projectHasB4mFiles: state.configStore.projectHasB4mFiles(),
+        isTty,
+        hostLaunch,
+      });
+      if (folderTrustGate === 'inert') {
+        folderTrustResolvedRef.current = true;
+        console.log(`\n${hostInertNotice(state.configStore.getProjectRealPath() ?? process.cwd())}\n`);
+      } else if (folderTrustGate === 'prompt') {
         folderTrustResolvedRef.current = true;
         setState(prev => ({
           ...prev,
@@ -570,10 +585,12 @@ function CliApp() {
       // they stay off and we warn.
       const pendingMcp = state.configStore.getPendingMcpApprovals();
       if (
-        pendingMcp.length > 0 &&
-        !mcpApprovalResolvedRef.current &&
-        Boolean(process.stdin.isTTY) &&
-        Boolean(process.stdout.isTTY)
+        shouldPromptMcpApproval({
+          alreadyResolved: mcpApprovalResolvedRef.current,
+          pendingCount: pendingMcp.length,
+          isTty,
+          hostLaunch,
+        })
       ) {
         mcpApprovalResolvedRef.current = true;
         setState(prev => ({
@@ -784,14 +801,21 @@ function CliApp() {
 
       // Create permission prompt function (queue-based for concurrent agent support)
       let permissionPromptCounter = 0;
-      const promptFn = (toolName: string, args: unknown, preview?: string, kind?: PermissionPromptKind) => {
+      const promptFn = (
+        toolName: string,
+        args: unknown,
+        preview?: string,
+        kind?: PermissionPromptKind,
+        options?: PermissionPromptOptions
+      ) => {
         return new Promise<{ action: PermissionResponse }>(resolve => {
           // Process-hook (host action_required signal): an interactive permission
           // prompt is now blocking - fire Notification/permission_prompt (writes sentinel).
           void getProcessHooks()?.fireNotificationPermissionPrompt(toolName);
           const canBeTrusted = permissionManager.canBeTrusted(toolName);
           const id = `perm-${++permissionPromptCounter}`;
-          const prompt = { id, toolName, args, preview, canBeTrusted, kind, resolve };
+          const sessionScope = options?.sessionScope;
+          const prompt = { id, toolName, args, preview, canBeTrusted, sessionScope, kind, resolve };
           setState(prev => ({
             ...prev,
             permissionManager,

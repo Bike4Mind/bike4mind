@@ -736,6 +736,21 @@ describe('runModelDiscovery', () => {
         expect(result.absence.missed).toEqual(['gpt-6']);
       });
 
+      it('keeps the credits of the discovery row it graduates', async () => {
+        await missFor(bench, 3);
+
+        const [sighted, graduation] = bench.catalog.rows;
+        expect(sighted.contributors).toContainEqual({ group: 'identity', source: 'openai' });
+        // planPass hands planLifecycle the in-force credits; without them the graduation would
+        // blanket-credit discovery, and the read path interprets the availability credit.
+        expect(graduation.contributors).toEqual(
+          expect.arrayContaining([
+            { group: 'identity', source: 'openai' },
+            { group: 'limits', source: 'openai' },
+          ])
+        );
+      });
+
       it('plans the graduation but writes nothing in report mode', async () => {
         // Report mode never applies a miss, so the plan has to reach the same
         // verdict from the counters as they stood when the run started.

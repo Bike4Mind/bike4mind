@@ -60,6 +60,32 @@ export function getInsufficientCreditsMessage(error: unknown): string | undefine
   return data.error || data.message || undefined;
 }
 
+const MAX_VIOLATIONS_SHOWN = 3;
+
+/**
+ * The reasons a 422 listed in its `violations` array (e.g. publish bundle validation), joined for a
+ * toast, or undefined when the response carries none. The bare `error` beside them ("Validation
+ * failed") says nothing the user can act on.
+ */
+export function getValidationViolationsMessage(error: unknown): string | undefined {
+  if (!isAxiosError(error)) return undefined;
+  const violations: unknown = (error.response?.data as { violations?: unknown } | undefined)?.violations;
+  if (!Array.isArray(violations)) return undefined;
+  const messages = [
+    ...new Set(
+      violations
+        .map(v => (v && typeof v === 'object' ? (v as { message?: unknown }).message : undefined))
+        .filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+        .map(m => m.trim())
+        .map(m => (/[.!?]$/.test(m) ? m : `${m}.`))
+    ),
+  ];
+  if (messages.length === 0) return undefined;
+  const shown = messages.slice(0, MAX_VIOLATIONS_SHOWN).join(' ');
+  const more = messages.length - MAX_VIOLATIONS_SHOWN;
+  return more > 0 ? `${shown} (+${more} more)` : shown;
+}
+
 /**
  * Get a generic error message for production environments.
  */

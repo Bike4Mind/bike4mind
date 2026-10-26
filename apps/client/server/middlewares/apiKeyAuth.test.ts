@@ -382,3 +382,44 @@ describe('apiKeyAuth infrastructure failures', () => {
     expect(error?.message).toBe('Invalid API key');
   });
 });
+
+describe('apiKeyAuth admin role', () => {
+  const keyWith = (scopes: ApiKeyScope[]) =>
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'admin-1',
+      scopes,
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findByIdMock.mockResolvedValue({ id: 'admin-1', isBanned: false, isAdmin: true });
+  });
+
+  it('treats the owner as a regular user when the key lacks the admin scope', async () => {
+    keyWith([ApiKeyScope.AI_CHAT]);
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(false);
+  });
+
+  it('keeps the admin role for a key holding the admin scope', async () => {
+    keyWith([ApiKeyScope.ADMIN]);
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(true);
+  });
+
+  it('leaves a session-authenticated admin alone', async () => {
+    const req = makeReq();
+    req.user = { id: 'admin-1', isAdmin: true } as unknown as Request['user'];
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(true);
+    expect(validateUserApiKeyMock).not.toHaveBeenCalled();
+  });
+});

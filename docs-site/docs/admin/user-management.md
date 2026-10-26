@@ -7,7 +7,7 @@ tags: [admin, users, management]
 
 # User Management
 
-The Users tab is the primary interface for administering user accounts on the Bike4Mind platform. It provides search, filtering, multiple display modes, inline editing, and bulk export capabilities. User management state (search terms, pagination, sort preferences, and filters) is persisted across sessions via local storage.
+The Users tab is the primary interface for administering user accounts on the Bike4Mind platform. It provides search, filtering, multiple display modes, inline editing, and bulk export capabilities. User management state (search terms, pagination, sort preferences, filters, and display mode) is persisted across sessions via local storage.
 
 ## Search
 
@@ -35,7 +35,7 @@ The Users tab supports four distinct view modes, selectable from the **View Mode
 | Storage | Progress bar showing used vs. allocated storage with percentage and color coding (green/yellow/red based on usage threshold) |
 | Security | MFA status badge |
 | Recent Activity | Latest activity timestamp and action name |
-| Actions | "Admin" button to open the full user view modal, plus a profile button |
+| Actions | "Admin" button to open the [user profile page](#user-profile-page), plus a profile button |
 
 ### Full View Sections
 
@@ -47,8 +47,28 @@ Each user card in Full view contains the following sections:
 | **Permissions** | User level button (cycles through DemoUser, PaidUser, VIPUser, ManagerUser, AdminUser), Super Admin checkbox, predefined user tags, and custom tag input |
 | **Subscription** | Current subscription status and details |
 | **B4M Settings** | Platform-specific settings including credits, storage limit, and referral availability |
-| **Admin Actions** | Ban, Moderate, and Delete user controls |
+| **Admin Actions** | Ban, Moderate, Delete, and Compliance controls |
 | **Activity & Profile** | Login details and admin profile view |
+
+Each card header also has an **Open profile** button that opens the user's profile page. It is disabled while the card has unsaved edits: update or undo them first.
+
+## User Profile Page
+
+Each user has a full-page profile at `/admin/users/<userId>`, opened from the **Admin** button in Slim view, the User Journey view, or **Open profile** on a Full view card. It is admin-only, like the rest of the admin panel. The **Users** button at the top returns to the Users tab.
+
+The header shows the user's name, email, and avatar; badges for email verification, banned, moderated, super admin, user level, organization, and signup method; the created and last-active dates; and the quick actions **Login as User**, **Send Message**, **Grant Subscription**, and **Update** (shown once there are changes to save).
+
+The page has three tabs. The selected tab is kept in the URL as `?tab=activity` or `?tab=admin` (Overview is the default and has no parameter), so a link can open a specific tab.
+
+| Tab | Contents |
+|-----|----------|
+| **Overview** | The editable sections from Full view (User Details, Roles, Product Access, Subscription, B4M Settings, Activity & Profile), laid out two per row on wide screens and one per row on narrow ones |
+| **Activity** | The user's recent activity |
+| **Admin** | The **Danger zone**: Ban, Moderate, Delete, and Compliance (see [Admin Actions](#admin-actions-ban-moderate-delete)) |
+
+Unsaved edits are kept when you switch tabs. If you try to leave the page with unsaved edits (another link, the browser Back button, or closing the tab), you are asked to confirm, and the in-app prompt lists the fields that would be discarded.
+
+Old links of the form `/admin?userId=<userId>` redirect to the user's profile page. An unknown or malformed user id shows **User not found**; any other loading error shows a retry button.
 
 ## Filtering
 
@@ -158,13 +178,16 @@ The Permissions section in Full view provides:
 
 ## Admin Actions (Ban, Moderate, Delete)
 
-The Admin Actions section provides destructive user operations:
+Destructive user operations live in the **Admin Actions** section of a Full view card, and in the **Danger zone** on the Admin tab of the user profile page:
 
 | Action | Description |
 |--------|-------------|
 | **Ban** | Checkbox toggle. Bans the user without deleting their account. |
 | **Moderate** | Checkbox toggle. Moderated users cannot use AI features. |
-| **Delete** | Requires typing "DELETE" in a text field, then clicking the Delete button. A confirmation modal appears before the deletion is executed. This action cannot be undone. |
+| **Delete** | Requires typing "DELETE" in a text field, then clicking the Delete button. A confirmation modal appears before the deletion is executed. This action cannot be undone. Deleting from the profile page returns you to the Users tab. |
+| **Compliance** | Opens the user's compliance details. |
+
+Ban and moderation changes are staged like any other field. When you click **Update** with a ban or moderation change pending, a confirmation dialog names the change before anything is saved; **Cancel** saves nothing.
 
 ## Export
 

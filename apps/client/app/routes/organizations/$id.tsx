@@ -193,6 +193,7 @@ const OrganizationPage: FC = () => {
           onChange={(_, value) => requestTab(value as OrganizationTabs)}
         >
           <TabList
+            data-testid="organization-tabs"
             sx={{
               width: '240px',
               borderRight: '1px solid',

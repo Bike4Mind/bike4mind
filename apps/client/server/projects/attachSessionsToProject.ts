@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/database';
 import type { Ability } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
+import { isAiAccessRevoked } from '@bike4mind/services/userService/accountState';
 import type { Logger } from '@bike4mind/observability';
 import { ProjectEvents, type ISessionDocument } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -15,7 +16,7 @@ import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOpera
 import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 
 export interface ProjectMutationContext {
-  user: { id: string };
+  user: { id: string; isModerated?: boolean | null };
   ability?: Ability;
   logger?: Logger;
 }
@@ -90,7 +91,7 @@ export async function attachSessionsToProject(
         },
         { ability: ctx.ability }
       );
-      if (!summarizableSessionIds.has(session.id)) return;
+      if (!summarizableSessionIds.has(session.id) || isAiAccessRevoked(ctx.user)) return;
       await SessionEvents.Summarize.publish({
         sessionId: session.id,
         callTagging: true,

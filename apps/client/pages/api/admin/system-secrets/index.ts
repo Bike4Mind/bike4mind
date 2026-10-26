@@ -10,7 +10,7 @@
  * - All values encrypted with AES-256-GCM before storage
  */
 
-import { systemSecretRepository } from '@bike4mind/database';
+import { systemSecretRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -24,6 +24,7 @@ import {
   type ResolvableSecretName,
 } from '@server/managers/systemSecretsManager';
 import { Logger } from '@bike4mind/observability';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * Mask a secret value for display (show only last 4 chars).
@@ -121,30 +122,39 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       const encryptedValue = encryptSecret(value, encryptionKey);
 
-      // Check if secret already exists
-      const existingSecret = await systemSecretRepository.findBySecretName(secretName);
+      const existingSecret = await withTransaction(async () => {
+        const existing = await systemSecretRepository.findBySecretName(secretName);
 
-      if (existingSecret) {
-        // Update existing secret
-        await systemSecretRepository.updateSecret(existingSecret.id, {
-          encryptedValue,
-          source: 'gui_configured',
-          lastModifiedBy: req.user!.id,
+        if (existing) {
+          await systemSecretRepository.updateSecret(existing.id, {
+            encryptedValue,
+            source: 'gui_configured',
+            lastModifiedBy: req.user!.id,
+          });
+        } else {
+          await systemSecretRepository.upsertSecret(secretName, {
+            encryptedValue,
+            keyVersion: 1,
+            category: secretConfig.category,
+            source: 'gui_configured',
+            isOverridable: true,
+            description: secretConfig.description,
+            lastModifiedBy: req.user!.id,
+          });
+        }
+
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.system_secret.upserted',
+          target: { kind: 'settings', id: secretName, displayName: secretName },
+          summary: `${existing ? 'updated' : 'created'} system secret ${secretName}`,
+          details: { created: !existing },
         });
-        Logger.info(`[System Secrets] Updated secret ${secretName} by user ${req.user!.id}`);
-      } else {
-        // Create new secret
-        await systemSecretRepository.upsertSecret(secretName, {
-          encryptedValue,
-          keyVersion: 1,
-          category: secretConfig.category,
-          source: 'gui_configured',
-          isOverridable: true,
-          description: secretConfig.description,
-          lastModifiedBy: req.user!.id,
-        });
-        Logger.info(`[System Secrets] Created secret ${secretName} by user ${req.user!.id}`);
-      }
+        return existing;
+      });
+
+      Logger.info(
+        `[System Secrets] ${existingSecret ? 'Updated' : 'Created'} secret ${secretName} by user ${req.user!.id}`
+      );
 
       // Clear cache so new value is used immediately
       clearSecretCache(secretName);

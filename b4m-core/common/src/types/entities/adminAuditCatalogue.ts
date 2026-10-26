@@ -99,6 +99,72 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 
+  // Handler coverage: secrets and integration credentials
+  'settings.system_secret.upserted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'settings.system_secret.deleted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.created': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.updated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.deleted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.key_rotated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.created': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.reconnected': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.manifest_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'integration.slack_workspace.deactivated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.created': { category: 'identity', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.updated': { category: 'identity', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.deleted': { category: 'identity', severity: 'critical', write: 'strict' },
+
+  // Handler coverage: email and messaging
+  // Job entries record the claim and enqueue request, not delivery.
+  'email.job.started': { category: 'support', severity: 'critical', write: 'strict' },
+  'email.job.sent': { category: 'support', severity: 'critical', write: 'strict' },
+  'email.job.test_sent': { category: 'support', severity: 'notice', write: 'strict' },
+  'email.job.created': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.cloned': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.scheduled': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.cancelled': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.created': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.deleted': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.cloned': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.test_sent': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'support.inbox.message_sent': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'support.pr_report.sent': { category: 'support', severity: 'info', write: 'bestEffort' },
+
+  // Handler coverage: users and credentials
+  'user.created': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.bulk_created': {
+    category: 'account',
+    severity: 'notice',
+    write: 'bestEffort',
+    escalatesAboveGrantThreshold: true,
+  },
+  'user.emergency_login.challenged': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.emergency_login.denied': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.api_key.generated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.subscription.removed': { category: 'credits', severity: 'critical', write: 'strict' },
+  'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
+  'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
+  // Handler coverage: liveops, sre and queues
+
+  // ops
+
+  // Handler coverage: liveops, sre and queues
+  'ops.triage_config.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.triage_config.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.triage_config.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.scan_triggered': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.run_triggered': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.pattern_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.tracking_dismissed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.tracking_rerun': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 

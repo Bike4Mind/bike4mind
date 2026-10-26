@@ -340,50 +340,42 @@ export function statusFields(turn: TurnProgress, now: number, activity: string, 
  * A stand-in zero in any of them reads as a fact the server never stated.
  */
 export interface ComposerUsage {
-  /**
-   * The whole input side of the LATEST request - cache reads included. See contextTokens: this
-   * is window occupancy, which is not the same quantity as `totalTokens` above.
-   */
   contextTokens: number | null;
-  /**
-   * What the percentage and the ring measure against: the model's window, capped - see
-   * effectiveContextLimit. Not the raw window, because the conversation compacts well before a
-   * 1M window fills, and a ring at 30% on the eve of a compaction would be telling the user it
-   * had room it does not.
-   */
   contextLimit: number | null;
-  /** The model's own window, from the server's catalog, for the tooltip only. Null when unstated. */
   modelWindow?: number | null;
   /** The account's personal credit balance. Null when it could not be read. */
   credits: number | null;
+  /** Backend-stated grant for one monthly plan cycle. Null when no finite allowance was stated. */
+  monthlyAllowance?: number | null;
   /** Why the balance is null, for the tooltip. Never set alongside a real balance. */
   creditsError?: string;
   /** What the last completed turn cost, for the tooltip's split. Deliberately a SEPARATE figure. */
   lastTurn?: ChatUsage | null;
 }
 
-/** Stands in for a figure nobody has stated, so the row keeps its shape and reads as unknown. */
-const UNKNOWN = '--';
-
-/** "22" for a window that is 22% full; null when either half of the fraction is unknown. */
+/** Percentage of a model window, retained for context accounting outside the footer indicator. */
 export function contextPercent(tokens: number | null, window: number | null): number | null {
   if (tokens === null || window === null || window <= 0) return null;
   return Math.round((tokens / window) * 100);
 }
 
-/**
- * What the ring is coloured by: how much room is left, in the three bands that change a
- * decision.
- *
- * The number itself is one hover and one squint away, and the user glancing at the composer is
- * asking one question - do I still have room? Primary up to three quarters, warning past it,
- * danger once a long reply plus its tool results would not fit - which is also where the next
- * message compacts the conversation first. Returned as a Joy palette name
- * rather than a colour so both themes get their own value for it.
- *
- * An unknown occupancy is neutral: there is no band to be in, and borrowing the full-window
- * colour for a figure nobody stated is the one reading this file never allows.
- */
+export function creditAllowancePercent(balance: number | null, allowance: number | null): number | null {
+  if (balance === null || allowance === null || allowance <= 0) return null;
+  return (balance / allowance) * 100;
+}
+
+export function allowanceColor(percent: number | null): 'neutral' | 'primary' | 'warning' | 'danger' {
+  if (percent === null) return 'neutral';
+  if (percent <= 10) return 'danger';
+  if (percent <= 25) return 'warning';
+  return 'primary';
+}
+
+export function allowanceArc(percent: number): number {
+  if (percent <= 0) return 0;
+  return Math.min(100, Math.max(4, percent));
+}
+
 export function occupancyColor(percent: number | null): 'neutral' | 'primary' | 'warning' | 'danger' {
   if (percent === null) return 'neutral';
   if (percent >= AUTO_COMPACT_PERCENT) return 'danger';
@@ -391,65 +383,15 @@ export function occupancyColor(percent: number | null): 'neutral' | 'primary' | 
   return 'primary';
 }
 
-/**
- * The arc the ring draws for an occupancy, as a percentage of the circle.
- *
- * Floored, and the floor is the point. The ring is the whole indicator now, so the only thing
- * telling a measured context from an unmeasured one is whether an arc is there at all - and a
- * real occupancy under a percent draws two or three pixels on a 14px circle, which is the empty
- * ring. This is the same distinction formatOccupancy makes by writing "<1%" instead of "0%",
- * said in the only language a ring has.
- */
 export function occupancyArc(percent: number): number {
   return Math.min(100, Math.max(4, percent));
 }
 
-/**
- * How full the window reads on the indicator: "22%", or "<1%" for a real but tiny occupancy.
- *
- * A million-token window sits under half a percent for the first several turns, and rounding
- * that to "0%" renders a measured context identically to no context at all - the same
- * something-shown-as-nothing this file avoids everywhere else.
- */
 export function formatOccupancy(percent: number, tokens: number): string {
   if (percent === 0 && tokens > 0) return '<1%';
   return `${percent}%`;
 }
 
-/**
- * The composer's usage indicator in words: how full the context window is, in one short field.
- *
- * No longer drawn. The ring took over the composer's status line and this became its ACCESSIBLE
- * NAME, which is why it still keeps the noun: "3%" announced on its own, on a row that also
- * carries a model and an effort, names no quantity at all. Dropping the words along with the
- * glyph would have taken the figure away from a screen reader entirely, which is not what
- * replacing a label with a picture is supposed to mean.
- *
- * The balance is deliberately NOT here. It belongs to the account rather than to this
- * conversation, it is the slower-moving of the two, and putting both on a row that already
- * carries the approval pill and the model picker is what would squeeze the line. It is one
- * hover away instead - see describeUsage.
- *
- * `--` rather than an omitted field when the window figure is unknown, so the row holds its
- * shape and the hover target stays where the user last found it. Null only when NEITHER figure
- * is known, which is the caller's cue to fall back to its own word.
- */
-export function usageLabel(usage: ComposerUsage): string | null {
-  const percent = contextPercent(usage.contextTokens, usage.contextLimit);
-  if (percent === null && usage.credits === null) return null;
-
-  return `Context ${percent === null ? UNKNOWN : formatOccupancy(percent, usage.contextTokens ?? 0)}`;
-}
-
-/** "31,667" - the balance as the server stated it, grouped so a five-figure number stays readable. */
-export function formatCredits(balance: number): string {
-  return Math.round(balance).toLocaleString('en-US');
-}
-
-/**
- * When the conversation will compact itself, and the model's own window where the cap hides it,
- * so nobody has to work out from "/ 400k" why a 1M model stops short of 1M.
- */
 export function describeCompaction(limit: number, modelWindow: number | null): string {
   const at = `Compacts automatically at ${formatTokens(autoCompactThreshold(limit))}`;
   return modelWindow !== null && modelWindow > limit
@@ -457,35 +399,36 @@ export function describeCompaction(limit: number, modelWindow: number | null): s
     : at;
 }
 
-/**
- * The tooltip behind that line: the same two figures in full, plus what the last turn cost.
- *
- * Context and cost are named apart on purpose. They are computed from different sides of the
- * same reports and a reader who takes one for the other will conclude the window is far fuller
- * than it is - see inputSide.
- */
+function formatAllowancePercent(percent: number, balance: number): string {
+  if (percent < 1 && balance > 0) return '<1%';
+  return `${Math.round(percent)}%`;
+}
+
+export function usageLabel(usage: ComposerUsage): string | null {
+  const percent = creditAllowancePercent(usage.credits, usage.monthlyAllowance ?? null);
+  if (percent !== null)
+    return `Credits ${formatAllowancePercent(percent, usage.credits ?? 0)} of monthly plan allowance`;
+  if (usage.credits !== null) return 'Credits personal balance; no monthly plan allowance';
+  return usage.creditsError ? `Credits unavailable - ${usage.creditsError}` : 'Credits loading';
+}
+
+/** "31,667" - the balance as the server stated it, grouped so a five-figure number stays readable. */
+export function formatCredits(balance: number): string {
+  return Math.round(balance).toLocaleString('en-US');
+}
+
 export function describeUsage(usage: ComposerUsage, showDollars = false): string | null {
   const lines: string[] = [];
-
-  if (usage.contextTokens === null) {
-    lines.push('Context - nothing measured in this conversation yet');
-  } else if (usage.contextLimit === null) {
-    // No percentage, rather than a percentage of a window this client made up.
-    lines.push(`Context ${formatTokens(usage.contextTokens)} used - this model reports no window size`);
-  } else {
-    const percent = contextPercent(usage.contextTokens, usage.contextLimit) ?? 0;
-    const share = formatOccupancy(percent, usage.contextTokens);
-    lines.push(`Context ${formatTokens(usage.contextTokens)} / ${formatTokens(usage.contextLimit)} (${share})`);
+  const percent = creditAllowancePercent(usage.credits, usage.monthlyAllowance ?? null);
+  if (usage.credits === null) lines.push(`Credits - ${usage.creditsError ?? 'loading'}`);
+  else if (percent === null)
+    lines.push(`Credits ${formatCredits(usage.credits)} personal balance - no monthly plan allowance`);
+  else {
+    const allowance = usage.monthlyAllowance ?? 0;
+    lines.push(
+      `Credits ${formatCredits(usage.credits)} personal balance / ${formatCredits(allowance)} monthly plan allowance (${formatAllowancePercent(percent, usage.credits)})`
+    );
   }
-  if (usage.contextLimit !== null) lines.push(describeCompaction(usage.contextLimit, usage.modelWindow ?? null));
-
-  lines.push(
-    usage.credits === null
-      ? `Credits - ${usage.creditsError ?? 'not available'}`
-      : // Named as personal because it is: a turn billed to an organization draws on a pool
-        // this number does not describe, per the endpoint's own contract.
-        `Credits ${formatCredits(usage.credits)} personal balance`
-  );
 
   const split = describeSplit(usage.lastTurn);
   if (split) {

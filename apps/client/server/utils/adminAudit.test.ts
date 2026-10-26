@@ -13,7 +13,9 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findById: h.findById } }));
 
 import {
+  ADMIN_ACTION_REASON_MISSING_MESSAGE,
   denySelfAdminAction,
+  parseAdminActionReason,
   recordAdminActionFromRequest,
   systemAuditActor,
   type RecordAdminActionFromRequestInput,
@@ -196,6 +198,25 @@ describe('recordAdminActionFromRequest', () => {
     await recordAdminActionFromRequest(buildRequest({ url: '/api/admin/x?token=secret&a=1' }), baseInput);
 
     expect(appended().context.route).toBe('/api/admin/x');
+  });
+});
+
+describe('parseAdminActionReason', () => {
+  it('points at a reload when no reason key was sent', () => {
+    expect(() => parseAdminActionReason(undefined)).toThrow(ADMIN_ACTION_REASON_MISSING_MESSAGE);
+    expect(ADMIN_ACTION_REASON_MISSING_MESSAGE).toMatch(/reload/i);
+  });
+
+  it('keeps the field-level message for an explicitly sent null', () => {
+    expect(() => parseAdminActionReason(null)).toThrow('A reason is required');
+  });
+
+  it.each(['', '   ', 'abc'])('keeps the field-level message when a reason was sent but is unusable (%j)', value => {
+    expect(() => parseAdminActionReason(value)).toThrow('A reason of at least 5 characters is required');
+  });
+
+  it('returns a trimmed valid reason', () => {
+    expect(parseAdminActionReason('  Reproducing a ticket  ')).toBe('Reproducing a ticket');
   });
 });
 

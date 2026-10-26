@@ -625,7 +625,7 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
           {call.notice && <NoticeBanner notice={call.notice} />}
           <MediaAttachments
             media={call.media ?? []}
-            nameHint={call.name === BROWSER_SCREENSHOT_TOOL_NAME ? 'screenshot' : 'image'}
+            nameHint={SCREENSHOT_TOOL_NAMES.has(call.name) ? 'screenshot' : 'image'}
           />
           {call.name === GENERATE_VIDEO_TOOL_NAME && <VideoJobsForCall callId={call.id} />}
         </Box>
@@ -663,7 +663,7 @@ function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
 }
 
 const GENERATE_VIDEO_TOOL_NAME = 'generate_video';
-const BROWSER_SCREENSHOT_TOOL_NAME = 'browser_screenshot';
+const SCREENSHOT_TOOL_NAMES: ReadonlySet<string> = new Set(['browser_screenshot', 'screen_capture']);
 
 export function ToolCallList({
   calls,

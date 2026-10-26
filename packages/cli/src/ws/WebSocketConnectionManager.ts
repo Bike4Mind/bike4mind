@@ -122,7 +122,7 @@ export class WebSocketConnectionManager {
           if (requestId && this.handlers.has(requestId)) {
             this.handlers.get(requestId)!(message);
           } else {
-            // Check action-based handlers (e.g. keep_command from server relay)
+            // Check action-based handlers (e.g. hearth_event, tavern_heartbeat_log)
             const action = message.action as string | undefined;
             if (action && this.actionHandlers.has(action)) {
               this.actionHandlers.get(action)!(message);
@@ -205,7 +205,7 @@ export class WebSocketConnectionManager {
 
   /**
    * Register a handler for messages matching a specific action type.
-   * Used for server-pushed commands like keep_command.
+   * Used for server-pushed events like hearth_event.
    */
   onAction(action: string, handler: MessageHandler): void {
     this.actionHandlers.set(action, handler);

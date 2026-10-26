@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
-import { BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
 import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   usageEventRepository: {},
   organizationRepository: {},
-  userApiKeyRepository: {},
+  userApiKeyRepository: { findById: vi.fn().mockResolvedValue(null) },
 }));
 
 // No registered connection by default, so the handler answers 400 right after authentication and
@@ -286,5 +286,30 @@ describe('completion analytics', () => {
         finalCreditsUsed: 7,
       })
     );
+  });
+});
+
+describe('admin role on the reloaded owner', () => {
+  type ScopeActor = (<U extends { isAdmin?: boolean }>(actor: U) => U) | undefined;
+  const runAs = async (scopes?: ApiKeyScope[]): Promise<ScopeActor> => {
+    if (scopes) vi.mocked(verifyApiKey).mockResolvedValueOnce({ userId: 'u1', keyId: 'k1', scopes } as never);
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+    return vi.mocked(executeCompletion).mock.calls[0][0].scopeActor;
+  };
+
+  it('withholds an admin owner role for a key without the admin scope', async () => {
+    const scopeActor = await runAs([ApiKeyScope.AI_CHAT]);
+    expect(scopeActor?.({ isAdmin: true }).isAdmin).toBe(false);
+  });
+
+  it('keeps the role for a key with the admin scope', async () => {
+    expect(await runAs([ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN])).toBeUndefined();
+  });
+
+  it('keeps the role for a JWT session', async () => {
+    expect(await runAs()).toBeUndefined();
   });
 });

@@ -33,6 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   // Lakes disabled, so the save tool answers right after its adapter gate without writing.
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
   apiKeyRepository: {},
+  cacheRepository: {},
   dataLakeRepository: {
     findByDatalakeTags: vi.fn().mockResolvedValue([]),
     findBySlug: vi.fn(),

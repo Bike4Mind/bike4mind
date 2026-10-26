@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
 import { decideScopeGate, parseStagedScopes } from './apiKeyScopeGate';
+
+vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+  premiumApiKeyScopes: [
+    { value: 'acme:read', label: 'Acme: Read', description: 'Read Acme records', endpoints: ['GET /api/acme'] },
+  ],
+}));
 
 const NONE = new Set<string>();
 
@@ -206,5 +212,36 @@ describe('decideScopeGate', () => {
       const held = [ApiKeyScope.EMBED_CHAT, ApiKeyScope.OPTIHASHI_READ];
       expect(decideScopeGate([ApiKeyScope.EMBED_CHAT], held, NONE, also)).toEqual({ outcome: 'allow' });
     });
+  });
+});
+
+describe('contributed scopes', () => {
+  it('stages a contributed scope and still rejects an unknown one', () => {
+    const { staged, rejected } = parseStagedScopes('acme:read,acme:write');
+    expect([...staged]).toEqual(['acme:read']);
+    expect(rejected).toEqual(['acme:write']);
+  });
+
+  it('allows a key holding the contributed scope and denies one without it', () => {
+    expect(decideScopeGate(['acme:read'], ['acme:read'], NONE)).toEqual({ outcome: 'allow' });
+    expect(decideScopeGate(['acme:read'], [ApiKeyScope.READ_NOTEBOOKS], NONE)).toEqual({ outcome: 'deny' });
+  });
+
+  it('lets a key without the contributed scope through only while it is staged', () => {
+    const { staged } = parseStagedScopes('acme:read');
+    expect(decideScopeGate(['acme:read'], [ApiKeyScope.READ_NOTEBOOKS], staged)).toEqual({
+      outcome: 'stagedAllow',
+      stagedScopes: ['acme:read'],
+    });
+  });
+
+  it('does not treat a contributed-only key as confined on a scope-less route', () => {
+    expect(decideScopeGate(undefined, ['acme:read'], NONE)).toEqual({ outcome: 'allow' });
+  });
+
+  it('still denies a confined key on a contributed route, staged or not', () => {
+    const { staged } = parseStagedScopes('acme:read');
+    expect(decideScopeGate(['acme:read'], [ApiKeyScope.EMBED_CHAT], staged)).toEqual({ outcome: 'deny' });
+    expect(decideScopeGate(['acme:read'], [ApiKeyScope.EMBED_CHAT, 'acme:read'], NONE)).toEqual({ outcome: 'allow' });
   });
 });

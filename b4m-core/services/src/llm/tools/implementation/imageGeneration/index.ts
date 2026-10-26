@@ -273,9 +273,7 @@ export const imageGenerationTool: ToolDefinition = {
         try {
           const images = await service.generate(prompt, {
             n,
-            // generate() only accepts the generation FLUX variants; in practice only those
-            // reach this branch (fill/Kontext are edit models), so narrow to satisfy it.
-            model: bflModel as ImageModels.FLUX_PRO | ImageModels.FLUX_PRO_1_1 | ImageModels.FLUX_PRO_ULTRA,
+            model: bflModel,
             ...resolveImageDimensions({ width, height, size }, BFL_DIMENSION_BOUNDS),
             aspect_ratio: aspect_ratio,
             output_format: nonWebpOutputFormat ?? 'png',

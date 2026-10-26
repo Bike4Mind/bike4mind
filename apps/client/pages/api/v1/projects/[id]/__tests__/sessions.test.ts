@@ -266,6 +266,17 @@ describe('POST /api/v1/projects/{id}/sessions', () => {
     });
   });
 
+  it('skips the summary but still attaches for a moderated user', async () => {
+    const { req, res } = createMocks({ method: 'POST', query: { id: PROJECT_ID }, body: { session_ids: [SESSION_B] } });
+    Object.assign(req, { user: { ...USER, isModerated: true }, logger, ability: {} });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the contract router's param type carries prelude-only fields
+    await (listAddHandler as any)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPublishSummarize).not.toHaveBeenCalled();
+    expect(mockUpdateWithUpdateAccess).toHaveBeenCalledTimes(1);
+  });
+
   it('skips the summary but still attaches when credits are insufficient', async () => {
     mockFilterCredits.mockResolvedValue(new Set<string>());
 

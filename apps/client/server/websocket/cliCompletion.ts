@@ -1,4 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import {
   CliCompletionRequestAction,
   buildCompletionStreamEvent,
@@ -179,6 +180,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         organizations: organizationRepository,
       },
       apiKeyInfo: apiKeyInfoForCompletion,
+      scopeActor: actorScopeForKey(apiKeyInfo),
       // Org-billed API keys settle to the org's shared pool.
       billingOrganizationId: apiKeyInfo?.organizationId,
       requestId,

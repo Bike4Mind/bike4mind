@@ -57,7 +57,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {
   IUserApiKeyDocument,
-  ApiKeyScope,
+  ApiKeyScopeValue,
   getMeContract,
   getCreditBalanceContract,
   listModelsContract,
@@ -131,7 +131,7 @@ interface ScopeGroup {
   resource: string;
   resourceLabel: string;
   scopes: {
-    value: ApiKeyScope;
+    value: ApiKeyScopeValue;
     actionLabel: string;
     description: string;
     isMutating: boolean;
@@ -141,9 +141,9 @@ interface ScopeGroup {
 type PresetId = 'read' | 'readwrite' | 'full';
 
 interface ScopeModel {
-  scopeValues: ApiKeyScope[];
+  scopeValues: ApiKeyScopeValue[];
   groups: ScopeGroup[];
-  presetScopes: Record<PresetId, ApiKeyScope[]>;
+  presetScopes: Record<PresetId, ApiKeyScopeValue[]>;
 }
 
 // Built from the viewer's generic-flow scopes, not a module constant, so the "full"
@@ -183,7 +183,8 @@ const PRESETS: { id: PresetId; label: string; description: string }[] = [
   { id: 'full', label: 'Full access', description: 'Everything, including AI generation & chat.' },
 ];
 
-const sameScopeSet = (a: ApiKeyScope[], b: ApiKeyScope[]) => a.length === b.length && a.every(x => b.includes(x));
+const sameScopeSet = (a: ApiKeyScopeValue[], b: ApiKeyScopeValue[]) =>
+  a.length === b.length && a.every(x => b.includes(x));
 
 interface NewKeyModalProps {
   open: boolean;
@@ -257,7 +258,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
 
   const applyPreset = (id: PresetId) => setFormData(fd => ({ ...fd, scopes: [...scopeModel.presetScopes[id]] }));
 
-  const toggleScope = (value: ApiKeyScope) =>
+  const toggleScope = (value: ApiKeyScopeValue) =>
     setFormData(fd => ({
       ...fd,
       scopes: fd.scopes.includes(value) ? fd.scopes.filter(s => s !== value) : [...fd.scopes, value],
@@ -551,7 +552,7 @@ const KEY_TEST_CONTRACTS = [
 ];
 
 /** The GET path a key with `scopes` can call to prove it works, or undefined when none of them fits. */
-export const keyTestPath = (scopes: readonly ApiKeyScope[]): string | undefined =>
+export const keyTestPath = (scopes: readonly ApiKeyScopeValue[]): string | undefined =>
   KEY_TEST_CONTRACTS.find(contract => contract.scopes?.some(scope => scopes.includes(scope)))?.path;
 
 interface KeyCreatedModalProps {
@@ -561,7 +562,7 @@ interface KeyCreatedModalProps {
   /** Present only for a fresh create response; absent for a rotated key or a pre-feature key. */
   callbackSigningSecret?: string;
   /** The key's scopes, which pick the endpoint the test snippet calls. */
-  scopes: readonly ApiKeyScope[];
+  scopes: readonly ApiKeyScopeValue[];
 }
 
 function KeyCreatedModal({ open, onClose, apiKey, callbackSigningSecret, scopes }: KeyCreatedModalProps) {
@@ -1917,7 +1918,7 @@ export default function UserApiKeysTab() {
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
   const [newlyCreatedSigningSecret, setNewlyCreatedSigningSecret] = useState<string | undefined>(undefined);
-  const [newlyCreatedScopes, setNewlyCreatedScopes] = useState<ApiKeyScope[]>([]);
+  const [newlyCreatedScopes, setNewlyCreatedScopes] = useState<ApiKeyScopeValue[]>([]);
   const [mainTab, setMainTab] = useState(0);
   // Off by default: revoked rows accumulate forever (scopes are write-once, so
   // every scope change mints a replacement and leaves one behind) and their

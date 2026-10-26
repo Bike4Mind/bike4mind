@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 import { CreditHolderType } from '@bike4mind/common';
 import {
   adminSettingsRepository,

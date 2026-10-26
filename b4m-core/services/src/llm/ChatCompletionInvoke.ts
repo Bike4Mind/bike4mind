@@ -83,6 +83,7 @@ export class ChatCompletionInvoke {
     userId,
     authOrigin,
     apiKeyId,
+    adminRoleWithheld,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
     userId: string;
@@ -90,6 +91,8 @@ export class ChatCompletionInvoke {
     authOrigin: AuthOrigin;
     /** Server-derived from `req.apiKeyInfo` - never from `body` (see QuestStartBodySchema.apiKeyId). */
     apiKeyId?: string;
+    /** See QuestStartBodySchema.adminRoleWithheld. */
+    adminRoleWithheld?: boolean;
   }) {
     // Fail at the door, not later in the worker that builds the tools.
     assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
@@ -492,6 +495,7 @@ export class ChatCompletionInvoke {
         deniedTools,
         authOrigin,
         apiKeyId,
+        ...(adminRoleWithheld ? { adminRoleWithheld } : {}),
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,

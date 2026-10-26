@@ -3,6 +3,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   IUserDocument,
   ApiKeyScope,
+  ApiKeyScopeValue,
   CreditHolderType,
   type ApiKeyBillingOwnerType,
   type CompletionSource,
@@ -34,7 +35,7 @@ export interface VerifiedUser {
 export interface ApiKeyInfo {
   keyId: string;
   userId: string;
-  scopes: ApiKeyScope[];
+  scopes: ApiKeyScopeValue[];
   rateLimit: {
     requestsPerMinute: number;
     requestsPerDay: number;
@@ -157,7 +158,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
 export interface VerifyApiKeyOptions {
   /** At least one of these scopes must be present on the key. Defaults to
    *  AI_GENERATE / AI_CHAT to preserve the legacy completions behavior. */
-  requiredScopes?: ApiKeyScope[];
+  requiredScopes?: ApiKeyScopeValue[];
 }
 
 /**
@@ -178,7 +179,7 @@ const DEFAULT_COMPLETION_SCOPES: ApiKeyScope[] = [ApiKeyScope.AI_GENERATE, ApiKe
 function toApiKeyInfo(v: {
   keyId?: string;
   userId?: string;
-  scopes?: ApiKeyScope[];
+  scopes?: ApiKeyScopeValue[];
   rateLimit?: { requestsPerMinute: number; requestsPerDay: number };
   billingOwnerType?: ApiKeyBillingOwnerType;
   organizationId?: string;

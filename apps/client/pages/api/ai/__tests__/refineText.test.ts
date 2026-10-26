@@ -75,6 +75,8 @@ describe('POST /api/ai/refineText', () => {
     });
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello', context: 'ctx' } });
+
+    Object.assign(req, { user: { id: 'u1' } });
     await handler(req as any, res as any);
 
     expect(mockGetCachedData).toHaveBeenCalledTimes(1);
@@ -101,6 +103,8 @@ describe('POST /api/ai/refineText', () => {
     );
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+
+    Object.assign(req, { user: { id: 'u1' } });
     // The route unwraps the helper's error back to the service's own, which has no statusCode,
     // so errorHandler's default 500 carries the real reason. The v1 route is the one that maps it to 503.
     const error = await handler(req as any, res as any).catch((e: unknown) => e);
@@ -116,6 +120,8 @@ describe('POST /api/ai/refineText', () => {
     mockGetCachedData.mockResolvedValue('cached refined');
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+
+    Object.assign(req, { user: { id: 'u1' } });
     await handler(req as any, res as any);
 
     expect(res._getJSONData()).toEqual({ text: 'cached refined' });
@@ -131,6 +137,8 @@ describe('POST /api/ai/refineText', () => {
     mockRefineText.mockRejectedValue(providerError);
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+
+    Object.assign(req, { user: { id: 'u1' } });
     const logger = { error: vi.fn(), warn: vi.fn() };
     Object.assign(req, { logger, requestId: 'trace-legacy-1' });
 
@@ -152,6 +160,8 @@ describe('POST /api/ai/refineText', () => {
     mockRefineText.mockResolvedValue('');
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+
+    Object.assign(req, { user: { id: 'u1' } });
     Object.assign(req, { logger: { error: vi.fn(), warn: vi.fn() }, requestId: 'trace-legacy-2' });
 
     const thrown = await handler(req as any, res as any).catch((e: unknown) => e);

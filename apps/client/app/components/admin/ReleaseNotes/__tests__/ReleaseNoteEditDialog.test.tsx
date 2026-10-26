@@ -110,4 +110,37 @@ describe('ReleaseNoteEditDialog', () => {
 
     expect(screen.getByTestId('release-note-edit-save-btn')).toBeDisabled();
   });
+  const stillNote = {
+    ...note,
+    image: { landscapeUrl: 'https://d111.cloudfront.net/s.png', portraitUrl: null },
+  } as AdminReleaseNote;
+
+  it('sends null for the image once it is removed', async () => {
+    mockPatch.mockResolvedValue({ data: note });
+    renderDialog(stillNote);
+
+    expect(screen.getByText('Still image attached (16:9 and 9:16)')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('release-note-edit-remove-image-btn'));
+    expect(screen.getByTestId('release-note-edit-image-status')).toHaveTextContent('Still image is removed on save');
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    expect(mockPatch).toHaveBeenCalledWith('/api/admin/release-notes/n1', expect.objectContaining({ image: null }));
+  });
+
+  it('sends no image key when the still is untouched', async () => {
+    mockPatch.mockResolvedValue({ data: note });
+    renderDialog(stillNote);
+
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    expect('image' in mockPatch.mock.calls[0][1]).toBe(false);
+  });
+
+  it('shows no still row for a note without an image', () => {
+    renderDialog({ ...note, image: null } as AdminReleaseNote);
+
+    expect(screen.queryByTestId('release-note-edit-remove-image-btn')).toBeNull();
+  });
 });

@@ -37,9 +37,10 @@ That's it. Once enabled, all bash commands are wrapped in an OS-level sandbox th
 ### Filesystem
 
 - **Writes** are restricted to your current working directory and `/tmp`
-- **Sensitive paths** are blocked for both read and write: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.env`, `/etc/shadow`, `/etc/passwd`
-- **Common config reads** are allowed: `~/.gitconfig`, `~/.npmrc`, `~/.node_modules`
-- All filesystem restrictions are [configurable](./configuration.md#filesystem-configuration)
+- **Sensitive paths** are blocked for both read and write, including SSH keys, cloud credentials, CLI configuration, and package registry credentials. See the [default denied paths](./configuration.md#deniedpaths).
+- **Common config reads** are allowed: `~/.gitconfig` and `~/.node_modules`
+- **Project configuration** in `.bike4mind` and Git metadata in `.git` are read-only, including when writes outside the working directory are enabled. Git operations that update metadata require a trusted operation outside the sandbox.
+- Configure read access and general write restrictions in the [filesystem configuration](./configuration.md#filesystem-configuration).
 
 ### Network (Opt-in)
 

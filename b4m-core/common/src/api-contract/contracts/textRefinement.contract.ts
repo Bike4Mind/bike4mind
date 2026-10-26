@@ -8,7 +8,7 @@ import {
   TextRefinementRequestSchema,
   TextRefinementResponseSchema,
 } from '../../schemas/textRefinement';
-import { ApiErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
 const EXAMPLE_REQUEST = {
   text: 'a dog on a beach',
@@ -46,6 +46,11 @@ export const createTextRefinementContract = defineEndpoint({
         'Missing/invalid credentials, or the text-refinement provider refused the configured key ' +
         '(`errorCode: "provider_rejected"`).',
       schema: TextRefinementErrorSchema,
+    },
+    403: {
+      description:
+        'The API key does not hold `ai:generate`, or AI features are disabled on this account by an administrator.',
+      schema: ScopeForbiddenErrorSchema,
     },
     429: { description: 'Per-key rate limit exceeded.', schema: ApiErrorSchema },
     500: {

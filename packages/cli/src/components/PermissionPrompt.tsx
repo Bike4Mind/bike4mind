@@ -70,6 +70,8 @@ export interface PermissionPromptProps {
   args: unknown;
   preview?: string;
   canBeTrusted: boolean; // Whether this tool can be trusted (not prompt_always)
+  /** What allow-session remembers for a shell command (PermissionPromptOptions.sessionScope). */
+  sessionScope?: string[] | null;
   /** 'sandbox-escalation' offers a retry outside the sandbox with no trust options. */
   kind?: PermissionPromptKind;
   onResponse: (response: PermissionResponse) => void;
@@ -79,6 +81,15 @@ export interface PermissionPromptProps {
 // The Preview block still renders, so the user has the human-readable
 // form to approve against.
 const TOOLS_WITH_HIDDEN_ARGS = new Set(['edit_local_file', 'bash_execute']);
+
+type PromptItem = { label: string; value: PermissionResponse };
+
+/** Name what the session option remembers, or drop it when nothing would be remembered. */
+function withSessionScope(items: PromptItem[], scope: string[] | null): PromptItem[] {
+  if (scope === null) return items.filter(item => item.value !== 'allow-session');
+  const label = `\u2713 Allow ${scope.map(entry => `\`${entry}\``).join(', ')} commands for the session`;
+  return items.map(item => (item.value === 'allow-session' ? { ...item, label } : item));
+}
 
 /**
  * Permission prompt component
@@ -92,13 +103,14 @@ export function PermissionPrompt({
   args,
   preview,
   canBeTrusted,
+  sessionScope,
   kind,
   onResponse,
 }: PermissionPromptProps) {
   const isSandboxEscalation = kind === 'sandbox-escalation';
   const hideArgs = TOOLS_WITH_HIDDEN_ARGS.has(toolName);
   // Build menu items based on whether tool can be trusted
-  const items: Array<{ label: string; value: PermissionResponse }> = isSandboxEscalation
+  const baseItems: PromptItem[] = isSandboxEscalation
     ? [
         { label: '\u2713 Retry once without sandbox', value: 'allow-once' },
         { label: '\u2713 Allow this command unsandboxed for the session', value: 'allow-session' },
@@ -116,6 +128,8 @@ export function PermissionPrompt({
           { label: '✓ Allow for this session', value: 'allow-session' },
           { label: '✗ Deny', value: 'deny' },
         ];
+  const items =
+    isSandboxEscalation || sessionScope === undefined ? baseItems : withSessionScope(baseItems, sessionScope);
 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [responded, setResponded] = useState(false);

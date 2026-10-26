@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AuthState } from '@shared/auth';
-import { assertScopeKey, migrateLegacySessions, sessionScopeFor, sessionScopeKey } from './sessionScope';
+import {
+  assertScopeKey,
+  migrateLegacySessions,
+  sessionScopeFor,
+  sessionScopeForChat,
+  sessionScopeKey,
+} from './sessionScope';
 
 const ACCOUNT = '66b1f0c2a4e1d20012ab34cd';
 
@@ -169,5 +175,35 @@ describe('migrateLegacySessions', () => {
   it('is a no-op on an install that has never stored a conversation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b4m-migrate-'));
     expect(await migrateLegacySessions(join(root, 'never-existed'), root)).toEqual([]);
+  });
+});
+
+describe('sessionScopeForChat', () => {
+  it('uses a reserved device namespace only after sign-out or explicit lack of configuration', () => {
+    const base = { ...signedIn('https://example.com', ACCOUNT), user: undefined };
+    for (const status of ['signed-out', 'unconfigured'] as const) {
+      const local = sessionScopeForChat({ ...base, status });
+      expect(local).toEqual({ environmentUrl: 'b4m-device-local://offline', accountId: 'device', local: true });
+      expect(sessionScopeKey(local!)).toBe('device-local');
+      expect(sessionScopeFor({ ...base, status })).toBeNull();
+    }
+    for (const status of [
+      'initializing',
+      'awaiting-approval',
+      'mfa-required',
+      'policy-acceptance-required',
+      'signed-in',
+    ] as const) {
+      expect(sessionScopeForChat({ ...base, status })).toBeNull();
+    }
+    expect(sessionScopeForChat(null)).toBeNull();
+  });
+
+  it('preserves known authenticated identity even during restore, and never collides with device storage', () => {
+    const authenticated = signedIn('https://device-local', 'device');
+    for (const status of ['signed-in', 'initializing'] as const) {
+      expect(sessionScopeForChat({ ...authenticated, status })).toEqual(sessionScopeFor(authenticated));
+    }
+    expect(sessionScopeKey(sessionScopeForChat(authenticated)!)).not.toBe('device-local');
   });
 });

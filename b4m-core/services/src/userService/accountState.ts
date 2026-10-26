@@ -38,3 +38,15 @@ export function entersBlockedState(previous: AccountStateFields, next: AccountSt
   const before = accountBlockReasons(previous);
   return accountBlockReasons(next).some(reason => !before.includes(reason));
 }
+
+export const AI_ACCESS_REVOKED_MESSAGE =
+  'AI features are disabled on your account by an administrator. Please contact support.';
+
+/**
+ * True when the admin "Moderate" action has revoked the user's AI access. Unlike
+ * `accountBlockReasons`, this does not block sign-in or data access - only AI features. It is
+ * independent of `moderation.status`: escalation never writes `isModerated` (see `setModerationStatus`).
+ */
+export function isAiAccessRevoked(user: { isModerated?: boolean | null }): boolean {
+  return user.isModerated === true;
+}

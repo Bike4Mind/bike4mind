@@ -81,6 +81,21 @@ describe('S3Storage browser-facing signing endpoint', () => {
     expect(url.searchParams.get('X-Amz-Signature')).toBe(expectedGetSignature(url));
   });
 
+  it('returns the identical URL for a fixed signingDate, dated from it', async () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid:9443');
+    const storage = new S3Storage('exports-bucket', 'us-east-2');
+    const signingDate = new Date('2026-03-04T05:00:00.000Z');
+    const sign = () =>
+      storage.getSignedUrl('thumbs/a.webp', 'get', { audience: 'browser', expiresIn: 1800, signingDate });
+
+    const first = await sign();
+    expect(await sign()).toBe(first);
+    const url = new URL(first);
+    expect(url.searchParams.get('X-Amz-Date')).toBe('20260304T050000Z');
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('1800');
+    expect(url.searchParams.get('X-Amz-Signature')).toBe(expectedGetSignature(url));
+  });
+
   it('uses the configured signing origin for PUT capabilities too', async () => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', 'http://localhost:19000');
     const url = new URL(

@@ -163,6 +163,23 @@ describe('transcribeUpload rejection kinds', () => {
     ).rejects.toMatchObject({ kind: 'invalid_key' });
   });
 
+  it('refuses a moderated user before any credit, storage or provider work', async () => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+
+    await expect(
+      transcribeUpload({
+        user: { id: 'u1', isModerated: true } as never,
+        fileKey: 'transcribe-uploads/u1/a.mp3',
+        receivedAt: new Date(),
+        logger,
+      })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockAssertCredits).not.toHaveBeenCalled();
+    expect(mockHoldCredits).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockOpenAI).not.toHaveBeenCalled();
+  });
+
   it('rethrows a credit pre-flight fault that is not a BadRequestError unchanged', async () => {
     const fault = new Error('db down');
     mockHoldCredits.mockRejectedValue(fault);
