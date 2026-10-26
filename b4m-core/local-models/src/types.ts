@@ -33,7 +33,7 @@ export interface AttentionGroup {
   valueLength: number;
 }
 
-/** Same shape as `ModelArchV2` in b4m-core/common/src/schemas/modelHub.ts; keep the two in sync. */
+/** Same shape as `ModelArch` in b4m-core/common/src/schemas/modelHub.ts; keep the two in sync. */
 export interface ModelArch {
   contextMax: number;
   blockCount: number;
