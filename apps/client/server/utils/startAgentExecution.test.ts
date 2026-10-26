@@ -217,6 +217,47 @@ describe('startAgentExecution', () => {
     expect(mockSend).not.toHaveBeenCalled();
   });
 
+  it('refuses confidenceOverrides from a non-admin before creating anything', async () => {
+    const result = await startAgentExecution(
+      input({ userId: 'overrides-non-admin', confidenceOverrides: [0.1] }),
+      logger
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'confidence_overrides_forbidden',
+      message: 'Only an admin can set confidence overrides',
+    });
+    expect(mockCreateExecution).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it('refuses confidenceOverrides when the caller cannot be loaded', async () => {
+    mockUserFindById.mockResolvedValueOnce(null);
+    const result = await startAgentExecution(input({ userId: 'overrides-ghost', confidenceOverrides: [0.1] }), logger);
+
+    expect(result).toMatchObject({ ok: false, reason: 'confidence_overrides_forbidden' });
+    expect(mockCreateExecution).not.toHaveBeenCalled();
+  });
+
+  it('stores an admin caller confidenceOverrides on the execution', async () => {
+    mockUserFindById.mockImplementation(async (id: string) => ({ id, isAdmin: true }));
+    const result = await startAgentExecution(
+      input({ userId: 'overrides-admin', confidenceOverrides: [0.9, 0.1] }),
+      logger
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ confidenceOverrides: [0.9, 0.1] }));
+  });
+
+  it('skips the admin lookup for a run without confidenceOverrides', async () => {
+    await startAgentExecution(input({ userId: 'no-overrides' }), logger);
+
+    expect(mockUserFindById).not.toHaveBeenCalled();
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ confidenceOverrides: undefined }));
+  });
+
   it('rejects a missing session', async () => {
     const cmd = input({ userId: 'no-session' });
     mockSessionFindById.mockResolvedValue(null);
