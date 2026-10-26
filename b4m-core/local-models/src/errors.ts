@@ -48,6 +48,19 @@ export class RuntimeProtocolError extends LocalRuntimeError {
   }
 }
 
+export type GgufFormatErrorReason = 'truncated' | 'unsupported' | 'invalid' | 'limit';
+
+/** A GGUF header that is truncated, malformed, in an unsupported version or byte order, or past a read limit. */
+export class GgufFormatError extends LocalRuntimeError {
+  constructor(
+    message: string,
+    readonly reason: GgufFormatErrorReason
+  ) {
+    super(message, 'gguf');
+    this.name = 'GgufFormatError';
+  }
+}
+
 export class ModelNotFoundError extends LocalRuntimeError {
   constructor(
     runtimeId: string,
