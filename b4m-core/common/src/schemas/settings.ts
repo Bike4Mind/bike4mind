@@ -6151,7 +6151,8 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
   'forcedRetrievalSpreadFloorPct',
 ] as const satisfies readonly SettingKey[];
 
-// =====================================================================// Public settings projection - the security boundary for the unauthenticated
+// ============================================================================
+// Public settings projection - the security boundary for the unauthenticated
 // CDN config artifact (docs/perf/mobile-startup-latency.md, M2.5).
 //
 // SINGLE source of truth for what may be served without authentication. The
@@ -6159,7 +6160,8 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
 // public if explicitly tagged. `isSensitive` is a separate (opt-out) boundary
 // used by the authenticated /api/settings/fetch admin path and is NOT sufficient
 // for public exposure (e.g. sreAgentConfig is !isSensitive but operational).
-// =====================================================================
+// ============================================================================
+
 /** Minimal shape of a stored admin setting document (Mongo/ORM-agnostic). */
 export interface AdminSettingDoc {
   settingName: string;
