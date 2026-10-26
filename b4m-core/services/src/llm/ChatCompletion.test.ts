@@ -10,6 +10,8 @@ import {
   shouldDeferCorpusToRetrieval,
   attachmentHasIndexedContent,
   computeSettlementDelta,
+  computeHolderSettlement,
+  warnOnSettlementDebt,
   clampFraction,
   dropOldestHistoryTurn,
   isAbortError,
@@ -55,6 +57,7 @@ import {
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ChatModels,
+  CreditHolderType,
   DATA_LAKE_TOOL_NAMES,
   DATA_LAKE_WRITE_TOOL_NAMES,
   ImageModels,
@@ -2857,9 +2860,11 @@ describe('ChatCompletionProcess', () => {
 
         expect(incrementCredits).toHaveBeenCalledWith('owner-id', 50);
         expect(fields.reservedCreditHolder?.currentCredits).toBe(60);
-        // What the still-running process() computes at settlement. A zeroed holder would floor the
-        // debit at zero and give the turn away; the restored balance charges the real 30.
-        const { delta, writtenOffCredits } = computeSettlementDelta(
+        // What the still-running process() computes at settlement. On an org holder a zeroed
+        // snapshot would floor the debit at zero and give the turn away; the restored balance
+        // charges the real 30.
+        const { delta, writtenOffCredits } = computeHolderSettlement(
+          CreditHolderType.Organization,
           0,
           30,
           fields.reservedCreditHolder?.currentCredits ?? 0
@@ -4988,6 +4993,34 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // An org balance is a hard stop (#1238): an overshoot past it is floored at zero and written
+    // off, unlike a personal account's (see 'settlement beyond the balance (personal account)').
+    it('floors an org overshoot at the balance and reports the write-off', async () => {
+      const { complete } = reservationOrgSetup();
+      const LEFT_AFTER_HOLD = 10;
+      const state = { balance: expectedHold + LEFT_AFTER_HOLD };
+      fundedOrg();
+      mockDb.organizations.incrementCredits = vi.fn(async (_id: string, amount: number) => {
+        state.balance += amount;
+        return { id: 'org1', currentCredits: state.balance };
+      });
+      const outputTokens = 1_000_000;
+      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+        await cb(['A long answer'], { inputTokens: 10, outputTokens });
+      });
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      const actual = settledCredits(outputTokens);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', -LEFT_AFTER_HOLD);
+      expect(state.balance).toBe(0);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ writtenOffCredits: actual - expectedHold - LEFT_AFTER_HOLD })
+      );
+    });
+
     // A second gated tool call refused for credits ends the turn, but the image delivered before it
     // was spent and is billed like an abort's, not refunded with the hold.
     it('bills delivered tool charges when a later tool call is refused for credits', async () => {
@@ -6167,6 +6200,143 @@ describe('ChatCompletionProcess', () => {
       expect(usageEventsRecord).toHaveBeenCalledWith(
         expect.objectContaining({ model: ChatModels.GPT4, status: 'refusal' })
       );
+    });
+
+    // A personal turn that costs more than its hold plus the balance behind it is charged in full:
+    // the balance goes negative instead of the excess being written off, and that debt is what the
+    // next turn's pre-flight hold refuses on.
+    describe('settlement beyond the balance (personal account)', () => {
+      const BALANCE = 100;
+      const overshootModel = {
+        id: ChatModels.GPT4,
+        type: 'text' as const,
+        name: 'GPT-4',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: false,
+        pricing: { 200000: { input: 0, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      const personalBody = () => ({ ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined });
+      const setupPersonalTurn = (incrementCredits: ReturnType<typeof vi.fn>, complete: ReturnType<typeof vi.fn>) => {
+        mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+        mockedCalculateTotalTokenLength.mockResolvedValue(80);
+        mockedUsdToCredits.mockImplementation(realUsdToCredits);
+        mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+        enableAdminFlags('enforceCredits');
+        mockDb.users = {
+          update: vi.fn(),
+          findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: BALANCE }),
+          incrementCredits,
+        };
+        mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([overshootModel]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      };
+      // A stored balance that every $inc moves, so the hold, the settlement and the next turn's
+      // admission all see what the database would.
+      const fakeBalance = (initial: number) => {
+        const state = { balance: initial };
+        const incrementCredits = vi.fn(async (_id: string, amount: number) => {
+          state.balance += amount;
+          return { id: 'user1', currentCredits: state.balance };
+        });
+        return { state, incrementCredits };
+      };
+      // Far past any hold: the cost of a long tool run the hold was never priced for.
+      const OVERSHOOT_OUTPUT_TOKENS = 1_000_000;
+      const actual = realUsdToCreditsStochastic((OVERSHOOT_OUTPUT_TOKENS * 30) / 1_000_000, () => 0);
+
+      it('charges the whole overshoot into a negative balance instead of writing it off', async () => {
+        expect(actual).toBeGreaterThan(BALANCE);
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['A long answer'], { inputTokens: 10, outputTokens: OVERSHOOT_OUTPUT_TOKENS });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        const hold = -incrementCredits.mock.calls[0][1];
+        expect(hold).toBeGreaterThan(0);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - actual);
+        expect(state.balance).toBe(BALANCE - actual);
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: undefined })
+        );
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
+          expect.objectContaining({ ownerId: 'user1', balanceAfter: BALANCE - actual, shortfall: actual - hold })
+        );
+        expect(mockLogger.warn).not.toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_CLAMP]'),
+          expect.anything()
+        );
+      });
+
+      // The thrown-abort settlement (settleReservation) charges a personal account the same way.
+      it('charges a stopped turn past the balance in full too', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const TOOL_CHARGE = BALANCE * 3;
+        const complete = vi.fn().mockImplementation(async () => {
+          (service as any).toolCreditsMap.set('image_generation', [TOOL_CHARGE]);
+          const abort = new Error('The operation was aborted');
+          abort.name = 'AbortError';
+          throw abort;
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        mockQuest.sessionId = 'session1';
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        const hold = -incrementCredits.mock.calls[0][1];
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - TOOL_CHARGE);
+        expect(state.balance).toBe(BALANCE - TOOL_CHARGE);
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
+          expect.objectContaining({ balanceAfter: BALANCE - TOOL_CHARGE })
+        );
+      });
+
+      it('refuses the next turn while the balance is negative, without calling the model', async () => {
+        const { state, incrementCredits } = fakeBalance(-250);
+        const complete = vi.fn();
+        setupPersonalTurn(incrementCredits, complete);
+        (service as any).user = { ...mockUser, currentCredits: -250 };
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(complete).not.toHaveBeenCalled();
+        // The hold went on and came straight back off: the debt is untouched.
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(state.balance).toBe(-250);
+        expect(mockQuest.type).toBe('error');
+        expect(mockQuest.reply).toMatch(/250 credits owed/);
+      });
+
+      it('does not report a debt when a concurrent hold, not an earlier overshoot, drained the balance', async () => {
+        const { incrementCredits } = fakeBalance(BALANCE - 500);
+        setupPersonalTurn(incrementCredits, vi.fn());
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(mockQuest.type).toBe('error');
+        expect(mockQuest.reply).not.toMatch(/owed/);
+      });
     });
 
     describe('settlement price stamp', () => {
@@ -11895,6 +12065,70 @@ describe('attachmentHasIndexedContent (readable-chunk-text predicate, #1163)', (
 
   it('is false for an archived file even when fully vectorized', () => {
     expect(attachmentHasIndexedContent({ vectorized: true, chunkCount: 0, archivedAt: new Date() })).toBe(false);
+  });
+});
+
+describe('computeHolderSettlement', () => {
+  it('charges a personal shortfall in full, past the balance, with nothing written off', () => {
+    expect(computeHolderSettlement(CreditHolderType.User, 100, 130, 10)).toEqual({ delta: -30, writtenOffCredits: 0 });
+    expect(computeHolderSettlement(CreditHolderType.User, 100, 130, -50)).toEqual({
+      delta: -30,
+      writtenOffCredits: 0,
+    });
+  });
+
+  it('refunds a personal over-reservation like any other settlement', () => {
+    expect(computeHolderSettlement(CreditHolderType.User, 100, 60, 0)).toEqual({ delta: 40, writtenOffCredits: 0 });
+  });
+
+  // Parallel turns each settle with their own atomic $inc, so summing their deltas is the total debited.
+  it('lets concurrent personal overshoots add up instead of each being clamped to a stale snapshot', () => {
+    const staleSnapshot = 10;
+    const turns = [130, 150, 170].map(used => computeHolderSettlement(CreditHolderType.User, 100, used, staleSnapshot));
+    expect(turns.reduce((sum, turn) => sum + turn.delta, 0)).toBe(-150);
+    expect(turns.every(turn => turn.writtenOffCredits === 0)).toBe(true);
+  });
+
+  it('floors any non-personal holder, so a new holder type is not charged into debt by default', () => {
+    expect(computeHolderSettlement(CreditHolderType.Agent, 100, 130, 10)).toEqual({
+      delta: -10,
+      writtenOffCredits: 20,
+    });
+  });
+
+  it('keeps the zero floor for an organization (its balance is a hard stop)', () => {
+    expect(computeHolderSettlement(CreditHolderType.Organization, 100, 130, 10)).toEqual({
+      delta: -10,
+      writtenOffCredits: 20,
+    });
+  });
+});
+
+describe('warnOnSettlementDebt', () => {
+  type SettlementLogger = Parameters<typeof warnOnSettlementDebt>[0];
+  const context = { questId: 'q1', ownerId: 'user1', ownerType: CreditHolderType.User, reserved: 100, used: 130 };
+
+  it('warns with the debt when the settled balance is negative', () => {
+    const logger = { warn: vi.fn() } as unknown as SettlementLogger;
+    warnOnSettlementDebt(logger, { currentCredits: -20 }, context);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
+      expect.objectContaining({ shortfall: 30, balanceAfter: -20, ownerId: 'user1' })
+    );
+  });
+
+  it('stays quiet at a zero or positive balance, or with no holder', () => {
+    const logger = { warn: vi.fn() } as unknown as SettlementLogger;
+    warnOnSettlementDebt(logger, { currentCredits: 0 }, context);
+    warnOnSettlementDebt(logger, null, context);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  // A sibling turn's overshoot left the balance negative; this turn's own refund did not add to it.
+  it('stays quiet for a refund settlement that lands on a negative balance', () => {
+    const logger = { warn: vi.fn() } as unknown as SettlementLogger;
+    warnOnSettlementDebt(logger, { currentCredits: -110 }, { ...context, reserved: 40, used: 10 });
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 
