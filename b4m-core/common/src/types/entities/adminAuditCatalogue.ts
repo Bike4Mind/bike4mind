@@ -166,6 +166,15 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: billing and model config
+  'settings.model_price.repriced': { category: 'settings', severity: 'notice', write: 'strict' },
+  'settings.provider_invoice.recorded': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.model_lifecycle.suggestion_resolved': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.model_discovery.triggered': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.gear_override.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.gear_override.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.tool_definition.override_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.tool_definition.override_deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
