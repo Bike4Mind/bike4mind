@@ -31,6 +31,7 @@ vi.mock('@client/services/operationsModelService', () => ({
 
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
+  fabFilesService: { signedUrlExpiresAt: (_url: string, seconds: number) => new Date(Date.now() + seconds * 1000) },
 }));
 
 vi.mock('axios', () => ({ default: { get: h.axiosGet } }));
