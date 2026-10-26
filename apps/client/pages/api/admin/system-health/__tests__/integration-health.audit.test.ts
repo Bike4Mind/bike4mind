@@ -135,6 +135,32 @@ describe('integration-health admin audit', () => {
     });
   });
 
+  it('records the previous mode when an existing override is cleared back to auto', async () => {
+    h.getOverride.mockResolvedValue({ integration: 'slack', mode: 'force_block' });
+    h.setOverride.mockResolvedValue({ integration: 'slack', mode: 'auto', setBy: 'admin-1' });
+
+    await call('put', { integration: 'slack', mode: 'auto' });
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      changes: [{ field: 'mode', before: 'force_block', after: 'auto' }],
+    });
+  });
+
+  it('does not audit a probe that fails', async () => {
+    h.runProbe.mockRejectedValue(new Error('probe down'));
+
+    await expect(call('post', { integration: 'github' })).rejects.toThrow('probe down');
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('does not audit an override whose write fails', async () => {
+    h.getOverride.mockResolvedValue(null);
+    h.setOverride.mockRejectedValue(new Error('write failed'));
+
+    await expect(call('put', { integration: 'slack', mode: 'force_block' })).rejects.toThrow('write failed');
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it('does not audit a rejected override', async () => {
     await expect(call('put', { integration: 'slack', mode: 'bogus' })).rejects.toThrow();
     expect(h.audit).not.toHaveBeenCalled();

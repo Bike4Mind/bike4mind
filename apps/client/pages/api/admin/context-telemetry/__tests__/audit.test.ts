@@ -136,6 +136,7 @@ describe('context telemetry admin audit', () => {
     h.audit.mockRejectedValueOnce(new Error('audit down'));
 
     await expect(run('delete', 'delete')).rejects.toThrow('audit down');
+    expect(h.audit).toHaveBeenCalledTimes(1);
     expect(h.auditLogCreate).toHaveBeenCalledTimes(1);
     expect(h.auditLogCreate.mock.calls[0][0]).toMatchObject({ action: 'delete', outcome: 'success' });
   });
@@ -198,6 +199,37 @@ describe('context telemetry admin audit', () => {
 
     expect(res._getStatusCode()).toBe(409);
     expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('does not audit an issue creation that fails', async () => {
+    h.findById.mockReturnValue(query(quest));
+    h.createIssue.mockResolvedValue({ status: 'error', code: 'GITHUB_API_ERROR', message: 'github down' });
+
+    await expect(run('createIssue', 'post', { body: { repository: 'acme/repo' } })).rejects.toThrow('github down');
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('records a config test run on a telemetry entry', async () => {
+    h.findById.mockReturnValue(query(quest));
+    h.createResult.mockResolvedValue({
+      id: 'r2',
+      timestamp: new Date(),
+      source: 'test',
+      telemetrySummary: {},
+      action: {},
+      fingerprint: 'fp',
+      semanticFingerprint: 'sfp',
+      expiresAt: new Date(),
+    });
+
+    await run('testConfig', 'post', { query: {}, body: { telemetryEntryId: QUEST_ID } });
+
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.context_telemetry.test_run',
+      details: { source: 'entry', telemetryEntryId: QUEST_ID },
+    });
+    expect(h.audit.mock.calls[0][1].details.sampleType).toBeUndefined();
   });
 
   it('records a config test run on sample data', async () => {
