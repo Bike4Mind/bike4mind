@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ITurnTiming } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { createAnthropicRequestTimeoutError, createAnthropicStreamTimeoutError } from '@bike4mind/llm-adapters';
+import {
+  bedrockEmptyResponseMessage,
+  createAnthropicRequestTimeoutError,
+  createAnthropicStreamTimeoutError,
+} from '@bike4mind/llm-adapters';
 
 const send = vi.fn();
 vi.mock('@aws-sdk/client-cloudwatch', () => ({
@@ -55,9 +59,7 @@ describe('classifyTurnRetryReason', () => {
   });
 
   it('reads a Bedrock stall before the first token as truncated', () => {
-    const stalled = new Error(
-      '[BaseBedrockBackend] stream timeout - model "m" in region r returned an EMPTY response (no text, no tool call) without a terminal event.'
-    );
+    const stalled = new Error(bedrockEmptyResponseMessage('m', 'r', true));
 
     expect(classifyTurnRetryReason(stalled)).toBe('stream_truncated');
   });
