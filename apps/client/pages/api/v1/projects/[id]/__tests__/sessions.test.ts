@@ -334,6 +334,8 @@ describe('DELETE /api/v1/projects/{id}/sessions/{session_id}', () => {
 
     expect((await remove(SESSION_B))._getStatusCode()).toBe(204);
     expect(mockProjectUpdate).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: [SESSION_A] }));
+    expect(mockCreateActivity).not.toHaveBeenCalled();
+    expect(mockLogEvent).not.toHaveBeenCalled();
   });
 
   it('answers 404 for a project the caller cannot read', async () => {
@@ -341,10 +343,18 @@ describe('DELETE /api/v1/projects/{id}/sessions/{session_id}', () => {
     expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, session_id: SESSION_A })).toBe(404);
   });
 
-  it('answers 404 for a session id the caller cannot read', async () => {
+  it('answers 404 for an unreadable session id the project does not hold', async () => {
     mockFindAllAccessibleSessions.mockResolvedValue([]);
-    expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, session_id: SESSION_A })).toBe(404);
+    expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, session_id: SESSION_B })).toBe(404);
     expect(mockProjectUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner clear a held id whose session no longer resolves', async () => {
+    mockFindAllAccessibleSessions.mockResolvedValue([]);
+
+    expect((await remove(SESSION_A))._getStatusCode()).toBe(204);
+    expect(mockProjectUpdate).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: [] }));
+    expect(mockCreateActivity).toHaveBeenCalledTimes(1);
   });
 
   it('answers 404 for a malformed session id without touching the project', async () => {

@@ -57,7 +57,14 @@ export const removeFiles = async (
   // Non-hex is NOT folded: two legacy entries differing only in case are different rows.
   const resolvedIds = new Set(files.map(f => canonicalId(String(f.id))));
   const addressable = new Set(usableObjectIds(fileIds, 'projectService.removeFiles').map(canonicalId));
-  if (fileIds.some(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)))) {
+  // The project owner may still clear an id the project holds but that no longer resolves (a deleted
+  // or unreadable row): the list is theirs, and nothing else can ever take the id out of it.
+  const ownerHeld = new Set(project.userId === userId ? project.fileIds.map(canonicalId) : []);
+  if (
+    fileIds.some(
+      id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)) && !ownerHeld.has(canonicalId(id))
+    )
+  ) {
     throw new BadRequestError('Some files are not accessible');
   }
 
@@ -68,6 +75,7 @@ export const removeFiles = async (
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
   // would match nothing and the call would answer 200 having removed nothing at all.
   const removing = new Set(fileIds.map(canonicalId));
+  const removedIds = project.fileIds.filter(id => removing.has(canonicalId(id)));
   project.fileIds = project.fileIds.filter(id => !removing.has(canonicalId(id)));
   project.updatedAt = new Date();
 
@@ -122,5 +130,6 @@ export const removeFiles = async (
 
   await db.projects.update({ id: project.id, fileIds: project.fileIds, updatedAt: project.updatedAt });
 
-  return project;
+  // removedIds are the stored ids actually taken out, so callers can skip side effects for a no-op.
+  return { project, removedIds };
 };

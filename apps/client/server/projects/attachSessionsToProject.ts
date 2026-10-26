@@ -66,8 +66,8 @@ export async function attachSessionsToProject(
   // pays for) two identical summaries.
   // Attaching a notebook to a project is free; only the summary it triggers costs credits, and
   // this fan-out is already best-effort (Promise.allSettled). So a refusal skips the queueing
-  // rather than failing the attach - the client types this response as ISessionDocument[],
-  // leaving the warning log as where a skipped summary surfaces (#1852).
+  // rather than failing the attach, and neither caller's response has room to report it, leaving
+  // the warning log as where a skipped summary surfaces (#1852).
   const summarizableSessionIds = await filterSessionIdsByOperationalCredits(sessions, {
     payerId: ctx.user.id,
     operationsPerSession: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,

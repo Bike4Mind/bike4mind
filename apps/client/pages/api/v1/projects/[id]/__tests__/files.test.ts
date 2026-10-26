@@ -283,6 +283,7 @@ describe('DELETE /api/v1/projects/{id}/files/{file_id}', () => {
 
     expect(res._getStatusCode()).toBe(204);
     expect(mockProjectUpdate).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [FILE_A] }));
+    expect(mockLogEvent).not.toHaveBeenCalled();
   });
 
   it('answers 404 for a project the caller cannot read', async () => {
@@ -290,10 +291,17 @@ describe('DELETE /api/v1/projects/{id}/files/{file_id}', () => {
     expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, file_id: FILE_A })).toBe(404);
   });
 
-  it('answers 404 for a file id the caller cannot read', async () => {
+  it('answers 404 for an unreadable file id the project does not hold', async () => {
     mockFindAllAccessibleFiles.mockResolvedValue([]);
-    expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, file_id: FILE_A })).toBe(404);
+    expect(await statusOf(removeHandler, 'DELETE', { id: PROJECT_ID, file_id: FILE_B })).toBe(404);
     expect(mockProjectUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner clear a held id whose file no longer resolves', async () => {
+    mockFindAllAccessibleFiles.mockResolvedValue([]);
+
+    expect((await remove(FILE_A))._getStatusCode()).toBe(204);
+    expect(mockProjectUpdate).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
   });
 
   it('answers 404 for a malformed file id without touching the project', async () => {

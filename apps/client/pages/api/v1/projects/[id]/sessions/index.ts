@@ -5,12 +5,7 @@
  * Auth mode, scopes and validation come from the contracts; the SPA route is unchanged and shares the
  * write path (including the credit-gated summary fan-out) through attachSessionsToProject.
  */
-import {
-  addProjectSessionsContract,
-  BadRequestError,
-  listProjectSessionsContract,
-  NotFoundError,
-} from '@bike4mind/common';
+import { addProjectSessionsContract, listProjectSessionsContract } from '@bike4mind/common';
 import { projectRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -56,16 +51,7 @@ const addRoute = nextRouteForContract(addProjectSessionsContract, {
   const { id } = req.validatedParams;
   const sessionIds = req.validated.session_ids as [string, ...string[]];
 
-  try {
-    await attachSessionsToProject({ user: req.user, ability: req.ability, logger: req.logger }, id, sessionIds);
-  } catch (error) {
-    // addSessions answers NotFoundError('Sessions not found') when none of the ids is reachable.
-    // That is a bad request body, and must not read as the project 404.
-    if (error instanceof NotFoundError && error.message === 'Sessions not found') {
-      throw new BadRequestError('Some sessions are not accessible');
-    }
-    throw error;
-  }
+  await attachSessionsToProject({ user: req.user, ability: req.ability, logger: req.logger }, id, sessionIds);
 
   // addSessions returns the sessions, not the project, so re-read for the response.
   return res.json(toPublicProject(await getReadableProject(req.user.id, id)));

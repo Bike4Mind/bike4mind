@@ -1165,7 +1165,8 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
 
   /**
    * One ascending-by-`_id` page of these ids (live rows only), resuming strictly after `afterId`.
-   * `hasMore` is true when a row exists past the page.
+   * `hasMore` is true when a row exists past the page. Rows carry only the public session fields
+   * (see toPublicSession), so they are for rendering, never for writing back.
    */
   findPageByIds: (
     ids: string[],

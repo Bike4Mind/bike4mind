@@ -238,4 +238,32 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     );
     expect(db.projects.update).not.toHaveBeenCalled();
   });
+
+  it('lets the owner clear a held id that no longer resolves, such as a deleted file', async () => {
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    const { removedIds } = await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db });
+
+    expect(removedIds).toEqual([FILE_ID_HEX]);
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
+  });
+
+  it('still rejects a held id that no longer resolves for a member who is not the owner', async () => {
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    await expect(removeFiles('member-1', { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db })).rejects.toThrow(
+      'Some files are not accessible'
+    );
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('reports no removed ids when the file is not in the project', async () => {
+    project.fileIds = [];
+
+    const { removedIds } = await call();
+
+    expect(removedIds).toEqual([]);
+  });
 });

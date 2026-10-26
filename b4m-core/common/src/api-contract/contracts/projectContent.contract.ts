@@ -113,8 +113,8 @@ export const removeProjectFileContract = defineEndpoint({
   description:
     'Ungroups a file from a project. The file itself is kept, but the access the project granted on it ' +
     'is revoked. The project owner can remove any file; anyone else with access to the project can ' +
-    'remove only files they own. Removing a file that is not in the project is a no-op that still ' +
-    'answers 204.',
+    'remove only files they own. The owner can also remove a `file_ids` entry whose file was since ' +
+    'deleted. Removing a file that is not in the project is a no-op that still answers 204.',
   tags: ['Projects'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.WRITE_PROJECTS],
@@ -206,8 +206,8 @@ export const removeProjectSessionContract = defineEndpoint({
   description:
     'Ungroups a session from a project. The session itself is kept, but the access the project granted ' +
     'on it is revoked. The project owner can remove any session; anyone else with access to the project ' +
-    'can remove only sessions they own. Removing a session that is not in the project is a no-op that ' +
-    'still answers 204.',
+    'can remove only sessions they own. The owner can also remove a `session_ids` entry whose session ' +
+    'was since deleted. Removing a session that is not in the project is a no-op that still answers 204.',
   tags: ['Projects'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.WRITE_PROJECTS],

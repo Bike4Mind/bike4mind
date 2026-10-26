@@ -64,7 +64,7 @@ export async function addFilesToProject(
 }
 
 export async function removeFilesFromProject(ctx: ProjectMutationContext, projectId: string, fileIds: string[]) {
-  const project = await withTransaction(() =>
+  const { project, removedIds } = await withTransaction(() =>
     projectService.removeFiles(
       ctx.user.id,
       {
@@ -83,7 +83,7 @@ export async function removeFilesFromProject(ctx: ProjectMutationContext, projec
   );
 
   await Promise.all(
-    fileIds.map((fileId: string) =>
+    removedIds.map((fileId: string) =>
       logEvent(
         {
           userId: ctx.user.id,
@@ -104,7 +104,7 @@ export async function removeFilesFromProject(ctx: ProjectMutationContext, projec
 }
 
 export async function removeSessionsFromProject(ctx: ProjectMutationContext, projectId: string, sessionIds: string[]) {
-  const project = await withTransaction(() =>
+  const { project, removedIds } = await withTransaction(() =>
     projectService.removeSessions(
       ctx.user.id,
       {
@@ -121,14 +121,17 @@ export async function removeSessionsFromProject(ctx: ProjectMutationContext, pro
     )
   );
 
-  await activityRepository.createActivity(
-    ActivityType.NOTEBOOK_REMOVED_FROM_PROJECT,
-    { type: 'Project', id: projectId },
-    { type: 'User', id: ctx.user.id }
-  );
+  // A retried or no-op removal (v1 DELETE answers 204 for it) must not log a removal that did not happen.
+  if (removedIds.length > 0) {
+    await activityRepository.createActivity(
+      ActivityType.NOTEBOOK_REMOVED_FROM_PROJECT,
+      { type: 'Project', id: projectId },
+      { type: 'User', id: ctx.user.id }
+    );
+  }
 
   await Promise.all(
-    sessionIds.map((sessionId: string) =>
+    removedIds.map((sessionId: string) =>
       logEvent(
         {
           userId: ctx.user.id,

@@ -97,4 +97,34 @@ describe('projectService - removeSessions (narrowed writes)', () => {
     await expect(callRemove('member-1', [SESSION_A])).rejects.toBeInstanceOf(ForbiddenError);
     expect(db.projects.update).not.toHaveBeenCalled();
   });
+
+  it('lets the owner clear a held id that no longer resolves, such as a deleted session', async () => {
+    db.sessions.shareable.findAllAccessibleByIds.mockResolvedValueOnce([]);
+
+    const { removedIds } = await removeSessions(
+      OWNER_ID,
+      { projectId: PROJECT_ID, sessionIds: [SESSION_KEPT] },
+      { db }
+    );
+
+    expect(removedIds).toEqual([SESSION_KEPT]);
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: [SESSION_A, SESSION_B] }));
+  });
+
+  it('still rejects a held id that no longer resolves for a member who is not the owner', async () => {
+    db.sessions.shareable.findAllAccessibleByIds.mockResolvedValueOnce([]);
+
+    await expect(
+      removeSessions('member-1', { projectId: PROJECT_ID, sessionIds: [SESSION_KEPT] }, { db })
+    ).rejects.toThrow('Some sessions are not accessible');
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('reports no removed ids when the session is not in the project', async () => {
+    project.sessionIds = [SESSION_KEPT];
+
+    const { removedIds } = await removeSessions(OWNER_ID, { projectId: PROJECT_ID, sessionIds: [SESSION_A] }, { db });
+
+    expect(removedIds).toEqual([]);
+  });
 });

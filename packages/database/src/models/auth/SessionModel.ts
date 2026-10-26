@@ -549,8 +549,8 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   }
 
   /**
-   * One ascending-by-`_id` page of the given ids. Same liveness as `findAllByIds` (the soft-delete
-   * plugin hides deleted rows); ids that cannot address a row are skipped.
+   * One ascending-by-`_id` page of the given ids, public-shape fields only. Same liveness as
+   * `findAllByIds` (the soft-delete plugin hides deleted rows); ids that cannot address a row are skipped.
    */
   async findPageByIds(ids: string[], { afterId, limit }: { afterId?: string; limit: number }) {
     if (afterId !== undefined && !mongoose.isObjectIdOrHexString(afterId)) return { data: [], hasMore: false };
@@ -559,10 +559,16 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     };
     if (afterId !== undefined) idCondition.$gt = new mongoose.Types.ObjectId(afterId);
 
+    // Only what the public session shape reads; must stay in sync with
+    // apps/client/server/sessions/toPublicSession.ts, the only caller.
     const result = await this.sessionModel
       .find({ _id: idCondition })
+      .select(
+        'name userId knowledgeIds artifactIds tags forceKnowledgeRetrieval retrievalTags lakeScopeExplicit lastUsedModel firstCreated lastUpdated'
+      )
       .sort({ _id: 1 })
-      .limit(limit + 1);
+      .limit(limit + 1)
+      .exec();
 
     return { data: result.slice(0, limit), hasMore: result.length > limit };
   }

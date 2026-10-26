@@ -194,6 +194,10 @@ below are still hand-written.
 Project create, list, get, update and delete, and the project's files and sessions (list, add, remove), are covered
 by the generated docs (see above). The routes below are still hand-written.
 
+If you call \`/api/projects/[id]/files\` or \`/api/projects/[id]/sessions\` with an API key, move to
+\`/api/v1/projects/{id}/files\` and \`/api/v1/projects/{id}/sessions\`. The older routes still answer but are no
+longer documented, and their response shapes differ (unpaginated, internal field names).
+
 **Required API-key scope:** \`projects:read\` (or \`projects:write\`) for the GET routes, \`projects:write\` for the rest.
 
 | Method | Endpoint | Description |
