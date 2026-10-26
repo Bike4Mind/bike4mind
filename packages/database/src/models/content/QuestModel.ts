@@ -1680,7 +1680,10 @@ function initializeQuestModel() {
 
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
-    ChatHistoryItemSchema.index({ 'signupActivity.userId': 1, status: 1, 'signupActivity.startedAt': 1 });
+    ChatHistoryItemSchema.index(
+      { 'signupActivity.userId': 1, status: 1, 'signupActivity.startedAt': 1 },
+      { name: 'signupActivity_user_status_startedAt' }
+    );
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });
