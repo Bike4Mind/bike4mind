@@ -23,7 +23,8 @@ const ReviewInput = z.object({
   modelId: z.string().optional(),
 });
 
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: process.env.NODE_ENV === 'development' ? 30 : 10, windowMs: 60 * 1000 }))
   .post(async (req: Request, res: Response) => {
     const hasAccess =
