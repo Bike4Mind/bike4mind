@@ -40,7 +40,18 @@ describe('useUserCreditsManager', () => {
 
     await act(() => result.current.handleCreditAdjustment('u1', { kind: 'set', balance: 0 }, 'zeroed'));
     expect(mockMutateAsync).toHaveBeenLastCalledWith({ userId: 'u1', currentCredits: 0, note: 'zeroed' });
-    expect(result.current.notification.message).toContain('Balance adjusted toward 0');
+  });
+
+  it('reports the committed balance, not the request, so a floored deduction reads honestly', async () => {
+    mockMutateAsync.mockResolvedValue({ currentCredits: -100 });
+    const { result } = renderHook(() => useUserCreditsManager());
+
+    await act(() => result.current.handleCreditAdjustment('u1', { kind: 'delta', delta: -50 }, 'penalty'));
+    expect(result.current.notification.message).toBe('Requested -50 credits; balance is now -100');
+
+    mockMutateAsync.mockResolvedValue({ currentCredits: 0 });
+    await act(() => result.current.handleCreditAdjustment('u1', { kind: 'set', balance: 0 }, 'zeroed'));
+    expect(result.current.notification.message).toBe('Requested balance 0; balance is now 0');
   });
 
   it('requests server-side sort by currentCredits (default highest first)', () => {

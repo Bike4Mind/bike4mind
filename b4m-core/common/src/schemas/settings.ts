@@ -2151,8 +2151,7 @@ export const API_SERVICE_GROUPS = {
   RATE_LIMITING: {
     id: 'rateLimitingService',
     name: 'API Rate Limiting',
-    description:
-      'Per-user request rate limits on every per-user rate-limited API route, tunable per subscription tier (#9780)',
+    description: 'Per-user request rate limits on every per-user rate-limited API route, tunable per subscription tier',
     icon: 'Speed',
     settings: [
       { key: 'apiRateLimitFreePerMin', order: 1 },

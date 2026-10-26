@@ -53,7 +53,7 @@ export function useUserCreditsManager(onRefresh?: () => void) {
 
   const handleCreditAdjustment = async (userId: string, change: CreditChange, note: string) => {
     try {
-      await updateUserCreditsMutation.mutateAsync({
+      const updated: { currentCredits?: unknown } | null = await updateUserCreditsMutation.mutateAsync({
         userId,
         // A delta applies atomically against the live balance, so interim spend is not
         // refunded and the balance never goes negative.
@@ -61,12 +61,15 @@ export function useUserCreditsManager(onRefresh?: () => void) {
         // The admin's required "Reason for adjustment" - persisted on the audit record.
         note: note.trim(),
       });
+      // Report the committed balance: the server floors deductions, so the request is not the outcome.
+      const committed = typeof updated?.currentCredits === 'number' ? updated.currentCredits : null;
+      const requested =
+        change.kind === 'set'
+          ? `Requested balance ${change.balance.toLocaleString()}`
+          : `Requested ${change.delta > 0 ? '+' : '-'}${Math.abs(change.delta).toLocaleString()} credits`;
       setNotification({
         open: true,
-        message:
-          change.kind === 'set'
-            ? `Balance adjusted toward ${change.balance.toLocaleString()}; spend since the page loaded can change the final amount`
-            : `Successfully ${change.delta > 0 ? 'added' : 'removed'} ${Math.abs(change.delta)} credits`,
+        message: committed === null ? requested : `${requested}; balance is now ${committed.toLocaleString()}`,
         color: 'success',
       });
       handleRefresh();
