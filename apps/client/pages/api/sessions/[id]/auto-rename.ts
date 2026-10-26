@@ -6,8 +6,10 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { assertSessionAccess } from '@server/utils/sessionAccess';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { Request } from 'express';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }>>(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { id } = req.query;
 
   // Bind the caller-supplied session id to the caller before renaming. Outside the try

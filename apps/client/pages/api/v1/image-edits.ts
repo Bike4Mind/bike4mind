@@ -14,8 +14,10 @@ import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@server/uti
 import { editImageContract } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(editImageContract).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   assertNoStrayBillingOrgKeys(req.body);
   // organization_id is the request alias; only the mapped value goes on to the queue.
   const requestedOrgId = resolveBillingOrgInput(req.validated);

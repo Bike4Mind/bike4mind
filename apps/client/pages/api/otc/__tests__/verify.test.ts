@@ -1,7 +1,12 @@
 import { signupProtection } from '@server/auth/signupProtection';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { CreditHolderType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import {
+  BadRequestError,
+  CreditHolderType,
+  PENDING_FREE_CREDITS_TAG,
+  RESERVED_USERNAME_MESSAGE,
+} from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
@@ -39,6 +44,12 @@ vi.mock('@server/analytics/funnel', () => ({
   emitEmailVerifiedFunnelEvents: (...a: any[]) => mockEmitVerifiedFunnel(...a),
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn(() => Promise.resolve()) }));
+const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
+const mockRecordLoginEvent = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: (...a: any[]) => mockRecordSignupNetwork(...a),
+  recordLoginEvent: (...a: any[]) => mockRecordLoginEvent(...a),
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
   isE2EEnabled: () => false,
@@ -151,6 +162,8 @@ import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
 // In-memory stand-in for the unique settingName upsert: the first claim per name wins.
 const claims = new Map<string, string>();
 beforeEach(() => {
+  mockRecordSignupNetwork.mockClear();
+  mockRecordLoginEvent.mockClear();
   claims.clear();
   mockClearPending.mockResolvedValue({ tags: ['Customer'] });
   mockClaimOnce.mockImplementation(async (name: string, claimId: string) => {
@@ -447,6 +460,8 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(mockRecordSignupAcquisition).toHaveBeenCalledWith(
       expect.objectContaining({ req, user: expect.objectContaining({ id: 'user-1' }), method: 'otc' })
     );
+    expect(mockRecordSignupNetwork).toHaveBeenCalledWith({ req, userId: 'user-1', method: 'otc' });
+    expect(mockRecordLoginEvent).toHaveBeenCalledWith({ req, userId: 'user-1', method: 'otc-registration' });
     const user = { id: 'user-1', acquisition, isSynthetic: false };
     expect(mockEmitFunnelEvent).toHaveBeenCalledWith({ user, event: 'email_verified', metadata: { method: 'otc' } });
     expect(mockEmitFunnelEvent).toHaveBeenCalledWith({
@@ -454,6 +469,25 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       event: 'credits_granted',
       metadata: { amount: 1000, source: 'signup', method: 'otc' },
     });
+  });
+
+  it('returns the reserved-username rejection with a fresh token so the user can pick another name', async () => {
+    mockRegisterViaOTC.mockRejectedValueOnce(new BadRequestError(RESERVED_USERNAME_MESSAGE));
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.username = 'persona-x';
+
+    const err = await handler(req, res).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(BadRequestError);
+    expect(err).toMatchObject({
+      message: RESERVED_USERNAME_MESSAGE,
+      additionalInfo: { pendingToken: expect.any(String) },
+    });
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.objectContaining({ username: 'persona-x', email: NON_DOMAIN_EMAIL }),
+      expect.anything()
+    );
+    expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
   });
 
   it('keeps a synthetic account out of the signup conversion', async () => {
@@ -579,6 +613,8 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(res._getStatusCode()).toBe(200);
     expect(mockRegisterViaOTC).not.toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
+    expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
+    expect(mockRecordLoginEvent).toHaveBeenCalledWith({ req, userId: 'u-existing', method: 'otc' });
   });
 
   describe('OAuth source client', () => {

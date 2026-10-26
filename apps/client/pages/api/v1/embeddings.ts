@@ -11,6 +11,7 @@
 
 import {
   createEmbeddingsContract,
+  getEmbeddingModelCapabilities,
   getEmbeddingModelCost,
   hasPublishedEmbeddingRate,
   MAX_EMBEDDING_REQUEST_TOKENS,
@@ -74,8 +75,8 @@ const handler = nextRouteForContract(createEmbeddingsContract, { maxBodySize: 4 
     }
 
     const service = new EmbeddingFactory(resolution.config).createEmbeddingService(model);
-    const modelInfo = service.getModelInfo();
-    const plan = planEmbeddingDimensions(model, modelInfo, dimensions);
+    const { dimensions: modelDimensions, maxInputTokens } = getEmbeddingModelCapabilities(model);
+    const plan = planEmbeddingDimensions(model, dimensions);
     if (plan.kind === 'unsupported') {
       return res.status(422).json({ error: plan.message });
     }
@@ -84,7 +85,7 @@ const handler = nextRouteForContract(createEmbeddingsContract, { maxBodySize: 4 
         ? plan.dimensions
         : plan.kind === 'provider'
           ? plan.outputDimension
-          : modelInfo.dimensions[0];
+          : modelDimensions.native;
     const maxInputs = Math.floor(MAX_EMBEDDING_RESPONSE_VALUES / outputWidth);
     if (texts.length > maxInputs) {
       return res.status(422).json({
@@ -95,10 +96,10 @@ const handler = nextRouteForContract(createEmbeddingsContract, { maxBodySize: 4 
     sharedTokenizer ??= createTokenizer({ logger: req.logger });
     const tokenizer = sharedTokenizer;
     const tokenCounts = await Promise.all(texts.map(text => tokenizer.countTokens(text, model)));
-    const oversizedIndex = tokenCounts.findIndex(count => count > modelInfo.contextWindow);
+    const oversizedIndex = tokenCounts.findIndex(count => count > maxInputTokens);
     if (oversizedIndex !== -1) {
       return res.status(422).json({
-        error: `input[${oversizedIndex}] is ${tokenCounts[oversizedIndex]} tokens; ${model} accepts at most ${modelInfo.contextWindow}.`,
+        error: `input[${oversizedIndex}] is ${tokenCounts[oversizedIndex]} tokens; ${model} accepts at most ${maxInputTokens}.`,
       });
     }
     const promptTokens = tokenCounts.reduce((sum, count) => sum + count, 0);

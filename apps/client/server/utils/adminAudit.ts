@@ -127,12 +127,24 @@ export const recordAdminActionForActor = async (
     await writerAdapters(req, input.action)
   );
 
+/**
+ * Shown when the request carries no `reason` key at all. A bundle new enough to send the key also
+ * renders the field, so an absent key means the tab predates the reason prompt - point at the reload
+ * instead of a validation error about a field the reader cannot see.
+ */
+export const ADMIN_ACTION_REASON_MISSING_MESSAGE =
+  'This page is running an outdated version of the app. Reload the page and try again.';
+
 /** Validates a reason-required admin action's reason; a missing or short reason is a 400. */
 export const parseAdminActionReason = (value: unknown): string => {
+  if (value === undefined) throw new BadRequestError(ADMIN_ACTION_REASON_MISSING_MESSAGE);
   const parsed = AdminActionReasonSchema.safeParse(value);
   if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'A reason is required');
   return parsed.data;
 };
+
+export const definedKeys = (data: Record<string, unknown>): string[] =>
+  Object.keys(data).filter(key => data[key] !== undefined);
 
 // Ids compare case-insensitively: Mongo resolves an upper-case hex id to the same user.
 export const isSameUserId = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();

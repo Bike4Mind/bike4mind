@@ -1,3 +1,4 @@
+import { USER_ID_PARAM } from '@bike4mind/common';
 import type { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import { oneOf, parsePage, parseStringList, toNumber } from '../adminSearchValues';
 
@@ -35,9 +36,12 @@ export const USERS_SORT_PARAM = 'sort';
 export const USERS_ORDER_PARAM = 'order';
 export const USERS_ORG_PARAM = 'org';
 export const USERS_TAGS_PARAM = 'tags';
-export const USERS_USER_ID_PARAM = 'userId';
+export const USERS_USER_ID_PARAM = USER_ID_PARAM;
 
-/** The params that describe the list view; `userId` (the open user) is separate. */
+/**
+ * The params that describe the list view. `userId` is separate: it is only read, so that the old
+ * `/admin?userId=` links can redirect to `/admin/users/$userId` (adminRoute's beforeLoad).
+ */
 const USERS_VIEW_PARAMS = [
   USERS_PAGE_PARAM,
   USERS_LIMIT_PARAM,
@@ -67,7 +71,7 @@ const parseLimit = (value: unknown): number | undefined => {
 };
 
 // The id is interpolated into `/api/users/<id>`, so only an ObjectId may come in from a link.
-const parseUserId = (value: unknown): string | undefined =>
+export const parseUserId = (value: unknown): string | undefined =>
   typeof value === 'string' && /^[0-9a-f]{24}$/.test(value) ? value : undefined;
 
 /** Per-key coercion for the route's `validateSearch`; anything invalid becomes undefined. */

@@ -15,7 +15,7 @@ const handler = nextRouteForContract(createTextRefinementContract).post(async (r
 
   let refined: string | undefined;
   try {
-    refined = await refineTextRequest({ text, context }, { logger: req.logger });
+    refined = await refineTextRequest({ text, context }, { logger: req.logger, user: req.user });
   } catch (error) {
     if (error instanceof RefineProviderUnavailableError) {
       req.logger.warn('Text refinement provider not configured', error.cause ?? error);

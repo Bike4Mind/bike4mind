@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { execSync } from 'child_process';
+import net from 'net';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -89,6 +90,34 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
       }
     }
   );
+
+  it('allows loopback but no other IP when network is enabled through a proxy', async () => {
+    const proxy = net.createServer(socket => socket.destroy());
+    await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve));
+    const probe = (host: string, port: number) => `out=$(nc -z -w 2 ${host} ${port} 2>&1) && echo open || echo closed`;
+    const listenAndConnect = (host: string) =>
+      `node -e "const s=require('net').createServer(c=>c.end()).listen(0,'${host}',()=>require('net').connect(s.address().port,'${host}',()=>{console.log('loopback');process.exit(0)}))" 2>&1 || echo failed`;
+    const wrapped = runtime.wrapCommand({
+      command: [
+        probe('127.0.0.1', (proxy.address() as net.AddressInfo).port),
+        listenAndConnect('127.0.0.1'),
+        listenAndConnect('::1'),
+        `nc -v -z -w 2 127.0.0.2 9 2>&1 | grep -q 'not permitted' && echo denied || echo allowed`,
+      ].join('; '),
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled: true,
+      proxyPort: (proxy.address() as net.AddressInfo).port,
+    });
+
+    try {
+      const output = execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 15000 });
+      expect(output.trim().split('\n')).toEqual(['open', 'loopback', 'loopback', 'denied']);
+    } finally {
+      cleanupWrapped(wrapped.cleanupPaths);
+      proxy.close();
+    }
+  });
 
   it('allows writing to CWD', () => {
     const testFile = path.join(TEST_DIR, 'write-test.txt');

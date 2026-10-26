@@ -26,6 +26,8 @@ const ListArtifactsSchema = z.object({
   visibility: z.enum(['private', 'project', 'organization', 'public']).optional(),
   projectId: z.string().optional(),
   sessionId: z.string().optional(),
+  // A plain string: qs.parse turns `identifier[$ne]=x` into an object, which this rejects.
+  identifier: z.string().min(1).optional(),
   tags: z.array(z.string()).prefault([]),
   search: z.string().optional(),
 });
@@ -44,6 +46,7 @@ const CreateArtifactSchema = z.object({
   sourceQuestId: z.string().optional(),
   sessionId: z.string().optional(),
   parentArtifactId: z.string().optional(),
+  identifier: z.string().optional(),
   permissions: z
     .object({
       canRead: z.array(z.string()).prefault([]),

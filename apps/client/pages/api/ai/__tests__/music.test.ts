@@ -1,4 +1,5 @@
 import { CREDITS_PER_USD_COST, CreditHolderType, isZodError } from '@bike4mind/common';
+import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -84,7 +85,8 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
-  adminSettingsRepository: {},
+  cacheRepository: { sentinel: 'cacheRepository' },
+  adminSettingsRepository: { sentinel: 'adminSettingsRepository' },
   creditTransactionRepository: {},
   organizationRepository: {
     findById: (...a: unknown[]) => orgFindById(...a),
@@ -128,6 +130,10 @@ vi.mock('@bike4mind/database', () => ({
 // Keep the real pure cap helper and the real membership predicate so org-billed tests exercise
 // the actual decisions the handler depends on; only the write (deductCreditsWithOrgSupport) is
 // stubbed. A hand-written stand-in for either would drift from the shared implementation.
+const { runElevenLabsWithCapacity, generatorFactory } = vi.hoisted(() => ({
+  runElevenLabsWithCapacity: vi.fn(),
+  generatorFactory: vi.fn(),
+}));
 vi.mock('@bike4mind/services', async () => {
   const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
     '@bike4mind/services/creditService'
@@ -141,10 +147,14 @@ vi.mock('@bike4mind/services', async () => {
       deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a),
     },
     estimateMusicCredits: (...a: unknown[]) => estimateMusicCredits(...a),
+    ProviderBusyError: services.ProviderBusyError,
+    runElevenLabsWithCapacity: (...a: unknown[]) => runElevenLabsWithCapacity(...a),
   };
 });
-vi.mock('@bike4mind/utils', () => ({
-  aiMusicService: () => ({ generate: (...a: unknown[]) => generate(...a) }),
+// The real module underneath: @bike4mind/services (imported for real above) reads its constants.
+vi.mock('@bike4mind/utils', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/utils')>()),
+  aiMusicService: (...a: unknown[]) => generatorFactory(...a),
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
   getSettingsMap: (...a: unknown[]) => getSettingsMap(...a),
 }));
@@ -158,6 +168,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload, getSignedUrl }),
 }));
 
+import { ProviderBusyError } from '@bike4mind/services';
 import handler from '../music';
 
 type Handler = (req: unknown, res: unknown) => Promise<void>;
@@ -202,7 +213,14 @@ beforeEach(() => {
   upload.mockReset().mockResolvedValue(undefined);
   getSignedUrl.mockReset().mockResolvedValue('https://s3/offload');
   getEffectiveApiKey.mockResolvedValue('eleven-key');
+  // Pass-through capacity gate: the gate's own behaviour is covered in @bike4mind/services.
+  runElevenLabsWithCapacity
+    .mockReset()
+    .mockImplementation((_args: unknown, attempt: (call: { timeoutMs: number }) => unknown) =>
+      attempt({ timeoutMs: 45_000 })
+    );
   getSettingsMap.mockResolvedValue({});
+  generatorFactory.mockReset().mockImplementation(() => ({ generate: (...a: unknown[]) => generate(...a) }));
   generate.mockResolvedValue({ audio: Buffer.from('song'), contentType: 'audio/mpeg' });
   findById.mockResolvedValue({ id: 'u1', currentCredits: 1000 });
   // Default reservation results (post-decrement balance, non-negative == funded).
@@ -473,6 +491,7 @@ describe('POST /api/ai/music', () => {
           modelId: expect.any(String),
           prompt: 'lofi beat',
           durationSeconds: 30,
+          request: expect.objectContaining({ prompt: 'lofi beat', lengthMs: 30000 }),
         },
       },
       expect.anything()
@@ -544,6 +563,70 @@ describe('POST /api/ai/music', () => {
     expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 150);
     expect(deductCredits).not.toHaveBeenCalled();
     // A failed generation still logs an analytics event, as an error with no cost.
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'music_generation', status: 'error', creditsCharged: 0, costUsd: 0 })
+    );
+  });
+
+  it('runs the generation through the shared ElevenLabs capacity gate', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+
+    const { res, promise } = run({ prompt: 'thunder score', lengthMs: 30000 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(runElevenLabsWithCapacity).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'music', apiKey: 'eleven-key' }),
+      expect.any(Function)
+    );
+    const [capacityArgs] = runElevenLabsWithCapacity.mock.calls[0] as [
+      { db: { adminSettings: unknown; caches: unknown } },
+    ];
+    expect(capacityArgs.db.adminSettings).toBe(adminSettingsRepository);
+    expect(capacityArgs.db.caches).toBe(cacheRepository);
+  });
+
+  it('forwards the capacity-granted timeout into the music generator factory', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+    runElevenLabsWithCapacity.mockImplementation((_args: unknown, attempt: (call: { timeoutMs: number }) => unknown) =>
+      attempt({ timeoutMs: 12_345 })
+    );
+
+    const { res, promise } = run({ prompt: 'thunder score', lengthMs: 30000 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(generatorFactory).toHaveBeenCalledWith('elevenlabs', 'eleven-key', expect.anything(), { timeoutMs: 12_345 });
+  });
+
+  it('maps a provider at capacity to 429, refunds, and records no usage when no call was made', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+    runElevenLabsWithCapacity.mockRejectedValue(new ProviderBusyError('elevenlabs', 'slots_exhausted', 5));
+
+    const { res, promise } = run({ prompt: 'thunder score', lengthMs: 30000 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(429);
+    expect(generate).not.toHaveBeenCalled();
+    expect(userIncrement).toHaveBeenNthCalledWith(1, 'u1', -150);
+    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 150);
+    expect(deductCredits).not.toHaveBeenCalled();
+    expect(recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('records an error usage event when the provider kept answering 429', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+    runElevenLabsWithCapacity.mockRejectedValue(new ProviderBusyError('elevenlabs', 'upstream_rate_limited', 2));
+
+    const { res, promise } = run({ prompt: 'thunder score', lengthMs: 30000 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(429);
+    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 150);
     expect(recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ feature: 'music_generation', status: 'error', creditsCharged: 0, costUsd: 0 })
     );

@@ -406,8 +406,8 @@ describe('ImageGenerationService.selectInputImage reference images (#2744)', () 
     ).rejects.toThrow(/At most/);
   });
 
-  it('drops anchors for a non-gpt-image model instead of failing the render', async () => {
-    // Only OpenAI's edit endpoint is wired for a multi-image array; BFL/Gemini would 400.
+  it('drops anchors for an unsupported model instead of failing the render', async () => {
+    // Legacy BFL models have no multi-reference input.
     const { service, findAccessibleInIds } = makeService({ a: cleanImage('a') });
 
     const result = await select(service, {
@@ -447,6 +447,41 @@ describe('ImageGenerationService.selectInputImage reference images (#2744)', () 
     });
 
     expect(result.referenceImages).toHaveLength(MAX_REFERENCE_IMAGES);
+  });
+
+  it('uses all FLUX.2 workbench images and deduplicates an explicit primary reference', async () => {
+    const { service } = makeService({ a: cleanImage('a'), b: cleanImage('b') });
+    const result = await select(service, {
+      model: ImageModels.FLUX_2_PRO,
+      fabFileIds: ['a', 'b'],
+      referenceImageFabFileIds: ['a', 'b'],
+    });
+    expect(result.fileImage.id).toBe('a');
+    expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['b']);
+  });
+
+  it('preserves FLUX.2 attachment order when the database returns files in reverse order', async () => {
+    const files = { a: cleanImage('a'), b: cleanImage('b'), c: cleanImage('c') };
+    const { service, findAccessibleInIds } = makeService(files);
+    findAccessibleInIds.mockImplementation(async ids => ids.map(id => files[id as keyof typeof files]).reverse());
+    const result = await select(service, {
+      model: ImageModels.FLUX_2_PRO,
+      fabFileIds: ['c', 'a', 'b'],
+    });
+    expect(result.fileImage.id).toBe('c');
+    expect(result.referenceImages.map((file: FakeFile) => file.id)).toEqual(['a', 'b']);
+  });
+
+  it('counts the primary against the FLUX.2 Klein input limit', async () => {
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    const { service } = makeService(Object.fromEntries(ids.map(id => [id, cleanImage(id)])));
+    await expect(
+      select(service, {
+        model: ImageModels.FLUX_2_KLEIN_4B,
+        fabFileIds: ['a'],
+        referenceImageFabFileIds: ids.slice(1),
+      })
+    ).rejects.toThrow(/At most 4 input images/);
   });
 
   it('makes no extra lookup when no anchors are requested', async () => {
@@ -1059,6 +1094,37 @@ describe('ImageGenerationService.validateUserCredits input images', () => {
   });
 });
 
+describe('ImageGenerationService.validateUserCredits (model dispatch)', () => {
+  const user = { id: 'user1', currentCredits: 1_000_000 } as any;
+  const logger = { ...silentLogger, updateMetadata: vi.fn() } as unknown as Logger;
+  const validate = (modelInfo: ModelInfo, input: Record<string, unknown>) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (new ImageGenerationService({ db: {} } as any) as any).validateUserCredits(
+      user,
+      modelInfo,
+      1,
+      input,
+      logger,
+      null
+    ) as Promise<{ requiredCredits: number; usdCost: number }>;
+
+  // The BFL branch used to enumerate the FLUX.1 ids, so a curated-but-newer model was accepted by
+  // the render path and then rejected here with "Model not supported" at credit pre-flight.
+  it.each([
+    [ImageModels.FLUX_2_PRO, 0.03],
+    [ImageModels.FLUX_2_KLEIN_4B, 0.014],
+  ])('prices a %s generation at pre-flight instead of throwing', async (model, usd) => {
+    await expect(validate({ id: model } as ModelInfo, { model })).resolves.toMatchObject({
+      usdCost: usd,
+      requiredCredits: usdToCredits(usd),
+    });
+  });
+
+  it('leaves FLUX_PRO_FILL unpriced here, because it bills through the edit path', async () => {
+    await expect(validate({ id: ImageModels.FLUX_PRO_FILL } as ModelInfo, {})).rejects.toThrow(/not supported/i);
+  });
+});
+
 describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
   // GROK image quality has a flat usdCost, so requiredCredits is deterministic here.
   const modelInfo = { id: ImageModels.GROK_IMAGINE_IMAGE_QUALITY } as ModelInfo;
@@ -1209,8 +1275,12 @@ describe('ImageGenerationService.process (size normalization)', () => {
       },
       logEvent: vi.fn().mockResolvedValue(undefined),
       abilityGetter: vi.fn().mockReturnValue({}),
-      storage: { getSignedUrl: vi.fn(async (key: string) => `https://storage.example.com/${key}`) } as any,
-      fabFileStorage: { getSignedUrl: vi.fn(async (key: string) => `https://fab.example.com/${key}`) } as any,
+      storage: {
+        getSignedUrl: vi.fn(async (key: string) => `data:image/png;base64,${Buffer.from(key).toString('base64')}`),
+      } as any,
+      fabFileStorage: {
+        getSignedUrl: vi.fn(async (key: string) => `data:image/png;base64,${Buffer.from(key).toString('base64')}`),
+      } as any,
       wsHttpsUrl: 'https://ws.example.com',
     } as any);
   };
@@ -1334,6 +1404,34 @@ describe('ImageGenerationService.process (size normalization)', () => {
   });
 
   const refs = [cleanFile('a'), cleanFile('b')];
+
+  it('forwards both attached FLUX.2 images to the BFL service', async () => {
+    const { rendered } = await generateWith(
+      ImageModels.FLUX_2_PRO,
+      ModelBackend.BFL,
+      undefined,
+      { fabFileIds: ['a', 'b'] },
+      { files: refs, supportsImageVariation: true }
+    );
+    expect(rendered).toMatchObject({
+      reference_images: [Buffer.from('fab/a').toString('base64'), Buffer.from('fab/b').toString('base64')],
+    });
+    expect(rendered).not.toHaveProperty('image_prompt');
+  });
+
+  it('forwards explicit FLUX.2 references without a primary image', async () => {
+    const { rendered } = await generateWith(
+      ImageModels.FLUX_2_PRO,
+      ModelBackend.BFL,
+      undefined,
+      { referenceImageFabFileIds: ['a', 'b'] },
+      { files: refs }
+    );
+    expect(rendered?.reference_images).toEqual([
+      Buffer.from('fab/a').toString('base64'),
+      Buffer.from('fab/b').toString('base64'),
+    ]);
+  });
 
   it('holds each unique reference image as an input image', async () => {
     const { billed } = await generateWith(
@@ -1777,6 +1875,36 @@ describe('ImageGenerationService quest partial writes', () => {
       });
 
     const twoImages = ['data:image/png;base64,ONE', 'data:image/png;base64,TWO'];
+
+    it('records edit_source and reference lineage plus the request', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service } = arrange(save);
+      // Reference images only ride on gpt-image models.
+      vi.mocked(getAvailableModels).mockResolvedValue([{ ...geminiModelInfo, id: ImageModels.GPT_IMAGE_2 } as never]);
+      mockGeminiGenerate.mockReset();
+      mockGeminiGenerate.mockResolvedValue(twoImages.slice(0, 1));
+      mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: twoImages[0] });
+      await service.process({
+        body: {
+          generationId: 'gen-1',
+          sessionId: 'session1',
+          questId: 'quest1',
+          userId: 'user1',
+          prompt: 'make it blue',
+          model: ImageModels.GPT_IMAGE_2,
+          fabFileIds: ['f1'],
+          referenceImageFabFileIds: ['f1'],
+        } as never,
+        logger: silentLogger,
+      });
+
+      const saved = save.mock.calls[0][0];
+      expect(saved.derivedFrom).toEqual([
+        { fileId: 'f1', role: 'edit_source' },
+        { fileId: 'f1', role: 'reference' },
+      ]);
+      expect(saved.generation.request).toMatchObject({ model: ImageModels.GPT_IMAGE_2, prompt: 'make it blue' });
+    });
 
     it('saves each of two images with its own index-suffixed jobId', async () => {
       const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);

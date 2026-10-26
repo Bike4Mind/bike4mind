@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { publicVideoModel } from '../media/__fixtures__/videoModels';
 import { toolsForRequest } from './registry';
-import { readsUntrusted, sendsOut, spendsCredits } from './riskAssessment';
+import { alwaysOverridesTaint, readsUntrusted, sendsOut, spendsCredits } from './riskAssessment';
+import { scanShell } from './shellScan';
 
 describe('the credit-spending axis', () => {
   it.each(['generate_image', 'generate_speech', 'generate_sound_effect', 'generate_music', 'session_spawn'])(
@@ -22,8 +23,16 @@ describe('the credit-spending axis', () => {
 });
 
 describe('the untrusted-content and outbound axes', () => {
-  it('reads the tools whose result is someone else\'s text, by name and by family', () => {
-    for (const name of ['web_fetch', 'web_search', 'skill', 'session_read', 'browser_snapshot', 'mcp__notion_search']) {
+  it("reads the tools whose result is someone else's text, by name and by family", () => {
+    for (const name of [
+      'web_fetch',
+      'web_search',
+      'skill',
+      'session_read',
+      'browser_snapshot',
+      'screen_capture',
+      'mcp__notion_search',
+    ]) {
       expect(readsUntrusted(name), name).toBe(true);
     }
     for (const name of ['bash_execute', 'file_read', 'grep_search', 'session_send']) {
@@ -46,6 +55,16 @@ describe('the untrusted-content and outbound axes', () => {
     for (const name of ['bash_output', 'bash_list', 'file_read', 'session_read', 'web_search']) {
       expect(sendsOut(name), name).toBe(false);
     }
+  });
+
+  it('keeps the shell on the outbound axis, so only what the scan proves contained skips the taint', async () => {
+    expect(sendsOut('bash_execute')).toBe(true);
+    expect(alwaysOverridesTaint('bash_execute')).toBe(false);
+    const contained = async (command: string) => (await scanShell(command, '/tmp/proj', ['/tmp/proj']))?.contained;
+    expect(await contained('wc -l notes.txt && cat notes.txt')).toBe(true);
+    // A test or build run executes project code a tainted reply may have written unasked.
+    expect(await contained('VITEST_MAX_WORKERS=25% pnpm exec vitest run x && pnpm typecheck')).toBe(false);
+    expect(await contained('node x.js')).toBe(false);
   });
 
   /**
@@ -96,6 +115,7 @@ describe('the untrusted-content and outbound axes', () => {
       host: true,
       explore: true,
       browser: true,
+      screen: true,
       memory: true,
       skills: true,
       web: true,
@@ -105,9 +125,7 @@ describe('the untrusted-content and outbound axes', () => {
       modelId: 'claude-sonnet-5-5',
     }).map(entry => entry.toolSchema.name);
 
-    const unclassified = declared.filter(
-      name => !spendsCredits(name) && !readsUntrusted(name) && !sendsOut(name)
-    );
+    const unclassified = declared.filter(name => !spendsCredits(name) && !readsUntrusted(name) && !sendsOut(name));
     expect([...unclassified].sort()).toEqual([...NEITHER].sort());
   });
 });

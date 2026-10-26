@@ -11,10 +11,14 @@ export {
 export { mayRepublishSlug, SLUG_OWNED_BY_OTHER } from './slugOwnership';
 export { buildPublishS3KeyPrefix, buildPublishUrlPath } from './paths';
 export {
+  archivedVersionBytes,
   checkPublishQuota,
+  checkInPlaceRewriteQuota,
+  type InPlaceRewriteQuotaInput,
   type PublishQuotaInput,
   type PublishQuotaResult,
   type QuotaUsage,
+  type VersionBytes,
 } from './checkPublishQuota';
 export {
   invalidatePublishCdn,
@@ -96,3 +100,10 @@ export {
 export { renderArtifactIndexHtml } from './renderArtifactHtml';
 export { purgeUserPublishedArtifacts } from './purgeUserPublishedArtifacts';
 export { loadLiveOwner } from './loadLiveOwner';
+export {
+  consumePublishAction,
+  publishActionLimit,
+  publishActionsKey,
+  type PublishActionReceipt,
+  type PublishActor,
+} from './publishRateLimit';

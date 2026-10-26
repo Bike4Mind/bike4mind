@@ -86,7 +86,7 @@ export async function persistGeneratedFileAsFabFile(
  */
 export async function saveGeneratedAssetFromTool(
   context: ToolContext,
-  asset: Pick<SaveGeneratedAssetParams, 'bytes' | 'contentType' | 'generation' | 'generatedCopyKey'>
+  asset: Pick<SaveGeneratedAssetParams, 'bytes' | 'contentType' | 'generation' | 'generatedCopyKey' | 'derivedFrom'>
 ): Promise<SaveGeneratedAssetResult> {
   const { sessionId, questId, userId, logger } = context;
   const adapters = toolFileAdapters(context);

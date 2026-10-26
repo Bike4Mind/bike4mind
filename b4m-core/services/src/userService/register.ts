@@ -14,6 +14,8 @@ import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import {
   CURRENT_POLICY_VERSION,
+  DEFAULT_STORAGE_LIMIT_MB,
+  resolveUserStorageLimit,
   PENDING_FREE_CREDITS_TAG,
   settingsMap,
   USERNAME_RULES_MESSAGE,
@@ -22,6 +24,7 @@ import {
 import { releasePendingFreeCredits } from './freeCredits';
 import { shouldBlockDisposableEmail } from './disposableEmail';
 import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
+import { assertUsernameNotReserved } from './reservedUsername';
 
 // NOT parsed at runtime - derives the param type via z.infer only. The policy/age fields are
 // enforced by the manual `!== true` / version checks in registerUser below, not by this schema.
@@ -122,6 +125,9 @@ export const registerUser = async (
     throw new BadRequestError('Invalid email address');
   }
 
+  // The only caller, registerViaOTC, runs after the code proved the email.
+  await assertUsernameNotReserved(username, normalizedEmail, db.adminSettings);
+
   const existingUser = await db.users.findByUsernameOrEmail(username, email);
   if (existingUser) {
     const field = existingUser.username === username ? 'username' : 'email';
@@ -176,7 +182,7 @@ export const registerUser = async (
   let invite: IRegInviteDocument | null = null;
   let isUnlimitedInvite = false;
   let freeCredits = 0;
-  let effectiveStorage = 1000;
+  let storageLimitOverride: number | null = null;
 
   if (hasInviteCode) {
     invite = await db.registrationInvites.findByCode(normalizedInviteCode);
@@ -202,7 +208,7 @@ export const registerUser = async (
 
     // Check if this invite is associated with a subscriber for custom credits/storage
     let subscriberCredits = 0;
-    let subscriberStorage = 1000; // Default storage
+    let subscriberStorage = DEFAULT_STORAGE_LIMIT_MB; // Default storage
     let subscriberStorageFound = false;
 
     if (invite.email && db.subscribers) {
@@ -211,7 +217,7 @@ export const registerUser = async (
         if (subscriber && subscriber.inviteCode === normalizedInviteCode) {
           // Use subscriber-specific allocations if available
           subscriberCredits = subscriber.startingCredits || 0;
-          subscriberStorage = subscriber.startingStorage || 1000;
+          subscriberStorage = subscriber.startingStorage || DEFAULT_STORAGE_LIMIT_MB;
           subscriberStorageFound = true;
           logger.info(
             `Applying subscriber-specific allocations: ${subscriberCredits} credits, ${subscriberStorage}MB storage for ${email}`
@@ -236,7 +242,8 @@ export const registerUser = async (
           : (parseInt(referralCredits?.settingValue || '0', 10) ?? 0);
 
     // Priority: subscriber > invite code > default (1000)
-    effectiveStorage = subscriberStorageFound ? subscriberStorage : inviteStorage > 0 ? inviteStorage : 1000;
+    const signupStorage = subscriberStorageFound ? subscriberStorage : inviteStorage > 0 ? inviteStorage : null;
+    storageLimitOverride = signupStorage === DEFAULT_STORAGE_LIMIT_MB ? null : signupStorage;
   } else {
     // No invite code - only permitted when open registration is enabled or invite check is skipped
     // (e.g., OTC registration where email ownership is already verified).
@@ -250,7 +257,7 @@ export const registerUser = async (
     // burn the grant with no real inbox behind it. Defer the grant until the user verifies their
     // email (granted in /api/email/verify); mark the account as awaiting it. freeCredits stays 0.
     tags = [...new Set([...tags, PENDING_FREE_CREDITS_TAG])];
-    effectiveStorage = 1000;
+    storageLimitOverride = null;
     logger.info(`Open registration (no invite) for ${email}: free credits deferred until email verification`);
   }
 
@@ -290,7 +297,9 @@ export const registerUser = async (
     // DEFAULT VALUES
     groups: [],
     isAdmin: false,
-    storageLimit: effectiveStorage, // Priority: subscriber > invite code > default (1000)
+    storageLimit: resolveUserStorageLimit({ storageLimitOverride }).limitMb,
+    storageLimitOverride,
+    planStorageLimit: null,
     currentStorageSize: 0,
     currentCredits: 0,
     pendingCreditGrant: freeCredits > 0 ? freeCredits : null,

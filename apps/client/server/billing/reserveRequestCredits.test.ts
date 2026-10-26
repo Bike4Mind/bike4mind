@@ -31,6 +31,12 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {
     statusCode = 400;
   },
+  ForbiddenError: class ForbiddenError extends Error {
+    statusCode = 403;
+  },
+  UnauthorizedError: class UnauthorizedError extends Error {
+    statusCode = 401;
+  },
 }));
 vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
@@ -106,6 +112,22 @@ describe('reserveRequestCredits', () => {
       return pending;
     });
   });
+
+  it.each([true, false])(
+    'refuses a moderated user before touching any balance (enforceCredits %s)',
+    async enforceCredits => {
+      const req = {
+        ...userReq(),
+        user: { id: 'u1', organizationId: null, isModerated: true },
+      } as unknown as Parameters<typeof reserveRequestCredits>[0]['req'];
+
+      await expect(
+        reserveRequestCredits({ req, requiredCredits: 5, enforceCredits, featureLabel: 'embeddings' })
+      ).rejects.toMatchObject({ statusCode: 403, message: expect.stringContaining('AI features are disabled') });
+      expect(userIncrement).not.toHaveBeenCalled();
+      expect(recordHold).not.toHaveBeenCalled();
+    }
+  );
 
   it('reserves nothing and touches no balance when credits are not enforced', async () => {
     const reservation = await reserveRequestCredits({

@@ -3,6 +3,7 @@ export * from './updateLogoutTime';
 export * from './update';
 export * from './adminUpdate';
 export * from './register';
+export * from './reservedUsername';
 export * from './freeCredits';
 export * from './disposableEmail';
 export * from './sourceTag';

@@ -8,6 +8,8 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { patch: vi.fn().mockResolvedValue({ data: {} }) },
 }));
 import { api } from '@client/app/contexts/ApiContext';
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+import { toast } from 'sonner';
 import { AccessGateEditor } from './AccessGateEditor';
 import type { PublishAccessGateRead } from '@client/app/utils/publishApi';
 
@@ -17,11 +19,22 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const renderEditor = (visibility = 'public', initialGate: PublishAccessGateRead = null) => {
+const renderEditor = (
+  visibility = 'public',
+  initialGate: PublishAccessGateRead = null,
+  onGateChange?: (gate: PublishAccessGateRead) => void
+) => {
   apiPatch.mockClear().mockResolvedValue({ data: {} });
+  vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.error).mockClear();
   render(
     <Wrapper>
-      <AccessGateEditor publicId="pub-1" visibility={visibility} initialGate={initialGate} />
+      <AccessGateEditor
+        publicId="pub-1"
+        visibility={visibility}
+        initialGate={initialGate}
+        onGateChange={onGateChange}
+      />
     </Wrapper>
   );
 };
@@ -240,5 +253,229 @@ describe('AccessGateEditor - passphrase show-once', () => {
     fireEvent.click(screen.getByTestId('manage-gate-passphrase-copy'));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('longenough1'));
+  });
+});
+
+/**
+ * A gate stored on a private, team or project page is still enforced on that page's private share
+ * links, so the owner has to be able to see it and clear it. The editor says so only while a gate
+ * is stored; with none, a non-public page keeps the hint that gates are a public-page setting.
+ */
+describe('AccessGateEditor - a gate stored on a non-public page', () => {
+  const clickClear = () => fireEvent.click(screen.getByTestId('manage-gate-clear'));
+  const confirmClear = () => fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
+
+  it.each(['private', 'organization', 'project'])(
+    'shows a stored passphrase gate on a %s page with what it guards and a Clear action',
+    visibility => {
+      renderEditor(visibility, { kind: 'passphrase' });
+
+      const note = screen.getByTestId('manage-gate-private-link-note');
+      expect(note.textContent).toContain('Passphrase gate');
+      expect(note.textContent).toContain('Private links to this page need the passphrase.');
+      expect(screen.getByTestId('manage-gate-clear')).not.toBeNull();
+      expect(screen.queryByTestId('manage-gate-needs-public')).toBeNull();
+    }
+  );
+
+  it('never reveals the stored passphrase: only a write-only input and the cannot-be-shown line', () => {
+    renderEditor('private', { kind: 'passphrase' });
+
+    expect((screen.getByTestId('manage-gate-passphrase-input') as HTMLInputElement).value).toBe('');
+    expect(screen.getByText(/cannot be shown or recovered/i)).not.toBeNull();
+    expect(screen.queryByTestId('manage-gate-passphrase-justset')).toBeNull();
+  });
+
+  it('shows a stored domain gate with its allowed domains and the domain wording', () => {
+    renderEditor('private', { kind: 'domain', allowedDomains: ['acme.com', 'example.org'] });
+
+    expect(screen.getByTestId('manage-gate-private-link-note').textContent).toContain('Email domain gate');
+    expect(screen.getByTestId('manage-gate-private-link-note').textContent).toContain(
+      'Private links to this page need a verified email from an allowed domain.'
+    );
+    expect((screen.getByTestId('manage-gate-domains-input') as HTMLTextAreaElement).value).toBe(
+      'acme.com, example.org'
+    );
+  });
+
+  // checkVisibility runs no stored gate on /p/..., so the note names who still opens the page
+  // itself without one, per visibility, rather than implying the page is gated too.
+  it.each([
+    ['organization', 'Team members who open the page itself, not a private link, are not asked for it.'],
+    ['project', 'Project members who open the page itself, not a private link, are not asked for it.'],
+    ['private', 'The page itself, not a private link, still opens only for you.'],
+  ])('on a %s page, says who opens the page itself without the gate', (visibility, sentence) => {
+    renderEditor(visibility, { kind: 'passphrase' });
+
+    const note = screen.getByTestId('manage-gate-private-link-note').textContent ?? '';
+    expect(note).toContain(sentence);
+    expect(note).not.toMatch(/also need/);
+  });
+
+  it('offers the stored gate types but not "Anyone with the link", which is the Clear action here', () => {
+    renderEditor('private', { kind: 'passphrase' });
+
+    expect(screen.getByTestId('manage-gate-passphrase')).not.toBeNull();
+    expect(screen.getByTestId('manage-gate-domain')).not.toBeNull();
+    expect(screen.queryByTestId('manage-gate-none')).toBeNull();
+  });
+
+  it('asks before clearing, and sends nothing until the owner confirms', async () => {
+    renderEditor('private', { kind: 'passphrase' });
+
+    clickClear();
+
+    expect(screen.getByTestId('confirmation-dialog').textContent).toContain('cannot be recovered');
+    expect(apiPatch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('confirmation-cancel-btn'));
+    expect(screen.queryByTestId('confirmation-dialog')).toBeNull();
+    expect(apiPatch).not.toHaveBeenCalled();
+    expect(screen.getByTestId('manage-gate-private-link-note')).not.toBeNull();
+  });
+
+  it('clears through the same API a public Remove gate uses, tells the parent, and drops back to the hint', async () => {
+    const onGateChange = vi.fn();
+    renderEditor('private', { kind: 'passphrase' }, onGateChange);
+
+    clickClear();
+    confirmClear();
+
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', { accessGate: null }));
+    await waitFor(() => expect(onGateChange).toHaveBeenCalledWith(null));
+    await waitFor(() => expect(screen.getByTestId('manage-gate-needs-public')).not.toBeNull());
+    expect(screen.queryByTestId('manage-gate-clear')).toBeNull();
+    expect(screen.queryByTestId('manage-gate-private-link-note')).toBeNull();
+    expect(screen.queryByTestId('confirmation-dialog')).toBeNull();
+    expect(toast.success).toHaveBeenCalledWith('Gate cleared - private links no longer ask for it');
+  });
+
+  it('lands focus on the hint after a clear, since the Clear button it came from is gone', async () => {
+    renderEditor('private', { kind: 'passphrase' });
+    screen.getByTestId('manage-gate-clear').focus();
+
+    clickClear();
+    confirmClear();
+
+    const hint = await screen.findByTestId('manage-gate-needs-public');
+    await waitFor(() => expect(document.activeElement).toBe(hint));
+    // The owner just read that the gate guarded private links, so the hint must not say gates
+    // only apply to public pages.
+    expect(hint.textContent).toBe('To add a passphrase or domain restriction here, set visibility to Public.');
+  });
+
+  it('says what clearing a domain gate opens up: private links with no sign-in at all', () => {
+    renderEditor('organization', { kind: 'domain', allowedDomains: ['acme.com'] });
+
+    clickClear();
+
+    expect(screen.getByTestId('confirmation-dialog').textContent).toContain(
+      'Anyone with a private link to this page will open it without signing in.'
+    );
+  });
+
+  it('offers no unconfirmed Remove gate when a public "Anyone with the link" draft carries over to a non-public page', () => {
+    apiPatch.mockClear();
+    const ui = (visibility: string) => (
+      <Wrapper>
+        <AccessGateEditor publicId="pub-1" visibility={visibility} initialGate={{ kind: 'passphrase' }} />
+      </Wrapper>
+    );
+    const { rerender } = render(ui('public'));
+    pickGate('none');
+    expect(screen.getByTestId('manage-gate-apply').textContent).toBe('Remove gate');
+
+    rerender(ui('private'));
+
+    expect(screen.queryByTestId('manage-gate-apply')).toBeNull();
+    expect(screen.getByTestId('manage-gate-clear')).not.toBeNull();
+    pickGate('passphrase');
+    expect(screen.getByTestId('manage-gate-apply').textContent).toBe('Apply');
+    expect(apiPatch).not.toHaveBeenCalled();
+  });
+
+  it('keeps the stored gate and the parent untouched when the server refuses the clear', async () => {
+    const onGateChange = vi.fn();
+    renderEditor('private', { kind: 'domain', allowedDomains: ['acme.com'] }, onGateChange);
+    apiPatch.mockRejectedValueOnce(new Error('Network down'));
+
+    clickClear();
+    confirmClear();
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Network down'));
+    expect(onGateChange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('confirmation-dialog')).toBeNull();
+    expect(screen.getByTestId('manage-gate-private-link-note')).not.toBeNull();
+    expect((screen.getByTestId('manage-gate-domains-input') as HTMLTextAreaElement).value).toBe('acme.com');
+  });
+
+  it('lets the owner change a stored gate: a replacement goes through the ordinary apply', async () => {
+    const onGateChange = vi.fn();
+    renderEditor('private', { kind: 'passphrase' }, onGateChange);
+
+    pickGate('domain');
+    fireEvent.change(screen.getByTestId('manage-gate-domains-input'), { target: { value: 'acme.com' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
+        accessGate: { kind: 'domain', allowedDomains: ['acme.com'] },
+      })
+    );
+    await waitFor(() => expect(onGateChange).toHaveBeenCalledWith({ kind: 'domain', allowedDomains: ['acme.com'] }));
+    // Still stored, so the note follows the new kind.
+    expect(screen.getByTestId('manage-gate-private-link-note').textContent).toContain('Email domain gate');
+  });
+
+  it('shows the hint, not an editor or a Clear action, when no gate is stored', () => {
+    renderEditor('private', null);
+
+    expect(screen.getByTestId('manage-gate-needs-public')).not.toBeNull();
+    expect(screen.queryByTestId('manage-gate-clear')).toBeNull();
+    expect(screen.queryByTestId('manage-gate-private-link-note')).toBeNull();
+    expect(screen.queryByTestId('manage-gate-apply')).toBeNull();
+  });
+
+  it('leaves a public page as it was: every option, Remove gate for none, no private-link note or Clear', () => {
+    renderEditor('public', { kind: 'passphrase' });
+
+    expect(screen.getByTestId('manage-gate-none')).not.toBeNull();
+    expect(screen.queryByTestId('manage-gate-private-link-note')).toBeNull();
+    expect(screen.queryByTestId('manage-gate-clear')).toBeNull();
+    expect(screen.queryByTestId('manage-gate-needs-public')).toBeNull();
+
+    pickGate('none');
+    expect(screen.getByTestId('manage-gate-apply').textContent).toBe('Remove gate');
+  });
+
+  it('keeps the public removal toast as it was', async () => {
+    renderEditor('public', { kind: 'passphrase' });
+    pickGate('none');
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Gate removed - open to anyone with the link'));
+  });
+});
+
+describe('AccessGateEditor - helper text contrast', () => {
+  /** Opacity stacks on the text token and drops helper text below AA, including inside the tinted show-once note. */
+  const expectTokenDimmed = (el: HTMLElement) => {
+    const style = getComputedStyle(el);
+    expect(['', '1']).toContain(style.opacity);
+    expect(style.color).toContain('--joy-palette-text-tertiary');
+  };
+
+  it('dims the live-gate passphrase hint with a text token, not opacity', () => {
+    renderEditor('public', { kind: 'passphrase' });
+    expectTokenDimmed(screen.getByText(/A passphrase is set\. It cannot be shown or recovered/));
+  });
+
+  it('dims the show-once note hint with a text token, not opacity', async () => {
+    renderEditor('public');
+    pickGate('passphrase');
+    fireEvent.change(screen.getByTestId('manage-gate-passphrase-input'), { target: { value: 'longenough1' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+    await waitFor(() => expect(screen.getByTestId('manage-gate-passphrase-justset')).not.toBeNull());
+    expectTokenDimmed(screen.getByText(/This will not be shown again/));
   });
 });

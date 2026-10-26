@@ -3,17 +3,30 @@ import { createMocks } from 'node-mocks-http';
 import type { Request, Response } from 'express';
 import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
 
-const { validateUserApiKeyMock, findUserMock, listBlockedMock, revokeSessionsMock, inboxDeleteMock } = vi.hoisted(
-  () => ({
-    inboxDeleteMock: vi.fn(),
-    validateUserApiKeyMock: vi.fn(),
-    findUserMock: vi.fn(),
-    listBlockedMock: vi.fn(),
-    revokeSessionsMock: vi.fn(),
-  })
-);
+const {
+  validateUserApiKeyMock,
+  findUserMock,
+  listBlockedMock,
+  revokeSessionsMock,
+  inboxDeleteMock,
+  markAsReadMock,
+  tagUpdateMock,
+  toggleTagsMock,
+  createFabFileMock,
+} = vi.hoisted(() => ({
+  inboxDeleteMock: vi.fn(),
+  markAsReadMock: vi.fn(),
+  tagUpdateMock: vi.fn(),
+  toggleTagsMock: vi.fn(),
+  createFabFileMock: vi.fn(),
+  validateUserApiKeyMock: vi.fn(),
+  findUserMock: vi.fn(),
+  listBlockedMock: vi.fn(),
+  revokeSessionsMock: vi.fn(),
+}));
 
 type Handler = (req: Request, res: Response) => unknown;
+type Middleware = (req: Request, res: Response, next: () => void) => unknown;
 
 // Stands in for baseApi with only the API-key step of its auth chain, run for real.
 vi.mock('@server/middlewares/baseApi', async () => {
@@ -21,10 +34,18 @@ vi.mock('@server/middlewares/baseApi', async () => {
   return {
     baseApi: (options: { requiredScopes?: ApiKeyScope[] } = {}) => {
       const handlers: Record<string, Handler> = {};
+      const middlewares: Middleware[] = [];
       const router = async (req: Request, res: Response) => {
         await apiKeyAuth(options.requiredScopes)(req, res, () => undefined);
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
         return handlers[req.method.toLowerCase()](req, res);
       };
+      Object.assign(router, {
+        use: (fn: Middleware) => {
+          middlewares.push(fn);
+          return router;
+        },
+      });
       for (const method of ['get', 'post', 'put', 'delete']) {
         Object.assign(router, {
           [method]: (fn: Handler) => {
@@ -44,13 +65,25 @@ vi.mock('@bike4mind/services', async importOriginal => {
     ...actual,
     userApiKeyService: { validateUserApiKey: validateUserApiKeyMock },
     userService: { ...actual.userService, adminRevokeUserSessions: revokeSessionsMock },
+    tagService: { update: tagUpdateMock },
+    fabFilesService: { toggleTags: toggleTagsMock, createFabFile: createFabFileMock },
+    dataLakeService: { ...actual.dataLakeService, assertCanWriteDataLakeTags: vi.fn().mockResolvedValue(undefined) },
   };
 });
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({
   User: { findById: findUserMock },
   blockedIPRepository: { list: listBlockedMock },
-  userRepository: { findById: vi.fn().mockResolvedValue(null) },
+  userRepository: { findById: (...args: unknown[]) => findUserMock(...args) },
+  FabFile: {},
+  fileTagRepository: {},
+  fabFileRepository: {},
+  dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
+  adminSettingsRepository: {},
+  scopedSettingsRepository: {},
+  organizationRepository: {},
+  memoryLedgerRepository: {},
   authSessionRepository: {},
   trustedDeviceRepository: { revokeAllForUser: vi.fn().mockResolvedValue(0) },
   realtimeConnectionRepository: {},
@@ -58,10 +91,29 @@ vi.mock('@bike4mind/database', () => ({
   inboxRepository: {
     findById: vi.fn().mockResolvedValue({ id: 'inbox-1', receiverId: 'someone-else' }),
     deleteByReceiverId: inboxDeleteMock,
+    markAsRead: markAsReadMock,
   },
-  withTransaction: vi.fn(),
+  withTransaction: async (fn: () => unknown) => fn(),
 }));
-vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
+vi.mock('@server/auth/ability', () => ({ default: () => ({ can: () => true }) }));
+vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
+vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: vi.fn().mockResolvedValue({ administeredOrgIds: [] }),
+}));
+vi.mock('@bike4mind/server-utils/utils/generatedImageAccess', () => ({
+  userCanAccessGeneratedImage: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getGeneratedImageStorage: () => ({
+    download: vi.fn().mockResolvedValue(Buffer.from('img')),
+    getMetadata: vi.fn().mockResolvedValue({ contentType: 'image/png' }),
+  }),
+  getFilesStorage: () => ({}),
+}));
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: vi.fn().mockResolvedValue(undefined) },
@@ -80,6 +132,10 @@ import blockedIps from '../security/blocked-ips';
 import revokeSessions from '../users/[id]/revoke-sessions';
 import forceMfaReset from '../auth/mfa/force-reset';
 import deleteInboxItem from '../inbox/[id]/delete';
+import tagById from '../files/tags/[id]';
+import toggleTags from '../files/tags/toggle';
+import copyGeneratedImage from '../files/copy-generated-image';
+import markInboxRead from '../inbox/read';
 
 const KEY = 'b4m_live_0123456789abcdef0123456789abcdef';
 
@@ -93,11 +149,17 @@ function keyWith(scopes: ApiKeyScope[]) {
   });
 }
 
-async function call(handler: unknown, method: 'GET' | 'POST' | 'DELETE', auth: 'key' | 'session') {
+async function call(
+  handler: unknown,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  auth: 'key' | 'session',
+  body?: Record<string, unknown>
+) {
   const { req, res } = createMocks({
     method,
     url: '/api/test',
     query: { id: 'target-1' },
+    body,
     headers: auth === 'key' ? { 'x-api-key': KEY } : {},
   });
   Object.assign(req, { logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
@@ -113,7 +175,9 @@ const routes = [
 
 beforeEach(() => {
   vi.clearAllMocks();
-  findUserMock.mockResolvedValue({ id: 'admin-1', isBanned: false, isAdmin: true });
+  // A fresh document per read, as a real lookup returns, so the owner re-read is not the already-withheld one.
+  findUserMock.mockImplementation(async () => ({ id: 'admin-1', isBanned: false, isAdmin: true }));
+  createFabFileMock.mockResolvedValue({ id: 'file-1' });
   listBlockedMock.mockResolvedValue([]);
   revokeSessionsMock.mockResolvedValue(2);
 });
@@ -155,5 +219,64 @@ describe('inbox/[id]/delete on an item addressed to another user', () => {
     keyWith([ApiKeyScope.ADMIN]);
     expect((await call(deleteInboxItem, 'DELETE', 'key'))._getStatusCode()).toBe(200);
     expect(inboxDeleteMock).toHaveBeenCalledWith('someone-else', 'target-1');
+  });
+
+  it('serves a signed-in admin session', async () => {
+    expect((await call(deleteInboxItem, 'DELETE', 'session'))._getStatusCode()).toBe(200);
+    expect(inboxDeleteMock).toHaveBeenCalledWith('someone-else', 'target-1');
+    expect(validateUserApiKeyMock).not.toHaveBeenCalled();
+  });
+});
+
+type ServiceOptions = { db: { users: { findById: (id: string) => Promise<{ isAdmin?: boolean } | null> } } };
+const ownerRoleSeenBy = async (mock: typeof tagUpdateMock) =>
+  (await (mock.mock.calls[0][2] as ServiceOptions).db.users.findById('admin-1'))?.isAdmin;
+
+describe.each([
+  {
+    name: 'files/tags/[id]',
+    scopes: [ApiKeyScope.WRITE_FILES],
+    run: () => call(tagById, 'PUT', 'key', { name: 'renamed' }),
+    seen: () => ownerRoleSeenBy(tagUpdateMock),
+  },
+  {
+    name: 'files/tags/toggle',
+    scopes: [ApiKeyScope.WRITE_FILES],
+    run: () => call(toggleTags, 'POST', 'key', { tags: [], fileIds: ['f1'] }),
+    seen: () => ownerRoleSeenBy(toggleTagsMock),
+  },
+  {
+    name: 'files/copy-generated-image',
+    scopes: [ApiKeyScope.WRITE_FILES],
+    run: () => call(copyGeneratedImage, 'POST', 'key', { imageS3Key: 'img/1.png' }),
+    seen: () => ownerRoleSeenBy(createFabFileMock),
+  },
+])('$name service reads of the key owner', ({ scopes, run, seen }) => {
+  it('see no admin role for a key without the admin scope', async () => {
+    keyWith(scopes);
+    await run();
+    expect(await seen()).toBe(false);
+  });
+
+  it('see the stored admin role for a key holding the admin scope', async () => {
+    keyWith([...scopes, ApiKeyScope.ADMIN]);
+    await run();
+    expect(await seen()).toBe(true);
+  });
+});
+
+describe('inbox/read', () => {
+  const ids = { ids: ['m1'] };
+
+  it("marks read only the key owner's own messages for a key without the admin scope", async () => {
+    keyWith([ApiKeyScope.AI_CHAT]);
+    expect((await call(markInboxRead, 'POST', 'key', ids))._getStatusCode()).toBe(200);
+    expect(markAsReadMock).toHaveBeenCalledWith(['m1'], 'admin-1');
+  });
+
+  it("marks any receiver's messages for a key holding the admin scope", async () => {
+    keyWith([ApiKeyScope.ADMIN]);
+    await call(markInboxRead, 'POST', 'key', ids);
+    expect(markAsReadMock).toHaveBeenCalledWith(['m1'], undefined);
   });
 });

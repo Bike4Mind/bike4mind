@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { backendForAdapterFamily } from './adapterFamilyDispatch';
-import { AnthropicBackend } from './anthropicBackend';
+import { ANTHROPIC_FEDERATED_KEY, AnthropicBackend } from './anthropicBackend';
 import { AWSBackend } from './awsBackend';
 import { ICompletionBackend } from './backend';
 import { isBackendUsable, resolveListingKey } from './backendGate';
@@ -19,6 +19,7 @@ import type { ApiKeyTable, BackendGateContext } from './backendGate';
 import { catalogLifecycles } from './deprecationHorizon';
 import { toProviderEndUserId } from './endUserId';
 import { mergeCatalog } from './mergeCatalog';
+import { federatedSharedKeyProviders, resolveProviderCredential } from './providerAuth';
 import { alignRouteTwinNames } from './routeTwinNames';
 import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
@@ -35,7 +36,7 @@ import { GeminiBackend } from './geminiBackend';
 import { KimiBackend } from './kimiBackend';
 import { LocalImageBackend } from './localImageBackend';
 import { OllamaBackend } from './ollamaBackend';
-import { OpenAIBackend } from './openaiBackend';
+import { OPENAI_FEDERATED_KEY, OpenAIBackend } from './openaiBackend';
 import { XAIBackend } from './xaiBackend';
 
 export function getLlmByModel(
@@ -102,7 +103,16 @@ export function getLlmByModel(
   switch (modelInfo.backend) {
     case 'openai':
       if (apiKeyTable.openai === 'expired') throw new Error('OpenAI API key is expired');
-      backend = apiKeyTable.openai ? new OpenAIBackend(apiKeyTable.openai, logger, providerEndUserId) : null;
+      backend = apiKeyTable.openai
+        ? new OpenAIBackend(
+            resolveProviderCredential(
+              federatedSharedKeyProviders(apiKeyTable)?.openai ? OPENAI_FEDERATED_KEY : apiKeyTable.openai,
+              OPENAI_FEDERATED_KEY
+            ),
+            logger,
+            providerEndUserId
+          )
+        : null;
       break;
     case 'bedrock':
       switch (modelInfo.id) {
@@ -158,7 +168,16 @@ export function getLlmByModel(
       break;
     case 'anthropic':
       if (apiKeyTable.anthropic === 'expired') throw new Error('Anthropic API key is expired');
-      backend = apiKeyTable.anthropic ? new AnthropicBackend(apiKeyTable.anthropic, logger, providerEndUserId) : null;
+      backend = apiKeyTable.anthropic
+        ? new AnthropicBackend(
+            resolveProviderCredential(
+              federatedSharedKeyProviders(apiKeyTable)?.anthropic ? ANTHROPIC_FEDERATED_KEY : apiKeyTable.anthropic,
+              ANTHROPIC_FEDERATED_KEY
+            ),
+            logger,
+            providerEndUserId
+          )
+        : null;
       break;
     case 'gemini':
       if (apiKeyTable.gemini === 'expired') throw new Error('Gemini API key is expired');
@@ -263,6 +282,11 @@ export function setModelCatalogProvider(provider: ModelCatalogProvider | null): 
   _modelCache = null;
 }
 
+/** Whether a catalog provider is wired on THIS module instance; see esmWorkspacePackages.mjs in apps/client. */
+export function hasModelCatalogProvider(): boolean {
+  return _catalogProvider !== null;
+}
+
 /**
  * Backends whose credential is a base URL (the cache key hashes it, since two hosts serve different
  * lists) and whose models exist only in the live listing, so a failed listing hides ids no catalog knows.
@@ -299,6 +323,11 @@ function getModelCacheKey(
     .sort()
     .map(k => {
       const value = apiKeys[k as keyof ApiKeyTable];
+      if (typeof value === 'symbol') {
+        if (k === ModelBackend.OpenAI && value === OPENAI_FEDERATED_KEY) return `${k}:federated-symbol`;
+        if (k === ModelBackend.Anthropic && value === ANTHROPIC_FEDERATED_KEY) return `${k}:federated-symbol`;
+        throw new TypeError('Unrecognized federated provider credential');
+      }
       if (value && RUNTIME_DISCOVERED_BACKENDS.includes(k as ModelBackend)) return `${k}:#${hashKeyValue(value)}`;
       return `${k}:${value ? '1' : '0'}`;
     })
@@ -423,8 +452,12 @@ export const getAvailableModels = async (
   const localImageBaseUrl = resolveListingKey(ModelBackend.LocalImage, gateCtx);
 
   const backends = {
-    [ModelBackend.OpenAI]: openaiKey ? new OpenAIBackend(openaiKey) : null,
-    [ModelBackend.Anthropic]: anthropicKey ? new AnthropicBackend(anthropicKey) : null,
+    [ModelBackend.OpenAI]: openaiKey
+      ? new OpenAIBackend(resolveProviderCredential(openaiKey, OPENAI_FEDERATED_KEY))
+      : null,
+    [ModelBackend.Anthropic]: anthropicKey
+      ? new AnthropicBackend(resolveProviderCredential(anthropicKey, ANTHROPIC_FEDERATED_KEY))
+      : null,
     // The keyless AWS-credentialed pair goes through isBackendUsable so the
     // self-host rules (Bedrock needs BEDROCK_AWS_*, AWS is hosted-only) are stated
     // once, in the same predicate the catalog tier reads, instead of once here and once in /api/models.
@@ -573,7 +606,9 @@ export * from './dispatchModel';
 export * from './dispatchResolver';
 export * from './endUserId';
 export * from './mergeCatalog';
+export * from './providerAuth';
 export * from './routeTwinNames';
+export * from './wifTokenSource';
 
 // Implementations:
 export * from './anthropicBackend';

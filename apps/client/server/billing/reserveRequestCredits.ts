@@ -13,6 +13,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 
 import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 export { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
 export type { CreditLedgerEntry };
@@ -103,6 +104,8 @@ export async function reserveRequestCredits({
   holdTtlMs = CREDIT_HOLD_TTL_MS,
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
+  // Before the enforceCredits short-circuit: a moderated user is refused with credits on or off.
+  assertAiAccessAllowed(req.user);
   const userId = req.user.id;
   const billingOrganizationId = resolveRequestBillingOrgId(req, explicitBillingOrgId);
   const ownerId = billingOrganizationId ?? userId;

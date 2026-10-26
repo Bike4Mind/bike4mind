@@ -23,7 +23,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(
 
     let enhancedText: string;
     try {
-      enhancedText = await refineTextRequest(params, { logger: req.logger });
+      enhancedText = await refineTextRequest(params, { logger: req.logger, user: req.user });
     } catch (error) {
       // v1 maps the wrapper to 502; this route must keep the behaviour it had before the wrapper
       // existed, where the provider's own error reached errorHandler and its numeric `status`

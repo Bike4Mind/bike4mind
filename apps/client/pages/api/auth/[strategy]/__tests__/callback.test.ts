@@ -50,6 +50,11 @@ vi.mock('@server/analytics/funnel', () => ({
   emitSignupFunnelEvents: (...a: any[]) => mockEmitSignupFunnelEvents(...a),
 }));
 
+const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: (...a: any[]) => mockRecordSignupNetwork(...a),
+}));
+
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
@@ -254,6 +259,14 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     );
   });
 
+  it("stamps a new account's signup network with the provider as the method", async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockRecordSignupNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-new', method: 'github' })
+    );
+  });
+
   it('keeps a synthetic new account out of the signup emit and the ad conversion fragment', async () => {
     mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: true });
     const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
@@ -271,6 +284,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
     expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
+    expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
   });
 
   // The REGISTER log and the emit are separate statements; folding the emit into the log's

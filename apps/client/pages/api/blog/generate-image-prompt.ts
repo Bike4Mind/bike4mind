@@ -5,6 +5,7 @@ import { getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 interface GenerateImagePromptParams {
   content: string;
@@ -105,6 +106,7 @@ Generate a detailed image prompt for a featured blog image that captures the ess
 }
 
 const handler = baseApi().post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   try {
     const params = req.body as GenerateImagePromptParams;
 

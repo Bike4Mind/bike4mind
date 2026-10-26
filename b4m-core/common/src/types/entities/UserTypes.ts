@@ -29,6 +29,27 @@ export interface ISystemFileEntry {
   enabled: boolean;
 }
 
+/**
+ * Network facts about the request that created or signed in to an account, read server-side
+ * (apps/client server/auth/networkMeta.ts). Every field is null when unknown: a failed or missing
+ * lookup never blocks auth.
+ */
+export interface INetworkMeta {
+  ip: string | null;
+  userAgent: string | null;
+  asn: number | null;
+  /** Operator name, known only for ASNs on the bundled hosting-provider list. */
+  asnOrg: string | null;
+  /** ISO 3166-1 alpha-2. */
+  country: string | null;
+  /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
+  isDatacenter: boolean | null;
+}
+
+export interface ISignupMeta extends INetworkMeta {
+  capturedAt: Date;
+}
+
 export interface ILoginRecord {
   loginTime: Date;
   logoutTime?: Date; // Optional, in case the user doesn't explicitly logout
@@ -182,7 +203,7 @@ export type ModerationHitSource = 'openai' | 'bedrock';
  * - `active`: no action; normal usage.
  * - `throttled`: auto-applied on repeat hits; a tighter rate limit is enforced until `throttledUntil`.
  * - `suspend_pending`: threshold for suspension reached - flagged for a human to confirm. NOT auto-blocking.
- * - `suspended`: human-confirmed suspension; chat/generation is blocked (mirrored to `isModerated`).
+ * - `suspended`: human-confirmed suspension; the account is blocked at sign-in.
  */
 export type UserModerationStatus = 'active' | 'throttled' | 'suspend_pending' | 'suspended';
 
@@ -240,7 +261,11 @@ export interface IUser extends ICreditHolder {
   hasUsablePassword?: boolean;
   groups: Array<string> | null;
   isAdmin: boolean;
-  storageLimit: number /** Storage limit in MBs */;
+  storageLimit: number /** Effective storage limit in decimal MB */;
+  /** Manual or custom signup allocation; null means use plan/default. */
+  storageLimitOverride?: number | null;
+  /** Plan allocation in decimal MB, separate from the manual override. */
+  planStorageLimit?: number | null;
   currentStorageSize: number /** Current storage size in Bytes */;
   tags: Array<string> | null;
   /**
@@ -255,10 +280,12 @@ export interface IUser extends ICreditHolder {
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;
+  /** Admin override that trusts the account for personal API keys (userApiKeyService/trust.ts). Absent on legacy docs. */
+  apiKeyTrustApproved?: boolean;
   /**
    * Per-user moderation tracking + auto-throttle/suspend state.
-   * Absent until the user's first moderation hit. `moderation.status === 'suspended'`
-   * is mirrored to `isModerated` for legacy admin surfaces.
+   * Absent until the user's first moderation hit. Independent of `isModerated`, the admin's
+   * AI-only block.
    */
   moderation?: IUserModeration;
   /**
@@ -630,6 +657,9 @@ export interface IUser extends ICreditHolder {
    */
   acquisition?: IUserAcquisition | null;
 
+  /** Network metadata of the signup request, written once at account creation. Admin-only PII. */
+  signupMeta?: ISignupMeta | null;
+
   /**
    * A test persona or test-domain account, decided at signup. Funnel analytics skip or tag these so
    * synthetic traffic never reaches conversion metrics.
@@ -798,8 +828,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    */
   recordModerationHit: (userId: string, hit: IModerationHit) => Promise<IUserDocument | null>;
   /**
-   * Transition a user's moderation escalation state. Mirrors `isModerated` when
-   * moving to/from `suspended`. Returns the updated user.
+   * Transition a user's moderation escalation state. Leaves `isModerated` alone. Returns the
+   * updated user.
    */
   setModerationStatus: (
     userId: string,

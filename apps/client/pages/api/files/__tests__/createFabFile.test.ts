@@ -580,6 +580,12 @@ describe('POST /api/files/createFabFile - release-notes:write key', () => {
     expect(json.mock.calls[0][0]).toHaveProperty('mediaUrl');
   });
 
+  it("uploads What's New media for a key whose admin owner has the role withheld", async () => {
+    const { res } = makeRes();
+    await run(mp4(), res, { ...releaseKey, user: withholdAdminRole({ id: 'u1', isAdmin: true }) });
+    expect(h.fabFileCreate).toHaveBeenCalled();
+  });
+
   it.each([
     ['without a purpose', body(), { user: { id: 'u1', isAdmin: true } }],
     ['for a non-admin user', mp4(), { user: { id: 'u1', isAdmin: false } }],

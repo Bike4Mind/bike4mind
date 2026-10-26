@@ -57,6 +57,7 @@ export const JWT_SECURITY_REQUIREMENT: Array<Record<string, string[]>> = [{ jwtA
  * enum - the single source of truth for what a key may do. Published in
  * `info.description` so consumers see the real grant vocabulary (e.g. `ai:chat`),
  * not an aspirational one. If the enum changes, this list changes with it.
+ * Built-in scopes only: scopes an overlay contributes are left out of the published spec.
  */
 export const ALL_API_KEY_SCOPES: string[] = Object.values(ApiKeyScope);
 

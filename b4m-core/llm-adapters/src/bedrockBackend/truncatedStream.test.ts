@@ -18,8 +18,8 @@ import MoonshotBedrockBackend from './moonshot';
  * half-finished answer was delivered as a complete one - no error, no retry, nothing greppable.
  *
  * The signal is the adapter's terminal event (`done`), which base.ts previously discarded.
- * stopReason cannot be used: it is absent on healthy turns for every adapter except deepseek and
- * moonshot, so keying on it would throw on healthy Claude traffic.
+ * stopReason cannot replace the terminal event: message_delta carries Claude's stop reason
+ * before message_stop, so a stream ending between them must still trigger the guard.
  *
  * @see BaseBedrockBackend.signalsStreamTermination
  */

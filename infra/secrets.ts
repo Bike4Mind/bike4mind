@@ -39,6 +39,8 @@ export const secrets = {
   // Anthropic Admin API key for billing/spend reconciliation (cost_report endpoint).
   // Requires an admin-scoped key from console.anthropic.com.
   ANTHROPIC_ADMIN_API_KEY: new sst.Secret('ANTHROPIC_ADMIN_API_KEY', 'not-configured'),
+  // Cloudflare Turnstile secret key; the check stays off until a real value is set.
+  TURNSTILE_SECRET_KEY: new sst.Secret('TURNSTILE_SECRET_KEY', 'not-configured'),
   GEMINI_API_KEY: new sst.Secret('GEMINI_API_KEY', 'not-configured'),
   // Deployment-level provider keys for model discovery (spec 5.7). Discovery has
   // no user, so its only other source is the admin demo-key tier, which exists
@@ -117,11 +119,6 @@ export const secrets = {
   // Secret for Active Defense (in-product attack simulation) ingest endpoint.
   // Set per stage: sst secret set SECOPS_ATTACK_SIMULATION_INGEST_TOKEN <value> --stage <stage>
   SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: new sst.Secret('SECOPS_ATTACK_SIMULATION_INGEST_TOKEN', 'not-configured'),
-  // What's New distribution URL for fork/staging environments to sync modals from production
-  // Only set this for non-production environments (dev, staging, forks)
-  // Production generates modals and doesn't need this
-  // Preview environments use placeholder - runtime checks for valid https:// URL
-  WHATS_NEW_DISTRIBUTION_URL: new sst.Secret('WHATS_NEW_DISTRIBUTION_URL', 'not-configured'),
   // Identifies main/source deployments (bike4mind staging + production)
   // Set to 'true' on main staging (dev stage) and main production to enable source-only features
   // Fork deployments should NOT have this set (defaults to 'false')

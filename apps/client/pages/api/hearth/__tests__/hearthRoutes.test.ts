@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import { ZodError } from 'zod';
-import { ForbiddenError, NotFoundError } from '@bike4mind/common';
+import { ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 const {
   getOwnedChannelMock,
@@ -227,6 +227,19 @@ describe('POST /api/hearth/events', () => {
     expect(ensureChannelByNameMock).toHaveBeenCalledWith('u1', 'agents');
     expect(getOwnedChannelMock).not.toHaveBeenCalled();
     expect(hearthLogAppendMock).toHaveBeenCalledWith(expect.objectContaining({ channelId: 'ch-default' }));
+  });
+
+  it('surfaces a channel-cap refusal and appends nothing', async () => {
+    // The repository owns the ceiling; the route only has to let the 409 through
+    // without writing an event for a channel that was never created.
+    ensureChannelByNameMock.mockRejectedValue(
+      new ConflictError('You can have at most 100 Hearth channels', { code: 'channel_limit', limit: 100 })
+    );
+
+    await expect(post()(makeReq({ channelName: 'brand-new', human: { text: 'hi' } }), makeRes())).rejects.toMatchObject(
+      { statusCode: 409 }
+    );
+    expect(hearthLogAppendMock).not.toHaveBeenCalled();
   });
 
   it('channelId keeps its ownership check and is mutually exclusive with channelName', async () => {

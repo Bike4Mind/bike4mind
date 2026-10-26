@@ -5,6 +5,7 @@ import { cacheService } from '@bike4mind/services';
 import { refineText } from '@bike4mind/services/llm/refineText';
 import { OperationsModelService, OperationsModelUnavailableError } from '@client/services/operationsModelService';
 import { CacheKeys } from '@server/utils/cacheKeys';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 // Identical (text, context) refinements are common (users re-clicking refine),
 // and every miss is a paid operations-model call - cache briefly.
@@ -36,13 +37,15 @@ export class RefineFailedError extends Error {
  * Cached operations-model refinement shared by POST /api/ai/refineText and POST /api/v1/text-refinements.
  * Throws RefineProviderUnavailableError when the deployment has no operations text model, and
  * RefineFailedError when the model call fails or its output is empty (an empty refinement must not
- * be cached). Anything else - cache/DB faults, a resolver failure - propagates as itself.
+ * be cached). Anything else - cache/DB faults, a resolver failure - propagates as itself. A moderated
+ * `user` is refused before the cache, so a cached answer is never served to them either.
  */
 export const refineTextRequest = async (
   { text, context }: { text: string; context?: string },
-  { logger }: { logger: Logger }
-): Promise<string> =>
-  cacheService.getCachedData(
+  { logger, user }: { logger: Logger; user: Parameters<typeof assertAiAccessAllowed>[0] }
+): Promise<string> => {
+  assertAiAccessAllowed(user);
+  return cacheService.getCachedData(
     CacheKeys.refineText(text, context),
     async () => {
       let operationsModel;
@@ -95,3 +98,4 @@ export const refineTextRequest = async (
       logger,
     }
   );
+};

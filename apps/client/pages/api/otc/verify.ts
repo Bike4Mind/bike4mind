@@ -43,6 +43,7 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
+import { recordLoginEvent, recordSignupNetwork } from '@server/auth/networkMeta';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -277,6 +278,7 @@ const handler = baseApi({ auth: false })
         }
       );
       setRefreshCookie(res, refreshToken);
+      await recordLoginEvent({ req, userId: existingUser.id, method: 'otc' });
       const tokens = { accessToken };
       const ip = getClientIp(req);
 
@@ -480,6 +482,7 @@ const handler = baseApi({ auth: false })
       type: AuthEvents.REGISTER,
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
+    await recordSignupNetwork({ req, userId: newUser.id, method: 'otc' });
     // Funnel floor (server/analytics/funnel.ts): keep the consented touches on the user so later
     // stages stay joinable to the door, then report the stages OTC completes in one step - the
     // code proved the email, and registerViaOTC plus the domain grant above seeded the credits.
@@ -517,6 +520,7 @@ const handler = baseApi({ auth: false })
       }
     );
     setRefreshCookie(res, registrationSession.refreshToken);
+    await recordLoginEvent({ req, userId: newUser.id, method: 'otc-registration' });
     return respond(res, otcRegistrationResponseSchema, {
       user: redactUserSecretsForSelf(newUser),
       accessToken: registrationSession.accessToken,

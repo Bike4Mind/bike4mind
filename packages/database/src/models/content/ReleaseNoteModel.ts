@@ -41,6 +41,16 @@ const ReleaseNoteSchema = new Schema(
       ),
       default: null,
     },
+    image: {
+      type: new Schema(
+        {
+          landscapeUrl: { type: String, default: null },
+          portraitUrl: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
     schemaVersion: { type: Number, required: true },
   },
   {
@@ -59,7 +69,7 @@ export const ReleaseNote =
   (mongoose.models.ReleaseNote as mongoose.Model<IReleaseNoteDocument>) ||
   model<IReleaseNoteDocument>('ReleaseNote', ReleaseNoteSchema);
 
-export type GeneratedReleaseNote = Omit<ReleaseNoteData, 'editedAt' | 'video'>;
+export type GeneratedReleaseNote = Omit<ReleaseNoteData, 'editedAt' | 'video' | 'image'>;
 
 /** Decoded keyset cursor: the last row of the previous page. */
 export interface ReleaseNoteKeyset {
@@ -78,7 +88,7 @@ export type ReleaseNoteAdminStatus = 'scheduled' | 'hidden' | 'published';
 export type ReleaseNoteMutationResult =
   { kind: 'ok'; note: IReleaseNoteDocument } | { kind: 'notFound' } | { kind: 'emptyItems' };
 
-export type ReleaseNoteEdit = Partial<Pick<ReleaseNoteData, 'headline' | 'summary' | 'items' | 'video'>>;
+export type ReleaseNoteEdit = Partial<Pick<ReleaseNoteData, 'headline' | 'summary' | 'items' | 'video' | 'image'>>;
 
 const PAGE_SORT = { publishAt: -1, _id: -1 } as const;
 
@@ -186,6 +196,16 @@ export class ReleaseNoteRepository extends BaseRepository<IReleaseNoteDocument> 
     const note = await this.model.findOneAndUpdate(
       { _id: id },
       { $set: { video } },
+      { new: true, runValidators: true }
+    );
+    return note ? { kind: 'ok', note } : { kind: 'notFound' };
+  }
+
+  /** Sets only the image and leaves editedAt alone, for the same reason as attachVideo. */
+  async attachImage(id: string, image: ReleaseNoteData['image']): Promise<ReleaseNoteMutationResult> {
+    const note = await this.model.findOneAndUpdate(
+      { _id: id },
+      { $set: { image } },
       { new: true, runValidators: true }
     );
     return note ? { kind: 'ok', note } : { kind: 'notFound' };

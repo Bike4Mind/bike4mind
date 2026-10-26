@@ -29,6 +29,10 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+// Trust is not under test here; pass the key's own rate limit through.
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+}));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();

@@ -176,6 +176,7 @@ export {
   MAX_DRIVE_DELTA_PER_WAKE,
   noopRunAct,
   resolveToolbeltProfile,
+  registerToolbelts,
   TOOLBELT_PROFILES,
   DEFAULT_TOOLBELT_ROLE,
   // Framework prompt building blocks (render helpers + act-step prompts). The
@@ -196,6 +197,10 @@ export {
   buildReferenceOrientPrompt,
   buildReferenceReflectPrompt,
   buildReferenceGroomPrompt,
+  // Agent-extension registry: contributed surface profiles + tool-map guards.
+  createAgentExtensionRegistry,
+  CONTRIBUTED_GUARD_PRIORITY_MIN,
+  CONTRIBUTED_GUARD_PRIORITY_MAX,
 } from './deepAgent/runtime';
 export type {
   DeepAgentStore,
@@ -214,6 +219,16 @@ export type {
   ReActRunActConfig,
   LinkedAgentContext,
   BackendWakeStepsConfig,
+  AgentExtensionContribution,
+  AgentExtensionListing,
+  AgentExtensionLogger,
+  AgentExtensionRegistry,
+  AgentExtensionSource,
+  ResolvedOrchestrationProfile,
+  SurfaceProfileContext,
+  SurfaceProfileEntry,
+  ToolMapGuardContext,
+  ToolMapGuardEntry,
 } from './deepAgent/runtime';
 
 // -- Persistent REPL substrate (RLM pattern) --
