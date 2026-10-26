@@ -793,6 +793,7 @@ describe('/api/otc/verify - new accounts per email domain', () => {
     vi.clearAllMocks();
     mockTryIncrement.mockImplementation(async key => (key === domainKey ? spent : granted));
     mockValidateNonce.mockResolvedValue('hash');
+    mockVerifyPendingOTC.mockResolvedValue(true);
     mockFindByEmail.mockResolvedValue(null);
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
     mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
