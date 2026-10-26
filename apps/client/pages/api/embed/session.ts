@@ -62,7 +62,7 @@ const handler = baseApi({ auth: false })
     // Defense-in-depth: a browser Origin must be on the key's allow-list; a
     // non-browser caller (no Origin) is gated by the key alone. Our own serving
     // origin is implicitly permitted (see firstPartyOrigin.ts).
-    if (!resolveEmbedOriginDecision(headers.origin, info.allowedOrigins, headers.host).allowed) {
+    if (!resolveEmbedOriginDecision(headers.origin, info.allowedOrigins, headers.host)) {
       return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
     }
 

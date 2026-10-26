@@ -56,7 +56,7 @@ async function resolveIdentifiedSession(
   }
   const { claims, info } = resolved;
 
-  if (!resolveEmbedOriginDecision(headers.origin, info.allowedOrigins, headers.host).allowed) {
+  if (!resolveEmbedOriginDecision(headers.origin, info.allowedOrigins, headers.host)) {
     return { status: 403, body: { error: 'forbidden', error_description: 'Origin not allowed for this embed key' } };
   }
 

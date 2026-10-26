@@ -48,25 +48,21 @@ describe('resolveEmbedOriginDecision', () => {
   const allowed = ['https://host.example.com'];
 
   it('allows a request with no Origin header', () => {
-    expect(resolveEmbedOriginDecision(undefined, allowed, 'app.example.com')).toEqual({ allowed: true });
+    expect(resolveEmbedOriginDecision(undefined, allowed, 'app.example.com')).toBe(true);
   });
 
   it('denies an opaque origin when the key restricts origins', () => {
-    expect(resolveEmbedOriginDecision('null', allowed, 'app.example.com')).toEqual({ allowed: false });
+    expect(resolveEmbedOriginDecision('null', allowed, 'app.example.com')).toBe(false);
   });
 
   it('keeps allowing an opaque origin when the key lists no origins', () => {
-    expect(resolveEmbedOriginDecision('null', [], 'app.example.com')).toEqual({ allowed: true });
-    expect(resolveEmbedOriginDecision('null', undefined, 'app.example.com')).toEqual({ allowed: true });
+    expect(resolveEmbedOriginDecision('null', [], 'app.example.com')).toBe(true);
+    expect(resolveEmbedOriginDecision('null', undefined, 'app.example.com')).toBe(true);
   });
 
   it('applies the allow-list and first-party rules to any other origin', () => {
-    expect(resolveEmbedOriginDecision('https://host.example.com', allowed, 'app.example.com')).toEqual({
-      allowed: true,
-    });
-    expect(resolveEmbedOriginDecision('https://other.example.com', allowed, 'app.example.com')).toEqual({
-      allowed: false,
-    });
-    expect(resolveEmbedOriginDecision('http://localhost:3000', allowed, 'localhost:3000')).toEqual({ allowed: true });
+    expect(resolveEmbedOriginDecision('https://host.example.com', allowed, 'app.example.com')).toBe(true);
+    expect(resolveEmbedOriginDecision('https://other.example.com', allowed, 'app.example.com')).toBe(false);
+    expect(resolveEmbedOriginDecision('http://localhost:3000', allowed, 'localhost:3000')).toBe(true);
   });
 });

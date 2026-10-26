@@ -54,20 +54,15 @@ export function isEmbedOriginAllowed(
 }
 
 /**
- * Single origin decision for every embed gate (session, history, chat). An absent
- * Origin is a non-browser caller and is left to the credential. The opaque literal
- * `null` is denied when the key restricts origins, and otherwise treated as absent.
- * Any other Origin goes through isEmbedOriginAllowed.
- * `null` is not treated as absent: a browser cannot omit Origin, so the
- * server-to-server argument does not cover it, and allowing it would let any
- * page use a restricted key.
+ * Absent Origin = non-browser caller, the credential decides. Opaque `null` passes only on keys
+ * with no allow-list (a browser cannot omit Origin, so `null` is not a server-to-server signal).
  */
 export function resolveEmbedOriginDecision(
   rawOrigin: string | undefined,
   allowedOrigins: string[] | undefined,
   requestHost: string | undefined
-): { allowed: boolean } {
-  if (!rawOrigin) return { allowed: true };
-  if (rawOrigin === 'null') return { allowed: !allowedOrigins?.length };
-  return { allowed: isEmbedOriginAllowed(rawOrigin, allowedOrigins, requestHost) };
+): boolean {
+  if (!rawOrigin) return true;
+  if (rawOrigin === 'null') return !allowedOrigins?.length;
+  return isEmbedOriginAllowed(rawOrigin, allowedOrigins, requestHost);
 }

@@ -428,8 +428,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // Origin gate (defense-in-depth for browsers; the credential is the boundary).
-      // Shared with the mint and history gates via resolveEmbedOriginDecision.
-      if (!resolveEmbedOriginDecision(headers.origin, ctx.allowedOrigins, headers.host).allowed) {
+      if (!resolveEmbedOriginDecision(headers.origin, ctx.allowedOrigins, headers.host)) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
       }
 
