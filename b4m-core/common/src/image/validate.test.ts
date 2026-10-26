@@ -180,6 +180,19 @@ describe('validateImageRequest', () => {
       expect(validateImageRequest(request, kontext).ok).toBe(true);
     });
 
+    it('checks a discrete list by membership', () => {
+      const caps = {
+        ...gptImage1,
+        modes: {
+          generate: { ...gptImage1.modes.generate!, aspectRatios: { kind: 'discrete', values: ['1:1', '4:3'] } },
+        },
+      } as const;
+      expect(validateImageRequest({ mode: 'generate', aspectRatio: '1:1' }, caps).ok).toBe(true);
+      expect(codesOf(validateImageRequest({ mode: 'generate', aspectRatio: '16:9' }, caps))).toEqual([
+        'unsupported_aspect_ratio',
+      ]);
+    });
+
     it('rejects a ratio on a model that sends none, including Gemini', () => {
       for (const caps of [gptImage1, gemini]) {
         expect(codesOf(validateImageRequest({ mode: 'generate', aspectRatio: '1:1' }, caps))).toEqual([
