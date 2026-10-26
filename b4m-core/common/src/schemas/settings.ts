@@ -3042,7 +3042,7 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description:
-      'Credits the inviter earns when an invited friend, with a verified email, gets their first answer. 0 turns this reward off.',
+      'Credits the inviter earns when an invited friend, with a verified email, gets their first answer. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.',
     category: 'Referrals',
   }),
   ReferralFirstPaymentCredits: makeNumberSetting({
@@ -3053,7 +3053,7 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description:
-      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off.",
+      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
     category: 'Referrals',
   }),
   ReferralSecondPaymentCredits: makeNumberSetting({
@@ -3064,7 +3064,7 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description:
-      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off.",
+      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
     category: 'Referrals',
   }),
   ReferralHoldDays: makeNumberSetting({
@@ -3075,7 +3075,7 @@ export const settingsMap = {
     min: 0,
     max: 365,
     description:
-      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward.',
+      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward. Not active yet: takes effect once inviter rewards ship.',
     category: 'Referrals',
   }),
   ReferralInvitesPerUser: makeNumberSetting({
@@ -3086,7 +3086,7 @@ export const settingsMap = {
     min: 0,
     max: 1000,
     description:
-      'Invites a user starts with when they register. Applies to new registrations only; existing users and admin-created accounts keep theirs (3 for admin-created).',
+      'Invites a user starts with when they register by email code. Existing users keep theirs; OAuth sign-ups start with 0 and admin-created accounts with 3.',
     category: 'Referrals',
   }),
   ReferralAlertRewardsPerDay: makeNumberSetting({
@@ -3096,7 +3096,8 @@ export const settingsMap = {
     int: true,
     min: 1,
     max: 1_000_000,
-    description: 'Alert admins when more than this many referral rewards are created within 24 hours.',
+    description:
+      'Alert admins when more than this many referral rewards are created within 24 hours. Not active yet: takes effect once inviter rewards ship.',
     category: 'Referrals',
   }),
   EnableReferralToEmail: makeBooleanSetting({

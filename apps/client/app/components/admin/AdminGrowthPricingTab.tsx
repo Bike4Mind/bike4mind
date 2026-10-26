@@ -50,7 +50,7 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     id: 'referral-rewards',
     title: 'Referral rewards for inviters',
     description:
-      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. The three reward amounts start at 0 (off); raise an amount to switch that reward on.',
+      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. Only the starting-invite count is active today; the reward, hold and alert settings are saved but not paid out until inviter rewards ship.',
     keys: [
       'ReferralFirstAnswerCredits',
       'ReferralFirstPaymentCredits',
