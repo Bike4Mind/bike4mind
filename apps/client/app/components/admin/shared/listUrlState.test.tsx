@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-router';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { adminSearchForTab, parseAdminSearch } from '../adminTabParams';
@@ -91,6 +92,16 @@ describe('URL-synced filters and saved views', () => {
     fireEvent.click(screen.getByTestId('admin-filter-stage'));
     fireEvent.click(screen.getByTestId('admin-filter-stage-planned'));
     await waitFor(() => expect(router.state.location.search.demandStage).toBe('planned'));
+  });
+
+  it('keeps every keystroke while typing and writes the query to the URL once typing pauses', async () => {
+    const router = await renderList('/admin?tab=integration-demand&demandView=live');
+    const input = screen.getByTestId('admin-filter-search-input');
+    await userEvent.type(input, 'calendar sync');
+    expect(input).toHaveValue('calendar sync');
+    await waitFor(() => expect(router.state.location.search.demandQuery).toBe('calendar sync'));
+    expect(router.state.location.search.demandView).toBeUndefined();
+    expect(input).toHaveValue('calendar sync');
   });
 
   it('applies saved views atomically and removes the previous filters', async () => {

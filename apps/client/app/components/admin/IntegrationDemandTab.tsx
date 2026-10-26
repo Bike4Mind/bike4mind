@@ -62,6 +62,9 @@ const STAGE_CHIP: Record<IntegrationStage, { label: string; tone: 'neutral' | 'w
   ga: { label: 'Live', tone: 'good' },
 };
 
+// Sort by lifecycle, with integrations missing from the catalog first.
+const STAGE_RANK: Record<IntegrationStage, number> = { planned: 1, beta: 2, ga: 3 };
+
 const StageChip: React.FC<{ stage: IntegrationStage | null }> = ({ stage }) => (
   <StatusChip
     tone={stage ? STAGE_CHIP[stage].tone : 'neutral'}
@@ -71,7 +74,12 @@ const StageChip: React.FC<{ stage: IntegrationStage | null }> = ({ stage }) => (
 
 const DEMAND_COLUMNS: readonly DataColumn<IntegrationDemand>[] = [
   { id: 'name', label: 'Integration', render: row => row.name, sortValue: row => row.name },
-  { id: 'stage', label: 'Stage', render: row => <StageChip stage={row.stage} />, sortValue: row => row.stage ?? '' },
+  {
+    id: 'stage',
+    label: 'Stage',
+    render: row => <StageChip stage={row.stage} />,
+    sortValue: row => (row.stage ? STAGE_RANK[row.stage] : 0),
+  },
   {
     id: 'total',
     label: 'Requests',
@@ -211,7 +219,7 @@ export const IntegrationDemandTab: React.FC = () => {
       row.name.toLowerCase().includes(view.query.toLowerCase()) &&
       (!view.filters.stage || row.stage === view.filters.stage)
   );
-  const selected = integrations.find(row => row.integrationId === selectedId) ?? null;
+  const selected = visibleIntegrations.find(row => row.integrationId === selectedId) ?? null;
 
   return (
     <Stack
@@ -265,6 +273,7 @@ export const IntegrationDemandTab: React.FC = () => {
       >
         <DataTable
           rows={visibleIntegrations}
+          pageResetKey={JSON.stringify([view.query, view.filters])}
           columns={DEMAND_COLUMNS}
           label="Integration demand"
           getRowId={row => row.integrationId}

@@ -27,6 +27,8 @@ export type DataTableProps<Row> = {
   activeRowId?: string;
   testId?: string;
   rowTestId?: (row: Row) => string;
+  /** Changing this (e.g. the serialized filter state) returns the table to its first page. */
+  pageResetKey?: string;
 };
 type Sort = { columnId: string; direction: 'asc' | 'desc' };
 const PAGE_SIZES = [25, 50, 100] as const;
@@ -46,9 +48,15 @@ export function DataTable<Row>({
   activeRowId,
   testId = 'admin-data-table',
   rowTestId,
+  pageResetKey,
 }: DataTableProps<Row>) {
   const [sort, setSort] = useState<Sort>();
   const [page, setPage] = useState(0);
+  const [pagedResetKey, setPagedResetKey] = useState(pageResetKey);
+  if (pagedResetKey !== pageResetKey) {
+    setPagedResetKey(pageResetKey);
+    setPage(0);
+  }
   const [pageSize, setPageSize] = useState<number>(25);
   const sortedColumn = columns.find(column => column.id === sort?.columnId);
   const sorted = sortedColumn?.sortValue

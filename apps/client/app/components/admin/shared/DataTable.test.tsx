@@ -138,4 +138,18 @@ describe('DataTable', () => {
     expect(tableRows()).toHaveLength(2);
     expect(screen.getByTestId('admin-table-previous-btn')).toBeDisabled();
   });
+
+  it('returns to the first page when the reset key changes', () => {
+    const rendered = renderTable({ pageResetKey: 'all' });
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    expect(tableRows()[0]).toHaveAttribute('data-testid', 'admin-table-row-51');
+    rendered.rerender(
+      <CssVarsProvider theme={theme}>
+        <DataTable {...defaults} rows={rows.slice(0, 60)} pageResetKey="filtered" />
+      </CssVarsProvider>
+    );
+    expect(tableRows()[0]).toHaveAttribute('data-testid', 'admin-table-row-1');
+    expect(screen.getByTestId('admin-table-previous-btn')).toBeDisabled();
+  });
 });
