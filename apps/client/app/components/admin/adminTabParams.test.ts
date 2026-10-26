@@ -176,3 +176,36 @@ describe('Webhook Audit Logs and Model Logs tab params', () => {
     }
   });
 });
+
+describe('Organizations tab params', () => {
+  const organizationsSearch = {
+    tab: 'organizations',
+    orgsPage: 2,
+    orgsLimit: 20,
+    orgsSort: 'createdAt',
+    orgsOrder: 'desc',
+    orgsPersonal: false,
+    orgId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+  };
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(
+      parseAdminSearch({ orgsPage: '2', orgsLimit: 7, orgsSort: 'credits', orgsPersonal: 'true', orgId: '../x' })
+    ).toMatchObject({
+      orgsPage: 2,
+      orgsLimit: undefined,
+      orgsSort: undefined,
+      orgsPersonal: true,
+      orgId: undefined,
+    });
+  });
+
+  it('keeps them on the organizations tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(organizationsSearch, 'organizations')).toMatchObject(organizationsSearch);
+
+    const switched = adminSearchForTab(organizationsSearch, 'users');
+    for (const key of Object.keys(organizationsSearch).filter(key => key !== 'tab')) {
+      expect(switched[key as keyof typeof switched], key).toBeUndefined();
+    }
+  });
+});
