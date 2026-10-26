@@ -185,6 +185,8 @@ Sandboxed commands cannot connect to container engine API sockets. The blocked l
 
 On macOS the Seatbelt profile denies connecting to them; on Linux Bubblewrap hides the ones that exist behind an empty mount. This applies to unix sockets only: an engine that listens on a loopback TCP port is reachable when sandbox networking is on.
 
+On macOS the profile also denies writes inside the listed directories, even with `writeOnlyToWorkingDir: false`, so sandboxed tools cannot write `~/.docker/config.json` or Podman and buildah storage under `~/.local/share/containers`. It also denies renaming, chmod-ing or changing the timestamps of each parent directory of a listed path (such as `$HOME` or `$TMPDIR`), which stops a socket from being moved out from under the deny. Creating and deleting files inside those parent directories still works.
+
 Set to `true` only if a sandboxed tool genuinely needs to talk to the container engine directly. A repo config can turn this off but never on. The `docker` and `podman` commands themselves are in `excludedCommands` and are not affected.
 
 ## Platform Configuration
