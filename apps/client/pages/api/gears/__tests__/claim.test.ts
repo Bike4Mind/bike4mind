@@ -334,6 +334,15 @@ describe('POST /api/gears/claim', () => {
     expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
   });
 
+  it('pays a verified legacy account that has no createdAt', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve({ emailVerified: true }) });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
+  });
+
   it('pays a trusted account (email-verified and older than 7 days)', async () => {
     unlockProjects();
     const { res, promise } = claim({ key: 'projects' });
