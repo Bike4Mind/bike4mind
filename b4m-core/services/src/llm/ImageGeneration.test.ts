@@ -18,7 +18,7 @@ import { OMITTED_QUALITY_TIER, OpenAIImageCostCalculator } from './imageCostCalc
 import { estimateImageCredits } from '../imageCost';
 import type { Logger } from '@bike4mind/observability';
 import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
-import { getSettingsValue, ImageModerationBlockedError } from '@bike4mind/utils';
+import { getSettingsValue, ImageModerationBlockedError, ImageProviderUnavailableError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { startQuestHeartbeat } from './questHeartbeat';
@@ -2078,8 +2078,28 @@ describe('ImageGenerationService quest partial writes', () => {
       await processEdit(service, undefined, logger);
 
       expect(logger.error).not.toHaveBeenCalled();
-      expect(logger.warn).toHaveBeenCalledWith('Image generation blocked by content policy:', { requestId: 'req_abc' });
+      expect(logger.warn).toHaveBeenCalledWith('Error processing image generation:', {
+        kind: 'moderation_blocked',
+        provider: 'openai',
+        requestId: 'req_abc',
+      });
       expect(callArgs(update).find(arg => arg.type === 'error')?.reply).toBe('blocked by policy');
+    });
+
+    it('logs a provider timeout at warn, never at error, and still shows the user its message', async () => {
+      mockGeminiEdit.mockRejectedValue(
+        new ImageProviderUnavailableError('try again later', { provider: 'bfl', reason: 'polling_timeout' })
+      );
+      const logger = makeLogger();
+      const { service, update } = makeService();
+      await processEdit(service, undefined, logger);
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Error processing image generation:',
+        expect.objectContaining({ kind: 'provider_unavailable', reason: 'polling_timeout' })
+      );
+      expect(callArgs(update).find(arg => arg.type === 'error')?.reply).toBe('try again later');
     });
 
     it('still logs any other failure at error', async () => {

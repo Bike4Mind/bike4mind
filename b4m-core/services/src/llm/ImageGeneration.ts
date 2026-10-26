@@ -65,13 +65,13 @@ import {
   TiktokenTokenizer,
   usdToCredits,
   usdToCreditsStochastic,
-  UnprocessableEntityError,
   OpenAIImageService,
   BFLImageService,
   XAIImageService,
   GeminiImageService,
   ImageEditResponse,
-  ImageModerationBlockedError,
+  ImageInputRejectedError,
+  logImageGenerationFailure,
   BaseStorage,
   getSettingsByNames,
   downloadImageAsBuffer,
@@ -483,7 +483,7 @@ export class ImageGenerationService {
         }
       }
     } catch (error) {
-      Logger.globalInstance.error(`[DEBUG INVOKE] Error in image generation process:`, error);
+      logImageGenerationFailure(Logger.globalInstance, '[DEBUG INVOKE] Error in image generation process:', error);
 
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
@@ -1315,8 +1315,7 @@ export class ImageGenerationService {
           if (!base64Image) {
             const errorMsg =
               '❌ Kontext models require an input image for transformation. Please either:\n1. Upload an image to the workbench, or\n2. Generate an image in this conversation first.\n\nTip: Try generating an image with a text-to-image model first (like Flux Pro or GPT-Image), then apply Kontext transformations.';
-            Logger.globalInstance.error(`[DEBUG] ❌ Kontext validation failed:`, errorMsg);
-            throw new UnprocessableEntityError(errorMsg);
+            throw new ImageInputRejectedError(errorMsg, { model, reason: 'missing_input_image' });
           }
 
           Logger.globalInstance.debug(`[DEBUG] ✅ Kontext validation passed, calling transform...`);
@@ -1333,18 +1332,13 @@ export class ImageGenerationService {
           Logger.globalInstance.debug(`[DEBUG] Transform parameters:`, transformParams);
           Logger.globalInstance.debug(`[DEBUG] Prompt preview:`, truncatedPrompt.substring(0, 100) + '...');
 
-          try {
-            const transformedImage = await (service as any).transform(base64Image, truncatedPrompt, transformParams);
-            Logger.globalInstance.debug(`[DEBUG] ✅ Transform successful:`, {
-              resultType: typeof transformedImage,
-              resultLength: transformedImage?.length,
-              resultPreview: transformedImage?.substring(0, 100) + '...',
-            });
-            images = [transformedImage];
-          } catch (error) {
-            Logger.globalInstance.error(`[DEBUG] ❌ Transform failed:`, error);
-            throw error;
-          }
+          const transformedImage = await (service as any).transform(base64Image, truncatedPrompt, transformParams);
+          Logger.globalInstance.debug(`[DEBUG] ✅ Transform successful:`, {
+            resultType: typeof transformedImage,
+            resultLength: transformedImage?.length,
+            resultPreview: transformedImage?.substring(0, 100) + '...',
+          });
+          images = [transformedImage];
         } else if (isBFLUltraModel) {
           // For Ultra models, use aspect_ratio
           images = await service.generate(truncatedPrompt, {
@@ -1736,12 +1730,8 @@ export class ImageGenerationService {
         )
       );
     } catch (error) {
-      if (error instanceof ImageModerationBlockedError) {
-        // The user's prompt was refused: expected, so keep it out of the error-level Slack alerts.
-        logger.warn('Image generation blocked by content policy:', { requestId: error.requestId });
-      } else {
-        logger.error('Error processing image generation:', error);
-      }
+      // Expected failures (content policy, provider timeout, unusable input) log at warn, out of the Slack alerts.
+      logImageGenerationFailure(logger, 'Error processing image generation:', error);
       this.addStatusToQuest(quest, `Error: ${(error as Error).message}`, userId);
       quest.reply = (error as Error).message;
       quest.type = 'error';

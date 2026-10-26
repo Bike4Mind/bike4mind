@@ -760,7 +760,11 @@ describe('imageEditTool - OpenAI content-policy refusal logging', () => {
     const { toolFn } = imageEditTool.implementation(context, {} as GenerateImageToolCall);
     await toolFn({ image: PNG_DATA_URL, prompt: 'make it blue' });
 
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('blocked by content policy'), { requestId: 'req-1' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('OpenAI image'), {
+      kind: 'moderation_blocked',
+      provider: 'openai',
+      requestId: 'req-1',
+    });
     expect(error).not.toHaveBeenCalled();
   });
 });

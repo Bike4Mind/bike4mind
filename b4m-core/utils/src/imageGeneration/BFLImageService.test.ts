@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
 import { BFLImageService } from './BFLImageService';
 import { ImageModels, BFL_SAFETY_TOLERANCE } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+import { ImageModerationBlockedError, ImageProviderUnavailableError } from './imageGenerationErrors';
 
 const API_KEY = 'TEST-BFL-KEY-0a1b2c3d-do-not-log';
 
@@ -274,4 +276,105 @@ describe('BFLImageService - request body', () => {
       expect(submittedBody()).not.toHaveProperty('disable_pup');
     }
   );
+});
+
+describe('BFLImageService - expected failures stay below error level', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let service: BFLImageService;
+
+  const POLLING_URL = 'https://api.bfl.ai/v1/poll/req-1';
+
+  function pollReturns(data: Record<string, unknown>) {
+    vi.spyOn(axios, 'get').mockResolvedValue({ data });
+  }
+
+  beforeEach(() => {
+    vi.spyOn(axios, 'post').mockResolvedValue({ data: { id: 'req-1', polling_url: POLLING_URL } });
+    errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(Logger.globalInstance, 'debug').mockImplementation(() => undefined);
+    vi.spyOn(Logger.globalInstance, 'log').mockImplementation(() => undefined);
+    service = new BFLImageService(API_KEY, { log() {}, error() {}, warn() {}, info() {} } as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(['Request Moderated', 'Content Moderated'])(
+    'throws ImageModerationBlockedError for a %s poll status',
+    async status => {
+      pollReturns({ status });
+
+      const thrown = await service.generate('a prompt', { model: ImageModels.FLUX_PRO }).catch((e: unknown) => e);
+
+      expect(thrown).toBeInstanceOf(ImageModerationBlockedError);
+      expect((thrown as ImageModerationBlockedError).logContext).toMatchObject({
+        provider: 'bfl',
+        requestId: 'req-1',
+        reason: status,
+      });
+      expect(errorSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it('throws ImageProviderUnavailableError when polling runs out of attempts', async () => {
+    pollReturns({ status: 'Pending' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const thrown = await (service as any).pollForResult('req-1', POLLING_URL, 1, 0).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageProviderUnavailableError);
+    expect((thrown as ImageProviderUnavailableError).logContext).toMatchObject({
+      provider: 'bfl',
+      reason: 'polling_timeout',
+      requestId: 'req-1',
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(['ETIMEDOUT', 'ENETUNREACH'])('treats a %s network failure as provider unavailable', async code => {
+    vi.spyOn(axios, 'post').mockRejectedValue(
+      Object.assign(new Error(`connect ${code}`), { isAxiosError: true, code, config: { headers: {} } })
+    );
+
+    const thrown = await service.generate('a prompt', { model: ImageModels.FLUX_PRO }).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageProviderUnavailableError);
+    expect((thrown as ImageProviderUnavailableError).logContext).toMatchObject({ provider: 'bfl', reason: code });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('logs a genuine task failure once, at error', async () => {
+    pollReturns({ status: 'Error', result: { error: 'internal' } });
+
+    await expect(service.generate('a prompt', { model: ImageModels.FLUX_PRO })).rejects.toThrow(
+      'BFL image generation failed: internal'
+    );
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs a 422's provider detail, but not the echoed input", async () => {
+    vi.spyOn(axios, 'post').mockRejectedValue(
+      Object.assign(new Error('Request failed with status code 422'), {
+        isAxiosError: true,
+        code: 'ERR_BAD_REQUEST',
+        config: { method: 'post', headers: { 'x-key': API_KEY } },
+        response: {
+          status: 422,
+          data: {
+            detail: [{ loc: ['body', 'width'], msg: 'Input should be a multiple of 32', input: 'SECRET PROMPT' }],
+          },
+        },
+      })
+    );
+
+    await expect(service.generate('a prompt', { model: ImageModels.FLUX_PRO })).rejects.toThrow();
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.stringify(errorSpy.mock.calls[0]);
+    expect(logged).toContain('body.width: Input should be a multiple of 32');
+    expect(logged).not.toContain('SECRET PROMPT');
+    expect(logged).not.toContain(API_KEY);
+  });
 });

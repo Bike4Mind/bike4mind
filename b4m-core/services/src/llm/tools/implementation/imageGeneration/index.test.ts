@@ -513,7 +513,11 @@ describe('image_generation OpenAI content-policy refusal logging', () => {
     const result = await toolFn({ prompt: 'a red bike' });
 
     expect(result).toBe('Error: blocked by policy');
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('blocked by content policy'), { requestId: 'req-1' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('OpenAI image'), {
+      kind: 'moderation_blocked',
+      provider: 'openai',
+      requestId: 'req-1',
+    });
     expect(consoleError).not.toHaveBeenCalled();
   });
 });
