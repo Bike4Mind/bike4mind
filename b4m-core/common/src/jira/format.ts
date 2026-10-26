@@ -40,7 +40,7 @@ function stripHtmlAndNormalizeWhitespace(html: string | undefined): string {
 // ============================================================================
 
 /** Minimal recursive Atlassian Document Format node (description/comment bodies). */
-interface AdfNode {
+export interface AdfNode {
   type?: string;
   text?: string;
   content?: AdfNode[];

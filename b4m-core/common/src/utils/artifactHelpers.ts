@@ -248,12 +248,12 @@ export function canTransitionStatus(currentStatus: ArtifactStatuses, newStatus: 
 }
 
 // Metadata helpers
-export function mergeArtifactMetadata<T extends Record<string, any>>(existing: T, updates: Partial<T>): T {
+export function mergeArtifactMetadata<T extends Record<string, unknown>>(existing: T, updates: Partial<T>): T {
   return {
     ...existing,
     ...updates,
-    ...(updates.dependencies && { dependencies: [...(updates.dependencies as any[])] }),
-    ...(updates.settings && { settings: { ...existing.settings, ...updates.settings } }),
+    ...(updates.dependencies && { dependencies: [...(updates.dependencies as unknown[])] }),
+    ...(updates.settings && { settings: { ...(existing.settings as object), ...(updates.settings as object) } }),
   };
 }
 

@@ -934,8 +934,7 @@ export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting,
   key: K;
   dependsOn?: [K] extends [SettingKey] ? SettingKey : string;
   type: 'string' | 'number' | 'boolean' | 'array' | 'object';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  schema: z.ZodType<any, any, any>;
+  schema: z.ZodType;
   defaultValue?: string | number | boolean | object | undefined;
   options?: string[];
 };
