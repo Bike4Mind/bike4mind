@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { HuggingFaceHub, isAbliteratedModel, type InstalledModel, type PullOptions } from '@bike4mind/local-models';
+import {
+  HUGGING_FACE_SSH_KEYS_URL,
+  HuggingFaceHub,
+  isAbliteratedModel,
+  type InstalledModel,
+  type PullOptions,
+} from '@bike4mind/local-models';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type {
@@ -21,8 +27,11 @@ import {
   rankSearchHits,
   removeInstalled,
   requireRemovable,
+  requireUnchangedLicenses,
+  requireUnchangedManifest,
   resolveRuntimeTarget,
   runtimeLabel,
+  shortDigest,
   type HubClient,
   type ModelSourceDeps,
   type PullPlan,
@@ -79,6 +88,7 @@ function pullSummary(plan: PullPlan) {
       sizeBytes: plan.manifest.sizeBytes,
       size: formatBytes(plan.manifest.sizeBytes),
       revision: null,
+      digest: shortDigest(plan.manifest.digest),
       licenses: [license.label],
       license: { label: license.label, link: license.link, permissive: !license.restricted },
       acknowledgementRequired: license.restricted,
@@ -93,7 +103,10 @@ function pullSummary(plan: PullPlan) {
     files: build.files.map(file => ({ path: clean(file.path), sizeBytes: file.sizeBytes })),
     sizeBytes: build.sizeBytes,
     size: formatBytes(build.sizeBytes),
-    ...(plan.projectorBytes > 0 && { visionProjectorUpToBytes: plan.projectorBytes }),
+    ...(plan.projectorBytes > 0 && {
+      visionProjectorUpToBytes: plan.projectorBytes,
+      visionProjectorUpTo: formatBytes(plan.projectorBytes),
+    }),
     revision: clean(detail.revision),
     licenses: detail.licenses.map(clean),
     license: { label: license.label, link: license.link, permissive: !license.restricted },
@@ -102,9 +115,21 @@ function pullSummary(plan: PullPlan) {
     runtime,
     ...(isAbliteratedModel(detail) && { caution: 'This is an abliterated or uncensored build.' }),
     ...(detail.ollamaNeedsSshKey && {
-      sshKeyNote: `Ollama downloads ${detail.private ? 'private' : 'gated'} repos with its own key: the Ollama host's ~/.ollama/id_ed25519.pub must be added to the Hugging Face account.`,
+      sshKeyNote: `Ollama downloads ${detail.private ? 'private' : 'gated'} repos with its own key: add ~/.ollama/id_ed25519.pub of the Ollama host at ${HUGGING_FACE_SSH_KEYS_URL} if you have not.`,
     }),
   };
+}
+
+/** The download size, plus the vision projector Ollama's Hugging Face registry adds to the pull. */
+function sizeText(summary: PullSummary): string {
+  return 'visionProjectorUpTo' in summary && summary.visionProjectorUpTo
+    ? `${summary.size} plus a vision projector of up to ${summary.visionProjectorUpTo}`
+    : summary.size;
+}
+
+function gatedLine(summary: PullSummary): string[] {
+  if (!('gated' in summary) || !summary.gated) return [];
+  return [`Gated: yes (${summary.gated === 'manual' ? 'manual approval' : 'automatic approval'}), access granted.`];
 }
 
 type PullSummary = ReturnType<typeof pullSummary>;
@@ -118,10 +143,13 @@ function licenseSentence(summary: PullSummary): string {
 
 function pullMessage(summary: PullSummary): string {
   return [
-    `Download ${summary.model}${'quant' in summary ? ` ${summary.quant}` : ''} (${summary.size}) to ${summary.runtime}?`,
+    `Download ${summary.model}${'quant' in summary ? ` ${summary.quant}` : ''} (${sizeText(summary)}) to ${summary.runtime}?`,
     ...('files' in summary ? [`File: ${summary.files.map(file => file.path).join(', ')}`] : []),
     ...(summary.revision ? [`Revision: ${summary.revision}`] : []),
+    ...('digest' in summary ? [`Digest: ${summary.digest}`] : []),
     licenseSentence(summary),
+    ...gatedLine(summary),
+    ...('sshKeyNote' in summary && summary.sshKeyNote ? [summary.sshKeyNote] : []),
     ...('caution' in summary && summary.caution ? [summary.caution] : []),
   ].join('\n');
 }
@@ -133,7 +161,7 @@ function pullElicitation(summary: PullSummary): ElicitRequestFormParams {
     requestedSchema: {
       type: 'object',
       properties: {
-        download: { type: 'boolean', title: `Download ${summary.size}`, default: false },
+        download: { type: 'boolean', title: `Download ${sizeText(summary)}`, default: false },
         ...(summary.acknowledgementRequired && {
           acceptLicense: {
             type: 'boolean',
@@ -324,6 +352,11 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
           });
         }
 
+        if (plan.kind === 'ollama') {
+          await requireUnchangedManifest(plan.name, plan.manifest, sources(extra.signal));
+        } else {
+          await requireUnchangedLicenses(plan.hub, plan.detail, plan.license, extra.signal);
+        }
         const ref =
           plan.kind === 'ollama'
             ? plan.name

@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ElicitRequestSchema, type ElicitRequest, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
+import type { OllamaManifestInfo } from '../commands/ollamaRegistry';
 import type { HubClient, RuntimeTarget } from '../models/localModels';
 import { MODEL_TOOL_NAMES, registerModelTools, type ModelToolsDeps } from './modelTools';
 
@@ -97,17 +98,28 @@ function fakeHub(model: HubModelDetail = detail()): HubClient {
 
 type Answer = (request: ElicitRequest) => ElicitResult;
 
-async function setup(options: { hub?: HubClient; elicit?: Answer; source?: RuntimeTarget['source'] } = {}) {
+function manifest(licenses = ['Gemma Terms of Use'], model = 'e'): OllamaManifestInfo {
+  return {
+    digest: `sha256:${model.repeat(12)}${'0'.repeat(52)}`,
+    layers: [`sha256:${model.repeat(64)}`],
+    sizeBytes: 270_800_000,
+    licenses,
+  };
+}
+
+async function setup(
+  options: {
+    hub?: HubClient;
+    elicit?: Answer;
+    source?: RuntimeTarget['source'];
+    registry?: ModelToolsDeps['ollamaRegistry'];
+  } = {}
+) {
   const runtime = fakeRuntime();
   const hub = options.hub ?? fakeHub();
   const deps: ModelToolsDeps = {
     hub: () => hub,
-    ollamaRegistry: async () => ({
-      digest: `sha256:${'d'.repeat(64)}`,
-      layers: [`sha256:${'e'.repeat(64)}`],
-      sizeBytes: 270_800_000,
-      licenses: ['Gemma Terms of Use'],
-    }),
+    ollamaRegistry: options.registry ?? (async () => manifest()),
     resolveRuntime: async () => ({ runtime, source: options.source ?? 'env' }),
     defaultModel: async () => 'qwen2.5:0.5b',
   };
@@ -252,11 +264,82 @@ describe('model tools', () => {
           source: 'ollama',
           model: 'gemma3:270m',
           size: '271 MB',
+          digest: 'eeeeeeeeeeee',
           licenses: ['Gemma Terms of Use'],
           acknowledgementRequired: true,
           command: 'b4m models pull gemma3:270m',
         })
       );
+    });
+  });
+
+  describe('models_pull prompt contents', () => {
+    it('names the vision projector, gated access and the SSH key step', async () => {
+      const vision = detail({
+        gated: 'auto',
+        canDownload: true,
+        ollamaNeedsSshKey: true,
+        projectors: [{ path: 'mmproj-f16.gguf', sizeBytes: 851_000_000, sha256: null, url: 'x', quant: 'F16' }],
+      });
+      const { call, prompts, runtime } = await setup({ hub: fakeHub(vision), elicit: () => ({ action: 'decline' }) });
+      const { data } = await call('models_pull', { ref: REPO });
+      expect(data).toEqual(expect.objectContaining({ visionProjectorUpToBytes: 851_000_000, downloaded: false }));
+      const { message, requestedSchema } = prompts[0].params as {
+        message: string;
+        requestedSchema: { properties: Record<string, { title: string }> };
+      };
+      expect(message).toContain('(491 MB plus a vision projector of up to 851 MB)');
+      expect(message).toContain('Gated: yes (automatic approval), access granted.');
+      expect(message).toContain(
+        'add ~/.ollama/id_ed25519.pub of the Ollama host at https://huggingface.co/settings/keys'
+      );
+      expect(requestedSchema.properties.download.title).toBe('Download 491 MB plus a vision projector of up to 851 MB');
+      expect(runtime.pull).not.toHaveBeenCalled();
+    });
+
+    it('shows the manifest digest for an Ollama registry model', async () => {
+      const { call, prompts } = await setup({ elicit: () => ({ action: 'decline' }) });
+      await call('models_pull', { ref: 'gemma3:270m' });
+      expect(prompts[0].params.message).toContain('Digest: eeeeeeeeeeee');
+    });
+  });
+
+  describe('models_pull re-checks after the user accepts', () => {
+    it('refuses when the Ollama tag now serves other layers', async () => {
+      const registry = vi
+        .fn<ModelToolsDeps['ollamaRegistry']>()
+        .mockResolvedValueOnce(manifest())
+        .mockResolvedValueOnce(manifest(['Gemma Terms of Use'], 'f'));
+      const { call, runtime } = await setup({ registry, elicit: accept });
+      const result = await call('models_pull', { ref: 'gemma3:270m' });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain('gemma3:270m changed since you reviewed it (the registry now serves ffffffffffff)');
+      expect(registry).toHaveBeenCalledTimes(2);
+      expect(runtime.pull).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the Ollama license text changed', async () => {
+      const registry = vi
+        .fn<ModelToolsDeps['ollamaRegistry']>()
+        .mockResolvedValueOnce(manifest())
+        .mockResolvedValueOnce(manifest(['Proprietary terms']));
+      const { call, runtime } = await setup({ registry, elicit: accept });
+      const result = await call('models_pull', { ref: 'gemma3:270m' });
+      expect(result.text).toContain('changed since you reviewed it (its license text changed)');
+      expect(runtime.pull).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the Hugging Face licenses changed', async () => {
+      const hub = fakeHub();
+      vi.mocked(hub.getModel)
+        .mockResolvedValueOnce(detail())
+        .mockResolvedValueOnce(detail({ licenses: ['llama3.1'] }));
+      const { call, runtime } = await setup({ hub, elicit: accept });
+      const result = await call('models_pull', { ref: REPO });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain(`${REPO} changed since you reviewed it (its license is now llama3.1)`);
+      expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+      expect(runtime.pull).not.toHaveBeenCalled();
     });
   });
 
