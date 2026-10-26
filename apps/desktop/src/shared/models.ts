@@ -159,18 +159,6 @@ export function licenseKind(licenses: readonly string[]): LicenseKind {
     : 'restricted';
 }
 
-/** Builds with refusal training removed, by explicit markers in the repo id, its tags or its base models. */
-export function isAbliteratedModel(
-  id: string,
-  tags: readonly string[] = [],
-  baseModels: readonly string[] = []
-): boolean {
-  return [id, ...tags, ...baseModels].some(name => {
-    const lower = name.toLowerCase();
-    return lower.includes('abliterat') || /(^|[^a-z])(uncensored|decensored|heretic)([^a-z]|$)/.test(lower);
-  });
-}
-
 export function formatBytes(bytes: number | null): string {
   if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return 'unknown size';
   if (bytes < 1_000_000) return `${Math.max(1, Math.round(bytes / 1_000))} KB`;

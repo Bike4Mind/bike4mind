@@ -5,6 +5,7 @@ import {
   ModelNotFoundError,
   RuntimeConnectionError,
   RuntimeHttpError,
+  isAbliteratedModel,
   type HubGgufBuild,
   type HubModelDetail,
   type HubModelSummary,
@@ -16,7 +17,6 @@ import {
   type RuntimeHealth,
 } from '@bike4mind/local-models';
 import {
-  isAbliteratedModel,
   licenseKind,
   pullKey,
   type HubBuildView,
@@ -129,7 +129,7 @@ function toCard(model: HubModelSummary): HubModelCard {
     licenses: model.licenses,
     gated: model.gated,
     private: model.private,
-    abliterated: isAbliteratedModel(model.id, model.tags, model.baseModels),
+    abliterated: isAbliteratedModel(model),
   };
 }
 
