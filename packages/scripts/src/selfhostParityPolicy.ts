@@ -661,6 +661,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     fingerprint: 'c3d09ab1645e180de73018af05a50b748c27dffcb699ccd1535be774c1359ab6',
   }),
   wired(
+    'schedule:infra/cron.ts:oauthAbuseAutoBlockCron',
+    '3c910cdcd65faba0e204cf3dcfcaf2023c58983eea9fedcb695b66005fab393c',
+    {
+      source: 'apps/workers/src/selfhost/oauthAbuseAutoBlock.ts',
+      symbol: 'registerOauthAbuseAutoBlock',
+      fingerprint: 'f421e8a8e1984b196879bc7706dd98c72e4e4f181c08d64f0a6cee857fb5c304',
+    }
+  ),
+  wired(
     'schedule:infra/cron.ts:agentExecutionAbandonedSweep',
     '231133ed8a07a894c6302ef73e91f887c3fe15d0f6440ce1ff7646802b1dea68',
     {

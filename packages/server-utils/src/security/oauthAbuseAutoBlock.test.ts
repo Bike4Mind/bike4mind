@@ -29,7 +29,12 @@ const setup = (overrides: Partial<OauthAbusePolicy> = {}, prior: Record<string, 
     { ip: '2.2.2.2', attempts: 20 },
   ]);
   const countAutoBlocksSince = vi.fn(async (ip: string) => prior[ip] ?? 0);
-  const deps = { loadPolicy: async () => ({ ...policy, ...overrides }), getIPsWithHighAttempts, countAutoBlocksSince, block };
+  const deps = {
+    loadPolicy: async () => ({ ...policy, ...overrides }),
+    getIPsWithHighAttempts,
+    countAutoBlocksSince,
+    block,
+  };
   return { deps, block, getIPsWithHighAttempts, countAutoBlocksSince };
 };
 
