@@ -27,8 +27,8 @@ const wafProviderUsEast1 = isWafEnabled
 /**
  * Emergency IP block set.
  *
- * Addresses come from the WAF_BLOCKED_IPS deploy variable (comma-separated IPv4 or CIDR). WAF requires
- * at least one address, so an empty list falls back to a TEST-NET placeholder that never appears in real traffic.
+ * WAF_BLOCKED_IPS (comma-separated IPv4 or CIDR) only seeds the set on first create; runtime edits are the source of truth.
+ * WAF requires at least one address, so an empty list falls back to a TEST-NET placeholder that never appears in real traffic.
  */
 export const wafEmergencyIpSet = isWafEnabled
   ? new aws.wafv2.IpSet(
@@ -47,6 +47,7 @@ export const wafEmergencyIpSet = isWafEnabled
         // Retain IPSet for permanent stages only — PR stages are torn down and recreated,
         // so retaining would orphan the resource and cause WAFDuplicateItemException on redeploy.
         retainOnDelete: ['production', 'dev'].includes($app.stage),
+        ignoreChanges: ['addresses', 'lockToken'],
       }
     )
   : undefined;
