@@ -4,6 +4,10 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 
+interface IUserRepository {
+  findById(id: string): Promise<IUserDocument | null>;
+}
+
 /** 24 hours in milliseconds. */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -27,11 +31,13 @@ export function isFreeTierDailyCapError(error: unknown): error is TooManyRequest
  * capped user never produces a dangling hold that the sweep has to clean up.
  */
 export async function checkFreeTierDailySpendCap({
-  user,
+  userId,
+  userRepository,
   usageEventRepository,
   logger,
 }: {
-  user: IUserDocument;
+  userId: string;
+  userRepository: IUserRepository;
   usageEventRepository: IUsageEventRepository;
   logger: ILogger;
 }): Promise<void> {
@@ -40,6 +46,11 @@ export async function checkFreeTierDailySpendCap({
 
     const enforceCredits = getSettingsValue('enforceCredits', settings) === true;
     if (!enforceCredits) return;
+
+    // Defer the user lookup until we know enforcement is on, so paid-tier requests
+    // don't pay the extra DB read on every call.
+    const user = await userRepository.findById(userId);
+    if (!user) return;
 
     const { resolveUserRateTier } = await import('@server/utils/userRateTier');
     const tier = await resolveUserRateTier(user);

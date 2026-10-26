@@ -224,10 +224,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           }
 
           // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
-          const capUser = await userRepository.findById(userId);
-          if (capUser) {
-            await checkFreeTierDailySpendCap({ user: capUser, usageEventRepository, logger });
-          }
+          await checkFreeTierDailySpendCap({ userId, userRepository, usageEventRepository, logger });
 
           // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
           await executeCompletion({

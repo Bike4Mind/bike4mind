@@ -305,7 +305,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   // is the cap's backstop. A capped turn is the user's limit, not a processing failure: settle the
   // quest with the reason instead of throwing into the route's generic-failure reply and metric.
   try {
-    await checkFreeTierDailySpendCap({ user, usageEventRepository, logger });
+    await checkFreeTierDailySpendCap({ userId: user.id, userRepository, usageEventRepository, logger });
   } catch (error) {
     if (!isFreeTierDailyCapError(error)) throw error;
     logger.info('Quest refused by the free-tier daily spend cap', { questId: params.questId });

@@ -3,14 +3,14 @@ import type { IUserDocument } from '@bike4mind/common';
 import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike4mind/common';
 
 // Hoisted mocks (vi.hoisted runs before imports)
-const { getSettingsMapMock, getSettingsValueMock, resolveUserRateTierMock, findDailySpendByUserMock } = vi.hoisted(
-  () => ({
+const { getSettingsMapMock, getSettingsValueMock, resolveUserRateTierMock, findDailySpendByUserMock, findByIdMock } =
+  vi.hoisted(() => ({
     getSettingsMapMock: vi.fn().mockResolvedValue({}),
     getSettingsValueMock: vi.fn(),
     resolveUserRateTierMock: vi.fn(),
     findDailySpendByUserMock: vi.fn(),
-  })
-);
+    findByIdMock: vi.fn(),
+  }));
 
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: getSettingsMapMock,
@@ -44,9 +44,22 @@ const mockLogger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() } as unknown a
   typeof checkFreeTierDailySpendCap
 >[0]['logger'];
 
-const mockRepo = { findDailySpendByUser: findDailySpendByUserMock } as unknown as Parameters<
+const mockUsageRepo = { findDailySpendByUser: findDailySpendByUserMock } as unknown as Parameters<
   typeof checkFreeTierDailySpendCap
 >[0]['usageEventRepository'];
+
+const mockUserRepo = { findById: findByIdMock };
+
+/** Shorthand: call the gate for a user of a given age. */
+function callGate(user: IUserDocument) {
+  findByIdMock.mockResolvedValue(user);
+  return checkFreeTierDailySpendCap({
+    userId: user.id,
+    userRepository: mockUserRepo,
+    usageEventRepository: mockUsageRepo,
+    logger: mockLogger,
+  });
+}
 
 describe('checkFreeTierDailySpendCap', () => {
   beforeEach(() => {
@@ -59,8 +72,10 @@ describe('checkFreeTierDailySpendCap', () => {
       return undefined;
     });
 
-    await checkFreeTierDailySpendCap({ user: makeUser(DAY_MS), usageEventRepository: mockRepo, logger: mockLogger });
+    await callGate(makeUser(DAY_MS));
 
+    // The user lookup must not run when enforcement is disabled.
+    expect(findByIdMock).not.toHaveBeenCalled();
     expect(resolveUserRateTierMock).not.toHaveBeenCalled();
     expect(findDailySpendByUserMock).not.toHaveBeenCalled();
   });
@@ -73,7 +88,7 @@ describe('checkFreeTierDailySpendCap', () => {
     });
     resolveUserRateTierMock.mockResolvedValue('pro');
 
-    await checkFreeTierDailySpendCap({ user: makeUser(DAY_MS), usageEventRepository: mockRepo, logger: mockLogger });
+    await callGate(makeUser(DAY_MS));
 
     expect(findDailySpendByUserMock).not.toHaveBeenCalled();
   });
@@ -86,11 +101,7 @@ describe('checkFreeTierDailySpendCap', () => {
     });
     resolveUserRateTierMock.mockResolvedValue('free');
 
-    await checkFreeTierDailySpendCap({
-      user: makeUser(10 * DAY_MS),
-      usageEventRepository: mockRepo,
-      logger: mockLogger,
-    });
+    await callGate(makeUser(10 * DAY_MS));
 
     expect(findDailySpendByUserMock).not.toHaveBeenCalled();
   });
@@ -106,13 +117,7 @@ describe('checkFreeTierDailySpendCap', () => {
     findDailySpendByUserMock.mockResolvedValue(300);
 
     // Under cap - should NOT throw
-    await expect(
-      checkFreeTierDailySpendCap({
-        user: makeUser(1 * 60 * 60 * 1000),
-        usageEventRepository: mockRepo,
-        logger: mockLogger,
-      })
-    ).resolves.toBeUndefined();
+    await expect(callGate(makeUser(1 * 60 * 60 * 1000))).resolves.toBeUndefined();
   });
 
   it('throws when day-1 cap is exceeded', async () => {
@@ -125,13 +130,7 @@ describe('checkFreeTierDailySpendCap', () => {
     resolveUserRateTierMock.mockResolvedValue('free');
     findDailySpendByUserMock.mockResolvedValue(500);
 
-    await expect(
-      checkFreeTierDailySpendCap({
-        user: makeUser(1 * 60 * 60 * 1000),
-        usageEventRepository: mockRepo,
-        logger: mockLogger,
-      })
-    ).rejects.toBeInstanceOf(TooManyRequestsError);
+    await expect(callGate(makeUser(1 * 60 * 60 * 1000))).rejects.toBeInstanceOf(TooManyRequestsError);
   });
 
   it('uses days-2-7 cap for an account 2 days old', async () => {
@@ -145,9 +144,7 @@ describe('checkFreeTierDailySpendCap', () => {
     resolveUserRateTierMock.mockResolvedValue('free');
     findDailySpendByUserMock.mockResolvedValue(350);
 
-    await expect(
-      checkFreeTierDailySpendCap({ user: makeUser(2 * DAY_MS), usageEventRepository: mockRepo, logger: mockLogger })
-    ).rejects.toBeInstanceOf(TooManyRequestsError);
+    await expect(callGate(makeUser(2 * DAY_MS))).rejects.toBeInstanceOf(TooManyRequestsError);
   });
 
   it('uses steady-state cap for an account older than 7 days', async () => {
@@ -159,9 +156,7 @@ describe('checkFreeTierDailySpendCap', () => {
     resolveUserRateTierMock.mockResolvedValue('free');
     findDailySpendByUserMock.mockResolvedValue(201);
 
-    await expect(
-      checkFreeTierDailySpendCap({ user: makeUser(10 * DAY_MS), usageEventRepository: mockRepo, logger: mockLogger })
-    ).rejects.toBeInstanceOf(TooManyRequestsError);
+    await expect(callGate(makeUser(10 * DAY_MS))).rejects.toBeInstanceOf(TooManyRequestsError);
   });
 
   it('falls back to steady-state cap when day-1 cap is 0', async () => {
@@ -175,13 +170,7 @@ describe('checkFreeTierDailySpendCap', () => {
     findDailySpendByUserMock.mockResolvedValue(150);
 
     // A day-1 cap of 0 would refuse any spend; falling back to the steady-state 200 lets 150 through.
-    await expect(
-      checkFreeTierDailySpendCap({
-        user: makeUser(1 * 60 * 60 * 1000),
-        usageEventRepository: mockRepo,
-        logger: mockLogger,
-      })
-    ).resolves.toBeUndefined();
+    await expect(callGate(makeUser(1 * 60 * 60 * 1000))).resolves.toBeUndefined();
   });
 
   it('falls back to steady-state cap when days-2-7 cap is 0', async () => {
@@ -195,9 +184,7 @@ describe('checkFreeTierDailySpendCap', () => {
     findDailySpendByUserMock.mockResolvedValue(150);
 
     // A days-2-7 cap of 0 would refuse any spend; falling back to the steady-state 200 lets 150 through.
-    await expect(
-      checkFreeTierDailySpendCap({ user: makeUser(2 * DAY_MS), usageEventRepository: mockRepo, logger: mockLogger })
-    ).resolves.toBeUndefined();
+    await expect(callGate(makeUser(2 * DAY_MS))).resolves.toBeUndefined();
   });
 
   it('fails open on a transient DB error', async () => {
@@ -210,15 +197,14 @@ describe('checkFreeTierDailySpendCap', () => {
     findDailySpendByUserMock.mockRejectedValue(new Error('DB timeout'));
 
     // Should NOT throw - fail open
-    await expect(
-      checkFreeTierDailySpendCap({ user: makeUser(10 * DAY_MS), usageEventRepository: mockRepo, logger: mockLogger })
-    ).resolves.toBeUndefined();
+    await expect(callGate(makeUser(10 * DAY_MS))).resolves.toBeUndefined();
 
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining('[freeTierDailyCapGate]'),
       expect.objectContaining({ error: expect.any(Error) })
     );
   });
+
   it('refuses at exactly the cap and allows one credit under it', async () => {
     getSettingsValueMock.mockImplementation((key: string) => {
       if (key === 'enforceCredits') return true;
@@ -229,14 +215,10 @@ describe('checkFreeTierDailySpendCap', () => {
     const user = makeUser(10 * DAY_MS);
 
     findDailySpendByUserMock.mockResolvedValue(199);
-    await expect(
-      checkFreeTierDailySpendCap({ user, usageEventRepository: mockRepo, logger: mockLogger })
-    ).resolves.toBeUndefined();
+    await expect(callGate(user)).resolves.toBeUndefined();
 
     findDailySpendByUserMock.mockResolvedValue(200);
-    await expect(
-      checkFreeTierDailySpendCap({ user, usageEventRepository: mockRepo, logger: mockLogger })
-    ).rejects.toBeInstanceOf(TooManyRequestsError);
+    await expect(callGate(user)).rejects.toBeInstanceOf(TooManyRequestsError);
   });
 
   it('tags the refusal with the registered errorCode and a Retry-After until UTC midnight', async () => {
@@ -248,11 +230,7 @@ describe('checkFreeTierDailySpendCap', () => {
     resolveUserRateTierMock.mockResolvedValue('free');
     findDailySpendByUserMock.mockResolvedValue(250);
 
-    const error = await checkFreeTierDailySpendCap({
-      user: makeUser(10 * DAY_MS),
-      usageEventRepository: mockRepo,
-      logger: mockLogger,
-    }).catch((caught: unknown) => caught);
+    const error = await callGate(makeUser(10 * DAY_MS)).catch((caught: unknown) => caught);
 
     expect(isFreeTierDailyCapError(error)).toBe(true);
     const info = (error as TooManyRequestsError).additionalInfo;
@@ -276,9 +254,26 @@ describe('checkFreeTierDailySpendCap', () => {
     findDailySpendByUserMock.mockResolvedValue(300);
     const legacyUser = { id: 'user-1', isAdmin: false, tags: [] } as unknown as IUserDocument;
 
+    await expect(callGate(legacyUser)).rejects.toBeInstanceOf(TooManyRequestsError);
+  });
+
+  it('returns without checking when the user is not found', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      return undefined;
+    });
+    findByIdMock.mockResolvedValue(null);
+
     await expect(
-      checkFreeTierDailySpendCap({ user: legacyUser, usageEventRepository: mockRepo, logger: mockLogger })
-    ).rejects.toBeInstanceOf(TooManyRequestsError);
+      checkFreeTierDailySpendCap({
+        userId: 'ghost-user',
+        userRepository: mockUserRepo,
+        usageEventRepository: mockUsageRepo,
+        logger: mockLogger,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(resolveUserRateTierMock).not.toHaveBeenCalled();
   });
 
   it('does not treat an unrelated 429 as the daily cap', () => {

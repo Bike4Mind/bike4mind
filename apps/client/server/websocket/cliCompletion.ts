@@ -164,13 +164,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   }
 
   try {
-    // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth
-    // method. The check is a no-op for pro/bypass tiers, so the extra DB read for API key callers
-    // is only paid when the user is actually on the free tier.
-    const capUser = await userRepository.findById(userId);
-    if (capUser) {
-      await checkFreeTierDailySpendCap({ user: capUser, usageEventRepository, logger });
-    }
+    // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+    await checkFreeTierDailySpendCap({ userId, userRepository, usageEventRepository, logger });
 
     // Execute completion - same function as SSE handler
     // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays

@@ -310,10 +310,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let hasToolCalls = false;
 
       // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
-      const capUser = await userRepository.findById(userId!);
-      if (capUser) {
-        await checkFreeTierDailySpendCap({ user: capUser, usageEventRepository, logger });
-      }
+      await checkFreeTierDailySpendCap({ userId: userId!, userRepository, usageEventRepository, logger });
 
       timing?.phase('completionStarted');
       await executeCompletion({
