@@ -15,6 +15,8 @@ import { ADMIN_GATE, ADMIN_OR_RELEASE_NOTES_WRITE_GATE } from './scopeCoverageHe
  * Invariant: every admin route declares EXACTLY `[ApiKeyScope.ADMIN]`, unless it opts out of
  * API-key auth entirely via `auth: false` and is hand-listed in NO_API_KEY_AUTH. Each listed
  * entry must exist and still declare `auth: false`, so the list cannot go stale or hide a route.
+ * A route declaring `auth: 'jwtOnly'` is exempt without a list: no key can reach it, so there is
+ * nothing to confine, and check-contract-gate.sh requires it of every new route outside /api/v1.
  */
 
 // Scanned from outside pages/: an fs-walking test under pages/ is traced as a route and
@@ -61,14 +63,17 @@ const rel = (f: string) => path.relative(ROUTES_DIR, f).split(path.sep).join('/'
 // [ApiKeyScope.ADMIN] */`, `'requiredScopes: [...]'`) does not read as gated. The declaration is
 // often inline in the baseApi options, so the regex itself stays unanchored; stripping is what
 // prevents the false positive. A `//` inside a string can only over-strip, failing closed.
-const source = (f: string) =>
+const withoutComments = (f: string) =>
   readFileSync(f, 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/[^\n]*/g, '')
-    .replace(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g, "''");
+    .replace(/\/\/[^\n]*/g, '');
+const source = (f: string) => withoutComments(f).replace(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g, "''");
 const isGated = (f: string) => ADMIN_GATE.test(source(f));
 const isReleaseNotesGated = (f: string) => ADMIN_OR_RELEASE_NOTES_WRITE_GATE.test(source(f));
 const declaresNoAuth = (f: string) => /\bauth:\s*false\b/.test(source(f));
+// Read with strings intact (the value is itself a literal), so only comments can fake it.
+const JWT_ONLY = /\bauth:\s*['"]jwtOnly['"]/;
+const declaresJwtOnly = (f: string) => JWT_ONLY.test(withoutComments(f));
 
 describe('admin routes declare the ADMIN API-key scope gate', () => {
   it('ADMIN_GATE accepts only an exactly-[ApiKeyScope.ADMIN] array, in any layout', () => {
@@ -77,6 +82,13 @@ describe('admin routes declare the ADMIN API-key scope gate', () => {
     expect(ADMIN_GATE.test('requiredScopes: [\n    ApiKeyScope.ADMIN,\n  ]')).toBe(true);
     expect(ADMIN_GATE.test('requiredScopes: [ApiKeyScope.ADMIN, ApiKeyScope.FILES_READ]')).toBe(false);
     expect(ADMIN_GATE.test('requiredScopes: [ApiKeyScope.FILES_READ]')).toBe(false);
+  });
+
+  it("JWT_ONLY matches only an auth: 'jwtOnly' option", () => {
+    expect(JWT_ONLY.test("baseApi({ auth: 'jwtOnly' })")).toBe(true);
+    expect(JWT_ONLY.test('baseApi({ auth: "jwtOnly", maxBodySize: 1 })')).toBe(true);
+    expect(JWT_ONLY.test('baseApi({ auth: true })')).toBe(false);
+    expect(JWT_ONLY.test("baseApi({ auth: 'jwt' })")).toBe(false);
   });
 
   it('finds the admin route files', () => {
@@ -97,7 +109,7 @@ describe('admin routes declare the ADMIN API-key scope gate', () => {
   });
 
   it.each(files.map(f => [rel(f), f]))('%s', (r, f) => {
-    if (NO_API_KEY_AUTH.has(r)) return;
+    if (NO_API_KEY_AUTH.has(r) || declaresJwtOnly(f)) return;
     if (ADMIN_OR_RELEASE_NOTES_WRITE.has(r)) {
       expect(
         isReleaseNotesGated(f),

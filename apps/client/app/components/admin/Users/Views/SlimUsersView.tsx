@@ -1,5 +1,5 @@
 import { storageLimitToBytes } from '@bike4mind/common';
-import { useFullUserViewModal } from '@client/app/components/admin/Users/Views/FullUserViewModal';
+import { useOpenUserProfile } from '@client/app/components/admin/Users/Profile/useOpenUserProfile';
 import { useGetRecentActivities } from '@client/app/hooks/data/user';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
@@ -105,11 +105,11 @@ const RecentActivityCell: React.FC<{ userId: string }> = ({ userId }) => {
 };
 
 const UserActions: React.FC<{ userId: string }> = ({ userId }) => {
-  const { setUserId: setFullUserViewUserId } = useFullUserViewModal();
+  const openUserProfile = useOpenUserProfile();
 
   return (
     <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
-      <Button data-testid="admin-user-admin-btn" size="sm" onClick={() => setFullUserViewUserId(userId)}>
+      <Button data-testid="admin-user-admin-btn" size="sm" onClick={() => openUserProfile(userId)}>
         Admin
       </Button>
       <AdminProfile userId={userId} size="sm" />

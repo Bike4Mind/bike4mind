@@ -931,6 +931,23 @@ export class ImageEditService {
           .catch(err => logger.warn('Failed to record usage event', err));
       }
 
+      // Parameters only: the source is a URL and the mask files are deleted below, so neither is recorded.
+      const request = {
+        model,
+        prompt,
+        ...(size && { size }),
+        ...(quality && { quality }),
+        ...(aspect_ratio && { aspect_ratio }),
+        ...(seed != null && { seed }),
+        safety_tolerance,
+        prompt_upsampling,
+        ...(output_format && { output_format }),
+        ...(background && { background }),
+      };
+      const derivedFrom = referenceImages.flatMap(reference =>
+        reference.id ? [{ fileId: reference.id, role: 'reference' as const }] : []
+      );
+
       // Last, so a run that fails anywhere above (quest update, billing) leaves no file.
       await saveGeneratedImage(
         this.saveGeneratedAsset,
@@ -944,7 +961,9 @@ export class ImageEditService {
             modelId: model,
             ...(generationId && { jobId: generationId }),
             prompt,
+            request,
           },
+          ...(derivedFrom.length > 0 && { derivedFrom }),
           sessionId,
           questId,
         },

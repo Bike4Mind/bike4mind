@@ -2,7 +2,7 @@
  * WAF Alarm -> Slack Notifier
  *
  * Subscribes to the WAF alarm SNS topic and posts a formatted message to the
- * error-reporting Slack channel whenever the ai-route-rate-limit rule transitions
+ * error-reporting Slack channel whenever an enforcing rate rule transitions
  * to ALARM state in production.
  *
  * Only ALARM transitions are reported; OK (resolved) transitions are suppressed

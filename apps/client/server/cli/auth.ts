@@ -17,6 +17,7 @@ import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable'
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { applyUntrustedRateLimit } from '@server/utils/apiKeyTrust';
 import { z } from 'zod';
 
 /** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */
@@ -225,12 +226,13 @@ function toApiKeyInfo(v: {
  * suspension lands *after* the key exists and must take effect on the surfaces
  * that spend money.
  */
-async function assertOwnerAccountUsable(userId: string): Promise<void> {
+async function assertOwnerAccountUsable(userId: string) {
   const user = await User.findById(userId);
   if (!user) {
     throw new UnauthorizedError('User not found or banned');
   }
   assertAccountStateUsable(user);
+  return user;
 }
 
 /**
@@ -270,9 +272,10 @@ export async function verifyApiKey(
       });
     }
 
-    await assertOwnerAccountUsable(validation.userId);
-
-    return toApiKeyInfo(validation);
+    const owner = await assertOwnerAccountUsable(validation.userId);
+    const info = toApiKeyInfo(validation);
+    // Same untrusted-owner ceiling apiKeyAuth applies, so these surfaces meter the clamped limit too.
+    return { ...info, rateLimit: await applyUntrustedRateLimit(owner, info) };
   } catch (error) {
     throw toApiKeyAuthError(error);
   }

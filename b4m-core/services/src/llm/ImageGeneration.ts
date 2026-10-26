@@ -14,6 +14,7 @@ import {
   IUserRepository,
   PromptMeta,
   IFabFileDocument,
+  type GeneratedAssetLineageEntry,
   IFabFileRepository,
   IAdminSettingsRepository,
   ModelInfo,
@@ -32,6 +33,9 @@ import {
   BFL_IMAGE_MODELS,
   XAI_IMAGE_MODELS,
   GEMINI_IMAGE_MODELS,
+  isBflImageModel,
+  isFlux2ImageModel,
+  getMaxReferenceImages,
   isGPTImageModel,
   rejectsTransparentBackground,
   clampImageQualityForModel,
@@ -216,6 +220,22 @@ async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin =
 // filePath + mimeType). Downstream dispatch only reads filePath and mimeType; everything
 // else is optional and used only for logging. `filePath` matches IFabFileDocument's shape.
 type SelectedImage = { filePath?: string; mimeType: string; id?: string; fileName?: string };
+
+/** FabFile inputs of a generation. A message-history input is a generated-bucket key with no FabFile id, so no lineage. */
+function lineageOf(
+  imageSource: 'workbench' | 'message_history' | 'notebook_attachment',
+  fileImage: SelectedImage | undefined,
+  referenceImages: SelectedImage[]
+): GeneratedAssetLineageEntry[] {
+  const entries: GeneratedAssetLineageEntry[] = [];
+  if (fileImage?.id && imageSource !== 'message_history') {
+    entries.push({ fileId: fileImage.id, role: 'edit_source' });
+  }
+  for (const reference of referenceImages) {
+    if (reference.id) entries.push({ fileId: reference.id, role: 'reference' });
+  }
+  return entries;
+}
 
 export class ImageGenerationService {
   private db: IImageGenerationServiceOptions['db'];
@@ -519,13 +539,10 @@ export class ImageGenerationService {
       const openAiCostCalculator = new OpenAIImageCostCalculator();
       usdCost = openAiCostCalculator.getCost(input as OpenAICostInput);
       inputUsd = openAiCostCalculator.getInputImageCost(input as OpenAICostInput);
-    } else if (
-      modelInfo.id === ImageModels.FLUX_PRO_ULTRA ||
-      modelInfo.id === ImageModels.FLUX_PRO_1_1 ||
-      modelInfo.id === ImageModels.FLUX_PRO ||
-      modelInfo.id === ImageModels.FLUX_KONTEXT_PRO ||
-      modelInfo.id === ImageModels.FLUX_KONTEXT_MAX
-    ) {
+    } else if (isBflImageModel(modelInfo.id) && modelInfo.id !== ImageModels.FLUX_PRO_FILL) {
+      // Fill bills through the edit path, which dispatches from there; every other BFL
+      // generation model is priced here by the family predicate, so a newly curated id
+      // cannot fall through to "Model not supported".
       const fluxCostCalculator = new FluxImageCostCalculator();
       usdCost = fluxCostCalculator.getCost({
         model: modelInfo.id,
@@ -624,10 +641,23 @@ export class ImageGenerationService {
     // Access-scoped: a caller-supplied fabFileId the caller cannot access is dropped here,
     // never presigned or fed to a provider (owner/share/group/global-read only).
     const fabFiles = await this.db.fabFiles.findAccessibleInIds(fabFileIds || [], { userId, userGroups }, lakeAccess);
-    const workbenchImage = fabFiles.find(file => file.mimeType.startsWith('image'));
+    const workbenchFiles = isFlux2ImageModel(model)
+      ? (fabFileIds ?? [])
+          .map(id => fabFiles.find(file => file.id === id))
+          .filter((file): file is IFabFileDocument => !!file)
+      : fabFiles;
+    const workbenchImage = workbenchFiles.find(file => file.mimeType.startsWith('image'));
 
     const referenceImages = await this.resolveReferenceImages({
-      referenceImageFabFileIds,
+      referenceImageFabFileIds: isFlux2ImageModel(model)
+        ? [
+            ...workbenchFiles
+              .filter(file => file.mimeType.startsWith('image') && file.id !== workbenchImage?.id)
+              .map(file => file.id)
+              .filter((id): id is string => !!id),
+            ...(referenceImageFabFileIds ?? []),
+          ].filter(id => id !== workbenchImage?.id)
+        : referenceImageFabFileIds,
       userId,
       userGroups,
       lakeAccess,
@@ -725,15 +755,26 @@ export class ImageGenerationService {
       fileImage = undefined;
     }
 
+    const selectedReferenceImages =
+      isFlux2ImageModel(model) && fileImage?.id
+        ? referenceImages.filter(reference => reference.id !== fileImage.id)
+        : referenceImages;
+    if (
+      isFlux2ImageModel(model) &&
+      selectedReferenceImages.length + (fileImage?.filePath ? 1 : 0) > getMaxReferenceImages(model)
+    ) {
+      throw new BadRequestError(`At most ${getMaxReferenceImages(model)} input images may be supplied for ${model}`);
+    }
+
     logger.debug('Image selection result', {
       hasImage: !!fileImage,
       imageSource,
       imageId: fileImage?.id,
       fileName: fileImage?.fileName,
-      referenceImageCount: referenceImages.length,
+      referenceImageCount: selectedReferenceImages.length,
     });
 
-    return { fileImage, imageSource, referenceImages };
+    return { fileImage, imageSource, referenceImages: selectedReferenceImages };
   }
 
   /**
@@ -746,8 +787,7 @@ export class ImageGenerationService {
    * they did not describe, with nothing in the response to say why it looks wrong.
    *
    * Anchors are never carried forward from session history; only this explicit field produces
-   * them. Non-gpt-image providers get none - OpenAI's edit endpoint is the only one wired for
-   * a multi-image array here.
+   * them, except FLUX.2 also accepts the current workbench images as inputs.
    */
   private async resolveReferenceImages({
     referenceImageFabFileIds,
@@ -768,7 +808,8 @@ export class ImageGenerationService {
       return [];
     }
 
-    if (!isGPTImageModel(model)) {
+    const maxReferenceImages = getMaxReferenceImages(model);
+    if (!maxReferenceImages) {
       logger.debug('Dropping reference images for a model that cannot carry them', {
         model,
         requested: referenceImageFabFileIds.length,
@@ -784,8 +825,8 @@ export class ImageGenerationService {
     // Belt-and-braces: the request schemas cap this, but process() is also reachable from the
     // queue, where a stale in-flight payload predates the cap. Counted after de-duplication,
     // because the cap exists to bound how many images we actually pay to send.
-    if (uniqueIds.length > MAX_REFERENCE_IMAGES) {
-      throw new BadRequestError(`At most ${MAX_REFERENCE_IMAGES} reference images may be supplied`);
+    if (uniqueIds.length > maxReferenceImages) {
+      throw new BadRequestError(`At most ${maxReferenceImages} reference images may be supplied for ${model}`);
     }
 
     const files = await this.db.fabFiles.findAccessibleInIds(uniqueIds, { userId, userGroups }, lakeAccess);
@@ -1252,6 +1293,15 @@ export class ImageGenerationService {
           Logger.globalInstance.debug(`[DEBUG] ⚠️ No imageUrl available for base64 conversion`);
         }
 
+        const referenceImageData = isFlux2ImageModel(model)
+          ? await Promise.all(
+              referenceImages.map(async reference => {
+                const url = await this.fabFileStorage.getSignedUrl(reference.filePath as string);
+                return imageUrlToBase64(url, true);
+              })
+            )
+          : [];
+
         if (isKontextModelBranch) {
           Logger.globalInstance.debug(`[DEBUG] === KONTEXT MODEL PROCESSING ===`);
           Logger.globalInstance.debug(`[DEBUG] Kontext model validation:`, {
@@ -1317,7 +1367,9 @@ export class ImageGenerationService {
             user: userId,
             model: model as any,
             safety_tolerance,
-            image_prompt: base64Image,
+            ...(isFlux2ImageModel(model)
+              ? { reference_images: [...(base64Image ? [base64Image] : []), ...referenceImageData] }
+              : { image_prompt: base64Image }),
             prompt_upsampling,
             seed,
             output_format: nonWebpOutputFormat,
@@ -1639,6 +1691,25 @@ export class ImageGenerationService {
           .catch(err => logger.warn('Failed to record usage event', err));
       }
 
+      // The validated generation parameters, so a later take can reload them. No URLs or file ids: inputs are lineage.
+      const request = {
+        model,
+        prompt,
+        n,
+        ...(size && { size }),
+        ...(quality && { quality }),
+        ...(style && { style }),
+        ...(width !== undefined && { width }),
+        ...(height !== undefined && { height }),
+        ...(aspect_ratio && { aspect_ratio }),
+        ...(seed != null && { seed }),
+        ...(safety_tolerance !== undefined && { safety_tolerance }),
+        prompt_upsampling,
+        ...(output_format && { output_format }),
+        ...(background && { background }),
+      };
+      const derivedFrom = lineageOf(imageSource, fileImage, referenceImages);
+
       // Last, so a run that fails anywhere above (a later image blocked by moderation, billing) leaves no file.
       await Promise.all(
         storedImages.map(({ buffer, contentType }, index) =>
@@ -1654,7 +1725,9 @@ export class ImageGenerationService {
                 modelId: model,
                 ...(generationId && { jobId: `${generationId}-${index}` }),
                 prompt,
+                request,
               },
+              ...(derivedFrom.length > 0 && { derivedFrom }),
               sessionId,
               questId,
             },

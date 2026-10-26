@@ -1,4 +1,3 @@
-import FullUserViewModal from '@client/app/components/admin/Users/Views/FullUserViewModal';
 import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -13,7 +12,8 @@ import { exportUsersCsv } from './exportUsersCsv';
 import MobileFiltersDrawer from './MobileFiltersDrawer';
 import PaginationControls from './PaginationControls';
 import { PAGE_LIMIT_OPTIONS, useUsersParams, useUsersTab, useUsersTabUrlSync } from './useUsersTabParams';
-import UsersFilterBar, { UsersDisplayMode } from './UsersFilterBar';
+import UsersFilterBar from './UsersFilterBar';
+import { useShallow } from 'zustand/react/shallow';
 import { FullUsersView } from './Views/FullUsersView';
 import RecentActivityView from './Views/RecentActivityView';
 import SlimUsersContainer from './Views/SlimUsersView';
@@ -21,7 +21,9 @@ import UserJourney from './Views/UserJourney';
 
 const UsersTab: React.FC = () => {
   const isMobile = useIsMobile();
-  const [displayMode, setDisplayMode] = useState<UsersDisplayMode>('slim');
+  const [displayMode, setDisplayMode] = useUsersTab(
+    useShallow(state => [state.displayMode, state.setDisplayMode] as const)
+  );
   const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
   const organizations = useGetAllOrganizations({ filters: { personal: false } });
   const { setOpen: setCreateUserModalOpen } = useCreateUserModal();
@@ -168,7 +170,6 @@ const UsersTab: React.FC = () => {
       {/* Place all modals in one area */}
       <AdminProfileModal />
       <ComplianceModal />
-      <FullUserViewModal />
       <CreateUserModal />
     </Sheet>
   );

@@ -108,3 +108,17 @@ describe('text token contrast', () => {
     expect(contrast('rgba(0, 0, 0, 0)', '#FFFFFF')).toBeCloseTo(1, 5);
   });
 });
+
+describe('admin token contrast', () => {
+  it.each(MODES)('%s: admin text and status labels reach 4.5:1', mode => {
+    const palette = theme.colorSchemes[mode].palette.admin;
+    for (const text of [palette.ink, palette.inkMuted, palette.accent, palette.danger]) {
+      for (const surface of [palette.canvas, palette.surface]) {
+        expect(contrast(text, surface), `${text} on ${surface}`).toBeGreaterThanOrEqual(AA_TEXT);
+      }
+    }
+    for (const tone of Object.values(palette.status)) {
+      expect(contrast(tone.foreground, tone.background)).toBeGreaterThanOrEqual(AA_TEXT);
+    }
+  });
+});

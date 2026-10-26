@@ -217,6 +217,37 @@ describe('POST /api/v1/agent-executions', () => {
     expect(error).toMatchObject({ statusCode: 400, message: 'key is stale' });
   });
 
+  it('forwards confidence_overrides for the service to authorize', async () => {
+    const { req, res } = post({ session_id: 's1', message: 'go', confidence_overrides: [0.9, 0.1] });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(req, res);
+
+    expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({ confidenceOverrides: [0.9, 0.1] }), logger);
+  });
+
+  it('maps confidence_overrides_forbidden to a 403', async () => {
+    mockStart.mockResolvedValue({ ok: false, reason: 'confidence_overrides_forbidden', message: 'admins only' });
+    const { req, res } = post({ session_id: 's1', message: 'go', confidence_overrides: [0.1] });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const error = await (startHandler as any)(req, res).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({ statusCode: 403, message: 'admins only' });
+  });
+
+  it.each([
+    ['a score above 1', [1.5]],
+    ['a negative score', [-0.1]],
+    ['an empty script', []],
+  ])('rejects confidence_overrides with %s before dispatching anything', async (_label, confidence_overrides) => {
+    const { req, res } = post({ session_id: 's1', message: 'go', confidence_overrides });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect((startHandler as any)(req, res)).rejects.toThrow();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
   it("forwards an org-billed key's billing fields so startAgentExecution can bill its org", async () => {
     const keyInfo = {
       keyId: 'key-1',
@@ -307,6 +338,63 @@ describe('GET /api/v1/agent-executions/{id}', () => {
       created_at: '2026-08-24T00:00:00.000Z',
       updated_at: '2026-08-24T00:01:00.000Z',
     });
+  });
+
+  it('strips think spans from the answer and the final_answer step, leaving thought steps raw', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      answer: '<think>weighing options</think>The answer is 4.',
+      steps: [
+        { type: 'thought' as const, content: '<think>raw reasoning</think>', metadata: { timestamp: 1, iteration: 0 } },
+        { type: 'final_answer' as const, content: '<think>weighing options</think>The answer is 4.' },
+      ],
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(AgentExecutionStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.answer).toBe('The answer is 4.');
+    expect(body.steps).toEqual([
+      { type: 'thought', content: '<think>raw reasoning</think>', iteration: 0 },
+      { type: 'final_answer', content: 'The answer is 4.' },
+    ]);
+  });
+
+  it('drops the empty <think></think> pair a run with redacted reasoning leaves at the start', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      answer: '<think></think>\n\ndone',
+      steps: [{ type: 'final_answer' as const, content: '<think></think>\n\ndone' }],
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(body.answer).toBe('done');
+    expect(body.steps[0].content).toBe('done');
+  });
+
+  it('publishes an empty string, not null, when the stored answer is only reasoning', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      answer: '<think>truncated',
+      steps: [{ type: 'final_answer' as const, content: '<think>truncated' }],
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(AgentExecutionStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.status).toBe('completed');
+    expect(body.answer).toBe('');
+    expect(body.steps[0].content).toBe('');
   });
 
   it('publishes the failure reason so a failed run is not an opaque null answer', async () => {

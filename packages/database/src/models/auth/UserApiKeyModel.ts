@@ -165,6 +165,8 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       status: ApiKeyStatus.ACTIVE,
       $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
       'metadata.createdFrom': pool === 'oauth-exchange' ? 'oauth-exchange' : { $ne: 'oauth-exchange' },
+      // `$ne` keeps legacy rows with no billingOwnerType (user-billed by default) in the pool.
+      ...(pool === 'personal' && { billingOwnerType: { $ne: CreditHolderType.Organization } }),
     };
   }
 

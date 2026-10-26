@@ -38,9 +38,6 @@ const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageI
   const [isResolving, setIsResolving] = useState(!(cachedId ?? provisionalId));
   // Bumped once this reply's rows are saved, so a provisional id is checked against them.
   const [persistedCount, setPersistedCount] = useState(0);
-  // Already looked up and minted for this message and index: skip a request per remount until
-  // the reply's rows land.
-  const trustProvisional = !!provisionalId && persistedCount === 0;
 
   useEffect(() => {
     const onPersisted = (event: Event) => {
@@ -53,7 +50,9 @@ const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageI
   }, [messageId]);
 
   useEffect(() => {
-    if (cachedId || trustProvisional) return;
+    // A provisional id renders immediately, but always recheck it: the row may have saved while
+    // this virtualized card was unmounted. Only a database-confirmed id can skip the lookup.
+    if (cachedId) return;
     let isCancelled = false;
 
     const resolveId = async () => {
@@ -90,13 +89,12 @@ const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageI
     sessionId,
     resolveArtifactId,
     cachedId,
-    trustProvisional,
     persistedCount,
   ]);
 
-  const artifactId = cachedId ?? (trustProvisional ? provisionalId : resolvedId);
+  const artifactId = cachedId ?? provisionalId ?? resolvedId;
 
-  if (!artifactId || (isResolving && !cachedId && !trustProvisional)) {
+  if (!artifactId || (isResolving && !cachedId && !provisionalId)) {
     return (
       <Box
         data-testid="artifact-loading"

@@ -285,7 +285,7 @@ export interface paths {
     put?: never;
     /**
      * Generate an image
-     * @description Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images (4 for Klein), including images attached through `fabFileIds`. Unsupported models and an oversized reference list are rejected with a 400. The combined FLUX.2 input limit is checked when the render resolves attachments; exceeding it fails the polled quest. Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: "error"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.
      */
@@ -401,7 +401,7 @@ export interface paths {
     put?: never;
     /**
      * Refine text
-     * @description Rewrites `text` to be more concise, clear and detailed while keeping its intent. `context` is optional background that steers the rewrite. `text` is at most 10000 characters and `context` at most 10000. Output is capped at about 800 tokens, and identical requests are served from a cache for about five minutes. Not billed in credits. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
+     * @description Rewrites `text` to be more concise, clear and detailed while keeping its intent. `context` is optional background that steers the rewrite. `text` is at most 10000 characters and `context` at most 10000. Output is capped at about 800 tokens, and identical requests are served from a cache for about five minutes. A refinement the model runs is billed in credits for the tokens it used; a cached answer is free. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
      */
     post: operations['createTextRefinement'];
     delete?: never;
@@ -1198,7 +1198,7 @@ export interface components {
       };
     };
     /**
-     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, and a reference image that is missing, not an image, or still in moderation. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
+     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, a reference image that is missing, not an image, or still in moderation, and the combined FLUX.2 input-image limit after attachments are resolved. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "sessionId": "664f1c2b9a1e4d0012ab34aa",
@@ -1230,7 +1230,7 @@ export interface components {
       images?: string[];
     };
     /**
-     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, and a reference image that is missing, not an image, or still in moderation. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
+     * @description The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: "insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a provider error, a reference image that is missing, not an image, or still in moderation, and the combined FLUX.2 input-image limit after attachments are resolved. Check `type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does not mean success.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "sessionId": "664f1c2b9a1e4d0012ab34aa",
@@ -1460,6 +1460,8 @@ export interface components {
       enable_mementos?: boolean;
       enable_lattice?: boolean;
       enable_artifacts?: boolean;
+      /** @description Admin only. Scripted per-iteration confidence scores (0 to 1) that replace the real score at the confidence gate: entry i scores iteration i + 1, and iterations past the end use the real score. The gate pauses the run for review on a streak of consecutive evaluated iterations below its threshold (currently 2), so script one low entry per iteration you want in the streak. Only iterations that ran tools are evaluated, scripted or not, and a finished run never pauses. A non-admin caller gets 403. */
+      confidence_overrides?: number[];
     };
     getAgentExecutionResponse200: {
       id: string;
@@ -2590,6 +2592,13 @@ export interface components {
             | 'flux-pro-1.0-fill'
             | 'flux-kontext-pro'
             | 'flux-kontext-max'
+            | 'flux-2-max'
+            | 'flux-2-pro'
+            | 'flux-2-pro-preview'
+            | 'flux-2-flex'
+            | 'flux-2-klein-9b'
+            | 'flux-2-klein-9b-preview'
+            | 'flux-2-klein-4b'
             | 'grok-imagine-image-quality'
             | 'gemini-2.5-flash-image'
             | 'gemini-3-pro-image-preview'
@@ -2766,6 +2775,13 @@ export interface components {
             | 'flux-pro-1.0-fill'
             | 'flux-kontext-pro'
             | 'flux-kontext-max'
+            | 'flux-2-max'
+            | 'flux-2-pro'
+            | 'flux-2-pro-preview'
+            | 'flux-2-flex'
+            | 'flux-2-klein-9b'
+            | 'flux-2-klein-9b-preview'
+            | 'flux-2-klein-4b'
             | 'grok-imagine-image-quality'
             | 'gemini-2.5-flash-image'
             | 'gemini-3-pro-image-preview'
@@ -3063,6 +3079,17 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?: 'provider_not_configured' | 'provider_rejected';
+    };
+    createTextRefinementResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     createTextRefinementResponse503: {
       error: string;
@@ -5717,7 +5744,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -8070,7 +8097,7 @@ export interface operations {
           'application/json': components['schemas']['generateImageResponse200'];
         };
       };
-      /** @description `referenceImageFabFileIds` is set for a non-gpt-image model, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
+      /** @description `referenceImageFabFileIds` is set for an unsupported model or its distinct ids alone exceed the model's reference limit, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -9309,6 +9336,29 @@ export interface operations {
           'application/json': components['schemas']['createTextRefinementResponse200'];
         };
       };
+      /** @description The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description Missing/invalid credentials, or the text-refinement provider refused the configured key (`errorCode: "provider_rejected"`). */
       401: {
         headers: {
@@ -9368,7 +9418,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request failed validation. */
+      /** @description Request body failed validation, or the caller cannot afford the refinement - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -9388,7 +9438,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['createTextRefinementResponse422'];
         };
       };
       /** @description Per-key rate limit exceeded. */

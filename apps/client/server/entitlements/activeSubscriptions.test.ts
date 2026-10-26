@@ -17,10 +17,63 @@ vi.mock('@bike4mind/database', () => ({ organizationRepository: { findPlanHolder
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn } } }));
 
-import { getActiveSubscriptionsForUser, getRequestActiveSubscriptions } from './activeSubscriptions';
+import { activePlanResolver, getActiveSubscriptionsForUser, getRequestActiveSubscriptions } from './activeSubscriptions';
 
 const own = { priceId: 'price_pro', ownerType: 'User', ownerId: 'u1' };
 const seat = { priceId: 'price_team', ownerType: 'Organization', ownerId: 'org1' };
+
+describe('activePlanResolver', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findActiveUserSubscriptions.mockResolvedValue([]);
+    findActiveSubscriptionsByOwners.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue([]);
+  });
+
+  it('reports no plan only after the user and org reads succeed', async () => {
+    await expect(activePlanResolver.hasActivePlan('u1')).resolves.toBe(false);
+    expect(findActiveUserSubscriptions).toHaveBeenCalledWith('u1');
+    expect(findPlanHolderOrgIds).toHaveBeenCalledWith('u1');
+    expect(findActiveSubscriptionsByOwners).not.toHaveBeenCalled();
+  });
+
+  it('recognizes a user-owned plan without needing the org leg', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([own]);
+
+    await expect(activePlanResolver.hasActivePlan('u1')).resolves.toBe(true);
+    expect(findPlanHolderOrgIds).not.toHaveBeenCalled();
+  });
+
+  it('recognizes an org seat even when the user has no personal plan', async () => {
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwners.mockResolvedValue([seat]);
+
+    await expect(activePlanResolver.hasActivePlan('u1')).resolves.toBe(true);
+    expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['org1']);
+  });
+
+  it('does not classify a failed membership read as no active plan', async () => {
+    const error = new Error('membership lookup unavailable');
+    findPlanHolderOrgIds.mockRejectedValue(error);
+
+    await expect(activePlanResolver.hasActivePlan('u1')).rejects.toBe(error);
+  });
+
+  it('does not classify a failed org-subscription read as no active plan', async () => {
+    const error = new Error('org subscriptions unavailable');
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwners.mockRejectedValue(error);
+
+    await expect(activePlanResolver.hasActivePlan('u1')).rejects.toBe(error);
+  });
+
+  it('propagates a failed user-owned subscription read', async () => {
+    const error = new Error('user subscriptions unavailable');
+    findActiveUserSubscriptions.mockRejectedValue(error);
+
+    await expect(activePlanResolver.hasActivePlan('u1')).rejects.toBe(error);
+  });
+});
 
 describe('getActiveSubscriptionsForUser', () => {
   beforeEach(() => {

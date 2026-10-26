@@ -136,6 +136,31 @@ describe('registerUser', () => {
     expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
   });
 
+  describe('invite-only OTC registration', () => {
+    it('redeems an email-bound invite and verifies the account', async () => {
+      mockInvite.email = baseParams.email;
+      mockAdapters.db.users.update = vi.fn().mockResolvedValue(undefined);
+      mockAdapters.db.creditTransactions = undefined;
+      const result = await registerViaOTC({ ...baseParams, password: '' }, mockAdapters);
+      expect(result).toMatchObject({ email: baseParams.email, emailVerified: true });
+      expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledWith(
+        expect.objectContaining({ id: mockInvite.id, status: RegInviteStatusType.used }),
+        undefined
+      );
+    });
+
+    it.each([
+      [{ email: 'other@example.com' }, 'This invite code was issued for a different email address'],
+      [{ used: new Date() }, 'Invite code already used'],
+      [{ expiresAt: new Date(0) }, 'Invite code has expired'],
+    ])('rejects an unusable invite %j', async (patch, message) => {
+      Object.assign(mockInvite, patch);
+      await expect(registerViaOTC({ ...baseParams, password: '' }, mockAdapters)).rejects.toThrow(message);
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+      expect(mockAdapters.db.registrationInvites.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('reserved username prefix', () => {
     const withSyntheticDomains = (domains: string) => {
       const base = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
@@ -567,6 +592,7 @@ describe('registerViaOTC', () => {
           findByUsernameOrEmail: vi.fn().mockResolvedValue(null),
           create: vi.fn().mockImplementation(async (user: any) => ({ ...user, id: 'newUserId' })),
           update: vi.fn().mockImplementation(async (user: any) => user),
+          claimFreeCreditGrant: vi.fn().mockResolvedValue(true),
         },
         adminSettings: {
           findBySettingName: vi.fn().mockImplementation((name: string) => {
@@ -624,6 +650,18 @@ describe('registerViaOTC', () => {
       tags: ['Customer'],
       pendingCreditGrant: null,
     });
+  });
+
+  it('registers an alias of an already-granted inbox but grants it nothing', async () => {
+    mockAdapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
+
+    const result = await registerViaOTC(otcParams, mockAdapters);
+
+    expect(mockAdapters.db.users.claimFreeCreditGrant).toHaveBeenCalledWith('newUserId');
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(result.emailVerified).toBe(true);
+    // The pending tag is released, so the refused grant is not retried on every login.
+    expect(result.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
   });
 
   it('grants the default credits for an admitted no-invite signup while open registration is off', async () => {

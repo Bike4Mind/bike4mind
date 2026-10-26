@@ -8,6 +8,7 @@ import {
   creditsToUsdAtFloor,
   formatUsdAmount,
   formatUsdPerCredit,
+  isEnforceCreditsLocked,
   MIN_PRICE_PER_CREDIT_USD,
   resolveTeamPlanSettings,
   SETTING_TABS,
@@ -263,6 +264,11 @@ const AdminGrowthPricingTab = () => {
                       index={index}
                       setting={setting}
                       defaultValue={current}
+                      lockedNote={
+                        key === 'enforceCredits' && isEnforceCreditsLocked()
+                          ? 'Always on for hosted deployments'
+                          : undefined
+                      }
                     />
                   </div>
                 );

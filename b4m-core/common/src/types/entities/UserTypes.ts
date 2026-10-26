@@ -277,9 +277,16 @@ export interface IUser extends ICreditHolder {
    * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
+  /**
+   * Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under. Unset
+   * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
+   */
+  freeCreditClaimEmail?: string | null;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;
+  /** Admin override that trusts the account for personal API keys (userApiKeyService/trust.ts). Absent on legacy docs. */
+  apiKeyTrustApproved?: boolean;
   /**
    * Per-user moderation tracking + auto-throttle/suspend state.
    * Absent until the user's first moderation hit. Independent of `isModerated`, the admin's
@@ -765,6 +772,11 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   atomicReserveMfaAttempt: (userId: string) => Promise<{ reserved: boolean; user: IUserDocument | null }>;
   atomicClaimTotpStep: (userId: string, step: number) => Promise<boolean>;
   atomicConsumeBackupCode: (userId: string, codeHash: string) => Promise<boolean>;
+  /**
+   * Claim the one free-credit grant allowed per inbox. True when this account holds the claim
+   * (now or from an earlier attempt), false when another account already does.
+   */
+  claimFreeCreditGrant: (userId: string) => Promise<boolean>;
   /**
    * Enable MFA only while the stored secret is still `totpSecret` and MFA is still disabled.
    * Returns null when a concurrent setup replaced the secret, so a code verified against a
