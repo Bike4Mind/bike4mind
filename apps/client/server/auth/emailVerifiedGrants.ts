@@ -49,7 +49,10 @@ export type EmailVerifiedGrantsResult = PendingFreeCreditReleaseResult & {
  */
 export async function isEligibleForFreeCredits(email: string, logger: Logger): Promise<boolean> {
   try {
-    return !(await userService.shouldBlockDisposableEmail(email, { adminSettings: adminSettingsRepository }));
+    return !(await userService.shouldBlockDisposableEmail(email, {
+      adminSettings: adminSettingsRepository,
+      signupProtection,
+    }));
   } catch (error) {
     logger.error('Free-credit eligibility check failed; withholding the grant', error);
     return false;

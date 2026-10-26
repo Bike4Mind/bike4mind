@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Alert, Button, Stack, Table, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SignupDomainReview } from '@bike4mind/common';
+import type { DisposableSourceStatus, SignupDomainReview } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 
@@ -15,7 +15,14 @@ export default function SignupDomainHoldsTab() {
   const query = useQuery({
     queryKey: [...QUERY_KEY, page],
     queryFn: async () =>
-      (await api.get<{ data: SignupDomainReview[]; total: number }>(ENDPOINT, { params: { page } })).data,
+      (
+        await api.get<{
+          data: SignupDomainReview[];
+          total: number;
+          sources: DisposableSourceStatus[];
+          intelCacheSize: number;
+        }>(ENDPOINT, { params: { page } })
+      ).data,
   });
   const decision = useMutation({
     mutationFn: async (input: { domain: string; action: 'confirm' | 'release'; afterUserId?: string }) =>
@@ -37,9 +44,10 @@ export default function SignupDomainHoldsTab() {
     <Stack spacing={2} data-testid="signup-domain-holds-tab">
       <Typography level="h3">Signup Domain Holds</Typography>
       <Typography>
-        Patterned signup bursts defer pending free credits. Confirm keeps credits held. Release allows future grants and
-        retries existing pending grants. Granted balances are never changed. Enable detection in Users settings.
-        Released domains stay exempt from automatic holds.
+        Patterned signup bursts, domains only on the aggregate disposable list, freshly registered domains and domains
+        whose mail runs through a disposable provider defer pending free credits. Confirm keeps credits held. Release
+        allows future grants and retries existing pending grants. Granted balances are never changed. Configure
+        detection in Users settings. Released domains stay exempt from automatic holds.
       </Typography>
       {query.isPending && <Typography>Loading holds...</Typography>}
       {query.error && <Alert color="danger">{getErrorMessage(query.error)}</Alert>}
@@ -118,6 +126,33 @@ export default function SignupDomainHoldsTab() {
         </tbody>
       </Table>
       {query.data?.data.length === 0 && <Typography>No signup domains are held.</Typography>}
+      <Typography level="title-md">Disposable list sources</Typography>
+      <Table aria-label="Disposable list sources" data-testid="signup-domain-holds-sources">
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Domains</th>
+            <th>Last success</th>
+            <th>Last error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {query.data?.sources.map(source => (
+            <tr key={source.source}>
+              <td>{source.source}</td>
+              <td>{source.count}</td>
+              <td>{source.lastSuccessAt ? new Date(source.lastSuccessAt).toLocaleString() : 'never'}</td>
+              <td>
+                {source.lastError
+                  ? `${source.lastError} (${source.lastErrorAt ? new Date(source.lastErrorAt).toLocaleString() : ''})`
+                  : '-'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+      {query.data?.sources.length === 0 && <Typography>The disposable list refresh has not run yet.</Typography>}
+      {query.data && <Typography level="body-sm">Cached domain lookups: {query.data.intelCacheSize}</Typography>}
     </Stack>
   );
 }

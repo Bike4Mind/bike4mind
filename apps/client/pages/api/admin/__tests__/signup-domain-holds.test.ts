@@ -28,10 +28,25 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@bike4mind/database', () => ({
-  SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate },
-  User: { find, countDocuments: count },
-}));
+vi.mock('@bike4mind/database', () => {
+  const reviewQuery = {
+    sort: () => reviewQuery,
+    skip: () => reviewQuery,
+    limit: () => reviewQuery,
+    lean: async () => [],
+  };
+  return {
+    SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate, find: () => reviewQuery, countDocuments: async () => 0 },
+    DomainIntelligenceModel: { estimatedDocumentCount: async () => 12 },
+    disposableDomainRepository: {
+      getDisposableSourceStatus: async () => [
+        { source: 'curated', count: 3, lastSuccessAt: new Date('2026-01-02') },
+        { source: 'aggregate', count: 0, lastError: 'HTTP 503', lastErrorAt: new Date('2026-01-02') },
+      ],
+    },
+    User: { find, countDocuments: count },
+  };
+});
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   isEligibleForFreeCredits: eligible,
   releaseVerifiedPendingFreeCredits: release,
@@ -57,6 +72,21 @@ beforeEach(() => {
   count.mockReset().mockResolvedValue(0);
   release.mockReset().mockResolvedValue({ creditsGranted: 25, tags: [] });
   eligible.mockReset().mockResolvedValue(true);
+});
+describe('signup domain hold listing', () => {
+  it('reports per-source list freshness and the lookup cache size', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: {} });
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
+    await handlers.get(req, res);
+    expect(res._getJSONData()).toMatchObject({
+      total: 0,
+      intelCacheSize: 12,
+      sources: [
+        { source: 'curated', count: 3 },
+        { source: 'aggregate', count: 0, lastError: 'HTTP 503' },
+      ],
+    });
+  });
 });
 describe('signup domain hold decisions', () => {
   it('is session-only and rejects non-admin decisions before reading or writing', async () => {
