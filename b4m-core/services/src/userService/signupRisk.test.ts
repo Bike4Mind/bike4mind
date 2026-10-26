@@ -44,7 +44,10 @@ describe('evaluateSignupRisk', () => {
   });
 
   it('accepts only boolean observations for boolean signals', () => {
-    const booleanPolicy = { ...policy, rules: [{ ...policy.rules[0], signal: 'datacenter', threshold: 1 }] };
+    const booleanPolicy = {
+      ...policy,
+      rules: [{ ...policy.rules[0], signal: 'datacenter', comparison: 'eq', threshold: 1 }],
+    };
     expect(evaluateSignupRisk(booleanPolicy, { datacenter: false }, 10).band).toBe('full');
     expect(evaluateSignupRisk(booleanPolicy, { datacenter: true }, 10).band).toBe('reduced');
     expect(evaluateSignupRisk(booleanPolicy, { datacenter: 0 }, 10).band).toBe('review');
@@ -71,6 +74,9 @@ describe('evaluateSignupRisk', () => {
     { ...policy, rules: [...policy.rules, ...policy.rules] },
     { ...policy, rules: [{ ...policy.rules[0], weight: -1 }] },
     { ...policy, rules: [{ ...policy.rules[0], signal: 'accountAge' }] },
+    { ...policy, rules: [{ ...policy.rules[0], signal: 'datacenter', comparison: 'eq', threshold: 2 }] },
+    { ...policy, rules: [{ ...policy.rules[0], signal: 'datacenter', threshold: 1 }] },
+    { ...policy, rules: [{ ...policy.rules[0], threshold: 1.5 }] },
     { enabled: false, unexpected: true },
   ])('holds invalid or unconfigured policy without a full-grant fallback', raw => {
     expect(signupRiskPolicySchema.safeParse(raw).success).toBe(false);

@@ -25,7 +25,16 @@ const ruleSchema = z
     missing: z.enum(['review', 'score']),
     missingWeight: finiteNonnegative,
   })
-  .strict();
+  .strict()
+  .superRefine((rule, ctx) => {
+    const countSignal = rule.signal.endsWith('Signups');
+    if (
+      (countSignal && !Number.isSafeInteger(rule.threshold)) ||
+      (!countSignal && (rule.comparison !== 'eq' || (rule.threshold !== 0 && rule.threshold !== 1)))
+    ) {
+      ctx.addIssue({ code: 'custom', message: 'Invalid signal comparison' });
+    }
+  });
 
 export const signupRiskPolicySchema = z.discriminatedUnion('enabled', [
   z.object({ enabled: z.literal(false) }).strict(),
