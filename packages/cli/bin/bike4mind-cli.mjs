@@ -285,7 +285,13 @@ const argv = await yargs(hideBin(process.argv))
         // Handled by external command handler
       })
       .command('search <query..>', 'Search Hugging Face for GGUF models', (yargs) => {
-        return yargs.positional('query', { type: 'string', describe: 'Search terms' });
+        return yargs
+          .positional('query', { type: 'string', describe: 'Search terms' })
+          .option('include-abliterated', {
+            type: 'boolean',
+            description: 'Also list abliterated and uncensored builds, labelled and last',
+            default: false,
+          });
       }, async () => {
         // Handled by external command handler
       })

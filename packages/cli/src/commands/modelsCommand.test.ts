@@ -220,7 +220,7 @@ function harness(
   return { deps, lines, questions, progress, saved, runtime, hub, registry, controller };
 }
 
-const OPTS: ModelsOptions = { json: false, yes: false, acceptLicense: false };
+const OPTS: ModelsOptions = { json: false, yes: false, acceptLicense: false, includeAbliterated: false };
 
 describe('parsePullTarget', () => {
   it('reads Hugging Face repos with and without a host or quant', () => {
@@ -383,6 +383,104 @@ describe('models search', () => {
 
   it('requires a query', async () => {
     await expect(runModelsCommand('search', { _: [], query: [] }, harness().deps)).rejects.toThrow(/Usage/);
+  });
+
+  describe('abliterated builds', () => {
+    const hit = (id: string, tags: string[] = []) => ({
+      id,
+      author: null,
+      downloads: 10,
+      likes: 1,
+      updatedAt: null,
+      pipelineTag: null,
+      gated: false as const,
+      private: false,
+      licenses: ['apache-2.0'],
+      baseModels: [],
+      tags,
+    });
+    const hubWith = () =>
+      harness({
+        hub: fakeHub({
+          search: vi.fn().mockResolvedValue({
+            models: [
+              hit('someone/Qwen3-8B-heretic-GGUF'),
+              hit('Qwen/Qwen3-8B-GGUF'),
+              hit('someone/Plain-GGUF', ['abliterated']),
+              hit('meta/Llama-3-8B-GGUF'),
+            ],
+            nextCursor: null,
+          }),
+        }),
+      });
+
+    it('hides them by default and prints how many were left out', async () => {
+      const h = hubWith();
+      await runModelsCommand('search', { _: [], query: 'qwen' }, h.deps);
+      const text = h.lines.join('\n');
+      expect(text).not.toMatch(/heretic|Plain-GGUF/);
+      expect(h.lines.filter(line => /^(Qwen|meta)\//.test(line))).toHaveLength(2);
+      expect(text).toContain('2 abliterated or uncensored builds were left out. Show them with --include-abliterated.');
+    });
+
+    it('lists them last and labelled with --include-abliterated', async () => {
+      const h = hubWith();
+      await runModelsCommand('search', { _: [], query: 'qwen', 'include-abliterated': true }, h.deps);
+      const repos = h.lines.filter(line => /GGUF/.test(line)).map(line => line.split(/\s+/)[0]);
+      expect(repos).toEqual([
+        'Qwen/Qwen3-8B-GGUF',
+        'meta/Llama-3-8B-GGUF',
+        'someone/Qwen3-8B-heretic-GGUF',
+        'someone/Plain-GGUF',
+      ]);
+      expect(h.lines.filter(line => /not recommended: abliterated or uncensored build$/.test(line))).toHaveLength(2);
+      expect(h.lines.join('\n')).not.toMatch(/left out/);
+    });
+
+    it('marks them in JSON and reports the hidden count', async () => {
+      const hidden = hubWith();
+      await runModelsCommand('search', { _: [], query: 'qwen', 'output-format': 'json' }, hidden.deps);
+      const page = JSON.parse(hidden.lines.join('\n'));
+      expect(page.models.map((model: { id: string }) => model.id)).toEqual([
+        'Qwen/Qwen3-8B-GGUF',
+        'meta/Llama-3-8B-GGUF',
+      ]);
+      expect(page.hidden).toBe('2 abliterated or uncensored builds were left out.');
+
+      const shown = hubWith();
+      await runModelsCommand(
+        'search',
+        { _: [], query: 'qwen', 'output-format': 'json', 'include-abliterated': true },
+        shown.deps
+      );
+      const all = JSON.parse(shown.lines.join('\n'));
+      expect(all.models.map((model: { notRecommended?: string }) => model.notRecommended)).toEqual([
+        undefined,
+        undefined,
+        'abliterated or uncensored build',
+        'abliterated or uncensored build',
+      ]);
+      expect(all.hidden).toBeUndefined();
+    });
+
+    it('still says so when every match is hidden', async () => {
+      const h = harness({
+        hub: fakeHub({
+          search: vi.fn().mockResolvedValue({ models: [hit('someone/X-Uncensored-GGUF')], nextCursor: null }),
+        }),
+      });
+      await runModelsCommand('search', { _: [], query: 'x' }, h.deps);
+      expect(h.lines[0]).toMatch(/No GGUF models on Hugging Face match "x"/);
+      expect(h.lines.join('\n')).toContain('1 abliterated or uncensored build was left out.');
+    });
+
+    it('cautions on a flagged repo in show', async () => {
+      const h = harness({
+        hub: fakeHub({ getModel: vi.fn().mockResolvedValue(detail({ id: 'someone/Qwen-abliterated-GGUF' })) }),
+      });
+      await runModelsCommand('show', { _: [], repo: 'someone/Qwen-abliterated-GGUF' }, h.deps);
+      expect(h.lines.join('\n')).toContain('Caution:   not recommended: abliterated or uncensored build');
+    });
   });
 });
 
