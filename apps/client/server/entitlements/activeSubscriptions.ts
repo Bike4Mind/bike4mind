@@ -1,11 +1,18 @@
 import type { IMongoDocument } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import type { ActivePlanResolver } from '@bike4mind/services';
 import { SubscriptionOwnerType, type ISubscription } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import type { MembershipRequest } from '@bike4mind/server-utils/dataLakes/requestMembership';
 
 export type ActiveSubscription = ISubscription & IMongoDocument;
+
+async function getActiveOrgSubscriptionsForUser(userId: string): Promise<ActiveSubscription[]> {
+  const orgIds = await organizationRepository.findPlanHolderOrgIds(userId);
+  if (orgIds.length === 0) return [];
+  return subscriptionRepository.findActiveSubscriptionsByOwners(SubscriptionOwnerType.Organization, orgIds);
+}
 
 /**
  * Every ACTIVE subscription that grants this user a plan: their own rows plus the rows of every
@@ -23,9 +30,7 @@ export type ActiveSubscription = ISubscription & IMongoDocument;
 export async function getActiveSubscriptionsForUser(userId: string): Promise<ActiveSubscription[]> {
   const resolveOrgRows = async (): Promise<ActiveSubscription[]> => {
     try {
-      const orgIds = await organizationRepository.findPlanHolderOrgIds(userId);
-      if (orgIds.length === 0) return [];
-      return await subscriptionRepository.findActiveSubscriptionsByOwners(SubscriptionOwnerType.Organization, orgIds);
+      return await getActiveOrgSubscriptionsForUser(userId);
     } catch (error) {
       Logger.globalInstance.warn('[entitlements] org-seat resolution failed; using user-owned subscriptions only', {
         userId,
@@ -40,6 +45,18 @@ export async function getActiveSubscriptionsForUser(userId: string): Promise<Act
   ]);
   return orgRows.length === 0 ? userRows : [...userRows, ...orgRows];
 }
+
+/**
+ * The billing check must distinguish no plan from an unreadable plan: the entitlement fallback
+ * above under-grants access, but reusing it here would charge a paid seat as a free-tier holder.
+ */
+export const activePlanResolver: ActivePlanResolver = {
+  hasActivePlan: async userId => {
+    const ownSubscriptions = await subscriptionRepository.findActiveUserSubscriptions(userId);
+    if (ownSubscriptions.length > 0) return true;
+    return (await getActiveOrgSubscriptionsForUser(userId)).length > 0;
+  },
+};
 
 export interface ActiveSubscriptionsRequest extends MembershipRequest {
   activeSubscriptions?: ActiveSubscription[];

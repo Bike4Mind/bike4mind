@@ -23,6 +23,7 @@ import type { BaseStorage } from '@bike4mind/utils';
 import type { B4MLLMTools as LlmTools, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from './base/types';
 import type { IChatCompletionServiceOptions } from '../ChatCompletionFeatures';
+import { memoizeOperationalBillingCheck } from '../../billing/isOperationalBillingEnabled';
 
 export const generateTools = (
   userId: string,
@@ -136,6 +137,9 @@ export const generateTools = (
     codeMinifier,
     availableModels,
     onToolLlmUsage,
+    operationalBillingCheck: db.operationalBilling
+      ? memoizeOperationalBillingCheck({ adminSettings: db.adminSettings }, logger)
+      : undefined,
     decide,
     getAbortSignal,
     numberCitables,

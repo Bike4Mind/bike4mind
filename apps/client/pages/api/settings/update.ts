@@ -1,6 +1,7 @@
 import {
   SettingKeySchema,
   isBlankSettingValue,
+  isEnforceCreditsLocked,
   SreAgentConfig,
   SRE_SECRET_PLACEHOLDER,
   formatUsdPerCredit,
@@ -26,6 +27,7 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/serve
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 
 // One-time guard so a self-host install running without a configured key logs the
@@ -78,6 +80,16 @@ const handler = baseApi().put(
       throw new BadRequestError(
         `Price Per Credit must be at least ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`
       );
+    }
+
+    if (key === 'enforceCredits' && value === false && isEnforceCreditsLocked()) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.admin_settings.denied',
+        target: { kind: 'settings', id: key, displayName: key },
+        summary: 'blocked disabling enforceCredits on a hosted deployment',
+        details: { attemptedAction: 'settings.admin_settings.updated', value: false },
+      });
+      throw new BadRequestError('enforceCredits is always on for hosted deployments.');
     }
 
     // The schema accepts any strings so a bad stored entry cannot blank the list on read; the write is

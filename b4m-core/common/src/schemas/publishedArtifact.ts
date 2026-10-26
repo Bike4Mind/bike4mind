@@ -79,6 +79,12 @@ export const PublishSourceSchema = z.object({
    * backward compatible: existing drafts omit it and finalize serves their bytes unchanged.
    */
   artifactType: ArtifactTypeSchema.optional(),
+  /**
+   * Set on a multi-file React publish: the identifiers of the sibling artifacts the entry imports.
+   * The upload is then a JSON `{ entry, files }` body (apps/client/app/utils/reactArtifactPublish.ts),
+   * and a refresh re-reads each sibling by these identifiers within the entry artifact's session.
+   */
+  reactSiblings: z.array(z.string().min(1).max(200)).max(50).optional(),
 });
 export type PublishSource = z.infer<typeof PublishSourceSchema>;
 
