@@ -25,6 +25,7 @@ import { useUserCreditAdjustments, userCreditAdjustmentsKey } from '../hooks/use
 import { isValidAdminActionReason } from '@bike4mind/common';
 import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { CreditChange } from '../types';
 
 interface CreditAdjustmentModalProps {
   open: boolean;
@@ -32,8 +33,6 @@ interface CreditAdjustmentModalProps {
   selectedUser: AdminUserListItem | null;
   onCreditAdjustment: (userId: string, change: CreditChange, note: string) => Promise<void>;
 }
-
-export type CreditChange = { kind: 'delta'; delta: number } | { kind: 'set'; balance: number };
 
 type Mode = 'adjust' | 'set';
 const MAX_BALANCE = 1_000_000_000;

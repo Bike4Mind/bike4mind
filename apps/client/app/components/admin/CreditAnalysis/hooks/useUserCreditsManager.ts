@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useUpdateUserCredits } from './useUpdateUserCredits';
-import { NotificationState } from '../types';
-import type { CreditChange } from '../components/CreditAdjustmentModal';
+import { CreditChange, NotificationState } from '../types';
 
 export function useUserCreditsManager(onRefresh?: () => void) {
   const { value: searchQuery, debouncedValue: debouncedSearch, setValue: setSearchValue } = useDebounceValue('');
