@@ -124,6 +124,24 @@ describe('OpenAIBackend lead system message on the wire', () => {
     });
   });
 
+  it('Responses: tool-backed identity sends the caller system text with no reminder', async () => {
+    const { backend, chatCreate, responsesCreate } = buildBackend();
+
+    await backend.complete(
+      ChatModels.GPT5,
+      [
+        { role: 'system', content: CALLER_SYSTEM },
+        { role: 'user', content: 'hi' },
+      ],
+      { tools: [tool], identityViaTool: true },
+      async () => {}
+    );
+
+    expect(chatCreate).not.toHaveBeenCalled();
+    const { input } = responsesCreate.mock.calls[0][0] as { input: AnyRecord[] };
+    expect(input[0]).toEqual({ role: 'system', content: CALLER_SYSTEM });
+  });
+
   it('tool-backed identity: tools present drops the reminder, tools absent keeps it', async () => {
     const withTools = buildBackend();
     await withTools.backend.complete(
