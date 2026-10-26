@@ -2466,7 +2466,6 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
-      const servingModel = { current: modelInfo };
       this.modelAdmission = createModelAdmission({
         user: this.user,
         configs: await loadModelConfigurations(this.db.adminSettings),
@@ -2477,6 +2476,7 @@ export class ChatCompletionProcess {
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
       await this.modelAdmission.assert(modelInfo.id);
+      const servingModel = { current: modelInfo };
       // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
       // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
       if (quest.promptMeta && resolvedModelId !== model) {
