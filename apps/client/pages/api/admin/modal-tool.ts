@@ -49,25 +49,28 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       logger.info(`Parsed tool params - Action: ${toolParams.action}`, toolParams);
 
       // Execute the appropriate action based on parsed parameters
-      const { result, changes } = await collectModalChanges(async () => {
-        switch (toolParams.action) {
-          case 'create':
-            logger.info('Executing CREATE action');
-            return await createModal(toolParams);
-          case 'list':
-            logger.info('Executing LIST action with filter:', toolParams.filter);
-            return await listModals(toolParams.filter);
-          case 'update':
-            logger.info(`Executing UPDATE action for modal ${toolParams.modalId}`);
-            return await updateModal(toolParams.modalId, toolParams);
-          case 'delete':
-            logger.info(`Executing DELETE action for modal ${toolParams.modalId}`);
-            return await deleteModal(toolParams.modalId);
-          default:
-            logger.error(`Unknown action: ${toolParams.action}`);
-            return { success: false, error: 'Unknown action' };
-        }
-      });
+      const { result, changes } = await collectModalChanges(
+        async () => {
+          switch (toolParams.action) {
+            case 'create':
+              logger.info('Executing CREATE action');
+              return await createModal(toolParams);
+            case 'list':
+              logger.info('Executing LIST action with filter:', toolParams.filter);
+              return await listModals(toolParams.filter);
+            case 'update':
+              logger.info(`Executing UPDATE action for modal ${toolParams.modalId}`);
+              return await updateModal(toolParams.modalId, toolParams);
+            case 'delete':
+              logger.info(`Executing DELETE action for modal ${toolParams.modalId}`);
+              return await deleteModal(toolParams.modalId);
+            default:
+              logger.error(`Unknown action: ${toolParams.action}`);
+              return { success: false, error: 'Unknown action' };
+          }
+        },
+        partial => recordModalChanges(req, partial, 'modal-tool')
+      );
       await recordModalChanges(req, changes, 'modal-tool');
 
       logger.info(`Modal tool result - Success: ${result.success}, Message: ${result.message}`);

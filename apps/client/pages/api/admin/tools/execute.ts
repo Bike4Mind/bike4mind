@@ -38,7 +38,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     };
 
     // Execute the tool
-    const { result, changes } = await collectModalChanges(() => adminToolService.execute(tool, context, toolParams));
+    const { result, changes } = await collectModalChanges(
+      () => adminToolService.execute(tool, context, toolParams),
+      partial => recordModalChanges(req, partial, 'admin-tool')
+    );
 
     await recordModalChanges(req, changes, 'admin-tool');
 

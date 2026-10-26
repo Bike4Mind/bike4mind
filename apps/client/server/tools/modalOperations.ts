@@ -9,11 +9,20 @@ export type ModalChange = { kind: 'created' | 'updated' | 'deleted'; id: string;
 // Lets a route audit the modal writes that a tool or LLM-parsed query performed on its behalf.
 const modalChangeStore = new AsyncLocalStorage<ModalChange[]>();
 
-// Changes are dropped if run throws, and a nested call hides its changes from the outer collector.
-export async function collectModalChanges<T>(run: () => Promise<T>): Promise<{ result: T; changes: ModalChange[] }> {
+// If run throws, changes already made go to onThrow before the error propagates.
+// A nested call hides its changes from the outer collector.
+export async function collectModalChanges<T>(
+  run: () => Promise<T>,
+  onThrow?: (changes: ModalChange[]) => Promise<void>
+): Promise<{ result: T; changes: ModalChange[] }> {
   const changes: ModalChange[] = [];
-  const result = await modalChangeStore.run(changes, run);
-  return { result, changes };
+  try {
+    const result = await modalChangeStore.run(changes, run);
+    return { result, changes };
+  } catch (error) {
+    if (changes.length > 0) await onThrow?.(changes);
+    throw error;
+  }
 }
 
 const noteModalChange = (kind: ModalChange['kind'], id: unknown, title: string | undefined | null) => {

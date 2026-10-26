@@ -48,6 +48,32 @@ describe('collectModalChanges', () => {
     expect(changes).toEqual([]);
   });
 
+  it('hands collected changes to onThrow before rethrowing', async () => {
+    model.findByIdAndDelete.mockResolvedValue({ _id: 'gone-1', title: 'Old' });
+    const onThrow = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      collectModalChanges(async () => {
+        await deleteModal('gone-1');
+        throw new Error('boom');
+      }, onThrow)
+    ).rejects.toThrow('boom');
+
+    expect(onThrow).toHaveBeenCalledWith([{ kind: 'deleted', id: 'gone-1', title: 'Old' }]);
+  });
+
+  it('does not call onThrow when nothing was written', async () => {
+    const onThrow = vi.fn();
+
+    await expect(
+      collectModalChanges(async () => {
+        throw new Error('boom');
+      }, onThrow)
+    ).rejects.toThrow('boom');
+
+    expect(onThrow).not.toHaveBeenCalled();
+  });
+
   it('is a no-op outside a collector', async () => {
     model.findByIdAndDelete.mockResolvedValue({ _id: 'x', title: 'X' });
     await expect(deleteModal('x')).resolves.toMatchObject({ success: true });
