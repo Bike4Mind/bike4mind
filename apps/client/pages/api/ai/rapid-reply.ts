@@ -16,6 +16,7 @@ import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
 import { assertSessionAccess } from '@server/utils/sessionAccess';
 import { ChatModels, NotFoundError } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 // OptiHashi sessions get the instant ack even when RapidReply is globally off. When no DB
 // mapping is configured for the main model, fall back to a fast Haiku + this prompt so the
@@ -36,7 +37,8 @@ const OPTI_RAPID_SYSTEM_PROMPT =
  * This endpoint only saves to the database. The main quest processor
  * handles WebSocket notifications when it detects the rapid reply result.
  */
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 200 : 50,
@@ -44,6 +46,7 @@ const handler = baseApi()
     })
   )
   .post(async (req, res) => {
+    assertAiAccessAllowed(req.user);
     const startTime = Date.now();
     const { questId, sessionId, message, model: mainModel, processStartTime, isOpti: isOptiHint } = req.body;
     // Security: never trust a body-supplied userId - it drives API-key resolution, websocket

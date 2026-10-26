@@ -8,7 +8,7 @@ const OLD_INDEX_KEY = { status: 1, publishAt: -1 };
  * keyset-paged reader and admin lists sort on. Neither autoIndex nor createIndexes drops an index the
  * schema stopped declaring, so the old one is dropped explicitly.
  *
- * The old index is found by key pattern, not by its auto-derived name, which can differ on DocumentDB.
+ * The old index is found by key pattern, not by its auto-derived name, which is not guaranteed.
  * Idempotent: a missing collection or old index is skipped and createIndexes is a no-op for existing indexes.
  * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), which must stay last.
  */

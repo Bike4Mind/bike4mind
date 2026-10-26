@@ -157,6 +157,21 @@ export const getEffectiveApiKey = async (
   return key;
 };
 
+export interface SharedAdminKeyProviders {
+  openai: boolean;
+  anthropic: boolean;
+}
+
+// Side channel so the returned key object stays exactly as before for every caller.
+const sharedAdminKeySources = new WeakMap<object, SharedAdminKeyProviders>();
+
+/**
+ * For a result of getEffectiveLLMApiKeys: which providers resolved to the shared admin-setting
+ * key (not a user's own key, not 'expired', not a self-host env key). Undefined for any other object.
+ */
+export const sharedAdminKeyProviders = (keys: object): SharedAdminKeyProviders | undefined =>
+  sharedAdminKeySources.get(keys);
+
 export const getEffectiveLLMApiKeys = async (
   userId: string | null,
   adapters: GetEffectiveLLMApiKeysAdapters,
@@ -256,7 +271,7 @@ export const getEffectiveLLMApiKeys = async (
   };
 
   // Self-host provider-key fallback uses the shared module-scope envKey (above).
-  return {
+  const keys = {
     openai: keyOrExpired(openaiUserKey) || openaiDemoKey || envKey('OPENAI_API_KEY'),
     anthropic: keyOrExpired(anthropicUserKey) || anthropicDemoKey || envKey('ANTHROPIC_API_KEY'),
     gemini: keyOrExpired(geminiUserKey) || geminiDemoKey || envKey('GEMINI_API_KEY'),
@@ -279,4 +294,9 @@ export const getEffectiveLLMApiKeys = async (
     // OLLAMA_BASE_URL for local image generation with no provider keys.
     imageGen: envKey('IMAGE_GEN_BASE_URL'),
   };
+  sharedAdminKeySources.set(keys, {
+    openai: !openaiUserKey && !!openaiDemoKey,
+    anthropic: !anthropicUserKey && !!anthropicDemoKey,
+  });
+  return keys;
 };

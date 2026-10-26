@@ -9,6 +9,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 interface RequestQuery {
   userId: string;
@@ -45,6 +46,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
       throw new NotFoundError('Subscription not found');
     }
 
+    const recordRemoval = (organizationId?: string) =>
+      recordAdminActionFromRequest(req, {
+        action: 'user.subscription.removed',
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+        organizationId,
+        summary: `removed ${organizationId ? 'team' : 'individual'} subscription ${subscriptionId}`,
+        details: {
+          subscriptionId,
+          ownerType: subscription.ownerType,
+          priceId: subscription.priceId,
+          status: subscription.status,
+          quantity: subscription.quantity,
+        },
+      });
+
     // Handle individual (user) subscription
     if (subscription.ownerType === SubscriptionOwnerType.User) {
       // Verify subscription belongs to the requested user
@@ -59,6 +75,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
       await withTransaction(async () => {
         // Delete the subscription using the repository's delete method
         await subscriptionRepository.delete(subscription.id);
+        await recordRemoval();
 
         req.logger.info(`Admin ${req.user.id} removed individual subscription ${subscriptionId} from user ${userId}`, {
           subscriptionId,
@@ -109,6 +126,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
       await withTransaction(async () => {
         // Delete the subscription using the repository's delete method
         await subscriptionRepository.delete(subscription.id);
+        await recordRemoval(organization.id);
 
         req.logger.info(
           `Admin ${req.user.id} removed team subscription ${subscriptionId} from organization ${organization.id}`,

@@ -193,6 +193,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "TURNSTILE_SECRET_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "OVERWATCH_INGEST_ENABLED": {
       "type": "sst.sst.Secret"
       "value": string

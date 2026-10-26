@@ -19,6 +19,7 @@ import {
   type LakeSupersession,
   DocumentDateSource,
   FabFileSourceType,
+  GENERATED_ASSET_LINEAGE_ROLES,
   KnowledgeType,
   countTagPathsByTagSet,
   normalizeTagPrefix,
@@ -4043,6 +4044,20 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
     sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
     sourceMetadata: { type: Schema.Types.Mixed, required: false },
+    // Generated-asset lineage, see IFabFile.derivedFrom. `default: undefined` so files without it store nothing.
+    derivedFrom: {
+      type: [
+        new Schema(
+          {
+            fileId: { type: String, required: true },
+            jobId: { type: String },
+            role: { type: String, enum: GENERATED_ASSET_LINEAGE_ROLES, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     // The document's own vintage plus where it came from (#3048) - see IFabFile's field docs. Both
     // stay unset unless a source actually offered one; there is deliberately no createdAt fallback.
     documentDate: { type: Date },
@@ -4153,8 +4168,8 @@ FabFileSchema.index({ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 // the prefix arm both bound on it, and some callers filter on nothing else.
 //
 // Pre-built by 20260907000000_ensure-fabfile-tagname-filename-index rather than left to autoIndex:
-// prod runs DocumentDB, where the build takes a foreground lock, and autoIndex would take it lazily
-// on a cold boot of whichever Lambda touches this collection first.
+// autoIndex builds are fire-and-forget (a failure is silent) and would start lazily on a cold boot
+// of whichever Lambda touches this collection first.
 FabFileSchema.index({ 'tags.name': 1, fileName: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
@@ -4201,6 +4216,13 @@ FabFileSchema.index(
   { partialFilterExpression: { sourceType: FabFileSourceType.TOOL_GENERATED } }
 );
 
+// Reverse lineage lookup ("what was made from this file"). Partial like the sessionId index above.
+// Pre-built by 20260921235976_ensure-fabfile-derived-from-index.
+FabFileSchema.index(
+  { 'derivedFrom.fileId': 1, deletedAt: 1 },
+  { partialFilterExpression: { sourceType: FabFileSourceType.TOOL_GENERATED } }
+);
+
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 
@@ -4213,8 +4235,8 @@ FabFileSchema.index(
 
 // Public v1 file list (listOwnedBeforeId): equality on the owned/live/unarchived filter, then the
 // `_id` keyset (scanned in reverse for newest first), so each page streams in order instead of sorting the user's whole file set.
-// Pre-built by 20260921235994_ensure-fabfile-owned-keyset-index rather than left to autoIndex: prod
-// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+// Pre-built by 20260921235994_ensure-fabfile-owned-keyset-index rather than left to autoIndex: the
+// build is fire-and-forget and would start on a cold Lambda boot, on a user request.
 FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
 
 // Serves both moderation rescue sweep queries (moderationRescueSweep.ts): the stale-'pending'

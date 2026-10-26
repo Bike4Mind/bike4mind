@@ -23,6 +23,7 @@ import type { BaseStorage } from '@bike4mind/utils';
 import type { B4MLLMTools as LlmTools, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from './base/types';
 import type { IChatCompletionServiceOptions } from '../ChatCompletionFeatures';
+import { memoizeOperationalBillingCheck } from '../../billing/isOperationalBillingEnabled';
 
 export const generateTools = (
   userId: string,
@@ -97,7 +98,8 @@ export const generateTools = (
   sessionId?: string,
   codeMinifier?: ToolContext['codeMinifier'],
   availableModels?: import('@bike4mind/common').ModelInfo[],
-  onToolLlmUsage?: ToolContext['onToolLlmUsage']
+  onToolLlmUsage?: ToolContext['onToolLlmUsage'],
+  servingModel?: ToolContext['servingModel']
 ): Record<string, ICompletionOptionTools> => {
   assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
   const context: ToolContext = {
@@ -136,9 +138,13 @@ export const generateTools = (
     codeMinifier,
     availableModels,
     onToolLlmUsage,
+    operationalBillingCheck: db.operationalBilling
+      ? memoizeOperationalBillingCheck({ adminSettings: db.adminSettings }, logger)
+      : undefined,
     decide,
     getAbortSignal,
     numberCitables,
+    servingModel,
   };
 
   return Object.entries(tools).reduce(

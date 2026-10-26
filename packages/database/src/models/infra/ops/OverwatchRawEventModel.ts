@@ -52,6 +52,12 @@ const OverwatchRawEventSchema = new Schema<IOverwatchRawEventDoc>(
 
 // Performance indexes
 OverwatchRawEventSchema.index({ productId: 1, timestamp: -1 });
+// One named event (or an `$in` of a few) over a range: the Overwatch explorer, funnel signups,
+// attribution, roads and the event trend. On `{productId, timestamp}` alone each of those reads every
+// event the product sent in the window to keep the few named ones. Not a replacement for it: the
+// event catalog, session counts, next steps and the newest-event seek name no event.
+// Pre-built by 20260921235977_ensure-overwatch-raw-event-explorer-index rather than left to autoIndex.
+OverwatchRawEventSchema.index({ productId: 1, event: 1, timestamp: -1 });
 // TTL: auto-delete raw events after 90 days
 OverwatchRawEventSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 });
 

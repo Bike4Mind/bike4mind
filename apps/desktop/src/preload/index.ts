@@ -96,6 +96,16 @@ const api: DesktopApi = {
     listSuggestionModels: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSuggestionModels),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
+    setSessionHistory: (sessionId: string, enabled: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionHistory, sessionId, enabled),
+    searchHistory: (query: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSearchHistory, query),
+    clearHistory: () => ipcRenderer.invoke(IPC_CHANNELS.chatClearHistory),
+    historyState: () => ipcRenderer.invoke(IPC_CHANNELS.chatHistoryState),
+    onHistoryChanged: listener => {
+      const handler = () => listener();
+      ipcRenderer.on(IPC_CHANNELS.chatHistoryChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatHistoryChanged, handler);
+    },
     setSessionReasoningEffort: (sessionId: string, effort: ReasoningEffortSetting) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionReasoningEffort, sessionId, effort),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
@@ -121,7 +131,10 @@ const api: DesktopApi = {
     getSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetSession, sessionId),
     renameSession: (sessionId: string, title: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRenameSession, sessionId, title),
-    deleteSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId),
+    deleteSession: (sessionId: string, removeWorktree?: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId, removeWorktree),
+    inspectWorktreeRemoval: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatInspectWorktreeRemoval, sessionId),
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),

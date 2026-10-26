@@ -4,6 +4,7 @@ import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { agentRepository } from '@bike4mind/database';
 import { agentMemoryService } from '@bike4mind/services';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 /**
  * /api/ai/tavern-conversation - Two-mode endpoint for live NPC conversations.
@@ -114,7 +115,8 @@ Return ONLY valid JSON (no markdown fences):
 }
 
 // Handler
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 60 : 30,
@@ -122,6 +124,7 @@ const handler = baseApi()
     })
   )
   .post(async (req: any, res) => {
+    assertAiAccessAllowed(req.user);
     ensureTavernAccess(req.user);
 
     const { characters, history, userMessage, topic, agentIds } = req.body || {};

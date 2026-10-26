@@ -12,6 +12,18 @@ import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 const mockLoggerError = vi.hoisted(() => vi.fn());
 const mockLoggerWarn = vi.hoisted(() => vi.fn());
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+vi.mock('@server/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    },
+  };
+});
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
@@ -69,6 +81,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockResolveContractAuth = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+}));
 vi.mock('@server/cli/resolveContractAuth', () => ({ resolveContractAuth: mockResolveContractAuth }));
 
 vi.mock('@server/cli/auth', () => ({

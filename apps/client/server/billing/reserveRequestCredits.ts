@@ -13,6 +13,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 
 import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 export { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
 export type { CreditLedgerEntry };
@@ -53,7 +54,7 @@ type BillingRequest = {
   logger: ILogger;
 };
 
-const holdAdapters = {
+export const holdAdapters = {
   users: userRepository,
   organizations: organizationRepository,
   creditTransactions: creditTransactionRepository,
@@ -103,6 +104,8 @@ export async function reserveRequestCredits({
   holdTtlMs = CREDIT_HOLD_TTL_MS,
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
+  // Before the enforceCredits short-circuit: a moderated user is refused with credits on or off.
+  assertAiAccessAllowed(req.user);
   const userId = req.user.id;
   const billingOrganizationId = resolveRequestBillingOrgId(req, explicitBillingOrgId);
   const ownerId = billingOrganizationId ?? userId;
@@ -132,31 +135,44 @@ export async function reserveRequestCredits({
     return { hold, pending: await pendingCreditHoldRepository.record(hold, featureLabel, expiresAt) };
   });
 
-  const logHoldError = holdErrorLogger(req.logger, featureLabel, hold, pending.id);
-
   return {
     ownerId: hold.ownerId,
     ownerType: hold.ownerType,
     reservedCredits: hold.reservedCredits,
     hold: { ...hold, pendingHoldId: pending.id },
-    refund: async () => {
-      try {
-        // Claim and release commit together: a failed release keeps the row, and the sweep refunds it later.
-        const refunded = await withTransaction(async () => {
-          if (!(await pendingCreditHoldRepository.claim(pending.id))) return false;
-          await creditService.releaseCreditHold(hold, holdAdapters);
-          return true;
-        });
-        if (!refunded) {
-          req.logger.warn(`${featureLabel} refund found its credit hold already swept`, { holdId: pending.id });
-        }
-      } catch (err) {
-        logHoldError('refund failed - left for the expired-hold sweep', err);
-      }
-    },
+    refund: () => releaseHeldCredits({ ...hold, pendingHoldId: pending.id }, { featureLabel, logger: req.logger }),
     settle: (chargedCredits, entry) =>
       settlePendingHold(hold, pending.id, chargedCredits, entry, { featureLabel, logger: req.logger }),
   };
+}
+
+/** Claim and refund together; a failed refund stays pending for the sweep. Never throws. */
+export async function releaseHeldCredits(
+  { pendingHoldId, ...hold }: PersistedCreditHold,
+  { featureLabel, logger }: { featureLabel: string; logger: ILogger }
+): Promise<void> {
+  try {
+    if (!pendingHoldId) {
+      await creditService.releaseCreditHold(hold, holdAdapters);
+      return;
+    }
+    const refunded = await withTransaction(async () => {
+      if (!(await pendingCreditHoldRepository.claim(pendingHoldId))) return false;
+      await creditService.releaseCreditHold(hold, holdAdapters);
+      return true;
+    });
+    if (!refunded) {
+      logger.warn(`${featureLabel} refund found its credit hold already swept`, { holdId: pendingHoldId });
+    }
+  } catch (error) {
+    logger.error(`${featureLabel} refund failed - left for the expired-hold sweep`, {
+      holdId: pendingHoldId,
+      ownerId: hold.ownerId,
+      ownerType: hold.ownerType,
+      reservedCredits: hold.reservedCredits,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
 }
 
 function holdErrorLogger(logger: ILogger, featureLabel: string, hold: CreditHoldRecord, pendingHoldId: string) {

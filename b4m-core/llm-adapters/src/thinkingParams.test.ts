@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ANTHROPIC_EFFORT_LEVELS,
+  belowReasoningFloor,
   buildThinkingParams,
   DEFAULT_ANTHROPIC_EFFORT,
   DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT,
@@ -161,6 +162,62 @@ describe('resolveOutputMaxTokens', () => {
 
     it('honors a budget on an OpenAI reasoning model', () => {
       expect(resolve(16_000, openAiReasoningModel)).toBe(16_000);
+    });
+
+    // The client's old 8192 placeholder, the value most often below the floor in practice.
+    it('honors the saved placeholder on an adaptive model', () => {
+      expect(resolve(8192, adaptiveModel)).toBe(8192);
+    });
+
+    it('still clamps a budget above an adaptive model cap', () => {
+      expect(resolve(500_000, adaptiveModel)).toBe(128_000);
+    });
+  });
+
+  describe('belowReasoningFloor', () => {
+    const args = (requested: number | undefined, modelInfo: ModelInfo) => ({
+      requested,
+      fallback: 4096,
+      modelInfo,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+    });
+
+    it('reports an explicit budget below the floor without changing the resolved budget', () => {
+      expect(belowReasoningFloor(args(8192, adaptiveModel))).toEqual({
+        requested: 8192,
+        floor: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+      });
+      expect(resolve(8192, adaptiveModel)).toBe(8192);
+    });
+
+    it('reports on an OpenAI reasoning model too', () => {
+      expect(belowReasoningFloor(args(16_000, openAiReasoningModel))?.floor).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('does not report a budget at or above the floor', () => {
+      expect(belowReasoningFloor(args(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, adaptiveModel))).toBeUndefined();
+      expect(belowReasoningFloor(args(100_000, adaptiveModel))).toBeUndefined();
+    });
+
+    // An absent request is sized for the model, so there is nothing below the floor to report.
+    it('does not report an absent or unusable request', () => {
+      expect(belowReasoningFloor(args(undefined, adaptiveModel))).toBeUndefined();
+      expect(belowReasoningFloor(args(Number.NaN, adaptiveModel))).toBeUndefined();
+      expect(belowReasoningFloor(args(0, adaptiveModel))).toBeUndefined();
+    });
+
+    it('does not report on a model that does not reason inside its budget', () => {
+      expect(belowReasoningFloor(args(2048, legacyModel))).toBeUndefined();
+      expect(
+        belowReasoningFloor(args(2048, { ...legacyModel, backend: ModelBackend.Gemini, max_tokens: 65_536 }))
+      ).toBeUndefined();
+    });
+
+    // A model capped below the floor cannot be given more than its cap, so asking for the cap is not a shortfall.
+    it('measures against the model cap when it is below the floor', () => {
+      const smallCap: ModelInfo = { ...adaptiveModel, max_tokens: 16_384 };
+      expect(belowReasoningFloor(args(16_384, smallCap))).toBeUndefined();
+      expect(belowReasoningFloor(args(8192, smallCap))).toEqual({ requested: 8192, floor: 16_384 });
     });
   });
 

@@ -28,6 +28,7 @@ import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
 import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 import { registerTelemetryCleanup } from './telemetryCleanup';
+import { registerSignupIpRetention } from './signupIpRetention';
 import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerCreditLotSweep } from './creditLotSweep';
@@ -119,6 +120,7 @@ async function main() {
   registerGitHubLakeReconcile(worker);
   registerLakeConnectorOrphanReap(worker);
   registerTelemetryCleanup(worker);
+  registerSignupIpRetention(worker);
   registerApiKeyBaselineCalculation(worker);
   registerLakeInconsistencySweep(worker);
   registerCreditLotSweep(worker);

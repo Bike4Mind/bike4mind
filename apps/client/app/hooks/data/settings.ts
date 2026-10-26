@@ -6,7 +6,9 @@ import {
   ServerStatusEnum,
   SettingKey,
   settingsMap,
-  experimentalFeatureSettingKeys,
+  allSettingDefinitions,
+  getExperimentalFeatureSettingKeys,
+  resolveSettingDefinition,
   forcedRetrievalFloorAboveMeasured,
   forcedRetrievalFloorAboveMeasuredMessage,
   isBlankSettingValue,
@@ -85,12 +87,13 @@ export function useExperimentalFeatureSettings() {
     // Single source of truth: derived from the schema's EXPERIMENTAL group
     // in @bike4mind/common, so a new experimental flag added to `settingsMap` is
     // surfaced here automatically - no second hand-maintained allowlist to forget.
-    const allowedSettings = experimentalFeatureSettingKeys;
+    // A contributed flag reaches a non-admin only with `userReadable: true`; otherwise they get its default.
+    const allowedSettings = getExperimentalFeatureSettingKeys();
 
     // Merge database settings with defaults, converting to string for consistency
     return allowedSettings.map(settingName => {
       const dbSetting = allSettings?.find(s => s.settingName === settingName);
-      const defaultSetting = settingsMap[settingName];
+      const defaultSetting = resolveSettingDefinition(settingName);
 
       // Get raw value (from DB or default) and convert to string
       const rawValue = dbSetting?.settingValue ?? defaultSetting?.defaultValue;
@@ -176,7 +179,7 @@ export function useClearScopedSettingOverride() {
 }
 
 export function useGetSettingsValue(key: SettingKey) {
-  const settingConfigs = useMemo(() => Object.values(settingsMap), []);
+  const settingConfigs = useMemo(() => allSettingDefinitions(), []);
   const { data: settingsFromServer } = useSettingsFromServer();
 
   return useMemo(() => {

@@ -158,6 +158,11 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   whatsNewHighlightsQueue: 'admin route; needs the same content-generation decision',
   secopsTriageQueue: 'admin security-dashboard ingest; needs Prowler and AWS findings',
   sreJobQueue: 'admin SRE rerun/retry routes; handler needs Bedrock and CloudWatch',
+
+  // Publish enqueues on every bundle publish, but the enqueue skips quietly when no URL resolves,
+  // so leaving it unregistered is the safe state: a declared queue with no consumer would only
+  // pile up messages. Registered as hosted-only in packages/scripts/src/selfhostParityPolicy.ts.
+  publishThumbnailQueue: 'publish thumbnail renders; consumer needs a headless Chromium the worker image lacks',
 };
 
 /**

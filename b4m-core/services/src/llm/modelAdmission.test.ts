@@ -70,6 +70,19 @@ describe('createModelAdmission', () => {
     const off = createModelAdmission({ user: {}, configs: [], models, enforceCredits: false });
     await expect(off.admits('unpriced')).resolves.toBe(true);
   });
+
+  it('refuses every model for a moderated user, even an admin, from both assert and admits', async () => {
+    const admission = createModelAdmission({ user: { isAdmin: true, isModerated: true }, configs: [] });
+    const err = await admission.assert('anything').catch(e => e);
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect(err.message).toContain('AI features are disabled');
+    await expect(admission.admits('anything')).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it('admits as usual once moderation is lifted', async () => {
+    const admission = createModelAdmission({ user: { isModerated: false }, configs: [] });
+    await expect(admission.admits('anything')).resolves.toBe(true);
+  });
 });
 
 describe('isUnpricedTextModel', () => {

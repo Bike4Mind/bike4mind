@@ -3,6 +3,7 @@ import { Card, Stack, Typography } from '@mui/joy';
 import React from 'react';
 import LoginsView from '../LoginsView';
 import MigrateAgain from '../MigrateAgain';
+import SignupNetworkDetails from './SignupNetworkDetails';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 
@@ -51,6 +52,7 @@ const LoginDetails: React.FC<LoginDetailsProps> = React.memo(({ user }) => {
             {user.createdAt ? new Date(user.createdAt).toDateString() : 'Unknown'}
           </Typography>
         </Stack>
+        {user.signupMeta && <SignupNetworkDetails signupMeta={user.signupMeta} />}
       </Stack>
     </Card>
   );

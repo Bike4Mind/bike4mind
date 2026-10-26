@@ -2,7 +2,8 @@
  * POST /api/v1/text-refinements - rewrites a short description to be clearer and more detailed.
  *
  * Shares refineTextRequest (cache + operations model) with the legacy POST /api/ai/refineText.
- * Not credit-metered, matching the legacy route; ai:generate plus the per-key rate limit bound the cost.
+ * A cache miss is credit-metered against the caller inside refineTextRequest; a billing refusal
+ * (422 insufficient_credits, 400 for a departed org key holder) propagates to errorHandler.
  */
 
 import { createTextRefinementContract } from '@bike4mind/common';
@@ -15,7 +16,7 @@ const handler = nextRouteForContract(createTextRefinementContract).post(async (r
 
   let refined: string | undefined;
   try {
-    refined = await refineTextRequest({ text, context }, { logger: req.logger });
+    refined = await refineTextRequest({ text, context }, req);
   } catch (error) {
     if (error instanceof RefineProviderUnavailableError) {
       req.logger.warn('Text refinement provider not configured', error.cause ?? error);

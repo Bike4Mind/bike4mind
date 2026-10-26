@@ -1,4 +1,5 @@
 import type {
+  GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
   GenerationJobDelivery,
   GenerationJobSource,
@@ -38,6 +39,7 @@ export type VideoJobDeps = {
     bytes: Buffer;
     contentType: string;
     generation: GeneratedAssetMetadata & { jobId: string };
+    derivedFrom?: GeneratedAssetLineageEntry[];
     /** A chat-made job's quest; the save links the file to its notebook, which scopes the grants that notebook mints. */
     questId?: string;
     signal: AbortSignal;

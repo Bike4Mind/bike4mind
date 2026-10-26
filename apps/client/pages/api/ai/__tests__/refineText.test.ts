@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
-import { ApiKeyScope } from '@bike4mind/common';
 
 // Capture the options baseApi() is constructed with so we can assert the scope
 // gate. Middleware is stripped so the raw handler runs directly (same pattern as
@@ -21,7 +20,10 @@ const mockGetCachedData = vi.fn();
 const mockRefineText = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   cacheService: { getCachedData: (...a: any[]) => mockGetCachedData(...a) },
+  // Metering is covered in server/ai/refineTextRequest.test.ts; here the backend passes through.
+  meterCompletionBackend: (llm: unknown) => llm,
 }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 vi.mock('@bike4mind/services/llm/refineText', () => ({
   refineText: (...a: any[]) => mockRefineText(...a),
   // Real schema so validation + ZodError behave exactly as in production.
@@ -46,9 +48,9 @@ describe('POST /api/ai/refineText', () => {
     vi.clearAllMocks();
   });
 
-  it('gates the route to the ai:generate scope', () => {
+  it('accepts a JWT only (API keys use POST /api/v1/text-refinements)', () => {
     // Populated at module-eval when baseApi({...}) runs.
-    expect(mockBaseApiArgs[0]).toEqual({ requiredScopes: [ApiKeyScope.AI_GENERATE] });
+    expect(mockBaseApiArgs[0]).toEqual({ auth: 'jwtOnly' });
   });
 
   it('rejects an invalid body with a 400 and never calls the LLM/cache', async () => {
@@ -75,6 +77,8 @@ describe('POST /api/ai/refineText', () => {
     });
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello', context: 'ctx' } });
+
+    Object.assign(req, { user: { id: 'u1' } });
     await handler(req as any, res as any);
 
     expect(mockGetCachedData).toHaveBeenCalledTimes(1);
@@ -101,6 +105,8 @@ describe('POST /api/ai/refineText', () => {
     );
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+
+    Object.assign(req, { user: { id: 'u1' } });
     // The route unwraps the helper's error back to the service's own, which has no statusCode,
     // so errorHandler's default 500 carries the real reason. The v1 route is the one that maps it to 503.
     const error = await handler(req as any, res as any).catch((e: unknown) => e);
@@ -116,6 +122,8 @@ describe('POST /api/ai/refineText', () => {
     mockGetCachedData.mockResolvedValue('cached refined');
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+
+    Object.assign(req, { user: { id: 'u1' } });
     await handler(req as any, res as any);
 
     expect(res._getJSONData()).toEqual({ text: 'cached refined' });
@@ -131,6 +139,8 @@ describe('POST /api/ai/refineText', () => {
     mockRefineText.mockRejectedValue(providerError);
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+
+    Object.assign(req, { user: { id: 'u1' } });
     const logger = { error: vi.fn(), warn: vi.fn() };
     Object.assign(req, { logger, requestId: 'trace-legacy-1' });
 
@@ -152,6 +162,8 @@ describe('POST /api/ai/refineText', () => {
     mockRefineText.mockResolvedValue('');
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+
+    Object.assign(req, { user: { id: 'u1' } });
     Object.assign(req, { logger: { error: vi.fn(), warn: vi.fn() }, requestId: 'trace-legacy-2' });
 
     const thrown = await handler(req as any, res as any).catch((e: unknown) => e);

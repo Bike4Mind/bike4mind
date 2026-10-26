@@ -238,6 +238,19 @@ describe('processSubagentDispatch tool deps', () => {
     }
   });
 
+  it('withholds the owner admin role on a child of a run whose key lacks the admin scope', async () => {
+    const { agentExecutionRepository, User } = await import('@bike4mind/database');
+    vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100, isAdmin: true } as never);
+    vi.mocked(agentExecutionRepository.findById).mockResolvedValue({ ...childDoc, adminRoleWithheld: true } as never);
+    try {
+      const deps = await dispatchWithSession(baseSession);
+
+      expect((deps.user as { isAdmin?: boolean }).isAdmin).toBe(false);
+    } finally {
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValue(childDoc as never);
+    }
+  });
+
   it('passes an empty attachedFileIds when the session has no attached files', async () => {
     const deps = await dispatchWithSession(baseSession);
 

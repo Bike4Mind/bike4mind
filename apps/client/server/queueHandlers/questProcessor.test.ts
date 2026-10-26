@@ -115,6 +115,13 @@ describe('questProcessor getMusicToolConfigResolver', () => {
 });
 
 describe('questProcessor getStaticOptions', () => {
+  it('wires the shared operational billing adapter into tool execution', async () => {
+    const { getStaticOptions } = await import('./questProcessor');
+    const { operationalBillingAdapters } = await import('@server/billing/operationalBilling');
+
+    expect(getStaticOptions().db.operationalBilling).toBe(operationalBillingAdapters);
+  }, 120_000);
+
   it('wires the save_content_to_data_lake audit adapters', async () => {
     // The handler's transitive import graph (services + database + slack) is heavy enough
     // that resolving it inside a test can exceed the default timeout.

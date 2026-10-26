@@ -10,6 +10,13 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
+const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown[] }));
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: (opts: unknown) => {
+    rateLimitOptions.push(opts);
+    return (_req: any, _res: any, next: any) => next?.();
+  },
+}));
 
 // passport.authenticate is invoked as passport.authenticate(strategy, opts, cb)(req, res, next);
 // the mock lets each test drive the (err, user, info) triple passport would normally supply.
@@ -50,6 +57,11 @@ vi.mock('@server/analytics/funnel', () => ({
   emitSignupFunnelEvents: (...a: any[]) => mockEmitSignupFunnelEvents(...a),
 }));
 
+const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: (...a: any[]) => mockRecordSignupNetwork(...a),
+}));
+
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
@@ -71,10 +83,10 @@ const stateNaming = (clientId: string): VerifyResult<BaseStatePayload & { client
 });
 import handler from '@pages/api/auth/[strategy]/callback';
 
-function makeReqRes(headers: Record<string, string> = {}) {
+function makeReqRes(headers: Record<string, string> = {}, query: Record<string, string> = {}) {
   const { req, res } = createMocks({
     method: 'GET',
-    query: { strategy: 'github', state: 'state-token' },
+    query: { strategy: 'github', state: 'state-token', ...query },
     headers: { host: 'localhost:3000', 'user-agent': 'vitest', ...headers },
     url: '/api/auth/github/callback',
   });
@@ -82,14 +94,20 @@ function makeReqRes(headers: Record<string, string> = {}) {
 }
 
 /** Drive the handler as if passport's verify callback resolved with (err, user, info). */
-async function runCallback(err: unknown, user: unknown, info: unknown, headers?: Record<string, string>) {
+async function runCallback(
+  err: unknown,
+  user: unknown,
+  info: unknown,
+  headers?: Record<string, string>,
+  query?: Record<string, string>
+) {
   // The handler does not await passport's callback, so hold on to the promise it returns and wait
   // for that: a fixed tick races any await added above the code under test.
   let passportCallback: Promise<unknown> | undefined;
   mockAuthenticate.mockImplementation((_strategy: string, _opts: any, cb: any) => () => {
     passportCallback = cb(err, user, info);
   });
-  const { req, res } = makeReqRes(headers);
+  const { req, res } = makeReqRes(headers, query);
   await handler(req, res, vi.fn());
   await passportCallback;
   return res;
@@ -169,6 +187,63 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'forbidden_system_user' }));
     expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+  });
+});
+
+describe('[strategy]/callback - !user branch log level', () => {
+  it.each([
+    'registration_closed',
+    'state_expired',
+    'state_invalid',
+    'state_missing',
+    'duplicate_account',
+    'forbidden_system_user',
+  ])('logs the expected %s outcome at warn, below the level the alert channel pages on', async code => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runCallback(null, undefined, { code });
+
+    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', { code });
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('logs a cancelled consent (?error=access_denied) at warn with its own reason', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // What passport-oauth2 passes to fail() when the provider redirects back with access_denied.
+    const info = { message: 'The user has denied your application access.' };
+
+    const res = await runCallback(null, undefined, info, undefined, { error: 'access_denied' });
+
+    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', info);
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'access_denied' }));
+    expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('keeps an unrecognized failure at error', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runCallback(null, undefined, { message: 'Failed to obtain access token' });
+
+    expect(errorSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', {
+      message: 'Failed to obtain access token',
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+});
+
+describe('[strategy]/callback - guards', () => {
+  it('rate limits the callback at 10/min per client IP in the oauth-callback bucket', () => {
+    expect(rateLimitOptions).toEqual([{ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }]);
   });
 });
 
@@ -254,6 +329,14 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     );
   });
 
+  it("stamps a new account's signup network with the provider as the method", async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockRecordSignupNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-new', method: 'github' })
+    );
+  });
+
   it('keeps a synthetic new account out of the signup emit and the ad conversion fragment', async () => {
     mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: true });
     const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
@@ -271,6 +354,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
     expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
+    expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
   });
 
   // The REGISTER log and the emit are separate statements; folding the emit into the log's

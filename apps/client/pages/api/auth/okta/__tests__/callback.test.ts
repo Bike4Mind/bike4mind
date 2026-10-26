@@ -114,6 +114,10 @@ vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   applyEmailVerifiedGrants: (...a: unknown[]) => mockApplyEmailVerifiedGrants(...a),
 }));
+const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: (...a: unknown[]) => mockRecordSignupNetwork(...a),
+}));
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
   emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
@@ -730,6 +734,9 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
       userInfo: { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' },
     });
     expect(mockStampSourceTag).toHaveBeenCalledWith('new-user', 'b4m_sat_0123abcd');
+    expect(mockRecordSignupNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'new-user', method: AuthStrategy.Okta })
+    );
   });
 
   it('never stamps an existing account that signs in through a client', async () => {
@@ -745,6 +752,7 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
       userInfo: { sub: 'okta-sub-default', email: 'old@example.com', email_verified: true, name: 'Old User' },
     });
     expect(mockStampSourceTag).not.toHaveBeenCalled();
+    expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
   });
 });
 

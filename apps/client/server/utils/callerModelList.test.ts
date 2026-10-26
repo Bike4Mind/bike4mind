@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 
 const { mocks } = vi.hoisted(() => ({
@@ -57,6 +57,10 @@ beforeEach(() => {
 });
 
 describe('getCallerModelList unpriced text models', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('drops an unpriced text model when credits are enforced', async () => {
     mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'true' });
 
@@ -66,6 +70,7 @@ describe('getCallerModelList unpriced text models', () => {
   });
 
   it('lists it when credits are off', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
 
     expect(await listedIds()).toEqual(['priced', 'unpriced', 'free']);

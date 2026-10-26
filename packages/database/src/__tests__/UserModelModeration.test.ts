@@ -53,7 +53,7 @@ describe('UserModel — moderation hit tracking', () => {
     expect(reloaded?.moderation?.hits[0].categories).toEqual([`c${MODERATION_HITS_RETAINED + 4}`]);
   });
 
-  it('sets throttled status with a throttledUntil deadline and does not mirror isModerated', async () => {
+  it('sets throttled status with a throttledUntil deadline and leaves isModerated unset', async () => {
     const user = await User.create({ username: 'mod-4', name: 'Mod Four' });
     const until = new Date(Date.now() + 60_000);
 
@@ -65,7 +65,7 @@ describe('UserModel — moderation hit tracking', () => {
     expect(updated?.isModerated).toBe(false);
   });
 
-  it('mirrors isModerated=true when suspended and clears throttledUntil', async () => {
+  it('clears throttledUntil when suspended without setting isModerated', async () => {
     const user = await User.create({ username: 'mod-5', name: 'Mod Five' });
     await userRepository.setModerationStatus(user.id, 'throttled', { throttledUntil: new Date(Date.now() + 60_000) });
 
@@ -73,18 +73,20 @@ describe('UserModel — moderation hit tracking', () => {
 
     expect(updated?.moderation?.status).toBe('suspended');
     expect(updated?.moderation?.throttledUntil).toBeNull();
-    expect(updated?.isModerated).toBe(true);
-  });
-
-  it('clears the isModerated mirror when a suspension is lifted back to active', async () => {
-    const user = await User.create({ username: 'mod-6', name: 'Mod Six' });
-    await userRepository.setModerationStatus(user.id, 'suspended');
-
-    const updated = await userRepository.setModerationStatus(user.id, 'active');
-
-    expect(updated?.moderation?.status).toBe('active');
     expect(updated?.isModerated).toBe(false);
   });
+
+  it.each(['throttled', 'active', 'suspended'] as const)(
+    'leaves an admin-set isModerated in place across a %s transition',
+    async status => {
+      const user = await User.create({ username: `mod-6-${status}`, name: 'Mod Six', isModerated: true });
+
+      const updated = await userRepository.setModerationStatus(user.id, status);
+
+      expect(updated?.moderation?.status).toBe(status);
+      expect(updated?.isModerated).toBe(true);
+    }
+  );
 
   it('records a moderation appeal with a timestamp and text', async () => {
     const user = await User.create({ username: 'mod-7', name: 'Mod Seven' });

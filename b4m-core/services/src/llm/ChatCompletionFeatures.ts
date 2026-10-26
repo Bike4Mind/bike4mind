@@ -114,12 +114,13 @@ import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeServ
 import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
 import {
   DeadlineExceededError,
-  rankCandidateFilesByRelevance,
+  selectRelevanceCandidates,
   withDeadline,
   type ForcedRetrievalCandidateSelection,
   type ForcedRetrievalFallbackReason,
 } from './forcedRetrievalCandidateSelection';
 import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
+import type { OperationalBillingAdapters } from '../billing/recordOperationalUsage';
 import { recordForcedRetrievalCutMetrics } from './forcedRetrievalSelectionMetrics';
 import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
 import {
@@ -236,6 +237,8 @@ interface DatabaseAdapters {
   creditTransactions?: ICreditTransactionRepository;
   /** Optional usage-event sink: dual-write analytics, never billing. */
   usageEvents?: IUsageEventRepository;
+  /** Flows to ToolContext.db unchanged; see its doc there. */
+  operationalBilling?: OperationalBillingAdapters;
   agents: IAgentRepository;
   /**
    * Optional skill repository - present when the host wires `/api/skills`
@@ -1863,6 +1866,9 @@ export class SessionPromptFeature implements ChatCompletionFeature {
 // cut is decided by an ANN query over the scope (see selectForcedRetrievalCandidates); otherwise by
 // file name.
 const FORCED_RETRIEVAL_MAX_CANDIDATE_FILES = 100;
+// Cap slots held for files the ANN cannot answer for yet (stamped within the mongot lag), so a
+// file uploaded and asked about at once is scored even when hits alone would fill the cap.
+const FORCED_RETRIEVAL_NOT_INDEXED_RESERVE = 10;
 // Metadata rows listed when the candidates can be chosen by relevance (the ANN query ranks this
 // many files down to the cap above) or the scope spans several lakes (the by-name cut takes from
 // each lake in turn, so it needs more rows than the cap to pick from). Metadata only (no chunks), so it is cheap next to the scan.
@@ -1881,7 +1887,7 @@ type ForcedRetrievalCandidateFile = VectorSearchReadinessFile & {
 };
 // The ANN candidate pick's outcome. annPickMs is null when no query was sent.
 type AnnCandidatePick<T> =
-  | { ranked: T[]; annPickMs: number }
+  | { ranked: T[]; notIndexedCut: number; annPickMs: number }
   | { ranked: null; reason: ForcedRetrievalFallbackReason; annPickMs: number | null };
 // File ids per chunk query, and chunk rows per query - together these bound how many vectors
 // are resident at once instead of loading every candidate file's chunks up front.
@@ -2077,6 +2083,12 @@ interface ForcedRetrievalCoverage {
    * failure mode this whole feature exists to prevent.
    */
   filesWithheldReindexing: number;
+  /**
+   * Files stamped within VECTOR_SEARCH_READY_LAG_MS (too recent for the ANN) that the relevance pick
+   * still cut past the candidate cap, after the reserved slots. Unlike a by-name cut they return on
+   * their own once indexed.
+   */
+  filesNotYetIndexedCut: number;
   /**
    * Older generations of a document this lake also holds a newer generation of, dropped before the
    * chunk scan (see dataLakeService/supersession.ts). Reported with ids and the matching tier, not
@@ -2332,7 +2344,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       coverage.stoppedByChunkBudget ||
       coverage.stoppedByCursorStall ||
       anyMismatch ||
-      coverage.filesWithheldReindexing > 0;
+      coverage.filesWithheldReindexing > 0 ||
+      coverage.filesNotYetIndexedCut > 0;
     const supersededOnly = !partial && coverage.filesSupersededCollapsed > 0;
     if (!partial && !supersededOnly) return false;
 
@@ -2387,6 +2400,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       readerReasons.push(
         `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were skipped. ` +
           'They return on their own.'
+      );
+    }
+    if (coverage.filesNotYetIndexedCut > 0) {
+      reasons.push(
+        `${coverage.filesNotYetIndexedCut} recently added document(s) are not searchable yet and the candidate ` +
+          'cap left them out; they become candidates on their own once indexed'
+      );
+      readerReasons.push(
+        `${coverage.filesNotYetIndexedCut} recently added document(s) are still being indexed and were not checked. ` +
+          'Try again in a minute.'
       );
     }
     if (coverage.filesSupersededCollapsed > 0) {
@@ -2573,7 +2596,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     embeddingModel: SupportedEmbeddingModel,
     relevanceSelectionAvailable: boolean,
     listingCutAtCap: boolean
-  ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection }> {
+  ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection; notIndexedCut: number }> {
     if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) {
       if (listingCutAtCap) {
         await recordForcedRetrievalCutMetrics(
@@ -2581,20 +2604,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           this.logger
         );
       }
-      return { files, selection: 'all' };
+      return { files, selection: 'all', notIndexedCut: 0 };
     }
     const pick: AnnCandidatePick<T> = relevanceSelectionAvailable
       ? await this.rankCandidatesByAnn(files, queryVector, embeddingModel)
       : { ranked: null, reason: 'relevance-unavailable', annPickMs: null };
     if (pick.ranked) {
       await recordForcedRetrievalCutMetrics({ selection: 'relevance', annPickMs: pick.annPickMs }, this.logger);
-      return { files: pick.ranked.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'relevance' };
+      return { files: pick.ranked, selection: 'relevance', notIndexedCut: pick.notIndexedCut };
     }
     await recordForcedRetrievalCutMetrics(
       { selection: 'fileName', reason: pick.reason, annPickMs: pick.annPickMs },
       this.logger
     );
-    return { files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
+    return {
+      files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES),
+      selection: 'fileName',
+      notIndexedCut: 0,
+    };
   }
 
   /**
@@ -2668,12 +2695,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
         return { ranked: null, reason: 'no-hits', annPickMs: elapsedMs() };
       }
-      const ranked = rankCandidateFilesByRelevance(
+      const { files: ranked, notIndexedCut } = selectRelevanceCandidates(
         files,
         ann.results.map(r => ({ fabFileId: r.fileId, score: r.score })),
-        now
+        now,
+        { cap: FORCED_RETRIEVAL_MAX_CANDIDATE_FILES, notIndexedReserve: FORCED_RETRIEVAL_NOT_INDEXED_RESERVE }
       );
-      return { ranked, annPickMs: elapsedMs() };
+      return { ranked, notIndexedCut, annPickMs: elapsedMs() };
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
         this.logger.warn(
@@ -3411,7 +3439,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         const { ordered } = orderFilesFairlyAcrossLakes(lakeRows, orderScopes, f => f.tags?.map(t => t.name) ?? []);
         return [...ordered, ...libraryRows];
       };
-      const { files: scanCandidates, selection: candidateSelection } = await this.selectForcedRetrievalCandidates(
+      const {
+        files: scanCandidates,
+        selection: candidateSelection,
+        notIndexedCut,
+      } = await this.selectForcedRetrievalCandidates(
         spansSeveralLakes ? fairByName(collapse.servable) : collapse.servable,
         queryVector,
         embeddingModel,
@@ -3452,6 +3484,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         listingLimit,
         filesExcludedForeignModel: excludedForeignFiles.length,
         filesWithheldReindexing: reindexingFiles.length,
+        filesNotYetIndexedCut: notIndexedCut,
         filesSupersededCollapsed: supersession.count,
         superseded: supersession.sample,
         chunksScanned: 0,
