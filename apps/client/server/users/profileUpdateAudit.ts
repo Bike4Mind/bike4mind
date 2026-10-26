@@ -6,7 +6,16 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
 
 // Fields with their own audit action (role, credits) or that are request-only and never stored.
-const EXCLUDED_FIELDS = new Set(['id', 'isAdmin', 'roleChangeReason', 'currentCredits', 'creditDelta', 'creditReason']);
+const EXCLUDED_FIELDS = new Set([
+  'id',
+  'isAdmin',
+  'roleChangeReason',
+  'currentCredits',
+  'creditDelta',
+  'creditReason',
+  'throttleTier',
+  'throttleReason',
+]);
 // Credentials: never recorded, and not reliably comparable (select: false, or hashed answers), so a
 // sent value always counts as a change with both sides redacted.
 const SECRET_FIELDS = new Set(['password', 'securityQuestions']);

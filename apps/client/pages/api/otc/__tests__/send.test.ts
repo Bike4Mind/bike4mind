@@ -29,7 +29,15 @@ vi.mock('@server/middlewares/requireTurnstile', () => ({
 }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({ getLogoUrl: () => undefined }));
-vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-pending-token' } }));
+const signedPayloads = vi.hoisted(() => [] as Record<string, unknown>[]);
+vi.mock('jsonwebtoken', () => ({
+  default: {
+    sign: (payload: Record<string, unknown>) => {
+      signedPayloads.push(payload);
+      return 'signed-pending-token';
+    },
+  },
+}));
 
 const mockIsE2EEnabled = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
@@ -83,6 +91,19 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+const settingsValues = vi.hoisted(
+  () => ({ signupBotChecksEnabled: true, signupMinSubmitMs: 1500 }) as Record<string, unknown>
+);
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsValue: (key: string) => settingsValues[key],
+}));
+const mockEvaluateSignals = vi.fn();
+vi.mock('@server/utils/signupBotChecks', () => ({
+  evaluateSignupSignals: (...a: unknown[]) => mockEvaluateSignals(...a),
+}));
+
 const mockSendOTC = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   userService: { sendOTC: (...a: any[]) => mockSendOTC(...a) },
@@ -96,7 +117,7 @@ const EMAIL = 'someone@example.com';
 
 function makeReqRes(email: string = EMAIL, ip = '81.2.69.160') {
   const { req, res } = createMocks({ method: 'POST', headers: { 'x-real-ip': ip } });
-  return { req: Object.assign(req, { body: { email }, logger: { info: vi.fn() } }), res };
+  return { req: Object.assign(req, { body: { email }, logger: { info: vi.fn(), warn: vi.fn() } }), res };
 }
 
 const resetCache = () => {
@@ -342,6 +363,8 @@ describe('/api/otc/send', () => {
     vi.clearAllMocks();
     resetCache();
     mockIsE2EEnabled.mockReturnValue(false);
+    settingsValues.signupBotChecksEnabled = true;
+    mockEvaluateSignals.mockReturnValue([]);
     mockSendOTC.mockResolvedValue({
       pendingToken: 'pending-token',
       nonce: 'real-nonce',
@@ -467,7 +490,7 @@ describe('/api/otc/send', () => {
 
     await handler(req, res);
 
-    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', undefined);
+    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', undefined, []);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ pendingToken: 'pending-token' });
   });
@@ -481,6 +504,67 @@ describe('/api/otc/send', () => {
 
     await handler(req, res);
 
-    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', '123456');
+    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', '123456', []);
+  });
+
+  describe('signup signals', () => {
+    const send = async (body: Record<string, unknown> = {}) => {
+      mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt: new Date('2026-01-01T00:00:00.000Z') });
+      mockConfirmReservation.mockResolvedValue(true);
+      const { req, res } = makeReqRes();
+      req.body = { email: EMAIL, ...body };
+      await handler(req, res);
+      return res;
+    };
+
+    it('stores each evaluated signal with the code and responds exactly as for a clean submission', async () => {
+      const clean = await send();
+      expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
+
+      for (const signal of ['signup_honeypot', 'signup_too_fast', 'signup_token_missing', 'signup_token_invalid']) {
+        mockConfirmReservation.mockClear();
+        mockEvaluateSignals.mockReturnValue([signal]);
+        const flagged = await send({ formToken: 't', formExtra: 'x' });
+        expect(mockConfirmReservation.mock.calls[0][5]).toEqual([signal]);
+        expect(flagged._getStatusCode()).toBe(clean._getStatusCode());
+        expect(flagged._getJSONData()).toEqual(clean._getJSONData());
+      }
+    });
+
+    it('never puts signals in the returned pending token', async () => {
+      const { userService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+      mockSendOTC.mockImplementation((params, adapters) => userService.sendOTC(params, adapters));
+      mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+      const res = await send({ formToken: 't', formExtra: 'x' });
+      expect(res._getJSONData()).toEqual({ pendingToken: 'signed-pending-token' });
+      expect(signedPayloads.at(-1)).toHaveProperty('jti');
+      expect(signedPayloads.at(-1)).not.toHaveProperty('rs');
+      expect(mockConfirmReservation.mock.calls[0][5]).toEqual(['signup_honeypot']);
+    });
+
+    it('forwards the body fields and the min-submit setting to the evaluator', async () => {
+      settingsValues.signupMinSubmitMs = 2000;
+      await send({ formToken: 'tok', formExtra: 'bait' });
+      expect(mockEvaluateSignals).toHaveBeenCalledWith(
+        expect.objectContaining({ formToken: 'tok', formExtra: 'bait', minSubmitMs: 2000 })
+      );
+      settingsValues.signupMinSubmitMs = 1500;
+    });
+
+    it('records nothing when the kill switch is off', async () => {
+      settingsValues.signupBotChecksEnabled = false;
+      mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+      await send();
+      expect(mockEvaluateSignals).not.toHaveBeenCalled();
+      expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
+    });
+
+    it('records nothing when E2E is enabled', async () => {
+      mockIsE2EEnabled.mockReturnValue(true);
+      mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+      await send();
+      expect(mockEvaluateSignals).not.toHaveBeenCalled();
+      expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
+    });
   });
 });

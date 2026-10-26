@@ -1,5 +1,6 @@
-import { pendingOtcTokenRepository } from '@bike4mind/database';
+import { adminSettingsRepository, pendingOtcTokenRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
@@ -14,9 +15,31 @@ import {
 import { requireTurnstile } from '@server/middlewares/requireTurnstile';
 import { TURNSTILE_ACTION_OTC_SEND } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
+import { evaluateSignupSignals } from '@server/utils/signupBotChecks';
 import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { Config, isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
+
+// Bot-check signals for a send; empty when checks are off or evaluation fails.
+async function collectSignupSignals(body: Record<string, unknown>, logger: { warn: (...args: unknown[]) => void }) {
+  if (isE2EEnabled()) return [];
+  try {
+    const settings = await getSettingsMap(
+      { adminSettings: adminSettingsRepository },
+      { names: ['signupBotChecksEnabled', 'signupMinSubmitMs'] }
+    );
+    if (!getSettingsValue('signupBotChecksEnabled', settings, true)) return [];
+    return evaluateSignupSignals({
+      formToken: body.formToken,
+      formExtra: body.formExtra,
+      nowMs: Date.now(),
+      minSubmitMs: getSettingsValue('signupMinSubmitMs', settings, 1500),
+    });
+  } catch (err) {
+    logger.warn('signup signal evaluation failed', err);
+    return [];
+  }
+}
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -80,6 +103,8 @@ const handler = baseApi({ auth: false })
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }
 
+    const riskSignals = await collectSignupSignals(req.body, req.logger);
+
     const result = await userService
       .sendOTC(
         { email: normalizedEmail },
@@ -139,7 +164,8 @@ const handler = baseApi({ auth: false })
         reservation.reservedAt,
         result.nonce,
         result.otcHash,
-        debugCode
+        debugCode,
+        riskSignals
       );
       if (!confirmed) {
         // A newer concurrent request for this email superseded our reservation before

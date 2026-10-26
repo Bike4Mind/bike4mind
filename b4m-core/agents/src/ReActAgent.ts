@@ -382,6 +382,14 @@ export class ReActAgent extends EventEmitter {
     this.context.systemPrompt = systemPrompt;
   }
 
+  private identityOptions() {
+    const { modelIdentityId, modelDisplayName } = this.context;
+    return {
+      ...(modelIdentityId ? { modelIdentityId } : {}),
+      ...(modelDisplayName ? { modelDisplayName } : {}),
+    };
+  }
+
   /**
    * One-shot, non-reentrant text completion: a single non-streaming LLM call
    * with no tools, isolated from `run()`'s instance state (steps, messages,
@@ -410,6 +418,7 @@ export class ReActAgent extends EventEmitter {
         temperature,
         abortSignal: options.signal,
         executeTools: false,
+        ...(options.model ? {} : this.identityOptions()),
       },
       async texts => {
         for (const chunk of texts) {
@@ -600,6 +609,7 @@ export class ReActAgent extends EventEmitter {
               executeTools: false,
               thinking: this.context.thinking,
               cacheStrategy,
+              ...this.identityOptions(),
             },
             async (texts, completionInfo) => {
               // Collect text chunks and emit deltas for live token streaming
@@ -1497,6 +1507,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           executeTools: false,
           thinking: this.context.thinking,
           cacheStrategy,
+          ...this.identityOptions(),
         },
         async (texts, completionInfo) => {
           for (const rawText of texts) {

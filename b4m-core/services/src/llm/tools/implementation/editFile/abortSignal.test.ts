@@ -68,6 +68,17 @@ describe('editFileTool cancellation handling', () => {
     expect(complete.mock.calls[0][2].abortSignal).toBe(controller.signal);
   });
 
+  it('runs the configured model in place of its default', async () => {
+    const complete = vi.fn(async (_m, _msgs, _o, cb) => cb(['edited'], undefined));
+    const { context } = makeContext(undefined, complete);
+
+    await editFileTool
+      .implementation(context, { model: 'cheap-model' })
+      .toolFn({ fileId: FILE_ID, instruction: 'uppercase it' }, {} as never);
+
+    expect(complete.mock.calls[0][0]).toBe('cheap-model');
+  });
+
   it('sends no signal when the host supplies no getter', async () => {
     const complete = vi.fn(async (_m, _msgs, _o, cb) => cb(['edited'], undefined));
     const { context } = makeContext(undefined, complete);

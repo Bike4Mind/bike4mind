@@ -110,11 +110,14 @@ const describeDangerChanges = (editedFields: EditedFieldsState, formState: Admin
   return changes;
 };
 
+// throttleTier/throttleReason are request-only fields the update route routes through setThrottleTier.
+export type AdminFieldKey = keyof IUserDocument | 'throttleTier' | 'throttleReason';
+
 // Keyed by IUserDocument, not the narrower list-projection row: admins edit fields the
 // list endpoint does not read back (e.g. emailVerifiedAt), and the PATCH body is a
 // Partial<IUserDocument>.
 export type EditedFieldsState = {
-  [key in keyof Partial<IUserDocument>]: boolean;
+  [key in AdminFieldKey]?: boolean;
 };
 
 export const FullUsersView: React.FC<UsersViewProps> = ({
@@ -231,9 +234,13 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
     return () => reportUnsavedFields.current?.([]);
   }, [unsavedKeys]);
 
-  const handleFormFieldChange = (key: keyof IUserDocument, value: unknown) => {
+  const handleFormFieldChange = (key: AdminFieldKey, value: unknown) => {
     setFormState(prev => ({ ...prev, [key]: value }));
-    setEditedFields(prev => stageFieldEdit(prev, key, value, user));
+    setEditedFields(prev => {
+      const next = stageFieldEdit(prev, key, value, user);
+      // A reason is only meaningful while the tier change it explains is staged.
+      return key === 'throttleTier' && !next.throttleTier ? { ...next, throttleReason: false } : next;
+    });
   };
 
   const handleDeleteUser = async (userId: string, reason: string) => {
@@ -250,6 +257,9 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   };
 
   const creditReasonMissing = !!editedFields.currentCredits && !isValidAdminActionReason(creditReason);
+  const throttleReasonMissing =
+    !!editedFields.throttleTier &&
+    !isValidAdminActionReason((formState as { throttleReason?: string }).throttleReason ?? '');
 
   const getNextLevel = (currentLevel: string) => {
     switch (currentLevel) {
@@ -520,7 +530,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
           startDecorator={<SaveIcon />}
           onClick={handleUpdateClick}
           loading={updateUser.isPending}
-          disabled={creditReasonMissing}
+          disabled={creditReasonMissing || throttleReasonMissing}
           data-testid="user-update-btn"
           sx={{ width: { xs: '100%', sm: 'auto' } }}
         >

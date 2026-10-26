@@ -27,9 +27,10 @@ import OktaIcon from './svgs/flags/OktaIcon';
 import GoogleColorIcon from './svgs/flags/GoogleColorIcon';
 
 import { useUser } from '@client/app/contexts/UserContext';
-import { useSendOTC, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
+import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
+import SignupHoneypot from './SignupHoneypot';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
@@ -112,6 +113,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const joinWaitlist = useJoinWaitlist();
   const router = useRouter();
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
+  const { botFields, honeypotProps } = useSignupBotFields();
   const rateLimit = useOtcRateLimit();
   const [emailError, setEmailError] = useState<string | null>(null);
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
@@ -245,7 +247,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         return;
       }
 
-      const sendResult = await sendOTC({ email: trimmedEmail });
+      const sendResult = await sendOTC({ email: trimmedEmail, ...botFields });
       setPendingToken(sendResult.pendingToken);
       toastOtcCodeSent(t('auth.codeSent'));
       setCurrentStep('otc');
@@ -267,7 +269,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const handleResendCode = async () => {
     if (resendCooldown > 0 || rateLimit.secondsLeft > 0) return;
     try {
-      const sendResult = await sendOTC({ email: email.trim() });
+      const sendResult = await sendOTC({ email: email.trim(), ...botFields });
       setPendingToken(sendResult.pendingToken);
       toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
@@ -832,6 +834,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     )}
                   </Typography>
                 </Box>
+                <SignupHoneypot {...honeypotProps} />
               </form>
             )}
 

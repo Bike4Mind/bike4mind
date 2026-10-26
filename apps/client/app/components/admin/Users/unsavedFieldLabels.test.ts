@@ -27,6 +27,13 @@ describe('unsavedFieldLabels', () => {
     expect(unsavedFieldLabels(['stripeCustomerId'])).toEqual(['Stripe Customer Id']);
   });
 
+  it('labels the restricted tier fields', () => {
+    expect(unsavedFieldLabels(['throttleTier', 'throttleReason'])).toEqual([
+      'Restricted tier',
+      'Restricted tier reason',
+    ]);
+  });
+
   it('returns nothing for no keys', () => {
     expect(unsavedFieldLabels([])).toEqual([]);
   });

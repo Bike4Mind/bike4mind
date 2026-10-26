@@ -10,12 +10,18 @@ import {
   getTextModelCost,
   getTurnsCost,
   insufficientCreditsError,
+  isShadowTier,
   type IMessage,
   type IUserDocument,
   type ModelInfo,
   type ApiKeyCompletionSource,
 } from '@bike4mind/common';
-import { adminSettingsRepository, organizationRepository, usageEventRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  cacheRepository,
+  organizationRepository,
+  usageEventRepository,
+} from '@bike4mind/database';
 import { estimateInputTokens, estimateToolTokens } from '@bike4mind/services/cliCompletions';
 import {
   assertOwnerHasCredits,
@@ -31,6 +37,11 @@ import {
   loadModelConfigurations,
   type ModelAdmission,
 } from '@bike4mind/services/llm/modelAdmission';
+import {
+  loadShadowTierSettings,
+  recordShadowTokenUsage,
+  reserveShadowTokenBudget,
+} from '@bike4mind/services/llm/shadowTier';
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 import { getUserEntitlements } from '@server/entitlements';
@@ -126,6 +137,20 @@ export async function reserveCompletionCredits(
   featureLabel: string,
   { organizationId, holdTtlMs }: { organizationId?: string | null; holdTtlMs?: number } = {}
 ): Promise<CreditReservation> {
+  // Restricted-tier daily token cap; refused like an empty balance.
+  if (req.user && isShadowTier(req.user)) {
+    const { dailyTokenCap } = await loadShadowTierSettings(adminSettingsRepository);
+    if (!(await reserveShadowTokenBudget(req.user, dailyTokenCap, { cache: cacheRepository }))) {
+      throw insufficientCreditsError(
+        creditService.holdInsufficientCreditsMessage(
+          featureLabel,
+          0,
+          Math.max(1, usdToCredits(usd)),
+          Boolean(resolveRequestBillingOrgId(req, organizationId))
+        )
+      );
+    }
+  }
   return reserveRequestCredits({
     req,
     // Positive requests keep the minimum one-credit reservation; an explicitly free call needs none.
@@ -207,6 +232,14 @@ export async function settleCompletion(
       apiKeyId: req.apiKeyInfo?.keyId,
     })
     .catch(err => req.logger.warn('[meterPlatformCompletion] usage event failed', err));
+  await recordShadowTokenUsage(
+    req.user!,
+    charge.inputTokens +
+      charge.outputTokens +
+      (charge.cacheReadInputTokens ?? 0) +
+      (charge.cacheCreationInputTokens ?? 0),
+    { cache: cacheRepository }
+  );
   return creditsCharged;
 }
 

@@ -1,5 +1,4 @@
-import type { IUserDocument } from '@bike4mind/common';
-import type { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
+import type { AdminFieldKey, EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 
 /**
  * Human labels for the admin-editable fields on the user card, in the order they
@@ -10,7 +9,7 @@ import type { EditedFieldsState } from '@client/app/components/admin/Users/Views
  * move together, and the admin thinks of them as one thing) - duplicates are
  * collapsed.
  */
-const FIELD_LABELS: Partial<Record<keyof IUserDocument, string>> = {
+const FIELD_LABELS: Partial<Record<AdminFieldKey, string>> = {
   name: 'Name',
   username: 'Username',
   email: 'Email',
@@ -26,6 +25,8 @@ const FIELD_LABELS: Partial<Record<keyof IUserDocument, string>> = {
   subscribedUntil: 'Subscribed until',
   isBanned: 'Banned',
   isModerated: 'Moderated',
+  throttleTier: 'Restricted tier',
+  throttleReason: 'Restricted tier reason',
 };
 
 const prettifyKey = (key: string): string =>
@@ -44,6 +45,9 @@ export const unsavedFieldKeys = (editedFields: EditedFieldsState): string[] =>
 export const unsavedFieldLabels = (keys: readonly string[]): string[] => {
   const known = Object.keys(FIELD_LABELS).filter(key => keys.includes(key));
   const unknown = keys.filter(key => !(key in FIELD_LABELS));
-  const labels = [...known.map(key => FIELD_LABELS[key as keyof IUserDocument] as string), ...unknown.map(prettifyKey)];
+  const labels = [
+    ...known.map(key => FIELD_LABELS[key as keyof typeof FIELD_LABELS] as string),
+    ...unknown.map(prettifyKey),
+  ];
   return Array.from(new Set(labels));
 };

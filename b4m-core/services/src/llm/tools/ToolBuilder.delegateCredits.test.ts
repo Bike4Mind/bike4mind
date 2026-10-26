@@ -51,7 +51,7 @@ const mockDelegation = (model: string, totalCredits = 40) =>
     },
   } as ServerAgentExecutionResult);
 
-const buildDelegateTool = () => {
+const buildDelegateTool = (extraDeps: Partial<ToolBuilderConfig> = {}) => {
   const toolCreditsMap = new Map<string, number[]>();
   const toolCreditModels = new Set<string>();
   const recordUsage = vi.fn().mockResolvedValue(undefined);
@@ -65,6 +65,7 @@ const buildDelegateTool = () => {
     subagentTelemetryData: [],
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     extraContextMessages: [],
+    ...extraDeps,
   } as unknown as ToolBuilderConfig;
 
   const tools = new ToolBuilder(deps).buildTools({
@@ -180,5 +181,18 @@ describe('ToolBuilder delegate_to_agent credit attribution', () => {
       model: PARENT_MODEL,
     });
     expect(recordUsage.mock.calls[0][0].costUsd).toBeGreaterThan(0);
+  });
+
+  it('attributes a substituted subagent run to the requested model', async () => {
+    mockDelegation(PARENT_MODEL);
+    const requested = { ...parentModelInfo, id: 'claude-sonnet-5', backend: ModelBackend.Anthropic };
+    const { delegateTool, toolCreditModels, recordUsage } = buildDelegateTool({
+      toLedgerModel: id => (id === PARENT_MODEL ? requested : undefined),
+    });
+
+    await delegateTool.toolFn({ task: 'research', agent: 'researcher' });
+
+    expect(resolveAggregateToolModel(toolCreditModels)).toBe('claude-sonnet-5');
+    expect(recordUsage.mock.calls[0][0]).toMatchObject({ model: 'claude-sonnet-5', provider: ModelBackend.Anthropic });
   });
 });

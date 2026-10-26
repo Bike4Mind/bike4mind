@@ -189,6 +189,8 @@ export interface ToolBuilderConfig {
   modelAdmission?: Pick<ModelAdmission, 'assert'>;
   /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
   decide?: ToolContext['decide'];
+  /** The model a delegation's charge is recorded under when `id` ran in place of it (restricted tier). */
+  toLedgerModel?: (id: string) => ModelInfo | undefined;
 }
 
 // Short spoken preambles for tools whose latency would otherwise leave the
@@ -1156,7 +1158,8 @@ export class ToolBuilder {
               }
             : undefined,
         onSubagentCredits: (credits, meta) => {
-          this.reserveToolCredits('delegate_to_agent', credits, meta?.model);
+          const ledger = meta && this.deps.toLedgerModel?.(meta.model);
+          this.reserveToolCredits('delegate_to_agent', credits, ledger?.id ?? meta?.model);
           // No meta == model unresolvable; skip rather than fabricate a zero-cost event.
           if (meta) {
             recordToolUsageEvent(
@@ -1167,8 +1170,8 @@ export class ToolBuilder {
                 quest,
                 user: this.deps.user,
                 organization,
-                provider: meta.provider,
-                model: meta.model,
+                provider: ledger?.backend ?? meta.provider,
+                model: ledger?.id ?? meta.model,
                 costUsd: meta.usdCost,
                 creditsCharged: credits,
                 inputTokens: meta.inputTokens,

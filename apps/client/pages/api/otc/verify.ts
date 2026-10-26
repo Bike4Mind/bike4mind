@@ -7,6 +7,8 @@ import {
   UnprocessableEntityError,
   isOAuthClientIdShape,
   redactUserSecretsForSelf,
+  throttleSourceForSignal,
+  type UserRiskSignalType,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -59,6 +61,7 @@ import { randomUUID } from 'crypto';
 import * as z from 'zod';
 import { selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
+import { recordAdminActionForActor, systemAuditActor } from '@server/utils/adminAudit';
 
 interface PendingTokenPayload {
   email: string;
@@ -143,13 +146,17 @@ const handler = baseApi({ auth: false })
     // below to retry). A stale/replayed token, or one whose record holds no code hash,
     // fails this check -> generic invalid. The code hash is only ever read from here.
     const newNonce = randomUUID();
-    const otcHash = await pendingOtcTokenRepository.validateAndRotateNonce(normalizedEmail, tokenPayload.jti, newNonce);
-    if (!otcHash) {
+    const pendingCode = await pendingOtcTokenRepository.validateAndRotateNonce(
+      normalizedEmail,
+      tokenPayload.jti,
+      newNonce
+    );
+    if (!pendingCode) {
       await budget.refund();
       throw new UnprocessableEntityError('Invalid code.');
     }
 
-    const isValid = await userService.verifyPendingOTC(code, otcHash);
+    const isValid = await userService.verifyPendingOTC(code, pendingCode.otcHash);
     if (!isValid) {
       // Re-issue the token with an incremented attempt count + the rotated nonce so
       // the user can retry. Identical response for existing and non-existent accounts
@@ -484,6 +491,38 @@ const handler = baseApi({ auth: false })
       const promoted = await userRepository.update({ id: newUser.id, isAdmin: true });
       if (promoted) newUser = promoted;
       req.logger.info('Self-host bootstrap: first registered user promoted to admin', { userId: newUser.id });
+    }
+
+    // Best-effort: a failure here must neither fail the signup nor change the response.
+    // Signals are written by otc/send only, from the closed UserRiskSignalType set.
+    const signals = (pendingCode.riskSignals ?? []) as UserRiskSignalType[];
+    if (signals.length && newUser?.id) {
+      const signalLog = { userId: newUser.id, signals };
+      let step = 'record risk signals';
+      try {
+        await userRepository.update({
+          id: newUser.id,
+          riskSignals: signals.map(type => ({ type, at: new Date() })),
+        });
+        step = 'set throttle tier';
+        const tierChange = await userService.setThrottleTier(
+          newUser.id,
+          'shadow',
+          { reason: `signup checks: ${signals.join(',')}`, source: throttleSourceForSignal(signals[0]) },
+          { db: { users: userRepository } }
+        );
+        if (tierChange.changed) {
+          step = 'record audit entry';
+          await recordAdminActionForActor(req, systemAuditActor('signup-checks'), {
+            action: 'user.throttle_tier.changed',
+            target: { kind: 'user', id: newUser.id, displayName: normalizedEmail },
+            summary: `set the restricted tier to ${tierChange.after} (source: signup checks, signals: ${signals.join(',')})`,
+            changes: [{ field: 'throttle.tier', before: tierChange.before, after: tierChange.after }],
+          });
+        }
+      } catch (err) {
+        req.logger.error(`OTC signup signal application failed: ${step}`, { ...signalLog, err });
+      }
     }
 
     // registerViaOTC set emailVerified=true, so the now-verified domain may confer its signup

@@ -280,6 +280,16 @@
         "default": "./dist/llm/modelAdmission.cjs"
       }
     },
+    "./llm/shadowTier": {
+      "import": {
+        "types": "./dist/llm/shadowTier.d.mts",
+        "default": "./dist/llm/shadowTier.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/shadowTier.d.cts",
+        "default": "./dist/llm/shadowTier.cjs"
+      }
+    },
     "./llm/refineText": {
       "import": {
         "types": "./dist/llm/refineText.d.mts",

@@ -75,8 +75,15 @@ vi.mock('@bike4mind/db-core', async importOriginal => ({
 // The one-time code is already proven by the time we reach registration; stub the
 // verify layer so the happy path lands on the new-user branch.
 const mockJwtVerify = vi.fn();
+const mockJwtSign = vi.hoisted(() => vi.fn((..._a: unknown[]) => 'signed-token'));
+const mockSetThrottleTier = vi.fn();
+const mockRecordAdminActionForActor = vi.fn();
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionForActor: (...a: unknown[]) => mockRecordAdminActionForActor(...a),
+  systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
+}));
 vi.mock('jsonwebtoken', () => ({
-  default: { verify: (...a: any[]) => mockJwtVerify(...a), sign: () => 'signed-token' },
+  default: { verify: (...a: any[]) => mockJwtVerify(...a), sign: (...a: any[]) => mockJwtSign(...a) },
 }));
 
 // DB-backed partner rules (issue #293). Default to "no rule" so the base cases fall
@@ -156,6 +163,7 @@ vi.mock('@bike4mind/services', () => ({
   userService: {
     verifyPendingOTC: (...a: any[]) => mockVerifyPendingOTC(...a),
     registerViaOTC: (...a: any[]) => mockRegisterViaOTC(...a),
+    setThrottleTier: (...a: any[]) => mockSetThrottleTier(...a),
     releasePendingFreeCredits: (...a: unknown[]) => mockReleasePending(...a),
   },
   creditService: { addCredits: (...a: any[]) => mockAddCredits(...a) },
@@ -265,7 +273,7 @@ describe('/api/otc/verify per-email budget', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
-    mockValidateNonce.mockResolvedValue('hash');
+    mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
     mockVerifyPendingOTC.mockResolvedValue(false);
   });
 
@@ -285,7 +293,7 @@ describe('/api/otc/verify per-email budget', () => {
       setup();
       await expect(handler(req, res)).rejects.toThrow();
       mockJwtVerify.mockReset();
-      mockValidateNonce.mockResolvedValue('hash');
+      mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
     }
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     req.body.pendingToken = undefined;
@@ -422,7 +430,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
   beforeEach(() => {
     vi.clearAllMocks();
     mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
-    mockValidateNonce.mockResolvedValue('hash');
+    mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockFindByEmail.mockResolvedValue(null); // new user -> registration branch
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
@@ -926,7 +934,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
   beforeEach(() => {
     vi.clearAllMocks();
     mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
-    mockValidateNonce.mockResolvedValue(true);
+    mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockUserUpdate.mockResolvedValue(undefined);
     mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
@@ -1136,7 +1144,7 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
-    mockValidateNonce.mockResolvedValue('hash');
+    mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockFindByEmail.mockResolvedValue(null);
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
@@ -1317,7 +1325,7 @@ describe('/api/otc/verify - self-host bootstrap admin', () => {
     vi.clearAllMocks();
     vi.stubEnv('B4M_SELF_HOST', 'true');
     mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
-    mockValidateNonce.mockResolvedValue('hash');
+    mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockFindByEmail.mockResolvedValue(null);
     mockRegisterViaOTC.mockImplementation(async ({ email }: { email: string }) => ({
@@ -1546,5 +1554,105 @@ describe('/api/otc/verify - self-host bootstrap admin', () => {
 
       expect(adminPromotions()).toHaveLength(0);
     });
+  });
+});
+
+describe('/api/otc/verify - signup bot-check signals', () => {
+  const signals = ['signup_too_fast', 'signup_honeypot'];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
+    mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue(null);
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
+    mockSetThrottleTier.mockResolvedValue({ changed: true, before: 'none', after: 'shadow' });
+  });
+
+  const withSignals = (list: string[]) => mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: list });
+
+  it('applies signals to a newly created account and audits as a system actor', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(signals);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserUpdate).toHaveBeenCalledWith({
+      id: 'user-1',
+      riskSignals: signals.map(type => ({ type, at: expect.any(Date) })),
+    });
+    expect(mockSetThrottleTier).toHaveBeenCalledWith(
+      'user-1',
+      'shadow',
+      { reason: 'signup checks: signup_too_fast,signup_honeypot', source: 'signup_timing' },
+      expect.anything()
+    );
+    expect(mockRecordAdminActionForActor).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ kind: 'system', name: 'signup-checks' }),
+      expect.objectContaining({
+        action: 'user.throttle_tier.changed',
+        changes: [{ field: 'throttle.tier', before: 'none', after: 'shadow' }],
+      })
+    );
+  });
+
+  it('does nothing for a new account without signals', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
+    expect(mockRecordAdminActionForActor).not.toHaveBeenCalled();
+  });
+
+  it('ignores signals when an existing user logs in', async () => {
+    mockFindByEmail.mockResolvedValue({ id: 'user-9', email: NON_DOMAIN_EMAIL, emailVerified: true, tags: [] });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(signals);
+    await handler(req, res);
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
+    expect(mockUserUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ riskSignals: expect.anything() }));
+  });
+
+  it('keeps signals out of the re-issued token when registration still needs a username', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.username = undefined;
+    withSignals(signals);
+    await handler(req, res);
+    expect(res._getJSONData()).toMatchObject({ registrationRequired: true });
+    expect(mockJwtSign.mock.calls.at(-1)?.[0]).not.toHaveProperty('rs');
+  });
+
+  it('keeps signals out of the re-issued token after a wrong code', async () => {
+    mockVerifyPendingOTC.mockResolvedValue(false);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(signals);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockJwtSign.mock.calls.at(-1)?.[0]).not.toHaveProperty('rs');
+  });
+
+  it('does not fail signup or change the response when applying signals throws', async () => {
+    mockSetThrottleTier.mockRejectedValue(new Error('db down'));
+    const clean = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(clean.req, clean.res);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(signals);
+    await handler(req, res);
+    expect(mockSetThrottleTier).toHaveBeenCalledWith(
+      'user-1',
+      'shadow',
+      expect.objectContaining({ source: 'signup_timing' }),
+      expect.anything()
+    );
+    expect(res._getStatusCode()).toBe(clean.res._getStatusCode());
+    expect(res._getJSONData()).toEqual(clean.res._getJSONData());
+    expect((req as any).logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('set throttle tier'),
+      expect.objectContaining({ userId: 'user-1', signals })
+    );
   });
 });

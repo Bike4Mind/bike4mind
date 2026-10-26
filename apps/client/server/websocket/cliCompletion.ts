@@ -19,6 +19,7 @@ import {
   userRepository,
   userApiKeyRepository,
   organizationRepository,
+  cacheRepository,
 } from '@bike4mind/database';
 import {
   verifyJwtToken,
@@ -190,6 +191,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         users: userRepository,
         usageEvents: usageEventRepository,
         organizations: organizationRepository,
+        cache: cacheRepository,
       },
       apiKeyInfo: apiKeyInfoForCompletion,
       scopeActor: actorScopeForKey(apiKeyInfo),

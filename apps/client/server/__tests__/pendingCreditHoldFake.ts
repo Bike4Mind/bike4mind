@@ -10,5 +10,6 @@ export const pendingCreditHoldFake = {
     markSettled: async () => true,
     findSettlement: async () => null,
   },
+  cacheRepository: {},
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
 };

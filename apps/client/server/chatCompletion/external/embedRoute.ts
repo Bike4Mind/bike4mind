@@ -42,6 +42,7 @@ import {
   userRepository,
   usageEventRepository,
   organizationRepository,
+  cacheRepository,
   agentRepository,
   userApiKeyRepository,
   projectRepository,
@@ -657,6 +658,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             users: userRepository,
             usageEvents: usageEventRepository,
             organizations: organizationRepository,
+            cache: cacheRepository,
             // Per-key spend metering (spend-cap enforcement), org-paid turns only. NOT the
             // provider-LLM key repo above (apiKeys) - this one holds the embed UserApiKey docs.
             ...(ctx.endUserId ? {} : { userApiKeys: userApiKeyRepository }),

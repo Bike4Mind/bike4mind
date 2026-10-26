@@ -1,7 +1,7 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
-import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
-import { IUserDocument } from '@bike4mind/common';
-import { Button, Checkbox, Stack, Tooltip } from '@mui/joy';
+import { AdminFieldKey, EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
+import type { ThrottleTier } from '@bike4mind/common';
+import { Button, Checkbox, Input, Stack, Tooltip, Typography } from '@mui/joy';
 import React, { useState } from 'react';
 import { toast } from 'sonner';
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
@@ -9,9 +9,9 @@ import { ADMIN_REASON_PRESETS } from '@client/app/components/admin/shared/adminR
 import DestructiveActionHelp from '@client/app/components/help/DestructiveActionHelp';
 
 interface SpicyUserActionsProps {
-  user: AdminUserListItem;
+  user: AdminUserListItem & { throttleTier?: ThrottleTier; throttleReason?: string };
   editedFields: EditedFieldsState;
-  onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
+  onFieldChange: (fieldName: AdminFieldKey, value: unknown) => void;
   handleDeleteUser: (userId: string, reason: string) => Promise<void>;
 }
 
@@ -29,6 +29,8 @@ const SpicyUserActions: React.FC<SpicyUserActionsProps> = React.memo(
       const newValue = e.target.checked;
       onFieldChange('isModerated', newValue);
     };
+
+    const shadowed = (user.throttleTier ?? user.throttle?.tier ?? 'none') === 'shadow';
 
     const confirmDelete = async (reason: string) => {
       setIsDeleting(true);
@@ -78,6 +80,37 @@ const SpicyUserActions: React.FC<SpicyUserActionsProps> = React.memo(
             consequences="Moderated users can't use AI features, but can still sign in and access their data. You can remove moderation later."
             helpId="admin/user-management"
           />
+        </Stack>
+        <Stack direction="column" spacing={1}>
+          <Tooltip title="Applies lower limits and a cheaper model without telling the user">
+            <Checkbox
+              size="lg"
+              variant="outlined"
+              color={editedFields?.throttleTier ? 'warning' : 'neutral'}
+              checked={shadowed}
+              onChange={e => onFieldChange('throttleTier', e.target.checked ? 'shadow' : 'none')}
+              label="Shadow tier"
+              data-testid="admin-user-shadow-checkbox"
+            />
+          </Tooltip>
+          {editedFields?.throttleTier && (
+            <Input
+              size="sm"
+              placeholder="Reason (required)"
+              value={user.throttleReason ?? ''}
+              onChange={e => onFieldChange('throttleReason', e.target.value)}
+              data-testid="admin-user-shadow-reason-input"
+            />
+          )}
+          {!!(user.throttle || user.riskSignals?.length) && (
+            <Typography level="body-xs" data-testid="admin-user-shadow-info">
+              {user.throttle &&
+                `Tier ${user.throttle.tier}, source ${user.throttle.source}, changed ${String(user.throttle.changedAt).slice(0, 10)}. `}
+              {user.riskSignals?.length
+                ? `Signals: ${user.riskSignals.map(sig => `${sig.type} (${String(sig.at).slice(0, 10)})`).join(', ')}`
+                : ''}
+            </Typography>
+          )}
         </Stack>
         <Stack direction="row" spacing={1} alignItems="center">
           <Button

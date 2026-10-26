@@ -51,7 +51,9 @@ export class ResearchModeService {
     private logger: Logger,
     // Internal id of the end user this research run is on behalf of, forwarded
     // to direct providers for per-user abuse attribution. See toProviderEndUserId.
-    private endUserId?: string
+    private endUserId?: string,
+    // The model each configuration actually runs on; results keep reporting the configured id.
+    private runModelFor?: (requested: ModelInfo) => ModelInfo
   ) {}
 
   async processResearchMode(
@@ -116,10 +118,11 @@ export class ResearchModeService {
       this.logger.info(`🔬 [Research Mode] Processing configuration: ${config.label || config.model} (${config.id})`);
 
       // Get model info for this configuration
-      const modelInfo = this.modelInfos.find(m => m.id === config.model);
-      if (!modelInfo) {
+      const requestedModelInfo = this.modelInfos.find(m => m.id === config.model);
+      if (!requestedModelInfo) {
         throw new Error(`Model ${config.model} not found`);
       }
+      const modelInfo = this.runModelFor?.(requestedModelInfo) ?? requestedModelInfo;
       const reasoningWithholder = withholdsReasoning(thinkingVisibility, config.model)
         ? createReasoningWithholder(reasoningChannelOf(modelInfo))
         : null;
@@ -145,6 +148,9 @@ export class ResearchModeService {
         presencePenalty: config.parameters?.presencePenalty ?? baseOptions.presencePenalty,
         frequencyPenalty: config.parameters?.frequencyPenalty ?? baseOptions.frequencyPenalty,
         ...(abortSignal ? { abortSignal } : {}),
+        ...(modelInfo.id !== requestedModelInfo.id
+          ? { modelIdentityId: requestedModelInfo.id, modelDisplayName: requestedModelInfo.name }
+          : {}),
       };
 
       let completionInfo: any = undefined;
@@ -174,7 +180,7 @@ export class ResearchModeService {
         // Race between the LLM completion, the timeout, and cancellation
         await Promise.race([
           llm.complete(
-            config.model,
+            modelInfo.id,
             messages,
             options,
             async (rawTexts: (string | null | undefined)[], rawInfo?: any) => {
