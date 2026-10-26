@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
-import { TooManyRequestsError } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike4mind/common';
 
 // Hoisted mocks (vi.hoisted runs before imports)
 const { getSettingsMapMock, getSettingsValueMock, resolveUserRateTierMock, findDailySpendByUserMock } = vi.hoisted(
@@ -25,7 +25,7 @@ vi.mock('@server/utils/userRateTier', () => ({
   resolveUserRateTier: resolveUserRateTierMock,
 }));
 
-import { checkFreeTierDailySpendCap } from './freeTierDailyCapGate';
+import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from './freeTierDailyCapGate';
 
 /** Build a minimal IUserDocument with a given account age. */
 function makeUser(ageMs: number): IUserDocument {
@@ -86,7 +86,11 @@ describe('checkFreeTierDailySpendCap', () => {
     });
     resolveUserRateTierMock.mockResolvedValue('free');
 
-    await checkFreeTierDailySpendCap({ user: makeUser(10 * DAY_MS), usageEventRepository: mockRepo, logger: mockLogger });
+    await checkFreeTierDailySpendCap({
+      user: makeUser(10 * DAY_MS),
+      usageEventRepository: mockRepo,
+      logger: mockLogger,
+    });
 
     expect(findDailySpendByUserMock).not.toHaveBeenCalled();
   });
@@ -103,7 +107,11 @@ describe('checkFreeTierDailySpendCap', () => {
 
     // Under cap - should NOT throw
     await expect(
-      checkFreeTierDailySpendCap({ user: makeUser(1 * 60 * 60 * 1000), usageEventRepository: mockRepo, logger: mockLogger })
+      checkFreeTierDailySpendCap({
+        user: makeUser(1 * 60 * 60 * 1000),
+        usageEventRepository: mockRepo,
+        logger: mockLogger,
+      })
     ).resolves.toBeUndefined();
   });
 
@@ -118,7 +126,11 @@ describe('checkFreeTierDailySpendCap', () => {
     findDailySpendByUserMock.mockResolvedValue(500);
 
     await expect(
-      checkFreeTierDailySpendCap({ user: makeUser(1 * 60 * 60 * 1000), usageEventRepository: mockRepo, logger: mockLogger })
+      checkFreeTierDailySpendCap({
+        user: makeUser(1 * 60 * 60 * 1000),
+        usageEventRepository: mockRepo,
+        logger: mockLogger,
+      })
     ).rejects.toBeInstanceOf(TooManyRequestsError);
   });
 
@@ -160,12 +172,16 @@ describe('checkFreeTierDailySpendCap', () => {
       return undefined;
     });
     resolveUserRateTierMock.mockResolvedValue('free');
-    findDailySpendByUserMock.mockResolvedValue(201);
+    findDailySpendByUserMock.mockResolvedValue(150);
 
-    // day-1 cap is 0, so falls back to steady-state 200; 201 >= 200 => throws
+    // A day-1 cap of 0 would refuse any spend; falling back to the steady-state 200 lets 150 through.
     await expect(
-      checkFreeTierDailySpendCap({ user: makeUser(1 * 60 * 60 * 1000), usageEventRepository: mockRepo, logger: mockLogger })
-    ).rejects.toBeInstanceOf(TooManyRequestsError);
+      checkFreeTierDailySpendCap({
+        user: makeUser(1 * 60 * 60 * 1000),
+        usageEventRepository: mockRepo,
+        logger: mockLogger,
+      })
+    ).resolves.toBeUndefined();
   });
 
   it('falls back to steady-state cap when days-2-7 cap is 0', async () => {
@@ -176,12 +192,12 @@ describe('checkFreeTierDailySpendCap', () => {
       return undefined;
     });
     resolveUserRateTierMock.mockResolvedValue('free');
-    findDailySpendByUserMock.mockResolvedValue(201);
+    findDailySpendByUserMock.mockResolvedValue(150);
 
-    // days-2-7 cap is 0, so falls back to steady-state 200; 201 >= 200 => throws
+    // A days-2-7 cap of 0 would refuse any spend; falling back to the steady-state 200 lets 150 through.
     await expect(
       checkFreeTierDailySpendCap({ user: makeUser(2 * DAY_MS), usageEventRepository: mockRepo, logger: mockLogger })
-    ).rejects.toBeInstanceOf(TooManyRequestsError);
+    ).resolves.toBeUndefined();
   });
 
   it('fails open on a transient DB error', async () => {
@@ -202,5 +218,70 @@ describe('checkFreeTierDailySpendCap', () => {
       expect.stringContaining('[freeTierDailyCapGate]'),
       expect.objectContaining({ error: expect.any(Error) })
     );
+  });
+  it('refuses at exactly the cap and allows one credit under it', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+    resolveUserRateTierMock.mockResolvedValue('free');
+    const user = makeUser(10 * DAY_MS);
+
+    findDailySpendByUserMock.mockResolvedValue(199);
+    await expect(
+      checkFreeTierDailySpendCap({ user, usageEventRepository: mockRepo, logger: mockLogger })
+    ).resolves.toBeUndefined();
+
+    findDailySpendByUserMock.mockResolvedValue(200);
+    await expect(
+      checkFreeTierDailySpendCap({ user, usageEventRepository: mockRepo, logger: mockLogger })
+    ).rejects.toBeInstanceOf(TooManyRequestsError);
+  });
+
+  it('tags the refusal with the registered errorCode and a Retry-After until UTC midnight', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+    resolveUserRateTierMock.mockResolvedValue('free');
+    findDailySpendByUserMock.mockResolvedValue(250);
+
+    const error = await checkFreeTierDailySpendCap({
+      user: makeUser(10 * DAY_MS),
+      usageEventRepository: mockRepo,
+      logger: mockLogger,
+    }).catch((caught: unknown) => caught);
+
+    expect(isFreeTierDailyCapError(error)).toBe(true);
+    const info = (error as TooManyRequestsError).additionalInfo;
+    expect(info).toMatchObject({ errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE, spentToday: 250, dailyCap: 200 });
+    expect(info?.retryAfter).toBeGreaterThan(0);
+    expect(info?.retryAfter).toBeLessThanOrEqual(DAY_MS / 1000);
+
+    const now = new Date();
+    const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    expect(findDailySpendByUserMock).toHaveBeenLastCalledWith('user-1', startOfDay);
+  });
+
+  it('applies the steady-state cap to a user without createdAt instead of failing open', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      if (key === 'freeTierDay1SpendCapCredits') return 500;
+      return undefined;
+    });
+    resolveUserRateTierMock.mockResolvedValue('free');
+    findDailySpendByUserMock.mockResolvedValue(300);
+    const legacyUser = { id: 'user-1', isAdmin: false, tags: [] } as unknown as IUserDocument;
+
+    await expect(
+      checkFreeTierDailySpendCap({ user: legacyUser, usageEventRepository: mockRepo, logger: mockLogger })
+    ).rejects.toBeInstanceOf(TooManyRequestsError);
+  });
+
+  it('does not treat an unrelated 429 as the daily cap', () => {
+    expect(isFreeTierDailyCapError(new TooManyRequestsError('slow down'))).toBe(false);
   });
 });

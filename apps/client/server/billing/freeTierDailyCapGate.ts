@@ -1,18 +1,22 @@
 import type { IUserDocument, IUsageEventRepository } from '@bike4mind/common';
-import { TooManyRequestsError } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 
 import { resolveUserRateTier } from '@server/utils/userRateTier';
 
-/** 24 hours in milliseconds. */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Return UTC midnight for the current day (start of today). */
-function utcMidnightToday(): Date {
-  const now = new Date();
+function utcMidnight(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+/** True for the 429 `checkFreeTierDailySpendCap` throws, so a caller can answer it instead of failing the turn. */
+export function isFreeTierDailyCapError(error: unknown): error is TooManyRequestsError {
+  return (
+    error instanceof TooManyRequestsError && error.additionalInfo?.errorCode === DAILY_FREE_LIMIT_REACHED_ERROR_CODE
+  );
 }
 
 /**
@@ -44,7 +48,9 @@ export async function checkFreeTierDailySpendCap({
     const steadyCap = getSettingsValue('freeTierDailySpendCapCredits', settings) ?? 0;
     if (steadyCap <= 0) return;
 
-    const accountAgeMs = Date.now() - user.createdAt.getTime();
+    const now = new Date();
+    // A legacy user without createdAt predates the ramp, so it gets the steady-state cap.
+    const accountAgeMs = user.createdAt ? now.getTime() - new Date(user.createdAt).getTime() : Infinity;
     let cap: number;
     if (accountAgeMs < DAY_MS) {
       cap = getSettingsValue('freeTierDay1SpendCapCredits', settings) ?? steadyCap;
@@ -56,10 +62,14 @@ export async function checkFreeTierDailySpendCap({
       cap = steadyCap;
     }
 
-    const todaySpend = await usageEventRepository.findDailySpendByUser(user.id, utcMidnightToday());
+    const startOfDay = utcMidnight(now);
+    const todaySpend = await usageEventRepository.findDailySpendByUser(user.id, startOfDay);
     if (todaySpend >= cap) {
+      // Seconds until the next UTC midnight; becomes the Retry-After header.
+      const retryAfter = Math.ceil((startOfDay.getTime() + DAY_MS - now.getTime()) / 1000);
       throw new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
-        code: 'daily_free_limit_reached',
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter,
         spentToday: todaySpend,
         dailyCap: cap,
       });

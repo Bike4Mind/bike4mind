@@ -73,7 +73,7 @@ import {
 } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
+import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from '@server/billing/freeTierDailyCapGate';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -301,6 +301,23 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     throw new NotFoundError('Session not found');
   }
 
+  // Every quest-creating surface (web app, public chat API, Slack, voice proxy) lands here, so this
+  // is the cap's backstop. A capped turn is the user's limit, not a processing failure: settle the
+  // quest with the reason instead of throwing into the route's generic-failure reply and metric.
+  try {
+    await checkFreeTierDailySpendCap({ user, usageEventRepository, logger });
+  } catch (error) {
+    if (!isFreeTierDailyCapError(error)) throw error;
+    logger.info('Quest refused by the free-tier daily spend cap', { questId: params.questId });
+    await questRepository.settleIfUnfinished(params.questId, {
+      status: 'stopped',
+      type: 'error',
+      reply: error.message,
+      replies: [error.message],
+    });
+    return;
+  }
+
   // Prepare the request body with server-side searchers augmentation
   // Note: searchers are server-side only and not part of the API schema
   type ServerSideQuestBody = z.infer<typeof QuestStartBodySchema> & {
@@ -333,9 +350,6 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
   });
   logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
-
-  // Daily spend cap before the LLM call; fail this quest early if the user has hit their cap.
-  await checkFreeTierDailySpendCap({ user, usageEventRepository, logger });
 
   const timeToProcess = Date.now() - handlerStartTime;
   logger.debug('Calling chatCompletion.process', { durationMs: timeToProcess });

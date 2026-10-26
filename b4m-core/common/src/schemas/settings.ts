@@ -3592,7 +3592,7 @@ export const settingsMap = {
     int: true,
     min: 0,
     description:
-      'Maximum credits a free-tier account may spend in a single UTC calendar day (steady-state, accounts older than 7 days). A request that would push total spend past this cap is refused with a 429. Set to 0 to disable the cap entirely.',
+      'Daily credit allowance for a free-tier account older than 7 days, counted per UTC calendar day. Once spend for the day reaches this cap, new requests are refused with a 429 until the next UTC midnight; the request that crosses the cap is not cut off, so a day can end slightly over it. Set to 0 to disable the cap for every free-tier account, including the day-1 and days 2-7 tiers.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -3603,7 +3603,7 @@ export const settingsMap = {
     int: true,
     min: 0,
     description:
-      'Daily spend cap for a free-tier account on its first calendar day (account age under 24 hours). Higher than the steady-state cap to let genuine new users explore. Set to 0 to fall back to the steady-state cap.',
+      'Daily spend cap for a free-tier account during its first 24 hours (by account age; spend still resets at UTC midnight). Higher than the steady-state cap to let genuine new users explore. Set to 0 to fall back to the steady-state cap.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -3614,7 +3614,7 @@ export const settingsMap = {
     int: true,
     min: 0,
     description:
-      'Daily spend cap for a free-tier account during its second through seventh calendar days (account age 1 to 7 days). Intermediate ramp between the day-1 allowance and the steady-state cap. Set to 0 to fall back to the steady-state cap.',
+      'Daily spend cap for a free-tier account aged 24 hours to 7 days. Intermediate ramp between the day-1 allowance and the steady-state cap. Set to 0 to fall back to the steady-state cap.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
