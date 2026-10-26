@@ -2,7 +2,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { COHORT_CSV_COLUMNS, parseDomainFactsFile, renderCohortCsv } from './signupCohortSweep';
+import type { userService } from '@bike4mind/services';
+import {
+  buildSweepOptions,
+  COHORT_CSV_COLUMNS,
+  parseDomainFactsFile,
+  parseSignupSelection,
+  renderCohortCsv,
+} from './signupCohortSweep';
 
 describe('parseDomainFactsFile', () => {
   it('normalizes domain keys and coerces dates', () => {
@@ -14,6 +21,15 @@ describe('parseDomainFactsFile', () => {
       registrar: 'Registrar Example',
       registeredAt: new Date('2026-03-10'),
     });
+  });
+
+  it('keys facts by registrable domain', () => {
+    const facts = parseDomainFactsFile({ 'Mail.Harbor.Example': { registrar: 'Registrar Example' } });
+    expect([...facts.keys()]).toEqual(['harbor.example']);
+  });
+
+  it('rejects a key that is not a domain', () => {
+    expect(() => parseDomainFactsFile({ com: {} })).toThrow(/not a registrable domain/);
   });
 
   it('rejects a malformed file', () => {
@@ -61,5 +77,89 @@ describe('the signup cohort sweep stays read-only', () => {
     expect(source).not.toMatch(
       /\.(updateOne|updateMany|deleteOne|deleteMany|findOneAnd\w+|findByIdAnd\w+|insertOne|insertMany|bulkWrite|bulkSave|replaceOne|remove|save|create|drop\w*)\s*\(|\$out\b|\$merge\b/
     );
+  });
+});
+
+describe('buildSweepOptions', () => {
+  const defaults: userService.CohortOptions = {
+    localPartShapes: [],
+    ignoredInfrastructureHosts: [],
+    minHexLength: 8,
+    registrationBucketDays: 7,
+    signupBucketHours: 24,
+    minSharedKeyKinds: 2,
+    minDomains: 2,
+    maxDomainsPerKey: 50,
+    maxDomainsPerInfraKey: 500,
+    maxCohortDomains: 20,
+    minUserKeyShare: 0.5,
+    sharedMailboxDomains: [],
+  };
+
+  it('falls back to the defaults for omitted flags', () => {
+    expect(buildSweepOptions({}, defaults)).toEqual(defaults);
+  });
+
+  it('applies provided values', () => {
+    const options = buildSweepOptions(
+      {
+        shapes: ' Alpha+Digits ,hex',
+        'ignore-hosts': 'Shared-Mail.example',
+        'mailbox-domains': 'Mail.Example.Com',
+        'min-shared-key-kinds': '3',
+        'max-domains-per-infra-key': '90',
+        'min-user-key-share': '0.25',
+      },
+      defaults
+    );
+    expect(options).toMatchObject({
+      localPartShapes: ['alpha+digits', 'hex'],
+      ignoredInfrastructureHosts: ['shared-mail.example'],
+      sharedMailboxDomains: ['example.com'],
+      minSharedKeyKinds: 3,
+      maxDomainsPerInfraKey: 90,
+      minUserKeyShare: 0.25,
+    });
+  });
+
+  it.each([
+    ['min-user-key-share', '0'],
+    ['min-user-key-share', '1.5'],
+    ['min-shared-key-kinds', '0'],
+    ['max-cohort-domains', '-1'],
+    ['min-domains', 'two'],
+    ['signup-bucket-hours', '1.5'],
+  ])('rejects --%s %s', (flag, value) => {
+    expect(() => buildSweepOptions({ [flag]: value }, defaults)).toThrow();
+  });
+
+  it('accepts any in any case, alone only', () => {
+    expect(buildSweepOptions({ shapes: 'ANY' }, defaults).localPartShapes).toBe('any');
+    expect(() => buildSweepOptions({ shapes: 'any,alpha' }, defaults)).toThrow(/cannot be combined/);
+  });
+});
+
+describe('parseSignupSelection', () => {
+  it('leaves omitted flags undefined', () => {
+    expect(parseSignupSelection({})).toEqual({ since: undefined, until: undefined, maxUsers: undefined });
+  });
+
+  it('parses ISO dates and the user limit', () => {
+    expect(
+      parseSignupSelection({ since: '2026-03-01T00:00:00Z', until: '2026-04-01T00:00:00Z', 'max-users': '10' })
+    ).toEqual({
+      since: new Date('2026-03-01T00:00:00Z'),
+      until: new Date('2026-04-01T00:00:00Z'),
+      maxUsers: 10,
+    });
+  });
+
+  it.each([
+    ['since', 'notadate'],
+    ['until', '2026-03-01'],
+    ['max-users', '-1'],
+    ['max-users', '0'],
+  ])('rejects --%s %s', (flag, value) => {
+    expect(() => parseSignupSelection({ [flag]: value })).toThrow();
   });
 });

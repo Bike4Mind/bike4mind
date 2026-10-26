@@ -1,8 +1,18 @@
 import { z } from 'zod';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+import type { User } from '@bike4mind/database';
 import type { userService } from '@bike4mind/services';
 
 type DomainFacts = userService.DomainFacts;
 type SignupGroupingResult = userService.SignupGroupingResult;
+type CohortOptions = userService.CohortOptions;
+
+/** Same normalization the records use, so a facts or mailbox entry such as `mail.example.com.` matches. */
+const normalizeDomainEntry = (entry: string): string => {
+  const domain = registrableDomain(entry.trim(), { allowPrivateDomains: true });
+  if (!domain) throw new Error(`"${entry}" is not a registrable domain`);
+  return domain;
+};
 
 const domainFactsFileSchema = z.record(
   z.string(),
@@ -17,7 +27,7 @@ const domainFactsFileSchema = z.record(
 /** Parses a `{ "<registrable domain>": { mxHosts, nameservers, registrar, registeredAt } }` file. */
 export function parseDomainFactsFile(json: unknown): Map<string, DomainFacts> {
   const parsed = domainFactsFileSchema.parse(json);
-  return new Map(Object.entries(parsed).map(([domain, facts]) => [domain.trim().toLowerCase(), facts]));
+  return new Map(Object.entries(parsed).map(([domain, facts]) => [normalizeDomainEntry(domain), facts]));
 }
 
 export const COHORT_CSV_COLUMNS = [
@@ -73,4 +83,99 @@ export function renderCohortCsv({ cohorts, commonKeys }: SignupGroupingResult): 
     rows.push(['common_key', '', '', key.domainCount, '', '', '', '', '', '', '', '', key.label]);
   }
   return [COHORT_CSV_COLUMNS.join(','), ...rows.map(row => row.map(csvCell).join(','))].join('\n') + '\n';
+}
+
+const positiveInt = z.coerce.number().int().positive();
+const share = z.coerce.number().gt(0).max(1);
+const isoDate = z.iso.datetime().transform(value => new Date(value));
+
+export type SweepFlags = Partial<Record<string, string>>;
+
+const list = (raw: string | undefined) =>
+  (raw ?? '')
+    .split(',')
+    .map(entry => entry.trim().toLowerCase())
+    .filter(Boolean);
+
+const parseShapes = (raw: string | undefined): CohortOptions['localPartShapes'] => {
+  const shapes = list(raw);
+  if (!shapes.includes('any')) return shapes;
+  if (shapes.length > 1) throw new Error('--shapes "any" cannot be combined with other shapes');
+  return 'any';
+};
+
+/** Validates the tuning flags and fills omitted ones from `defaults`. Throws on an invalid value. */
+export function buildSweepOptions(flags: SweepFlags, defaults: CohortOptions): CohortOptions {
+  const int = (name: string, fallback: number) =>
+    flags[name] === undefined ? fallback : positiveInt.parse(flags[name]);
+  const userKeyShare = flags['min-user-key-share'];
+  return {
+    ...defaults,
+    localPartShapes: parseShapes(flags.shapes),
+    ignoredInfrastructureHosts: list(flags['ignore-hosts']),
+    sharedMailboxDomains: list(flags['mailbox-domains']).map(normalizeDomainEntry),
+    minSharedKeyKinds: int('min-shared-key-kinds', defaults.minSharedKeyKinds),
+    minDomains: int('min-domains', defaults.minDomains),
+    maxDomainsPerKey: int('max-domains-per-key', defaults.maxDomainsPerKey),
+    maxDomainsPerInfraKey: int('max-domains-per-infra-key', defaults.maxDomainsPerInfraKey),
+    maxCohortDomains: int('max-cohort-domains', defaults.maxCohortDomains),
+    minUserKeyShare: userKeyShare === undefined ? defaults.minUserKeyShare : share.parse(userKeyShare),
+    minHexLength: int('min-hex-length', defaults.minHexLength),
+    registrationBucketDays: int('registration-bucket-days', defaults.registrationBucketDays),
+    signupBucketHours: int('signup-bucket-hours', defaults.signupBucketHours),
+  };
+}
+
+export type SignupSelection = { since?: Date; until?: Date; maxUsers?: number };
+
+/** Validates `--since`, `--until` and `--max-users`. Throws on an invalid value. */
+export function parseSignupSelection(flags: SweepFlags): SignupSelection {
+  return {
+    since: flags.since === undefined ? undefined : isoDate.parse(flags.since),
+    until: flags.until === undefined ? undefined : isoDate.parse(flags.until),
+    maxUsers: flags['max-users'] === undefined ? undefined : positiveInt.parse(flags['max-users']),
+  };
+}
+
+/**
+ * Reads the users in the selection with a secondary-preferred cursor, projecting only the fields the
+ * grouping needs. Users without a string email are skipped.
+ */
+export async function readSignupRecords(
+  users: Pick<typeof User, 'find'>,
+  { since, until, maxUsers }: SignupSelection,
+  options: userService.ClusterKeyOptions
+): Promise<userService.SignupRecord[]> {
+  const { userService: services } = await import('@bike4mind/services');
+  const createdAt: Record<string, Date> = {};
+  if (since) createdAt.$gte = since;
+  if (until) createdAt.$lt = until;
+  const query = users
+    .find(Object.keys(createdAt).length ? { createdAt } : {}, {
+      email: 1,
+      createdAt: 1,
+      'signupMeta.asn': 1,
+      'signupMeta.isDatacenter': 1,
+    })
+    .read('secondaryPreferred')
+    .lean();
+  if (maxUsers) query.limit(maxUsers);
+
+  const records: userService.SignupRecord[] = [];
+  for await (const doc of query.cursor()) {
+    if (typeof doc.email !== 'string') continue;
+    records.push(
+      services.toSignupRecord(
+        {
+          userId: String(doc._id),
+          email: doc.email,
+          createdAt: doc.createdAt instanceof Date ? doc.createdAt : null,
+          asn: doc.signupMeta?.asn ?? null,
+          isDatacenter: doc.signupMeta?.isDatacenter ?? null,
+        },
+        options
+      )
+    );
+  }
+  return records;
 }
