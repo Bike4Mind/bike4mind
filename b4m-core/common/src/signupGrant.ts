@@ -12,6 +12,16 @@ export const SIGNUP_GRANT_UNLOCK_REASONS = [
 
 export type SignupGrantUnlockReason = (typeof SIGNUP_GRANT_UNLOCK_REASONS)[number];
 
+export interface SignupGrantAssessment {
+  band: 'full' | 'reduced' | 'review';
+  credits: number;
+  score: number | null;
+  reasons: string[];
+  missing: string[];
+  policyVersion: string | null;
+  status: 'evaluated' | 'disabled' | 'unavailable';
+}
+
 export interface SignupGrant {
   stage: 'pending_email' | 'signup' | 'unlocked';
   signupCredits: number;
@@ -19,6 +29,10 @@ export interface SignupGrant {
   creditsReleased: number;
   nextCondition: 'email_verification' | 'verification' | null;
   unlockedBy?: SignupGrantUnlockReason;
+}
+
+export function signupGrantRemaining(grant: SignupGrant): number {
+  return Math.max(0, grant.signupCredits + grant.unlockCredits - grant.creditsReleased);
 }
 
 export function nonnegativeGrantCredits(value: unknown): number {

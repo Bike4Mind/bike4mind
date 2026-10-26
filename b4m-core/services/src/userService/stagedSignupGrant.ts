@@ -7,12 +7,15 @@ import {
 import { withTransaction } from '@bike4mind/db-core';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService';
 import type { FreeCreditAdapters, GrantFreeCreditsResult } from './freeCredits';
+import { evaluateSignupRisk, type SignupRiskSignals } from './signupRisk';
+import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 
 type GrantAdapters = FreeCreditAdapters & {
   audit?: (input: { userId: string; credits: number; creditTransactionId?: string }) => Promise<void>;
+  collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
 };
 
-export type SignupGrantValidator = (user: IUserDocument) => Promise<boolean>;
+export type SignupGrantValidator = (user: IUserDocument) => Promise<boolean | { cumulativeCredits: number }>;
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
@@ -21,16 +24,65 @@ async function releaseStage(
   expected: SignupGrant['stage'],
   reason: SignupGrantUnlockReason | undefined,
   validate: SignupGrantValidator,
-  { db, audit }: GrantAdapters
+  adapters: GrantAdapters
 ): Promise<GrantFreeCreditsResult> {
+  const { db, audit } = adapters;
   try {
     return await withTransaction(async () => {
       const user = await db.users.findById(userId);
       const grant = user?.signupGrant;
-      if (!user || !grant || grant.stage !== expected || user.isBanned || !(await validate(user))) return noGrant();
-      const amount = expected === 'pending_email' ? grant.signupCredits : grant.unlockCredits;
-      if (!Number.isSafeInteger(amount) || amount < 0) throw new Error('Invalid staged grant amount');
-      const transactionId = expected === 'pending_email' ? `verify-grant:${userId}` : `unlock-grant:${userId}`;
+      if (
+        !user ||
+        !grant ||
+        accountBlockReasons(user).length ||
+        isAiAccessRevoked(user) ||
+        (expected === 'pending_email' ? grant.stage !== expected : grant.stage === 'pending_email')
+      )
+        return noGrant();
+      const evidence = await validate(user);
+      if (!evidence) return noGrant();
+      const maximum = grant.signupCredits + grant.unlockCredits;
+      if (
+        ![grant.signupCredits, grant.unlockCredits, grant.creditsReleased, maximum].every(
+          value => Number.isSafeInteger(value) && value >= 0
+        ) ||
+        grant.creditsReleased > maximum
+      )
+        throw new Error('Invalid staged grant amount');
+      let assessment = user.signupGrantAssessment;
+      let target: number;
+      if (expected === 'pending_email') {
+        if (!assessment) {
+          const setting = await db.adminSettings.findBySettingName('signupGrantRiskPolicy');
+          let policy: unknown = { enabled: false };
+          let signals: SignupRiskSignals = { datacenter: user.signupMeta?.isDatacenter };
+          try {
+            if (setting)
+              policy =
+                typeof setting.settingValue === 'string' ? JSON.parse(setting.settingValue) : setting.settingValue;
+            if (adapters.collectRiskSignals) signals = await adapters.collectRiskSignals(user);
+          } catch {
+            policy = undefined;
+          }
+          assessment = evaluateSignupRisk(policy, signals, grant.signupCredits);
+        }
+        target = assessment.credits;
+        if (!Number.isSafeInteger(target) || target < 0 || target > grant.signupCredits)
+          throw new Error('Invalid signup assessment entitlement');
+      } else {
+        target = evidence === true ? maximum : evidence.cumulativeCredits;
+        if (!Number.isSafeInteger(target) || target < 0 || target > maximum)
+          throw new Error('Invalid unlock entitlement');
+      }
+      const amount = Math.max(0, target - grant.creditsReleased);
+      if (expected !== 'pending_email' && amount === 0) return noGrant();
+      // The target is account-wide, not reason-wide: competing validators cannot stack grants.
+      const transactionId =
+        expected === 'pending_email'
+          ? `verify-grant:${userId}`
+          : grant.creditsReleased === (assessment?.credits ?? grant.signupCredits)
+            ? `unlock-grant:${userId}`
+            : `unlock-grant:${userId}:${target}`;
       const existing = await db.creditTransactions.findOne({ transactionId });
       if (existing) throw new Error('Staged grant ledger and account state disagree');
       let balance = user.currentCredits;
@@ -54,13 +106,15 @@ async function releaseStage(
         balance = result.creditHolder.currentCredits;
         creditTransactionId = result.creditTransactionId;
       }
-      const unlocked = expected === 'signup' || grant.unlockCredits === 0;
+      const released = grant.creditsReleased + amount;
+      const unlocked = released >= maximum;
       const updated = await db.users.update({
         id: userId,
+        ...(assessment ? { signupGrantAssessment: assessment } : {}),
         signupGrant: {
           ...grant,
           stage: unlocked ? 'unlocked' : 'signup',
-          creditsReleased: grant.creditsReleased + amount,
+          creditsReleased: released,
           nextCondition: unlocked ? null : 'verification',
           ...(reason ? { unlockedBy: reason } : {}),
         },
@@ -95,5 +149,5 @@ export const unlockSignupGrant = (
 ) => {
   const validator = adapters.validators[reason];
   if (!validator || (reason === 'admin' && !adapters.audit)) return Promise.resolve(noGrant());
-  return releaseStage(userId, 'signup', reason, async user => user.emailVerified && (await validator(user)), adapters);
+  return releaseStage(userId, 'signup', reason, async user => (user.emailVerified ? validator(user) : false), adapters);
 };

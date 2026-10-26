@@ -34,7 +34,7 @@ describe('staged signup setting migration', () => {
     h.findOne.mockResolvedValue({ settingValue: '37' });
     await migration.up();
     await migration.down();
-    expect(h.updateOne).toHaveBeenCalledTimes(3);
+    expect(h.updateOne).toHaveBeenCalledTimes(7);
     for (const [, update] of h.updateOne.mock.calls) expect(Object.keys(update)).toEqual(['$setOnInsert']);
   });
 });

@@ -125,6 +125,11 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     expect((invoke as any).questStartParams).toEqual(
       expect.objectContaining({ skipAutoOffers: true, promptMode: 'raw' })
     );
+    expect(mockDb.quests.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signupActivity: { userId: OWNER_ID, turnId: expect.any(String), startedAt: expect.any(Date) },
+      })
+    );
   });
   // Same boundary: a workflow-style caller's integration isolation would silently lapse on the
   // async path, handing a prompt the user did not write their MCP servers, agents and skills.
@@ -176,6 +181,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     expect((invoke as any).questStartParams).toEqual(
       expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key1' })
     );
+    expect(mockDb.quests.create.mock.calls[0][0]).not.toHaveProperty('signupActivity');
   });
   it('carries a withheld admin role onto questStartParams', async () => {
     mockedGetAvailableModels.mockResolvedValue([

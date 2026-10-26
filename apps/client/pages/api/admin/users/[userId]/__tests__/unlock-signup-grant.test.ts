@@ -49,7 +49,7 @@ describe('admin signup unlock', () => {
     h.unlock.mockResolvedValue({ creditsGranted: 0 });
   });
   it('requires admin scope and rejects non-admin callers before invoking the grant', async () => {
-    expect(h.config).toEqual({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] });
+    expect(h.config).toEqual({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
     const req = request();
     req.user.isAdmin = false;
     await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('Admin access required');

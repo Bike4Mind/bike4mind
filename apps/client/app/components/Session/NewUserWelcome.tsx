@@ -17,6 +17,7 @@ import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCanStart, welcomeCreditsLine } from './newUserWelcomeModel';
 import { isAwaitingEmailVerification } from '@client/app/utils/onboarding';
 import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
+import SignupGrantStatus from '../subscription/SignupGrantStatus';
 
 const dismissKey = (userId: string) => `newUserWelcomeDismissed:${userId}`;
 
@@ -148,6 +149,7 @@ const NewUserWelcome = () => {
           {creditsLine}
         </Typography>
       )}
+      <SignupGrantStatus />
       {answersEstimate && (
         <Typography level="body-sm" data-testid="new-user-welcome-answers-estimate" sx={{ color: 'text.secondary' }}>
           {answersEstimate}

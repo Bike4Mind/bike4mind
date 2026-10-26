@@ -6,6 +6,7 @@ import { useSignupGrantCredits } from '@client/app/hooks/useSignupGrantCredits';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { estimateAnswerCount, typicalAnswerCredits } from '@client/app/utils/creditEstimate';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import SignupGrantStatus from './SignupGrantStatus';
 
 const CreditsExplanation = () => {
   const model = useLLM(state => state.model);
@@ -46,6 +47,7 @@ const CreditsExplanation = () => {
           {formatCreditAmount(credits)} credits available
         </Typography>
       </Box>
+      <SignupGrantStatus />
       <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
         {showFreeCreditsNote && 'Free starting credits require no card. '}Your chats and files remain yours if the
         balance runs out.

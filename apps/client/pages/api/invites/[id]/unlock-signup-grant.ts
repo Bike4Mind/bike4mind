@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { unlockSignupGrantFromOrgInvite } from '@server/credits/orgInviteUnlock';
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
   .post(async (req, res) => {
     const id = req.query.id;

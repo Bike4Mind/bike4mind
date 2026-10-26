@@ -7,7 +7,7 @@ import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
-import type { SignupGrant } from '../../signupGrant';
+import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -291,6 +291,7 @@ export interface IUser extends ICreditHolder {
   freeCreditClaimEmail?: string | null;
   /** Absent on accounts created before staged grants were enabled. */
   signupGrant?: SignupGrant;
+  signupGrantAssessment?: SignupGrantAssessment;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;

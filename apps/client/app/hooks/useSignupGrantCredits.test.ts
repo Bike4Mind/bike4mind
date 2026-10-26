@@ -11,6 +11,12 @@ describe('signup grant copy configuration', () => {
   it('preserves the installed legacy amount when staging is disabled', () => {
     expect(renderHook(useSignupGrantCredits).result.current).toBe(37);
   });
+  it('parses persisted string booleans explicitly', () => {
+    h.values.stagedSignupGrantEnabled = 'false';
+    expect(renderHook(useSignupGrantCredits).result.current).toBe(37);
+    h.values.stagedSignupGrantEnabled = 'true';
+    expect(renderHook(useSignupGrantCredits).result.current).toBe(12);
+  });
   it('reads the signup tranche instead of advertising the full grant', () => {
     h.values.stagedSignupGrantEnabled = true;
     expect(renderHook(useSignupGrantCredits).result.current).toBe(12);

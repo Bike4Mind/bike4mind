@@ -11,6 +11,10 @@ const migration: MigrationFile = {
       signupGrantCredits: String(nonnegativeGrantCredits(legacy?.settingValue)),
       verifiedUnlockCredits: '0',
       stagedSignupGrantEnabled: 'false',
+      signupGrantRiskPolicy: JSON.stringify({ enabled: false }),
+      signupGrantActivityEnabled: 'false',
+      signupGrantActivityMinMessages: '0',
+      signupGrantActivityMinDays: '0',
     };
     for (const [settingName, settingValue] of Object.entries(values)) {
       await AdminSettings.updateOne({ settingName }, { $setOnInsert: { settingName, settingValue } }, { upsert: true });

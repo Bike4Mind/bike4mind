@@ -411,6 +411,9 @@ export class ChatCompletionInvoke {
               timestamp: now,
               replies: [],
               status: 'running',
+              ...(authOrigin === 'session'
+                ? { signupActivity: { userId, turnId: `${userId}:${sessionId}:${now.getTime()}`, startedAt: now } }
+                : {}),
               promptMeta,
               agentIds: session.agentIds || [],
               // Session-bound by the guard above, so the chain a correction claims to extend is

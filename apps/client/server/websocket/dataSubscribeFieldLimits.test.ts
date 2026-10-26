@@ -19,6 +19,7 @@ describe('resolveFieldLimits', () => {
       callback: false,
       embedding: false,
       slackNotification: false,
+      signupActivity: false,
     });
   });
 
@@ -56,7 +57,12 @@ describe('resolveFieldLimits', () => {
 
   it('excludes password/stripeCustomerId/resetPasswordToken for the users collection', () => {
     const limits = resolveFieldLimits('users', opts());
-    expect(limits).toEqual({ password: false, stripeCustomerId: false, resetPasswordToken: false });
+    expect(limits).toEqual({
+      password: false,
+      stripeCustomerId: false,
+      resetPasswordToken: false,
+      signupGrantAssessment: false,
+    });
   });
 
   it('returns undefined for a collection with no configured limits', () => {
@@ -86,6 +92,7 @@ describe('resolveFieldLimits', () => {
       callback: false,
       embedding: false,
       slackNotification: false,
+      signupActivity: false,
     });
   });
 

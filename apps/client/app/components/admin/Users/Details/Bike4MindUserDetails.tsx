@@ -84,6 +84,12 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
             ? `Signup grant: ${user.signupGrant.stage}; released ${user.signupGrant.creditsReleased}; next: ${user.signupGrant.nextCondition ?? 'none'}`
             : 'Signup grant: not enrolled'}
         </Typography>
+        {user.signupGrantAssessment && (
+          <Typography level="body-sm" data-testid="admin-user-grant-assessment">
+            Signup assessment: {user.signupGrantAssessment.band}; {user.signupGrantAssessment.status}; policy:{' '}
+            {user.signupGrantAssessment.policyVersion ?? 'none'}
+          </Typography>
+        )}
         {user.signupGrant?.stage === 'signup' && (
           <Stack spacing={1}>
             <Textarea

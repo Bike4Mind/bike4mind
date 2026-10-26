@@ -11,7 +11,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
   .use(csrfProtection())
   .post(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
