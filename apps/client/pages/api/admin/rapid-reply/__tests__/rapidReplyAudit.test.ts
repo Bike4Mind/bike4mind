@@ -134,11 +134,11 @@ describe('rapid reply prompts admin audit', () => {
   });
 
   it('records nothing for a PUT that changes nothing', async () => {
-    h.prompts.findById.mockResolvedValue({ ...prompt, parameters: { temperature: 0.2 } });
+    h.prompts.findById.mockResolvedValue({ ...prompt, parameters: { temperature: 0.2 }, variables: ['tone'] });
     h.prompts.updatePrompt.mockResolvedValue(prompt);
     const { res } = await call(promptById, 'PUT', {
       id: 'p1',
-      body: { name: 'Concise', content: prompt.content, parameters: { temperature: 0.2 } },
+      body: { name: 'Concise', content: prompt.content, parameters: { temperature: 0.2 }, variables: ['tone'] },
     });
 
     expect(res._getStatusCode()).toBe(200);
@@ -359,6 +359,17 @@ describe('rapid reply mappings admin audit', () => {
     expect(details.operations[0].id).toBe('[object Object]');
     expect(details.operations[1].id).toHaveLength(200);
   });
+
+  it('caps the count and length of bulk changed field names', async () => {
+    const data = Object.fromEntries(Array.from({ length: 80 }, (_, i) => [`${'k'.repeat(300)}${i}`, i]));
+    h.mappings.findById.mockResolvedValue(mapping);
+    h.mappings.updateMapping.mockResolvedValue(mapping);
+    await call(mappingsBulk, 'POST', { body: { operations: [{ id: 'm1', action: 'update', data }] } });
+
+    const { changedFields } = h.audit.mock.calls[0][1].details.operations[0];
+    expect(changedFields).toHaveLength(50);
+    expect(changedFields.every((field: string) => field.length === 200)).toBe(true);
+  });
 });
 
 describe('rapid reply admin audit on failed writes', () => {
@@ -550,5 +561,30 @@ describe('rapid reply test run admin audit', () => {
     const entry = h.audit.mock.calls[0][1];
     expect(entry.target.id).toHaveLength(200);
     expect(entry.details.mainModelId).toHaveLength(200);
+  });
+
+  it('drops a non-numeric simulateLatency from the test_run entry', async () => {
+    h.settings.mockResolvedValue({ enabled: false });
+
+    await call(testRun, 'POST', { body: { mainModelId: 'main-a', simulateLatency: 'x'.repeat(500) } });
+
+    expect(h.audit.mock.calls[0][1].details.simulateLatencyMs).toBeUndefined();
+  });
+
+  it.each([
+    { name: 'settings lookup', arrange: () => h.settings.mockRejectedValue(new Error('db down')) },
+    {
+      name: 'mapping lookup',
+      arrange: () => {
+        h.settings.mockResolvedValue({ enabled: true });
+        h.mappings.findByMainModel.mockRejectedValue(new Error('db down'));
+      },
+    },
+  ])('records a failed test_run before rethrowing a $name failure', async ({ arrange }) => {
+    arrange();
+
+    await expect(call(testRun, 'POST', { body: { mainModelId: 'main-a' } })).rejects.toThrow('db down');
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({ details: { mainModelId: 'main-a', success: false } });
   });
 });
