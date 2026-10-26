@@ -60,7 +60,8 @@ async function releaseStage(
             if (setting)
               policy =
                 typeof setting.settingValue === 'string' ? JSON.parse(setting.settingValue) : setting.settingValue;
-            if (adapters.collectRiskSignals) signals = await adapters.collectRiskSignals(user);
+            if (adapters.collectRiskSignals && (policy as { enabled?: unknown } | null)?.enabled === true)
+              signals = await adapters.collectRiskSignals(user);
           } catch {
             policy = undefined;
           }
