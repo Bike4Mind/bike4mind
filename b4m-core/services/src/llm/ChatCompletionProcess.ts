@@ -854,8 +854,9 @@ export function computeSettlementDelta(
 }
 
 /**
- * The settlement a holder gets. An organization keeps computeSettlementDelta's zero floor: its
- * balance is a hard stop by design (#1238). A personal account is charged the shortfall in full,
+ * The settlement a holder gets. Only a personal account is charged into debt; any other holder keeps
+ * computeSettlementDelta's zero floor (an organization's balance is a hard stop by design, #1238).
+ * A personal account is charged the shortfall in full,
  * with one atomic $inc that may take the balance below zero: nothing is written off, turns settling
  * concurrently each debit the live balance so the debt is exact however many were in flight, and
  * the pre-flight hold ($inc, then reject below zero) refuses every later turn until a top-up clears
@@ -867,19 +868,22 @@ export function computeHolderSettlement(
   totalCreditsUsed: number,
   availableCredits: number
 ): { delta: number; writtenOffCredits: number } {
-  if (ownerType === CreditHolderType.Organization) {
+  if (ownerType !== CreditHolderType.User) {
     return computeSettlementDelta(reservedCredits, totalCreditsUsed, availableCredits);
   }
   return { delta: reservedCredits - totalCreditsUsed, writtenOffCredits: 0 };
 }
 
-/** Warns when a settlement left the holder owing credits (see computeHolderSettlement). */
+/**
+ * Warns when a shortfall settlement left the holder owing credits (see computeHolderSettlement). A
+ * refund that lands on a balance a sibling turn already took negative adds no debt and stays quiet.
+ */
 export function warnOnSettlementDebt(
   logger: Logger,
   holder: Pick<ICreditHolder, 'currentCredits'> | null,
   context: { questId: string; ownerId: string; ownerType: CreditHolderType; reserved: number; used: number }
 ): void {
-  if (!holder || holder.currentCredits >= 0) return;
+  if (!holder || holder.currentCredits >= 0 || context.used <= context.reserved) return;
   logger.warn('[BILLING_SHORTFALL_DEBT] Settlement exceeded the balance; holder owes credits until topped up', {
     ...context,
     shortfall: context.used - context.reserved,
@@ -1837,8 +1841,8 @@ export class ChatCompletionProcess {
     if (amount <= 0 || !ownerId) return;
     this.reservedCredits = 0;
     // Bump the holder in the same synchronous step as the claim, before the refund awaits: a run
-    // that later reaches settlement reads this snapshot, and a stale one (still holding the
-    // reservation-reduced balance) would floor the whole debit at zero. Kept, not nulled, so the
+    // that later reaches settlement reads this snapshot, and on an org holder a stale one (still
+    // holding the reservation-reduced balance) would floor the whole debit at zero. Kept, not nulled, so the
     // settlement can charge against the restored balance.
     if (this.reservedCreditHolder) this.reservedCreditHolder.currentCredits += amount;
     try {
@@ -7038,9 +7042,7 @@ export class ChatCompletionProcess {
       }
     }
     logger.info(`Credits settled for quest ${quest.id}: reserved=${reserved}, actual=${totalCredits}, delta=${delta}`);
-    if (delta !== 0) {
-      warnOnSettlementDebt(logger, holder, { questId: quest.id, ownerId, ownerType, reserved, used: totalCredits });
-    }
+    warnOnSettlementDebt(logger, holder, { questId: quest.id, ownerId, ownerType, reserved, used: totalCredits });
     this.reservedCreditHolder = null;
     quest.creditsUsed = totalCredits;
 

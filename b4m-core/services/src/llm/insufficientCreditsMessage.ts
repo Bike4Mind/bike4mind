@@ -23,9 +23,10 @@ export function buildInsufficientCreditsMessage(params: {
   // A negative balance is debt left by a turn that cost more than its hold (see warnOnSettlementDebt).
   if (available < 0) {
     const owed = Math.ceil(-available);
+    const owedLabel = `${owed} ${owed === 1 ? 'credit' : 'credits'}`;
     return organizationName
-      ? `Your organization "${organizationName}" is out of credits: an earlier request cost more than the balance covered, leaving ${owed} credits owed. Contact your organization administrator to add more credits.`
-      : `You're out of credits: an earlier request cost more than your balance covered, leaving ${owed} credits owed. Add credits to keep going.`;
+      ? `Your organization "${organizationName}" is out of credits: an earlier request cost more than the balance covered, leaving ${owedLabel} owed. Contact your organization administrator to add more credits.`
+      : `You're out of credits: an earlier request cost more than your balance covered, leaving ${owedLabel} owed. Add credits to keep going.`;
   }
   return organizationName
     ? `Your organization "${organizationName}" is out of credits. This request needs about ${required} credits, but only ${available} are available. Contact your organization administrator to add more credits.`

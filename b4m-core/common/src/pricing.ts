@@ -225,7 +225,8 @@ export const usdToCreditsExpected = (usd: number, rate: number = CREDITS_PER_USD
  * UNDER-RESERVATION IS ACCEPTED, NOT PREVENTED. A turn that emits more than this
  * settles as a shortfall debit at reconciliation, which is already a supported path
  * (provider-basis settlement could always exceed a hold priced on the local
- * estimate). Both settlement sites apply it with one atomic $inc. cliCompletions.ts
+ * estimate). The two LLM-turn settlement sites apply it with one atomic $inc (other
+ * features settle their own way, e.g. creditHold caps the charge at the hold). cliCompletions.ts
  * never clamps; chat (services/llm/ChatCompletionProcess.ts, computeHolderSettlement)
  * charges a personal account in full and floors only an organization at its balance
  * snapshot, reporting the rest as writtenOffCredits (#1238: an org balance is a hard

@@ -2856,9 +2856,11 @@ describe('ChatCompletionProcess', () => {
 
         expect(incrementCredits).toHaveBeenCalledWith('owner-id', 50);
         expect(fields.reservedCreditHolder?.currentCredits).toBe(60);
-        // What the still-running process() computes at settlement. A zeroed holder would floor the
-        // debit at zero and give the turn away; the restored balance charges the real 30.
-        const { delta, writtenOffCredits } = computeSettlementDelta(
+        // What the still-running process() computes at settlement. On an org holder a zeroed
+        // snapshot would floor the debit at zero and give the turn away; the restored balance
+        // charges the real 30.
+        const { delta, writtenOffCredits } = computeHolderSettlement(
+          CreditHolderType.Organization,
           0,
           30,
           fields.reservedCreditHolder?.currentCredits ?? 0
@@ -4908,6 +4910,34 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // An org balance is a hard stop (#1238): an overshoot past it is floored at zero and written
+    // off, unlike a personal account's (see 'settlement beyond the balance (personal account)').
+    it('floors an org overshoot at the balance and reports the write-off', async () => {
+      const { complete } = reservationOrgSetup();
+      const LEFT_AFTER_HOLD = 10;
+      const state = { balance: expectedHold + LEFT_AFTER_HOLD };
+      fundedOrg();
+      mockDb.organizations.incrementCredits = vi.fn(async (_id: string, amount: number) => {
+        state.balance += amount;
+        return { id: 'org1', currentCredits: state.balance };
+      });
+      const outputTokens = 1_000_000;
+      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+        await cb(['A long answer'], { inputTokens: 10, outputTokens });
+      });
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      const actual = settledCredits(outputTokens);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', -LEFT_AFTER_HOLD);
+      expect(state.balance).toBe(0);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ writtenOffCredits: actual - expectedHold - LEFT_AFTER_HOLD })
+      );
+    });
+
     // A second gated tool call refused for credits ends the turn, but the image delivered before it
     // was spent and is billed like an abort's, not refunded with the hold.
     it('bills delivered tool charges when a later tool call is refused for credits', async () => {
@@ -6172,6 +6202,27 @@ describe('ChatCompletionProcess', () => {
           expect.stringContaining('[BILLING_SHORTFALL_CLAMP]'),
           expect.anything()
         );
+      });
+
+      // The thrown-abort settlement (settleReservation) charges a personal account the same way.
+      it('charges a stopped turn past the balance in full too', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const TOOL_CHARGE = BALANCE * 3;
+        const complete = vi.fn().mockImplementation(async () => {
+          (service as any).toolCreditsMap.set('image_generation', [TOOL_CHARGE]);
+          const abort = new Error('The operation was aborted');
+          abort.name = 'AbortError';
+          throw abort;
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        mockQuest.sessionId = 'session1';
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        const hold = -incrementCredits.mock.calls[0][1];
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - TOOL_CHARGE);
+        expect(state.balance).toBe(BALANCE - TOOL_CHARGE);
       });
 
       it('refuses the next turn while the balance is negative, without calling the model', async () => {
@@ -11929,6 +11980,13 @@ describe('computeHolderSettlement', () => {
     expect(turns.every(turn => turn.writtenOffCredits === 0)).toBe(true);
   });
 
+  it('floors any non-personal holder, so a new holder type is not charged into debt by default', () => {
+    expect(computeHolderSettlement(CreditHolderType.Agent, 100, 130, 10)).toEqual({
+      delta: -10,
+      writtenOffCredits: 20,
+    });
+  });
+
   it('keeps the zero floor for an organization (its balance is a hard stop)', () => {
     expect(computeHolderSettlement(CreditHolderType.Organization, 100, 130, 10)).toEqual({
       delta: -10,
@@ -11954,6 +12012,13 @@ describe('warnOnSettlementDebt', () => {
     const logger = { warn: vi.fn() } as unknown as SettlementLogger;
     warnOnSettlementDebt(logger, { currentCredits: 0 }, context);
     warnOnSettlementDebt(logger, null, context);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  // A sibling turn's overshoot left the balance negative; this turn's own refund did not add to it.
+  it('stays quiet for a refund settlement that lands on a negative balance', () => {
+    const logger = { warn: vi.fn() } as unknown as SettlementLogger;
+    warnOnSettlementDebt(logger, { currentCredits: -110 }, { ...context, reserved: 40, used: 10 });
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });

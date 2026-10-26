@@ -39,6 +39,10 @@ describe('buildInsufficientCreditsMessage', () => {
     expect(org).toContain('leaving 10 credits owed');
     expect(org).not.toContain('Add credits to keep going.');
   });
+
+  it('uses the singular for a single credit owed', () => {
+    expect(buildInsufficientCreditsMessage({ available: -0.3, required: 5 })).toContain('leaving 1 credit owed');
+  });
 });
 
 describe('buildMemberCreditCapMessage', () => {
