@@ -838,6 +838,7 @@ export const AUTO_ADDED_TOOL_NAMES = [
  * holder has and the rest is reported as writtenOffCredits: uncollected revenue
  * the usage event must surface so margin reporting doesn't count a phantom
  * collection. Best effort: the balance snapshot predates concurrent spend.
+ * Applied to organizations only; see computeHolderSettlement.
  */
 export function computeSettlementDelta(
   reservedCredits: number,
@@ -850,6 +851,40 @@ export function computeSettlementDelta(
   if (-delta <= available) return { delta, writtenOffCredits: 0 };
   // `available > 0 ? ...` avoids returning -0 when the balance is empty.
   return { delta: available > 0 ? -available : 0, writtenOffCredits: -delta - available };
+}
+
+/**
+ * The settlement a holder gets. An organization keeps computeSettlementDelta's zero floor: its
+ * balance is a hard stop by design (#1238). A personal account is charged the shortfall in full,
+ * with one atomic $inc that may take the balance below zero: nothing is written off, turns settling
+ * concurrently each debit the live balance so the debt is exact however many were in flight, and
+ * the pre-flight hold ($inc, then reject below zero) refuses every later turn until a top-up clears
+ * it. Same contract as cliCompletions.ts, which never clamped.
+ */
+export function computeHolderSettlement(
+  ownerType: CreditHolderType,
+  reservedCredits: number,
+  totalCreditsUsed: number,
+  availableCredits: number
+): { delta: number; writtenOffCredits: number } {
+  if (ownerType === CreditHolderType.Organization) {
+    return computeSettlementDelta(reservedCredits, totalCreditsUsed, availableCredits);
+  }
+  return { delta: reservedCredits - totalCreditsUsed, writtenOffCredits: 0 };
+}
+
+/** Warns when a settlement left the holder owing credits (see computeHolderSettlement). */
+export function warnOnSettlementDebt(
+  logger: Logger,
+  holder: Pick<ICreditHolder, 'currentCredits'> | null,
+  context: { questId: string; ownerId: string; ownerType: CreditHolderType; reserved: number; used: number }
+): void {
+  if (!holder || holder.currentCredits >= 0) return;
+  logger.warn('[BILLING_SHORTFALL_DEBT] Settlement exceeded the balance; holder owes credits until topped up', {
+    ...context,
+    shortfall: context.used - context.reserved,
+    balanceAfter: holder.currentCredits,
+  });
 }
 
 /** One model's share of a turn's usage, priced against the turn's credit reservation. */
@@ -6154,7 +6189,8 @@ export class ChatCompletionProcess {
           this.reservedCredits = 0;
           this.reservationBasis = null;
           const { delta: settlementDelta, writtenOffCredits } = this.reservedCreditsOwnerId
-            ? computeSettlementDelta(
+            ? computeHolderSettlement(
+                this.reservedCreditsOwnerType,
                 reservedAtSettlement,
                 totalCreditsUsed,
                 this.reservedCreditHolder?.currentCredits ?? 0
@@ -6223,8 +6259,8 @@ export class ChatCompletionProcess {
             });
 
           try {
-            // Reconcile on the pre-computed, zero-floored delta (see
-            // computeSettlementDelta for the clamp semantics).
+            // Reconcile on the pre-computed delta (see computeHolderSettlement for which
+            // holders are floored at zero and which are charged into debt).
             const delta = settlementDelta;
             let reconciledHolder: ICreditHolder | null = this.reservedCreditHolder;
 
@@ -6237,6 +6273,13 @@ export class ChatCompletionProcess {
               logger.info(
                 `Credits reconciled for quest ${quest.id}: reserved=${reservedAtSettlement}, actual=${totalCreditsUsed}, delta=${delta}`
               );
+              warnOnSettlementDebt(logger, reconciledHolder, {
+                questId: quest.id,
+                ownerId: this.reservedCreditsOwnerId,
+                ownerType: this.reservedCreditsOwnerType,
+                reserved: reservedAtSettlement,
+                used: totalCreditsUsed,
+              });
             }
 
             // Record audit-trail transactions with skipBalanceUpdate (balance already settled)
@@ -6945,8 +6988,8 @@ export class ChatCompletionProcess {
   /**
    * Settle the turn's credit reservation against `usages` (plus `toolCredits`, the tool charges the
    * turn reserved) outside the normal completion path (a Research-mode turn, or one ended by a thrown
-   * abort): the balance moves by the reservation's difference from the usage, floored at zero like
-   * the main settlement (computeSettlementDelta), and each usage gets its ledger row and usage event.
+   * abort): the balance moves by the reservation's difference from the usage, settled like the main
+   * settlement (computeHolderSettlement), and each usage gets its ledger row and usage event.
    * The reservation is claimed before the first await, like the main settlement, so a caller's
    * releaseReservedCredits cannot refund it as well; a hold that was already released settles at
    * the full actual. A failed balance update restores the claim for the caller's rollback to refund.
@@ -6977,7 +7020,8 @@ export class ChatCompletionProcess {
       return { ...usage, costUsd, credits: usdToCreditsStochastic(costUsd) };
     });
     const totalCredits = priced.reduce((sum, usage) => sum + usage.credits, 0) + toolCredits;
-    const { delta, writtenOffCredits } = computeSettlementDelta(
+    const { delta, writtenOffCredits } = computeHolderSettlement(
+      ownerType,
       reserved,
       totalCredits,
       this.reservedCreditHolder?.currentCredits ?? 0
@@ -6994,6 +7038,9 @@ export class ChatCompletionProcess {
       }
     }
     logger.info(`Credits settled for quest ${quest.id}: reserved=${reserved}, actual=${totalCredits}, delta=${delta}`);
+    if (delta !== 0) {
+      warnOnSettlementDebt(logger, holder, { questId: quest.id, ownerId, ownerType, reserved, used: totalCredits });
+    }
     this.reservedCreditHolder = null;
     quest.creditsUsed = totalCredits;
 

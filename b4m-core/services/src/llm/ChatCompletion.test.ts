@@ -7,6 +7,8 @@ import {
   shouldDeferCorpusToRetrieval,
   attachmentHasIndexedContent,
   computeSettlementDelta,
+  computeHolderSettlement,
+  warnOnSettlementDebt,
   clampFraction,
   dropOldestHistoryTurn,
   isAbortError,
@@ -52,6 +54,7 @@ import {
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ChatModels,
+  CreditHolderType,
   DATA_LAKE_TOOL_NAMES,
   DATA_LAKE_WRITE_TOOL_NAMES,
   ImageModels,
@@ -6086,6 +6089,107 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // A personal turn that costs more than its hold plus the balance behind it is charged in full:
+    // the balance goes negative instead of the excess being written off, and that debt is what the
+    // next turn's pre-flight hold refuses on.
+    describe('settlement beyond the balance (personal account)', () => {
+      const BALANCE = 100;
+      const overshootModel = {
+        id: ChatModels.GPT4,
+        type: 'text' as const,
+        name: 'GPT-4',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: false,
+        pricing: { 200000: { input: 0, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      const personalBody = () => ({ ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined });
+      const setupPersonalTurn = (incrementCredits: ReturnType<typeof vi.fn>, complete: ReturnType<typeof vi.fn>) => {
+        mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+        mockedCalculateTotalTokenLength.mockResolvedValue(80);
+        mockedUsdToCredits.mockImplementation(realUsdToCredits);
+        mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+        enableAdminFlags('enforceCredits');
+        mockDb.users = {
+          update: vi.fn(),
+          findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: BALANCE }),
+          incrementCredits,
+        };
+        mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([overshootModel]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      };
+      // A stored balance that every $inc moves, so the hold, the settlement and the next turn's
+      // admission all see what the database would.
+      const fakeBalance = (initial: number) => {
+        const state = { balance: initial };
+        const incrementCredits = vi.fn(async (_id: string, amount: number) => {
+          state.balance += amount;
+          return { id: 'user1', currentCredits: state.balance };
+        });
+        return { state, incrementCredits };
+      };
+      // Far past any hold: the cost of a long tool run the hold was never priced for.
+      const OVERSHOOT_OUTPUT_TOKENS = 1_000_000;
+      const actual = realUsdToCreditsStochastic((OVERSHOOT_OUTPUT_TOKENS * 30) / 1_000_000, () => 0);
+
+      it('charges the whole overshoot into a negative balance instead of writing it off', async () => {
+        expect(actual).toBeGreaterThan(BALANCE);
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['A long answer'], { inputTokens: 10, outputTokens: OVERSHOOT_OUTPUT_TOKENS });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        const hold = -incrementCredits.mock.calls[0][1];
+        expect(hold).toBeGreaterThan(0);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - actual);
+        expect(state.balance).toBe(BALANCE - actual);
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: undefined })
+        );
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
+          expect.objectContaining({ ownerId: 'user1', balanceAfter: BALANCE - actual, shortfall: actual - hold })
+        );
+        expect(mockLogger.warn).not.toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_CLAMP]'),
+          expect.anything()
+        );
+      });
+
+      it('refuses the next turn while the balance is negative, without calling the model', async () => {
+        const { state, incrementCredits } = fakeBalance(-250);
+        const complete = vi.fn();
+        setupPersonalTurn(incrementCredits, complete);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(complete).not.toHaveBeenCalled();
+        // The hold went on and came straight back off: the debt is untouched.
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(state.balance).toBe(-250);
+        expect(mockQuest.type).toBe('error');
+        expect(mockQuest.reply).toMatch(/250 credits owed/);
+      });
+    });
+
     describe('settlement price stamp', () => {
       const stampedModel = (extra: Partial<ModelInfo> = {}): ModelInfo => ({
         id: ChatModels.GPT4,
@@ -11801,6 +11905,56 @@ describe('attachmentHasIndexedContent (readable-chunk-text predicate, #1163)', (
 
   it('is false for an archived file even when fully vectorized', () => {
     expect(attachmentHasIndexedContent({ vectorized: true, chunkCount: 0, archivedAt: new Date() })).toBe(false);
+  });
+});
+
+describe('computeHolderSettlement', () => {
+  it('charges a personal shortfall in full, past the balance, with nothing written off', () => {
+    expect(computeHolderSettlement(CreditHolderType.User, 100, 130, 10)).toEqual({ delta: -30, writtenOffCredits: 0 });
+    expect(computeHolderSettlement(CreditHolderType.User, 100, 130, -50)).toEqual({
+      delta: -30,
+      writtenOffCredits: 0,
+    });
+  });
+
+  it('refunds a personal over-reservation like any other settlement', () => {
+    expect(computeHolderSettlement(CreditHolderType.User, 100, 60, 0)).toEqual({ delta: 40, writtenOffCredits: 0 });
+  });
+
+  // Parallel turns each settle with their own atomic $inc, so summing their deltas is the total debited.
+  it('lets concurrent personal overshoots add up instead of each being clamped to a stale snapshot', () => {
+    const staleSnapshot = 10;
+    const turns = [130, 150, 170].map(used => computeHolderSettlement(CreditHolderType.User, 100, used, staleSnapshot));
+    expect(turns.reduce((sum, turn) => sum + turn.delta, 0)).toBe(-150);
+    expect(turns.every(turn => turn.writtenOffCredits === 0)).toBe(true);
+  });
+
+  it('keeps the zero floor for an organization (its balance is a hard stop)', () => {
+    expect(computeHolderSettlement(CreditHolderType.Organization, 100, 130, 10)).toEqual({
+      delta: -10,
+      writtenOffCredits: 20,
+    });
+  });
+});
+
+describe('warnOnSettlementDebt', () => {
+  type SettlementLogger = Parameters<typeof warnOnSettlementDebt>[0];
+  const context = { questId: 'q1', ownerId: 'user1', ownerType: CreditHolderType.User, reserved: 100, used: 130 };
+
+  it('warns with the debt when the settled balance is negative', () => {
+    const logger = { warn: vi.fn() } as unknown as SettlementLogger;
+    warnOnSettlementDebt(logger, { currentCredits: -20 }, context);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
+      expect.objectContaining({ shortfall: 30, balanceAfter: -20, ownerId: 'user1' })
+    );
+  });
+
+  it('stays quiet at a zero or positive balance, or with no holder', () => {
+    const logger = { warn: vi.fn() } as unknown as SettlementLogger;
+    warnOnSettlementDebt(logger, { currentCredits: 0 }, context);
+    warnOnSettlementDebt(logger, null, context);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 
