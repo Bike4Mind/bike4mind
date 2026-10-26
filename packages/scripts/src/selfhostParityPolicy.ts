@@ -630,7 +630,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
-    '024e7a2caa0084dc96d7337654c09dd2f281ffca2bc7c12fefa4f20761ed1eda'
+    '29fb64fbb3b1e0a27b6f9b91a0e7f829fd8b5c9bf05689f1633c051031f7a0bb'
   ),
   broker(
     'queue:infra/youngAccountSpendAlertDeadLetter.ts:youngAccountSpendAlertDlq',
@@ -931,11 +931,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafAlarmSlackHandlerSubscription',
-    '6cdee0cfaa815acfd63886168b951ac377771e7054daa7304a20a6dd8471f166',
+    '3192d9f47c6bb5d4dc0f8f9276e577a8bc38853d0e9184e7e95f8127b671dabb',
     ['lambda:InvokeFunction']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafOobAlarmTopicEmailSub',
-    '5274354b3137a73fbc7b8da300bc81802808e82342e9ab719809b82ad17805f5'
+    '49982595268cc4415dff776783e82f0a5d2dbf4c131c93ec2b657d0fde838f07'
   ),
 ];
