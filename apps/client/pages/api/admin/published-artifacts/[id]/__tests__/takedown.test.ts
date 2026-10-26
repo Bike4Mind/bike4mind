@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindOneAndUpdate, mockReportUpdateMany } = vi.hoisted(() => ({
+const { mockFindOneAndUpdate, mockReportUpdateMany, mockUserFindById } = vi.hoisted(() => ({
+  mockUserFindById: vi.fn(),
   mockFindOneAndUpdate: vi.fn(),
   mockReportUpdateMany: vi.fn(),
 }));
@@ -37,6 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   PublishedArtifactReport: {
     updateMany: (...a: unknown[]) => Promise.resolve(mockReportUpdateMany(...a)),
   },
+  userRepository: { findById: (...a: unknown[]) => mockUserFindById(...a) },
   withTransaction: async (fn: () => Promise<unknown>) => {
     audit.txActive = true;
     try {
@@ -91,6 +93,7 @@ const ADMIN = { id: 'admin1', isAdmin: true };
 beforeEach(() => {
   mockFindOneAndUpdate.mockReset();
   mockReportUpdateMany.mockReset().mockResolvedValue({});
+  mockUserFindById.mockReset().mockResolvedValue({ id: 'u1', email: 'owner@example.com', username: 'owner' });
   invalidateMock.mockReset();
   thumbnails.deletePublishThumbnail.mockReset().mockResolvedValue(undefined);
   thumbnails.deletePublishThumbnails.mockReset().mockResolvedValue(0);
@@ -100,6 +103,24 @@ beforeEach(() => {
     return null;
   });
   audit.inTransaction = [];
+});
+
+describe('takedown and restore - audit target', () => {
+  it.each(['POST', 'DELETE'] as const)('%s labels the target with the owner email', async method => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    const { promise } = run({ method, user: ADMIN });
+    await promise;
+    expect(mockUserFindById).toHaveBeenCalledWith('u1');
+    expect(audit.record.mock.calls[0][1].target).toEqual({ kind: 'user', id: 'u1', displayName: 'owner@example.com' });
+  });
+
+  it('falls back to the owner id when the user no longer exists', async () => {
+    mockUserFindById.mockResolvedValue(null);
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    const { promise } = run({ method: 'POST', user: ADMIN });
+    await promise;
+    expect(audit.record.mock.calls[0][1].target.displayName).toBe('u1');
+  });
 });
 
 describe('takedown and restore - owner-only thumbnails', () => {

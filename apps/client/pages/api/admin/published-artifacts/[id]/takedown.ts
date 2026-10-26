@@ -4,7 +4,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { deletePublishThumbnail, enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { PublishedArtifact, PublishedArtifactReport, withTransaction } from '@bike4mind/database';
+import { PublishedArtifact, PublishedArtifactReport, userRepository, withTransaction } from '@bike4mind/database';
 import { invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
@@ -25,11 +25,14 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 const TakedownSchema = z.object({ reason: z.string().max(1000).optional() });
 
 /** Targets the page owner so an admin's moderation history against an account is filterable. */
-const auditTarget = (artifact: { ownerId: string }) => ({
-  kind: 'user' as const,
-  id: artifact.ownerId,
-  displayName: artifact.ownerId,
-});
+const auditTarget = async (artifact: { ownerId: string }) => {
+  const owner = await userRepository.findById(artifact.ownerId);
+  return {
+    kind: 'user' as const,
+    id: artifact.ownerId,
+    displayName: owner?.email ?? owner?.username ?? artifact.ownerId,
+  };
+};
 
 const auditDetails = (artifact: { publicId: string; tier: string; scopeId: string; slug: string; title: string }) => ({
   publicId: artifact.publicId,
@@ -80,7 +83,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       await recordAdminActionFromRequest(req, {
         action: 'moderation.published_artifact.taken_down',
-        target: auditTarget(takenDown),
+        target: await auditTarget(takenDown),
         summary: `took down published page ${publicId}`,
         details: auditDetails(takenDown),
         reason: parsed.data.reason,
@@ -132,7 +135,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
         await recordAdminActionFromRequest(req, {
           action: 'moderation.published_artifact.takedown_reverted',
-          target: auditTarget(restored),
+          target: await auditTarget(restored),
           summary: `restored taken-down published page ${publicId}`,
           details: auditDetails(restored),
         });

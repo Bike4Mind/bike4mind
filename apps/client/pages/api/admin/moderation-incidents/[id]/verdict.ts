@@ -3,7 +3,7 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { imageModerationIncidentRepository, withTransaction } from '@bike4mind/database';
+import { imageModerationIncidentRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { ncmecService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -80,18 +80,20 @@ const bodySchema = z.union([
 type Verdict = z.infer<typeof bodySchema>['verdict'];
 
 // Targets the flagged user so an admin's moderation history against an account is filterable.
-const recordVerdict = (
+const recordVerdict = async (
   req: Request,
   incident: { incidentId: string; userId: string },
   verdict: Verdict,
   details: Record<string, unknown> = {}
-) =>
-  recordAdminActionFromRequest(req, {
+) => {
+  const user = await userRepository.findById(incident.userId);
+  await recordAdminActionFromRequest(req, {
     action: 'moderation.incident.verdict_recorded',
-    target: { kind: 'user', id: incident.userId, displayName: incident.userId },
+    target: { kind: 'user', id: incident.userId, displayName: user?.email ?? user?.username ?? incident.userId },
     summary: `recorded verdict on moderation incident ${incident.incidentId}`,
     details: { incidentId: incident.incidentId, verdict, ...details },
   });
+};
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req: Request, res) => {
   if (!req.user?.isAdmin) {

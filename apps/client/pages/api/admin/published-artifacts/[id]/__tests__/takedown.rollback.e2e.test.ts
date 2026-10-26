@@ -7,7 +7,7 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../../packages/database/src/__test__/createMongoServer';
-import { PublishedArtifact, PublishedArtifactReport } from '@bike4mind/database';
+import { PublishedArtifact, PublishedArtifactReport, userRepository } from '@bike4mind/database';
 
 // The rollback only exists on a real replica set; the unit test mocks withTransaction.
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -49,6 +49,7 @@ afterAll(async () => {
   await replSet?.stop();
 });
 beforeEach(() => {
+  vi.spyOn(userRepository, 'findById').mockResolvedValue(null);
   audit.record.mockReset();
 });
 afterEach(async () => {

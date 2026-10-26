@@ -11,6 +11,7 @@ const mockSetNcmecReportId = vi.fn();
 const mockRecordManualReport = vi.fn();
 const mockSubmitNcmecReport = vi.fn();
 const mockFinishNcmecReport = vi.fn();
+const mockUserFindById = vi.fn();
 const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -22,6 +23,7 @@ vi.mock('@bike4mind/database', () => ({
     setNcmecReportId: (...args: unknown[]) => mockSetNcmecReportId(...args),
     recordManualReport: (...args: unknown[]) => mockRecordManualReport(...args),
   },
+  userRepository: { findById: (...args: unknown[]) => mockUserFindById(...args) },
   withTransaction: async (fn: () => Promise<unknown>) => {
     audit.txActive = true;
     try {
@@ -124,6 +126,7 @@ const NcmecFinishFailedError = ncmecService.NcmecFinishFailedError as unknown as
 describe('admin/moderation-incidents/[id]/verdict', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUserFindById.mockResolvedValue({ id: 'user-suspect-1', email: 'suspect@example.com', username: 'suspect' });
     audit.record.mockReset().mockImplementation(async () => {
       audit.inTransaction.push(audit.txActive);
       return null;
@@ -640,7 +643,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
         expect(audit.record.mock.calls[0][0]).toBe(req);
         expect(audit.record.mock.calls[0][1]).toMatchObject({
           action: 'moderation.incident.verdict_recorded',
-          target: { kind: 'user', id: 'user-suspect-1' },
+          target: { kind: 'user', id: 'user-suspect-1', displayName: 'suspect@example.com' },
           details: { incidentId: 'inc-1', verdict },
         });
         expect(audit.inTransaction).toEqual([true]);
@@ -690,6 +693,14 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
 
       expect(res.status).toHaveBeenCalledWith(500);
       expect((res.json as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ ncmecReportId: 'RPT-001' });
+    });
+
+    it('falls back to the user id when the flagged user no longer exists', async () => {
+      arrange.false_positive();
+      mockUserFindById.mockResolvedValue(null);
+      await runHandler(makeReq({ verdict: 'false_positive' }), makeRes());
+
+      expect(audit.record.mock.calls[0][1].target.displayName).toBe('user-suspect-1');
     });
 
     it('records the NCMEC report id for a confirmed_csam verdict', async () => {
