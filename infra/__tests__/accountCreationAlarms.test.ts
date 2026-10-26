@@ -43,7 +43,7 @@ describe('account creation alarms', () => {
     const queries = emailRateQueries('Bounce', 'synthetic-otc');
     expect(queries[0]).toEqual({
       id: 'rate',
-      expression: 'IF(sent > 0, 100 * FILL(events, 0) / sent, IF(FILL(events, 0) > 0, 100, 0))',
+      expression: 'IF(FILL(sent, 0) > 0, 100 * FILL(events, 0) / FILL(sent, 0), IF(FILL(events, 0) > 0, 100, 0))',
       returnData: true,
     });
     expect(queries[1]).toMatchObject({
