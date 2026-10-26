@@ -12,7 +12,7 @@ import {
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
 import { requireTurnstile } from '@server/middlewares/requireTurnstile';
-import { TURNSTILE_ACTION_OTC_SEND } from '@server/utils/auth/turnstile';
+import { TURNSTILE_ACTION_OTC_SEND } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { Config, isE2EEnabled } from '@bike4mind/server-utils/utils/config';

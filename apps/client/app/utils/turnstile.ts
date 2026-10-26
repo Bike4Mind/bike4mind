@@ -1,10 +1,7 @@
 const SCRIPT_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 const CHALLENGE_TIMEOUT_MS = 60_000;
 
-// Must match TURNSTILE_ACTION_OTC_SEND in server/utils/auth/turnstile.ts.
-export const TURNSTILE_ACTION_OTC_SEND = 'otc-send';
-
-interface TurnstileApi {
+type TurnstileApi = {
   render: (
     container: HTMLElement,
     options: {
@@ -17,7 +14,7 @@ interface TurnstileApi {
     }
   ) => string;
   remove: (widgetId: string) => void;
-}
+};
 
 declare global {
   interface Window {
@@ -31,14 +28,26 @@ function loadTurnstile(): Promise<TurnstileApi> {
   if (window.turnstile) return Promise.resolve(window.turnstile);
   scriptPromise ??= new Promise<TurnstileApi>((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = SCRIPT_SRC;
-    script.async = true;
-    script.onload = () => (window.turnstile ? resolve(window.turnstile) : reject(new Error('turnstile-unavailable')));
-    script.onerror = () => {
+    const fail = () => {
+      clearTimeout(timer);
+      script.onload = null;
+      script.onerror = null;
       scriptPromise = undefined;
       script.remove();
       reject(new Error('turnstile-unavailable'));
     };
+    const timer = setTimeout(fail, CHALLENGE_TIMEOUT_MS);
+    script.src = SCRIPT_SRC;
+    script.async = true;
+    script.onload = () => {
+      if (!window.turnstile) {
+        fail();
+        return;
+      }
+      clearTimeout(timer);
+      resolve(window.turnstile);
+    };
+    script.onerror = fail;
     document.head.appendChild(script);
   });
   return scriptPromise;
@@ -62,9 +71,10 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
   document.body.appendChild(overlay);
 
   let widgetId: string | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('turnstile-timeout')), CHALLENGE_TIMEOUT_MS);
+      timer = setTimeout(() => reject(new Error('turnstile-timeout')), CHALLENGE_TIMEOUT_MS);
       const settle = (fn: () => void) => {
         clearTimeout(timer);
         fn();
@@ -79,7 +89,11 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
       });
     });
   } finally {
-    if (widgetId !== undefined) turnstile.remove(widgetId);
-    overlay.remove();
+    clearTimeout(timer);
+    try {
+      if (widgetId !== undefined) turnstile.remove(widgetId);
+    } finally {
+      overlay.remove();
+    }
   }
 }

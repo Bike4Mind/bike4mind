@@ -3,36 +3,40 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { isTurnstileSecretConfigured } from '@bike4mind/server-utils/utils/turnstile';
 
-export const TURNSTILE_ACTION_OTC_SEND = 'otc-send';
-
-export interface TurnstilePolicy {
+export type TurnstilePolicy = {
   /** True only when the toggle is on, a site key is set and the secret is provisioned. */
   active: boolean;
   failClosed: boolean;
   siteKey: string;
   secret: string;
-}
+};
 
 async function readSetting<K extends 'turnstileEnabled' | 'turnstileFailClosed' | 'turnstileSiteKey'>(key: K) {
-  const row = await adminSettingsRepository.findBySettingName(key).catch(() => null);
-  const parsed = settingsMap[key].schema.safeParse(row?.settingValue);
-  return parsed.success ? parsed.data : settingsMap[key].schema.parse(undefined);
+  const row = await adminSettingsRepository.findBySettingName(key);
+  // Defaults apply only to absent settings, never to an unreadable or malformed policy.
+  return settingsMap[key].schema.parse(row?.settingValue);
 }
 
 /** Resolved the same way for the pre-login config the form reads and the server gate that enforces it. */
 export async function getTurnstilePolicy(): Promise<TurnstilePolicy> {
   const secret = Config.TURNSTILE_SECRET_KEY;
-  const [enabled, failClosed, siteKey] = await Promise.all([
-    readSetting('turnstileEnabled'),
+  if (!isTurnstileSecretConfigured(secret)) {
+    return { active: false, failClosed: false, siteKey: '', secret: '' };
+  }
+  const enabled = await readSetting('turnstileEnabled');
+  if (enabled !== true) {
+    return { active: false, failClosed: false, siteKey: '', secret: '' };
+  }
+  const [failClosed, siteKey] = await Promise.all([
     readSetting('turnstileFailClosed'),
     readSetting('turnstileSiteKey'),
   ]);
   const trimmedKey = String(siteKey ?? '').trim();
   return {
-    active: enabled === true && trimmedKey !== '' && isTurnstileSecretConfigured(secret),
+    active: trimmedKey !== '',
     failClosed: failClosed === true,
     siteKey: trimmedKey,
-    secret: isTurnstileSecretConfigured(secret) ? secret : '',
+    secret,
   };
 }
 

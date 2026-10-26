@@ -21,6 +21,38 @@ describe('verifyTurnstile', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it.each([
+    null,
+    [],
+    {},
+    { success: 'true' },
+    { success: false, 'error-codes': 'internal-error' },
+    { success: true, hostname: 42 },
+  ])('reports malformed siteverify responses as unavailable: %j', async body => {
+    expect(await verifyTurnstile({ ...base, token: 'tok', fetchImpl: respond(body) })).toEqual({
+      ok: false,
+      reason: 'unavailable',
+    });
+  });
+
+  it.each(['internal-error', 'missing-input-secret', 'invalid-input-secret', 'bad-request'])(
+    'reports provider configuration errors as unavailable: %s',
+    async code => {
+      expect(
+        await verifyTurnstile({ ...base, token: 'tok', fetchImpl: respond({ success: false, 'error-codes': [code] }) })
+      ).toMatchObject({ ok: false, reason: 'unavailable' });
+    }
+  );
+
+  it('rejects oversized tokens without contacting the provider', async () => {
+    const fetchImpl = respond({ success: true });
+    expect(await verifyTurnstile({ ...base, token: 'x'.repeat(2049), fetchImpl })).toEqual({
+      ok: false,
+      reason: 'invalid',
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('rejects an invalid or duplicate token', async () => {
     const fetchImpl = respond({ success: false, 'error-codes': ['timeout-or-duplicate'] });
     const result = await verifyTurnstile({ ...base, token: 'tok', fetchImpl });

@@ -5,9 +5,10 @@ const policy = vi.hoisted(() => ({
   value: { active: true, failClosed: false, siteKey: 'site', secret: 'secret' },
 }));
 const verify = vi.hoisted(() => vi.fn());
+const getPolicy = vi.hoisted(() => vi.fn());
 
 vi.mock('@server/utils/auth/turnstile', () => ({
-  getTurnstilePolicy: async () => policy.value,
+  getTurnstilePolicy: getPolicy,
   turnstileAllowedHostnames: () => ['app.example.com'],
 }));
 vi.mock('@bike4mind/server-utils/utils/turnstile', () => ({ verifyTurnstile: verify }));
@@ -15,20 +16,33 @@ vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.1
 
 import { requireTurnstile } from './requireTurnstile';
 
-function run(body: unknown = { turnstileToken: 'tok' }) {
+async function run(body: unknown = { turnstileToken: 'tok' }) {
   const json = vi.fn();
   const status = vi.fn(() => ({ json }));
   const next = vi.fn();
   const logger = { warn: vi.fn() };
   const req = { body, logger, requestId: 'r1' } as unknown as Request;
   const res = { status } as unknown as Response;
-  return requireTurnstile('otc-send')(req, res, next).then(() => ({ json, status, next, logger }));
+  await requireTurnstile('otc-send')(req, res, next);
+  return { json, status, next, logger };
 }
 
 describe('requireTurnstile', () => {
   beforeEach(() => {
     verify.mockReset();
+    getPolicy.mockReset();
+    getPolicy.mockImplementation(async () => policy.value);
     policy.value = { active: true, failClosed: false, siteKey: 'site', secret: 'secret' };
+  });
+
+  it('refuses and logs an unreadable policy instead of bypassing verification', async () => {
+    getPolicy.mockRejectedValue(new Error('database unavailable'));
+    const { next, status, json, logger } = await run();
+    expect(next).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(503);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ code: 'challenge_unavailable' }));
+    expect(logger.warn).toHaveBeenCalledWith('turnstile-policy-unreadable', expect.any(Error));
   });
 
   it('skips verification when the feature is not active', async () => {

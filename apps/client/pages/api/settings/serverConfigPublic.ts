@@ -38,7 +38,7 @@ const handler = baseApi({ auth: false }).get(
     const trustedParsed = settingsMap.allowTrustedDevices.schema.safeParse(trustedSetting?.settingValue);
     const allowTrustedDevices = trustedParsed.success ? trustedParsed.data : true;
 
-    const turnstile = await getTurnstilePolicy().catch(() => null);
+    const turnstile = await getTurnstilePolicy();
 
     const config: ServerConfigPublic = {
       // In dev, derive from request host so the URL matches the actual port
@@ -49,7 +49,7 @@ const handler = baseApi({ auth: false }).get(
       allowOpenRegistration,
       pyodideBaseUrl: process.env.PYODIDE_BASE_URL || '',
       allowTrustedDevices,
-      turnstileSiteKey: turnstile?.active ? turnstile.siteKey : '',
+      turnstileSiteKey: turnstile.active ? turnstile.siteKey : '',
     };
 
     return res.json(config);

@@ -12,9 +12,15 @@ export const requireTurnstile = (action: string): RequestHandler => {
   return async (req, res, next) => {
     const policy = await getTurnstilePolicy().catch(error => {
       req.logger?.warn('turnstile-policy-unreadable', error);
+      res.status(503).json({
+        error: 'Verification is temporarily unavailable. Please try again.',
+        code: 'challenge_unavailable',
+        request_id: req.requestId,
+      });
       return null;
     });
-    if (!policy?.active) return next();
+    if (!policy) return;
+    if (!policy.active) return next();
 
     const ip = getClientIp(req);
     const result = await verifyTurnstile({

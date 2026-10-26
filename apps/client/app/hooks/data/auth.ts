@@ -1,4 +1,9 @@
-import { AuthStrategy, IUserDocument, clientIdFromAuthorizeRedirect } from '@bike4mind/common';
+import {
+  AuthStrategy,
+  IUserDocument,
+  clientIdFromAuthorizeRedirect,
+  TURNSTILE_ACTION_OTC_SEND,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
@@ -8,7 +13,7 @@ import { useRouter, useSearch } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { toast } from 'sonner';
 import { applyRedirect } from '@client/app/utils/authRedirect';
-import { TURNSTILE_ACTION_OTC_SEND, getTurnstileToken } from '@client/app/utils/turnstile';
+import { getTurnstileToken } from '@client/app/utils/turnstile';
 import type { ServerConfigPublic } from '@pages/api/settings/serverConfigPublic';
 
 interface LoginError {
@@ -40,7 +45,6 @@ interface OTCRegisterResponse {
 
 interface SendOTCData {
   email: string;
-  turnstileToken?: string;
 }
 
 interface SendOTCResponse {
@@ -102,13 +106,11 @@ export function useSendOTC() {
 // Fresh token per send: Turnstile tokens are single-use, so resends solve again. Returns undefined
 // when the stage does not enforce the challenge.
 async function solveTurnstileIfRequired(queryClient: QueryClient): Promise<string | undefined> {
-  const config = await queryClient
-    .fetchQuery({
-      queryKey: ['server-config-public'],
-      queryFn: async () => (await api.get<ServerConfigPublic>('/api/settings/serverConfigPublic')).data,
-      staleTime: 1000 * 60 * 5,
-    })
-    .catch(() => undefined);
+  const config = await queryClient.fetchQuery({
+    queryKey: ['server-config-public'],
+    queryFn: async () => (await api.get<ServerConfigPublic>('/api/settings/serverConfigPublic')).data,
+    staleTime: 1000 * 60 * 5,
+  });
   if (!config?.turnstileSiteKey) return undefined;
   try {
     return await getTurnstileToken(config.turnstileSiteKey, TURNSTILE_ACTION_OTC_SEND);

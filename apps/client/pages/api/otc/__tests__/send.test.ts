@@ -20,10 +20,11 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
 const turnstileActions = vi.hoisted(() => [] as string[]);
+const turnstileGate = vi.hoisted(() => vi.fn((_req: unknown, _res: unknown, next: () => void) => next()));
 vi.mock('@server/middlewares/requireTurnstile', () => ({
   requireTurnstile: (action: string) => {
     turnstileActions.push(action);
-    return (_req: any, _res: any, next: any) => next?.();
+    return turnstileGate;
   },
 }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } } }));
@@ -121,6 +122,7 @@ describe('/api/otc/send limiter wiring', () => {
 
   it('gates the route on the otc-send Turnstile challenge before any limiter runs', () => {
     expect(turnstileActions).toEqual(['otc-send']);
+    expect(wiring.uses[1]).toBe(turnstileGate);
   });
 
   it('counts every request against the per-IP and distinct-email-per-IP limits, but not the per-email ones', async () => {

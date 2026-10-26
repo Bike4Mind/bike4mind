@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 export const TURNSTILE_SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 export const TURNSTILE_TIMEOUT_MS = 2000;
 export const TURNSTILE_MAX_TOKEN_LENGTH = 2048;
@@ -5,7 +7,7 @@ export const TURNSTILE_MAX_TOKEN_LENGTH = 2048;
 export type TurnstileResult =
   { ok: true } | { ok: false; reason: 'missing' | 'invalid' | 'unavailable'; errorCodes?: string[] };
 
-export interface VerifyTurnstileInput {
+export type VerifyTurnstileInput = {
   token: unknown;
   secret: string;
   ip?: string;
@@ -14,14 +16,14 @@ export interface VerifyTurnstileInput {
   allowedHostnames?: string[];
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
-}
+};
 
-interface SiteverifyResponse {
-  success?: boolean;
-  hostname?: string;
-  action?: string;
-  'error-codes'?: string[];
-}
+const siteverifyResponseSchema = z.object({
+  success: z.boolean(),
+  hostname: z.string().optional(),
+  action: z.string().optional(),
+  'error-codes': z.array(z.string()).optional(),
+});
 
 /** Secrets default to this placeholder on stages that never provisioned a key. */
 export function isTurnstileSecretConfigured(secret: string | undefined): secret is string {
@@ -41,7 +43,7 @@ export async function verifyTurnstile(input: VerifyTurnstileInput): Promise<Turn
   const body = new URLSearchParams({ secret, response: token });
   if (ip) body.set('remoteip', ip);
 
-  let data: SiteverifyResponse;
+  let data: z.infer<typeof siteverifyResponseSchema>;
   try {
     const response = await (input.fetchImpl ?? fetch)(TURNSTILE_SITEVERIFY_URL, {
       method: 'POST',
@@ -49,7 +51,7 @@ export async function verifyTurnstile(input: VerifyTurnstileInput): Promise<Turn
       signal: AbortSignal.timeout(input.timeoutMs ?? TURNSTILE_TIMEOUT_MS),
     });
     if (!response.ok) return { ok: false, reason: 'unavailable' };
-    data = (await response.json()) as SiteverifyResponse;
+    data = siteverifyResponseSchema.parse(await response.json());
   } catch {
     return { ok: false, reason: 'unavailable' };
   }
@@ -57,7 +59,12 @@ export async function verifyTurnstile(input: VerifyTurnstileInput): Promise<Turn
   const errorCodes = data['error-codes'];
   if (data.success !== true) {
     // A rejected secret or malformed request is our misconfiguration, not the caller's fault.
-    if (errorCodes?.some(code => code === 'internal-error')) return { ok: false, reason: 'unavailable', errorCodes };
+    if (
+      errorCodes?.some(code =>
+        ['internal-error', 'missing-input-secret', 'invalid-input-secret', 'bad-request'].includes(code)
+      )
+    )
+      return { ok: false, reason: 'unavailable', errorCodes };
     return { ok: false, reason: 'invalid', errorCodes };
   }
   if (data.action !== expectedAction) return { ok: false, reason: 'invalid', errorCodes: ['action-mismatch'] };
