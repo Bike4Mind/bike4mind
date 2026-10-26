@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BubblewrapRuntime } from './BubblewrapRuntime.js';
 import os from 'os';
 import path from 'path';
@@ -260,6 +260,71 @@ describe('BubblewrapRuntime', () => {
       const awsIdx = result.args.indexOf(`${home}/.aws`);
       expect(awsIdx).toBeGreaterThan(-1);
       expect(result.args[awsIdx - 1]).toBe('--tmpfs');
+    });
+
+    describe('container engine sockets', () => {
+      const home = os.homedir();
+      const originalRuntimeDir = process.env.XDG_RUNTIME_DIR;
+      const present: Record<string, boolean> = {
+        [`${home}/.colima`]: true,
+        [`${home}/.docker`]: true,
+        [`${home}/.docker/run`]: true,
+        '/var/run/docker.sock': false,
+        '/run/user/1000/podman': true,
+        '/run/user/1000/docker.sock': false,
+      };
+      const wrap = (allowContainerSockets?: boolean) =>
+        runtime.wrapCommand({
+          command: 'true',
+          cwd: '/home/test/project',
+          filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [`${home}/.docker`] },
+          networkEnabled: false,
+          allowContainerSockets,
+        });
+      const mountOf = (args: string[], target: string) => {
+        const idx = args.lastIndexOf(target);
+        return idx === -1 ? null : args.slice(idx - (args[idx - 1] === '--tmpfs' ? 1 : 2), idx + 1);
+      };
+
+      beforeEach(() => {
+        process.env.XDG_RUNTIME_DIR = '/run/user/1000';
+        vi.mocked(statSync).mockImplementation(p => {
+          if (String(p) in present) return fsEntry(present[String(p)]);
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        });
+      });
+
+      afterEach(() => {
+        if (originalRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
+        else process.env.XDG_RUNTIME_DIR = originalRuntimeDir;
+      });
+
+      it('masks existing socket dirs and files after the home bind', () => {
+        const { args } = wrap();
+        const homeBindIdx = args.indexOf(home);
+        expect(mountOf(args, `${home}/.colima`)).toEqual(['--tmpfs', `${home}/.colima`]);
+        expect(args.lastIndexOf(`${home}/.colima`)).toBeGreaterThan(homeBindIdx);
+        expect(mountOf(args, '/run/user/1000/podman')).toEqual(['--tmpfs', '/run/user/1000/podman']);
+        expect(mountOf(args, '/var/run/docker.sock')).toEqual(['--ro-bind', '/dev/null', '/var/run/docker.sock']);
+        expect(mountOf(args, '/run/user/1000/docker.sock')).toEqual([
+          '--ro-bind',
+          '/dev/null',
+          '/run/user/1000/docker.sock',
+        ]);
+        expect(args).not.toContain(`${home}/.lima`);
+      });
+
+      it('does not remount a socket dir already hidden by a denied path', () => {
+        const { args } = wrap();
+        expect(args).not.toContain(`${home}/.docker/run`);
+      });
+
+      it('leaves them alone when allowContainerSockets is set', () => {
+        const { args } = wrap(true);
+        expect(args).not.toContain(`${home}/.colima`);
+        expect(args).not.toContain('/var/run/docker.sock');
+        expect(args).not.toContain('/run/user/1000/podman');
+      });
     });
 
     it('includes namespace isolation flags and denies net when network is disabled', () => {

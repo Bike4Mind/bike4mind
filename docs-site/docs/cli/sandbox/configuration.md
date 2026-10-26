@@ -73,6 +73,7 @@ The sandbox is configured through JSON config files with a 3-layer merge system.
     },
     "excludedCommands": ["docker", "watchman", "podman"],
     "allowUnsandboxedCommands": true,
+    "allowContainerSockets": false,
     "platform": {
       "linux": { "runtime": "bubblewrap" },
       "macos": { "runtime": "seatbelt", "profileTemplate": "default" }
@@ -167,6 +168,14 @@ Controls what happens when an excluded command is executed:
 - **`false`** — Excluded commands are **blocked entirely** and recorded as violations
 
 Set to `false` for maximum security when you want to prevent any unsandboxed execution.
+
+### `allowContainerSockets`
+
+**Type:** `boolean` | **Default:** `false`
+
+Sandboxed commands cannot connect to container engine API sockets: `/var/run/docker.sock` (and the file it links to), `~/.docker/run`, `~/.colima`, `~/.lima`, `~/.rd`, `~/.orbstack`, `~/.local/share/containers`, and `docker.sock` / `podman` under `$XDG_RUNTIME_DIR`. On macOS the Seatbelt profile denies connecting to them; on Linux Bubblewrap hides them behind an empty mount.
+
+Set to `true` only if a sandboxed tool genuinely needs to talk to the container engine directly. A repo config can turn this off but never on. The `docker` and `podman` commands themselves are in `excludedCommands` and are not affected.
 
 ## Platform Configuration
 

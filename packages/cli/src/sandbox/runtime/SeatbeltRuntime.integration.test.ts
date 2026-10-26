@@ -119,6 +119,36 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
     }
   });
 
+  it.each([
+    [false, 'EPERM'],
+    [true, 'open'],
+  ])('connects to a container socket only when allowed (allow=%s)', async (allow, expected) => {
+    const runtimeDir = mkdtempSync(path.join(os.tmpdir(), 'b4m-xdg-'));
+    const socketPath = path.join(runtimeDir, 'docker.sock');
+    const server = net.createServer(socket => socket.end());
+    await new Promise<void>(resolve => server.listen(socketPath, resolve));
+    const original = process.env.XDG_RUNTIME_DIR;
+    process.env.XDG_RUNTIME_DIR = runtimeDir;
+    const wrapped = runtime.wrapCommand({
+      command: `node -e "require('net').connect('${socketPath}').on('connect',()=>{console.log('open');process.exit(0)}).on('error',e=>{console.log(e.code);process.exit(0)})"`,
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled: false,
+      allowContainerSockets: allow,
+    });
+    if (original === undefined) delete process.env.XDG_RUNTIME_DIR;
+    else process.env.XDG_RUNTIME_DIR = original;
+
+    try {
+      const output = execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 10000 });
+      expect(output.trim()).toBe(expected);
+    } finally {
+      cleanupWrapped(wrapped.cleanupPaths);
+      server.close();
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
+  });
+
   it('allows writing to CWD', () => {
     const testFile = path.join(TEST_DIR, 'write-test.txt');
     const wrapped = runtime.wrapCommand({

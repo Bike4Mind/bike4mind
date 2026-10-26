@@ -13,6 +13,7 @@ import { lstatSync, mkdirSync, statSync } from 'fs';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
 import {
   resolveSandboxPath,
+  getContainerSocketPaths,
   getProtectedWorkspacePaths,
   isBinaryAvailable,
   type SandboxRuntime,
@@ -100,6 +101,18 @@ export class BubblewrapRuntime implements SandboxRuntime {
       const kind = pathKind(deniedPath);
       if (kind === 'dir') args.push('--tmpfs', deniedPath);
       else if (kind === 'file') args.push('--ro-bind', '/dev/null', deniedPath);
+    }
+
+    // connect() works on a read-only bind, so container sockets need masking too.
+    if (!options.allowContainerSockets) {
+      const isDenied = (p: string) => expandedDenied.some(d => p === d || p.startsWith(`${d}${path.sep}`));
+      for (const entry of getContainerSocketPaths()) {
+        const socketPath = resolveSandboxPath(entry.path);
+        if (isDenied(socketPath)) continue;
+        const kind = pathKind(socketPath);
+        if (kind === 'dir') args.push('--tmpfs', socketPath);
+        else if (kind === 'file') args.push('--ro-bind', '/dev/null', socketPath);
+      }
     }
 
     // Write restrictions: if writeOnlyToWorkingDir, make home read-only

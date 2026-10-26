@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { SeatbeltRuntime } from './SeatbeltRuntime.js';
 import os from 'os';
-import { writeFileSync } from 'fs';
+import path from 'path';
+import { realpathSync, writeFileSync } from 'fs';
 
 // Mock only the specific functions we need
 vi.mock('fs', async () => {
@@ -260,6 +261,58 @@ describe('SeatbeltRuntime', () => {
 
       expect(profile).toContain(`(deny file-read* file-write* (subpath "${home}/.ssh"))`);
       expect(profile).not.toContain('$HOME');
+    });
+  });
+
+  describe('container engine sockets', () => {
+    const baseOptions = {
+      command: 'true',
+      cwd: '/Users/test/project',
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+    };
+    const home = realpathSync(os.homedir());
+
+    it.each([false, true])('denies them after the unix-socket allow (network %s)', networkEnabled => {
+      const profile = runtime.generateProfile({ ...baseOptions, networkEnabled, proxyPort: 8080 });
+      const unixAllowIdx = profile.indexOf('(allow network-outbound (remote unix-socket))');
+      const dockerDeny = '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/docker.sock")))';
+      expect(unixAllowIdx).toBeGreaterThan(-1);
+      expect(profile.indexOf(dockerDeny)).toBeGreaterThan(unixAllowIdx);
+      for (const dir of ['.docker/run', '.colima', '.lima', '.rd', '.orbstack', '.local/share/containers']) {
+        const rule = `(deny network-outbound (remote unix-socket (subpath "${home}/${dir}")))`;
+        expect(profile.indexOf(rule)).toBeGreaterThan(unixAllowIdx);
+      }
+    });
+
+    it('denies the docker.sock symlink at its resolved target', async () => {
+      const fs = await vi.importActual<typeof import('fs')>('fs');
+      const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'seatbelt-xdg-')));
+      const original = process.env.XDG_RUNTIME_DIR;
+      try {
+        fs.mkdirSync(path.join(fixture, 'engine'));
+        fs.writeFileSync(path.join(fixture, 'engine', 'api.sock'), '');
+        fs.symlinkSync(path.join(fixture, 'engine', 'api.sock'), path.join(fixture, 'docker.sock'));
+        process.env.XDG_RUNTIME_DIR = fixture;
+        const profile = runtime.generateProfile({ ...baseOptions, networkEnabled: false });
+        expect(profile).toContain(
+          `(deny network-outbound (remote unix-socket (path-literal "${fixture}/docker.sock")))`
+        );
+        expect(profile).toContain(
+          `(deny network-outbound (remote unix-socket (path-literal "${fixture}/engine/api.sock")))`
+        );
+        expect(profile).toContain(`(deny network-outbound (remote unix-socket (subpath "${fixture}/podman")))`);
+      } finally {
+        if (original === undefined) delete process.env.XDG_RUNTIME_DIR;
+        else process.env.XDG_RUNTIME_DIR = original;
+        fs.rmSync(fixture, { recursive: true, force: true });
+      }
+    });
+
+    it('leaves them reachable when allowContainerSockets is set', () => {
+      const profile = runtime.generateProfile({ ...baseOptions, networkEnabled: false, allowContainerSockets: true });
+      expect(profile).toContain('(allow network-outbound (remote unix-socket))');
+      expect(profile).not.toContain('docker.sock');
+      expect(profile).not.toContain('.colima');
     });
   });
 

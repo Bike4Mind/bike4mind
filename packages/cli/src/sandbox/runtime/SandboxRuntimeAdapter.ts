@@ -18,6 +18,38 @@ export interface WrapCommandOptions {
   networkEnabled: boolean;
   /** Filtering proxy port; Seatbelt grants loopback-only network when set with networkEnabled. */
   proxyPort?: number;
+  /** Leave container engine sockets (see getContainerSocketPaths) reachable inside the sandbox. */
+  allowContainerSockets?: boolean;
+}
+
+export interface ContainerSocketPath {
+  path: string;
+  directory: boolean;
+}
+
+/** Docker, Podman, Colima, Lima, Rancher Desktop and OrbStack API sockets, or the directories holding them. */
+export function getContainerSocketPaths(): ContainerSocketPath[] {
+  const home = os.homedir();
+  const entries: ContainerSocketPath[] = [
+    { path: '/var/run/docker.sock', directory: false },
+    { path: '/run/docker.sock', directory: false },
+    { path: '/run/podman', directory: true },
+    { path: path.join(home, '.docker', 'run'), directory: true },
+    { path: path.join(home, '.colima'), directory: true },
+    { path: path.join(home, '.lima'), directory: true },
+    { path: path.join(home, '.rd'), directory: true },
+    { path: path.join(home, '.orbstack'), directory: true },
+    { path: path.join(home, '.local', 'share', 'containers'), directory: true },
+    { path: path.join(os.tmpdir(), 'podman'), directory: true },
+  ];
+  const runtimeDir = process.env.XDG_RUNTIME_DIR;
+  if (runtimeDir && path.isAbsolute(runtimeDir)) {
+    entries.push(
+      { path: path.join(runtimeDir, 'docker.sock'), directory: false },
+      { path: path.join(runtimeDir, 'podman'), directory: true }
+    );
+  }
+  return entries;
 }
 
 /** Abstract interface for platform-specific sandbox runtimes */

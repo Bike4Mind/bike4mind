@@ -10,6 +10,7 @@ import os from 'os';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
 import {
   resolveSandboxPath,
+  getContainerSocketPaths,
   getProtectedWorkspacePaths,
   isBinaryAvailable,
   type SandboxRuntime,
@@ -38,6 +39,22 @@ function assertPort(port: number): void {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid sandbox proxy port: ${port}`);
   }
+}
+
+/**
+ * Seatbelt matches a socket connect against the fully resolved path, so a symlink like
+ * /var/run/docker.sock is denied at its current target, resolved each time a profile is built.
+ */
+function containerSocketDenies(): string[] {
+  const rules = new Set<string>();
+  for (const entry of getContainerSocketPaths()) {
+    const resolvedParent = path.join(resolveSandboxPath(path.dirname(entry.path)), path.basename(entry.path));
+    for (const candidate of [resolvedParent, resolveSandboxPath(entry.path)]) {
+      const filter = entry.directory ? 'subpath' : 'path-literal';
+      rules.add(`(deny network-outbound (remote unix-socket (${filter} "${escapeSeatbeltPath(candidate)}")))`);
+    }
+  }
+  return [...rules];
 }
 
 export class SeatbeltRuntime implements SandboxRuntime {
@@ -91,6 +108,10 @@ export class SeatbeltRuntime implements SandboxRuntime {
       lines.push('(allow network-inbound (local ip "localhost:*"))');
       lines.push('(allow network-outbound (remote ip "localhost:*"))');
       lines.push(`(deny network-outbound (remote unix-socket (path-literal "${MDNS_RESPONDER_SOCKET}")))`);
+    }
+    if (!options.allowContainerSockets) {
+      lines.push('; Keep container engine sockets out of reach');
+      lines.push(...containerSocketDenies());
     }
     lines.push('');
 
