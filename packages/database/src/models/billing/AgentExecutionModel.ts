@@ -453,11 +453,8 @@ export interface IAgentExecution {
   lowConfidenceStreak?: number;
 
   /**
-   * Admin-only scripted gate input: entry `i` replaces the confidence of the run's 1-indexed
-   * iteration `i + 1` wherever the gate evaluates one, so a test can make the gate fire on demand.
-   * Set at start only (`startAgentExecution` rejects non-admin callers); read by the executor's
-   * confidence-gate block, which keeps scripted iterations out of `confidenceTelemetry` (they
-   * still advance `lowConfidenceStreak`, so firing the gate takes a streak of low entries).
+   * Admin-only scripted per-iteration gate confidence; semantics are documented on
+   * `confidence_overrides` in `AgentExecutionStartRequestSchema` (@bike4mind/common).
    */
   confidenceOverrides?: number[];
 

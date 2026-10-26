@@ -7,13 +7,8 @@ import type { CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { LOW_CONFIDENCE_STREAK_TO_PAUSE } from './agentExecutorUtils/confidenceGate';
 
-// The confidence gate's pause -> resume -> complete loop, end to end: the real executor
-// `handler` and the real WebSocket `gate_response` handler over a real Mongo, so every status
-// transition goes through the repository's own CAS writes. Only the edges are stubbed - the
-// LLM (probe calls, then a final answer), the toolbelt, credits, the transports, and the
-// chat-history and memento writes on completion.
-// `confidenceOverrides` is what makes the gate fire: the tool's real score would clear it,
-// and the gate pauses only on a streak, so the script carries one low entry per probe turn.
+// Confidence gate pause -> resume -> complete over a real Mongo, with only the edges stubbed.
+// `confidenceOverrides` scripts one low entry per probe turn so the streak fires the gate.
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
