@@ -13,7 +13,7 @@ const SIZE_PATTERN = /^(\d+)x(\d+)$/;
  * of positive numbers. Lets callers tell a resolution that breaks a rule apart from
  * a value that expresses no resolution at all ('auto', 'wide', undefined).
  */
-function parseSizeEdges(size?: string | null): { width: number; height: number } | null {
+export function parseSizeEdges(size?: string | null): { width: number; height: number } | null {
   if (typeof size !== 'string') {
     return null;
   }
@@ -35,9 +35,12 @@ function parseSizeEdges(size?: string | null): { width: number; height: number }
  * IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes, so a flat preset check would reject
  * valid custom sizes.
  */
-export function satisfiesGptImage2Constraints({ width, height }: { width: number; height: number }): boolean {
-  const { maxEdge, minTotalPixels, maxTotalPixels, edgeMultiple, maxAspectRatio } =
-    IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.constraints;
+export function satisfiesGptImage2Constraints(
+  { width, height }: { width: number; height: number },
+  constraints: (typeof IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2)['constraints'] = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2
+    .constraints
+): boolean {
+  const { maxEdge, minTotalPixels, maxTotalPixels, edgeMultiple, maxAspectRatio } = constraints;
   const longEdge = Math.max(width, height);
   const shortEdge = Math.min(width, height);
   const totalPixels = width * height;
