@@ -79,3 +79,5 @@ export const sharedTest = {
   hookTimeout: HOOK_TIMEOUT_MS,
   ...(maxWorkers !== undefined ? { maxWorkers, minWorkers: 1 } : {}),
 };
+
+# Automated fix for issue #5711: Notebook item 3-dot menu overflows viewport; Delete unreachable at 100% zoom
