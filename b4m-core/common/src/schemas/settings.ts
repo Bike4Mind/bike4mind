@@ -598,6 +598,7 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitFreePerMin',
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
+  'apiKeyAccess',
 
   // FREE-TIER MODEL ALLOWLIST
   'freeTierModelGateEnabled',
@@ -2158,6 +2159,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitFreePerMin', order: 1 },
       { key: 'apiRateLimitBasicPerMin', order: 2 },
       { key: 'apiRateLimitProPerMin', order: 3 },
+      { key: 'apiKeyAccess', order: 4 },
     ],
   },
   API_KEY_TRUST: {
@@ -3063,6 +3065,21 @@ export const settingsMap = {
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 3,
+  }),
+  // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
+  // tightening it also cuts off keys that already exist.
+  apiKeyAccess: makeStringSetting({
+    key: 'apiKeyAccess',
+    name: 'API Key Access',
+    // Self-host has no billing stack (see enforceCredits), so keys stay open there; hosted
+    // defaults to paid-only so the gate is live without an admin write.
+    defaultValue: process.env.B4M_SELF_HOST === 'true' ? 'all' : 'paid',
+    description:
+      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
+    options: ['all', 'paid', 'disabled'],
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 4,
   }),
   tagLineMain: makeStringSetting({
     key: 'tagLineMain',

@@ -35,7 +35,8 @@ export function getEntitlingPlanByPriceId(
   priceId: string
 ): (Pick<SubscriptionPlanDetail, 'priceId' | 'name' | 'interval' | 'tier'> & { credits?: number }) | undefined {
   if (!priceId) return undefined;
-  return SUBSCRIPTION_PLANS_MAP[priceId] ?? (priceId === TEAM_PLAN.priceId ? TEAM_PLAN : undefined);
+  if (Object.hasOwn(SUBSCRIPTION_PLANS_MAP, priceId)) return SUBSCRIPTION_PLANS_MAP[priceId];
+  return priceId === TEAM_PLAN.priceId ? TEAM_PLAN : undefined;
 }
 
 /**

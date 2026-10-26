@@ -99,6 +99,15 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_cancelled': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.sessions.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  // Bulk abuse response (apps/client/pages/api/admin/abuse/bulk-*.ts): one strict entry per user and
+  // step, written in that user's transaction, plus a summary per execute. The summary is bestEffort
+  // because the per-user entries are the record and the work is already committed when it is written.
+  'abuse.bulk.executed': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  'abuse.bulk.ban': { category: 'access', severity: 'critical', write: 'strict' },
+  'abuse.bulk.revoke_keys': { category: 'access', severity: 'notice', write: 'strict' },
+  'abuse.bulk.revoke_sessions': { category: 'identity', severity: 'notice', write: 'strict' },
+  'abuse.bulk.clawback': { category: 'credits', severity: 'notice', write: 'strict' },
+  'abuse.bulk.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 
@@ -176,6 +185,16 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.gear_override.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: rapid reply
+  'settings.rapid_reply_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.bulk_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;

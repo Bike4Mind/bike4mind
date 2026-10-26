@@ -10,10 +10,10 @@ import { type MigrationFile } from './index';
  * scanned the whole users collection.
  *
  * Migration rather than autoIndex, for the same reason as
- * 20260918000000_ensure-feedback-org-createdat-index: prod runs DocumentDB, where an index build
- * takes a foreground collection lock, and users is the hottest collection in the system - leaving
- * the build to whichever Lambda cold-boots first after deploy would take that lock at an arbitrary
- * moment rather than a chosen one.
+ * 20260918000000_ensure-feedback-org-createdat-index: autoIndex builds are fire-and-forget (a
+ * failure is silent), and users is the hottest collection in the system - leaving
+ * the build to whichever Lambda cold-boots first after deploy would run it scanning the whole
+ * collection at an arbitrary moment rather than a chosen one.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist. The name matches the schema
  * declaration byte-for-byte, so this build and autoIndex cannot produce an IndexKeySpecsConflict.

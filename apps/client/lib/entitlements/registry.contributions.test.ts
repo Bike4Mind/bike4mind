@@ -340,6 +340,70 @@ describe('mergeContributedRows', () => {
     expect(reasons).toHaveLength(2);
   });
 
+  describe('a key core only pays signup credits on', () => {
+    const CREDIT_ONLY = {
+      ...BUILT_IN,
+      signupCreditRows: [...BUILT_IN.signupCreditRows, { key: 'core:credited', credits: 100 }],
+    };
+    const CONTRIBUTED = {
+      tagGrants: [
+        { tag: 'example-pro', entitlements: ['example:pro'] },
+        { tag: 'example-credited', entitlements: ['core:credited'] },
+      ],
+      impliedEntitlements: [{ ifHeld: 'example:pro', alsoGrant: ['core:credited'] }],
+      internalStaffEntitlements: ['example:pro'],
+      signupCredits: [{ key: 'example:pro', credits: 100 }],
+    };
+    const mergeOver = async (contributed: unknown) => {
+      const registry = await loadRegistry({});
+      const reasons: string[] = [];
+      const merged = registry.mergeContributedRows(CREDIT_ONLY, contributed as PremiumEntitlementGrants, {
+        onReject: reason => reasons.push(reason),
+      });
+      return { registry, merged, reasons };
+    };
+
+    it('lets a contribution grant and imply it', async () => {
+      const { merged, reasons } = await mergeOver(CONTRIBUTED);
+
+      expect(reasons).toEqual([]);
+      expect(merged.tagGrantRows).toEqual([...CREDIT_ONLY.tagGrantRows, ...CONTRIBUTED.tagGrants]);
+      expect(merged.impliedRows).toEqual([...CREDIT_ONLY.impliedRows, ...CONTRIBUTED.impliedEntitlements]);
+      expect(merged.signupCreditRows).toEqual([...CREDIT_ONLY.signupCreditRows, { key: 'example:pro', credits: 100 }]);
+    });
+
+    it('pays its credit once when another held key implies it', async () => {
+      const { registry, merged } = await mergeOver(CONTRIBUTED);
+      const credits = new Map(merged.signupCreditRows.map(row => [row.key, row.credits]));
+      const implications = new Map(merged.impliedRows.map(row => [row.ifHeld, row.alsoGrant]));
+      const pay = (keys: string[]) =>
+        registry.signupCreditsForKeys(registry.applyImpliedEntitlements(keys, implications), credits, implications);
+
+      expect(pay(['example:pro'])).toBe(100);
+      expect(pay(['example:pro', 'core:credited'])).toBe(100);
+      expect(pay(['core:credited'])).toBe(100);
+    });
+
+    it.each([
+      ['a tag', { tagGrants: [{ tag: 'example', entitlements: ['core:pro'] }] }],
+      ['an implication', { impliedEntitlements: [{ ifHeld: 'core:pro', alsoGrant: ['example:a'] }] }],
+      [
+        'an implication to it',
+        {
+          internalStaffEntitlements: ['example:a'],
+          impliedEntitlements: [{ ifHeld: 'example:a', alsoGrant: ['core:addon'] }],
+        },
+      ],
+    ])('still drops %s naming a key core also grants', async (_case, contributed) => {
+      const { merged, reasons } = await mergeOver(contributed);
+
+      expect(merged.impliedRows).toEqual(CREDIT_ONLY.impliedRows);
+      expect(merged.tagGrantRows).toEqual(CREDIT_ONLY.tagGrantRows);
+      expect(merged.signupCreditRows).toEqual(CREDIT_ONLY.signupCreditRows);
+      expect(reasons).toHaveLength(1);
+    });
+  });
+
   describe('against the real built-in tag names', () => {
     const loadReal = async () => {
       const registry = await loadRegistry({});
@@ -348,7 +412,6 @@ describe('mergeContributedRows', () => {
         [
           ...rows.tagGrantRows.flatMap(row => row.entitlements),
           ...rows.impliedRows.flatMap(row => [row.ifHeld, ...row.alsoGrant]),
-          ...rows.signupCreditRows.map(row => row.key),
           ...rows.internalStaffEntitlements,
         ].map(key => key.toLowerCase())
       );

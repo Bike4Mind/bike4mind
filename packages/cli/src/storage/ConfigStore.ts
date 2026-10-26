@@ -66,6 +66,7 @@ const SandboxConfigSchema = z
     network: SandboxNetworkSchema.default(DEFAULT_SANDBOX_CONFIG.network),
     excludedCommands: z.array(z.string()).default(DEFAULT_SANDBOX_CONFIG.excludedCommands),
     allowUnsandboxedCommands: z.boolean().default(true),
+    allowContainerSockets: z.boolean().default(false),
     platform: SandboxPlatformSchema.default(DEFAULT_SANDBOX_CONFIG.platform),
   })
   .refine(
@@ -102,6 +103,7 @@ const PartialSandboxConfigSchema = z
       .optional(),
     excludedCommands: z.array(z.string()).optional(),
     allowUnsandboxedCommands: z.boolean().optional(),
+    allowContainerSockets: z.boolean().optional(),
     platform: SandboxPlatformSchema.optional(),
   })
   .optional();
@@ -654,7 +656,8 @@ function isWithin(root: string, target: string): boolean {
  * only ever TIGHTEN it, never loosen it. A repo layer may enable the sandbox,
  * raise the mode (disabled < auto-allow < permissions) but never select
  * auto-allow itself, add denied paths, narrow read paths / domains / excluded
- * commands, turn the network filter on, and force allowUnsandboxedCommands off.
+ * commands, turn the network filter on, and force allowUnsandboxedCommands and
+ * allowContainerSockets off.
  * Every loosening value is ignored with a warning. `platform` is ignored.
  */
 function tightenSandbox(base: SandboxConfig | undefined, repo: PartialSandboxConfig | undefined): SandboxConfig {
@@ -699,6 +702,9 @@ function tightenSandbox(base: SandboxConfig | undefined, repo: PartialSandboxCon
 
   if (repo.allowUnsandboxedCommands === false) result.allowUnsandboxedCommands = false;
   else if (repo.allowUnsandboxedCommands === true && !b.allowUnsandboxedCommands) warn('allowUnsandboxedCommands=true');
+
+  if (repo.allowContainerSockets === false) result.allowContainerSockets = false;
+  else if (repo.allowContainerSockets === true && !b.allowContainerSockets) warn('allowContainerSockets=true');
 
   // Keep enabled/mode consistent for the schema refine: an enabled sandbox needs
   // a non-disabled mode (default to the strictest), and a disabled one needs

@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { refuseBlockedRotatedSession } from '@server/auth/refreshAccountGate';
+import { API_KEY_ACCESS_DENIED_MESSAGE, assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
 
 const RefreshRequestSchema = z.object({
@@ -16,6 +18,13 @@ const RefreshRequestSchema = z.object({
   refresh_token: z.string(),
   client_id: z.enum(OAUTH_DEVICE_CLIENT_IDS),
 });
+
+function oauthRefreshErrorCode(error: HTTPError): string {
+  if (error.statusCode >= 500) return 'temporarily_unavailable';
+  if (error.statusCode === 429) return 'slow_down';
+  if (error.statusCode === 403 && error.message === API_KEY_ACCESS_DENIED_MESSAGE) return 'subscription_required';
+  return 'invalid_request';
+}
 
 const handler = baseApi({ auth: false })
   .use(
@@ -25,7 +34,7 @@ const handler = baseApi({ auth: false })
     })
   )
   .post(async (req, res) => {
-    const { refresh_token } = RefreshRequestSchema.parse(req.body);
+    const { refresh_token, client_id } = RefreshRequestSchema.parse(req.body);
 
     const signAccessToken = (id: string, tokenVersion: number, extra?: Record<string, unknown>) =>
       authTokenGenerator.signAccessToken(id, tokenVersion, extra);
@@ -33,6 +42,17 @@ const handler = baseApi({ auth: false })
     try {
       // New session-store path: rotate the opaque refresh token against the AuthSession store.
       if (authSessionService.isOpaqueRefreshToken(refresh_token)) {
+        // Validate trusted session ownership and access before rotation changes the secret.
+        // Refusals and transient lookup errors must leave the caller's refresh token usable.
+        try {
+          const parsed = authSessionService.parseRefreshToken(refresh_token);
+          const session = parsed ? await authSessionRepository.findBySid(parsed.sid) : null;
+          const user = session ? await userRepository.findById(session.userId) : null;
+          if (!user) throw new UnauthorizedError('Invalid refresh token');
+          await assertApiKeyAccessAllowed(user, undefined, req);
+        } catch (error) {
+          throw toApiKeyAuthError(error);
+        }
         const rotated = await authSessionService.rotateSession(refresh_token, {
           db: {
             authSessions: authSessionRepository,
@@ -74,6 +94,11 @@ const handler = baseApi({ auth: false })
       }
       // Refused before a session is minted, so nothing is left to revoke.
       assertAccountStateUsable(user);
+      try {
+        await assertApiKeyAccessAllowed(user, undefined, req);
+      } catch (error) {
+        throw toApiKeyAuthError(error);
+      }
 
       // Legacy JWT refresh token: lazily migrate onto a session. impersonatedBy is re-stamped so
       // an impersonated session keeps the marker across refresh (logout.ts's guard depends on it).
@@ -81,6 +106,7 @@ const handler = baseApi({ auth: false })
         user.id,
         {
           createdVia: 'legacy-migration',
+          clientId: client_id,
           tokenVersion: user.tokenVersion ?? 0,
           impersonatedBy: payload.impersonatedBy,
           device: buildSessionDevice(req),
@@ -105,7 +131,7 @@ const handler = baseApi({ auth: false })
       // exact logout that choosing 429 was meant to avoid.
       if (error instanceof HTTPError && error.statusCode !== 401) {
         return res.status(error.statusCode).json({
-          error: error.statusCode === 429 ? 'slow_down' : 'invalid_request',
+          error: oauthRefreshErrorCode(error),
           error_description: error.message,
         });
       }

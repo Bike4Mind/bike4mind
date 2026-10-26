@@ -4168,8 +4168,8 @@ FabFileSchema.index({ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 // the prefix arm both bound on it, and some callers filter on nothing else.
 //
 // Pre-built by 20260907000000_ensure-fabfile-tagname-filename-index rather than left to autoIndex:
-// prod runs DocumentDB, where the build takes a foreground lock, and autoIndex would take it lazily
-// on a cold boot of whichever Lambda touches this collection first.
+// autoIndex builds are fire-and-forget (a failure is silent) and would start lazily on a cold boot
+// of whichever Lambda touches this collection first.
 FabFileSchema.index({ 'tags.name': 1, fileName: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
@@ -4235,8 +4235,8 @@ FabFileSchema.index(
 
 // Public v1 file list (listOwnedBeforeId): equality on the owned/live/unarchived filter, then the
 // `_id` keyset (scanned in reverse for newest first), so each page streams in order instead of sorting the user's whole file set.
-// Pre-built by 20260921235994_ensure-fabfile-owned-keyset-index rather than left to autoIndex: prod
-// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+// Pre-built by 20260921235994_ensure-fabfile-owned-keyset-index rather than left to autoIndex: the
+// build is fire-and-forget and would start on a cold Lambda boot, on a user request.
 FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
 
 // Serves both moderation rescue sweep queries (moderationRescueSweep.ts): the stale-'pending'
