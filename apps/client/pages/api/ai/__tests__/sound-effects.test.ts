@@ -448,6 +448,7 @@ describe('POST /api/ai/sound-effects', () => {
           prompt: 'rain',
           durationSeconds: 3,
           promptInfluence: 0.6,
+          request: expect.objectContaining({ text: 'rain', durationSeconds: 3, promptInfluence: 0.6 }),
         },
       },
       expect.anything()

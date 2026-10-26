@@ -511,7 +511,14 @@ describe('POST /api/ai/tts', () => {
         userId: 'u1',
         bytes: expect.any(Buffer),
         contentType: 'audio/mpeg',
-        generation: { generator: 'speech', provider: 'openai', modelId: 'tts-1', prompt: 'hello', format: 'mp3' },
+        generation: {
+          generator: 'speech',
+          provider: 'openai',
+          modelId: 'tts-1',
+          prompt: 'hello',
+          format: 'mp3',
+          request: expect.objectContaining({ provider: 'openai', text: 'hello' }),
+        },
       },
       expect.anything()
     );
