@@ -45,7 +45,7 @@ const resources = vi.hoisted(() => {
   function output<T>(value: T): { arn?: T; apply: <Result>(callback: (input: T) => Result) => Result } {
     return { apply: callback => callback(value) };
   }
-  const resource = vi.fn(function (name: string, args: Record<string, unknown>) {
+  const resource = vi.fn(function (name: string, args: Record<string, unknown>, _options?: Record<string, unknown>) {
     return { ...args, name: args.name ?? name, arn: output(`${name}-arn`), url: `${name}-url` };
   });
   const lookup = vi.fn((_args: Record<string, unknown>, _options: unknown) => ({ arn: output('looked-up-acl-arn') }));
