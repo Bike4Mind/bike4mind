@@ -15,9 +15,10 @@ export type ScoredToolCall = {
  * that ran is. Failed calls never count: the model sees the error and can recover,
  * while a human answering the gate cannot fix a broken tool.
  *
- * Shared by both gate sites so they cannot drift: the web executor's per-iteration
- * gate (`evaluateConfidenceGate` in apps/workers) and the approval-replay gate
- * (`ReActAgent.takeIterationConfidence`).
+ * Shared by both sites that decide the gate so they cannot drift: the web executor's
+ * per-iteration gate (`evaluateConfidenceGate` in apps/workers) and the approval-replay
+ * gate (`ReActAgent.takeIterationConfidence`). The raw average `ReActAgent` passes to
+ * `options.confidenceGate` is not this rule.
  */
 export function usableEvidenceConfidence(calls: readonly ScoredToolCall[]): number | null {
   let strongest: number | null = null;

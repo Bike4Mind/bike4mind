@@ -2037,9 +2037,9 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   }
 
   /**
-   * Read and clear the confidence of every observation pushed since the
+   * Read and clear the iteration confidence of the observations pushed since the
    * last call (or the last `runIteration()`, whichever is more recent) - `null`
-   * if nothing has been scored yet.
+   * if nothing has been scored yet or every scored call failed.
    *
    * Exists for the approval-replay path: `executeGatedToolCall` pushes onto
    * `iterationConfidences` the same way an ordinary tool call does, but that
