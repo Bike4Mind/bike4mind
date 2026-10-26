@@ -33,7 +33,7 @@ env:
 
 jobs:
   e2e-run:
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_STATIC || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: ${{ inputs.suite_name && format('E2E {0} Tests', inputs.suite_name) || 'E2E Tests' }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     permissions:
