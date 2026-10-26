@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
 import type { ICompletionOptions, ICompletionResponseChunk, IMessage, ModelInfo } from '@bike4mind/common';
 import type { CompletionInfo } from '../types';
@@ -162,6 +163,18 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     expect(message).toMatch(/EMPTY response/i);
     expect(message).not.toMatch(/stream timeout/i);
     expect(message).not.toContain('without a terminal event');
+  });
+
+  // The retry and fallback downstream log the failure at WARN, so this backend log is the ERROR
+  // signal a persistent misroute (every call empty) still raises.
+  it('logs a stalled empty stream at ERROR before it is retried', async () => {
+    const error = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => {});
+
+    await run(withBody(new TerminalSignallingBackend(), streamBody([]))).catch(() => {});
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0][1]).toMatchObject({ message: expect.stringContaining('EMPTY response') });
+    error.mockRestore();
   });
 
   it('does not report an aborted empty stream as an EMPTY response', async () => {
