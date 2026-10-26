@@ -8,7 +8,7 @@ import {
   ServiceUnavailableError,
   UnauthorizedError,
 } from '@bike4mind/common';
-import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
+import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { logEvent } from '@server/utils/analyticsLog';
 

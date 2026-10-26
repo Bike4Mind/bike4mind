@@ -55,7 +55,7 @@ import { runDataLakeSlackCommand, formatBareDataLakeMentionHint } from '@server/
 import { buildSlackLakeIngestDeps } from '@server/slack/dataLakeIngestDeps';
 import { logEvent } from '@server/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';

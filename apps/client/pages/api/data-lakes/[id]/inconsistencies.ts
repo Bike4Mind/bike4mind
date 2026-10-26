@@ -22,7 +22,7 @@ import {
 } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';

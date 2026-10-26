@@ -98,7 +98,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
       modelId: 'test-model',

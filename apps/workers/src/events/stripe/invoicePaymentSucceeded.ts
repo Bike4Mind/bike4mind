@@ -1,6 +1,6 @@
 import { userRepository } from '@bike4mind/database';
-import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
-import { SubscriptionMetadata, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
+import { SubscriptionMetadata, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   handleUserSubscriptionInvoice,
   handleOrganizationSubscriptionInvoice,

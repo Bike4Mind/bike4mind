@@ -3,7 +3,7 @@ import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/e
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import pLimit from 'p-limit';
 import {

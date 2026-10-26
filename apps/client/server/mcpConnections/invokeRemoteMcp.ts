@@ -32,7 +32,7 @@ import { cleanMcpToolText } from '@bike4mind/server-utils/mcpConnections/toolDis
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { Resource } from 'sst';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import {
   CircuitBreakerError,
   flushBreakerMetrics,
