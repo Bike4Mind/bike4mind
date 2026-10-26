@@ -205,7 +205,7 @@ const UsersTab: React.FC = () => {
       {/* Mounted only while open, so each run starts from a clean form. */}
       {bulkAbuseOpen && (
         <BulkAbuseResponseModal
-          selectedUserIds={[...selectedUserIds]}
+          selectedUserIds={displayMode === 'slim' ? [...selectedUserIds] : []}
           onClose={() => setBulkAbuseOpen(false)}
           onExecuted={clearSelection}
         />

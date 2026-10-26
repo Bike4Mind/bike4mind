@@ -219,24 +219,29 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
               </FormControl>
             )}
 
-            <FormControl>
-              <FormLabel>Actions</FormLabel>
-              <Stack spacing={0.5}>
-                {(Object.keys(ACTION_LABELS) as BulkAbuseAction[]).map(action => (
-                  <Checkbox
-                    key={action}
-                    label={ACTION_LABELS[action]}
-                    checked={effectiveActions[action]}
-                    disabled={executeMutation.isPending || (action === 'revokeApiKeys' && actions.ban)}
-                    onChange={event => {
-                      setActions(current => ({ ...current, [action]: event.target.checked }));
-                      resetPreview();
-                    }}
-                    slotProps={{ input: { 'data-testid': `bulk-abuse-action-${action}-checkbox` } }}
-                  />
-                ))}
-              </Stack>
-            </FormControl>
+            <Stack component="fieldset" spacing={0.5} sx={{ border: 0, p: 0, m: 0 }}>
+              <Typography component="legend" level="title-sm">
+                Actions
+              </Typography>
+              {(Object.keys(ACTION_LABELS) as BulkAbuseAction[]).map(action => (
+                <Checkbox
+                  key={action}
+                  label={ACTION_LABELS[action]}
+                  checked={effectiveActions[action]}
+                  disabled={executeMutation.isPending || (action === 'revokeApiKeys' && actions.ban)}
+                  onChange={event => {
+                    setActions(current => ({ ...current, [action]: event.target.checked }));
+                    resetPreview();
+                  }}
+                  slotProps={{
+                    input: {
+                      'data-testid': `bulk-abuse-action-${action}-checkbox`,
+                      'aria-label': ACTION_LABELS[action],
+                    },
+                  }}
+                />
+              ))}
+            </Stack>
           </>
         )}
 
@@ -284,8 +289,10 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
                 {stage.kind !== 'previewed'
                   ? 'Apply'
                   : stage.preview.includedCount > 0
-                    ? `Apply to ${stage.preview.includedCount} users`
-                    : 'Block domain only'}
+                    ? `Apply to ${stage.preview.includedCount} ${stage.preview.includedCount === 1 ? 'user' : 'users'}`
+                    : stage.request.target.kind === 'domain'
+                      ? 'Block domain only'
+                      : 'No eligible users'}
               </Button>
             </>
           )}

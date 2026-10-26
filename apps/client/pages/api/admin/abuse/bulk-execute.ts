@@ -44,8 +44,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
     }
 
     // Block the domain first, so no new account can sign up on it while the cohort is processed.
-    const blockedDomain = actions.ban ? domain : null;
-    if (blockedDomain) await addBlockedEmailDomain(req, blockedDomain);
+    const blockedDomain = actions.ban && domain && (await addBlockedEmailDomain(req, domain)) ? domain : null;
 
     const results = await abuseService.executeBulkAbuse(
       cohort.included,

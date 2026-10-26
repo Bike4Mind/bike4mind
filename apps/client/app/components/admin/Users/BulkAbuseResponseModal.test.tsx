@@ -362,6 +362,38 @@ describe('BulkAbuseResponseModal', () => {
     );
   });
 
+  it('names each action checkbox independently', () => {
+    renderModal();
+
+    expect(screen.getByTestId('bulk-abuse-action-ban-checkbox')).toHaveAccessibleName('Ban accounts');
+    expect(screen.getByTestId('bulk-abuse-action-revokeApiKeys-checkbox')).toHaveAccessibleName('Revoke API keys');
+    expect(screen.getByTestId('bulk-abuse-action-revokeSessions-checkbox')).toHaveAccessibleName(
+      'Sign out everywhere (sessions and trusted devices)'
+    );
+    expect(screen.getByTestId('bulk-abuse-action-clawbackFreeCredits-checkbox')).toHaveAccessibleName(
+      'Claw back the unspent signup grant'
+    );
+  });
+
+  it('uses singular wording for one included user', () => {
+    resolvePreviewWith(preview({ includedCount: 1, blocksDomain: null }));
+    renderModal([USER_ID]);
+
+    fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
+
+    expect(screen.getByTestId('bulk-abuse-execute-btn')).toHaveTextContent(/^Apply to 1 user$/);
+  });
+
+  it('does not offer a domain block for a selection with no eligible users', () => {
+    resolvePreviewWith(preview({ includedCount: 0, sample: [], blocksDomain: null }));
+    renderModal([USER_ID]);
+
+    fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
+
+    expect(screen.getByTestId('bulk-abuse-execute-btn')).toHaveTextContent('No eligible users');
+    expect(screen.getByTestId('bulk-abuse-execute-btn')).toBeDisabled();
+  });
+
   it('can still apply the domain block when every user in the batch was skipped', () => {
     resolvePreviewWith(preview({ includedCount: 0, sample: [] }));
     renderModal();

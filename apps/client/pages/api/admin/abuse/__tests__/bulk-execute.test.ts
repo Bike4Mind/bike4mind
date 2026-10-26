@@ -180,6 +180,25 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
     expect(res._getJSONData()).toMatchObject({ blockedDomain: 'kashre.com' });
   });
 
+  it('does not report an existing domain block as newly added', async () => {
+    const target = { kind: 'domain', domain: 'kashre.com' } as const;
+    mockAddBlockedDomain.mockResolvedValueOnce(false);
+
+    const res = await call(
+      validBody({ target, previewToken: signBulkAbusePreviewToken(ADMIN.id, fingerprintFor(target, [USER_ID]), BOUND) })
+    );
+
+    expect(mockExecute).toHaveBeenCalled();
+    expect(res._getJSONData()).toMatchObject({ blockedDomain: null, succeededCount: 1 });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        target: expect.objectContaining({ displayName: 'kashre.com' }),
+        details: expect.objectContaining({ blockedDomain: null }),
+      })
+    );
+  });
+
   it('refuses before actioning any user when the domain block fails', async () => {
     const target = { kind: 'domain', domain: 'kashre.com' } as const;
     mockAddBlockedDomain.mockRejectedValueOnce(new Error('tx'));
@@ -197,13 +216,16 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
-  it.each(['github.io', 'co.uk', 'gmail.com', 'outlook.com', 'fastmail.com'])('refuses %s as a domain target', async domain => {
-    const target = { kind: 'domain', domain };
-    await expect(call(validBody({ target }))).rejects.toMatchObject({ statusCode: 400 });
-    expect(mockResolve).not.toHaveBeenCalled();
-    expect(mockAddBlockedDomain).not.toHaveBeenCalled();
-    expect(mockExecute).not.toHaveBeenCalled();
-  });
+  it.each(['github.io', 'co.uk', 'gmail.com', 'outlook.com', 'fastmail.com'])(
+    'refuses %s as a domain target',
+    async domain => {
+      const target = { kind: 'domain', domain };
+      await expect(call(validBody({ target }))).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockResolve).not.toHaveBeenCalled();
+      expect(mockAddBlockedDomain).not.toHaveBeenCalled();
+      expect(mockExecute).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not touch the blocklist for a domain target without the ban action', async () => {
     const target = { kind: 'domain', domain: 'kashre.com' } as const;
