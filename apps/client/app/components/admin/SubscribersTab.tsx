@@ -89,6 +89,7 @@ const GenerateInviteModal = ({ open, onClose, subscriber }: GenerateInviteModalP
   const [startingStorage, setStartingStorage] = useState(1000);
   const [emailBody, setEmailBody] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [inviteIssued, setInviteIssued] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -128,6 +129,7 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
 
       // Leave the modal open so the admin can copy the code from the message.
       if (result?.emailSent === false) {
+        setInviteIssued(true);
         setError(result.message);
         return;
       }
@@ -149,6 +151,7 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
 
   const handleClose = () => {
     onClose();
+    setInviteIssued(false);
     setError(null);
     setSuccess(null);
     setEmailBody('');
@@ -225,7 +228,12 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
             <Button variant="outlined" onClick={handleClose} disabled={isGenerating}>
               Cancel
             </Button>
-            <Button onClick={handleSubmit} loading={isGenerating} startDecorator={<SendIcon />} disabled={isGenerating}>
+            <Button
+              onClick={handleSubmit}
+              loading={isGenerating}
+              startDecorator={<SendIcon />}
+              disabled={isGenerating || inviteIssued}
+            >
               Generate & Send Invite
             </Button>
           </Box>
