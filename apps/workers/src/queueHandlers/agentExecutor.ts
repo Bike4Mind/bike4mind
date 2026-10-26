@@ -193,6 +193,7 @@ import {
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
+import { createSubagentTextDeltaSender } from './agentExecutor.subagentTextDelta';
 import {
   aggregationWakeStartIteration as wakeStartIterationOf,
   aggregationGraceReasonOf,
@@ -1445,6 +1446,12 @@ async function processExecution(
     const approvedTools = [...(execution.approvedTools ?? [])];
     const deniedTools = [...(execution.deniedTools ?? [])];
 
+    // MAX_STEP_CONTENT keeps one frame under the 128KB API Gateway limit, past which
+    // `createWsSender` would silently drop it.
+    const subagentTextDeltas = createSubagentTextDeltaSender(
+      payload => sendWs('subagent_text_delta', { executionId, ...payload }),
+      MAX_STEP_CONTENT
+    );
     const subagentTracker: ServerSubagentTracker = {
       onStart: async info => {
         // Background children are treated as TOP-LEVEL for cap/billing purposes:
@@ -1563,6 +1570,7 @@ async function processExecution(
         return child.id;
       },
       onStep: async ({ childExecutionId, agentName, step, iteration }) => {
+        await subagentTextDeltas.flush(childExecutionId);
         const truncatedStep =
           step.content.length > MAX_STEP_CONTENT
             ? { ...step, content: step.content.slice(0, MAX_STEP_CONTENT) + '\n\n...(truncated)' }
@@ -1575,29 +1583,8 @@ async function processExecution(
           step: truncatedStep,
         });
       },
-      // Forward streaming token deltas so the parent UI renders partial subagent
-      // responses live within each iteration. Fire-and-forget so a slow
-      // WS send cannot stall the agent loop - the orchestrator already wraps
-      // this in .catch(), but we also avoid awaiting here to keep the LLM
-      // callback non-blocking.
-      //
-      // Defense-in-depth: split deltas larger than MAX_STEP_CONTENT into
-      // multiple frames so a pathological chunk (e.g., a buffering adapter
-      // coalescing many tokens, or a single large code block) cannot exceed
-      // the 128KB API Gateway frame limit and get silently dropped by
-      // `createWsSender`. Reuses the same ceiling `onStep` enforces.
-      onTextDelta: async ({ childExecutionId, agentName, iteration, delta }) => {
-        for (let offset = 0; offset < delta.length; offset += MAX_STEP_CONTENT) {
-          const chunk = delta.slice(offset, offset + MAX_STEP_CONTENT);
-          await sendWs('subagent_text_delta', {
-            executionId,
-            childExecutionId,
-            agentName,
-            iteration,
-            delta: chunk,
-          });
-        }
-      },
+      // Ordered, chunked forwarding lives in agentExecutor.subagentTextDelta.ts.
+      onTextDelta: subagentTextDeltas.send,
       onChildProgress: async ({ childExecutionId, status }) => {
         await sendWs('subagent_progress', {
           executionId,
@@ -1638,6 +1625,7 @@ async function processExecution(
         if (credits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, credits);
         }
+        await subagentTextDeltas.flush(childExecutionId);
         await sendWs('subagent_completed', {
           executionId,
           childExecutionId,
@@ -1673,6 +1661,7 @@ async function processExecution(
         if (partialCredits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, partialCredits);
         }
+        await subagentTextDeltas.flush(childExecutionId);
         await sendWs('subagent_failed', {
           executionId,
           childExecutionId,
