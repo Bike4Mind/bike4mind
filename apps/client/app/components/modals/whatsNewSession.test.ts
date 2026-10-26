@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { markWhatsNewShown, resetWhatsNewShownForTests, wasWhatsNewShown } from './whatsNewSession';
+import {
+  markGearsDiscoveryShown,
+  markWhatsNewShown,
+  resetWhatsNewShownForTests,
+  wasGearsDiscoveryShown,
+  wasWhatsNewShown,
+} from './whatsNewSession';
 
 describe('whatsNewSession', () => {
   beforeEach(() => resetWhatsNewShownForTests());
@@ -8,5 +14,12 @@ describe('whatsNewSession', () => {
     expect(wasWhatsNewShown()).toBe(false);
     markWhatsNewShown();
     expect(wasWhatsNewShown()).toBe(true);
+    expect(wasGearsDiscoveryShown()).toBe(false);
+  });
+
+  it('tracks the gears discovery modal separately', () => {
+    markGearsDiscoveryShown();
+    expect(wasGearsDiscoveryShown()).toBe(true);
+    expect(wasWhatsNewShown()).toBe(false);
   });
 });

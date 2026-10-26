@@ -8,7 +8,11 @@ import {
   readDiscoveryState,
   writeDiscoveryState,
 } from '@client/lib/gears/discovery';
-import { markWhatsNewShown, resetWhatsNewShownForTests } from '@client/app/components/modals/whatsNewSession';
+import {
+  markWhatsNewShown,
+  resetWhatsNewShownForTests,
+  wasGearsDiscoveryShown,
+} from '@client/app/components/modals/whatsNewSession';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -98,6 +102,7 @@ describe('useGearsDiscovery', () => {
     expect(result.current.open).toBe(true);
     expect(result.current.gears.map(g => g.key)).toEqual(['models', 'agents', 'websearch']);
     expect(readDiscoveryState('u1')).toEqual({ lastShownAt: Date.now(), dismissed: false, rotation: 3 });
+    expect(wasGearsDiscoveryShown()).toBe(true);
     expect(h.logEvent).toHaveBeenCalledWith({
       type: FirstRunEvents.GEARS_DISCOVERY_SHOWN,
       metadata: { count: 3, keys: 'models,agents,websearch' },

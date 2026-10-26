@@ -14,8 +14,11 @@ export const modalCustomizations = {
         boxShadow: 'none',
         paddingTop: '32px',
         paddingBottom: '24px',
-        paddingInline: '24px',
-        [theme.breakpoints.down('sm')]: { paddingInline: '16px' },
+        // Only the variable switches on phones: a media rule setting padding itself would be emitted after
+        // the dialog's own `sx` and beat a plain `p`/`px` there.
+        '--app-ModalDialog-paddingInline': '24px',
+        [theme.breakpoints.down('sm')]: { '--app-ModalDialog-paddingInline': '16px' },
+        paddingInline: 'var(--app-ModalDialog-paddingInline)',
       }),
     },
   },

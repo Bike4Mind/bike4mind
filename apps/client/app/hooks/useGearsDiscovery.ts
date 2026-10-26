@@ -8,7 +8,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { isAnyModalDialogOpen } from '@client/app/utils/anyDialogOpen';
-import { wasWhatsNewShown } from '@client/app/components/modals/whatsNewSession';
+import { markGearsDiscoveryShown, wasWhatsNewShown } from '@client/app/components/modals/whatsNewSession';
 import {
   DISCOVERY_MAX_CARDS,
   DISCOVERY_RECHECK_MS,
@@ -72,6 +72,7 @@ export function useGearsDiscovery(): GearsDiscovery {
 
     const picked = pickDiscoveryGears(candidates, state.rotation);
     writeDiscoveryState(userId, { ...state, lastShownAt: now, rotation: state.rotation + DISCOVERY_MAX_CARDS });
+    markGearsDiscoveryShown();
     setShown(picked);
     logEvent({
       type: FirstRunEvents.GEARS_DISCOVERY_SHOWN,
