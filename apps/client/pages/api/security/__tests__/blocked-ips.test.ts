@@ -145,6 +145,41 @@ describe('/api/security/blocked-ips - admin gate', () => {
     expect(repo.block).not.toHaveBeenCalled();
   });
 
+  it('POST rejects an IP over 64 characters', async () => {
+    const { req, res } = mocks(ADMIN, { method: 'POST', body: { ip: 'x'.repeat(65) } });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(repo.block).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['repeated query parameters', { query: { ip: ['a', 'b'] } }],
+    ['an operator object in the body', { body: { ip: { $ne: null } } }],
+    ['a missing IP', {}],
+  ])('DELETE rejects %s', async (_label, extra) => {
+    const { req, res } = mocks(ADMIN, { method: 'DELETE', ...extra });
+    await mockRefs.deleteHandler!(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toMatchObject({ error: 'Invalid request', details: expect.any(Array) });
+    expect(repo.unblock).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('DELETE builds the audit entry from the removed document IP', async () => {
+    repo.unblock.mockResolvedValueOnce({ ip: '5.6.7.8', expiresAt: new Date(Date.now() + 3_600_000) });
+    const { req, res } = mocks(ADMIN, { method: 'DELETE', query: { ip: '1.2.3.4' } });
+    await mockRefs.deleteHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(repo.unblock).toHaveBeenCalledWith('1.2.3.4');
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record.mock.calls[0][1]).toMatchObject({
+      target: { kind: 'settings', id: 'blocked-ip:5.6.7.8', displayName: '5.6.7.8' },
+      summary: 'unblocked ip 5.6.7.8',
+      details: { ip: '5.6.7.8' },
+    });
+  });
+
   it('DELETE records security.blocked_ip.removed inside the unblock transaction', async () => {
     const { req, res } = mocks(ADMIN, { method: 'DELETE', query: { ip: '1.2.3.4' } });
     await mockRefs.deleteHandler!(req, res);

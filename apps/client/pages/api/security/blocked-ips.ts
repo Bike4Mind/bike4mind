@@ -12,7 +12,8 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 // Managing the IP blocklist is an administrative security control; every method
 // is restricted to admins.
 
-const BlockSchema = z.object({ ip: z.string().min(1), reason: z.string().max(1000).optional() });
+const BlockSchema = z.object({ ip: z.string().min(1).max(64), reason: z.string().max(1000).optional() });
+const UnblockSchema = BlockSchema.pick({ ip: true });
 
 const handler = baseApi()
   .get(async (req, res) => {
@@ -46,17 +47,17 @@ const handler = baseApi()
     ensureAdmin(req.user?.isAdmin);
     const query = req.query as { ip?: string };
     const body = req.body as { ip?: string } | undefined;
-    const ip = query.ip || body?.ip;
-    if (!ip) return res.status(400).json({ error: 'ip is required' });
+    const parsed = UnblockSchema.safeParse({ ip: query.ip ?? body?.ip });
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     const doc = await withTransaction(async () => {
-      const unblocked = await blockedIPRepository.unblock(ip);
+      const unblocked = await blockedIPRepository.unblock(parsed.data.ip);
       if (unblocked) {
         // unblock() matches on active alone, so a block past its expiry can still be removed here.
         await recordAdminActionFromRequest(req, {
           action: 'security.blocked_ip.removed',
-          target: { kind: 'settings', id: `blocked-ip:${ip}`, displayName: ip },
-          summary: `unblocked ip ${ip}`,
-          details: { ip, expiresAt: unblocked.expiresAt, wasExpired: unblocked.expiresAt <= new Date() },
+          target: { kind: 'settings', id: `blocked-ip:${unblocked.ip}`, displayName: unblocked.ip },
+          summary: `unblocked ip ${unblocked.ip}`,
+          details: { ip: unblocked.ip, expiresAt: unblocked.expiresAt, wasExpired: unblocked.expiresAt <= new Date() },
         });
       }
       return unblocked;
