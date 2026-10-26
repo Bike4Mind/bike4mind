@@ -25,6 +25,10 @@ const handler = nextRouteForContract(getAgentExecutionContract, {
     throw new NotFoundError('Execution not found');
   }
 
+  const answer = trace.answer === null ? null : publicText(trace.answer);
+  const finalText = (content: string): string =>
+    answer !== null && content === trace.answer ? answer : publicText(content);
+
   // Public projection of the internal step shape: the published trace is deliberately
   // narrower than `IAgentStep` (no token usage, no confidence telemetry) so those stay
   // free to change without a breaking API change.
@@ -34,7 +38,7 @@ const handler = nextRouteForContract(getAgentExecutionContract, {
   // steps are reasoning by design and stay raw.
   const steps: AgentExecutionStep[] = trace.steps.map(step => ({
     type: step.type,
-    content: step.type === 'final_answer' ? publicText(step.content) : step.content,
+    content: step.type === 'final_answer' ? finalText(step.content) : step.content,
     ...(step.metadata?.iteration != null ? { iteration: step.metadata.iteration } : {}),
     ...(step.metadata?.toolName ? { tool_name: step.metadata.toolName } : {}),
   }));
@@ -43,7 +47,7 @@ const handler = nextRouteForContract(getAgentExecutionContract, {
     id: trace.id,
     status: trace.status,
     session_id: trace.sessionId,
-    answer: trace.answer === null ? null : publicText(trace.answer),
+    answer,
     error: trace.error,
     steps,
     total_iterations: trace.totalIterations,
