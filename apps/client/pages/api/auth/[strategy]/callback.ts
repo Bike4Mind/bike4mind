@@ -85,7 +85,11 @@ const handler = baseApi({ auth: false })
           // redirect below must never read anything but the whitelisted code.
           // A whitelisted reason is an expected outcome (invite gate, stale or replayed state), so
           // only an unrecognized failure logs at error, the level the alert channel pages on.
-          const reason = resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
+          // passport-oauth2 turns a cancelled consent (`?error=access_denied`) into a code-less fail().
+          const reason =
+            (req.query as { error?: unknown }).error === 'access_denied'
+              ? 'access_denied'
+              : resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
           const logFailure = reason === 'internal' ? console.error : console.warn;
           logFailure('Passport Authenticate User Not Found Info:', info);
           try {
