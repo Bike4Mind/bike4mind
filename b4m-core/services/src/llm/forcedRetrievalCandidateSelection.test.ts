@@ -64,6 +64,14 @@ describe('selectRelevanceCandidates', () => {
     expect(notIndexedCut).toBe(0);
   });
 
+  it('reports the lag-window files that do not fit beside a partial set of hits', () => {
+    const hits = hitFiles(30);
+    const recent = Array.from({ length: 80 }, (_, i) => file(`fresh${String(i).padStart(2, '0')}`, fresh));
+    const { files, notIndexedCut } = selectRelevanceCandidates([...hits, ...recent], hitsFor(hits), NOW, opts);
+    expect(files.map(f => f.id)).toEqual([...hits, ...recent.slice(0, 70)].map(f => f.id));
+    expect(notIndexedCut).toBe(10);
+  });
+
   it('reports the not-yet-indexed files the reserve could not hold, and keeps the top hits', () => {
     const hits = hitFiles(110);
     const freshFiles = Array.from({ length: 15 }, (_, i) => file(`fresh${i}`, fresh));

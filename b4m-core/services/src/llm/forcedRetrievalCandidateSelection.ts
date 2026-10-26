@@ -1,4 +1,8 @@
-import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
+import {
+  isVectorSearchReady,
+  VECTOR_SEARCH_READY_LAG_MS,
+  type VectorSearchReadinessFile,
+} from '../dataLakeService/vectorSearchEligibility';
 
 /**
  * How forced retrieval chose the files whose chunks it scores this turn:
@@ -51,8 +55,8 @@ export function selectRelevanceCandidates<T extends VectorSearchReadinessFile>(
   { cap, notIndexedReserve }: { cap: number; notIndexedReserve: number }
 ): { files: T[]; notIndexedCut: number } {
   const { withHit, notIndexed, rankedOutside } = splitByRelevanceTier(files, hits, now);
-  const recent = notIndexed.filter(isStampedWithinLag);
-  const unstamped = notIndexed.filter(file => !isStampedWithinLag(file));
+  const recent = notIndexed.filter(file => isStampedWithinLag(file, now));
+  const unstamped = notIndexed.filter(file => !isStampedWithinLag(file, now));
   const hitSlots = Math.max(0, cap - Math.min(recent.length, notIndexedReserve));
   const ordered = [
     ...withHit.slice(0, hitSlots),
@@ -66,11 +70,10 @@ export function selectRelevanceCandidates<T extends VectorSearchReadinessFile>(
 }
 
 /** Stamped, but not yet old enough for mongot to be trusted to have indexed it. */
-function isStampedWithinLag(file: VectorSearchReadinessFile): boolean {
-  return (
-    Boolean(file.chunkEmbeddingModelStampedAt) &&
-    Number.isFinite(new Date(file.chunkEmbeddingModelStampedAt!).getTime())
-  );
+function isStampedWithinLag(file: VectorSearchReadinessFile, now: Date): boolean {
+  if (!file.chunkEmbeddingModelStampedAt) return false;
+  const stampedAt = new Date(file.chunkEmbeddingModelStampedAt).getTime();
+  return Number.isFinite(stampedAt) && now.getTime() - stampedAt < VECTOR_SEARCH_READY_LAG_MS;
 }
 
 function splitByRelevanceTier<T extends VectorSearchReadinessFile>(files: T[], hits: AnnChunkHit[], now: Date) {
