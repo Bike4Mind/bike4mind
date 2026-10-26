@@ -131,6 +131,10 @@ function nextEscalationLevel(latest: LatestBlock | null, lookbackStart: Date, la
  *
  * Only failures after the IP's previous block ended count, so an admin unblock, or a block that
  * simply expired, is not undone by the rows that caused it. IPs that are blocked right now are skipped.
+ *
+ * Counts and blocks raw addresses, unlike oauthIpRateLimit which buckets IPv6 by /64 (ipBucket): a
+ * client rotating addresses inside its /64 never reaches the threshold here and is capped only by
+ * the limiter. Keying on ipBucket would also need checkBlockedIP to match buckets for every caller.
  */
 export async function runOauthAbuseAutoBlock(
   options: { now?: Date; deps?: Partial<OauthAbuseAutoBlockDeps> } = {}
