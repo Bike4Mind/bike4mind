@@ -46,6 +46,7 @@ describe('ToolCallList', () => {
     it.each([
       [{ kind: 'rule', rule: 'Bash(rm:*)' } as const, 'Denied by rule Bash(rm:*)'],
       [{ kind: 'chat-allowance' } as const, 'Denied in this chat'],
+      [{ kind: 'mode', mode: 'auto' } as const, 'Denied by the approval mode'],
       [{ kind: 'user', answer: 'deny' } as const, 'Declined by you'],
       [{ kind: 'user', answer: 'redirect', option: 'Start a session' } as const, 'Redirected by you - Start a session'],
       [{ kind: 'system', reason: 'stopped' } as const, 'Not run - reply stopped before approval'],

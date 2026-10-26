@@ -1,5 +1,4 @@
 import type { ChatApprovalSystemReason, ChatToolApproval } from '@shared/chat';
-import { APPROVAL_MODE_OPTIONS } from './approvalModes';
 
 const CLOSED_REASON: Record<Exclude<ChatApprovalSystemReason, 'error'>, string> = {
   stopped: 'Not run - reply stopped before approval',
@@ -25,10 +24,9 @@ export function describeApproval(approval: ChatToolApproval): string | null {
       return `Denied by rule ${decidedBy.rule}`;
     case 'chat-allowance':
       return 'Denied in this chat';
-    case 'mode': {
-      const label = APPROVAL_MODE_OPTIONS.find(option => option.mode === decidedBy.mode)?.label ?? decidedBy.mode;
-      return `Denied - ${label}`;
-    }
+    case 'mode':
+      // A mode decision is only ever recorded as allowed today.
+      return 'Denied by the approval mode';
     case 'system':
       return decidedBy.reason === 'error'
         ? `Blocked${decidedBy.detail ? ` - ${decidedBy.detail}` : ''}`
