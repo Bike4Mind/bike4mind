@@ -1392,9 +1392,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
     let preprocessedContent = cleanReply;
     if (isStreamingArtifact) {
-      const artifactIndex = preprocessedContent.indexOf('<artifact');
+      const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
       if (artifactIndex !== -1) {
-        preprocessedContent = preprocessedContent.substring(0, artifactIndex).trim();
+        preprocessedContent = preprocessedContent.substring(0, artifactIndex).trimEnd();
       }
     } else if (isTruncatedArtifact) {
       preprocessedContent = repairTruncatedArtifact(preprocessedContent);
@@ -1908,9 +1908,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {(chessBoard || nonChessArtifacts.length > 0) && (
         <Stack spacing={2} sx={{ mt: 3, mb: 1 }}>
           {chessBoard}
-          {nonChessArtifacts.map((artifact, index) => (
+          {nonChessArtifacts.map(artifact => (
             <ArtifactRenderer
-              key={`${artifact.type}_${artifact.identifier}_${index}`}
+              key={`${artifact.type}_${artifact.identifier}_${artifact.startIndex}`}
               artifact={artifact}
               // The full parse's index, chess included, which is what persistence numbers ids by.
               index={artifacts.indexOf(artifact)}

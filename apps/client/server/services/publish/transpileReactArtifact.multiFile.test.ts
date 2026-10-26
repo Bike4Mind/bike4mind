@@ -21,7 +21,7 @@ function inlineBootstrap(html: string): string {
 }
 
 /** Runs the bootstrap where string code generation is disabled, so any eval path throws. */
-function renderInert(html: string): string {
+function renderInert(html: string, globals: Record<string, unknown> = {}): string {
   let rendered: unknown = null;
   const React = {
     createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]) => ({
@@ -44,6 +44,7 @@ function renderInert(html: string): string {
     appendChild: (el: { textContent: string }) => (root.textContent = el.textContent),
   };
   const window = {
+    ...globals,
     React,
     ReactDOM: { createRoot: () => ({ render: (el: unknown) => (rendered = el) }) },
   };
@@ -397,5 +398,139 @@ describe('package and side-effect import text outside import statements', () => 
       files: { Setup: `globalThis.__setup = 1;` },
     });
     expect(renderInert(indexHtml)).toBe('<b>x</b>');
+  });
+});
+
+describe('runtime module references', () => {
+  it.each(["export { sum } from 'lodash';", "export const sum = require('lodash').sum;"])(
+    'loads the supported package used by a sibling: %s',
+    async source => {
+      const { indexHtml } = await buildReactArtifactBundle({
+        source: "import { sum } from './Helpers'; export default function App() { return <p>{sum([1, 2])}</p>; }",
+        title: 'App',
+        files: { Helpers: source },
+      });
+      expect(indexHtml).toContain('lodash');
+      expect(indexHtml).toContain('"lodash":window._');
+      expect(
+        renderInert(indexHtml, { _: { sum: (values: number[]) => values.reduce((total, value) => total + value, 0) } })
+      ).toBe('<p>3</p>');
+    }
+  );
+
+  it.each(["export { sum } from 'lodash-es';", "export const sum = require('lodash-es').sum;"])(
+    'rejects an unsupported runtime package in a sibling: %s',
+    async source => {
+      await expect(
+        buildReactArtifactBundle({
+          source: "import { sum } from './Helpers'; export default function App() { return <p>{sum([1, 2])}</p>; }",
+          title: 'App',
+          files: { Helpers: source },
+        })
+      ).rejects.toThrow(new UnsupportedReactDependencyError('lodash-es').message);
+    }
+  );
+
+  it.each(["import('./Panel')", "import('lodash')", 'import(target)'])(
+    'rejects a dynamic import instead of publishing an unresolved browser load: %s',
+    async expression => {
+      await expect(
+        buildReactArtifactBundle({
+          source: `const target = './Panel'; const load = () => ${expression}; export default function App() { return <p>App</p>; }`,
+          title: 'App',
+          files: { Panel: 'export default function Panel() { return <p>Panel</p>; }' },
+        })
+      ).rejects.toThrow('Dynamic imports are not supported for publish. Use a static import instead.');
+    }
+  );
+});
+
+describe('import text remains user content', () => {
+  it.each([
+    `const label = "import X from 'lodash-es'";`,
+    "const label = `import X from 'lodash-es'`;",
+    `const label = "import type X from 'lodash-es'";`,
+  ])('preserves the exact visible string: %s', async body => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      source: `${body} export default function App() { return <p>{label}</p>; }`,
+      title: 'App',
+    });
+    const expected = body.includes('import type') ? "import type X from 'lodash-es'" : "import X from 'lodash-es'";
+    expect(renderInert(indexHtml)).toBe(`<p>${expected}</p>`);
+  });
+
+  it('preserves import text in JSX and in a sibling while still rewriting its real package import', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      source: "import Panel from './Panel'; export default function App() { return <Panel/>; }",
+      title: 'App',
+      files: {
+        Panel: `import { sum } from 'lodash'; export default function Panel() { return <p>import X from 'lodash-es' {sum([1, 2])}</p>; }`,
+      },
+    });
+    expect(
+      renderInert(indexHtml, { _: { sum: (values: number[]) => values.reduce((total, value) => total + value, 0) } })
+    ).toBe("<p>import X from 'lodash-es' 3</p>");
+  });
+});
+
+describe('same-line React imports', () => {
+  it.each(["import React from 'react';", "import { useState } from 'react';"])(
+    'does not comment out the following entry: %s',
+    async reactImport => {
+      const { indexHtml } = await buildReactArtifactBundle({
+        source: `${reactImport} export default function App() { return <p>ok</p>; }`,
+        title: 'App',
+      });
+      expect(renderInert(indexHtml)).toBe('<p>ok</p>');
+    }
+  );
+
+  it('keeps the following sibling import reachable', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      source:
+        "import React from 'react'; import Panel from './Panel'; export default function App() { return <Panel/>; }",
+      title: 'App',
+      files: { Panel: "import { useState } from 'react'; export default function Panel() { return <p>ok</p>; }" },
+    });
+    expect(renderInert(indexHtml)).toBe('<p>ok</p>');
+  });
+});
+
+describe('local require bindings', () => {
+  it.each([
+    "const label = (() => { function require(value) { return value; } return require('hello'); })();",
+    "const label = ((require) => require('hello'))(value => value);",
+  ])('does not treat a local function as a package load: %s', async body => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      source: `${body} export default function App() { return <p>{label}</p>; }`,
+      title: 'App',
+    });
+    expect(renderInert(indexHtml)).toBe('<p>hello</p>');
+  });
+});
+
+describe('type-only re-exports', () => {
+  it.each(["export { type Props } from 'lodash-es';", "export type { Props } from 'lodash-es';"])(
+    'does not load an erased sibling export: %s',
+    async declaration => {
+      const { indexHtml } = await buildReactArtifactBundle({
+        source: "import Panel from './Panel'; export default function App() { return <Panel/>; }",
+        title: 'App',
+        files: { Panel: `${declaration} export default function Panel() { return <p>ok</p>; }` },
+      });
+      expect(renderInert(indexHtml)).toBe('<p>ok</p>');
+      expect(indexHtml).not.toContain('lodash-es');
+    }
+  );
+
+  it('still loads a mixed value and type re-export', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      source: "import { sum } from './Helpers'; export default function App() { return <p>{sum([1, 2])}</p>; }",
+      title: 'App',
+      files: { Helpers: "export { type Props, sum } from 'lodash';" },
+    });
+    expect(
+      renderInert(indexHtml, { _: { sum: (values: number[]) => values.reduce((total, value) => total + value, 0) } })
+    ).toBe('<p>3</p>');
   });
 });

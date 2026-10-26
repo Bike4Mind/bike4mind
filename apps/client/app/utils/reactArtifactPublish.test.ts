@@ -1,7 +1,34 @@
 import { describe, it, expect } from 'vitest';
 import { decodeReactPublishUpload, encodeReactPublishUpload, reactPublishFiles } from './reactArtifactPublish';
+import { groupReactArtifacts } from './reactArtifactGroup';
 
 describe('reactPublishFiles', () => {
+  it.each(['__proto__', 'constructor', 'toString'])(
+    'preserves the %s sibling through grouping and upload',
+    identifier => {
+      const entry = {
+        type: 'react',
+        identifier: 'App',
+        title: 'App',
+        content: `import { label } from './${identifier}'; export default function App() { return <p>{label}</p>; }`,
+        startIndex: 0,
+      };
+      const sibling = {
+        type: 'react',
+        identifier,
+        title: identifier,
+        content: 'export const label = "Sibling";',
+        startIndex: 100,
+      };
+      const files = reactPublishFiles(groupReactArtifacts([entry, sibling]).get(entry));
+      expect(files).not.toBeNull();
+      if (!files) throw new Error('Expected sibling sources for a multi-file entry.');
+      const decoded = decodeReactPublishUpload(encodeReactPublishUpload({ entry: entry.content, files }), [identifier]);
+      expect(Object.keys(decoded.files)).toEqual([identifier]);
+      expect(decoded.files[identifier]).toBe(sibling.content);
+    }
+  );
+
   it('keeps only the siblings the entry reaches, by identifier', () => {
     expect(
       reactPublishFiles({

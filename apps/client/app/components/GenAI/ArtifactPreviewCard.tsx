@@ -271,7 +271,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
 
   // Push live content changes to the Knowledge Base store. Guarded: a card that merely
   // mounts (scrolled back into view) must not overwrite the store with older content (#457).
-  useSelectedArtifactContentSync(artifactId, artifactType, contentKey, artifactContent);
+  useSelectedArtifactContentSync(artifactId, artifactType, contentKey, artifactContent, reactGroup);
 
   return (
     <Card

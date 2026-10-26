@@ -77,7 +77,7 @@ export function groupReactArtifacts<T extends GroupableArtifact>(
       queue.push(...(imports.get(next) ?? []));
     }
 
-    const files: Record<string, string> = {};
+    const files: Record<string, string> = Object.create(null);
     const siblings: { identifier: string; title: string }[] = [];
     const dependencies = new Set(extractReactDependencies(entry.content));
     for (const [identifier, file] of latest) {

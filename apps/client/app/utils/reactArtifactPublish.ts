@@ -18,7 +18,7 @@ export interface ReactPublishUpload {
  */
 export function reactPublishFiles(group: ReactArtifactGroupRole | undefined): Record<string, string> | null {
   if (group?.role !== 'entry') return null;
-  const files: Record<string, string> = {};
+  const files: Record<string, string> = Object.create(null);
   for (const { identifier } of group.siblings) {
     if (typeof group.files[identifier] === 'string') files[identifier] = group.files[identifier];
   }
