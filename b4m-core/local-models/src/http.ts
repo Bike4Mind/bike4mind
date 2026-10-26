@@ -95,8 +95,21 @@ export function connectionError(
   );
 }
 
+// Bytes fetch refuses in a header value; its error would quote the value (an API key) in message and cause.
+const INVALID_HEADER_VALUE = /[\0\r\n]|[^\0-\xff]/;
+
+/** Throws `LocalRuntimeError` naming the header, never its value, when fetch would reject that value. */
+export function assertHeaderValues(headers: Record<string, string> | undefined, runtimeId: string): void {
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    if (INVALID_HEADER_VALUE.test(value)) {
+      throw new LocalRuntimeError(`${runtimeId} ${name} header contains a character HTTP does not allow`, runtimeId);
+    }
+  }
+}
+
 /** Throws `RuntimeHttpError` on a non-2xx status and `RuntimeConnectionError` when there is no response. */
 export async function send(client: HttpClient, path: string, options: RequestOptions = {}): Promise<Response> {
+  assertHeaderValues(client.headers, client.runtimeId);
   const hasBody = options.body !== undefined;
   let response: Response;
   try {
