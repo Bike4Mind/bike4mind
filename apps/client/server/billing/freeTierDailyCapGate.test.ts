@@ -276,6 +276,23 @@ describe('checkFreeTierDailySpendCap', () => {
     expect(resolveUserRateTierMock).not.toHaveBeenCalled();
   });
 
+  it('skips the extra DB read when the caller passes the resolved user directly', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+    resolveUserRateTierMock.mockResolvedValue('pro');
+
+    await checkFreeTierDailySpendCap({
+      user: makeUser(DAY_MS),
+      usageEventRepository: mockUsageRepo,
+      logger: mockLogger,
+    });
+
+    expect(findByIdMock).not.toHaveBeenCalled();
+  });
+
   it('does not treat an unrelated 429 as the daily cap', () => {
     expect(isFreeTierDailyCapError(new TooManyRequestsError('slow down'))).toBe(false);
   });

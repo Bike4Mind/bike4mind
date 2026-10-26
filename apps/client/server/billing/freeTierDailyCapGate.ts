@@ -8,6 +8,12 @@ interface IUserRepository {
   findById(id: string): Promise<IUserDocument | null>;
 }
 
+type CapCheckInput =
+  // Caller already holds the resolved user (e.g. request middleware) — no extra DB read.
+  | { user: IUserDocument; userId?: never; userRepository?: never }
+  // Caller only has a user ID — the lookup is deferred until after the enforceCredits gate.
+  | { userId: string; userRepository: IUserRepository; user?: never };
+
 /** 24 hours in milliseconds. */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -31,13 +37,10 @@ export function isFreeTierDailyCapError(error: unknown): error is TooManyRequest
  * capped user never produces a dangling hold that the sweep has to clean up.
  */
 export async function checkFreeTierDailySpendCap({
-  userId,
-  userRepository,
   usageEventRepository,
   logger,
-}: {
-  userId: string;
-  userRepository: IUserRepository;
+  ...input
+}: CapCheckInput & {
   usageEventRepository: IUsageEventRepository;
   logger: ILogger;
 }): Promise<void> {
@@ -47,9 +50,11 @@ export async function checkFreeTierDailySpendCap({
     const enforceCredits = getSettingsValue('enforceCredits', settings) === true;
     if (!enforceCredits) return;
 
-    // Defer the user lookup until we know enforcement is on, so paid-tier requests
-    // don't pay the extra DB read on every call.
-    const user = await userRepository.findById(userId);
+    // When only a userId is provided, defer the DB read until here so callers that
+    // reach this point rarely (paid tier, enforcement off) don't pay it on every request.
+    // When the caller already holds the resolved user (e.g. req.user from middleware),
+    // skip the second lookup entirely to avoid a silent skip on replica lag or deletion.
+    const user = 'user' in input && input.user ? input.user : await input.userRepository!.findById(input.userId!);
     if (!user) return;
 
     const { resolveUserRateTier } = await import('@server/utils/userRateTier');
