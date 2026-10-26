@@ -45,18 +45,26 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError('mainModelId is required for testing');
     }
 
+    // mainModelId comes straight from the body, so bound it before it lands in the audit entry.
+    const auditModelId = String(mainModelId).slice(0, 200);
     const recordTestRun = async (success: boolean) =>
       recordAdminActionFromRequest(req, {
         action: 'settings.rapid_reply.test_run',
-        target: { kind: 'settings', id: mainModelId, displayName: `Rapid reply test for ${mainModelId}` },
-        summary: `ran rapid reply test for ${mainModelId}`,
-        details: { mainModelId, success, simulatedLatency: simulateLatency },
+        target: { kind: 'settings', id: auditModelId, displayName: `Rapid reply test for ${auditModelId}` },
+        summary: `ran rapid reply test for ${auditModelId}`,
+        details: { mainModelId: auditModelId, success, simulateLatencyMs: simulateLatency },
       });
+    const recordFailedRunAndRethrow = async (error: unknown): Promise<never> => {
+      await recordTestRun(false);
+      throw error;
+    };
 
     // Get system settings
-    const settings = await adminSettingsRepository.getSettingsValue('RapidReplySettings');
+    const settings = await adminSettingsRepository
+      .getSettingsValue('RapidReplySettings')
+      .catch(recordFailedRunAndRethrow);
     if (!settings) {
-      throw new Error('Rapid Reply settings not found. Please configure settings first.');
+      return recordFailedRunAndRethrow(new Error('Rapid Reply settings not found. Please configure settings first.'));
     }
 
     // Check if Rapid Reply is enabled
@@ -74,7 +82,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     // Find mapping for the main model
-    const mapping = await rapidReplyMappingRepository.findByMainModel(mainModelId);
+    const mapping = await rapidReplyMappingRepository.findByMainModel(mainModelId).catch(recordFailedRunAndRethrow);
     if (!mapping) {
       await recordTestRun(false);
       return res.json({
@@ -113,7 +121,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     // Find applicable prompts
-    const prompts = await rapidReplyPromptRepository.findByModelPair(mapping.id);
+    const prompts = await rapidReplyPromptRepository.findByModelPair(mapping.id).catch(recordFailedRunAndRethrow);
     const activePrompts = prompts.filter(p => p.isActive);
 
     // Actually test the rapid reply process with proper measurement
@@ -543,43 +551,48 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     const testSuccess = !errorMessage && !!rapidReplyResponse;
 
-    await rapidReplyAuditLogRepository.createLog({
-      entityType: 'settings',
-      entityId: 'test',
-      action: 'update',
-      changes: {
-        testConfiguration: {
-          after: {
-            mainModelId,
-            testInput: testInput.substring(0, 50) + (testInput.length > 50 ? '...' : ''),
-            actualRapidReplyLatency,
-            actualRapidReplyTtfvt,
-            actualResponseLength,
-            latencyCheck,
-            mappingFound: true,
-            promptsAvailable: activePrompts.length,
-            testSuccess,
-            tokensUsed: actualTokensUsed,
-            estimatedCost: actualCost,
-            responseGenerated: !!rapidReplyResponse,
-            timing: {
-              testStartTime,
-              rapidReplyStartTime,
-              rapidReplyEndTime,
-              testEndTime,
+    await rapidReplyAuditLogRepository
+      .createLog({
+        entityType: 'settings',
+        entityId: 'test',
+        action: 'update',
+        changes: {
+          testConfiguration: {
+            after: {
+              mainModelId,
+              testInput: testInput.substring(0, 50) + (testInput.length > 50 ? '...' : ''),
+              actualRapidReplyLatency,
+              actualRapidReplyTtfvt,
+              actualResponseLength,
+              latencyCheck,
+              mappingFound: true,
+              promptsAvailable: activePrompts.length,
+              testSuccess,
+              tokensUsed: actualTokensUsed,
+              estimatedCost: actualCost,
+              responseGenerated: !!rapidReplyResponse,
+              timing: {
+                testStartTime,
+                rapidReplyStartTime,
+                rapidReplyEndTime,
+                testEndTime,
+              },
             },
           },
         },
-      },
-      userId: req.user!.id,
-      userEmail: req.user!.email || undefined,
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent'],
-      metadata: {
-        testRun: true,
-        simulatedLatency: simulateLatency,
-      },
-    });
+        userId: req.user!.id,
+        userEmail: req.user!.email || undefined,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        metadata: {
+          testRun: true,
+          simulatedLatency: simulateLatency,
+        },
+      })
+      .catch(async (error: unknown) => {
+        await recordTestRun(testSuccess);
+        throw error;
+      });
 
     await recordTestRun(testSuccess);
 
