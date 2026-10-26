@@ -62,7 +62,9 @@ Shared terms: **Suspended** (not "banned"), **Restricted** (not "moderated"), **
 
 ## 3. Page anatomy
 
-Every admin page uses one of two skeletons, so admins always know where to look.
+Every admin page renders inside the shared admin layout (sidebar navigation plus content frame); there are no full-screen admin pages. New admin routes are children of the `/admin` layout route, never siblings of it.
+
+Inside that layout, every page uses one of two skeletons, so admins always know where to look.
 
 **List page**
 
