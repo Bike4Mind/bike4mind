@@ -908,7 +908,8 @@ if (isMonitoredStage) {
       alarmDescription:
         'Model pins are unavailable; model-reference-audit logs name the model, configuration path and cause. See admin model-deprecation-status for the report.',
       comparisonOperator: 'GreaterThanThreshold',
-      evaluationPeriods: 1,
+      evaluationPeriods: 2,
+      datapointsToAlarm: 2,
       metricName: 'UnavailableModelReferences',
       namespace: 'Lumina5/ModelDiscovery',
       period: 1800,
@@ -920,7 +921,7 @@ if (isMonitoredStage) {
       tags: { Application: 'ModelDiscovery', Severity: 'High' },
     });
 
-    for (const metricName of ['ModelsDeprecated', 'LifecycleDateChanges', 'LifecycleSuggestions'] as const) {
+    for (const metricName of ['ModelsDeprecated', 'LifecycleDateChanges'] as const) {
       new aws.cloudwatch.MetricAlarm(`modelDiscovery-${metricName}`, {
         name: `${$app.name}-${$app.stage}-model-discovery-${metricName}`,
         alarmDescription: `Model discovery reports ${metricName}; review the model lifecycle operator queue and discovery logs`,

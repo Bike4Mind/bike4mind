@@ -36,8 +36,11 @@ describe('model discovery no-successful-run alarm', () => {
     expect(unavailableAlarm).toMatch(/metricName: 'UnavailableModelReferences'/);
     expect(unavailableAlarm).toMatch(/dimensions: modelDiscoveryDimensions/);
     expect(unavailableAlarm).toMatch(/treatMissingData: 'breaching'/);
+    expect(unavailableAlarm).toMatch(/evaluationPeriods: 2/);
+    expect(unavailableAlarm).toMatch(/datapointsToAlarm: 2/);
+    expect(alarmsSource).not.toMatch(/'LifecycleSuggestions'/);
     expect(unavailableAlarm).toMatch(/alarmActions: \[dlqAlarmTopic\.arn\]/);
-    expect(alarmsSource).toMatch(/\['ModelsDeprecated', 'LifecycleDateChanges', 'LifecycleSuggestions'\]/);
+    expect(alarmsSource).toMatch(/\['ModelsDeprecated', 'LifecycleDateChanges'\]/);
     expect(unavailableAlarm).toMatch(/name: .*unavailable-model-references/);
   });
 
