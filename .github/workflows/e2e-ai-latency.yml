@@ -173,9 +173,10 @@ jobs:
           # dev reads E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper below
           # (same-account). Preview stacks live in a SEPARATE AWS account the dev role
           # can't `sst shell` into, so for pr<N> runs we inject it directly from this repo
-          # secret (the stable value the deployer seeds onto every stage). It is the ONLY
-          # SST value the suite needs. Same pattern as e2e-run.yml / e2e-on-label.yml.
-          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          # secret (the preview-tier value the deployer seeds onto preview stages), and
+          # leave it empty for dev so SST wins. It is the ONLY SST value the suite needs.
+          # Same pattern as e2e-run.yml / e2e-on-label.yml.
+          E2E_CLEANUP_SECRET: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           # Sanitized upstream (pr<digits> or the `dev` choice input); safe to branch on.
           STAGE: ${{ steps.config.outputs.stage }}
           E2E_TEST_ID: discover-models
@@ -192,7 +193,7 @@ jobs:
               # models, so setup-matrix still stops the run - but it names THIS cause,
               # rather than reporting an unexplained empty discovery result.
               if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping model discovery (0 tests run)"
+                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured; skipping model discovery (0 tests run)"
                 echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
@@ -250,7 +251,7 @@ jobs:
           build_full_matrix() {
             if [ -z "$DISCOVERED_GPT" ] || [ -z "$DISCOVERED_CLAUDE" ]; then
               if [ "$DISCOVERY_SKIPPED" = "true" ]; then
-                echo "::error::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured, so model discovery could not run. No tests were executed - this is a configuration gap, not a test failure."
+                echo "::error::preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured, so model discovery could not run. No tests were executed - this is a configuration gap, not a test failure."
               else
                 echo "Full matrix requested but model discovery did not return both models (gpt='$DISCOVERED_GPT', claude='$DISCOVERED_CLAUDE')."
               fi
@@ -436,9 +437,10 @@ jobs:
           # dev reads E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper below
           # (same-account). Preview stacks live in a SEPARATE AWS account the dev role
           # can't `sst shell` into, so for pr<N> runs we inject it directly from this repo
-          # secret (the stable value the deployer seeds onto every stage). It is the ONLY
-          # SST value the suite needs. Same pattern as e2e-run.yml / e2e-on-label.yml.
-          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          # secret (the preview-tier value the deployer seeds onto preview stages), and
+          # leave it empty for dev so SST wins. It is the ONLY SST value the suite needs.
+          # Same pattern as e2e-run.yml / e2e-on-label.yml.
+          E2E_CLEANUP_SECRET: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           # Sanitized upstream (pr<digits> or the `dev` choice input); safe to branch on.
           STAGE: ${{ steps.config.outputs.stage }}
           E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
@@ -459,7 +461,7 @@ jobs:
               # pass/fail. Must stay in sync with that branch: without it, every cell
               # renders "No Data", whose legend blames Playwright for a config gap.
               if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
+                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured; skipping (0 tests run)"
                 echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
@@ -602,7 +604,7 @@ jobs:
           # at the suite when the cause is a missing repo secret. The benchmark cells exit 0 on
           # a skip, so without this branch the whole run renders green.
           if [ "${PREVIEW_SKIPPED:-}" = "true" ]; then
-            OVERALL_STATUS=":fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)"
+            OVERALL_STATUS=":fast_forward: Skipped (E2E_CLEANUP_SECRET_PREVIEW not configured)"
           elif [ "${#ALL_PW_RESULTS[@]}" -gt 0 ]; then
             PASSED=$(jq -rs '[.[].stats.expected] | add // 0' "${ALL_PW_RESULTS[@]}")
             FAILED=$(jq -rs '[.[].stats.unexpected] | add // 0' "${ALL_PW_RESULTS[@]}")
@@ -773,7 +775,7 @@ jobs:
           # On a skip every cell is empty for one known reason, so the default legend would
           # send the reader to debug a suite that never ran. Name the cause instead.
           if [ "${PREVIEW_SKIPPED:-}" = "true" ]; then
-            FOOTNOTE_1="--- / No Data = preview e2e unavailable: the E2E_CLEANUP_SECRET repo secret is not configured, so no tests ran"
+            FOOTNOTE_1="--- / No Data = preview e2e unavailable: the E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured, so no tests ran"
             FOOTNOTE_2="This is a configuration gap, not a test failure. Set the repo secret; do not debug the suite."
           else
             FOOTNOTE_1="--- = No quality data: Playwright crashed, timed out, or failed before results were collected"
