@@ -355,6 +355,7 @@ describe('RekognitionImageModerationService.checkImage', () => {
       const svc = new RekognitionImageModerationService(Logger.globalInstance, client);
       const bomb = oversizedHugeDimsPng(20000, 20000); // 4e8 px, well over the 60 MP budget
       await expect(svc.checkImage(bomb, 'image/png')).rejects.toBeInstanceOf(UnsupportedImageFormatError);
+      await expect(svc.checkImage(bomb, 'image/png')).rejects.toThrow(/decode limit/);
       expect(client.send).not.toHaveBeenCalled(); // rejected before the bitmap is materialized
     });
 
@@ -364,6 +365,7 @@ describe('RekognitionImageModerationService.checkImage', () => {
       const bomb = oversizedHugeDimsPng(7000, 12000, false); // 84 MP, tall, header-only so under the byte budget
       expect(bomb.length).toBeLessThan(MAX_INLINE_IMAGE_BYTES);
       await expect(svc.checkImage(bomb, 'image/png')).rejects.toBeInstanceOf(UnsupportedImageFormatError);
+      await expect(svc.checkImage(bomb, 'image/png')).rejects.toThrow(/decode limit/);
       expect(client.send).not.toHaveBeenCalled();
     });
   });
