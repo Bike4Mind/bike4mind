@@ -64,7 +64,7 @@ export interface JiraIssue {
   self: string;
   fields: {
     summary: string;
-    description?: AdfNode | string;
+    description?: AdfNode | string | null;
     status: {
       name: string;
       id: string;

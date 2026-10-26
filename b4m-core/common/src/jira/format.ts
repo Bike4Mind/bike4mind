@@ -44,6 +44,9 @@ export interface AdfNode {
   type?: string;
   text?: string;
   content?: AdfNode[];
+  version?: number;
+  attrs?: Record<string, unknown>;
+  marks?: AdfNode[];
 }
 
 interface JiraErrorEnvelope {
@@ -82,7 +85,7 @@ interface RawJiraProject extends JiraErrorEnvelope {
 
 interface RawJiraIssueFields {
   summary?: string;
-  description?: AdfNode | string;
+  description?: AdfNode | string | null;
   status?: { name?: string };
   issuetype?: { name?: string };
   priority?: { name?: string };
