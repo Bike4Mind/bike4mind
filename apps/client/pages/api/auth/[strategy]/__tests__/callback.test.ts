@@ -10,6 +10,9 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: any, _res: any, next: any) => next?.(),
+}));
 
 // passport.authenticate is invoked as passport.authenticate(strategy, opts, cb)(req, res, next);
 // the mock lets each test drive the (err, user, info) triple passport would normally supply.
@@ -174,6 +177,37 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'forbidden_system_user' }));
     expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+  });
+});
+
+describe('[strategy]/callback - !user branch log level', () => {
+  it.each(['registration_closed', 'state_expired', 'state_invalid', 'duplicate_account'])(
+    'logs the expected %s outcome at warn, below the level the alert channel pages on',
+    async code => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await runCallback(null, undefined, { code });
+
+      expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', { code });
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  );
+
+  it('keeps an unrecognized failure at error', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runCallback(null, undefined, { message: 'The user has denied your application access.' });
+
+    expect(errorSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', {
+      message: 'The user has denied your application access.',
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });
 
