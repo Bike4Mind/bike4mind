@@ -262,6 +262,9 @@ export interface AgentRunOptions {
    * Confidence gate callback. Called after each iteration with the average confidence
    * of tool results from that iteration. Return a decision to proceed, pause, or timed-gate.
    * If not provided, the agent always proceeds (original behavior).
+   *
+   * The average includes failed calls, so it is not the gate rule: deciding on it would
+   * diverge from `usableEvidenceConfidence`, which the web executor's gate uses instead.
    */
   confidenceGate?: (iterationConfidence: number, iterationIndex: number) => ConfidenceGateDecision;
   /**
