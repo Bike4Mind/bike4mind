@@ -1857,7 +1857,7 @@ export class SessionPromptFeature implements ChatCompletionFeature {
 // cut is decided by an ANN query over the scope (see selectForcedRetrievalCandidates); otherwise by
 // file name.
 const FORCED_RETRIEVAL_MAX_CANDIDATE_FILES = 100;
-// Cap slots held for files the ANN cannot answer for yet (embedded within the mongot lag), so a
+// Cap slots held for files the ANN cannot answer for yet (stamped within the mongot lag), so a
 // file uploaded and asked about at once is scored even when hits alone would fill the cap.
 const FORCED_RETRIEVAL_NOT_INDEXED_RESERVE = 10;
 // Metadata rows listed when the candidates can be chosen by relevance (the ANN query ranks this
@@ -2075,7 +2075,7 @@ interface ForcedRetrievalCoverage {
    */
   filesWithheldReindexing: number;
   /**
-   * Files embedded too recently for the ANN (see VECTOR_SEARCH_READY_LAG_MS) that the relevance pick
+   * Files stamped within VECTOR_SEARCH_READY_LAG_MS (too recent for the ANN) that the relevance pick
    * still cut past the candidate cap, after the reserved slots. Unlike a by-name cut they return on
    * their own once indexed.
    */

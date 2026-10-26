@@ -69,7 +69,9 @@ describe('selectRelevanceCandidates', () => {
     const freshFiles = Array.from({ length: 15 }, (_, i) => file(`fresh${i}`, fresh));
     const { files, notIndexedCut } = selectRelevanceCandidates([...hits, ...freshFiles], hitsFor(hits), NOW, opts);
     expect(files).toHaveLength(100);
-    expect(files.filter(f => f.id.startsWith('fresh'))).toHaveLength(10);
+    const keptFresh = files.filter(f => f.id.startsWith('fresh'));
+    expect(keptFresh.map(f => f.id)).toEqual(Array.from({ length: 10 }, (_, i) => `fresh${i}`));
+    expect(files.slice(90).map(f => f.id)).toEqual(keptFresh.map(f => f.id));
     expect(files.slice(0, 90).map(f => f.id)).toEqual(hits.slice(0, 90).map(f => f.id));
     expect(notIndexedCut).toBe(5);
   });
@@ -88,9 +90,38 @@ describe('selectRelevanceCandidates', () => {
     expect(notIndexedCut).toBe(0);
   });
 
-  it('counts not-yet-indexed files cut when they alone overflow the cap', () => {
-    const notIndexed = Array.from({ length: 120 }, (_, i) => file(`ni${i}`, null));
-    expect(selectRelevanceCandidates(notIndexed, [], NOW, opts)).toMatchObject({ notIndexedCut: 20 });
+  it('counts recently stamped files cut when they alone overflow the cap', () => {
+    const recent = Array.from({ length: 120 }, (_, i) => file(`ni${i}`, fresh));
+    expect(selectRelevanceCandidates(recent, [], NOW, opts)).toMatchObject({ notIndexedCut: 20 });
+  });
+
+  it('never gives a never-stamped file a reserved slot, so the fresh file and top hits survive', () => {
+    const hits = hitFiles(110);
+    const unstamped = Array.from({ length: 15 }, (_, i) => file(`a-img${i}`, null));
+    const target = file('m-new', fresh);
+    const { files, notIndexedCut } = selectRelevanceCandidates(
+      [...unstamped, target, ...hits],
+      hitsFor(hits),
+      NOW,
+      opts
+    );
+    expect(files).toHaveLength(100);
+    expect(files.map(f => f.id)).toContain('m-new');
+    expect(
+      files
+        .slice(0, 99)
+        .map(f => f.id)
+        .filter(id => id !== 'm-new')
+    ).toEqual(hits.slice(0, 99).map(f => f.id));
+    expect(notIndexedCut).toBe(0);
+  });
+
+  it('cuts never-stamped files silently when hits fill the cap', () => {
+    const hits = hitFiles(110);
+    const unstamped = Array.from({ length: 15 }, (_, i) => file(`a-img${i}`, null));
+    const { files, notIndexedCut } = selectRelevanceCandidates([...unstamped, ...hits], hitsFor(hits), NOW, opts);
+    expect(files.map(f => f.id)).toEqual(hits.slice(0, 100).map(f => f.id));
+    expect(notIndexedCut).toBe(0);
   });
 });
 

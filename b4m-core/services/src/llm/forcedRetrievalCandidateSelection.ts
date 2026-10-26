@@ -37,10 +37,12 @@ export function rankCandidateFilesByRelevance<T extends VectorSearchReadinessFil
 }
 
 /**
- * rankCandidateFilesByRelevance cut at `cap`, except that up to `notIndexedReserve` tier-2 files are
- * placed ahead of the lowest-scoring hits. A file embedded within the mongot lag has no hit yet,
- * so without the reserve it would sit behind a full cap of hits and be dropped silently.
- * `notIndexedCut` counts the tier-2 files that still fell past the cap, for the coverage notice.
+ * rankCandidateFilesByRelevance cut at `cap`, except that up to `notIndexedReserve` files stamped within
+ * the mongot lag are placed ahead of the lowest-scoring hits. Such a file has no hit yet, so without
+ * the reserve it would sit behind a full cap of hits and be dropped silently. Never-stamped files
+ * (chunkless images, legacy rows) never get a slot: waiting does not make them searchable, so they
+ * keep their tier-2 position behind the hits and are cut silently, as before.
+ * `notIndexedCut` counts only the lag-window files that still fell past the cap, for the coverage notice.
  */
 export function selectRelevanceCandidates<T extends VectorSearchReadinessFile>(
   files: T[],
@@ -49,10 +51,26 @@ export function selectRelevanceCandidates<T extends VectorSearchReadinessFile>(
   { cap, notIndexedReserve }: { cap: number; notIndexedReserve: number }
 ): { files: T[]; notIndexedCut: number } {
   const { withHit, notIndexed, rankedOutside } = splitByRelevanceTier(files, hits, now);
-  const hitSlots = Math.max(0, cap - Math.min(notIndexed.length, notIndexedReserve));
-  const ordered = [...withHit.slice(0, hitSlots), ...notIndexed, ...withHit.slice(hitSlots), ...rankedOutside];
-  const notIndexedKept = Math.min(notIndexed.length, Math.max(0, cap - Math.min(withHit.length, hitSlots)));
-  return { files: ordered.slice(0, cap), notIndexedCut: notIndexed.length - notIndexedKept };
+  const recent = notIndexed.filter(isStampedWithinLag);
+  const unstamped = notIndexed.filter(file => !isStampedWithinLag(file));
+  const hitSlots = Math.max(0, cap - Math.min(recent.length, notIndexedReserve));
+  const ordered = [
+    ...withHit.slice(0, hitSlots),
+    ...recent,
+    ...withHit.slice(hitSlots),
+    ...unstamped,
+    ...rankedOutside,
+  ];
+  const recentKept = Math.min(recent.length, Math.max(0, cap - Math.min(withHit.length, hitSlots)));
+  return { files: ordered.slice(0, cap), notIndexedCut: recent.length - recentKept };
+}
+
+/** Stamped, but not yet old enough for mongot to be trusted to have indexed it. */
+function isStampedWithinLag(file: VectorSearchReadinessFile): boolean {
+  return (
+    Boolean(file.chunkEmbeddingModelStampedAt) &&
+    Number.isFinite(new Date(file.chunkEmbeddingModelStampedAt!).getTime())
+  );
 }
 
 function splitByRelevanceTier<T extends VectorSearchReadinessFile>(files: T[], hits: AnnChunkHit[], now: Date) {

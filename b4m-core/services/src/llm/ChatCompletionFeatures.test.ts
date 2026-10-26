@@ -1360,6 +1360,26 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(coverage?.partial).toBe(true);
       expect(coverage?.reasons.join(' ')).toContain('10 recently added document(s) are still being indexed');
       expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('recently added document(s) are not searchable yet'));
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      const keptFresh = lakeFiles
+        .slice(130)
+        .map(f => f.id)
+        .filter(id => scanned.has(id));
+      expect(keptFresh).toEqual(lakeFiles.slice(130, 140).map(f => f.id));
+    });
+
+    it('with vector search, does not report never-stamped files the cap leaves out', async () => {
+      const { ctx, annDb } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const files = lakeFiles.map((f, i) => (i >= 110 ? { ...f, chunkEmbeddingModelStampedAt: undefined } : f));
+      ctx.db.fabfiles.search = vi.fn((_u, _q, _f, page: { limit: number }) =>
+        Promise.resolve({ data: files.slice(0, page.limit), hasMore: files.length > page.limit, total: files.length })
+      );
+      annDb.vectorSearch.mockResolvedValue(
+        lakeFiles.slice(0, 110).map((f, i) => ({ id: `ch-${f.id}`, fabFileId: f.id, text: '', score: 0.9 - i / 1000 }))
+      );
+      const { quest } = await run(ctx);
+      expect((quest.promptMeta as { retrievalCoverage?: unknown }).retrievalCoverage).toBeUndefined();
     });
 
     it('falls back to the alphabetical pick, and says so, when the ANN query fails', async () => {
