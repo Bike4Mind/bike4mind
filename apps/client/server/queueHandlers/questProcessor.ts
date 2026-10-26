@@ -55,7 +55,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@server/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
@@ -305,13 +305,14 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   // is the cap's backstop. A capped turn is the user's limit, not a processing failure: settle the
   // quest with the reason instead of throwing into the route's generic-failure reply and metric.
   try {
-    await checkFreeTierDailySpendCap({ user, usageEventRepository, logger });
+    await checkFreeTierDailySpendCap({ user: storedUser, usageEventRepository, logger });
   } catch (error) {
     if (!isFreeTierDailyCapError(error)) throw error;
     logger.info('Quest refused by the free-tier daily spend cap', { questId: params.questId });
     await questRepository.settleIfUnfinished(params.questId, {
       status: 'stopped',
       type: 'error',
+      errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
       reply: error.message,
       replies: [error.message],
     });
