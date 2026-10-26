@@ -216,6 +216,22 @@ const telemetryCleanupCron = runsScheduledJobs
     })
   : undefined;
 
+// Signup IP retention - truncates User.signupMeta.ip to its /24 (IPv4) or /48 (IPv6) prefix once
+// the signup is older than the AuthEvent TTL (90 days)
+const signupIpRetentionCron = runsScheduledJobs
+  ? new sst.aws.Cron('signupIpRetention', {
+      schedule: 'cron(30 3 * * ? *)', // Daily at 3:30am UTC
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupIpRetention.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
 // Credit Lot Sweep — reconciles the CreditLot parallel ledger against
 // currentCredits: assigns cumulative consumption soonest-to-expire-first and
 // expires stale remainders (see #190 design).
@@ -1150,6 +1166,7 @@ export {
   deepAgentWakeCron,
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
+  signupIpRetentionCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,
