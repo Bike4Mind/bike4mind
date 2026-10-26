@@ -7,7 +7,7 @@ import { filterModals } from '@client/app/components/modals/modalHelpers';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useFirstSignupSession } from '@client/app/hooks/useFirstSignupSession';
 import { isAnyModalDialogOpen } from '@client/app/utils/anyDialogOpen';
-import { markWhatsNewShown } from '@client/app/components/modals/whatsNewSession';
+import { markWhatsNewShown, wasGearsDiscoveryShown } from '@client/app/components/modals/whatsNewSession';
 
 type ModalType = 'WhatsNewSlider';
 type TriggerSource = 'manual' | 'auto';
@@ -141,7 +141,12 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
                   activeEl.isContentEditable &&
                   (activeEl.textContent ?? '').trim().length > 0);
               const anyDialogOpen = isAnyModalDialogOpen();
-              if (useStreamingState.getState().isAnyStreaming() || isComposing || anyDialogOpen) {
+              if (
+                useStreamingState.getState().isAnyStreaming() ||
+                isComposing ||
+                anyDialogOpen ||
+                wasGearsDiscoveryShown()
+              ) {
                 if (process.env.NODE_ENV === 'development') {
                   console.log('ModalTriggerContext: user busy (streaming/composing/modal), deferring auto-trigger');
                 }

@@ -127,6 +127,7 @@ describe('ModalManager new-account suppression', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-20T04:00:00Z'));
+    resetWhatsNewShownForTests();
     mocks.modals.data = [announcement(), announcement(true)];
     mocks.modals.isPending = false;
     mocks.modals.slidesPending = false;
