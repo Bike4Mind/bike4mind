@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose, { Types } from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { ApiKeyUsageLog, Quest, UsageEvent, User, UserApiKey } from '@bike4mind/database';
+import { ApiKeyUsageLog, Organization, Quest, Session, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
@@ -20,6 +20,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   }),
 }));
 import { collectBusinessMetrics } from './collect';
+import { Subscription } from '@server/models/Subscription';
 import { deliverAnomalies, deliveryStore, subscriberMetric } from './deliver';
 import { BusinessMetricState } from '@bike4mind/database';
 
@@ -38,6 +39,7 @@ afterEach(async () => {
   await mongoose.connection.db?.dropDatabase();
   payments.length = 0;
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe('business metric persisted behavior', () => {
@@ -142,14 +144,26 @@ describe('business metric persisted behavior', () => {
     const window = comparisonWindow(new Date('2026-10-26T13:05:00Z'));
     await BusinessMetricState.create({ _id: 'unused', expiresAt: new Date(Date.now() + 86_400_000) });
     const post = vi.fn(async () => true);
-    await Promise.allSettled(
-      Array.from({ length: 5 }, () => deliverAnomalies(window, ['same metric\n120 vs 100'], post))
-    );
+    const sameMetric = {
+      metricName: 'same metric',
+      direction: 'increase' as const,
+      message: 'same metric\n120 vs 100',
+    };
+    const failedMetric = {
+      metricName: 'failed metric',
+      direction: 'increase' as const,
+      message: 'failed metric\n120 vs 100',
+    };
+    await Promise.allSettled(Array.from({ length: 5 }, () => deliverAnomalies(window, [sameMetric], post)));
     expect(post).toHaveBeenCalledTimes(1);
-    expect(await deliverAnomalies(window, ['same metric\n120 vs 100'], post)).toBe(0);
+    expect(await deliverAnomalies(window, [sameMetric], post)).toBe(0);
     expect(post).toHaveBeenCalledTimes(1);
-    await expect(deliverAnomalies(window, ['failed metric\n120 vs 100'], async () => false)).rejects.toThrow();
-    expect(await deliverAnomalies(window, ['failed metric\n120 vs 100'], post)).toBe(1);
+    await expect(deliverAnomalies(window, [failedMetric], async () => false)).rejects.toThrow();
+    expect(await deliverAnomalies(window, [failedMetric], post)).toBe(1);
+    expect(await deliverAnomalies(comparisonWindow(new Date('2026-10-26T14:05:00Z')), [sameMetric], post)).toBe(0);
+    expect(await deliverAnomalies(comparisonWindow(new Date('2026-10-27T00:05:00Z')), [sameMetric], post)).toBe(0);
+    expect(await deliverAnomalies(window, [{ ...sameMetric, direction: 'decrease' }], post)).toBe(1);
+    expect(await deliverAnomalies(comparisonWindow(new Date('2026-10-27T13:05:00Z')), [sameMetric], post)).toBe(1);
     await deliveryStore.claim('pending-delivery', 'crashed-worker', new Date());
     await expect(deliveryStore.claim('pending-delivery', 'retry-worker', new Date())).rejects.toThrow('leased');
     await deliveryStore.release('pending-delivery', 'crashed-worker');
@@ -197,6 +211,115 @@ describe('business metric persisted behavior', () => {
     expect(result.metrics.find(metric => metric.name === 'revenueMinor:usd')?.values[0]).toBe(2000);
     expect(result.metrics.find(metric => metric.name === 'revenueMinor:jpy')?.values[0]).toBe(100);
     payments.length = 0;
+  });
+
+  it('hydrates old accounts and window-referenced sessions in bounded batches', async () => {
+    const at = new Date('2026-10-26T11:00:00Z');
+    const old = new Date('2025-01-01T00:00:00Z');
+    const accounts = Array.from({ length: 501 }, (_, index) => ({
+      _id: new Types.ObjectId(),
+      email: `customer-${index}@example.org`,
+      createdAt: old,
+    }));
+    const sessions = accounts.map((account, index) => ({
+      _id: new Types.ObjectId(),
+      userId: String(account._id),
+      createdAt: old,
+      ...(index < 2 ? { origin: { channel: 'api', apiKeyId: index === 0 ? 'public-key' : 'internal-key' } } : {}),
+    }));
+    await User.collection.insertMany(accounts);
+    await UserApiKey.collection.insertOne({
+      _id: new Types.ObjectId('123456789012345678901234'),
+      productId: 'internal',
+    });
+    sessions[1].origin = { channel: 'api', apiKeyId: '123456789012345678901234' };
+    await Session.collection.insertMany(sessions);
+    await Quest.collection.insertMany(
+      accounts.map((account, index) => ({
+        _id: new Types.ObjectId(Math.floor(at.getTime() / 1000).toString(16) + index.toString(16).padStart(16, '0')),
+        type: 'message',
+        timestamp: at,
+        sessionId: String(sessions[index]._id),
+        promptMeta: { session: { userId: String(account._id) } },
+        deletedAt: null,
+      }))
+    );
+    await UsageEvent.collection.insertMany(
+      accounts.map(account => ({
+        userId: String(account._id),
+        ownerId: String(account._id),
+        ownerType: 'User',
+        provider: 'example',
+        model: 'model',
+        feature: 'chat',
+        source: 'web',
+        createdAt: at,
+        costUsd: 1,
+        creditsCharged: 1,
+        // A failed paid attempt contributes cost, while the Quest independently supplies activity.
+        status: 'error',
+      }))
+    );
+    const userFind = vi.spyOn(User, 'find');
+    const organizationFind = vi.spyOn(Organization, 'find');
+    const sessionFind = vi.spyOn(Session, 'find');
+    const result = await collectBusinessMetrics(comparisonWindow(new Date('2026-10-26T12:05:00Z')));
+    expect(result.metrics.find(metric => metric.name === 'activeUsers')?.values[0]).toBe(499);
+    expect(result.metrics.find(metric => metric.name === 'spendUsd')?.values[0]).toBe(501);
+    expect(result.metrics.find(metric => metric.name === 'verifiedSignups')?.values[0]).toBe(0);
+    // Guard the operational requirement: these lookups must not become whole-collection scans.
+    expect(userFind.mock.calls.every(([filter]) => filter && Object.keys(filter).length > 0)).toBe(true);
+    expect(organizationFind.mock.calls.every(([filter]) => filter && Object.keys(filter).length > 0)).toBe(true);
+    expect(sessionFind.mock.calls).toHaveLength(2);
+    for (const [filter] of sessionFind.mock.calls) {
+      expect(filter?._id.$in.length).toBeLessThanOrEqual(500);
+      expect(filter?._id.$in.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('resolves old Stripe customers and subscriber owners with fresh exclusions on each run', async () => {
+    const at = new Date('2026-10-26T11:00:00Z');
+    const old = new Date('2025-01-01T00:00:00Z');
+    const user = new Types.ObjectId();
+    const excluded = new Types.ObjectId();
+    const organization = new Types.ObjectId();
+    const excludedOrganization = new Types.ObjectId();
+    await User.collection.insertMany([
+      { _id: user, email: 'old-payer@example.org', stripeCustomerId: 'cus_old_user', createdAt: old },
+      { _id: excluded, email: 'synthetic-owner@example.org', isSynthetic: true, createdAt: old },
+    ]);
+    await Organization.collection.insertMany([
+      { _id: organization, userId: String(user), stripeCustomerId: 'cus_old_org', createdAt: old },
+      { _id: excludedOrganization, userId: String(excluded), stripeCustomerId: 'cus_excluded_org', createdAt: old },
+    ]);
+    payments.push(
+      ...['cus_old_user', 'cus_old_org', 'cus_excluded_org', 'cus_orphan'].map(customer => ({
+        type: 'charge.succeeded',
+        created: at.getTime() / 1000,
+        data: { object: { id: `charge-${customer}`, paid: true, customer, amount: 1000, currency: 'usd' } },
+      }))
+    );
+    await Subscription.collection.insertMany(
+      [
+        { ownerType: 'User', ownerId: String(user) },
+        { ownerType: 'Organization', ownerId: String(organization) },
+        { ownerType: 'Organization', ownerId: String(excludedOrganization) },
+        { ownerType: 'User', ownerId: String(new Types.ObjectId()) },
+      ].map(owner => ({
+        ...owner,
+        source: 'stripe',
+        status: 'active',
+        periodEndsAt: new Date(Date.now() + 86_400_000),
+      }))
+    );
+    const window = comparisonWindow(new Date('2026-10-26T12:05:00Z'));
+    const first = await collectBusinessMetrics(window);
+    expect(first.metrics.find(metric => metric.name === 'revenueMinor:usd')?.values[0]).toBe(2000);
+    expect(first.subscribers).toBe(2);
+    await User.collection.updateOne({ _id: user }, { $set: { isSynthetic: true } });
+    const second = await collectBusinessMetrics(window);
+    expect(second.metrics.find(metric => metric.name === 'revenueMinor:usd')).toBeUndefined();
+    expect(second.subscribers).toBe(0);
   });
 
   it('keeps missing subscriber history unknown and preserves the first sample on retry', async () => {

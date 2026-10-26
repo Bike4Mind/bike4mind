@@ -1,7 +1,7 @@
 import { adminSettingsRepository, connectDB } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import {
-  anomalyMessages,
+  anomalyAlerts,
   comparisonWindow,
   thresholdsSchema,
 } from '@bike4mind/server-utils/analytics/businessMetricAnomalies';
@@ -30,20 +30,19 @@ export async function handler(event: unknown) {
   if (!webhook) throw new Error('Configure SlackUserActivityWebhookUrl for business metric alerts');
   const result = await collectBusinessMetrics(window);
   const subscribers = await subscriberMetric(window, result.subscribers);
-  subscribers.contributors = result.subscriberContributors;
   const metrics = [...result.metrics, subscribers];
-  const messages = anomalyMessages(metrics, window, thresholds);
-  const delivered = await deliverAnomalies(window, messages, message => postMessageToSlack(webhook, message));
+  const anomalies = anomalyAlerts(metrics, window, thresholds);
+  const delivered = await deliverAnomalies(window, anomalies, message => postMessageToSlack(webhook, message));
   console.info(
     JSON.stringify({
       report: 'business-metric-alerts',
       end: window.end.toISOString(),
       mode: window.mode,
       metrics: metrics.length,
-      anomalies: messages.length,
+      anomalies: anomalies.length,
       delivered,
       subscriberBaselineReady: subscribers.values[1] !== null,
     })
   );
-  return { status: 'success', anomalies: messages.length, delivered };
+  return { status: 'success', anomalies: anomalies.length, delivered };
 }

@@ -3,6 +3,7 @@ import { BusinessMetricState } from '@bike4mind/database';
 import {
   DAY_MS,
   HOUR_MS,
+  type BusinessMetricAnomaly,
   type ComparisonWindow,
   type Metric,
 } from '@bike4mind/server-utils/analytics/businessMetricAnomalies';
@@ -72,18 +73,20 @@ export const deliveryStore: DeliveryStore = {
 
 export async function deliverAnomalies(
   window: ComparisonWindow,
-  messages: string[],
+  anomalies: BusinessMetricAnomaly[],
   post: (message: string) => Promise<boolean>,
   store: DeliveryStore = deliveryStore
 ) {
   let delivered = 0;
-  for (const message of messages) {
-    const metricName = message.split('\n')[0];
-    const id = `alert:${window.end.toISOString()}:${createHash('sha256').update(metricName).digest('hex')}`;
+  // The midnight run closes the previous UTC day, so it shares that day's receipt.
+  const day = new Date(window.end.getTime() - (window.mode === 'daily' ? 1 : 0)).toISOString().slice(0, 10);
+  for (const anomaly of anomalies) {
+    const metricHash = createHash('sha256').update(anomaly.metricName).digest('hex');
+    const id = `alert:${day}:${anomaly.direction}:${metricHash}`;
     const token = randomUUID();
     if (!(await store.claim(id, token, new Date()))) continue;
     try {
-      if (!(await post(message))) throw new Error('Slack rejected business metric alert');
+      if (!(await post(anomaly.message))) throw new Error('Slack rejected business metric alert');
       await store.complete(id, token, new Date());
       delivered++;
     } catch (error) {

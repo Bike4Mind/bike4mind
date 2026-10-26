@@ -24,10 +24,10 @@ vi.mock('./businessMetrics/deliver', async importOriginal => {
     subscriberMetric: mocks.sample,
     deliverAnomalies: (
       window: Parameters<typeof original.deliverAnomalies>[0],
-      messages: string[],
+      anomalies: Parameters<typeof original.deliverAnomalies>[1],
       post: (message: string) => Promise<boolean>
     ) =>
-      original.deliverAnomalies(window, messages, post, {
+      original.deliverAnomalies(window, anomalies, post, {
         claim: async () => true,
         complete: async () => undefined,
         release: async () => undefined,
@@ -48,7 +48,7 @@ beforeEach(() => {
     values: [120, 100, 100, 100, 100, 100, 100, 100],
     contributors: [{ label: 'model:large', value: 120 }],
   };
-  mocks.collect.mockResolvedValue({ metrics: [metric], subscribers: 1, subscriberContributors: [] });
+  mocks.collect.mockResolvedValue({ metrics: [metric], subscribers: 1 });
 });
 
 describe('scheduled business metric alert', () => {
@@ -66,7 +66,6 @@ describe('scheduled business metric alert', () => {
     mocks.collect.mockResolvedValue({
       metrics: [{ name: 'requests:user', values: [1040, 1000], contributors: [] }],
       subscribers: 1,
-      subscriberContributors: [],
     });
     expect(await handler({ time: '2026-10-26T00:05:00Z' })).toMatchObject({ anomalies: 0, delivered: 0 });
     expect(mocks.post).not.toHaveBeenCalled();

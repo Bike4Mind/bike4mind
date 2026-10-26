@@ -19,6 +19,11 @@ export type Metric = {
   values: Array<number | null>;
   contributors: Array<{ label: string; value: number }>;
 };
+export type BusinessMetricAnomaly = {
+  metricName: string;
+  direction: 'increase' | 'decrease';
+  message: string;
+};
 export type ComparisonWindow = { end: Date; duration: number; mode: 'daily' | 'intraday' };
 
 export function comparisonWindow(at: Date): ComparisonWindow {
@@ -60,20 +65,28 @@ export function compareMetric(metric: Metric, thresholds: Thresholds) {
 
 const escapeSlack = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function anomalyMessages(metrics: Metric[], window: ComparisonWindow, thresholds: Thresholds): string[] {
-  return metrics.flatMap(metric => {
+export function anomalyAlerts(
+  metrics: Metric[],
+  window: ComparisonWindow,
+  thresholds: Thresholds
+): BusinessMetricAnomaly[] {
+  return metrics.flatMap<BusinessMetricAnomaly>(metric => {
     const anomaly = compareMetric(metric, thresholds);
     if (!anomaly) return [];
     const change = anomaly.percent === null ? 'new activity (previously zero)' : `${anomaly.percent.toFixed(1)}%`;
     const contributors = [...metric.contributors].sort((a, b) => b.value - a.value).slice(0, 5);
-    return [
+    const message =
       `Business metric anomaly: ${escapeSlack(metric.name)}\n` +
-        `${window.mode}, UTC through ${window.end.toISOString()} (${window.duration / HOUR_MS}h)\n` +
-        `Current ${anomaly.current.toFixed(2)}; previous ${anomaly.previous.toFixed(2)}; change ${change}; ` +
-        `7-day median ${anomaly.median === null ? 'warming up' : anomaly.median.toFixed(2)}\n` +
-        `Top contributors: ${contributors.map(row => `${escapeSlack(row.label)}=${row.value.toFixed(2)}`).join(', ') || 'none'}`,
-    ];
+      `${window.mode}, UTC through ${window.end.toISOString()} (${window.duration / HOUR_MS}h)\n` +
+      `Current ${anomaly.current.toFixed(2)}; previous ${anomaly.previous.toFixed(2)}; change ${change}; ` +
+      `7-day median ${anomaly.median === null ? 'warming up' : anomaly.median.toFixed(2)}\n` +
+      `Top contributors: ${contributors.map(row => `${escapeSlack(row.label)}=${row.value.toFixed(2)}`).join(', ') || 'none'}`;
+    return [{ metricName: metric.name, direction: anomaly.delta > 0 ? 'increase' : 'decrease', message }];
   });
+}
+
+export function anomalyMessages(metrics: Metric[], window: ComparisonWindow, thresholds: Thresholds): string[] {
+  return anomalyAlerts(metrics, window, thresholds).map(anomaly => anomaly.message);
 }
 
 export function createMetricAccumulator() {

@@ -3,7 +3,7 @@
 The scheduled worker reconciles the current UTC period against the same period yesterday at
 five minutes past each hour. The midnight run compares the last two complete days. Other runs
 compare midnight through the last completed hour on each day. Every alert includes the preceding
-seven comparable periods' median and the five largest current contributors.
+seven comparable periods' median and, where attributable, the five largest current contributors.
 
 ## Configuration
 
@@ -59,12 +59,15 @@ Stripe customers must map to an eligible account in this stage's database.
 Subscription rows contain only current state, so the worker persists one observed count per UTC
 hour instead of inventing history. Yesterday's comparison becomes available after 24 hours;
 the median needs seven prior samples. Missing samples stay unknown and cannot cause an alert.
-Samples are observed at the scheduled run (about five minutes after the boundary). A replay more
+Subscriber snapshots provide counts, so subscriber alerts omit contributor identities rather than
+listing arbitrary currently subscribed owners. Samples are observed at the scheduled run (about five minutes after the boundary). A replay more
 than an hour late does not create a historical subscription sample. Other metrics are rebuilt
 from their source records; delayed writes and later email verification can revise their history.
 
-The included database migration creates the state collection's `expiresAt` TTL index through
-the normal migration deployment process. It retains samples and delivery receipts for ten days.
+The included database migration creates the state collection's `expiresAt` TTL index, a
+`User.createdAt` index for signup windows, and `stripeCustomerId` indexes on User and Organization
+for payment-customer lookups through the normal migration deployment process. State samples and
+delivery receipts are retained for ten days.
 
 ## Verification and response
 
@@ -83,12 +86,15 @@ the normal migration deployment process. It retains samples and delivery receipt
    DLQ and its shared DLQ alarms if retries exhaust.
 
 Delivery receipts are stored only after Slack accepts a post. A lease prevents simultaneous
-workers from sending the same metric/window, and failed posts are retried. A pending lease
+workers from sending the same metric/day/direction, and failed posts are retried. A pending lease
 fails a competing invocation so a crashed sender cannot make a retry silently succeed; replay
 from the DLQ after the 15-minute lease expires if retries exhaust. As with any incoming
 webhook, a crash after Slack accepts but before the receipt commits can cause a duplicate.
-Replaying after ten-day receipt expiry can also resend a historical alert. Each metric may
-alert once per hourly period; a persistent anomaly can therefore recur hourly.
+Replaying after ten-day receipt expiry can also resend a historical alert. Each metric alerts only on its first threshold
+crossing in each direction per UTC day. Later hourly cutoffs in the same direction stay quiet;
+a reversal can alert once in the opposite direction. The midnight run closes the previous UTC
+day and shares its receipts, so it cannot repeat an intraday alert for that day. The next UTC
+day starts fresh. Failed posts do not consume the daily receipt and remain retryable.
 
 On an alert, inspect the named user/org/model contributors, compare the 7-day median, and check
 the relevant source data before changing thresholds. A small-number guard prevents noise; it

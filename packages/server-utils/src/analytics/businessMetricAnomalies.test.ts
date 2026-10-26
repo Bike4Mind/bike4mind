@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  anomalyAlerts,
   anomalyMessages,
   compareMetric,
   comparisonWindow,
@@ -66,6 +67,19 @@ describe('business metric comparisons', () => {
       contributors: expect.arrayContaining([{ label: 'model:large', value: 12 }]),
     });
     expect(() => accumulator.add('spendUsd', 0, NaN)).toThrow();
+  });
+
+  it('carries stable metric identity and direction separately from presentation', () => {
+    const window = comparisonWindow(new Date('2026-10-26T12:05:00Z'));
+    expect(
+      anomalyAlerts([metric(120), { ...metric(80), name: 'credits' }], window, {
+        credits: { percent: 5, minimumDelta: 10 },
+      })
+    ).toEqual([
+      expect.objectContaining({ metricName: 'requests:user', direction: 'increase' }),
+      expect.objectContaining({ metricName: 'credits', direction: 'decrease' }),
+    ]);
+    expect(anomalyAlerts([metric(10, 0)], window, {})[0].direction).toBe('increase');
   });
 
   it('provides current, previous, median and escaped top contributors in Slack', () => {

@@ -1310,6 +1310,10 @@ UserSchema.pre('save', function (next) {
   next();
 });
 
+// Bounded signup cohorts and Stripe-customer resolution for business metrics.
+UserSchema.index({ createdAt: 1 }, { name: 'user_createdAt' });
+UserSchema.index({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
+
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({
   username: 1,

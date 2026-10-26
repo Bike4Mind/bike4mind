@@ -1,4 +1,4 @@
-import { ApiKeyUsageLog, Organization, Session, UsageEvent, User, UserApiKey } from '@bike4mind/database';
+import { ApiKeyUsageLog, Organization, Quest, Session, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import { Subscription } from '@server/models/Subscription';
 import {
   buildExclusionRules,
@@ -36,6 +36,81 @@ type Usage = {
   feature: string;
 };
 const BATCH_SIZE = 500;
+const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
+const ACCOUNT_FIELDS = {
+  email: 1,
+  isAdmin: 1,
+  isSynthetic: 1,
+  createdAt: 1,
+  emailVerified: 1,
+  stripeCustomerId: 1,
+};
+const ORGANIZATION_FIELDS = { userId: 1, stripeCustomerId: 1 };
+
+async function* batches<Row>(rows: AsyncIterable<Row>) {
+  let batch: Row[] = [];
+  for await (const row of rows) {
+    batch.push(row);
+    if (batch.length === BATCH_SIZE) {
+      yield batch;
+      batch = [];
+    }
+  }
+  if (batch.length > 0) yield batch;
+}
+
+const sourceCut = (source?: string) =>
+  source === 'api' ? 'user' : source === 'cli' || source === 'desktop' ? 'firstParty' : 'unclassified';
+
+// Cache only within this invocation: exclusion changes take effect on the next hourly collection.
+function createEligibility(rules: ReturnType<typeof buildExclusionRules>) {
+  const loadedUsers = new Set<string>();
+  const users = new Set<string>();
+  const loadedOrganizations = new Set<string>();
+  const organizations = new Map<string, OrganizationRow>();
+  const rememberAccount = (account: Account) => {
+    const id = String(account._id);
+    loadedUsers.add(id);
+    if (exclusionReason(account, rules) === null) users.add(id);
+  };
+  const loadUsers = async (ids: Iterable<string>) => {
+    const candidates = [...new Set(ids)].filter(id => OBJECT_ID_RE.test(id) && !loadedUsers.has(id));
+    for (let offset = 0; offset < candidates.length; offset += BATCH_SIZE) {
+      const batch = candidates.slice(offset, offset + BATCH_SIZE);
+      const accounts = await User.find({ _id: { $in: batch } }, ACCOUNT_FIELDS)
+        .read('secondaryPreferred')
+        .lean<Account[]>();
+      batch.forEach(id => loadedUsers.add(id));
+      accounts.forEach(rememberAccount);
+    }
+  };
+  const loadOwners = async (owners: ReadonlyArray<{ ownerType: string; ownerId: string }>) => {
+    const organizationIds = [
+      ...new Set(owners.filter(owner => owner.ownerType === 'Organization').map(owner => owner.ownerId)),
+    ].filter(id => OBJECT_ID_RE.test(id) && !loadedOrganizations.has(id));
+    for (let offset = 0; offset < organizationIds.length; offset += BATCH_SIZE) {
+      const batch = organizationIds.slice(offset, offset + BATCH_SIZE);
+      const rows = await Organization.find({ _id: { $in: batch } }, ORGANIZATION_FIELDS)
+        .read('secondaryPreferred')
+        .lean<OrganizationRow[]>();
+      batch.forEach(id => loadedOrganizations.add(id));
+      rows.forEach(row => organizations.set(String(row._id), row));
+    }
+    await loadUsers(
+      owners.flatMap(owner => {
+        if (owner.ownerType === 'User') return [owner.ownerId];
+        const organization = owner.ownerType === 'Organization' ? organizations.get(owner.ownerId) : undefined;
+        return organization ? [organization.userId] : [];
+      })
+    );
+  };
+  const allowedOwner = (type: string, id: string) => {
+    if (type === 'User') return users.has(id);
+    const organization = type === 'Organization' ? organizations.get(id) : undefined;
+    return organization !== undefined && users.has(organization.userId);
+  };
+  return { users, rememberAccount, loadUsers, loadOwners, allowedOwner };
+}
 
 export async function collectBusinessMetrics(window: ComparisonWindow) {
   const start = new Date(window.end.getTime() - 7 * DAY_MS - window.duration);
@@ -56,34 +131,18 @@ export async function collectBusinessMetrics(window: ComparisonWindow) {
     'completions:firstParty',
   ])
     metrics.ensure(name);
-  const users = new Set<string>();
-  const customers = new Map<string, string>();
-  const accounts = User.find(
-    {},
-    { email: 1, isAdmin: 1, isSynthetic: 1, createdAt: 1, emailVerified: 1, emailVerifiedAt: 1, stripeCustomerId: 1 }
-  )
+  const eligibility = createEligibility(rules);
+  const { users, allowedOwner } = eligibility;
+  const accounts = User.find({ createdAt: range }, ACCOUNT_FIELDS)
     .read('secondaryPreferred')
     .lean<Account[]>()
     .cursor({ batchSize: BATCH_SIZE });
   for await (const account of accounts) {
-    if (exclusionReason(account, rules) !== null) continue;
+    eligibility.rememberAccount(account);
     const id = String(account._id);
-    users.add(id);
-    if (account.stripeCustomerId) customers.set(account.stripeCustomerId, `user:${id}`);
-    if (!account.emailVerified) continue;
+    if (!users.has(id) || !account.emailVerified) continue;
     const index = periodIndex(account.createdAt, window);
     if (index !== null) metrics.add('verifiedSignups', index, 1, [`user:${id}`]);
-  }
-  const organizations = new Set<string>();
-  const orgs = Organization.find({}, { userId: 1, stripeCustomerId: 1 })
-    .read('secondaryPreferred')
-    .lean<OrganizationRow[]>()
-    .cursor({ batchSize: BATCH_SIZE });
-  for await (const organization of orgs) {
-    if (!users.has(organization.userId)) continue;
-    const id = String(organization._id);
-    organizations.add(id);
-    if (organization.stripeCustomerId) customers.set(organization.stripeCustomerId, `org:${id}`);
   }
   const internalKeys = new Set<string>();
   const keys = UserApiKey.find({ productId: { $exists: true, $nin: [null, ''] } }, { _id: 1 })
@@ -93,8 +152,6 @@ export async function collectBusinessMetrics(window: ComparisonWindow) {
     .cursor({ batchSize: BATCH_SIZE });
   for await (const key of keys) internalKeys.add(String(key._id));
   const allowedKey = (id?: string | null) => !id || !internalKeys.has(id);
-  const allowedOwner = (type: string, id: string) =>
-    type === 'Organization' ? organizations.has(id) : type === 'User' && users.has(id);
 
   const usage = UsageEvent.find(
     { createdAt: range, source: { $ne: 'system' } },
@@ -115,55 +172,69 @@ export async function collectBusinessMetrics(window: ComparisonWindow) {
     .read('secondaryPreferred')
     .lean<Usage[]>()
     .cursor({ batchSize: BATCH_SIZE });
-  for await (const row of usage) {
-    if (!users.has(row.userId) || !allowedOwner(row.ownerType, row.ownerId) || !allowedKey(row.apiKeyId)) continue;
-    const index = periodIndex(row.createdAt, window);
-    if (index === null) continue;
-    const labels = [`user:${row.userId}`, `model:${row.model}`];
-    if (row.ownerType === 'Organization') labels.push(`org:${row.ownerId}`);
-    metrics.add('spendUsd', index, row.costUsd, labels);
-    metrics.add(`spendUsd:${row.provider}`, index, row.costUsd, labels);
-    metrics.add('credits', index, row.creditsCharged, labels);
-    if (row.apiKeyId && row.feature === 'completion_api')
-      metrics.add(
-        `completions:${row.source === 'api' ? 'user' : row.source === 'cli' || row.source === 'desktop' ? 'firstParty' : 'unclassified'}`,
-        index,
-        1,
-        labels
-      );
+  for await (const batch of batches(usage)) {
+    await eligibility.loadUsers(batch.map(row => row.userId));
+    await eligibility.loadOwners(batch);
+    for (const row of batch) {
+      if (!users.has(row.userId) || !allowedOwner(row.ownerType, row.ownerId) || !allowedKey(row.apiKeyId)) continue;
+      const index = periodIndex(row.createdAt, window);
+      if (index === null) continue;
+      const labels = [`user:${row.userId}`, `model:${row.model}`];
+      if (row.ownerType === 'Organization') labels.push(`org:${row.ownerId}`);
+      metrics.add('spendUsd', index, row.costUsd, labels);
+      metrics.add(`spendUsd:${row.provider}`, index, row.costUsd, labels);
+      metrics.add('credits', index, row.creditsCharged, labels);
+      if (row.apiKeyId && row.feature === 'completion_api')
+        metrics.add(`completions:${sourceCut(row.source)}`, index, 1, labels);
+    }
   }
   const requests = ApiKeyUsageLog.find({ timestamp: range }, { userId: 1, keyId: 1, source: 1, timestamp: 1 })
     .read('secondaryPreferred')
     .lean<Array<{ userId: string; keyId: string; source?: string; timestamp: Date }>>()
     .cursor({ batchSize: BATCH_SIZE });
-  for await (const row of requests) {
-    if (!users.has(row.userId) || !allowedKey(row.keyId)) continue;
-    const index = periodIndex(row.timestamp, window);
-    if (index !== null)
-      metrics.add(
-        `requests:${row.source === 'api' ? 'user' : row.source === 'cli' || row.source === 'desktop' ? 'firstParty' : 'unclassified'}`,
-        index,
-        1,
-        [`user:${row.userId}`]
-      );
+  for await (const batch of batches(requests)) {
+    await eligibility.loadUsers(batch.map(row => row.userId));
+    for (const row of batch) {
+      if (!users.has(row.userId) || !allowedKey(row.keyId)) continue;
+      const index = periodIndex(row.timestamp, window);
+      if (index !== null) metrics.add(`requests:${sourceCut(row.source)}`, index, 1, [`user:${row.userId}`]);
+    }
   }
 
   const apiSessions = new Set<string>();
   const excludedSessions = new Set<string>();
-  const sessions = Session.find({ 'origin.channel': 'api' }, { _id: 1, 'origin.apiKeyId': 1 })
+  // Resolve only sessions referenced by this window. An old API session can receive a new message.
+  const questSessions = Quest.find({ type: 'message', timestamp: range }, { sessionId: 1 })
     .read('secondaryPreferred')
-    .lean<Array<{ _id: unknown; origin?: { apiKeyId?: string } }>>()
+    .lean<Array<{ sessionId?: string }>>()
     .cursor({ batchSize: BATCH_SIZE });
-  for await (const session of sessions) {
-    apiSessions.add(String(session._id));
-    if (!allowedKey(session.origin?.apiKeyId)) excludedSessions.add(String(session._id));
+  const seenSessions = new Set<string>();
+  for await (const batch of batches(questSessions)) {
+    const ids = [
+      ...new Set(
+        batch
+          .map(quest => quest.sessionId)
+          .filter((id): id is string => !!id && OBJECT_ID_RE.test(id) && !seenSessions.has(id))
+      ),
+    ];
+    if (ids.length === 0) continue;
+    ids.forEach(id => seenSessions.add(id));
+    const sessions = await Session.find({ _id: { $in: ids }, 'origin.channel': 'api' }, { 'origin.apiKeyId': 1 })
+      .read('secondaryPreferred')
+      .lean<Array<{ _id: unknown; origin?: { apiKeyId?: string } }>>();
+    for (const session of sessions) {
+      apiSessions.add(String(session._id));
+      if (!allowedKey(session.origin?.apiKeyId)) excludedSessions.add(String(session._id));
+    }
   }
-  const activity = await collectActivity(start, BATCH_SIZE, window.end, apiSessions, users, undefined, {
+  const activity = await collectActivity(start, BATCH_SIZE, window.end, apiSessions, undefined, undefined, {
     include: (at, source) => source !== 'system' && periodIndex(at, window) !== null,
     excludedApiKeyIds: internalKeys,
     excludedSessionIds: excludedSessions,
   });
+  await eligibility.loadUsers(activity.userDays.keys());
   for (const [userId, days] of activity.userDays) {
+    if (!users.has(userId)) continue;
     for (const day of days) {
       const at = new Date(day * DAY_MS + window.duration - 1);
       const index = periodIndex(at, window);
@@ -178,17 +249,55 @@ export async function collectBusinessMetrics(window: ComparisonWindow) {
     limit: 100,
   });
   const seenCharges = new Set<string>();
-  for await (const event of payments) {
-    if (event.type !== 'charge.succeeded') continue;
-    const charge = event.data.object;
-    if (seenCharges.has(charge.id) || !charge.paid) continue;
-    seenCharges.add(charge.id);
-    const customerId = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id;
-    const customer = customerId ? customers.get(customerId) : undefined;
-    const index = periodIndex(new Date(event.created * 1000), window);
-    if (!customer || index === null) continue;
-    // Keep minor units and currencies separate: no implicit FX conversion or two-decimal assumption.
-    metrics.add(`revenueMinor:${charge.currency}`, index, charge.amount, [customer]);
+  for await (const batch of batches(payments)) {
+    const charges = batch
+      .filter(event => event.type === 'charge.succeeded')
+      .map(event => ({
+        charge: event.data.object,
+        createdAt: new Date(event.created * 1000),
+      }));
+    const customerIds = [
+      ...new Set(
+        charges
+          .map(({ charge }) => (typeof charge.customer === 'string' ? charge.customer : charge.customer?.id))
+          .filter((id): id is string => !!id)
+      ),
+    ];
+    const customers = new Map<string, string>();
+    if (customerIds.length > 0) {
+      const [accounts, organizations] = await Promise.all([
+        User.find({ stripeCustomerId: { $in: customerIds } }, ACCOUNT_FIELDS)
+          .read('secondaryPreferred')
+          .lean<Account[]>(),
+        Organization.find({ stripeCustomerId: { $in: customerIds } }, ORGANIZATION_FIELDS)
+          .read('secondaryPreferred')
+          .lean<OrganizationRow[]>(),
+      ]);
+      accounts.forEach(eligibility.rememberAccount);
+      const owners = organizations.map(organization => ({
+        ownerType: 'Organization',
+        ownerId: String(organization._id),
+      }));
+      await eligibility.loadOwners(owners);
+      for (const account of accounts) {
+        if (account.stripeCustomerId && users.has(String(account._id)))
+          customers.set(account.stripeCustomerId, `user:${String(account._id)}`);
+      }
+      for (const organization of organizations) {
+        if (organization.stripeCustomerId && allowedOwner('Organization', String(organization._id)))
+          customers.set(organization.stripeCustomerId, `org:${String(organization._id)}`);
+      }
+    }
+    for (const { charge, createdAt } of charges) {
+      if (seenCharges.has(charge.id) || !charge.paid) continue;
+      seenCharges.add(charge.id);
+      const customerId = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id;
+      const customer = customerId ? customers.get(customerId) : undefined;
+      const index = periodIndex(createdAt, window);
+      if (!customer || index === null) continue;
+      // Keep minor units and currencies separate: no implicit FX conversion or two-decimal assumption.
+      metrics.add(`revenueMinor:${charge.currency}`, index, charge.amount, [customer]);
+    }
   }
 
   const subscribers = new Set<string>();
@@ -199,13 +308,15 @@ export async function collectBusinessMetrics(window: ComparisonWindow) {
     .read('primary')
     .lean<Array<{ ownerType: string; ownerId: string }>>()
     .cursor({ batchSize: BATCH_SIZE });
-  for await (const subscription of subscriptions) {
-    if (allowedOwner(subscription.ownerType, subscription.ownerId))
-      subscribers.add(`${subscription.ownerType}:${subscription.ownerId}`);
+  for await (const batch of batches(subscriptions)) {
+    await eligibility.loadOwners(batch);
+    for (const subscription of batch) {
+      if (allowedOwner(subscription.ownerType, subscription.ownerId))
+        subscribers.add(`${subscription.ownerType}:${subscription.ownerId}`);
+    }
   }
   return {
     metrics: metrics.result(),
     subscribers: subscribers.size,
-    subscriberContributors: [...subscribers].slice(0, 5).map(label => ({ label, value: 1 })),
   };
 }
