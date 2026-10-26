@@ -116,6 +116,7 @@ export async function reserveRequestCredits({
   // Daily cap check for free-tier accounts (no-op when enforceCredits is off).
   await checkFreeTierDailySpendCap({
     user: req.user,
+    req,
     usageEventRepository,
     logger: req.logger,
   });

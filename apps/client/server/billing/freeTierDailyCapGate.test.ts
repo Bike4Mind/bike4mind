@@ -234,7 +234,9 @@ describe('checkFreeTierDailySpendCap', () => {
 
     expect(isFreeTierDailyCapError(error)).toBe(true);
     const info = (error as TooManyRequestsError).additionalInfo;
-    expect(info).toMatchObject({ errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE, spentToday: 250, dailyCap: 200 });
+    expect(info).toMatchObject({ errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE });
+    expect(info).not.toHaveProperty('spentToday');
+    expect(info).not.toHaveProperty('dailyCap');
     expect(info?.retryAfter).toBeGreaterThan(0);
     expect(info?.retryAfter).toBeLessThanOrEqual(DAY_MS / 1000);
 

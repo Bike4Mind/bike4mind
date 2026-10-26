@@ -3,6 +3,7 @@ import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike
 import { adminSettingsRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
 
 interface IUserRepository {
   findById(id: string): Promise<IUserDocument | null>;
@@ -39,10 +40,13 @@ export function isFreeTierDailyCapError(error: unknown): error is TooManyRequest
 export async function checkFreeTierDailySpendCap({
   usageEventRepository,
   logger,
+  req,
   ...input
 }: CapCheckInput & {
   usageEventRepository: IUsageEventRepository;
   logger: ILogger;
+  /** Request memo for the tier lookup, so it reuses the request's subscription reads. */
+  req?: ActiveSubscriptionsRequest;
 }): Promise<void> {
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
@@ -54,11 +58,13 @@ export async function checkFreeTierDailySpendCap({
     // reach this point rarely (paid tier, enforcement off) don't pay it on every request.
     // When the caller already holds the resolved user (e.g. req.user from middleware),
     // skip the second lookup entirely to avoid a silent skip on replica lag or deletion.
-    const user = 'user' in input && input.user ? input.user : await input.userRepository!.findById(input.userId!);
+    const user = 'user' in input && input.user ? input.user : await input.userRepository.findById(input.userId);
     if (!user) return;
 
+    // Dynamic: userRateTier pulls in the Subscription model at module init, which crashes route tests
+    // that mock @bike4mind/database but never reach the cap check.
     const { resolveUserRateTier } = await import('@server/utils/userRateTier');
-    const tier = await resolveUserRateTier(user);
+    const tier = await resolveUserRateTier(user, req);
     if (tier !== 'free') return;
 
     const steadyCap = getSettingsValue('freeTierDailySpendCapCredits', settings) ?? 0;
@@ -83,11 +89,14 @@ export async function checkFreeTierDailySpendCap({
     if (todaySpend >= cap) {
       // Seconds until the next UTC midnight; becomes the Retry-After header.
       const retryAfter = Math.ceil((startOfDay.getTime() + DAY_MS - now.getTime()) / 1000);
+      logger.info('[freeTierDailyCapGate] daily cap reached', {
+        userId: user.id,
+        spentToday: todaySpend,
+        dailyCap: cap,
+      });
       throw new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
         errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
         retryAfter,
-        spentToday: todaySpend,
-        dailyCap: cap,
       });
     }
   } catch (err) {
