@@ -145,6 +145,19 @@ describe('GET /api/admin/model-deprecation-status', () => {
     ]);
   });
 
+  it('still serves the rest of the report when the stale reference report fails', async () => {
+    mockGetAvailableModels.mockResolvedValueOnce([LIVE_MODEL]).mockRejectedValueOnce(new Error('provider down'));
+    const { res, run } = call({ method: 'GET' });
+    await run();
+    const body = res._getJSONData();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(body.staleReferences).toBeNull();
+    expect(body.staleReferencesError).toEqual(expect.any(String));
+    expect(body).toMatchObject({ totalModels: 1 });
+    expect(body.queue).toHaveLength(1);
+  });
+
   it('populates the EXPIRED view from catalog lifecycle, which the picker filter hides', async () => {
     const { res, run } = call({ method: 'GET' });
     await run();

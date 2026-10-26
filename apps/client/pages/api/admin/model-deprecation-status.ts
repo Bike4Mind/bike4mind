@@ -67,13 +67,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     const daysAhead = parseInt(req.query.daysAhead as string) || 90;
 
-    const [liveModels, rows, pending, priceRows, staleReferences] = await Promise.all([
+    const [liveModels, rows, pending, priceRows, staleReport] = await Promise.all([
       // Private included: this is an operator view, not the picker.
       getAvailableModels(null, { includePrivate: true }),
       modelCatalogRepository.rowsInForce(),
       modelDiscoveryStateRepository.pendingSuggestions(),
       modelPriceRepository.rowsInForce(),
-      modelReferenceReport(),
+      modelReferenceReport().then(
+        references => ({ references, error: undefined }),
+        (error: unknown) => {
+          req.logger?.error('[model-deprecation-status] stale reference report failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return { references: null, error: 'Stale reference report is unavailable' };
+        }
+      ),
     ]);
 
     const lifecycles = catalogLifecycles(rows);
@@ -96,7 +104,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       queue: pending.map(state => ({ modelId: state.modelId, suggestion: state.suggestion })),
       // The shared watchdog report uses deployment credentials and catalog lifecycle,
       // so hidden pins remain classifiable even when they have no successor.
-      staleReferences,
+      staleReferences: staleReport.references,
+      ...(staleReport.error ? { staleReferencesError: staleReport.error } : {}),
     });
   })
   .post(async (req, res) => {
