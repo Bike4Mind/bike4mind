@@ -78,6 +78,17 @@ export class BadRequestError extends HTTPError {
   }
 }
 
+/**
+ * An outbound fetch refused by the SSRF guard. Still a 400, but its message can name the resolved
+ * address, so callers that echo a BadRequestError to end users must exclude this class.
+ */
+export class UrlBlockedError extends BadRequestError {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'UrlBlockedError';
+  }
+}
+
 /** Narrows API_ERROR_CODES to the storage refusals (CONVENTIONS.md section 1). */
 export const STORAGE_ERROR_CODES = [
   'storage_limit_exceeded',
