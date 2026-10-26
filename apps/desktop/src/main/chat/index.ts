@@ -10,6 +10,7 @@ import {
   dialog,
   ipcMain,
   nativeImage,
+  net,
   safeStorage,
   shell,
   type WebContents,
@@ -415,7 +416,7 @@ export function registerChat(
     writeClipboard: text => clipboard.writeText(text),
     logger,
   });
-  const local = new OllamaLocal();
+  const local = new OllamaLocal((url, init) => net.fetch(url, init));
   const models = new ModelCatalog(
     {
       logger,

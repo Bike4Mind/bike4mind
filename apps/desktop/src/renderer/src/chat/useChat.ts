@@ -736,6 +736,13 @@ export function useConversation(
         return;
       }
 
+      if (event.type === 'context-trimmed') {
+        setNotice(
+          `This conversation no longer fits the model's context, so ${event.dropped === 1 ? 'its oldest message was' : `its ${event.dropped} oldest messages were`} left out of this reply. Your next message compacts it first, or run /compact now.`
+        );
+        return;
+      }
+
       // Only 'done' and 'error' end a reply. Stated rather than left to the fall-through,
       // because the background-process events arrive with no reply in flight at all, and
       // treating an unrecognised event as terminal would blank the streaming indicator.

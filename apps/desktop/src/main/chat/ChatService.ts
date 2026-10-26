@@ -112,6 +112,7 @@ import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
 import { LOCAL_MODEL_PREFIX, OllamaLocal } from './OllamaLocal';
+import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
@@ -323,6 +324,10 @@ const LOCAL_SUGGESTION_TIMEOUT_MS = 30_000;
  * limit. Abandoning it changes nothing - see compactContext.
  */
 const COMPACT_TIMEOUT_MS = 120_000;
+// A local summary reads most of the window, about 14k tokens on a 16k model: over two minutes of
+// CPU prefill. Stop cannot reach a compaction, so this stays the bound on the user's wait.
+const LOCAL_COMPACT_TIMEOUT_MS = 300_000;
+const SUMMARY_SHRINK_RETRIES = 2;
 
 /**
  * How far a message may travel from the turn the USER typed, in agent-to-agent hops.
@@ -1857,8 +1862,9 @@ export class ChatService {
    * message released from the queue, which has no caller to read a result, still reports it.
    */
   private async autoCompact(session: ChatSession): Promise<void> {
-    const window = this.deps.models?.cached()?.find(model => model.id === session.model)?.contextWindow;
-    if (!shouldAutoCompact(session.messages, window) && !importedHistoryNeedsCompaction(session)) return;
+    const window = await this.contextWindowOf(session.model);
+    const local = session.model.startsWith(LOCAL_MODEL_PREFIX);
+    if (!shouldAutoCompact(session.messages, window, local) && !importedHistoryNeedsCompaction(session)) return;
 
     const sessionId = session.id;
     this.compacting.add(sessionId);
@@ -1870,6 +1876,17 @@ export class ChatService {
     } finally {
       this.compacting.delete(sessionId);
       this.emit({ type: 'auto-compact', sessionId, running: false, ...(error ? { error } : {}) });
+    }
+  }
+
+  /** For a local model, the num_ctx its requests are sent with (OllamaLocal.contextTokens). */
+  private async contextWindowOf(model: string): Promise<number | undefined> {
+    if (!model.startsWith(LOCAL_MODEL_PREFIX))
+      return this.deps.models?.cached()?.find(option => option.id === model)?.contextWindow;
+    try {
+      return await (this.deps.local ?? new OllamaLocal()).contextTokens(model);
+    } catch {
+      return undefined;
     }
   }
 
@@ -1903,28 +1920,51 @@ export class ChatService {
       return { ok: false, error: 'There is nothing in this conversation to compact yet.' };
     }
     const history = messagesSinceBoundary(session.messages);
+    const localWindow = session.model.startsWith(LOCAL_MODEL_PREFIX)
+      ? await this.contextWindowOf(session.model)
+      : undefined;
+    let transcript = renderForSummary(
+      history,
+      localWindow === undefined ? undefined : localTranscriptChars(localWindow, COMPACT_MAX_TOKENS)
+    );
 
     const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
     let answer = '';
     try {
-      timer = setTimeout(() => controller.abort(), COMPACT_TIMEOUT_MS);
-      await this.streamAuxiliary(
-        api,
-        {
-          // The session's own model, as asked: a summary of a long coding conversation is the
-          // kind of reading a small model does badly, and this one is the handoff everything
-          // after the boundary depends on.
-          model: session.model,
-          messages: compactRequestMessages(renderForSummary(history), focus),
-          tools: [],
-          maxTokens: COMPACT_MAX_TOKENS,
-        },
-        event => {
-          if (event.type === 'content') answer += event.text ?? '';
-        },
-        controller.signal
+      timer = setTimeout(
+        () => controller.abort(),
+        session.model.startsWith(LOCAL_MODEL_PREFIX) ? LOCAL_COMPACT_TIMEOUT_MS : COMPACT_TIMEOUT_MS
       );
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await this.streamAuxiliary(
+            api,
+            {
+              // The session's own model, as asked: a summary of a long coding conversation is the
+              // kind of reading a small model does badly, and this one is the handoff everything
+              // after the boundary depends on.
+              model: session.model,
+              messages: compactRequestMessages(transcript, focus),
+              tools: [],
+              maxTokens: COMPACT_MAX_TOKENS,
+            },
+            event => {
+              if (event.type === 'content') answer += event.text ?? '';
+            },
+            controller.signal
+          );
+          break;
+        } catch (err) {
+          // One message cannot be trimmed by OllamaLocal, so the transcript shrinks by what Ollama
+          // measured: dense text such as CJK runs far fewer characters to a token than estimated.
+          if (!(err instanceof ContextOverflowError) || attempt === SUMMARY_SHRINK_RETRIES) throw err;
+          transcript = renderForSummary(
+            history,
+            shrunkTranscriptChars(transcript.length, err.tokens, err.limit, COMPACT_MAX_TOKENS)
+          );
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`CHAT: could not compact ${sessionId}: ${message}`);
@@ -2402,7 +2442,8 @@ export class ChatService {
                 ...(maxTokens ? { maxTokens } : {}),
               },
               onCompletionEvent,
-              controller.signal
+              controller.signal,
+              dropped => this.emit({ type: 'context-trimmed', sessionId, dropped })
             )
           : await streamRound(
               api!.getAxiosInstance(),
@@ -2618,6 +2659,7 @@ export class ChatService {
                 source: { type: 'base64', media_type: image.mediaType, data: image.data },
               })),
             ],
+            continuesTurn: true,
           });
           screenshotTurns.push(wire.length - 1);
           pruneScreenshots(wire, screenshotTurns);
@@ -2678,7 +2720,8 @@ export class ChatService {
             ...(entry.round.usage ? { usage: entry.round.usage } : {}),
             ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
           }))
-          .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning),
+          // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
+          .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage),
       ];
       // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
       const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
@@ -5287,6 +5330,7 @@ function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
     wire[index] = {
       role: 'user',
       content: [{ type: 'text', text: '[An earlier image was here. Capture or read it again if you need to see it.]' }],
+      continuesTurn: true,
     };
   }
 }
@@ -5455,10 +5499,11 @@ async function streamLocalRound(
   local: OllamaLocal,
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onTrimmed?: (dropped: number) => void
 ): Promise<Error | null> {
   try {
-    await local.stream(request, onEvent, signal);
+    await local.stream(request, onEvent, signal, onTrimmed);
     return null;
   } catch (err) {
     if (signal?.aborted) return null;
