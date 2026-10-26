@@ -33,7 +33,7 @@ jobs:
   audit-gate:
     name: Dependency Audit Gate
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
       contents: read

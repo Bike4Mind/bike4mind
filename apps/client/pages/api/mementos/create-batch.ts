@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { Memento } from '@bike4mind/database';
+import { isZodError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   MementoGroomingService,
@@ -7,6 +8,7 @@ import {
   calculateHotMementoSize,
 } from '../../../services/MementoGroomingService';
 import { CreateMementoSchema } from '@server/validators/mementoValidators';
+import { describeMementoValidationError } from '@server/validators/mementoModelValidation';
 
 const handler = baseApi().post(async (req: Request, res: Response) => {
   req.logger.updateMetadata({ endpoint: 'mementos/create-batch' });
@@ -127,6 +129,12 @@ const handler = baseApi().post(async (req: Request, res: Response) => {
 
     return res.status(201).json(createdMementos);
   } catch (error) {
+    if (isZodError(error)) throw error;
+    const invalidMemento = describeMementoValidationError(error);
+    if (invalidMemento) {
+      req.logger.warn('Rejected mementos that failed model validation:', error);
+      return res.status(400).json({ error: invalidMemento });
+    }
     req.logger.error('Error creating mementos:', error);
     return res.status(500).json({ error: 'Failed to create mementos' });
   }

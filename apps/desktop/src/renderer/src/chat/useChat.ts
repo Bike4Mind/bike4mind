@@ -43,7 +43,7 @@ export interface SessionsController {
   creatingCode: boolean;
   codeError: string | null;
   clearCodeError: () => void;
-  remove: (sessionId: string) => Promise<void>;
+  remove: (sessionId: string, removeWorktree?: boolean) => Promise<void>;
   togglePin: (session: ChatSessionSummary) => Promise<void>;
   toggleArchived: (session: ChatSessionSummary) => Promise<void>;
   /** Rename any listed session, shown at once and rolled back (with `renameError`) if main refuses. */
@@ -152,8 +152,8 @@ export function useSessions(): SessionsController {
     [list]
   );
 
-  const remove = useCallback(async (sessionId: string) => {
-    await window.b4m.chat.deleteSession(sessionId);
+  const remove = useCallback(async (sessionId: string, removeWorktree = false) => {
+    await window.b4m.chat.deleteSession(sessionId, removeWorktree);
     editSessions(current => current.filter(session => session.id !== sessionId));
   }, []);
 
