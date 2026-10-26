@@ -20,7 +20,7 @@ const resources = vi.hoisted(() => {
 });
 
 vi.mock('../secrets', () => ({ secrets: { SLACK_ERROR_REPORTING_WEBHOOK_URL: 'webhook-secret' } }));
-vi.mock('../constants', () => ({ DEFAULT_LAMBDA_ENVIRONMENT: {} }));
+vi.mock('../constants', () => ({ DEFAULT_LAMBDA_ENVIRONMENT: {}, isPreviewStage: false }));
 
 afterEach(() => {
   vi.unstubAllEnvs();
