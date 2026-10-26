@@ -10,11 +10,9 @@ import {
   creditTransactionRepository,
   TelemetryAuditLogModel,
   realtimeConnectionRepository,
-  prepareAdminMutationLock,
-  lockAdminMutations,
-  assertCanRemoveFullAdmin,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { BadRequestError } from '@bike4mind/utils';
 import { userService } from '@bike4mind/services';
 import { commitWithSessionEnd, type SessionEndReason } from '@server/auth/endUserSessions';
 import {
@@ -51,6 +49,9 @@ const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
 
 /** Fields that change how the account signs in; see the credential gates in the handler. */
 const CREDENTIAL_FIELDS = ['password', 'email'] as const;
+
+const ADMIN_ROLE_MOVED_MESSAGE =
+  'Full admin access cannot be changed here; use PUT /api/admin/users/{userId}/permissions.';
 
 const writesCredentialFields = (body: unknown): boolean => {
   const fields = (body ?? {}) as Record<string, unknown>;
@@ -133,12 +134,10 @@ async function handleTelemetryConsentChange(
 }
 
 type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
-  isAdmin?: boolean;
   email?: string | null;
 };
 
 type AuditTargetSnapshot = {
-  isAdmin?: boolean;
   currentCredits?: number;
   name?: string;
   username?: string;
@@ -210,26 +209,21 @@ const handler = baseApi().put(
 
       requireAdminPermission(req, 'support:read');
 
-      // Another user's credentials and the admin role are session-only changes: an API key is
-      // refused, a browser session must have recently re-verified. Both run before any write.
-      // The role is gated in both directions, matching pages/api/admin/users/[userId]/permissions.ts;
-      // bans and every other field stay ungated.
-      if (!isSelf) {
-        const requestedIsAdmin = (req.body as Record<string, unknown> | undefined)?.isAdmin;
-        const changesAdminRole =
-          typeof requestedIsAdmin === 'boolean' &&
-          requestedIsAdmin !==
-            !!((await User.findById(userId).select('isAdmin').lean()) as { isAdmin?: boolean } | null)?.isAdmin;
-        if (writesCredentialFields(req.body) || changesAdminRole) {
-          if (req.apiKeyInfo) {
-            throw new ForbiddenError('Credential and admin-role changes require a signed-in session.');
-          }
-          await requireStepUp(req);
-        }
+      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // Full admin access has one write path, with its own step-up, API-key refusal, last-admin
+      // guard and audit action; a second, weaker path here would bypass them.
+      if (rawBody.isAdmin !== undefined || rawBody.roleChangeReason !== undefined) {
+        throw new BadRequestError(ADMIN_ROLE_MOVED_MESSAGE);
       }
 
-      // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
-      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // Another user's credentials are a session-only change: an API key is refused, a browser
+      // session must have recently re-verified. Runs before any write; other fields stay ungated.
+      if (!isSelf && writesCredentialFields(req.body)) {
+        if (req.apiKeyInfo) throw new ForbiddenError('Credential changes require a signed-in session.');
+        await requireStepUp(req);
+      }
+
+      // Parse with the admin schema -- includes email, tags, credits, etc.
       // Zod strips unknown keys, so a misnamed admin field (the `adminNote` vs
       // `creditReason` mix-up in useUpdateUserCredits was exactly this) parses away
       // and the 200 reads as "fully applied" when a credit grant, tag, or role
@@ -242,23 +236,14 @@ const handler = baseApi().put(
       userService.assertAdminUpdatePermissions(currentUser, body);
 
       const targetBefore = (await User.findById(userId)
-        .select('isAdmin currentCredits name username email')
+        .select('currentCredits name username email')
         .lean()) as AuditTargetSnapshot | null;
       const auditTarget = userAuditTarget(userId, targetBefore);
-      const changesRole = body.isAdmin !== undefined && body.isAdmin !== !!targetBefore?.isAdmin;
       const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
 
-      // No self-service privilege: an admin cannot move their own balance or change their own
-      // admin flag. The attempt is recorded as a critical denied entry and answered with a 403.
-      const deniesSelf = isSelfOrImpersonator(currentUser, userId);
-      if (deniesSelf && changesRole) {
-        await denySelfAdminAction(req, {
-          action: 'user.role.denied',
-          attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
-          target: auditTarget,
-        });
-      }
-      if (deniesSelf && changesCredits) {
+      // No self-service privilege: an admin cannot move their own balance. The attempt is
+      // recorded as a critical denied entry and answered with a 403.
+      if (changesCredits && isSelfOrImpersonator(currentUser, userId)) {
         await denySelfAdminAction(req, {
           action: 'user.credits.denied',
           attempted: 'user.credits.adjusted',
@@ -267,10 +252,7 @@ const handler = baseApi().put(
       }
 
       // Validated before any write so a missing reason never leaves a half-applied update.
-      if (changesRole) parseAdminActionReason(body.roleChangeReason);
       const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
-
-      if (body.isAdmin !== undefined) await prepareAdminMutationLock();
 
       const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
       const previousTelemetryLevel = incomingTelemetryLevel
@@ -284,24 +266,11 @@ const handler = baseApi().put(
       await commitWithSessionEnd(
         req,
         async () => {
-          if (body.isAdmin !== undefined) {
-            await lockAdminMutations();
-            if (body.isAdmin === false) await assertCanRemoveFullAdmin(userId, { isAdmin: false });
-          }
-          // Read inside the transaction so the reason sees the state the write saw; an
+          // Read inside the transaction so the session-end reason sees the state the write saw; an
           // outside read can be stale by the time the write commits.
           const snapshot = (await User.findById(userId)
-            .select('isAdmin email isBanned disputePending moderation')
+            .select('email isBanned disputePending moderation')
             .lean()) as AccountStateSnapshot | null;
-          const changesRoleInTransaction = body.isAdmin !== undefined && body.isAdmin !== !!snapshot?.isAdmin;
-          const roleChangeReason = changesRoleInTransaction ? parseAdminActionReason(body.roleChangeReason) : undefined;
-          if (deniesSelf && changesRoleInTransaction) {
-            await denySelfAdminAction(req, {
-              action: 'user.role.denied',
-              attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
-              target: auditTarget,
-            });
-          }
           const { user: updated, creditAdjustment } = await userService.adminUpdateUser(
             currentUser.id,
             changesCredits ? { ...body, creditReason } : { ...body, currentCredits: undefined, creditReason },
@@ -317,18 +286,8 @@ const handler = baseApi().put(
             }
           );
 
-          // Both entries are strict: a failed audit write aborts this transaction, so neither the
-          // role change nor the balance change can commit without its record. The role change uses
-          // the same action as pages/api/admin/users/[userId]/permissions.ts, so one filter finds both.
-          if (changesRoleInTransaction && snapshot?.isAdmin !== updated?.isAdmin) {
-            await recordAdminActionFromRequest(req, {
-              action: 'user.permissions.updated',
-              target: auditTarget,
-              summary: updated?.isAdmin ? 'granted full admin access' : 'revoked full admin access',
-              reason: roleChangeReason,
-              changes: [{ field: 'isAdmin', before: !!snapshot?.isAdmin, after: !!updated?.isAdmin }],
-            });
-          }
+          // Strict: a failed audit write aborts this transaction, so the balance change cannot
+          // commit without its record.
           if (creditAdjustment) {
             const { credits, previousBalance, resultingBalance, creditTransactionId } = creditAdjustment;
             await recordAdminActionFromRequest(req, {

@@ -111,12 +111,6 @@ vi.mock('@bike4mind/services', async orig => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  prepareAdminMutationLock: vi.fn(),
-  lockAdminMutations: vi.fn(),
-  assertCanRemoveFullAdmin: vi.fn(async () => {
-    if (mockUserFindById()?.isAdmin && (await mockCount()) <= 1)
-      throw Object.assign(new Error('Cannot remove the last remaining full administrator.'), { statusCode: 400 });
-  }),
   adminSettingsRepository: { findBySettingName: vi.fn() },
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: {
@@ -132,7 +126,7 @@ vi.mock('@bike4mind/database', () => ({
           const keep = fields.split(' ');
           // The session-end snapshot is the only read that asks for every block field; note
           // whether it happened inside the change callback (the transaction) or before it.
-          if (fields === 'isAdmin email isBanned disputePending moderation') {
+          if (fields === 'email isBanned disputePending moderation') {
             txnState.snapshotReadInsideChange = txnState.changeRunning;
           }
           projected =
@@ -363,7 +357,7 @@ describe('PUT /api/users/:id/update - changing your own password', () => {
   });
 });
 
-describe("PUT /api/users/:id/update - an admin changing another user's credentials or role", () => {
+describe("PUT /api/users/:id/update - an admin changing another user's credentials", () => {
   const stepUpRequired = Object.assign(new ForbiddenError('Recent verification required'), {
     additionalInfo: { code: 'step_up_required' },
   });
@@ -372,8 +366,6 @@ describe("PUT /api/users/:id/update - an admin changing another user's credentia
   const gatedBodies: Array<[string, Record<string, unknown>, boolean]> = [
     ['password', { password: 'reset-value' }, false],
     ['email', { email: 'other@example.com' }, false],
-    ['an admin-role grant', { isAdmin: true, roleChangeReason: 'Promoted to run support' }, false],
-    ['an admin-role revocation', { isAdmin: false, roleChangeReason: 'Left the support team' }, true],
   ];
 
   it.each(gatedBodies)(
@@ -408,17 +400,6 @@ describe("PUT /api/users/:id/update - an admin changing another user's credentia
   });
 
   it.each([
-    ['isAdmin: true on a user who is already an admin', true],
-    ['isAdmin: false on a user who is not an admin', false],
-  ])('does not gate re-sending %s', async (_label, isAdmin) => {
-    mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin });
-    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin }, apiKeyInfo: API_KEY });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(mockRequireStepUp).not.toHaveBeenCalled();
-  });
-
-  it.each([
     ['a ban', { isBanned: true }],
     ['an unrelated field', { name: 'Renamed' }],
   ])('leaves %s ungated, including with an API key', async (_label, body) => {
@@ -432,77 +413,29 @@ describe("PUT /api/users/:id/update - an admin changing another user's credentia
   });
 });
 
-describe('PUT /api/users/:id/update - lockout guard', () => {
-  it('denies an admin demoting their OWN Super Admin role with a 403, even when other admins exist', async () => {
-    mockUserFindById.mockReturnValue({ isAdmin: true });
-    mockCount.mockResolvedValue(5);
+describe('PUT /api/users/:id/update - full admin access is not changed here', () => {
+  it.each([
+    ['a grant', { isAdmin: true, roleChangeReason: 'Promoted to run support' }],
+    ['a revocation', { isAdmin: false, roleChangeReason: 'Left the support team' }],
+    ['a re-sent unchanged flag', { isAdmin: true }],
+    ['a stray role reason', { name: 'Renamed', roleChangeReason: 'No role change' }],
+  ])('rejects %s with a 400 pointing at the permissions endpoint, before any read or write', async (_label, body) => {
+    mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: true });
+    const { promise } = run({ user: ADMIN, userId: 'other-user', body });
+    await expect(promise).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/\/api\/admin\/users\/\{userId\}\/permissions/),
+    });
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('rejects an admin sending isAdmin on their own record too', async () => {
     const { promise } = run({ user: ADMIN, userId: ADMIN.id, body: { isAdmin: false } });
-    await expect(promise).rejects.toMatchObject({ statusCode: 403 });
-    expect(mockDeny).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ action: 'user.role.denied', attempted: 'user.role.admin_revoked' })
-    );
+    await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockDeny).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).not.toHaveBeenCalled();
-  });
-
-  it('rejects demoting the LAST remaining Super Admin (a different user)', async () => {
-    mockUserFindById.mockReturnValue({ isAdmin: true });
-    mockCount.mockResolvedValue(1);
-    const { promise } = run({
-      user: ADMIN,
-      userId: 'other-admin',
-      body: { isAdmin: false, roleChangeReason: 'Left the company' },
-    });
-    await expect(promise).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/last remaining/i) });
-    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
-  });
-
-  it('allows demoting a non-last admin (a different user)', async () => {
-    mockUserFindById.mockReturnValue({ isAdmin: true });
-    mockCount.mockResolvedValue(2);
-    const { res, promise } = run({
-      user: ADMIN,
-      userId: 'other-admin',
-      body: { isAdmin: false, roleChangeReason: 'Left the company' },
-    });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(mockAdminUpdateUser).toHaveBeenCalled();
-    expect(mockAdminUpdateUser.mock.calls[0][2].db.userApiKeys).toBeDefined();
-  });
-
-  it('does not run the lockout check at all for a non-demote update (isAdmin absent from body)', async () => {
-    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { tags: ['opti'] } });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    // The audit target read, the in-transaction snapshot, the post-update refetch and the
-    // before/after profile-audit snapshots; the guard's isAdmin count is skipped entirely.
-    expect(mockUserFindById).toHaveBeenCalledTimes(5);
-    expect(mockCount).not.toHaveBeenCalled();
-    expect(mockAdminUpdateUser).toHaveBeenCalled();
-  });
-
-  it('does not run the lockout check when promoting a user (isAdmin: true)', async () => {
-    const { res, promise } = run({
-      user: ADMIN,
-      userId: 'other-user',
-      body: { isAdmin: true, roleChangeReason: 'Promoted to run support' },
-    });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    // Role-grant check, audit target read, in-transaction snapshot and refetch; no lockout guard read.
-    expect(mockUserFindById).toHaveBeenCalledTimes(4);
-    expect(mockCount).not.toHaveBeenCalled();
-    expect(mockAdminUpdateUser).toHaveBeenCalled();
-  });
-
-  it('does not block demoting a target who is not currently an admin', async () => {
-    mockUserFindById.mockReturnValue({ isAdmin: false });
-    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin: false } });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(mockCount).not.toHaveBeenCalled();
-    expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
 });
 
@@ -882,7 +815,6 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
 });
 
 describe('PUT /api/users/:id/update - admin audit trail', () => {
-  const ROLE_REASON = 'Promoted to run support';
   const CREDIT_REASON = 'Goodwill after the outage';
   const target = (overrides: Record<string, unknown> = {}) => ({
     id: 'other-user',
@@ -890,96 +822,6 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
     isAdmin: false,
     currentCredits: 100,
     ...overrides,
-  });
-
-  describe('role changes', () => {
-    it.each([
-      ['grants', true, false, 'granted full admin access'],
-      ['revokes', false, true, 'revoked full admin access'],
-    ])(
-      'records %s as user.permissions.updated with the reason and an isAdmin change row',
-      async (_label, after, before, summary) => {
-        mockUserFindById.mockReturnValue(target({ isAdmin: before }));
-        mockAdminUpdateUser.mockResolvedValue({ user: target({ isAdmin: after }), creditAdjustment: undefined });
-        const { res, promise } = run({
-          user: ADMIN,
-          userId: 'other-user',
-          body: { isAdmin: after, roleChangeReason: `  ${ROLE_REASON}  ` },
-        });
-        await promise;
-
-        expect(res._getStatusCode()).toBe(200);
-        expect(mockRecord).toHaveBeenCalledTimes(1);
-        expect(mockRecord).toHaveBeenCalledWith(
-          expect.anything(),
-          expect.objectContaining({
-            action: 'user.permissions.updated',
-            summary,
-            target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
-            reason: ROLE_REASON,
-            changes: [{ field: 'isAdmin', before, after }],
-          })
-        );
-      }
-    );
-
-    it('records inside the commitWithSessionEnd transaction', async () => {
-      mockUserFindById.mockReturnValue(target({ isAdmin: true }));
-      mockAdminUpdateUser.mockResolvedValue({ user: target({ isAdmin: false }), creditAdjustment: undefined });
-      let changeRunningAtRecord: boolean | undefined;
-      mockRecord.mockImplementation(async () => {
-        changeRunningAtRecord = txnState.changeRunning;
-        return null;
-      });
-      await run({
-        user: ADMIN,
-        userId: 'other-user',
-        body: { isAdmin: false, roleChangeReason: ROLE_REASON },
-      }).promise;
-
-      expect(changeRunningAtRecord).toBe(true);
-    });
-
-    it.each([
-      ['missing', undefined],
-      ['too short', ' abc '],
-    ])('answers 400 and writes nothing when the role change reason is %s', async (_label, roleChangeReason) => {
-      mockUserFindById.mockReturnValue(target({ isAdmin: true }));
-      const { promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin: false, roleChangeReason } });
-
-      await expect(promise).rejects.toMatchObject({ statusCode: 400 });
-      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
-      expect(mockRecord).not.toHaveBeenCalled();
-    });
-
-    it('does not record when the isAdmin flag is unchanged', async () => {
-      mockUserFindById.mockReturnValue(target({ isAdmin: true }));
-      await run({ user: ADMIN, userId: 'other-user', body: { isAdmin: true } }).promise;
-
-      expect(mockRecord).not.toHaveBeenCalled();
-    });
-
-    it('fails the request when the audit write fails, so the transaction aborts', async () => {
-      mockUserFindById.mockReturnValue(target({ isAdmin: true }));
-      mockAdminUpdateUser.mockResolvedValue({ user: target({ isAdmin: false }), creditAdjustment: undefined });
-      mockRecord.mockRejectedValue(new Error('audit down'));
-      const { promise } = run({
-        user: ADMIN,
-        userId: 'other-user',
-        body: { isAdmin: false, roleChangeReason: ROLE_REASON },
-      });
-
-      await expect(promise).rejects.toThrow('audit down');
-    });
-
-    it('denies a self role change before the reason is even checked', async () => {
-      mockUserFindById.mockReturnValue(target({ id: ADMIN.id, isAdmin: true }));
-      const { promise } = run({ user: ADMIN, userId: ADMIN.id, body: { isAdmin: false } });
-
-      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
-      expect(mockDeny).toHaveBeenCalledTimes(1);
-      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
-    });
   });
 
   describe('credit changes', () => {

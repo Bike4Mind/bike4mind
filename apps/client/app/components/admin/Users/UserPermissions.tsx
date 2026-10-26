@@ -107,7 +107,7 @@ const UserPermissions: React.FC<UserPermissionsProps> = React.memo(
     // Client-side preemption of the server lockout guard for the case the client
     // can actually know: an admin demoting their OWN Super Admin. (The
     // last-remaining-admin case needs a global count the client doesn't have, so
-    // it stays server-enforced with a clear error - see users/[id]/update.ts.)
+    // it stays server-enforced with a clear error - see admin/users/[userId]/permissions.ts.)
     const lockSelfDemote = !!isSelf && user.isAdmin;
 
     const handleRoleChange = (newRole: Role) => {

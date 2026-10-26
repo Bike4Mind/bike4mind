@@ -10,7 +10,13 @@ import { FullUsersView } from './FullUsersView';
 const actor = vi.hoisted(() => ({
   currentUser: { id: 'admin-1', isAdmin: true, adminPermissions: [] as string[], mfa: { totpEnabled: true } },
 }));
-const mutations = vi.hoisted(() => ({ updateMutate: vi.fn(), loginAsMutate: vi.fn(), navigate: vi.fn() }));
+const mutations = vi.hoisted(() => ({
+  updateMutate: vi.fn(),
+  loginAsMutate: vi.fn(),
+  navigate: vi.fn(),
+  put: vi.fn(),
+  toastError: vi.fn(),
+}));
 
 // Only the Roles column is exercised here (it owns the Custom Tags control that #2441 is
 // about), so the card's other sections are stubbed to keep their data hooks out of it.
@@ -59,7 +65,8 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
   useAdminSettings: () => ({ settings: {} }),
 }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn() } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), put: mutations.put } }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: mutations.toastError } }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mutations.navigate }));
 
@@ -202,19 +209,23 @@ describe('FullUsersView - reason-required admin actions', () => {
   beforeEach(() => {
     mutations.updateMutate.mockClear();
     mutations.loginAsMutate.mockClear();
+    mutations.put.mockReset();
+    mutations.toastError.mockClear();
   });
 
   const typeReason = (testId: string, value: string) =>
     fireEvent.change(screen.getByTestId(testId), { target: { value } });
 
-  it('requires a reason before a role change is saved, then sends roleChangeReason', () => {
+  it('requires a reason, then saves the role through the permissions endpoint, not the profile update', async () => {
+    mutations.put.mockResolvedValue({});
     render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByTestId('role-radio-super-admin').querySelector('input') as HTMLInputElement);
+    addCustomTag('on-call');
     fireEvent.click(screen.getByTestId('user-update-btn'));
 
     // Confirm dialog opens instead of saving straight away.
-    expect(mutations.updateMutate).not.toHaveBeenCalled();
+    expect(mutations.put).not.toHaveBeenCalled();
     const confirmButton = screen.getByTestId('role-change-confirm-btn');
     expect(confirmButton).toBeDisabled();
 
@@ -225,11 +236,32 @@ describe('FullUsersView - reason-required admin actions', () => {
     expect(confirmButton).toBeEnabled();
     fireEvent.click(confirmButton);
 
-    expect(mutations.updateMutate).toHaveBeenCalledTimes(1);
-    expect(mutations.updateMutate.mock.calls[0][0]).toMatchObject({
-      id: 'u1',
-      data: { isAdmin: true, roleChangeReason: 'Promoted to cover on-call' },
+    await waitFor(() => expect(mutations.put).toHaveBeenCalledTimes(1));
+    expect(mutations.put).toHaveBeenCalledWith('/api/admin/users/u1/permissions', {
+      isAdmin: true,
+      adminPermissions: [],
+      reason: 'Promoted to cover on-call',
     });
+    // The rest of the staged edit still goes through the profile update, without the role.
+    await waitFor(() => expect(mutations.updateMutate).toHaveBeenCalledTimes(1));
+    expect(mutations.updateMutate.mock.calls[0][0].data).toHaveProperty('tags');
+    expect(mutations.updateMutate.mock.calls[0][0].data).not.toHaveProperty('isAdmin');
+    expect(mutations.updateMutate.mock.calls[0][0].data).not.toHaveProperty('roleChangeReason');
+  });
+
+  it('shows the server refusal and skips the profile update when the role change is refused', async () => {
+    mutations.put.mockRejectedValue(new Error('Cannot remove the last remaining full administrator.'));
+    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+
+    fireEvent.click(screen.getByTestId('role-radio-super-admin').querySelector('input') as HTMLInputElement);
+    fireEvent.click(screen.getByTestId('user-update-btn'));
+    typeReason('role-change-reason-input', 'Promoted to cover on-call');
+    fireEvent.click(screen.getByTestId('role-change-confirm-btn'));
+
+    await waitFor(() =>
+      expect(mutations.toastError).toHaveBeenCalledWith('Cannot remove the last remaining full administrator.')
+    );
+    expect(mutations.updateMutate).not.toHaveBeenCalled();
   });
 
   it('saves without a confirm dialog or roleChangeReason when the role is untouched', () => {

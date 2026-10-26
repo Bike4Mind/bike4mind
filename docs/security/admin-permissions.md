@@ -21,8 +21,8 @@ User profile updates and deletion also require `support:read` because their
 responses include user details.
 Treat `settings:manage` as privileged because its holder can grant permissions.
 A delegated `settings:manage` holder can only grant permissions it holds itself,
-cannot grant the full-admin flag (on the permissions endpoint, the profile update
-or account creation), and cannot change the permissions of an account that
+cannot grant the full-admin flag (on the permissions endpoint or account
+creation), and cannot change the permissions of an account that
 already has admin access.
 
 "Full admin" means exactly the legacy `isAdmin: true` flag. Holding every explicit
@@ -68,7 +68,7 @@ test. New authenticated admin routes without declarations fail that test.
 Use `hasAdminPermission` from `@bike4mind/common` for client affordances and server
 checks. Do not infer admin permissions from tags or `User.role`. Permission
 mutations must use the audited permissions endpoint rather than general profile
-updates.
+updates; `PUT /api/users/{id}/update` rejects `isAdmin` with a 400 that names it.
 
 The transaction ledger and session-usage read endpoints also serve organization
 owners. Their explicit read-only owner authorization remains scoped to the

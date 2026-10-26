@@ -10,7 +10,9 @@ const {
   mockRecord,
   mockDeny,
   mockWithTransaction,
+  mockAssertCanRemoveFullAdmin,
 } = vi.hoisted(() => ({
+  mockAssertCanRemoveFullAdmin: vi.fn(),
   mockRecord: vi.fn(),
   mockDeny: vi.fn(),
   mockWithTransaction: vi.fn(),
@@ -38,7 +40,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({
   prepareAdminMutationLock: vi.fn(),
   lockAdminMutations: vi.fn(),
-  assertCanRemoveFullAdmin: vi.fn(),
+  assertCanRemoveFullAdmin: (...a: unknown[]) => mockAssertCanRemoveFullAdmin(...a),
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   userRepository: {
     delete: (...a: unknown[]) => mockRepoDelete(...a),
@@ -90,6 +92,7 @@ beforeEach(() => {
   mockRecord.mockReset().mockResolvedValue(null);
   mockEmitBillingEvent.mockReset().mockResolvedValue([]);
   mockWithTransaction.mockReset().mockImplementation((fn: () => unknown) => fn());
+  mockAssertCanRemoveFullAdmin.mockReset().mockResolvedValue(undefined);
   mockDeny.mockReset().mockImplementation(async () => {
     throw new ForbiddenError('Admins cannot perform this action on their own account.');
   });
@@ -106,6 +109,22 @@ describe('DELETE /api/users/[id]/delete', () => {
     });
     await call;
     expect(mockRepoDelete).toHaveBeenCalledWith('u1');
+  });
+
+  it('refuses deleting the last full admin inside the transaction and deletes nothing', async () => {
+    mockAssertCanRemoveFullAdmin.mockRejectedValue(
+      Object.assign(new Error('Cannot remove the last remaining full administrator.'), { statusCode: 400 })
+    );
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      return { id: 'u1' };
+    });
+    const { call } = await run();
+    await expect(call).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockAssertCanRemoveFullAdmin).toHaveBeenCalledWith('u1');
+    expect(mockRepoDelete).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(mockPurge).not.toHaveBeenCalled();
   });
 
   it('denies a delete-only actor before target reads or deletion', async () => {

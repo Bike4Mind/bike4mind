@@ -61,9 +61,15 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useNavigate } from '@tanstack/react-router';
+import { toast } from 'sonner';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { unsavedFieldKeys } from '../unsavedFieldLabels';
 import { stageFieldEdit } from '../stageFieldEdit';
+import {
+  adminRequestErrorMessage,
+  invalidateAdminPermissionQueries,
+  putAdminPermissions,
+} from '../adminPermissionsRequest';
 
 interface UsersViewProps {
   user: AdminUserProfile;
@@ -149,6 +155,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   const [creditReason, setCreditReason] = useState('');
   const [roleConfirmOpen, setRoleConfirmOpen] = useState(false);
   const [roleChangeReason, setRoleChangeReason] = useState('');
+  const [roleSaving, setRoleSaving] = useState(false);
   const [loginAsReason, setLoginAsReason] = useState('');
   const [tempUserLevel, setTempUserLevel] = useState<UserLevelType>(user.level);
   const [systemMessageModalOpen, setSystemMessageModalOpen] = useState(false);
@@ -293,24 +300,42 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       return;
     if (unsavedKeys.some(key => !hasAdminPermission(currentUser, permissionForField(key as keyof IUserDocument))))
       return;
-    const data = Object.entries(editedFields).reduce<
-      Partial<IUserDocument> & { creditReason?: string; roleChangeReason?: string }
-    >((acc, [key, value]) => {
-      if (value) {
-        // formState carries admin-editable fields beyond the list projection, so index it
-        // structurally rather than through AdminUserListItem's narrower keys.
-        (acc as Record<string, unknown>)[key] = (formState as Record<string, unknown>)[key];
-      }
-      return acc;
-    }, {});
+    const data = Object.entries(editedFields).reduce<Partial<IUserDocument> & { creditReason?: string }>(
+      (acc, [key, value]) => {
+        // The role goes through the permissions endpoint below; the profile update rejects it.
+        if (value && key !== 'isAdmin') {
+          // formState carries admin-editable fields beyond the list projection, so index it
+          // structurally rather than through AdminUserListItem's narrower keys.
+          (acc as Record<string, unknown>)[key] = (formState as Record<string, unknown>)[key];
+        }
+        return acc;
+      },
+      {}
+    );
 
     // Attach the reason only when credits actually changed - the server ignores
     // it otherwise, and it should never leak onto an unrelated profile edit.
     if (editedFields.currentCredits && creditReason.trim()) {
       data.creditReason = creditReason.trim();
     }
-    if (editedFields.isAdmin && roleReason) {
-      data.roleChangeReason = roleReason.trim();
+    if (editedFields.isAdmin) {
+      setRoleSaving(true);
+      try {
+        await putAdminPermissions(user.id, {
+          isAdmin: !!formState.isAdmin,
+          adminPermissions: user.adminPermissions ?? [],
+          reason: roleReason ?? '',
+        });
+      } catch (error) {
+        toast.error(adminRequestErrorMessage(error, 'Failed to change the role'));
+        return;
+      } finally {
+        setRoleSaving(false);
+      }
+      closeRoleConfirm();
+      toast.success('Role updated');
+      await invalidateAdminPermissionQueries(queryClient, user.id);
+      if (Object.keys(data).length === 0) return;
     }
 
     updateUser.mutate(
@@ -788,7 +813,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
             <Button
               color="danger"
               disabled={!isValidAdminActionReason(roleChangeReason)}
-              loading={updateUser.isPending}
+              loading={roleSaving || updateUser.isPending}
               onClick={() => handleSaveChanges(roleChangeReason)}
               data-testid="role-change-confirm-btn"
             >
