@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
+import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
 
 // Mirror of fabFileChunk.test.ts, scoped to the batchId log-metadata attach. We drive the raw
 // handler with a fully-vectorized FabFile so it hits the idempotency early-return right after the
@@ -141,7 +142,10 @@ vi.mock('@workers/queueHandlers/notifySlackIndexingComplete', () => ({
 }));
 vi.mock('@workers/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifier: () => h.spendNotifier }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
+vi.mock('@bike4mind/server-utils/utils/errors', async () => ({
+  NotFoundError: class NotFoundError extends Error {},
+  ForbiddenError: (await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common')).ForbiddenError,
+}));
 // Module-load zod schemas used by VectorizePayload.
 vi.mock('@bike4mind/common', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
@@ -1555,6 +1559,36 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     expect(h.reservationRefund).toHaveBeenCalledTimes(1);
     expect(h.reservationSettle).not.toHaveBeenCalled();
   });
+
+  it('fails the file once and consumes the message when AI access has been revoked', async () => {
+    const { ForbiddenError } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+    h.reserveRequestCredits.mockRejectedValueOnce(new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE));
+    h.markFailedIfNotAlready.mockResolvedValueOnce(true);
+    h.deferFailureIfRetryable.mockResolvedValueOnce(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledExactlyOnceWith('ff1', AI_ACCESS_REVOKED_MESSAGE);
+    expect(h.reservationSettle).not.toHaveBeenCalled();
+  });
+
+  it.each(['billing store unavailable', 'unrelated forbidden request'])(
+    'keeps retrying a reservation failure: %s',
+    async message => {
+      const { ForbiddenError } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+      const error = message === 'unrelated forbidden request' ? new ForbiddenError(message) : new Error(message);
+      h.reserveRequestCredits.mockRejectedValueOnce(error);
+      h.deferFailureIfRetryable.mockResolvedValueOnce(true);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toBe(error);
+
+      expect(h.getVector).not.toHaveBeenCalled();
+      expect(h.deferFailureIfRetryable).toHaveBeenCalledTimes(1);
+      expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    }
+  );
 
   it('still completes the file when settlement fails after the embeddings were paid for', async () => {
     h.reservationSettle.mockRejectedValueOnce(new Error('ledger down'));

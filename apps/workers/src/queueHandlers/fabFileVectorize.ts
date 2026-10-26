@@ -21,7 +21,8 @@ import {
   User,
   withTransaction,
 } from '@bike4mind/database';
-import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
 import {
@@ -785,16 +786,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
     // switch does not flip itself): retrying only re-reserves spend from the wider meters
     // and burns delivery attempts, so it skips the retry deferral and accounts immediately.
-    // A holder short of credits is the same: the file fails now with the refusal as its message.
-    const isTerminalSpendDenial =
+    // Insufficient credits and an administrator's AI-access revocation are likewise terminal.
+    // Match the moderation refusal specifically; unrelated authorization failures still retry.
+    const isTerminalVectorizeDenial =
       (err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable) ||
-      getQuestErrorCode(err) === 'insufficient_credits';
+      getQuestErrorCode(err) === 'insufficient_credits' ||
+      (err instanceof ForbiddenError && err.message === AI_ACCESS_REVOKED_MESSAGE);
 
     // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
     // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
     // 'failed' status untouched.
     if (
-      !isTerminalSpendDenial &&
+      !isTerminalVectorizeDenial &&
       (await deferFailureIfRetryable(event, FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT, {
         fabFileId,
         batchId: existingFabFile.batchId,
@@ -857,8 +860,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // A terminal denial is fully accounted above - consume the message instead of
     // rethrowing, so a deliberately stopped pipeline does not shovel messages into the
     // DLQ and page whoever flipped the switch.
-    if (isTerminalSpendDenial) {
-      logger.warn(`Vectorization denied by spend gate or credit balance for ${fabFileId}: ${errorMessage}`);
+    if (isTerminalVectorizeDenial) {
+      logger.warn(`Vectorization denied by spend gate, credit balance, or AI access for ${fabFileId}: ${errorMessage}`);
       return;
     }
     throw err; // Re-throw so SQS marks the message failed
