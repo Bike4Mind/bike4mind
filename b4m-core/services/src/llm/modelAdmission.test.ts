@@ -3,6 +3,7 @@ import {
   ChatModels,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   PAID_PLAN_ENTITLEMENT_KEY,
+  ServiceUnavailableError,
   type LLMModelConfig,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -195,7 +196,27 @@ describe('free-tier model gate', () => {
   });
 
   it('fails closed when entitlements cannot be resolved', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     await expect(freeUser(() => Promise.reject(new Error('db down'))).admits('premium')).resolves.toBe(false);
+    warn.mockRestore();
+  });
+
+  it('answers a failed entitlement read with a retryable 503, not the subscription refusal, and logs once', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
+    const admission = freeUser(() => Promise.reject(new Error('db down')));
+    const err = await admission.assert('premium').catch(e => e);
+    expect(err).toBeInstanceOf(ServiceUnavailableError);
+    expect(err.additionalInfo?.errorCode).not.toBe(MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE);
+    expect(err.message).toContain('Please try again');
+    await expect(admission.admits('premium')).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('still admits an allowlisted model when the entitlement read fails', async () => {
+    const getEntitlements = vi.fn(() => Promise.reject(new Error('db down')));
+    await expect(freeUser(getEntitlements).admits('priced')).resolves.toBe(true);
+    expect(getEntitlements).not.toHaveBeenCalled();
   });
 
   it('admits every model while the gate is off', async () => {

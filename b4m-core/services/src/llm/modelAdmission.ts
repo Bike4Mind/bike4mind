@@ -3,6 +3,7 @@ import {
   hasDeveloperUserTag,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   PAID_PLAN_ENTITLEMENT_KEY,
+  ServiceUnavailableError,
   type IAdminSettingsRepository,
   type LLMModelConfig,
   type ModelInfo,
@@ -103,8 +104,8 @@ export function isUnpricedTextModel(model: ModelInfo): boolean {
  * client and automatic fallbacks, the deprecated-id remap (ChatCompletionProcess), executeCompletion
  * (cliCompletions), the agent executor, and the routes metered by
  * apps/client/server/billing/meterPlatformCompletion.ts. A model with no config entry is admitted;
- * entitlements are resolved lazily, only when they can change the outcome, and fail safe to [] (which
- * reads as a free account to the free-tier gate).
+ * entitlements are resolved lazily, only when they can change the outcome. A failed read yields [] for the
+ * config gate; the free-tier gate answers it with a retryable ServiceUnavailableError, not an upgrade prompt.
  */
 export function createModelAdmission({
   user,
@@ -116,8 +117,13 @@ export function createModelAdmission({
 }: ModelAdmissionInput): ModelAdmission {
   const isAdmin = user.isAdmin || false;
   let entitlementKeys: Promise<string[]> | undefined;
+  let entitlementReadFailed = false;
   const resolveEntitlements = (): Promise<string[]> =>
-    (entitlementKeys ??= (getEntitlements?.() ?? Promise.resolve([])).catch(() => []));
+    (entitlementKeys ??= (getEntitlements?.() ?? Promise.resolve([])).catch(error => {
+      entitlementReadFailed = true;
+      Logger.warn('modelAdmission: entitlement read failed; cannot verify the plan for the free-tier gate', error);
+      return [];
+    }));
 
   const requiresPaidPlan = async (modelId: string, model: ModelInfo | undefined): Promise<boolean> => {
     if (!freeTierAllowedModels || isFreeTierExempt(user)) return false;
@@ -145,6 +151,9 @@ export function createModelAdmission({
       }
     }
     if (await requiresPaidPlan(modelId, model)) {
+      if (entitlementReadFailed) {
+        return new ServiceUnavailableError(`Could not verify your plan for model "${modelId}". Please try again.`);
+      }
       return new ForbiddenError(
         `Model "${modelId}" requires a paid plan. Upgrade your plan to use it, or choose one of the free-tier models.`,
         { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE }
