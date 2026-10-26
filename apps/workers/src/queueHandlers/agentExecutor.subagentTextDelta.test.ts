@@ -89,6 +89,53 @@ describe('createSubagentTextDeltaSender', () => {
     expect(delivered).toEqual(['ok']);
   });
 
+  it('sends no frames for an empty delta and no empty trailing chunk for an exact multiple', async () => {
+    const delivered: string[] = [];
+    const { send } = createSubagentTextDeltaSender(async ({ delta }) => {
+      delivered.push(delta);
+    }, 3);
+    const base = { childExecutionId: 'c1', agentName: 'a', iteration: 0 };
+
+    await send({ ...base, delta: '' });
+    await send({ ...base, delta: 'abcdef' });
+
+    expect(delivered).toEqual(['abc', 'def']);
+  });
+
+  it('keeps a later send queued behind an in-flight one after an earlier link settles', async () => {
+    const gates = [deferred(), deferred(), deferred()];
+    const started: string[] = [];
+    let call = 0;
+    const { send, flush } = createSubagentTextDeltaSender(async ({ delta }) => {
+      const gate = gates[call++];
+      started.push(delta);
+      await gate.promise;
+    }, 100);
+    const base = { childExecutionId: 'c1', agentName: 'a', iteration: 1 };
+
+    const p1 = send({ ...base, delta: 'A' });
+    const p2 = send({ ...base, delta: 'B' });
+    gates[0].resolve();
+    await p1;
+    for (let tick = 0; tick < 5; tick++) await Promise.resolve();
+
+    const p3 = send({ ...base, delta: 'C' });
+    let flushed = false;
+    const flushing = flush('c1').then(() => {
+      flushed = true;
+    });
+    for (let tick = 0; tick < 5; tick++) await Promise.resolve();
+
+    expect(started).toEqual(['A', 'B']);
+    expect(flushed).toBe(false);
+
+    gates[1].resolve();
+    await p2;
+    gates[2].resolve();
+    await Promise.all([p3, flushing]);
+    expect(started).toEqual(['A', 'B', 'C']);
+  });
+
   describe('flush', () => {
     it('resolves only after every queued delta for that child has been sent', async () => {
       const gate = deferred();
