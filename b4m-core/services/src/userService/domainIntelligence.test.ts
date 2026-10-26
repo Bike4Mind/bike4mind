@@ -98,6 +98,30 @@ describe('lookupDomainIntel', () => {
     );
     expect(intel.mxFlags).toEqual(['no-mx']);
     expect(intel.failed).toEqual([]);
+
+    const unresolved = await lookupDomainIntel(
+      'gone.test',
+      lookupOptions({
+        resolveMx: async () => {
+          throw Object.assign(new Error('not found'), { code: 'ENOTFOUND' });
+        },
+      })
+    );
+    expect(unresolved.mxFlags).toEqual(['no-mx']);
+    expect(unresolved.failed).toEqual([]);
+  });
+
+  it('flags self-hosted and Google Workspace MX hosts', async () => {
+    const intel = await lookupDomainIntel(
+      'own-mail.test',
+      lookupOptions({
+        resolveMx: async () => [
+          { exchange: 'mail.own-mail.test', priority: 1 },
+          { exchange: 'aspmx.l.google.com', priority: 5 },
+        ],
+      })
+    );
+    expect(intel.mxFlags.sort()).toEqual(['google-workspace', 'self-hosted']);
   });
 
   it('fails open when the lookups outlive the budget', async () => {
@@ -169,6 +193,17 @@ describe('domainHoldReason', () => {
       'young-domain (<30 days)'
     );
     expect(await reasonFor('a@settled.test', memoryRepo(), { fetchImpl: rdapFetch(registered(30)) })).toBeNull();
+  });
+
+  it('never holds on age when the threshold is 0', async () => {
+    const reason = await domainHoldReason('a@young.test', {
+      repository: memoryRepo(),
+      youngerThanDays: 0,
+      timeoutMs: 500,
+      adminBlockedDomains: new Set(),
+      lookup: lookupOptions({ fetchImpl: rdapFetch(registered(1)) }),
+    });
+    expect(reason).toBeNull();
   });
 
   it('looks up the registrable domain of a subdomain address', async () => {

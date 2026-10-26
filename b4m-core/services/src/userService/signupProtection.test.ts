@@ -254,6 +254,19 @@ describe('domain intelligence holds', () => {
     }
   });
 
+  it('skips the domain checks for an existing review or a signup outside the window', async () => {
+    const reviewed = withLists({ 'example-burner.test': ['aggregate'] });
+    reviewed.setReview({ domain: 'example-burner.test', status: 'released' } as SignupDomainReview);
+    expect(await protectSignupCredits(reviewed.user(1, 'a@example-burner.test').id, reviewed.db)).toBe(false);
+    expect(reviewed.repository.disposableSources).not.toHaveBeenCalled();
+
+    const stale = withLists({ 'example-burner.test': ['aggregate'] });
+    const user = stale.user(1, 'a@example-burner.test');
+    stale.findById.mockResolvedValue({ ...user, emailVerifiedAt: new Date('2020-01-01') });
+    expect(await protectSignupCredits(user.id, stale.db)).toBe(false);
+    expect(stale.repository.disposableSources).not.toHaveBeenCalled();
+  });
+
   it('fails open when the list read throws', async () => {
     const fixture = withLists({});
     vi.mocked(fixture.repository.disposableSources!).mockRejectedValue(new Error('db down'));

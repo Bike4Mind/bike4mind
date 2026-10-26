@@ -35,6 +35,12 @@ describe('disposable domain persistence', () => {
     expect(await repo.disposableSources(['unlisted.test'])).toEqual([]);
   });
 
+  it('writes every entry of a source larger than one bulk batch', async () => {
+    const domains = Array.from({ length: 5001 }, (_, i) => `burner${i}.test`);
+    await repo.replaceDisposableSource('aggregate', domains, new Date(1000));
+    expect(await DisposableDomainModel.countDocuments({ sources: 'aggregate' })).toBe(5001);
+  });
+
   it('records source success and keeps the last good count on failure', async () => {
     await repo.recordDisposableSource('fakefilter', { count: 42, at: new Date(1000) });
     await repo.recordDisposableSource('fakefilter', { error: 'HTTP 503', at: new Date(2000) });

@@ -232,6 +232,18 @@ describe('registerUser', () => {
       expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
     });
 
+    it('rejects a domain on a refreshed reject-tier list carried by db.signupProtection', async () => {
+      mockAdapters.db.signupProtection = {
+        repository: {
+          disposableSources: vi.fn().mockResolvedValue(['curated']),
+          isOrganizationDomain: vi.fn().mockResolvedValue(false),
+        },
+      };
+      const params = { ...baseParams, email: 'x@listed-burner.test' };
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+    });
+
     it('rejects a malformed email address', async () => {
       const params = { ...baseParams, email: 'not-an-email' };
       await expect(registerUser(params, mockAdapters)).rejects.toThrow('Invalid email address');
