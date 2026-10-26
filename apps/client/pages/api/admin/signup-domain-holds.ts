@@ -65,7 +65,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         const pendingQuery = {
           emailVerified: true,
           tags: PENDING_FREE_CREDITS_TAG,
-          email: { $regex: `@(?:[^@]+\\.)?${escapeRegex(domain)}$`, $options: 'i' },
+          email: { $regex: `@(?:[^@]+\\.)?${escapeRegex(domain)}\\.*$`, $options: 'i' },
         };
         const users = await User.find({ ...pendingQuery, ...(afterUserId ? { _id: { $gt: afterUserId } } : {}) })
           .sort({ _id: 1 })
