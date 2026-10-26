@@ -174,8 +174,8 @@ export const wafLoggingConfig =
         {
           // MUST be us-east-1 for CloudFront-scope WAF
           provider: wafProviderUsEast1,
-          // No retainOnDelete needed - lifecycle is tied to WebACL
-          // If WebACL is deleted, this logging configuration is automatically removed
+          // Retained in production so removing it from this stack never turns logging off
+          retainOnDelete: $app.stage === 'production',
         }
       )
     : undefined;
@@ -197,7 +197,7 @@ export const wafAiRateLimitAlarmTopic =
     ? new aws.sns.Topic(
         'WafAiRateLimitAlarmTopic',
         { name: `${$app.name}-${$app.stage}-waf-ai-rate-limit-alarm` },
-        { provider: wafProviderUsEast1 }
+        { provider: wafProviderUsEast1, retainOnDelete: true }
       )
     : undefined;
 
@@ -386,7 +386,7 @@ if (isWafEnabled && $app.stage === 'production' && wafWebAcl && wafAiRateLimitAl
           Severity: 'High',
         },
       },
-      { provider: wafProviderUsEast1 }
+      { provider: wafProviderUsEast1, retainOnDelete: true }
     );
   }
 }
