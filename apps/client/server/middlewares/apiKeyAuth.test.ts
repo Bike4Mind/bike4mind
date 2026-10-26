@@ -234,7 +234,8 @@ describe('apiKeyAuth usage log stamping', () => {
   const loggedUsage = async (
     headers: Record<string, string>,
     validationExtra: Record<string, unknown> = {},
-    reqExtra: Record<string, unknown> = {}
+    reqExtra: Record<string, unknown> = {},
+    requiredScopes?: ApiKeyScope[]
   ) => {
     validateUserApiKeyMock.mockResolvedValue({
       isValid: true,
@@ -247,7 +248,7 @@ describe('apiKeyAuth usage log stamping', () => {
     const req = Object.assign(makeReq(), reqExtra);
     req.headers = { ...req.headers, ...headers };
     const res = makeRes();
-    await apiKeyAuth()(req, res, vi.fn() as unknown as NextFunction);
+    await apiKeyAuth(requiredScopes)(req, res, vi.fn() as unknown as NextFunction);
 
     const [event, onFinish] = (res.once as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(event).toBe('finish');
@@ -271,6 +272,23 @@ describe('apiKeyAuth usage log stamping', () => {
     expect(vi.mocked(logEvent).mock.calls[0][0]).toMatchObject({
       metadata: { endpoint: '/api/agents/[id]' },
     });
+  });
+
+  it('emits the USED analytics event for an ordinary key', async () => {
+    await loggedUsage({});
+    expect(logEvent).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logEvent).mock.calls[0][0]).toMatchObject({ type: 'User API Key Used' });
+  });
+
+  it('skips the USED analytics event for an ingest key but still logs its usage', async () => {
+    const logged = await loggedUsage(
+      {},
+      { scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE], productId: 'p1' },
+      { method: 'POST', originalUrl: '/api/overwatch/v1/events' },
+      [ApiKeyScope.OVERWATCH_INGEST_WRITE]
+    );
+    expect(logEvent).not.toHaveBeenCalled();
+    expect(logged).toMatchObject({ keyId: 'key-1', endpoint: '/api/overwatch/v1/events' });
   });
 
   it('stamps ownerType organization only for an org-billed key with an organization', async () => {

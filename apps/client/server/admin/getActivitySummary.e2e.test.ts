@@ -10,7 +10,7 @@ vi.mock('@bike4mind/database', () => ({ CounterLog: { aggregate } }));
 
 const TestCounter = mongoose.model(
   'DashboardActivityTest',
-  new mongoose.Schema({ counterName: String, datetime: Date })
+  new mongoose.Schema({ counterName: String, datetime: Date, metadata: mongoose.Schema.Types.Mixed })
 );
 let mongoServer: Awaited<ReturnType<typeof createMongoServer>>;
 const now = new Date('2026-10-21T12:00:00.000Z');
@@ -59,6 +59,26 @@ describe('dashboard activity aggregation', () => {
     expect(result.categoryBreakdown.map(({ category, count }) => ({ category, count }))).toEqual([
       { category: 'Session', count: 1001 },
       { category: 'File', count: 2 },
+    ]);
+  });
+
+  it('leaves Overwatch ingest key use out of the summary but keeps other key use', async () => {
+    await TestCounter.insertMany([
+      ...Array.from({ length: 3 }, () => ({
+        counterName: 'User API Key Used',
+        datetime: now,
+        metadata: { endpoint: '/api/overwatch/v1/events' },
+      })),
+      { counterName: 'User API Key Used', datetime: now, metadata: { endpoint: '/api/v1/sessions' } },
+      { counterName: 'Session Created', datetime: now, metadata: { endpoint: '/api/overwatch/v1/events' } },
+    ]);
+
+    const result = await getActivitySummary(now);
+
+    expect(result.totalEvents).toBe(2);
+    expect(result.topEvents.map(({ eventName, count }) => ({ eventName, count }))).toEqual([
+      { eventName: 'Session Created', count: 1 },
+      { eventName: 'User API Key Used', count: 1 },
     ]);
   });
 
