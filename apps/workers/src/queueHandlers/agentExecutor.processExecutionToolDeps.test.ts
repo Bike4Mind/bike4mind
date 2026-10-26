@@ -26,9 +26,21 @@ vi.mock('sst', () => ({
   }),
 }));
 
+// Records every frame the real `createWsSender` posts, in the order the sends complete. While
+// `holdTextDelta` is set, `subagent_text_delta` posts stay in flight until it resolves.
+const ws = vi.hoisted(() => ({ frames: [] as string[], holdTextDelta: null as Promise<void> | null }));
+
 vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   ApiGatewayManagementApiClient: class {
-    send() {
+    send(command: { input: { Data: Buffer } }) {
+      const action = (JSON.parse(command.input.Data.toString()) as { action: string }).action;
+      if (action === 'subagent_text_delta' && ws.holdTextDelta) {
+        return ws.holdTextDelta.then(() => {
+          ws.frames.push(action);
+          return {};
+        });
+      }
+      ws.frames.push(action);
       return Promise.resolve({});
     }
   },
@@ -261,6 +273,8 @@ describe('processExecution tool deps', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ws.frames.length = 0;
+    ws.holdTextDelta = null;
     buildSharedToolsMock.mockImplementation(() => {
       throw toolsBuilt;
     });
@@ -548,6 +562,69 @@ describe('processExecution tool deps', () => {
       ).rejects.toThrow('db down');
 
       expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
+    });
+
+    // The client clears a child's live-text buffer on each of these frames, so a delta that lands
+    // after one would bring stale "(streaming...)" text back under a finished child.
+    describe('live text deltas land before the frame that clears them', () => {
+      const delta = { childExecutionId: 'child-1', agentName: 'researcher', iteration: 0, delta: 'hello' };
+
+      async function withDeltaInFlight(sendTerminal: (tracker: ServerSubagentTracker) => Promise<void>) {
+        const tracker = await subagentTracker();
+        let release!: () => void;
+        ws.holdTextDelta = new Promise<void>(resolve => {
+          release = resolve;
+        });
+        ws.frames.length = 0;
+
+        const delivered = tracker.onTextDelta!(delta);
+        const terminal = sendTerminal(tracker);
+        // Let the terminal handler run through its awaited work to its own send, so a missing
+        // flush shows up as the frame going out while the delta is still held.
+        for (let tick = 0; tick < 20; tick++) await new Promise(resolve => setImmediate(resolve));
+        const beforeRelease = [...ws.frames];
+
+        release();
+        await Promise.all([delivered, terminal]);
+        return { beforeRelease, afterRelease: [...ws.frames] };
+      }
+
+      it('sends subagent_iteration_step only after the child queued deltas', async () => {
+        const { beforeRelease, afterRelease } = await withDeltaInFlight(tracker =>
+          tracker.onStep({
+            childExecutionId: 'child-1',
+            agentName: 'researcher',
+            iteration: 0,
+            step: { type: 'thought', content: 'done', timestamp: 0 } as never,
+          })
+        );
+
+        expect(beforeRelease).not.toContain('subagent_iteration_step');
+        expect(afterRelease).toEqual(['subagent_text_delta', 'subagent_iteration_step']);
+      });
+
+      it('sends subagent_completed only after the child queued deltas', async () => {
+        const { beforeRelease, afterRelease } = await withDeltaInFlight(tracker =>
+          tracker.onComplete({ childExecutionId: 'child-1', result: childResult })
+        );
+
+        expect(beforeRelease).not.toContain('subagent_completed');
+        expect(afterRelease).toEqual(['subagent_text_delta', 'subagent_completed']);
+      });
+
+      it('sends subagent_failed only after the child queued deltas', async () => {
+        const { beforeRelease, afterRelease } = await withDeltaInFlight(tracker =>
+          tracker.onFailure({
+            childExecutionId: 'child-1',
+            error: 'boom',
+            isTimeout: false,
+            partialResult: childResult,
+          })
+        );
+
+        expect(beforeRelease).not.toContain('subagent_failed');
+        expect(afterRelease).toEqual(['subagent_text_delta', 'subagent_failed']);
+      });
     });
 
     // Reached only by spend no tracker bills, e.g. a subagent that ran untracked after
