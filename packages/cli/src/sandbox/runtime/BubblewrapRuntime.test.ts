@@ -337,6 +337,17 @@ describe('BubblewrapRuntime', () => {
         expect(() => wrap()).toThrow('EIO');
       });
 
+      it('does not mask a socket dir that contains the working directory', () => {
+        const { args } = runtime.wrapCommand({
+          command: 'true',
+          cwd: `${home}/.colima/work`,
+          filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+          networkEnabled: false,
+        });
+        expect(args).not.toContain(`${home}/.colima`);
+        expect(mountOf(args, '/run/user/1000/podman')).toEqual(['--tmpfs', '/run/user/1000/podman']);
+      });
+
       it('leaves them alone when allowContainerSockets is set', () => {
         const { args } = wrap(true);
         expect(args).not.toContain(`${home}/.colima`);

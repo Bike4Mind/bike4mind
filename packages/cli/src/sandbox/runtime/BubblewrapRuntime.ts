@@ -105,6 +105,7 @@ export class BubblewrapRuntime implements SandboxRuntime {
     }
 
     // connect() works on a read-only bind, so container sockets need masking too.
+    // Only home entries are visible: /var/run and /run are never bound, so masking them leaves an empty mountpoint.
     if (!options.allowContainerSockets) {
       const isDenied = (p: string) => expandedDenied.some(d => p === d || p.startsWith(`${d}${path.sep}`));
       for (const entry of getContainerSocketPaths()) {
@@ -121,6 +122,10 @@ export class BubblewrapRuntime implements SandboxRuntime {
           throw error;
         }
         if (isDenied(socketPath)) continue;
+        if (resolvedCwd === socketPath || resolvedCwd.startsWith(`${socketPath}${path.sep}`)) {
+          logger.debug(`Sandbox: not masking container socket path ${socketPath}, it contains the working directory`);
+          continue;
+        }
         if (kind === 'dir') args.push('--tmpfs', socketPath);
         else if (kind === 'file') args.push('--ro-bind', '/dev/null', socketPath);
       }
