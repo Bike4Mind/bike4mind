@@ -425,6 +425,36 @@ describe('organizationService - delete', () => {
       expect(callOrder).toContain('upsertGrant');
     });
 
+    it("clears the members' org pointers only after the lapse", async () => {
+      const callOrder: string[] = [];
+      mockAdapters.db.dataLakeAccessGrants.upsertGrant.mockImplementation(async () => {
+        callOrder.push('upsertGrant');
+      });
+      mockAdapters.db.users.clearOrganizationPointer.mockImplementation(async () => {
+        callOrder.push('clearOrganizationPointer');
+      });
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(callOrder.indexOf('clearOrganizationPointer')).toBeGreaterThan(callOrder.lastIndexOf('upsertGrant'));
+    });
+
+    it('hands a lake created by someone off the roster to the billing owner, without lapsing their grants', async () => {
+      lakes.push(lake('lakeC', 'org1', 'formerMember'));
+      grants.push(grant('lakeC', 'formerMember', 'curator'));
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(find('lakeC', 'user1')).toEqual(expect.objectContaining({ role: 'owner', expiresAt: null }));
+      expect(find('lakeC', 'formerMember')?.expiresAt).toBeNull();
+    });
+
+    it("reads the org's grants once for both phases", async () => {
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.dataLakeAccessGrants.listActiveByLakes).toHaveBeenCalledTimes(1);
+    });
+
     it('is idempotent: a re-run writes and records nothing further', async () => {
       await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
       const snapshot = structuredClone(grants);

@@ -11,6 +11,7 @@ import {
   DataLakeAccessGrantModel,
   DataLakeModel,
   Group,
+  LakeConfigChangeEventModel,
   Organization,
   User,
   dataLakeAccessGrantRepository,
@@ -206,6 +207,10 @@ describe('deleteOrganization - data-lake access lapse (replica set)', () => {
     expect((await grantOf(orgLake, 'outsider'))?.expiresAt).toBeNull();
     expect((await grantOf(otherLake, memberId))?.expiresAt).toBeNull();
     expect(await grantOf(orgLake, owner.id)).toEqual(expect.objectContaining({ role: 'owner', expiresAt: null }));
+    expect(await LakeConfigChangeEventModel.countDocuments({ dataLakeId: orgLake })).toBe(2);
+    expect(
+      (await DataLakeModel.collection.findOne({ _id: new mongoose.Types.ObjectId(orgLake) }))?.lastUpdatedByUserId
+    ).toBe(owner.id);
   });
 
   it('rolls the lapse back with the rest when the transaction aborts', async () => {
@@ -220,5 +225,9 @@ describe('deleteOrganization - data-lake access lapse (replica set)', () => {
 
     expect((await grantOf(orgLake, memberId))?.expiresAt).toBeNull();
     expect(await grantOf(orgLake, owner.id)).toBeNull();
+    expect(await LakeConfigChangeEventModel.countDocuments({ dataLakeId: orgLake })).toBe(0);
+    const lakeDoc = await DataLakeModel.collection.findOne({ _id: new mongoose.Types.ObjectId(orgLake) });
+    expect(lakeDoc).not.toBeNull();
+    expect(lakeDoc!.lastUpdatedByUserId ?? null).toBeNull();
   });
 });

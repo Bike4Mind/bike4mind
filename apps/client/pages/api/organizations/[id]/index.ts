@@ -15,6 +15,7 @@ import {
 import { groupRepository } from '@bike4mind/database/social';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { creditService, organizationService } from '@bike4mind/services';
 import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
@@ -135,6 +136,10 @@ const handler = baseApi()
     })
   )
   .delete<Request<unknown, unknown, unknown, { id: string }>>(async (req, res) => {
+    // In-handler so GET and PUT keep their scope behaviour: deleting the org lapses members' lake
+    // grants and can hand lakes to the billing owner. No-ops for a session caller.
+    assertDataLakeShareScope(req);
+
     const id = req.query.id;
 
     // Wrapped in withTransaction (org-groups #1172/#1219): the member purge, the group

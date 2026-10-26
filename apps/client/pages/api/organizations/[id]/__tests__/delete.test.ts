@@ -81,6 +81,7 @@ const findActiveSubscriptionsByOwner = vi.hoisted(() => vi.fn().mockResolvedValu
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwner },
 }));
+vi.mock('@server/auth/turnAuth', () => ({}));
 vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
 
 import '@pages/api/organizations/[id]/index';
@@ -145,6 +146,36 @@ describe('DELETE /api/organizations/[id]', () => {
     );
     expect(passedAdapters.auditPrincipal).toBe(keyPrincipal);
     expect(lakeConfigAuditPrincipal).toHaveBeenCalledWith(expect.objectContaining({ id: 'admin1' }), undefined);
+  });
+
+  describe('API-key scope', () => {
+    const callWithKey = (scopes: string[]) => {
+      const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
+      (req as any).user = { id: 'admin1', isAdmin: true };
+      (req as any).logger = { warn };
+      (req as any).apiKeyInfo = { keyId: 'key1', scopes };
+      return mockRefs.deleteHandler!(req, res);
+    };
+
+    it('refuses a key without datalake:share with a 403 before any write', async () => {
+      await expect(callWithKey(['admin:*'])).rejects.toMatchObject({ statusCode: 403 });
+
+      expect(withTransaction).not.toHaveBeenCalled();
+      expect(deleteOrganization).not.toHaveBeenCalled();
+      expect(updateMany).not.toHaveBeenCalled();
+    });
+
+    it('admits a key holding datalake:share', async () => {
+      await callWithKey(['datalake:share']);
+
+      expect(deleteOrganization).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a session caller unaffected', async () => {
+      await call();
+
+      expect(deleteOrganization).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('clears the dangling partner-rule reference and invalidates the cache after deleting', async () => {
