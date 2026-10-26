@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { IAdminAuditLogRepository } from '@bike4mind/common';
 import type { RecordAdminActionFromRequestInput } from '@server/utils/adminAudit';
-import { recordAdminAction } from '../../../../../../b4m-core/services/src/adminAuditService/recordAdminAction';
+import { adminAuditService } from '@bike4mind/services';
 
 // Middleware stripped so the handler body runs directly (same pattern as
 // pages/api/email/__tests__/verify.test.ts). The chain object doubles as the
@@ -630,7 +630,7 @@ describe('POST /api/admin/model-prices admin audit', () => {
       mockRowsInForce.mockResolvedValue([{ modelId, unit, pricing: before, note: 'invoice A' }]);
       mockGenerateSeed.mockResolvedValue([{ modelId, unit, pricing: after }]);
       mockAudit.mockImplementationOnce(async (_request: unknown, input: RecordAdminActionFromRequestInput) => {
-        await recordAdminAction(
+        await adminAuditService.recordAdminAction(
           {
             ...input,
             actor: { kind: 'user', scope: 'platform', userId: 'admin-1', name: 'Admin', wasAdmin: true },
