@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { z } from 'zod';
 import type {
   ChatApprovalMode,
   ChatMessage,
@@ -110,7 +111,7 @@ interface SummaryIndexFile {
   entries: Record<string, IndexedSummary>;
 }
 
-/** Whether an import wrote its copy, preserved a continuation, or respected a concurrent deletion. */
+/** Whether an import wrote its copy, preserved a continuation, or respected conversation/workspace deletion. */
 export type PutImportedOutcome = 'written' | 'forked' | 'removed';
 
 /** The guarded removal result, decided while holding the session's write lock. */
@@ -127,6 +128,20 @@ export class ImportScopeChangedError extends Error {
 export function isForkedImport(session: ChatSession): boolean {
   if (!session.importOrigin) return false;
   return !!session.importOrigin.forkedAt || session.messages.some(message => !isImportedMessageId(message.id));
+}
+
+/** Whether a binding's repository and checkout are both still directories; other errors surface. */
+async function projectOnDisk(project: ChatProject): Promise<boolean> {
+  for (const path of new Set([project.directory, project.workingDirectory])) {
+    try {
+      if (!(await stat(path)).isDirectory()) return false;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+      throw error;
+    }
+  }
+  return true;
 }
 
 function summarize(session: ChatSession): ChatSessionSummary {
@@ -247,6 +262,18 @@ export class SessionStore {
    * the reply is still appending is exactly that overlap.
    */
   private readonly writes = new Map<string, Promise<unknown>>();
+
+  /** Import bindings and service cleanup share a lease, always outside the per-session lock. */
+  private workspaceBindings: Promise<void> = Promise.resolve();
+
+  withWorkspaceBindings<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.workspaceBindings.then(operation);
+    this.workspaceBindings = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
 
   /** Per scope directory; see SUMMARY_INDEX. */
   private readonly summaryIndexes = new Map<string, Promise<Map<string, IndexedSummary>>>();
@@ -466,6 +493,34 @@ export class SessionStore {
     return sessions
       .filter((session): session is ChatSessionSummary => session !== null)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  /** Only workspace bindings cross account scopes; conversation contents stay private. */
+  async workspaceProjectsExcept(sessionId: string): Promise<ChatProject[]> {
+    const currentDirectory = await this.directoryFor(false);
+    if (!currentDirectory) throw new Error('No conversation scope is available');
+    const entries = await readdir(this.baseDirectory, { withFileTypes: true });
+    if (entries.some(entry => entry.isSymbolicLink())) throw new Error('Cannot verify linked conversation storage');
+    const directories = [
+      this.baseDirectory,
+      ...entries
+        .filter(entry => entry.isDirectory())
+        .map(entry => join(this.baseDirectory, assertScopeKey(entry.name))),
+    ];
+    const projects: ChatProject[] = [];
+    const schema = z.object({ project: z.unknown().optional() });
+    for (const directory of directories) {
+      for (const name of await readdir(directory)) {
+        if (!name.endsWith('.json')) continue;
+        if (directory === currentDirectory && name === `${sessionId}.json`) continue;
+        const record = schema.parse(JSON.parse(await readFile(join(directory, name), 'utf8')));
+        if (record.project == null) continue;
+        const project = normalizeProject(record.project);
+        if (!project) throw new Error('Cannot verify all conversation workspaces');
+        projects.push(project);
+      }
+    }
+    return projects;
   }
 
   private summaryIndex(directory: string): Promise<Map<string, IndexedSummary>> {
@@ -826,42 +881,54 @@ export class SessionStore {
   /**
    * Create or replace a session the Claude importer built, unless the user has continued it
    * here - then it is left exactly as it is and marked forked, so a later sync can never
-   * overwrite a desktop turn. Under the same per-session lock as every other write.
+   * overwrite a desktop turn. Workspace deletion also wins over a binding derived before it.
    */
   async putImported(
     session: ChatSession,
     scopeKey?: string,
     options: { mustExist?: boolean } = {}
   ): Promise<PutImportedOutcome> {
-    return this.serialize(session.id, async () => {
-      const directory = await this.importDirectory(scopeKey);
-      const existing = await this.read(directory, session.id);
-      // A deletion while the importer was reading wins over its stale snapshot.
-      if (options.mustExist && !existing) return 'removed';
-      if (existing && (!existing.importOrigin || isForkedImport(existing))) {
-        if (existing.importOrigin && !existing.importOrigin.forkedAt) {
-          existing.importOrigin = { ...existing.importOrigin, forkedAt: new Date().toISOString() };
-          await this.write(directory, existing);
-        }
-        return 'forked';
-      }
-      // The user's own choices on the row outlive a re-sync of its content: anything the import
-      // does not set (granted folders, a remote link) rides along, and these it does set lose.
-      const kept: Partial<ChatSession> = existing
-        ? {
-            ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
-            // Same repository only: a project the importer now derives differently is not the user's.
-            ...(existing.project && existing.project.directory === session.project?.directory
-              ? { project: existing.project }
-              : {}),
-            model: existing.model,
-            approvalMode: existing.approvalMode,
-            reasoningEffort: existing.reasoningEffort,
+    return this.withWorkspaceBindings(() =>
+      this.serialize(session.id, async () => {
+        const directory = await this.importDirectory(scopeKey);
+        const existing = await this.read(directory, session.id);
+        // A deletion while the importer was reading wins over its stale snapshot.
+        if (options.mustExist && !existing) return 'removed';
+        if (existing && (!existing.importOrigin || isForkedImport(existing))) {
+          if (existing.importOrigin && !existing.importOrigin.forkedAt) {
+            existing.importOrigin = { ...existing.importOrigin, forkedAt: new Date().toISOString() };
+            await this.write(directory, existing);
           }
-        : {};
-      await this.write(directory, { ...existing, ...session, ...kept });
-      return 'written';
-    });
+          return 'forked';
+        }
+        // The user's own choices on the row outlive a re-sync of its content: anything the import
+        // does not set (granted folders, a remote link) rides along, and these it does set lose.
+        const kept: Partial<ChatSession> = existing
+          ? {
+              ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
+              // Same repository only: a project the importer now derives differently is not the user's.
+              ...(existing.project && existing.project.directory === session.project?.directory
+                ? { project: existing.project }
+                : {}),
+              model: existing.model,
+              approvalMode: existing.approvalMode,
+              reasoningEffort: existing.reasoningEffort,
+            }
+          : {};
+        const imported = { ...existing, ...session, ...kept };
+        // A carried-over binding whose checkout has since been removed (the normal end of a
+        // worktree) yields to the importer's fresh one, which projectFor already checked.
+        // Answering 'removed' here would freeze the copy for good: callers read it as deleted.
+        if (imported.project && imported.project !== session.project && !(await projectOnDisk(imported.project))) {
+          if (session.project) imported.project = session.project;
+          else delete imported.project;
+        }
+        // Only a fresh binding gone under the lease means workspace cleanup won the race.
+        if (imported.project && !(await projectOnDisk(imported.project))) return 'removed';
+        await this.write(directory, imported);
+        return 'written';
+      })
+    );
   }
 
   /** Recheck ownership and continuation at the delete sink, in the captured account directory. */

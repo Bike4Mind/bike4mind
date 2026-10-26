@@ -515,3 +515,94 @@ describe('CounterLogRepository.metricsByDate - daily topUsers leaderboard', () =
     expect(result.topUsers?.[1]).toEqual(expect.objectContaining({ creditsSpent: 0 }));
   });
 });
+
+describe('findYoungAccountSpend', () => {
+  const windowEnd = new Date('2026-06-01T12:00:00.000Z');
+  const windowStart = new Date('2026-06-01T11:00:00.000Z');
+  const halfHourAgo = new Date('2026-06-01T11:30:00.000Z');
+  const twoHoursAgo = new Date('2026-06-01T10:00:00.000Z');
+
+  it('totals hourly spend by accounts created in the last seven days and ranks the top spenders', async () => {
+    const big = await seedUser('big@example.com', threeDaysBefore);
+    const small = await seedUser('small@example.com', sixDaysBefore);
+    const veteran = await seedUser('veteran@example.com', eightDaysBefore);
+    const earlier = await seedUser('earlier@example.com', threeDaysBefore);
+    await spendFor(big, 300, halfHourAgo);
+    await spendFor(big, 200, halfHourAgo);
+    await spendFor(small, 40, halfHourAgo);
+    await spendFor(veteran, 9000, halfHourAgo);
+    await spendFor(earlier, 700, twoHoursAgo);
+    await mongoose.connection.collection('credittransactions').insertOne({
+      ownerId: 'SYSTEM',
+      ownerType: 'User',
+      type: 'text_generation_usage',
+      credits: -50,
+      createdAt: halfHourAgo,
+    });
+
+    const result = await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 1);
+
+    expect(result.totalCredits).toBe(540);
+    expect(result.accountCount).toBe(2);
+    expect(result.topSpenders).toEqual([{ userId: big, creditsSpent: 500, accountCreatedAt: threeDaysBefore }]);
+  });
+
+  it('excludes non-user owners and non-usage ledger entries', async () => {
+    const userId = await seedUser('usage-only@example.com', threeDaysBefore);
+    await spendFor(userId, 100, halfHourAgo);
+    await mongoose.connection.collection('credittransactions').insertMany([
+      {
+        ownerId: userId,
+        ownerType: 'Organization',
+        type: 'text_generation_usage',
+        credits: -9000,
+        createdAt: halfHourAgo,
+      },
+      { ownerId: userId, ownerType: 'User', type: 'purchase', credits: 9000, createdAt: halfHourAgo },
+    ]);
+    const result = await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
+    expect(result.totalCredits).toBe(100);
+    expect(result.accountCount).toBe(1);
+  });
+
+  it('propagates aggregation failures instead of reporting zero spend', async () => {
+    const error = new Error('ledger unavailable');
+    vi.spyOn(CreditTransaction, 'aggregate').mockImplementationOnce(() => {
+      throw error;
+    });
+    await expect(counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10)).rejects.toBe(error);
+  });
+
+  it.each([
+    ['exactly seven days old', new Date('2026-05-25T12:00:00.000Z'), 0],
+    ['just under seven days old', new Date('2026-05-25T12:00:00.001Z'), 100],
+    ['future creation date', new Date('2026-06-01T12:00:00.001Z'), 0],
+    ['missing creation date', undefined, 0],
+  ])('classifies an account with %s', async (_label, createdAt, expectedCredits) => {
+    const userId = await seedUser('age-boundary@example.com', createdAt);
+    await spendFor(userId, 100, halfHourAgo);
+    const result = await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
+    expect(result.totalCredits).toBe(expectedCredits);
+    expect(result.accountCount).toBe(expectedCredits > 0 ? 1 : 0);
+  });
+
+  it('counts a boundary transaction only in the next adjacent window', async () => {
+    const userId = await seedUser('boundary@example.com', threeDaysBefore);
+    await spendFor(userId, 100, windowEnd);
+    const first = await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
+    const next = await counterLogRepository.findYoungAccountSpend(windowEnd, new Date('2026-06-01T13:00:00.000Z'), 10);
+    expect(first.totalCredits).toBe(0);
+    expect(next.totalCredits).toBe(100);
+  });
+
+  it('returns an empty summary when no young account spent', async () => {
+    const veteran = await seedUser('veteran@example.com', eightDaysBefore);
+    await spendFor(veteran, 100, halfHourAgo);
+
+    expect(await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10)).toEqual({
+      totalCredits: 0,
+      accountCount: 0,
+      topSpenders: [],
+    });
+  });
+});

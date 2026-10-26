@@ -448,6 +448,7 @@ export const SettingKeySchema = z.enum([
   'turnstileEnabled',
   'turnstileFailClosed',
   'turnstileSiteKey',
+  'signupRiskScoring',
 
   // WEATHER SERVICE SETTINGS
   'EnableWeatherService',
@@ -1190,6 +1191,47 @@ export enum ServerStatusEnum {
 
 /** Platform cap on custom MCP connections per user (design #4845). */
 export const CUSTOM_MCP_MAX_CONNECTIONS_PER_USER = 20;
+
+export const SIGNUP_RISK_SIGNALS = [
+  'riskyDomain',
+  'burstCohort',
+  'datacenterNetwork',
+  'quickApiKey',
+  'fastSpend',
+  'generatedLocalPart',
+] as const;
+export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
+
+const signupRiskWeight = (defaultValue: number) => z.number().min(0).max(100).prefault(defaultValue);
+
+/**
+ * Weights and thresholds for `scoreSignupRisk` (b4m-core/services/src/userService/signupRiskScore.ts).
+ * The defaults are generic placeholders: a deployment tunes the real values in admin settings.
+ * Both levels are strict so a mistyped signal or field name is refused on save instead of silently ignored.
+ */
+export const SignupRiskScoringSchema = z
+  .object({
+    weights: z
+      .object({
+        riskyDomain: signupRiskWeight(25),
+        burstCohort: signupRiskWeight(30),
+        datacenterNetwork: signupRiskWeight(15),
+        quickApiKey: signupRiskWeight(15),
+        fastSpend: signupRiskWeight(20),
+        generatedLocalPart: signupRiskWeight(10),
+      })
+      .strict()
+      .prefault({}),
+    /** A first API key minted within this many minutes of signup counts as quick. */
+    quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(60),
+    /** Credits spent in the first 24h at which fastSpend reaches its full weight; less scales linearly. */
+    fastSpendCredits: z.number().positive().prefault(1000),
+    /** A score at or above this needs review. */
+    reviewThreshold: z.number().min(1).max(100).prefault(50),
+  })
+  .strict();
+
+export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
 
 export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
 export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
@@ -2014,12 +2056,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'turnstileEnabled', order: 5 },
       { key: 'turnstileFailClosed', order: 6 },
       { key: 'turnstileSiteKey', order: 7 },
-      { key: 'signupBurstThreshold', order: 8 },
-      { key: 'signupBurstWindowHours', order: 9 },
-      { key: 'signupBurstAutoHold', order: 10 },
-      { key: 'enableDomainIntelligence', order: 11 },
-      { key: 'holdSignupsFromDomainsYoungerThanDays', order: 12 },
-      { key: 'domainIntelligenceTimeoutMs', order: 13 },
+      { key: 'signupRiskScoring', order: 8 },
+      { key: 'signupBurstThreshold', order: 9 },
+      { key: 'signupBurstWindowHours', order: 10 },
+      { key: 'signupBurstAutoHold', order: 11 },
+      { key: 'enableDomainIntelligence', order: 12 },
+      { key: 'holdSignupsFromDomainsYoungerThanDays', order: 13 },
+      { key: 'domainIntelligenceTimeoutMs', order: 14 },
     ],
   },
   KNOWLEDGE: {
@@ -3643,6 +3686,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     dependsOn: 'turnstileEnabled',
+  }),
+  signupRiskScoring: makeObjectSetting({
+    key: 'signupRiskScoring',
+    name: 'Signup Risk Scoring',
+    defaultValue: SignupRiskScoringSchema.parse({}),
+    description:
+      "Weights (0-100 each) for the signals that make up a new account's 0-100 risk score, the minutes " +
+      'and credits that set off the quick-API-key and fast-spend signals, and the score at which an account ' +
+      'needs review. The score is capped at 100.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    schema: SignupRiskScoringSchema,
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',

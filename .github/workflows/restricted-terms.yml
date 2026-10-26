@@ -43,7 +43,7 @@ jobs:
     # Public repo only: the check exists to keep terms out of public logs and
     # history, and the secret is set here alone.
     if: github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind')
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     steps:
       # Under pull_request_target the default ref is the base branch, never the
