@@ -3,7 +3,7 @@ import { BadRequestError, ForbiddenError, NotFoundError, getSettingsMap, getSett
 import { deleteElevenLabsAgent, getElevenLabsAgent, updateElevenLabsAgent } from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const UpdateVoiceAgentBodySchema = z.object({
@@ -135,7 +135,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       target: { kind: 'settings', id, displayName: updated?.name ?? agent.name },
       summary: `updated voice agent ${updated?.name ?? agent.name}`,
       // Field names only: the system prompt can be long and is not worth copying into the log.
-      details: { fields: Object.keys(body) },
+      details: { fields: definedKeys(body) },
     });
     return res.status(200).json({ agent: updated });
   })

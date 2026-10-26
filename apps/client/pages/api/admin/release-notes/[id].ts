@@ -9,7 +9,7 @@ import {
   scrubCustomerText,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -93,7 +93,7 @@ const handler = api.patch(async (req, res) => {
     action: 'settings.release_note.updated',
     target: { kind: 'settings', id, displayName: `release note ${note.releaseTag}` },
     summary: `edited release note ${note.releaseTag}`,
-    details: { releaseTag: note.releaseTag, fields: Object.keys(parsed.data) },
+    details: { releaseTag: note.releaseTag, fields: definedKeys(parsed.data) },
   });
   return res.json(toAdminReleaseNote(note));
 });

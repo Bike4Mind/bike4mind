@@ -1,6 +1,6 @@
 import { internalTeamMemberRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
   ApiKeyScope,
@@ -92,7 +92,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       action: 'settings.team_member.updated',
       target: { kind: 'settings', id: updatedId, displayName: updated.name },
       summary: `updated team member ${updated.name}`,
-      details: { fields: Object.keys(updatedFields) },
+      details: { fields: definedKeys(updatedFields) },
     });
 
     return respond(res, internalTeamMemberResponseSchema, updated);

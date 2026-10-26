@@ -5,7 +5,7 @@ import { ResearchLinkCategory } from '@bike4mind/database/content';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 interface IParams {
@@ -50,7 +50,7 @@ const handler = baseApi()
         action: 'settings.business_link_category.updated',
         target: { kind: 'settings', id, displayName: category.name },
         summary: `updated business link category ${category.name}`,
-        details: { fields: Object.keys(parsedBody.data) },
+        details: { fields: definedKeys(parsedBody.data) },
       });
 
       return res.json(category);

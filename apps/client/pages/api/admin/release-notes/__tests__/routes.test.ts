@@ -55,7 +55,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: { findOneAndUpdate: m.upsert, findOne: () => ({ lean: () => m.findSetting() }) },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: m.audit }));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: m.audit,
+  definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
+}));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: m.getSettings, invalidateSettingsCache: m.invalidate }));
 
 const { default: listHandler } = await import('@pages/api/admin/release-notes/index');

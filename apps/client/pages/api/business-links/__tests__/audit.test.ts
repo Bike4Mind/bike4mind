@@ -42,7 +42,10 @@ vi.mock('@bike4mind/database/content', () => ({
     findByIdAndDelete: h.categoryDelete,
   },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: h.audit,
+  definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
+}));
 
 import linksHandler from '../index';
 import linkHandler from '../[id]';

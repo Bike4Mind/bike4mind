@@ -5,7 +5,7 @@ import { ResearchLink } from '@bike4mind/database/content';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 
@@ -77,7 +77,7 @@ const handler = baseApi()
         action: 'settings.business_link.updated',
         target: { kind: 'settings', id, displayName: link.name },
         summary: `updated business link ${link.name}`,
-        details: { fields: Object.keys(parsedBody.data) },
+        details: { fields: definedKeys(parsedBody.data) },
       });
 
       return res.json(link);

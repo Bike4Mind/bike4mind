@@ -57,7 +57,10 @@ vi.mock('@bike4mind/voice', () => ({
   deleteElevenLabsAgent: h.deleteElevenLabsAgent,
   getElevenLabsAgent: vi.fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: h.audit,
+  definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
+}));
 
 import collectionHandler from '../index';
 import itemHandler from '../[id]';
