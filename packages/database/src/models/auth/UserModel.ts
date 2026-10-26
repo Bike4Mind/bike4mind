@@ -1248,6 +1248,7 @@ UserSchema.index({ 'authProviders.strategy': 1, 'authProviders.id': 1 }, { name:
 // Without it both scan the full users collection. Explicit name so the migration and autoIndex
 // (mongo.ts) agree - see the authProviders_strategy_id note above.
 UserSchema.index({ groups: 1 }, { name: 'user_groups' });
+UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fingerprint_window' });
 // Serves the forward member lookup in OrganizationRepository.findMemberUserIds, which the org
 // feedback report and its drill-down routes call on every request. Without it that read scans the
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
