@@ -9,28 +9,23 @@ const CLOSED_REASON: Record<Exclude<ChatApprovalSystemReason, 'error'>, string> 
 };
 
 /**
- * The one line under a settled call saying who let it run or stopped it, or null when a saved
- * rule or the approval mode let it through: that is routine and would sit under most calls. A
- * system close is worded as "not run" rather than as a refusal, because nobody refused it.
+ * The one line under a settled call that did not run as asked, or null for one that did: who or
+ * what let a call through is routine and would sit under nearly every call. A system close is
+ * worded as "not run" rather than as a refusal, because nobody refused it.
  */
 export function describeApproval(approval: ChatToolApproval): string | null {
   const { decidedBy, outcome } = approval;
+  if (outcome === 'allowed') return null;
   switch (decidedBy.kind) {
-    case 'user': {
-      const option = decidedBy.option ? ` - ${decidedBy.option}` : '';
-      if (decidedBy.answer === 'deny') return 'Declined by you';
-      if (decidedBy.answer === 'redirect') return `Redirected by you${option}`;
-      if (decidedBy.answer === 'always') {
-        return `Approved by you - always${decidedBy.everywhere ? ', in every session' : ' in this chat'}${option}`;
-      }
-      return `Approved by you${option}`;
-    }
+    case 'user':
+      return decidedBy.answer === 'redirect'
+        ? `Redirected by you${decidedBy.option ? ` - ${decidedBy.option}` : ''}`
+        : 'Declined by you';
     case 'rule':
-      return outcome === 'allowed' ? null : `Denied by rule ${decidedBy.rule}`;
+      return `Denied by rule ${decidedBy.rule}`;
     case 'chat-allowance':
-      return outcome === 'allowed' ? 'Allowed in this chat' : 'Denied in this chat';
+      return 'Denied in this chat';
     case 'mode': {
-      if (outcome === 'allowed') return null;
       const label = APPROVAL_MODE_OPTIONS.find(option => option.mode === decidedBy.mode)?.label ?? decidedBy.mode;
       return `Denied - ${label}`;
     }

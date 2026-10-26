@@ -636,8 +636,8 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
 }
 
 /**
- * Who let the group's calls run, or stopped them, one muted line per distinct answer. A group of
- * seven commands an earlier "Allow in this chat" let through reads as one line, not seven of the same.
+ * Why the group's calls did not run, one muted line per distinct reason. A group of seven
+ * commands a reply stop closed reads as one line, not seven of the same.
  */
 function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
   const lines = new Map<string, ChatToolApproval>();
