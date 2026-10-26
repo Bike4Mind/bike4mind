@@ -86,8 +86,38 @@ describe('stripComments', () => {
   });
 
   it('keeps real code after a regex that holds // and a quote', () => {
-    const source = "const re = /['//]/; export const handler = defineLambdaRoute(c, f);";
+    const source = "const re = /['//]/; export const handler = defineLambdaRoute(c, f);\n";
     expect(stripComments(source)).toBe(source);
+  });
+
+  it.each([
+    ['a [///] class', 'const re = /[///]/; export const h = defineLambdaRoute(c, f);\n'],
+    ['escaped slashes', 'const re = /\\/\\//; export const h = defineLambdaRoute(c, f);\n'],
+    ['a regex after return', 'function f(s) { return /[/*]/.test(s); }\nexport const h = defineLambdaRoute(c, f);\n'],
+  ])('keeps real code after a regex with %s', (_name, source) => {
+    expect(stripComments(source)).toBe(source);
+  });
+
+  it.each([
+    ['a postfix ++', 'const a = n++ / 2; // defineLambdaRoute(c, f)'],
+    ['a postfix --', 'const a = n-- / 2; // defineLambdaRoute(c, f)'],
+    ['a non-null !', 'const a = total! / count; // defineLambdaRoute(c, f)'],
+    ['a JSX closing tag', 'return <div>{x}</div>; // defineLambdaRoute(c, f)'],
+    ['a block comment', 'const a = n++ / 2; /* defineLambdaRoute(c, f) */'],
+  ])('blanks a comment after a division misread as a regex start by %s', (_name, source) => {
+    const clean = stripComments(source);
+    expect(clean).toHaveLength(source.length);
+    expect(clean).not.toContain('defineLambdaRoute');
+  });
+
+  it('does not treat a commented-out declaration as code after a postfix division', () => {
+    const source = "const q = (a) => a++ / 2; // new sst.aws.Function('Old', { url: true });";
+    expect(stripComments(source)).not.toContain('sst.aws');
+  });
+
+  it('bounds an unterminated quote at end of file', () => {
+    const source = "if (x) /What's New/.test(s); // TODO: defineLambdaRoute(c, f)";
+    expect(stripComments(source)).not.toContain('defineLambdaRoute');
   });
 
   it('treats / as division after an identifier, a paren or a literal', () => {
@@ -140,6 +170,15 @@ describe('findUrlFunctions', () => {
 
   it('parses Function options that carry a quote-bearing regex', () => {
     const text = fnDeclaration([HANDLER, "  environment: { PATTERN: /What's New/ },", '  url: true,']);
+    expect(scan(text)).toEqual({
+      exposed: [{ file: 'infra/fn.ts', handler: 'apps/workers/src/thing.handler' }],
+      problems: [],
+    });
+  });
+
+  it.each([['}'], [']'], ['{'], ['('], [')']])('never reports clean when options hold a regex with %s', ch => {
+    const cls = ch === ']' ? '\\]' : ch;
+    const text = fnDeclaration([HANDLER, `  pattern: /[${cls}]/,`, '  url: true,']);
     expect(scan(text)).toEqual({
       exposed: [{ file: 'infra/fn.ts', handler: 'apps/workers/src/thing.handler' }],
       problems: [],
@@ -244,6 +283,14 @@ describe('usesDefineLambdaRoute', () => {
   it('passes when the entry calls defineLambdaRoute directly', () => {
     const io = virtualFs({
       [ENTRY]: "import { defineLambdaRoute } from './defineLambdaRoute';\nexport const h = defineLambdaRoute(c, f);",
+    });
+    expect(usesDefineLambdaRoute('/repo', ENTRY, io)).toBe(true);
+  });
+
+  it('passes when the call carries an explicit type-argument list', () => {
+    const io = virtualFs({
+      [ENTRY]:
+        "import { defineLambdaRoute } from './defineLambdaRoute';\nexport const h = defineLambdaRoute<MyContract>(c, f);",
     });
     expect(usesDefineLambdaRoute('/repo', ENTRY, io)).toBe(true);
   });
@@ -404,10 +451,64 @@ describe('main', () => {
     expect(r.stdout.trim()).toBe('apps/workers/src/thing.ts');
   });
 
+  it.each([
+    ['a non-null !', 'const avg = total! / count; // defineLambdaRoute(contract, handler)'],
+    ['a postfix ++', 'const avg = n++ / 2; // defineLambdaRoute(contract, handler)'],
+    ['a postfix --', 'const avg = n-- / 2; // defineLambdaRoute(contract, handler)'],
+    ['an unterminated quote at EOF', "if (x) /What's New/.test(s); // TODO: defineLambdaRoute(contract, handler)"],
+  ])('exits 1 when the only defineLambdaRoute is in a comment after %s', (_name, extra) => {
+    const dir = writeTree({
+      'infra/fn.ts': fnDeclaration([HANDLER, '  url: true,']),
+      'apps/workers/src/thing.ts': `${RAW_HANDLER}\n${extra}`,
+    });
+    const r = run(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout.trim()).toBe('apps/workers/src/thing.ts');
+  });
+
+  it('exits 1 for an imported .tsx whose only defineLambdaRoute is a comment after a JSX closing tag', () => {
+    const dir = writeTree({
+      'infra/fn.ts': fnDeclaration([HANDLER, '  url: true,']),
+      'apps/workers/src/thing.ts': `${RAW_HANDLER}\nimport './view';\n`,
+      'apps/workers/src/view.tsx':
+        'export const V = () => {\n  return <div>{x}</div>; // TODO: defineLambdaRoute(contract, handler)\n};\n',
+    });
+    const r = run(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout.trim()).toBe('apps/workers/src/thing.ts');
+  });
+
+  it('does not report a commented-out Function after a postfix division', () => {
+    const dir = writeTree({
+      'infra/fn.ts':
+        "export const q = (a) => a++ / 2; // new sst.aws.Function('Old', { handler: 'apps/workers/src/thing.handler', url: true });\n",
+      'apps/workers/src/thing.ts': RAW_HANDLER,
+    });
+    expect(run(dir).status).toBe(0);
+  });
+
+  it('exits 1 for a url Function whose options hold a regex with a closing brace', () => {
+    const dir = writeTree({
+      'infra/fn.ts': fnDeclaration([HANDLER, '  pattern: /[}]/,', '  url: true,']),
+      'apps/workers/src/thing.ts': RAW_HANDLER,
+    });
+    const r = run(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout.trim()).toBe('apps/workers/src/thing.ts');
+  });
+
+  it('passes a generic defineLambdaRoute<C>(...) call', () => {
+    const dir = writeTree({
+      'infra/fn.ts': fnDeclaration([HANDLER, '  url: true,']),
+      'apps/workers/src/thing.ts': 'export const handler = defineLambdaRoute<MyContract>(c, f);\n',
+    });
+    expect(run(dir).status).toBe(0);
+  });
+
   it('passes a real defineLambdaRoute call on the line of a regex holding //', () => {
     const dir = writeTree({
       'infra/fn.ts': fnDeclaration([HANDLER, '  url: true,']),
-      'apps/workers/src/thing.ts': "const re = /['//]/; export const handler = defineLambdaRoute(c, f);",
+      'apps/workers/src/thing.ts': "const re = /['//]/; export const handler = defineLambdaRoute(c, f);\n",
     });
     expect(run(dir).status).toBe(0);
   });

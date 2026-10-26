@@ -68,6 +68,38 @@ const REGEX_KEYWORDS = new Set([
 ]);
 
 /**
+ * True when a `/` at $i sits where an expression can start, judged from the
+ * preceding code in $text (an array or string, comments already blanked).
+ */
+function startsRegex(text, i) {
+  let j = i - 1;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  if (j < 0 || REGEX_PRECEDERS.includes(text[j])) return true;
+  let k = j;
+  while (k >= 0 && /[\w$]/.test(text[k])) k--;
+  let word = '';
+  for (let m = k + 1; m <= j; m++) word += text[m];
+  return REGEX_KEYWORDS.has(word);
+}
+
+/**
+ * Index just past the regex literal that starts at $i, or i + 1 when the line
+ * ends first (it was division after all). A closing `/` that runs straight into
+ * `/` or `*` is a comment opener, so the start was a misread division (`n++ / 2`,
+ * `total! / n`, `</div>`) and is refused.
+ */
+function regexEnd(text, i) {
+  let inClass = false;
+  for (let k = i + 1; k < text.length && text[k] !== '\n'; k++) {
+    if (text[k] === '\\') k++;
+    else if (text[k] === '[') inClass = true;
+    else if (text[k] === ']') inClass = false;
+    else if (text[k] === '/' && !inClass) return text[k + 1] === '/' || text[k + 1] === '*' ? i + 1 : k + 1;
+  }
+  return i + 1;
+}
+
+/**
  * Replaces comments with spaces (newlines kept) so offset-preserving scans see
  * code only. String, template and regex literals are preserved, since the handler
  * literal has to be read back out; comment markers and quotes inside them are not
@@ -81,30 +113,6 @@ export function stripComments(source) {
   const blank = (from, to) => {
     for (let k = from; k < to; k++) if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' ';
   };
-
-  // True when a `/` at $i sits where an expression can start, judged from the
-  // blanked output so far (comments are already spaces).
-  function startsRegex(i) {
-    let j = i - 1;
-    while (j >= 0 && /\s/.test(out[j])) j--;
-    if (j < 0 || REGEX_PRECEDERS.includes(out[j])) return true;
-    let k = j;
-    while (k >= 0 && /[\w$]/.test(out[k])) k--;
-    return REGEX_KEYWORDS.has(out.slice(k + 1, j + 1).join(''));
-  }
-
-  // Index just past the regex literal that starts at $i, or i + 1 when the line
-  // ends first (it was division after all).
-  function regexEnd(i) {
-    let inClass = false;
-    for (let k = i + 1; k < source.length && source[k] !== '\n'; k++) {
-      if (source[k] === '\\') k++;
-      else if (source[k] === '[') inClass = true;
-      else if (source[k] === ']') inClass = false;
-      else if (source[k] === '/' && !inClass) return k + 1;
-    }
-    return i + 1;
-  }
 
   // Index just past the string/template literal that starts at $i.
   function stringEnd(i) {
@@ -128,7 +136,7 @@ export function stripComments(source) {
         i++;
       }
     }
-    return i;
+    return quote === '`' ? i : opener + 1; // EOF: same unterminated-quote bound as a newline
   }
 
   // With `depth` set, stops at the `}` that closes that interpolation; otherwise
@@ -146,8 +154,8 @@ export function stripComments(source) {
         while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i++;
         i = Math.min(i + 2, source.length);
         blank(start, i);
-      } else if (c === '/' && startsRegex(i)) {
-        i = regexEnd(i);
+      } else if (c === '/' && startsRegex(out, i)) {
+        i = regexEnd(source, i);
       } else if (c === '"' || c === "'" || c === '`') {
         i = stringEnd(i);
       } else if (depth !== undefined && c === '{') {
@@ -184,7 +192,7 @@ function plainStringEnd(text, i) {
       i++;
     }
   }
-  return i;
+  return quote === '`' ? i : opener + 1;
 }
 
 function plainInterpolationEnd(text, i) {
@@ -217,6 +225,10 @@ function balancedEnd(text, i) {
       i = plainStringEnd(text, i);
       continue;
     }
+    if (c === '/' && startsRegex(text, i)) {
+      i = regexEnd(text, i);
+      continue;
+    }
     if (c === open) depth++;
     else if (c === close && --depth === 0) return i + 1;
     i++;
@@ -233,6 +245,8 @@ function splitTopLevel(text) {
     const c = text[i];
     if (c === '"' || c === "'" || c === '`') {
       i = plainStringEnd(text, i) - 1;
+    } else if (c === '/' && startsRegex(text, i)) {
+      i = regexEnd(text, i) - 1;
     } else if (c === '(' || c === '[' || c === '{') {
       depth++;
     } else if (c === ')' || c === ']' || c === '}') {
@@ -429,7 +443,8 @@ export function usesDefineLambdaRoute(root, entryFile, io = {}) {
       }
 
       const names = ['defineLambdaRoute', ...[...clean.matchAll(ROUTE_ALIAS_PATTERN)].map(m => m[1])];
-      if (new RegExp(`\\b(?:${names.map(n => n.replace(/\$/g, '\\$')).join('|')})\\s*\\(`).test(clean)) return true;
+      if (new RegExp(`\\b(?:${names.map(n => n.replace(/\$/g, '\\$')).join('|')})\\s*(?:<[^;]*?>\\s*)?\\(`).test(clean))
+        return true;
       for (const spec of importSpecifiers(dropTypeOnlyImports(clean))) {
         const target = resolveImport(file, spec, exists);
         if (target && !seen.has(target)) next.push(target);
