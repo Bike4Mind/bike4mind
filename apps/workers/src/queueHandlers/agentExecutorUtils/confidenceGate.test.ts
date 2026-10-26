@@ -63,6 +63,7 @@ describe('evaluateConfidenceGate', () => {
       confidence: 0.7,
       belowThreshold: false,
       pausable: true,
+      overridden: false,
     });
     expect(evaluateConfidenceGate(input([observation(0.3), observation(0.3), observation(0.7)]))?.belowThreshold).toBe(
       false
@@ -75,6 +76,7 @@ describe('evaluateConfidenceGate', () => {
       confidence: 0.3,
       belowThreshold: true,
       pausable: true,
+      overridden: false,
     });
   });
 
@@ -224,6 +226,26 @@ describe('decideIterationConfidencePause', () => {
         pausable: true,
         overridden: true,
       });
+    });
+
+    it('replaces mixed usable evidence and excludes the scripted score from telemetry', async () => {
+      const record = vi.fn(async () => LOW_CONFIDENCE_STREAK_TO_PAUSE);
+      const gate = evaluateConfidenceGate(
+        input([observation(0.3), observation(0.7)], { confidenceOverrides: [0.95, 0.1] })
+      );
+
+      expect(gate).toEqual({
+        iteration: 2,
+        confidence: 0.1,
+        belowThreshold: true,
+        pausable: true,
+        overridden: true,
+      });
+      expect(await decideIterationConfidencePause(gate, record)).toEqual({
+        pause: true,
+        lowConfidenceStreak: LOW_CONFIDENCE_STREAK_TO_PAUSE,
+      });
+      expect(record).toHaveBeenCalledWith(0.1, { belowThreshold: true, recordTelemetry: false });
     });
 
     it('can force a pass over a low real score', () => {
