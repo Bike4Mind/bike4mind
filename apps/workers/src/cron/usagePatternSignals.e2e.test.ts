@@ -173,7 +173,9 @@ describe('runUsagePatternSignals', () => {
     const result = await runUsagePatternSignals({ now });
 
     expect(result).toMatchObject({ analyzed: 0, skippedPaid: 1 });
-    expect(await UserUsagePatternSignals.countDocuments()).toBe(0);
+    expect(await UserUsagePatternSignals.find({}, { _id: 0, userId: 1, skipped: 1, needsReview: 1 }).lean()).toEqual([
+      { userId: paid, skipped: 'paid', needsReview: false },
+    ]);
   });
 
   it('keeps one result per user across runs and leaves the account untouched', async () => {
@@ -210,7 +212,7 @@ describe('runUsagePatternSignals', () => {
     });
 
     expect(await runUsagePatternSignals({ now })).toMatchObject({ analyzed: 2, skippedPaid: 1 });
-    const firstRun = (await UserUsagePatternSignals.find().lean()).map(r => r.userId);
+    const firstRun = (await UserUsagePatternSignals.find({ skipped: null }).lean()).map(r => r.userId);
     await runUsagePatternSignals({ now: new Date(now.getTime() + MINUTE) });
 
     const missed = free.find(id => !firstRun.includes(id));
@@ -218,7 +220,9 @@ describe('runUsagePatternSignals', () => {
     expect(await userUsagePatternSignalsRepository.findByUserId(missed!)).toMatchObject({
       computedAt: new Date(now.getTime() + MINUTE),
     });
-    expect((await UserUsagePatternSignals.find().lean()).map(r => r.userId).sort()).toEqual([...free].sort());
+    expect((await UserUsagePatternSignals.find({ skipped: null }).lean()).map(r => r.userId).sort()).toEqual(
+      [...free].sort()
+    );
   });
 
   it('stops early when out of time and picks up the missed users on the next run', async () => {
@@ -233,5 +237,25 @@ describe('runUsagePatternSignals', () => {
     const missed = await UserUsagePatternSignals.findOne({ computedAt: new Date(now.getTime() + MINUTE) }).lean();
     expect(users).toContain(missed?.userId);
     expect(await UserUsagePatternSignals.countDocuments()).toBe(2);
+  });
+
+  it('scores free users within the first runs even when paid users outnumber the time budget', async () => {
+    const paid: string[] = [];
+    for (let i = 0; i < 5; i++) paid.push(await seedUser());
+    const free = [await seedUser(), await seedUser()];
+    for (const userId of [...paid, ...free]) await seedUsage(userId, [new Date(now.getTime() - MINUTE)], {});
+    h.getActiveSubscriptionsForUser.mockImplementation(async (userId: string) => (paid.includes(userId) ? [{}] : []));
+    // Each run has time for four users.
+    const budget = () => {
+      let checks = 0;
+      return () => checks++ >= 4;
+    };
+
+    await runUsagePatternSignals({ now, shouldStop: budget() });
+    await runUsagePatternSignals({ now: new Date(now.getTime() + MINUTE), shouldStop: budget() });
+
+    const scored = await UserUsagePatternSignals.find({ skipped: null }).lean();
+    expect(scored.map(r => r.userId).sort()).toEqual([...free].sort());
+    expect(await UserUsagePatternSignals.countDocuments({ skipped: 'paid', needsReview: false })).toBe(paid.length);
   });
 });

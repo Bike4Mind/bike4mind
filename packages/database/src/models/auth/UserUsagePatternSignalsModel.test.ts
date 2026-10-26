@@ -26,6 +26,21 @@ describe('UserUsagePatternSignalsRepository', () => {
     expect(latest?.signals[0]).toMatchObject({ id: 'quickApiKey', value: 2, triggered: true, weight: 10 });
   });
 
+  it('marks a skipped user without a score and clears the marker once scored', async () => {
+    await userUsagePatternSignalsRepository.markSkipped('user-2', 'paid', new Date('2026-01-01T00:00:00Z'));
+    expect(await userUsagePatternSignalsRepository.findByUserId('user-2')).toMatchObject({
+      skipped: 'paid',
+      signals: [],
+      score: 0,
+      needsReview: false,
+    });
+
+    await userUsagePatternSignalsRepository.upsertLatest('user-2', result(80), new Date('2026-01-01T01:00:00Z'));
+    const scored = await userUsagePatternSignalsRepository.findByUserId('user-2');
+    expect(scored).toMatchObject({ score: 80, needsReview: true });
+    expect(scored?.skipped).toBeUndefined();
+  });
+
   it('declares a unique userId and a TTL on computedAt', async () => {
     await UserUsagePatternSignals.syncIndexes();
     const indexes = await UserUsagePatternSignals.collection.indexes();

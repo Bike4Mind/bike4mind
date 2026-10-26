@@ -186,6 +186,7 @@ export async function runUsagePatternSignals(
     const userId = String(user._id);
     try {
       if (await hasActivePlan(userId)) {
+        await userUsagePatternSignalsRepository.markSkipped(userId, 'paid', now);
         result.skippedPaid++;
         continue;
       }

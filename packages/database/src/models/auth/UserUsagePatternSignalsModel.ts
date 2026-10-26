@@ -1,7 +1,9 @@
 import {
   type IUserUsagePatternSignals,
   USAGE_PATTERN_SIGNAL_IDS,
+  USAGE_PATTERN_SKIP_REASONS,
   type UsagePatternSignalsResult,
+  type UsagePatternSkipReason,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import mongoose, { type Model, Schema } from 'mongoose';
@@ -27,6 +29,7 @@ const UserUsagePatternSignalsSchema = new Schema<IUserUsagePatternSignals>(
     score: { type: Number, required: true },
     needsReview: { type: Boolean, required: true },
     computedAt: { type: Date, required: true },
+    skipped: { type: String, enum: USAGE_PATTERN_SKIP_REASONS },
   },
   {
     timestamps: true,
@@ -51,7 +54,19 @@ export class UserUsagePatternSignalsRepository extends BaseRepository<IUserUsage
   async upsertLatest(userId: string, result: UsagePatternSignalsResult, computedAt: Date): Promise<void> {
     await this.model.updateOne(
       { userId },
-      { $set: { signals: result.signals, score: result.score, needsReview: result.needsReview, computedAt } },
+      {
+        $set: { signals: result.signals, score: result.score, needsReview: result.needsReview, computedAt },
+        $unset: { skipped: 1 },
+      },
+      { upsert: true }
+    );
+  }
+
+  /** Records a checked-but-unscored user so it rotates behind never-checked users on the next run. */
+  async markSkipped(userId: string, reason: UsagePatternSkipReason, computedAt: Date): Promise<void> {
+    await this.model.updateOne(
+      { userId },
+      { $set: { signals: [], score: 0, needsReview: false, skipped: reason, computedAt } },
       { upsert: true }
     );
   }

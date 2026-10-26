@@ -20,10 +20,15 @@ export interface UsagePatternSignalsResult {
   needsReview: boolean;
 }
 
+export const USAGE_PATTERN_SKIP_REASONS = ['paid'] as const;
+export type UsagePatternSkipReason = (typeof USAGE_PATTERN_SKIP_REASONS)[number];
+
 /** The latest result for one user, one document per user. */
 export interface IUserUsagePatternSignals extends UsagePatternSignalsResult {
   id: string;
   userId: string;
+  /** Set when the user was checked but not scored; signals are then empty and needsReview false. */
+  skipped?: UsagePatternSkipReason;
   computedAt: Date;
   createdAt: Date;
   updatedAt: Date;
