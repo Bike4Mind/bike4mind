@@ -388,7 +388,7 @@ async function fetchThreadReplies(channelId: string, threadTs: string, slackBotT
 /**
  * Escape CSV field to prevent formula injection and parsing issues
  */
-function escapeCsvField(field: string): string {
+export function escapeCsvField(field: string): string {
   if (!field) return '';
 
   if (CSV_FORMULA_PREFIX.test(field)) {

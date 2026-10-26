@@ -19,7 +19,7 @@ import {
 } from '@mui/joy';
 import React, { ReactNode, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { toCsv } from '@client/app/utils/csv';
+import { buildMigratedUsersCsv } from '@client/app/utils/migratedUsersCsv';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import SingleOrganizationSelector from '../common/SingleOrganizationSelector';
 
@@ -102,16 +102,7 @@ const MigrateUsersTab: React.FC = () => {
     }
   };
 
-  const generateCSV = () => {
-    const header = ['Name', 'Email'];
-
-    if (createdUsers[0].tempPassword) {
-      header.push('Temporary Password');
-    }
-
-    const rows = createdUsers.map(user => [user.name, user.email, user.tempPassword]);
-    return toCsv([header, ...rows]);
-  };
+  const generateCSV = () => buildMigratedUsersCsv(createdUsers);
 
   const copyCSVToClipboard = async () => {
     const csv = generateCSV();

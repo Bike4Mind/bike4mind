@@ -18,8 +18,13 @@ export const CSV_FORMULA_PREFIX = /^[=+\-@\t\r]/;
 export function escapeCsvCell(value: unknown): string {
   const text = value === null || value === undefined ? '' : String(value);
   const flattened = text.replace(/\r\n|\r|\n/g, ' ').replace(/"/g, '""');
-  const guarded = /^[=+\-@\t]/.test(flattened) ? `'${flattened}` : flattened;
+  const guarded = CSV_FORMULA_PREFIX.test(flattened) ? `'${flattened}` : flattened;
   return `"${guarded}"`;
+}
+
+/** Quotes a cell verbatim, with no formula prefix or newline flattening, for values that must survive a copy exactly. */
+export function quoteCsvCellVerbatim(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 /** Joins rows of already-raw values into a CSV document, escaping every cell. */

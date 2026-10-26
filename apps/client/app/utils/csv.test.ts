@@ -55,6 +55,16 @@ describe('toCsv', () => {
   });
 });
 
+describe('escapeCsvCell edge cases', () => {
+  it('escapes a header cell the same way as a body cell', () => {
+    expect(toCsv([['=Name'], ['Ada']])).toBe(`"'=Name"\n"Ada"`);
+  });
+
+  it('does not prefix a cell with a leading space', () => {
+    expect(escapeCsvCell(' =1')).toBe('" =1"');
+  });
+});
+
 describe('CSV_FORMULA_PREFIX', () => {
   it.each(['=1', '+1', '-1', '@a', '\ta', '\ra'])('matches %j', value => {
     expect(CSV_FORMULA_PREFIX.test(value)).toBe(true);
