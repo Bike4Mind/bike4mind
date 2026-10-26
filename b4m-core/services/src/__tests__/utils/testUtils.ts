@@ -93,6 +93,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   deleteManyInIds: vi.fn(),
   softDeleteByIdsForUserBatch: vi.fn(),
   findAllByIds: vi.fn(),
+  findPageByIds: vi.fn(),
   findExistingIdsByIds: vi.fn(),
   findExistingIdsIncludingDeletedByIds: vi.fn(),
   findCitableFieldsByIds: vi.fn(),
@@ -220,6 +221,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     listByUserId: vi.fn(),
     findRecentlyUpdatedByUserId: vi.fn(),
     findAllByIds: vi.fn(),
+    findPageByIds: vi.fn(),
     findSessionIdsByUserId: vi.fn(),
     attachAgent: vi.fn(),
     // Returns a promise so the caller's `.catch(...)` on the auto-add write works in every test.

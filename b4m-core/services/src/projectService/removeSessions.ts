@@ -4,6 +4,8 @@ import {
   IUserRepository,
   secureParameters,
   BadRequestError,
+  ForbiddenError,
+  NotFoundError,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
@@ -33,10 +35,10 @@ export const removeSessions = async (
   const { projectId, sessionIds } = secureParameters(params, removeProjectSessionsSchema);
 
   const user = await db.users.findById(userId);
-  if (!user) throw new Error('User not found');
+  if (!user) throw new NotFoundError('User not found');
 
   const project = await db.projects.shareable.findAccessibleById(user, projectId);
-  if (!project) throw new Error('Project not found');
+  if (!project) throw new NotFoundError('Project not found');
 
   const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
   // BadRequestError, not a bare Error - see addFiles.
@@ -51,16 +53,24 @@ export const removeSessions = async (
   // Non-hex is NOT folded: two legacy entries differing only in case are different rows.
   const resolvedIds = new Set(sessions.map(s => canonicalId(String(s.id))));
   const addressable = new Set(usableObjectIds(sessionIds, 'projectService.removeSessions').map(canonicalId));
-  if (sessionIds.some(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)))) {
+  // The project owner may still clear an id the project holds but that no longer resolves (a deleted
+  // or unreadable row): the list is theirs, and nothing else can ever take the id out of it.
+  const ownerHeld = new Set(project.userId === userId ? project.sessionIds.map(canonicalId) : []);
+  if (
+    sessionIds.some(
+      id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)) && !ownerHeld.has(canonicalId(id))
+    )
+  ) {
     throw new BadRequestError('Some sessions are not accessible');
   }
   if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {
-    throw new Error('You are not authorized to remove sessions from this project');
+    throw new ForbiddenError('You are not authorized to remove sessions from this project');
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
   // would match nothing and the call would answer 200 having removed nothing at all.
   const removing = new Set(sessionIds.map(canonicalId));
+  const removedIds = project.sessionIds.filter(id => removing.has(canonicalId(id)));
   project.sessionIds = project.sessionIds.filter(id => !removing.has(canonicalId(id)));
   project.updatedAt = new Date();
 
@@ -72,5 +82,6 @@ export const removeSessions = async (
 
   await db.projects.update({ id: project.id, sessionIds: project.sessionIds, updatedAt: project.updatedAt });
 
-  return project;
+  // removedIds are the stored ids actually taken out, so callers can skip side effects for a no-op.
+  return { project, removedIds };
 };

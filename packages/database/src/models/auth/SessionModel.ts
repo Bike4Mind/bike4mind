@@ -18,8 +18,15 @@ import {
   SessionListFilters,
   SessionOriginChannel,
   tagAttemptDueFilter,
+  SessionResponseSchema,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
+
+// The public session fields, minus the id pair Mongo returns anyway, so findPageByIds cannot load
+// less than toPublicSession (apps/client/server/sessions) emits.
+const PUBLIC_SESSION_PROJECTION = Object.keys(SessionResponseSchema.shape)
+  .filter(key => key !== 'id' && key !== '_id')
+  .join(' ');
 import User from './UserModel';
 import { NotFoundError } from '@bike4mind/utils';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -546,6 +553,27 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   async findAllByIds(ids: string[], options?: { includeDeleted?: boolean }) {
     const query = this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });
     return options?.includeDeleted ? query.setOptions({ includeDeleted: true }) : query;
+  }
+
+  /**
+   * One ascending-by-`_id` page of the given ids, public-shape fields only. Same liveness as
+   * `findAllByIds` (the soft-delete plugin hides deleted rows); ids that cannot address a row are skipped.
+   */
+  async findPageByIds(ids: string[], { afterId, limit }: { afterId?: string; limit: number }) {
+    if (afterId !== undefined && !mongoose.isObjectIdOrHexString(afterId)) return { data: [], hasMore: false };
+    const idCondition: Record<string, unknown> = {
+      $in: usableObjectIds(ids, 'SessionModel.findPageByIds').map(id => new mongoose.Types.ObjectId(id)),
+    };
+    if (afterId !== undefined) idCondition.$gt = new mongoose.Types.ObjectId(afterId);
+
+    const result = await this.sessionModel
+      .find({ _id: idCondition })
+      .select(PUBLIC_SESSION_PROJECTION)
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .exec();
+
+    return { data: result.slice(0, limit), hasMore: result.length > limit };
   }
 
   async attachAgent(sessionId: string, agentId: string) {

@@ -27,6 +27,7 @@ const AI_MARKERS = [
   /\brefineTextRequest\(/,
   /\.complete\(/,
   /\bSessionEvents\.(?:Summarize|Tag)\.publish\(/,
+  /\battachSessionsToProject\(/,
 ];
 const GATE = /\b(?:assertAiAccessAllowed|createModelAdmission|reserveRequestCredits|isAiAccessRevoked)\(/;
 
@@ -60,6 +61,7 @@ const selfGatedMarkers = new Set(
   [
     ['transcribe/transcribe.ts', /\btranscribeUpload\(/.source],
     ['ai/refineTextRequest.ts', /\brefineTextRequest\(/.source],
+    ['projects/attachSessionsToProject.ts', /\battachSessionsToProject\(/.source],
   ].flatMap(([file, marker]) => (GATE.test(read(file)) ? [marker] : []))
 );
 

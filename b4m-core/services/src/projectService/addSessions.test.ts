@@ -15,7 +15,7 @@ import {
   Permission,
   IFabFileRepository,
 } from '@bike4mind/common';
-import { NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 describe('projectService - addSessions', () => {
   const userId = 'test-user-123';
@@ -272,7 +272,7 @@ describe('projectService - addSessions', () => {
     });
   });
 
-  it('should throw NotFoundError when sessions are not found', async () => {
+  it('should throw BadRequestError when none of the sessions is reachable', async () => {
     const projectId = 'test-project-id';
     const sessionIds = ['session-1', 'session-2'];
     (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce({
@@ -284,7 +284,7 @@ describe('projectService - addSessions', () => {
     });
     (mockSessionRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce([]);
 
-    await expect(addSessions(mockUser, { projectId, sessionIds }, adapters)).rejects.toThrow(NotFoundError);
+    await expect(addSessions(mockUser, { projectId, sessionIds }, adapters)).rejects.toThrow(BadRequestError);
     expect(mockProjectRepo.shareable.findUpdateAccessById).toHaveBeenCalledWith(mockUser, projectId);
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
     expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();

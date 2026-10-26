@@ -1,11 +1,5 @@
 import { z } from 'zod';
-import {
-  withTransaction,
-  projectRepository,
-  fabFileRepository,
-  userRepository,
-  inviteRepository,
-} from '@bike4mind/database';
+import { projectRepository, fabFileRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -14,8 +8,7 @@ import {
   assertProjectsWriteScope,
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
-import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents } from '@bike4mind/common';
+import { addFilesToProject, removeFilesFromProject } from '@server/projects/projectContentMutations';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 const addFileIdsBodySchema = z.object({
@@ -56,38 +49,10 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       const { id } = req.query as { id: string };
       const { fileIds } = addFileIdsBodySchema.parse(req.body);
 
-      const project = await withTransaction(() =>
-        projectService.addFiles(
-          req.user,
-          {
-            projectId: id,
-            fileIds: fileIds as [string, ...string[]],
-          },
-          {
-            db: {
-              fabFiles: fabFileRepository,
-              projects: projectRepository,
-            },
-          }
-        )
-      );
-
-      await Promise.all(
-        fileIds.map((fileId: string) =>
-          logEvent(
-            {
-              userId: req.user.id,
-              type: ProjectEvents.ADD_FILE,
-              metadata: {
-                projectId: project.id,
-                projectName: project.name,
-                contentId: fileId,
-                contentType: 'file',
-              },
-            },
-            { ability: req.ability }
-          )
-        )
+      const project = await addFilesToProject(
+        { user: req.user, ability: req.ability, logger: req.logger },
+        id,
+        fileIds as [string, ...string[]]
       );
 
       return res.json(project);
@@ -99,40 +64,10 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       const { id } = req.query as { id: string };
       const { fileIds } = removeFileIdsBodySchema.parse(req.body);
 
-      const project = await withTransaction(() =>
-        projectService.removeFiles(
-          req.user.id,
-          {
-            projectId: id,
-            fileIds,
-          },
-          {
-            db: {
-              fabFiles: fabFileRepository,
-              projects: projectRepository,
-              users: userRepository,
-              invites: inviteRepository,
-            },
-          }
-        )
-      );
-
-      await Promise.all(
-        fileIds.map((fileId: string) =>
-          logEvent(
-            {
-              userId: req.user.id,
-              type: ProjectEvents.REMOVE_FILE,
-              metadata: {
-                projectId: project.id,
-                projectName: project.name,
-                contentId: fileId,
-                contentType: 'file',
-              },
-            },
-            { ability: req.ability }
-          )
-        )
+      const project = await removeFilesFromProject(
+        { user: req.user, ability: req.ability, logger: req.logger },
+        id,
+        fileIds
       );
 
       return res.json(project);

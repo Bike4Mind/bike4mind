@@ -1196,6 +1196,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
+   * One ascending-by-`_id` page of the given ids, summary fields only. Same liveness as `findAllByIds`
+   * (the soft-delete plugin hides deleted rows); ids that cannot address a row are skipped.
+   */
+  async findPageByIds(ids: string[], { afterId, limit }: { afterId?: string; limit: number }) {
+    if (afterId !== undefined && !mongoose.isObjectIdOrHexString(afterId)) return { data: [], hasMore: false };
+    const idCondition: Record<string, unknown> = {
+      $in: convertIds(usableObjectIds(ids, 'FabFileModel.findPageByIds')),
+    };
+    if (afterId !== undefined) idCondition.$gt = convertId(afterId);
+
+    const result = await this.fabFileModel
+      .find({ _id: idCondition })
+      .select('fileName mimeType fileSize moderationStatus createdAt')
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .exec();
+
+    return { data: result.slice(0, limit).map(doc => doc.toJSON()), hasMore: result.length > limit };
+  }
+
+  /**
    * Existence only, nothing hydrated. See IFabFileRepository.findExistingIdsByIds for why this is not
    * `findAllByIds`: that one builds a full mongoose document per id to answer the same question.
    */

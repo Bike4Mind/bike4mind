@@ -63,13 +63,13 @@ export const addSessions = async (
   // Sessions/files being added stay read-level: adding a notebook you can only read into a
   // project you can update is legitimate, same call addFiles.ts makes for fileIds.
   const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
-  if (sessions.length === 0) {
-    throw new NotFoundError('Sessions not found');
+  // Any unreachable id is a 400, all-missing included, same as addFiles: a 404 here would read as
+  // the project 404 above. Counted as DISTINCT rows ignoring hex case: the reader returns one row
+  // per document, so the same notebook sent twice - or sent as both `abc` and `ABC` - is not one
+  // that could not be reached.
+  if (sessions.length === 0 || sessions.length !== distinctIdCount(sessionIds)) {
+    throw new BadRequestError('Some sessions are not accessible');
   }
-  // Partial resolve is a 400; all-missing keeps the 404 above. See addFiles. Counted as DISTINCT
-  // rows ignoring hex case: the reader returns one row per document, so the same notebook sent
-  // twice - or sent as both `abc` and `ABC` - is not one that could not be reached.
-  if (sessions.length !== distinctIdCount(sessionIds)) throw new BadRequestError('Some sessions are not accessible');
 
   // The ids that RESOLVED, not the request's raw list - same reason as the fileIds push below.
   project.sessionIds = mergeIds(
