@@ -8,7 +8,8 @@ Detection groups verified signups by registrable email domain, including private
 public suffixes, and requires generated local parts as well as the volume threshold.
 The newest 1,000 observations per domain bound each evaluation; reported counts
 refer to that analyzed sample. It recognizes shared alphabetic prefixes with hexadecimal counters and increasing
-hexadecimal suffixes even when unrelated addresses interrupt the counter cohort,
+hexadecimal suffixes that climb across at least 80% of the generated addresses, so unrelated
+addresses may interrupt the counter cohort but a short run among ID-style addresses does not count,
 with rotating short subdomains included in the review reason.
 Ordinary employee names and volume alone do not trigger a hold. Observations begin
 when detection is enabled; historical users are not reclassified as fresh signups.
