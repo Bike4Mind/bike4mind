@@ -101,6 +101,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
 
   // LiveOps Triage tab visibility - show everywhere except fork production environments
   const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useLiveOpsTriageEnv(!!currentUser?.isAdmin);
+  const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
 
   // Selecting a tab this screen cannot draw would leave the content pane blank, so the URL sync
   // treats it as unknown and corrects the store instead.

@@ -199,7 +199,8 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
         disablePortal
         slotProps={{ content: { sx: { width: 280, bgcolor: 'admin.canvas' } } }}
       >
-        <SidebarNav {...navProps} onClose={() => setDrawerOpen(false)} />
+        {/* Only while open: a hidden second nav would duplicate every sidebar testid on desktop. */}
+        {drawerOpen && <SidebarNav {...navProps} onClose={() => setDrawerOpen(false)} />}
       </Drawer>
       <HelpPanel />
     </Sheet>
