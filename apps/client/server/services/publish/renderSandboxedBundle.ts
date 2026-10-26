@@ -81,6 +81,12 @@ export interface RenderSandboxedBundleInput {
    * sub-documents (`?a=` reply artifacts), whose real URL fragment-navigates natively.
    */
   pagePaths?: string[];
+  /**
+   * Inline mode only: URL for a media ref (`img`/`video`/`audio`/`source`) that missed the
+   * `assets` budget. When it returns a URL the ref is pointed there and NOT reported in
+   * `droppedAssets`; stylesheets and `undefined` returns are still dropped.
+   */
+  overflowUrl?: (path: string) => string | undefined;
 }
 
 export interface RenderSandboxedBundleResult {
@@ -146,7 +152,9 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
         if (!value || !isRelativeBundlePath(value)) return;
         const asset = assets.get(value);
         if (!asset) {
-          droppedAssets.push(value);
+          const url = input.overflowUrl?.(value);
+          if (url) $(el).attr(attr, url);
+          else droppedAssets.push(value);
           return;
         }
         $(el).attr(attr, toDataUri(asset));

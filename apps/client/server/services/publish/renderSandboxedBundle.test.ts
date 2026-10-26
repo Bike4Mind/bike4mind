@@ -72,6 +72,21 @@ describe('renderSandboxedBundle', () => {
   });
 
   describe('gated', () => {
+    it('points over-budget media at overflowUrl and still drops over-budget stylesheets', () => {
+      const html = `<html><head><link rel="stylesheet" href="big.css"></head><body><img src="a.png"><video src="v.mp4"></video><img src="nope.png"></body></html>`;
+      const { srcdoc, droppedAssets } = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'private',
+        assets: new Map(),
+        overflowUrl: p => (p === 'nope.png' ? undefined : `${ORIGIN}${URL_BASE}/${p}?ot=T`),
+      });
+      expect(srcdoc).toContain(`src="${ORIGIN}${URL_BASE}/a.png?ot=T"`);
+      expect(srcdoc).toContain(`src="${ORIGIN}${URL_BASE}/v.mp4?ot=T"`);
+      expect(droppedAssets).toEqual(['big.css', 'nope.png']);
+    });
+
     it('inlines a relative image as a data: URI', () => {
       const html = `<html><body><img src="logo.png"></body></html>`;
       const assets = new Map([['logo.png', asset('PNGDATA', 'image/png')]]);

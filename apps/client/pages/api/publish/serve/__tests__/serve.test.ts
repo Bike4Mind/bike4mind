@@ -90,10 +90,11 @@ type RunOpts = {
   embed?: boolean;
   a?: string;
   exportAs?: unknown;
+  ot?: string;
 };
 const run = (
   segments: string[],
-  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent, embed, a, exportAs }: RunOpts = {}
+  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent, embed, a, exportAs, ot }: RunOpts = {}
 ) => {
   const query: Record<string, unknown> = { path: segments };
   if (raw) query.raw = '1';
@@ -102,6 +103,7 @@ const run = (
   if (embed) query.embed = '1';
   if (a !== undefined) query.a = a;
   if (exportAs !== undefined) query.export = exportAs;
+  if (ot !== undefined) query.ot = ot;
   const effectiveHost = uc ? `${uc}.usercontent.app.bike4mind.com` : host;
   if (uc) query.__uc = '1';
   const headers: Record<string, string> = { host: effectiveHost };
@@ -3275,5 +3277,101 @@ describe('GET /api/publish/serve - per-entry share-link view counts (#3255)', ()
     await sub.promise;
     expect(sub.res._getStatusCode()).toBe(200);
     expect(perLinkCall()).toBeUndefined();
+  });
+});
+
+describe('GET /api/publish/serve - gated bundle inline budget and overflow media', () => {
+  const IMG_BYTES = 500 * 1024;
+  const imgs = Array.from({ length: 14 }, (_, i) => `img${i}.png`);
+  const bigBundle = (over: Record<string, unknown> = {}) =>
+    bundle({
+      accessGate: { kind: 'passphrase' },
+      manifest: [
+        { path: 'index.html', mimeType: 'text/html' },
+        ...imgs.map(path => ({ path, mimeType: 'image/png' })),
+      ],
+      ...over,
+    });
+  const html = `<html><head></head><body>${imgs.map(p => `<img src="${p}">`).join('')}</body></html>`;
+  const serveBytes = () =>
+    mockDownload.mockImplementation(async (key: string) =>
+      key.endsWith('index.html') ? Buffer.from(html) : Buffer.alloc(IMG_BYTES)
+    );
+  const proof = async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    return `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
+  };
+
+  it('renders ~7 MB of images as 200 under 6 MB, with overflow images on tokenized URLs', async () => {
+    mockArtifactFindOne.mockReturnValue(bigBundle());
+    serveBytes();
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: await proof() });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(Buffer.byteLength(data)).toBeLessThan(6_000_000);
+    expect(data.match(/\?ot=/g)?.length).toBeGreaterThan(0);
+    expect(data).toContain('/p/u/scope123/my-slug/img13.png?ot=');
+    expect(res.getHeader('X-Publish-Dropped-Assets')).toBeUndefined();
+  });
+
+  it('serves share-link overflow URLs under /a/<token>, never the canonical /p path', async () => {
+    mockArtifactFindOne.mockReturnValue(bigBundle());
+    serveBytes();
+
+    const { res, promise } = run(['a', 'tok123'], { cookie: await proof() });
+    await promise;
+
+    expect(res.statusCode).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('/a/tok123/img13.png?ot=');
+    expect(data).not.toContain('/p/u/scope123/my-slug/img');
+  });
+
+  describe('?ot= on an asset request', () => {
+    it('authorizes that one asset with no credential, uncached', async () => {
+      const { signOverflowAssetToken } = await import('@server/services/publish/inlineOverflowToken');
+      mockArtifactFindOne.mockReturnValue(bigBundle());
+      serveBytes();
+
+      const ot = signOverflowAssetToken({ publicId: 'pub1', path: 'img3.png' });
+      const { res, promise } = run(['u', 'scope123', 'my-slug', 'img3.png'], { ot });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+    });
+
+    it('refuses the same token on another path, a bad token, and another artifact', async () => {
+      const { signOverflowAssetToken } = await import('@server/services/publish/inlineOverflowToken');
+      serveBytes();
+      const ot = signOverflowAssetToken({ publicId: 'pub1', path: 'img3.png' });
+      const foreign = signOverflowAssetToken({ publicId: 'other', path: 'img3.png' });
+
+      for (const [path, token] of [
+        ['img4.png', ot],
+        ['img3.png', 'garbage'],
+        ['img3.png', foreign],
+      ]) {
+        mockArtifactFindOne.mockReturnValue(bigBundle());
+        const { res, promise } = run(['u', 'scope123', 'my-slug', path], { ot: token });
+        await promise;
+        expect(res._getStatusCode()).toBe(401);
+      }
+    });
+
+    it('does not bypass the not-found check', async () => {
+      const { signOverflowAssetToken } = await import('@server/services/publish/inlineOverflowToken');
+      mockArtifactFindOne.mockReturnValue(null);
+      serveBytes();
+
+      const ot = signOverflowAssetToken({ publicId: 'pub1', path: 'img3.png' });
+      const { res, promise } = run(['u', 'scope123', 'my-slug', 'img3.png'], { ot });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(404);
+    });
   });
 });

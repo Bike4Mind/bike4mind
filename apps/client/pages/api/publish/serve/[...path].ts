@@ -31,6 +31,7 @@ import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
 import { requestHasGateProof } from '@server/services/publish/publishGateToken';
+import { signOverflowAssetToken, verifyOverflowAssetToken } from '@server/services/publish/inlineOverflowToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { injectSignupGateBridge } from '@server/services/publish/signupGateBridge';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
@@ -443,7 +444,15 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   const access = isShare
     ? await checkShareGrant(gateArtifact, { user: req.user as PublishUser | undefined, passphraseVerified })
     : await checkVisibility(gateArtifact, req.user as PublishUser | undefined, { passphraseVerified });
-  if (!access.ok) {
+  // An inline-overflow media URL (see the gated render below) carries a per-path token in
+  // place of a credential: the opaque-origin iframe sends none. Pinned to this artifact and
+  // this exact asset path, and only reached after the not-found and isolated-origin 404s above.
+  const requestedAssetPath = resolved.kind === 'bundle' ? resolved.assetPath : shareAssetPath;
+  const overflowGrant =
+    !!requestedAssetPath &&
+    typeof req.query.ot === 'string' &&
+    verifyOverflowAssetToken(req.query.ot, artifact.publicId, requestedAssetPath);
+  if (!access.ok && !overflowGrant) {
     // Passphrase-gated item navigated without a valid proof -> serve the PUBLIC
     // passphrase prompt shell (no artifact data) instead of a bare 401. Takes
     // precedence over the JWT loader shell below: a Bearer re-fetch can never
@@ -522,7 +531,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // sub-request double-counts). Fire-and-forget inside bumpViewCount.
   const gateViewAudit =
     gateArtifact.accessGate?.kind === 'domain'
-      ? { gateKind: 'domain' as const, sourceIp: getClientIp(req), viewerEmailDomain: access.viewerEmailDomain }
+      ? { gateKind: 'domain' as const, sourceIp: getClientIp(req), viewerEmailDomain: access.ok ? access.viewerEmailDomain : undefined }
       : undefined;
 
   // Per-link view counting (#3255 step 2). Computed once here and threaded to every
@@ -857,14 +866,26 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Share links use the <base> asset model (assets self-authorize via the token), so
   // they never inline - only gated `/p` bundles pre-fetch + inline their assets here.
   let inlineAssets: Map<string, SandboxAsset> | undefined;
+  let overflowUrl: ((path: string) => string | undefined) | undefined;
   let droppedAssets: string[] = [];
   if (isShare ? !!artifact.accessGate : !isOpenPublic) {
     const collected = await collectInlineAssets({
       manifest: artifact.manifest,
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
+      reservedBytes: Buffer.byteLength(indexHtml),
     });
     inlineAssets = collected.assets;
-    droppedAssets = [...collected.oversized, ...collected.failed];
+    // Over-budget media loads through a same-origin, per-path tokenized URL instead of
+    // breaking; everything else over budget (or failed) is still reported as dropped.
+    const overflowable = new Set(
+      artifact.manifest.filter(e => /^(image|video|audio)\//.test(e.mimeType)).map(e => e.path)
+    );
+    const overflow = new Set(collected.oversized.filter(p => overflowable.has(p)));
+    overflowUrl = p =>
+      overflow.has(p)
+        ? `${docOrigin}${urlBase}/${p.split('/').map(encodeURIComponent).join('/')}?ot=${signOverflowAssetToken({ publicId: artifact.publicId, path: p })}`
+        : undefined;
+    droppedAssets = [...collected.oversized.filter(p => !overflow.has(p)), ...collected.failed];
   }
 
   const { srcdoc: baseSrcdoc } = renderSandboxedBundle({
@@ -874,6 +895,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     visibility: effectiveVisibility,
     assetMode: isShare ? (artifact.accessGate ? 'inline' : 'base') : undefined,
     assets: inlineAssets,
+    overflowUrl,
     // Same-page fragment links must scroll in place, not re-navigate the sandboxed
     // iframe (an opaque-origin navigation drops the SameSite proof cookie and
     // dead-ends a gated bundle at its prompt shell). Both the canonical /p path and

@@ -10,11 +10,13 @@ import type { SandboxAsset } from './renderSandboxedBundle';
  * inlines them into the `srcdoc`.
  *
  * Inlining base64-encodes bytes (~33% inflation) into a single response, so this
- * is bounded by two caps to stay under the route's `responseLimit` (15mb):
+ * is bounded by two caps to stay under Lambda's 6 MB response limit:
  *   - per-asset cap: skip any single oversized file (reported, not fatal)
- *   - cumulative cap: stop inlining once the running raw total is reached
- * Caps are measured in RAW bytes: the 6 MB cumulative cap ≈ 8 MB once base64-encoded,
- * leaving ~7 MB of the 15 MB `responseLimit` for index.html + the wrapper page.
+ *   - cumulative cap: stop inlining once the running ENCODED total (the `data:` URI
+ *     length that actually lands in the response) reaches the budget, less
+ *     `reservedBytes` for index.html
+ * The ~1.5 MB between the budget and 6 MB absorbs attribute escaping, the wrapper
+ * page and response headers.
  *
  * Fetches run concurrently (bounded by CONCURRENCY) for latency, then the caps are
  * applied in a deterministic SECOND pass over the manifest order - so which assets
@@ -26,8 +28,8 @@ import type { SandboxAsset } from './renderSandboxedBundle';
 
 /** Skip any single asset larger than this raw-byte size. */
 export const PER_ASSET_MAX_BYTES = 3 * 1024 * 1024;
-/** Stop inlining once the cumulative raw-byte total reaches this size (≈ 8 MB base64). */
-export const TOTAL_INLINE_MAX_BYTES = 6 * 1024 * 1024;
+/** Stop inlining once the cumulative base64-encoded total reaches this size. */
+export const TOTAL_INLINE_MAX_BYTES = 4.5 * 1024 * 1024;
 /** Max concurrent asset downloads - bounds S3 fan-out without serializing latency. */
 const CONCURRENCY = 8;
 
@@ -38,6 +40,8 @@ export interface CollectInlineAssetsInput {
   load: (path: string) => Promise<Buffer>;
   perAssetMaxBytes?: number;
   totalMaxBytes?: number;
+  /** Bytes of the response already spoken for (e.g. index.html); subtracted from the total budget. */
+  reservedBytes?: number;
 }
 
 export interface CollectInlineAssetsResult {
@@ -49,9 +53,13 @@ export interface CollectInlineAssetsResult {
   failed: string[];
 }
 
+/** Length of the `data:<mime>;base64,<...>` URI that inlining this asset produces. */
+const encodedSize = (rawBytes: number, mimeType: string) =>
+  'data:'.length + mimeType.length + ';base64,'.length + 4 * Math.ceil(rawBytes / 3);
+
 export async function collectInlineAssets(input: CollectInlineAssetsInput): Promise<CollectInlineAssetsResult> {
   const perAssetMax = input.perAssetMaxBytes ?? PER_ASSET_MAX_BYTES;
-  const totalMax = input.totalMaxBytes ?? TOTAL_INLINE_MAX_BYTES;
+  const totalMax = (input.totalMaxBytes ?? TOTAL_INLINE_MAX_BYTES) - (input.reservedBytes ?? 0);
   const paths = input.manifest.filter(e => e.path !== 'index.html').map(e => e.path);
 
   // Pass 1 - fetch concurrently (bounded). Preserve per-path success/failure; the
@@ -79,12 +87,14 @@ export async function collectInlineAssets(input: CollectInlineAssetsInput): Prom
   for (const path of paths) {
     const data = fetched.get(path);
     if (!data) continue; // download failed — already recorded
-    if (data.length > perAssetMax || runningTotal + data.length > totalMax) {
+    const mimeType = mimeByPath.get(path)!;
+    const encoded = encodedSize(data.length, mimeType);
+    if (data.length > perAssetMax || runningTotal + encoded > totalMax) {
       oversized.push(path);
       continue;
     }
-    runningTotal += data.length;
-    assets.set(path, { data, mimeType: mimeByPath.get(path)! });
+    runningTotal += encoded;
+    assets.set(path, { data, mimeType });
   }
 
   // Stable ordering for callers/tests regardless of fetch-completion order.
