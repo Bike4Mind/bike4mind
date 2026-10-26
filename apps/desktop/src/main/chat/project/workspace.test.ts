@@ -429,7 +429,9 @@ describe('resolveWorkspace choosing what to fork from', () => {
     await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
     await fetchRemoteFor(repo, 'origin/main');
 
-    await expect(resolveWorkspace(repo, { base, branch: 'agent/refused' })).rejects.toThrow();
+    await expect(resolveWorkspace(repo, { base, branch: 'agent/refused' })).rejects.toThrow(
+      /Could not update origin\/main.*pick another base branch/s
+    );
 
     expect(await headOf(repo)).toBe(local);
     expect(await branchExists(repo, 'agent/refused')).toBe(false);
@@ -450,7 +452,7 @@ describe('resolveWorkspace choosing what to fork from', () => {
     await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
     await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
 
-    await expect(resolveWorkspace(repo, { branch: 'agent/refused' })).rejects.toThrow();
+    await expect(resolveWorkspace(repo, { branch: 'agent/refused' })).rejects.toThrow(/Could not update origin\/main/);
 
     expect(await branchExists(repo, 'agent/refused')).toBe(false);
   });

@@ -168,7 +168,17 @@ async function baseRefFor(directory: string, base: string): Promise<string> {
   if (selected === 'main' || selected === 'origin/main' || defaultMain) {
     const remotes = (await git(directory, ['remote'])).trim().split('\n');
     if (remotes.includes('origin')) {
-      await fetchRemoteFor(directory, 'origin/main', true);
+      try {
+        await fetchRemoteFor(directory, 'origin/main', true);
+      } catch (err) {
+        // The app's sandboxed git can fail where the user's terminal git works (repo-scoped
+        // credential helpers and ssh commands are dropped, see hostGitArgs.ts), so name the fix.
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Could not update origin/main, so this session cannot start from upstream main: ${reason}. ` +
+            'Check network access and credentials for this repository, or pick another base branch.'
+        );
+      }
       await git(directory, ['rev-parse', '--verify', '--quiet', 'origin/main^{commit}']);
       return 'origin/main';
     }
