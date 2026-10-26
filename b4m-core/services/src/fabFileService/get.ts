@@ -26,6 +26,29 @@ export const hasUsableCachedUrl = ({
 }: Pick<IFabFileDocument, 'fileUrl' | 'fileUrlExpireAt'>) =>
   Boolean(fileUrl && fileUrlExpireAt && new Date(fileUrlExpireAt).getTime() - REFRESH_MARGIN_MS > Date.now());
 
+const AMZ_DATE_PATTERN = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
+
+/**
+ * When a freshly signed URL stops working. An S3 signer may shorten the requested lifetime to
+ * that of its credentials (S3Storage.getSignedUrl), so read it from the SigV4 query
+ * (X-Amz-Date + X-Amz-Expires); a URL without them (non-S3 adapter) gets the requested lifetime.
+ */
+export const signedUrlExpiresAt = (fileUrl: string, requestedSeconds: number): Date => {
+  const fallback = new Date(Date.now() + requestedSeconds * 1000);
+  let params: URLSearchParams;
+  try {
+    params = new URL(fileUrl).searchParams;
+  } catch {
+    return fallback;
+  }
+  const date = AMZ_DATE_PATTERN.exec(params.get('X-Amz-Date') ?? '');
+  const expires = Number(params.get('X-Amz-Expires'));
+  if (!date || !Number.isFinite(expires) || expires <= 0) return fallback;
+  const [, year, month, day, hour, minute, second] = date.map(Number);
+  const signedAt = Date.UTC(year, month - 1, day, hour, minute, second);
+  return new Date(Math.min(signedAt + expires * 1000, fallback.getTime()));
+};
+
 /**
  * Check if a file ID is listed in the global SystemFiles admin setting
  */
@@ -128,7 +151,7 @@ export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, stora
   const fileUrl = await storage.generateSignedUrl(fabFile.filePath, EXPIRE_IN_SECONDS);
   if (!fileUrl) return fabFile; // Avoid updating if URL generation fails
 
-  const fileUrlExpireAt = new Date(Date.now() + 1000 * EXPIRE_IN_SECONDS);
+  const fileUrlExpireAt = signedUrlExpiresAt(fileUrl, EXPIRE_IN_SECONDS);
   fabFile.fileUrl = fileUrl;
   fabFile.fileUrlExpireAt = fileUrlExpireAt;
 
