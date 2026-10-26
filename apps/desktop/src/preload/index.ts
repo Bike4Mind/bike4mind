@@ -22,6 +22,7 @@ import type { CookieImportRequest, CookieImportState } from '@shared/browserCook
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
+import type { HubSearchRequest, ModelPull, ModelPullRequest } from '@shared/models';
 import {
   IPC_CHANNELS,
   type BrowserFreezeFrameRequest,
@@ -54,6 +55,27 @@ const api: DesktopApi = {
       const handler = (_event: unknown, state: UpdateState) => listener(state);
       ipcRenderer.on(IPC_CHANNELS.updateStateChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.updateStateChanged, handler);
+    },
+  },
+  models: {
+    getStatus: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStatus),
+    listInstalled: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled),
+    search: (request: HubSearchRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsSearch, request),
+    getDetail: (repo: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetDetail, repo),
+    listPulls: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListPulls),
+    pull: (request: ModelPullRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsPull, request),
+    cancelPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsCancelPull, key),
+    dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
+    remove: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name),
+    onPullsChanged: listener => {
+      const handler = (_event: unknown, pulls: ModelPull[]) => listener(pulls);
+      ipcRenderer.on(IPC_CHANNELS.modelsPullsChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsPullsChanged, handler);
+    },
+    onInstalledChanged: listener => {
+      const handler = () => listener();
+      ipcRenderer.on(IPC_CHANNELS.modelsInstalledChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsInstalledChanged, handler);
     },
   },
   auth: {

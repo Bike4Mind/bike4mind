@@ -42,6 +42,7 @@
   "devDependencies": {
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/cli": "workspace:*",
+    "@bike4mind/local-models": "workspace:*",
     "@bike4mind/typescript-config": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@mui/joy": "^5.0.0-beta.52",

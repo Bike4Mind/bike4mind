@@ -1,0 +1,171 @@
+/** The Models screen's IPC types and the pure rules main and the renderer share. */
+
+export const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
+
+export type ModelHubErrorKind =
+  | 'runtime-unavailable'
+  | 'hub-unreachable'
+  | 'rate-limited'
+  | 'gated'
+  | 'not-found'
+  | 'unverified'
+  | 'license-required'
+  | 'access-required'
+  | 'already-pulling'
+  | 'cannot-pull'
+  | 'cancelled'
+  | 'invalid'
+  | 'failed';
+
+export interface ModelHubError {
+  kind: ModelHubErrorKind;
+  message: string;
+  /** Rate limits only, when Hugging Face said how long to wait (ms). */
+  retryAfterMs?: number | null;
+}
+
+export interface ModelRuntimeStatus {
+  reachable: boolean;
+  version: string | null;
+  url: string;
+  error: string | null;
+}
+
+export interface LocalModelCapabilities {
+  tools: boolean;
+  vision: boolean;
+  thinking: boolean;
+  embeddings: boolean;
+  completion: boolean;
+}
+
+export interface LocalModelEntry {
+  name: string;
+  sizeBytes: number | null;
+  quantization: string | null;
+  family: string | null;
+  parameterSize: string | null;
+  modifiedAt: string | null;
+  capabilities: LocalModelCapabilities;
+  loaded: boolean;
+}
+
+export type InstalledModelsResult = { ok: true; models: LocalModelEntry[] } | { ok: false; error: ModelHubError };
+
+export type HubGatedMode = false | 'auto' | 'manual';
+
+export interface HubModelCard {
+  id: string;
+  author: string | null;
+  downloads: number | null;
+  likes: number | null;
+  updatedAt: string | null;
+  license: string | null;
+  gated: HubGatedMode;
+  private: boolean;
+  abliterated: boolean;
+}
+
+export interface HubSearchRequest {
+  query: string;
+  cursor?: string | null;
+}
+
+export type HubSearchResult =
+  { ok: true; models: HubModelCard[]; nextCursor: string | null } | { ok: false; error: ModelHubError };
+
+export type LicenseKind = 'permissive' | 'restricted';
+
+export interface HubBuildView {
+  id: string;
+  quant: string | null;
+  sizeBytes: number;
+  /** The `hf.co/...` name Ollama would list it under, as planned from the file list. */
+  ollamaRef: string | null;
+  /** Why the build cannot be pulled; null when it can be offered (the registry check still runs first). */
+  blockedReason: string | null;
+}
+
+export interface HubModelView extends HubModelCard {
+  url: string;
+  revision: string;
+  /** Shown name: the card's `license_name`, else the license id, else null when none is declared. */
+  licenseName: string | null;
+  licenseUrl: string;
+  licenseKind: LicenseKind;
+  baseModels: string[];
+  builds: HubBuildView[];
+  /** Largest vision projector; Ollama adds one projector to each pull from this repo. */
+  projectorBytes: number | null;
+  /** Gated or private: Ollama needs its SSH key on the user's Hugging Face account. */
+  needsAccess: boolean;
+}
+
+export type HubDetailResult = { ok: true; model: HubModelView } | { ok: false; error: ModelHubError };
+
+export interface ModelPullRequest {
+  repo: string;
+  buildId: string;
+  acceptLicense: boolean;
+  confirmAccess: boolean;
+}
+
+export type ModelPullPhase = 'verifying' | 'downloading' | 'finishing' | 'failed';
+
+export interface ModelPull {
+  key: string;
+  repo: string;
+  buildId: string;
+  quant: string | null;
+  ref: string | null;
+  phase: ModelPullPhase;
+  completedBytes: number;
+  totalBytes: number | null;
+  expectedBytes: number;
+  error: ModelHubError | null;
+}
+
+export type ModelPullResult = { ok: true; ref: string } | { ok: false; error: ModelHubError };
+
+export type ModelRemoveResult = { ok: true } | { ok: false; error: ModelHubError };
+
+export function pullKey(repo: string, buildId: string): string {
+  return `${repo}#${buildId}`;
+}
+
+const PERMISSIVE_LICENSES = new Set([
+  'apache-2.0',
+  'mit',
+  'bsd',
+  'bsd-2-clause',
+  'bsd-3-clause',
+  'bsd-3-clause-clear',
+  'isc',
+]);
+
+/** Anything not clearly permissive, including no license at all, needs the user to accept it. */
+export function licenseKind(license: string | null): LicenseKind {
+  return license && PERMISSIVE_LICENSES.has(license.trim().toLowerCase()) ? 'permissive' : 'restricted';
+}
+
+/** Builds with refusal training removed. Matches only explicit markers in the repo id or its tags. */
+export function isAbliteratedModel(id: string, tags: readonly string[] = []): boolean {
+  return [id, ...tags].some(name => {
+    const lower = name.toLowerCase();
+    return lower.includes('abliterat') || /(^|[^a-z])uncensored([^a-z]|$)/.test(lower);
+  });
+}
+
+export function formatBytes(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return 'unknown size';
+  if (bytes < 1_000_000) return `${Math.max(1, Math.round(bytes / 1_000))} KB`;
+  if (bytes < 1_000_000_000) return `${Math.round(bytes / 1_000_000)} MB`;
+  return `${(bytes / 1_000_000_000).toFixed(bytes < 10_000_000_000 ? 2 : 1)} GB`;
+}
+
+export function formatCount(count: number | null): string {
+  if (count === null) return '-';
+  if (count < 1_000) return String(count);
+  if (count < 1_000_000) return `${(count / 1_000).toFixed(count < 10_000 ? 1 : 0)}k`;
+  return `${(count / 1_000_000).toFixed(1)}M`;
+}

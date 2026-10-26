@@ -312,6 +312,9 @@ export function useModelCatalog(): ModelCatalogController {
     });
   }, [load]);
 
+  // A model pulled or removed on the Models screen changes the local half of the list.
+  useEffect(() => window.b4m.models.onInstalledChanged(() => void load(true)), [load]);
+
   const reload = useCallback(() => load(true), [load]);
 
   return { models, loading, error, reload };

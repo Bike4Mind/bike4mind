@@ -1,0 +1,319 @@
+import {
+  HubAccessError,
+  HubRateLimitError,
+  RuntimeConnectionError,
+  type HubGgufBuild,
+  type HubModelDetail,
+  type HubSearchPage,
+  type InstalledModel,
+  type LoadedModel,
+  type PullOptions,
+} from '@bike4mind/local-models';
+import { pullKey, type ModelPull } from '@shared/models';
+import { describe, expect, it, vi } from 'vitest';
+import { ModelHubService, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
+
+const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
+const SHA = 'a'.repeat(64);
+
+function build(overrides: Partial<HubGgufBuild> = {}): HubGgufBuild {
+  return {
+    id: 'qwen2.5-0.5b-instruct-q4_k_m',
+    quant: 'Q4_K_M',
+    files: [{ path: 'qwen2.5-0.5b-instruct-q4_k_m.gguf', sizeBytes: 491_400_032, sha256: SHA, url: 'https://x' }],
+    sizeBytes: 491_400_032,
+    split: false,
+    complete: true,
+    ollamaRef: `hf.co/${REPO}:Q4_K_M`,
+    ollamaRefIssue: null,
+    ...overrides,
+  };
+}
+
+function detail(overrides: Partial<HubModelDetail> = {}): HubModelDetail {
+  return {
+    id: REPO,
+    author: 'Qwen',
+    downloads: 100,
+    likes: 10,
+    updatedAt: null,
+    pipelineTag: 'text-generation',
+    gated: false,
+    private: false,
+    licenses: ['apache-2.0'],
+    baseModels: [],
+    tags: ['gguf'],
+    revision: 'b'.repeat(40),
+    licenseName: null,
+    licenseLink: null,
+    gguf: null,
+    builds: [build()],
+    projectors: [],
+    canDownload: true,
+    ollamaNeedsSshKey: false,
+    ...overrides,
+  };
+}
+
+interface Deferred {
+  resolve: () => void;
+  reject: (error: unknown) => void;
+  options: PullOptions | undefined;
+}
+
+function harness(options: { detail?: HubModelDetail; verified?: string | null; healthy?: boolean } = {}) {
+  const pulls: Deferred[] = [];
+  const runtime = {
+    baseUrl: 'http://127.0.0.1:11434',
+    health: vi.fn(async () =>
+      options.healthy === false
+        ? { ok: false, version: null, error: 'connection refused' }
+        : { ok: true, version: '0.40.11', error: null }
+    ),
+    list: vi.fn(async (): Promise<InstalledModel[]> => []),
+    loaded: vi.fn(async (): Promise<LoadedModel[]> => []),
+    pull: vi.fn(
+      (_ref: string, opts?: PullOptions) =>
+        new Promise<void>((resolve, reject) => {
+          pulls.push({ resolve, reject, options: opts });
+          opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        })
+    ),
+    remove: vi.fn(async () => undefined),
+  } satisfies ModelRuntimePort;
+  const hub = {
+    endpoint: 'https://huggingface.co',
+    search: vi.fn(async (): Promise<HubSearchPage> => ({ models: [], nextCursor: null })),
+    getModel: vi.fn(async () => options.detail ?? detail()),
+    verifyOllamaRef: vi.fn(async (): Promise<string | null> =>
+      options.verified === undefined ? `hf.co/${REPO}:Q4_K_M` : options.verified
+    ),
+  } satisfies ModelHubPort;
+  const pushed: ModelPull[][] = [];
+  const installedChanged = vi.fn();
+  const service = new ModelHubService({
+    runtime,
+    hub,
+    onPullsChanged: next => pushed.push(next),
+    onInstalledChanged: installedChanged,
+    progressIntervalMs: 0,
+  });
+  return { service, runtime, hub, pulls, pushed, installedChanged };
+}
+
+const request = { repo: REPO, buildId: 'qwen2.5-0.5b-instruct-q4_k_m', acceptLicense: false, confirmAccess: false };
+
+describe('ModelHubService pulls', () => {
+  it('verifies the ref, then pulls it with progress, and reports the model installed', async () => {
+    const { service, runtime, hub, pulls, pushed, installedChanged } = harness();
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+
+    expect(hub.verifyOllamaRef).toHaveBeenCalledTimes(1);
+    expect(runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
+    pulls[0].options?.onProgress?.({ status: 'pulling abc', completedBytes: 100, totalBytes: 491_400_032 });
+    expect(service.pulls()[0]).toMatchObject({ phase: 'downloading', completedBytes: 100, quant: 'Q4_K_M' });
+
+    pulls[0].resolve();
+    await expect(result).resolves.toEqual({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
+    expect(service.pulls()).toEqual([]);
+    expect(pushed.at(-1)).toEqual([]);
+    expect(installedChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not pull when the registry cannot confirm the file', async () => {
+    const { service, runtime } = harness({ verified: null });
+    const result = await service.pull(request);
+
+    expect(result).toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    expect(runtime.pull).not.toHaveBeenCalled();
+    expect(service.pulls()[0]).toMatchObject({ phase: 'failed', error: { kind: 'unverified' } });
+  });
+
+  it('cancels a running pull and leaves nothing behind', async () => {
+    const { service, pulls, installedChanged } = harness();
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+
+    service.cancel(pullKey(request.repo, request.buildId));
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+    expect(service.pulls()).toEqual([]);
+    expect(installedChanged).not.toHaveBeenCalled();
+  });
+
+  it('refuses a second pull of the same build while one runs', async () => {
+    const { service, runtime, pulls } = harness();
+    const first = service.pull(request);
+    const second = await service.pull(request);
+
+    expect(second).toMatchObject({ ok: false, error: { kind: 'already-pulling' } });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    expect(runtime.pull).toHaveBeenCalledTimes(1);
+    pulls[0].resolve();
+    await expect(first).resolves.toMatchObject({ ok: true });
+  });
+
+  it('retries a failed pull of the same build', async () => {
+    const { service, hub, pulls } = harness();
+    hub.verifyOllamaRef.mockResolvedValueOnce(null);
+    await service.pull(request);
+    expect(service.pulls()[0].phase).toBe('failed');
+
+    const retry = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].resolve();
+    await expect(retry).resolves.toMatchObject({ ok: true });
+  });
+
+  it('needs the license accepted for anything not clearly permissive', async () => {
+    const { service, hub, runtime, pulls } = harness({ detail: detail({ licenses: ['llama3.2'] }) });
+
+    const refused = await service.pull(request);
+    expect(refused).toMatchObject({ ok: false, error: { kind: 'license-required' } });
+    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+    expect(service.pulls()).toEqual([]);
+
+    const accepted = service.pull({ ...request, acceptLicense: true });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].resolve();
+    await expect(accepted).resolves.toMatchObject({ ok: true });
+    expect(runtime.pull).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks a gated build whose file Hugging Face hides', async () => {
+    const hidden = build({ files: [{ ...build().files[0], sha256: null }] });
+    const { service, hub } = harness({
+      detail: detail({ gated: 'manual', ollamaNeedsSshKey: true, builds: [hidden], canDownload: false }),
+    });
+
+    const result = await service.pull({ ...request, confirmAccess: true });
+    expect(result).toMatchObject({ ok: false, error: { kind: 'cannot-pull' } });
+    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+
+    const view = await service.detail(REPO);
+    expect(view).toMatchObject({ ok: true, model: { needsAccess: true, gated: 'manual' } });
+    expect(view.ok && view.model.builds[0].blockedReason).toMatch(/Needs access/);
+  });
+
+  it('needs the access steps confirmed for a gated repo, then reports a refusal as gated', async () => {
+    const { service, hub, runtime } = harness({ detail: detail({ gated: 'auto', ollamaNeedsSshKey: true }) });
+
+    expect(await service.pull(request)).toMatchObject({ ok: false, error: { kind: 'access-required' } });
+
+    hub.verifyOllamaRef.mockRejectedValueOnce(new HubAccessError('denied', 'huggingface', 403, REPO, 'gated'));
+    const result = await service.pull({ ...request, confirmAccess: true });
+    expect(result).toMatchObject({ ok: false, error: { kind: 'gated' } });
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('refuses to start when Ollama is not running', async () => {
+    const { service, hub } = harness({ healthy: false });
+    const result = await service.pull(request);
+
+    expect(result).toMatchObject({ ok: false, error: { kind: 'runtime-unavailable' } });
+    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+  });
+
+  it('refuses a build that cannot be pulled, with the reason', async () => {
+    const { service } = harness({
+      detail: detail({ builds: [build({ split: true, ollamaRef: null, ollamaRefIssue: 'split' })] }),
+    });
+    const result = await service.pull(request);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { kind: 'cannot-pull', message: expect.stringMatching(/Split/) },
+    });
+  });
+
+  it('aborts every pull on dispose', async () => {
+    const { service, pulls } = harness();
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    service.dispose();
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+  });
+});
+
+describe('ModelHubService reads', () => {
+  it('marks loaded models', async () => {
+    const { service, runtime } = harness();
+    const capabilities = { tools: true, vision: false, thinking: false, embeddings: false, completion: true };
+    const model = {
+      sizeBytes: 1,
+      quantization: 'Q4_K_M',
+      family: 'qwen2',
+      parameterSize: '494M',
+      modifiedAt: null,
+      capabilities,
+    };
+    runtime.list.mockResolvedValueOnce([
+      { ...model, name: 'qwen2.5:0.5b' },
+      { ...model, name: 'gemma3:270m' },
+    ]);
+    runtime.loaded.mockResolvedValueOnce([
+      { name: 'qwen2.5:0.5b', sizeBytes: 1, vramBytes: 0, contextLength: null, expiresAt: null },
+    ]);
+
+    const result = await service.installed();
+    expect(result.ok && result.models.map(entry => [entry.name, entry.loaded])).toEqual([
+      ['gemma3:270m', false],
+      ['qwen2.5:0.5b', true],
+    ]);
+  });
+
+  it('reports Ollama unreachable', async () => {
+    const { service, runtime } = harness();
+    runtime.list.mockRejectedValueOnce(new RuntimeConnectionError('refused', 'ollama', { cause: new Error('x') }));
+    expect(await service.installed()).toMatchObject({ ok: false, error: { kind: 'runtime-unavailable' } });
+  });
+
+  it('labels abliterated results and maps rate limits and outages', async () => {
+    const { service, hub } = harness();
+    const summary = { ...detail(), tags: [] };
+    hub.search.mockResolvedValueOnce({
+      models: [summary, { ...summary, id: 'someone/Qwen2.5-7B-Instruct-abliterated-GGUF' }],
+      nextCursor: 'next',
+    });
+    const found = await service.search({ query: 'qwen' });
+    expect(found.ok && found.models.map(model => model.abliterated)).toEqual([false, true]);
+    expect(found).toMatchObject({ nextCursor: 'next' });
+
+    hub.search.mockRejectedValueOnce(new HubRateLimitError('slow down', 'huggingface', 30_000));
+    expect(await service.search({ query: 'qwen' })).toMatchObject({
+      ok: false,
+      error: { kind: 'rate-limited', retryAfterMs: 30_000 },
+    });
+
+    hub.search.mockRejectedValueOnce(new RuntimeConnectionError('offline', 'huggingface', { cause: new Error('x') }));
+    expect(await service.search({ query: 'qwen' })).toMatchObject({ ok: false, error: { kind: 'hub-unreachable' } });
+  });
+
+  it('links the license from the card, or the repo page when the card has none', async () => {
+    const { service, hub } = harness();
+    hub.getModel.mockResolvedValueOnce(
+      detail({ licenses: ['other'], licenseName: 'qwen-research', licenseLink: 'LICENSE' })
+    );
+    const relative = await service.detail(REPO);
+    expect(relative).toMatchObject({
+      ok: true,
+      model: {
+        licenseName: 'qwen-research',
+        licenseKind: 'restricted',
+        licenseUrl: `https://huggingface.co/${REPO}/blob/main/LICENSE`,
+      },
+    });
+
+    const plain = await service.detail(REPO);
+    expect(plain).toMatchObject({
+      ok: true,
+      model: { licenseName: 'apache-2.0', licenseKind: 'permissive', licenseUrl: `https://huggingface.co/${REPO}` },
+    });
+  });
+
+  it('removes a model and announces it', async () => {
+    const { service, runtime, installedChanged } = harness();
+    expect(await service.remove('qwen2.5:0.5b')).toEqual({ ok: true });
+    expect(runtime.remove).toHaveBeenCalledWith('qwen2.5:0.5b');
+    expect(installedChanged).toHaveBeenCalledTimes(1);
+  });
+});

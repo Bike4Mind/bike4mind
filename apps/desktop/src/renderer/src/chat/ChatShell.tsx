@@ -22,6 +22,7 @@ import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
+import { ModelsScreen } from '../models/ModelsScreen';
 import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
@@ -141,7 +142,7 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models';
 
 /**
  * The sidebar's account strip, given the dot that says whether a reply is running.
@@ -656,6 +657,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         sectionError={sectionError}
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
+        onOpenModels={() => setScreen('models')}
         footer={account?.(
           <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
@@ -663,6 +665,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'models' ? (
+        <ModelsScreen onClose={() => setScreen('conversation')} />
       ) : screen === 'skill-market' ? (
         <SkillMarketPanel initial={marketListing} onClose={() => setScreen('customize')} />
       ) : screen === 'customize' ? (
