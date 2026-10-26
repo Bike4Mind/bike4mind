@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, expect, it, vi } from 'vitest';
@@ -66,7 +67,12 @@ describe('readOllamaManifest', () => {
       url.endsWith('/manifests/270m') ? Response.json(manifest) : new Response('Gemma Terms of Use\n...')
     );
     const info = await readOllamaManifest('gemma3:270m', new AbortController().signal, fetchImpl);
-    expect(info).toEqual({ sizeBytes: 270_011_100, licenses: ['Gemma Terms of Use\n...'] });
+    expect(info).toEqual({
+      digest: `sha256:${createHash('sha256').update(JSON.stringify(manifest)).digest('hex')}`,
+      layers: [digest('a'), digest('b'), digest('c')],
+      sizeBytes: 270_011_100,
+      licenses: ['Gemma Terms of Use\n...'],
+    });
     expect(fetchImpl).toHaveBeenCalledWith(
       'https://registry.ollama.ai/v2/library/gemma3/manifests/270m',
       expect.objectContaining({ headers: { accept: 'application/vnd.docker.distribution.manifest.v2+json' } })
