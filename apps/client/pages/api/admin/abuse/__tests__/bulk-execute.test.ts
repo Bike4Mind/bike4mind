@@ -197,7 +197,7 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
-  it.each(['github.io', 'co.uk'])('refuses the public suffix %s as a domain target', async domain => {
+  it.each(['github.io', 'co.uk', 'gmail.com', 'outlook.com', 'fastmail.com'])('refuses %s as a domain target', async domain => {
     const target = { kind: 'domain', domain };
     await expect(call(validBody({ target }))).rejects.toMatchObject({ statusCode: 400 });
     expect(mockResolve).not.toHaveBeenCalled();

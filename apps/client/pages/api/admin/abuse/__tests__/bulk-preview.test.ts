@@ -107,7 +107,7 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
     expect(res._getJSONData().blocksDomain).toBeNull();
   });
 
-  it.each(['github.io', 'co.uk'])('refuses the public suffix %s as a domain target', async domain => {
+  it.each(['github.io', 'co.uk', 'gmail.com', 'outlook.com', 'fastmail.com'])('refuses %s as a domain target', async domain => {
     await expect(call({ target: { kind: 'domain', domain }, actions: ALL_ACTIONS })).rejects.toMatchObject({
       statusCode: 400,
     });
