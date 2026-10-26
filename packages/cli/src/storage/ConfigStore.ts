@@ -1322,6 +1322,34 @@ export class ConfigStore {
   }
 
   /**
+   * `b4m models` writes defaultModel and ollamaHost from its own process, so like features they are taken
+   * from disk unless this caller's patch changed them vs its snapshot.
+   */
+  private async mergeModelFields(
+    next: CliConfig,
+    snapshot: CliConfig,
+    patch: GlobalConfigPatch | undefined
+  ): Promise<CliConfig> {
+    let disk: Record<string, unknown>;
+    try {
+      disk = JSON.parse(await fs.readFile(this.configPath, 'utf-8')) as Record<string, unknown>;
+    } catch {
+      return next;
+    }
+    const changed = (key: 'defaultModel' | 'ollamaHost') =>
+      patch !== undefined && Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== snapshot[key];
+    return {
+      ...next,
+      defaultModel:
+        changed('defaultModel') || typeof disk.defaultModel !== 'string' ? next.defaultModel : disk.defaultModel,
+      ollamaHost:
+        changed('ollamaHost') || (disk.ollamaHost !== undefined && typeof disk.ollamaHost !== 'string')
+          ? next.ollamaHost
+          : (disk.ollamaHost as string | undefined),
+    };
+  }
+
+  /**
    * Save configuration to disk
    */
   async save(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
@@ -1388,6 +1416,9 @@ export class ConfigStore {
       // refresh features from disk so a concurrent writer isn't reverted - unless
       // this is a reset, which intentionally wipes the feature map.
       this.globalConfig = { ...global, features: opts?.clearFeatures ? {} : await this.readDiskFeatures() };
+    }
+    if (!opts?.clearFeatures) {
+      this.globalConfig = await this.mergeModelFields(this.globalConfig, global, config);
     }
 
     try {
