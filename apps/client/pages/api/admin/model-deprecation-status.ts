@@ -1,10 +1,9 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { modelCatalogRepository, modelDiscoveryStateRepository, modelPriceRepository } from '@bike4mind/database';
-import { FALLBACK_PREFERENCES, DEFAULT_FALLBACK_CHAIN } from '@bike4mind/utils';
 import {
   catalogLifecycles,
-  checkStaleModelReferences,
   classifyModelReference,
   getAvailableModels,
   getExpiredCatalogModels,
@@ -12,7 +11,7 @@ import {
   resolveCatalogRecords,
 } from '@bike4mind/llm-adapters';
 import { modelDiscoveryService } from '@bike4mind/services';
-import { builtInAgentModelReferences } from '@bike4mind/services/llm/agents/ServerAgentStore';
+import { modelReferenceReport } from '@bike4mind/server-utils/modelDiscovery/modelReferenceReport';
 import { ApiKeyScope, LIFECYCLE_STATUSES, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
@@ -69,12 +68,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     const daysAhead = parseInt(req.query.daysAhead as string) || 90;
 
-    const [liveModels, rows, pending, priceRows] = await Promise.all([
+    const [liveModels, rows, pending, priceRows, staleReport] = await Promise.all([
       // Private included: this is an operator view, not the picker.
       getAvailableModels(null, { includePrivate: true }),
       modelCatalogRepository.rowsInForce(),
       modelDiscoveryStateRepository.pendingSuggestions(),
       modelPriceRepository.rowsInForce(),
+      modelReferenceReport().then(
+        references => ({ references, error: undefined }),
+        (error: unknown) => {
+          req.logger?.error('[model-deprecation-status] stale reference report failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return { references: null, error: 'Stale reference report is unavailable' };
+        }
+      ),
     ]);
 
     const lifecycles = catalogLifecycles(rows);
@@ -88,17 +96,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       perMTokRates: perMTokRatesInForce(priceRows),
       expiringOrExpired: getExpiringModels(liveModels, daysAhead),
       expired: getExpiredCatalogModels(lifecycles),
+      // Older active rows may carry dates from before the discovery trust gate.
+      // Group-level provenance cannot prove their origin, so operators review them.
+      activeModelDates: [...lifecycles]
+        .filter(([, lifecycle]) => lifecycle.status === 'active' && lifecycle.deprecationDate !== undefined)
+        .map(([modelId, lifecycle]) => ({ modelId, deprecationDate: lifecycle.deprecationDate }))
+        .sort((left, right) => (left.deprecationDate ?? '').localeCompare(right.deprecationDate ?? '')),
       queue: pending.map(state => ({ modelId: state.modelId, suggestion: state.suggestion })),
-      // The two arguments together are the unfiltered view: a model the picker
-      // filter dropped is gone from liveModels but still carries a lifecycle
-      // here, so it classifies as deprecated instead of vanishing into 'unknown'.
-      staleReferences: checkStaleModelReferences({
-        models: liveModels,
-        lifecycles,
-        fallbackChains: FALLBACK_PREFERENCES,
-        defaultChain: DEFAULT_FALLBACK_CHAIN,
-        agentModels: builtInAgentModelReferences(),
-      }),
+      // The shared watchdog report uses deployment credentials and catalog lifecycle,
+      // so hidden pins remain classifiable even when they have no successor.
+      staleReferences: staleReport.references,
+      ...(staleReport.error ? { staleReferencesError: staleReport.error } : {}),
     });
   })
   .post(async (req, res) => {
@@ -115,8 +123,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError(`${modelId}'s suggestion was already ${suggestion.resolution}`);
     }
 
+    const recordResolution = (details: Record<string, unknown>) =>
+      recordAdminActionFromRequest(req, {
+        action: 'settings.model_lifecycle.suggestion_resolved',
+        target: { kind: 'settings', id: modelId, displayName: `${modelId} lifecycle suggestion` },
+        summary: `${action === 'accept' ? 'accepted' : 'dismissed'} lifecycle suggestion for ${modelId}`,
+        details: { modelId, resolution: action, ...details },
+      });
+
     if (action === 'dismiss') {
-      return res.json({ state: await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'dismissed') });
+      const dismissed = await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'dismissed');
+      await recordResolution({});
+      return res.json({ state: dismissed });
     }
 
     const note = parsed.data.note?.trim() ?? '';
@@ -200,6 +218,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       patch: {
         lifecycle: {
           status: status as (typeof LIFECYCLE_STATUSES)[number],
+          ...(current?.isSuperseded !== undefined ? { isSuperseded: current.isSuperseded } : {}),
           ...(deprecationDate ? { deprecationDate } : {}),
           ...(retirementDate ? { retirementDate } : {}),
           ...(replacedBy ? { replacedBy } : {}),
@@ -213,7 +232,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       note: auditNote,
     });
 
-    return res.json({ row, state: await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'accepted') });
+    const resolved = await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'accepted');
+    await recordResolution({
+      status,
+      deprecationDate,
+      retirementDate,
+      replacedBy,
+      note,
+      acknowledgedBlockers: blockers,
+    });
+    return res.json({ row, state: resolved });
   });
 
 export default handler;

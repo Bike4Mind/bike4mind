@@ -25,6 +25,7 @@ export {
   deleteFileContract,
 } from './contracts/files.contract';
 export { createEmbeddingsContract } from './contracts/embeddings.contract';
+export { createTextRefinementContract } from './contracts/textRefinement.contract';
 export { createDecisionContract, listDecisionModelsContract } from './contracts/decisions.contract';
 export { getQuestContract, listQuestFilesContract } from './contracts/quest.contract';
 export {
@@ -39,7 +40,7 @@ export {
 export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
-export { listWhatsNewContract } from './contracts/whatsNew.contract';
+export { getWhatsNewMediaContract, listWhatsNewContract } from './contracts/whatsNew.contract';
 export {
   listDataLakesContract,
   getDataLakeContract,
@@ -77,4 +78,5 @@ export {
   updateAgentContract,
   deleteAgentContract,
 } from './contracts/agents.contract';
+export { getClaudeMarketplaceContract, getClaudePluginZipContract } from './contracts/skillMarket.contract';
 export { CONTRACTS } from './contracts';

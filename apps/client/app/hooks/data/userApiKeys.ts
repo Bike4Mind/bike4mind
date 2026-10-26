@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding } from '@bike4mind/common';
+import {
+  IUserApiKeyDocument,
+  ApiKeyScopeValue,
+  IEmbedBranding,
+  API_KEY_TRUST_REQUIRED_ERROR_CODE,
+  type ApiKeyRateLimitUsage,
+} from '@bike4mind/common';
+import type { ApiKeyEligibilityResponse } from '@client/pages/api/user-api-keys/eligibility';
 import type { CounterLockoutState } from '@server/utils/apiKeyRateLimitCheck';
 import { toast } from 'sonner';
 
@@ -31,9 +38,27 @@ function parseValidationError(error: any): string {
   return errorMessage || error.message || 'An error occurred';
 }
 
+type TrustRequiredError = {
+  response: { data: { errorCode: typeof API_KEY_TRUST_REQUIRED_ERROR_CODE; error: string } };
+};
+
+function isTrustRequiredError(error: unknown): error is TrustRequiredError {
+  if (typeof error !== 'object' || error === null || !('response' in error)) return false;
+  const { response } = error;
+  if (typeof response !== 'object' || response === null || !('data' in response)) return false;
+  const { data } = response;
+  if (typeof data !== 'object' || data === null) return false;
+  return (
+    'errorCode' in data &&
+    data.errorCode === API_KEY_TRUST_REQUIRED_ERROR_CODE &&
+    'error' in data &&
+    typeof data.error === 'string'
+  );
+}
+
 export interface CreateUserApiKeyRequest {
   name: string;
-  scopes: ApiKeyScope[];
+  scopes: ApiKeyScopeValue[];
   expiresAt?: Date;
   rateLimit?: {
     requestsPerMinute: number;
@@ -128,6 +153,17 @@ export function useBillingOrganizations() {
   });
 }
 
+/** Whether the user may mint a personal (user-billed) key; org-billed keys are never gated. */
+export function useApiKeyEligibility() {
+  return useQuery<ApiKeyEligibilityResponse>({
+    queryKey: ['user-api-keys', 'eligibility'],
+    queryFn: async () => {
+      const response = await api.get('/api/user-api-keys/eligibility');
+      return response.data;
+    },
+  });
+}
+
 export function useCreateUserApiKey({ onSuccess }: { onSuccess?: (result: CreateUserApiKeyResponse) => void } = {}) {
   const queryClient = useQueryClient();
 
@@ -141,7 +177,8 @@ export function useCreateUserApiKey({ onSuccess }: { onSuccess?: (result: Create
       if (onSuccess) onSuccess(result);
     },
     onError: (error: Error) => {
-      toast.error(parseValidationError(error));
+      // Shown verbatim: parseValidationError reshapes any message containing ':' as Zod output.
+      toast.error(isTrustRequiredError(error) ? error.response.data.error : parseValidationError(error));
     },
   });
 }
@@ -227,10 +264,10 @@ export function useAdminGenerateApiKey({ onSuccess }: { onSuccess?: (result: Cre
  * usage fields on the key doc itself are not maintained. */
 export interface AdminUserApiKeysResponse {
   apiKeys: IUserApiKeyDocument[];
-  liveUsage: Record<string, { minute: number; day: number }>;
+  liveUsage: Record<string, ApiKeyRateLimitUsage>;
 }
 
-export function useAdminGetUserApiKeys(userId: string | undefined) {
+export function useAdminGetUserApiKeys(userId: string | undefined, options?: { refetchInterval?: number }) {
   return useQuery<AdminUserApiKeysResponse>({
     queryKey: ['admin', 'user-api-keys', userId],
     queryFn: async () => {
@@ -238,6 +275,7 @@ export function useAdminGetUserApiKeys(userId: string | undefined) {
       return response.data;
     },
     enabled: typeof userId === 'string' && userId.length > 0,
+    refetchInterval: options?.refetchInterval,
   });
 }
 

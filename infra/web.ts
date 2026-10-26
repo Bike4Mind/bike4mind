@@ -5,7 +5,6 @@ import {
   publishedArtifactsBucket,
   qaArtifactsBucket,
   historyImportBucket,
-  whatsNewDistributionBucket,
   uploadCompleteFunction,
   notebookImportFunction,
 } from './buckets';
@@ -29,8 +28,8 @@ import {
   emailAnalysisQueueDLQ,
 } from './emailIngestion';
 import { eventBus } from './eventBus';
-import { slackEventBus } from './bus';
 import { mcpHandler } from './mcp';
+import { providerFederation } from './providerFederation';
 import {
   fabFileChunkQueue,
   fabFileVectorizeQueue,
@@ -43,6 +42,8 @@ import {
   slackExportQueue,
   githubWebhookQueue,
   questExportQueue,
+  publishThumbnailQueue,
+  publishThumbnailQueueDLQ,
   dataLakeCleanupQueue,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueue,
@@ -107,19 +108,12 @@ import {
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
 import { searxngUrl } from './searxng';
-import {
-  router,
-  routerDistributionId,
-  whatsNewDistributionId,
-  cdnUrlForLambdaEnv,
-  appUrlForLambdaEnv,
-  originVerifySecret,
-} from './router';
+import { router, routerDistributionId, cdnUrlForLambdaEnv, appUrlForLambdaEnv, originVerifySecret } from './router';
 import { secrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
-import { wafWebAclArn } from './waf';
+import { wafReadPermissions, wafWebAclArn } from './waf';
 
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
 // time — no IAM statements generated, no env var size concerns. The wildcard SQS
@@ -165,6 +159,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
     'github-lake-ingest': githubLakeIngestQueueDLQ.url,
     'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
+    'publish-thumbnail': publishThumbnailQueueDLQ.url,
   },
 });
 
@@ -227,6 +222,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
     githubLakeIngestQueue: githubLakeIngestQueue.url,
     githubLakeRevokeQueue: githubLakeRevokeQueue.url,
+    publishThumbnailQueue: publishThumbnailQueue.url,
   },
 });
 
@@ -265,7 +261,6 @@ export const web = new sst.aws.Nextjs(
       publishedArtifactsBucket,
       qaArtifactsBucket,
       eventBus,
-      slackEventBus,
       uploadCompleteFunction,
       notebookImportFunction,
       lambdaFunctionNames,
@@ -300,8 +295,6 @@ export const web = new sst.aws.Nextjs(
       // Resource.generationCallbackQueue.url, which also has to resolve in the generation queue
       // Lambdas and the timeout sweep, where only direct links exist.
       generationCallbackQueue,
-      ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
-      ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],
     permissions: [
       {
@@ -412,24 +405,8 @@ export const web = new sst.aws.Nextjs(
         actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'],
         resources: ['*'],
       },
-      {
-        // Read-only WAF logging config discovery used by the WAF Logs Insights panels.
-        // Scoped to CloudFront-scope WebACLs in us-east-1 only, further restricted to
-        // bike4mind-api-protection-* WebACLs to enforce least privilege.
-        actions: ['wafv2:GetLoggingConfiguration'],
-        resources: [
-          $interpolate`arn:aws:wafv2:us-east-1:${aws.getCallerIdentityOutput().accountId}:global/webacl/bike4mind-api-protection-*`,
-        ],
-      },
-      {
-        // CloudWatch Logs Insights query permissions for WAF log analysis.
-        // Scoped to us-east-1 (CloudFront-scope WAF always logs to us-east-1) and
-        // bike4mind-specific log groups to enforce least privilege.
-        actions: ['logs:StartQuery', 'logs:GetQueryResults', 'logs:StopQuery'],
-        resources: [
-          $interpolate`arn:aws:logs:us-east-1:${aws.getCallerIdentityOutput().accountId}:log-group:aws-waf-logs-bike4mind-*`,
-        ],
-      },
+      ...wafReadPermissions,
+      ...providerFederation.permissions,
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -545,6 +522,7 @@ export const web = new sst.aws.Nextjs(
       // checks. A typo or a stale value after a domain change costs more than
       // leaving it unset. Verify `_ga` is present on the serving host after setting.
       ...(process.env.GA_COOKIE_DOMAIN ? { NEXT_PUBLIC_GA_COOKIE_DOMAIN: process.env.GA_COOKIE_DOMAIN } : {}),
+      ...providerFederation.environment,
     },
     // warm pings invoke the handler, keeping the lazy OpenNext bundle resident — the lever for
     // the #8985 cold-open tail (provisioned concurrency only pre-runs the ~165ms init, not the

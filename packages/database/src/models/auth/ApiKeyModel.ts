@@ -1,7 +1,12 @@
 import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ApiKeyType, IApiKeyDocument, IApiKeyRepository } from '@bike4mind/common';
-import { decryptAtRest, encryptAtRest, isSecretsAtRestConfigured } from '@bike4mind/utils/security';
+import {
+  apiKeySecretContext,
+  decryptAtRest,
+  encryptAtRest,
+  isSecretsAtRestConfigured,
+} from '@bike4mind/utils/security';
 import BaseRepository from '@bike4mind/db-core';
 
 interface IApiKeyModel extends mongoose.Model<IApiKeyDocument> {}
@@ -11,11 +16,13 @@ interface IApiKeyModel extends mongoose.Model<IApiKeyDocument> {}
  * (apiKeyService.getApiKey / getEffective*) receive the usable plaintext key; a
  * not-yet-migrated plaintext value passes through unchanged. Mutates in place.
  */
-function decryptApiKeyInPlace<T extends { apiKey?: string }>(doc: T): T;
-function decryptApiKeyInPlace<T extends { apiKey?: string }>(doc: T | null): T | null;
-function decryptApiKeyInPlace(doc: { apiKey?: string } | null) {
+function decryptApiKeyInPlace<T extends { apiKey?: string; userId: string; id?: string; _id?: unknown }>(doc: T): T;
+function decryptApiKeyInPlace<T extends { apiKey?: string; userId: string; id?: string; _id?: unknown }>(
+  doc: T | null
+): T | null;
+function decryptApiKeyInPlace(doc: { apiKey?: string; userId: string; id?: string; _id?: unknown } | null) {
   if (doc && typeof doc.apiKey === 'string') {
-    doc.apiKey = decryptAtRest(doc.apiKey);
+    doc.apiKey = decryptAtRest(doc.apiKey, apiKeySecretContext(doc.userId, String(doc._id ?? doc.id)));
   }
   return doc;
 }
@@ -39,7 +46,10 @@ class ApiKeyRepository extends BaseRepository<IApiKeyDocument> implements IApiKe
           'Set a 64-hex key on this stage (sst secret set SECRET_ENCRYPTION_KEY <value>), or set B4M_SELF_HOST=true to opt into plaintext.'
       );
     }
-    const stored = await super.create({ ...data, apiKey: encryptAtRest(data.apiKey) });
+    const id = new mongoose.Types.ObjectId();
+    const context = apiKeySecretContext(data.userId, String(id));
+    const encrypted = { ...data, _id: id, apiKey: encryptAtRest(data.apiKey, context) };
+    const stored = await super.create(encrypted);
     return { ...stored, apiKey: data.apiKey };
   }
   async findByUserIdAndType(userId: string, type: ApiKeyType) {

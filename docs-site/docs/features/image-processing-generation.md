@@ -41,6 +41,13 @@ Once the model generates your image, you can view, download, or edit the result.
 - **FLUX Pro 1.1**: Professional quality standard generation
 - **FLUX Pro Ultra**: Premium quality with custom aspect ratios
 - **FLUX Kontext**: Transform existing images based on prompts
+- **FLUX.2 Max, Pro, Pro (Preview), and Flex**: Generate images or transform attached images with up to eight input images in total
+- **FLUX.2 Klein 9B, Klein 9B (Preview), and Klein 4B**: Smaller models with up to four input images in total
+
+To use FLUX.2 references, attach images to your current message, select a FLUX.2 generation model,
+and describe the result. The first attached image and every additional reference count toward the
+model's total input limit. These transformations use image generation; masked editing uses the
+separate image editing model. Klein models do not offer prompt upsampling.
 
 ### Generation Settings
 
@@ -131,6 +138,12 @@ Image generation uses credits based on:
 - **Size**: Larger images use more credits
 - **Quantity**: Each image in a batch counts separately
 
+The Image Generation row in Tools and the image model picker show the selected model and an estimated credits-per-image at your saved settings before you send. Free self-hosted models show as Free.
+
+FLUX.2 uses a flat credit charge per generated image at the model's first-megapixel rate. Larger
+outputs and reference images do not increase that charge. This is a product price, rather than a
+quote of the provider's full megapixel cost.
+
 Check your credit balance in Profile > Credit Analytics.
 
 ---
@@ -143,6 +156,12 @@ Check your credit balance in Profile > Credit Analytics.
 - Check you have sufficient credits
 - Verify you have API keys configured for the image provider (OpenAI or Black Forest Labs)
 - Try a simpler prompt first
+
+### Too Many FLUX.2 Inputs
+
+Count the primary image and additional references together: Max, Pro, and Flex accept eight inputs;
+Klein accepts four. A continued conversation may carry forward its previous image as the primary.
+Remove references or start a fresh request if the generation reports that the total is too high.
 
 ### Poor Quality Results
 

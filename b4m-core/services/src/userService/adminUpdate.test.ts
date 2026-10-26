@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { adminUpdateUser } from './adminUpdate';
+import { adminUpdateUser, adminUpdateUserSchema } from './adminUpdate';
+import { checkStorageLimit } from '@bike4mind/utils';
 
 vi.mock('../friendshipService/sendFriendRequest', () => ({ sendFriendRequest: vi.fn() }));
 
@@ -248,7 +249,26 @@ describe('adminUpdateUser — audited credit adjustments', () => {
       previousBalance: 100,
       resultingBalance: 0,
       note: 'Refund chargeback',
+      creditTransactionId: 'tx-1',
     });
+  });
+
+  it('links a grant to the ledger row it wrote', async () => {
+    const { adapters, createTransaction } = makeAdapters(100);
+    createTransaction.mockResolvedValueOnce({ id: 'tx-grant' });
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 50 }, adapters);
+
+    expect(result.creditAdjustment?.creditTransactionId).toBe('tx-grant');
+  });
+
+  it('links a deduction to the ledger row it wrote', async () => {
+    const { adapters, createTransaction } = makeAdapters(100);
+    createTransaction.mockResolvedValueOnce({ id: 'tx-deduct' });
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -30 }, adapters);
+
+    expect(result.creditAdjustment?.creditTransactionId).toBe('tx-deduct');
   });
 
   it('returns no credit adjustment when the balance does not change', async () => {
@@ -415,6 +435,15 @@ describe('adminUpdateUser - username changes', () => {
 
     expect(update.mock.calls[0][0].username).toBe('New Name');
   });
+
+  it('lets an admin give an account the reserved test-persona prefix', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.username = 'oldname';
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, username: 'persona-seed' }, adapters);
+
+    expect(update.mock.calls[0][0].username).toBe('persona-seed');
+  });
 });
 
 describe('adminUpdateUser - email changes', () => {
@@ -572,5 +601,54 @@ describe('adminUpdateUser - org move membership row', () => {
 
     expect(adapters.db.organizations.update).not.toHaveBeenCalled();
     expect(update).toHaveBeenCalled();
+  });
+});
+
+describe('adminUpdateUser storage overrides', () => {
+  it('writes an override and effective limit together, preserving usage', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { storageLimit: 5000, planStorageLimit: 5000, currentStorageSize: 8_000_000_000 });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, storageLimitOverride: 250.5 }, adapters);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: TARGET_ID,
+        storageLimitOverride: 250.5,
+        storageLimit: 250.5,
+      })
+    );
+    expect(update.mock.calls[0][0]).not.toHaveProperty('currentStorageSize');
+    expect(update.mock.calls[0][0]).not.toHaveProperty('planStorageLimit');
+    const persisted = { ...target, ...update.mock.calls[0][0] };
+    await expect(checkStorageLimit(persisted, 1)).rejects.toThrow('File size exceeds storage limit');
+    expect(persisted.currentStorageSize).toBe(8_000_000_000);
+  });
+
+  it.each([
+    [5000, 5000],
+    [null, 1000],
+  ])('clears to plan %s or default %s', async (plan, expected) => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { storageLimit: 2500, storageLimitOverride: 2500, planStorageLimit: plan });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, storageLimitOverride: null }, adapters);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ storageLimitOverride: null, storageLimit: expected })
+    );
+  });
+
+  it('maps the legacy admin input to an explicit override', async () => {
+    const { adapters, update } = makeAdapters(100);
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, storageLimit: 0 }, adapters);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ storageLimitOverride: 0, storageLimit: 0 }));
+  });
+
+  it('does not rewrite quota on unrelated edits', async () => {
+    const { adapters, update } = makeAdapters(100);
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, name: 'Updated' }, adapters);
+    expect(update.mock.calls[0][0]).not.toHaveProperty('storageLimitOverride');
+    expect(update.mock.calls[0][0]).not.toHaveProperty('storageLimit');
+  });
+
+  it.each([-1, Infinity, NaN, 1_000_000_001])('rejects invalid overrides: %s', value => {
+    expect(adminUpdateUserSchema.safeParse({ id: TARGET_ID, storageLimitOverride: value }).success).toBe(false);
   });
 });

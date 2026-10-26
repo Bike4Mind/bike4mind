@@ -11,6 +11,7 @@
  */
 
 // 2. Import the file here:
+import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
 import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';
 import CreateAndPopulateQuests from './20240524172716_create-and-populate-quests';
@@ -179,14 +180,21 @@ import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note
 import EnsureFabFileOwnedKeysetIndex from './20260921235994_ensure-fabfile-owned-keyset-index';
 import EnsureFabFileFilePathIndex from './20260921235981_ensure-fabfile-filepath-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureFabFileDerivedFromIndex from './20260921235976_ensure-fabfile-derived-from-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-stored-default-forced-retrieval-floor';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureArtifactOwnedKeysetIndex from './20260921235993_ensure-artifact-owned-keyset-index';
 import EnsureSkillListingIndexes from './20260921235960_ensure-skill-listing-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import BackfillSkillListingClaudePluginName from './20260921235963_backfill-skilllisting-claude-plugin-name';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureConnectionIndexes from './20260921235988_ensure-connection-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import MoveQuestAnsweredByToRedirectedFrom from './20260921235987_move-quest-answeredby-to-redirectedfrom';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import DropGoogleCalendarSettings from './20260921235982_drop-google-calendar-settings';
+import DropWhatsNewSettings from './20260921235984_drop-whats-new-settings';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureMcpConnectionIndexes from './20260921235985_ensure-mcp-connection-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
@@ -198,6 +206,13 @@ import SetLiveopsTriageConfigAuditLogRetention from './20260921235953_set-liveop
 import EnsureFabFileOwnerOrganizationIndex from './20260921235970_ensure-fabfile-owner-organization-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReconcileOrgStampedFileStorageOwners from './20260921235971_reconcile-org-stamped-file-storage-owners';
+import EnsureArtifactSessionIdentifierIndex from './20260921235979_ensure-artifact-session-identifier-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureOverwatchRawEventExplorerIndex from './20260921235977_ensure-overwatch-raw-event-explorer-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureOverwatchUserDaySyntheticLaneIndex from './20260921235978_ensure-overwatch-user-day-synthetic-lane-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureAuthEventIndexes from './20260921235972_ensure-authevent-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureAdminAuditLogIndexes from './20260921235940_ensure-adminauditlog-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
@@ -209,7 +224,11 @@ import BackfillAdminAuditCredits from './20260921235943_backfill-admin-audit-cre
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureUserApiKeyAuditLogActorIndex from './20260921235944_ensure-userapikeyauditlog-actor-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import ClearSuspensionMirroredIsModerated from './20260921235945_clear-suspension-mirrored-ismoderated';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organization-manager-into-admin-user-ids';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-claim-email';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -349,17 +368,22 @@ const coreMigrations: MigrationFile[] = [
   ReplaceReleaseNoteStatusIndex,
   EnsureFabFileOwnedKeysetIndex,
   EnsureFabFileFilePathIndex,
+  EnsureFabFileDerivedFromIndex,
   UnsetStoredDefaultForcedRetrievalFloor,
   EnsureArtifactOwnedKeysetIndex,
   EnsureSkillListingIndexes,
+  BackfillSkillListingClaudePluginName,
   EnsureConnectionIndexes,
   MoveQuestAnsweredByToRedirectedFrom,
   EnsureMcpConnectionIndexes,
+  DropGoogleCalendarSettings,
+  DropWhatsNewSettings,
   SetUserAuthAuditLogRetention,
   SetIntegrationAuditLogRetention,
   SetSlackAuditLogRetention,
   SetLiveopsTriageConfigAuditLogRetention,
   FoldOrganizationManagerIntoAdminUserIds,
+  BackfillFreeCreditClaimEmail,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
   EnsureAdminAuditLogReadIndexes,
@@ -367,6 +391,12 @@ const coreMigrations: MigrationFile[] = [
   EnsureUserApiKeyAuditLogActorIndex,
   EnsureFabFileOwnerOrganizationIndex,
   ReconcileOrgStampedFileStorageOwners,
+  ClearSuspensionMirroredIsModerated,
+  EnsureOverwatchRawEventExplorerIndex,
+  EnsureOverwatchUserDaySyntheticLaneIndex,
+  EnsureArtifactSessionIdentifierIndex,
+  EnsureAuthEventIndexes,
+  BackfillStorageLimitOverrides,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

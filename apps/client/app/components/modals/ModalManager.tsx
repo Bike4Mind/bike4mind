@@ -11,7 +11,7 @@ import BannerModal from './BannerModal';
 import { useGetPresignedUrl } from '@client/app/hooks/data/fabFiles';
 import { useQueryClient } from '@tanstack/react-query';
 import { modalStorage, filterModals } from './modalHelpers';
-import { isBrandNewAccount } from '@client/app/utils/onboarding';
+import { useFirstSignupSession } from '@client/app/hooks/useFirstSignupSession';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { isAnyModalDialogOpen } from '@client/app/utils/anyDialogOpen';
 
@@ -111,6 +111,7 @@ const modalManagerReducer = (state: ModalManagerState, action: ModalManagerActio
 
 const ModalManager: React.FC = () => {
   const currentUser = useUser(s => s.currentUser);
+  const firstSignupSession = useFirstSignupSession(currentUser?.id);
   const { resetTrigger, triggerModalByTag, tagToTrigger, triggerCounter } = useModalTrigger();
   const logEvent = useLogEvent();
   const counters = useGetUserActivityCounters(currentUser?.id);
@@ -225,7 +226,9 @@ const ModalManager: React.FC = () => {
     const filterStartTime = performance.now();
 
     const forcedTags = tagToTrigger ? [tagToTrigger] : [];
-    const filteredModals = filterModals(modals.data, currentUser, counters.data ?? [], forcedTags);
+    const filteredModals = firstSignupSession
+      ? []
+      : filterModals(modals.data, currentUser, counters.data ?? [], forcedTags);
     const newBanners = filteredModals.filter(modal => modal.isBanner);
     const nonBannerModals = filteredModals.filter(modal => !modal.isBanner);
 
@@ -256,12 +259,6 @@ const ModalManager: React.FC = () => {
       );
     }
 
-    // Don't greet a brand-new user with a changelog of releases that predate them - their first
-    // frame should be the workbench, not a "What's New" history. A freshly created account (within
-    // the grace window) gets a clean first run; What's New resumes on their next visit.
-    // (createdAt is persisted in UserContext so this survives a post-registration reload.)
-    const brandNewAccount = isBrandNewAccount(currentUser?.createdAt);
-
     // Don't pop over a user who is actively composing. The main chat composer is a Lexical
     // contenteditable div (role="textbox"), not a <textarea>, so check both. Point-in-time check;
     // the effect re-runs on its other deps so a deferred open isn't lost.
@@ -281,7 +278,7 @@ const ModalManager: React.FC = () => {
       whatsNewModals.length > 0 &&
       !hasTriggeredRef.current &&
       !tagToTrigger &&
-      !brandNewAccount &&
+      !firstSignupSession &&
       !isStreaming &&
       !isModalOpen &&
       !anyDialogOpen &&
@@ -373,6 +370,7 @@ const ModalManager: React.FC = () => {
     modals.data,
     modals.slidesPending,
     currentUser,
+    firstSignupSession,
     counters.data,
     counters.isPending,
     tagToTrigger,

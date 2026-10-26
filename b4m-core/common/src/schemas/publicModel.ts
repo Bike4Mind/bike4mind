@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { supportsToolChanges, supportsToolSearch } from '../claudeToolCapabilities';
+import { supportsAssistantPrefill, supportsToolChanges, supportsToolSearch } from '../claudeToolCapabilities';
 import { ModelBackend, type ModelInfo } from '../models';
 import { getTextModelCreditsPer1M } from '../pricing';
 import type { ReasoningEffort } from '../types/common';
@@ -115,16 +115,23 @@ export const PublicModelSchema = z.object({
     .describe(
       'Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, ' +
         'so a large tool catalog is searched on demand instead of loaded into context up front. Describes the ' +
-        'model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`. A `bedrock` ' +
-        'model with this flag set is not served with tool search there yet: a `serverTool` entry is refused with ' +
-        '`errorCode: "tool_search_unsupported"` and `defer_loading` is ignored.'
+        'model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is ' +
+        '`anthropic` or `bedrock`.'
     ),
   supports_tool_changes: z
     .boolean()
     .describe(
       'Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or ' +
-        'remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not ' +
-        'accept these blocks yet, and will accept them first for models whose `backend` is `anthropic`.'
+        'remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for ' +
+        'models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with ' +
+        '`errorCode: "tool_changes_unsupported"`.'
+    ),
+  supports_assistant_prefill: z
+    .boolean()
+    .describe(
+      'Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, ' +
+        'a text prefill returns `400` with `errorCode: "assistant_prefill_unsupported"`; server-tool continuations are allowed. On Claude models that accept ' +
+        'assistant prefill, it cannot be combined with `thinking`.'
     ),
   supports_vision: z.boolean(),
   deprecation_date: z.string().nullable().describe('`YYYY-MM-DD`; null when no retirement is scheduled.'),
@@ -227,6 +234,7 @@ export function toPublicModel(model: ModelInfo, reasoning: PublicModelReasoning)
     supports_tools: model.supportsTools ?? false,
     supports_tool_search: supportsToolSearch(model),
     supports_tool_changes: supportsToolChanges(model),
+    supports_assistant_prefill: supportsAssistantPrefill(model),
     supports_vision: model.supportsVision ?? false,
     deprecation_date: model.deprecationDate ?? null,
     replaced_by: model.replacedBy ?? null,

@@ -23,9 +23,8 @@ import type { Logger } from '@bike4mind/observability';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 // Deliberately the CLIENT parser, not `@bike4mind/utils` (which the other server
 // callers use). Only this one exports `generateCompleteArtifactId`, and its exact
-// `artifact_{type}_{identifier}_{timestamp}_{index}` shape is what
-// `findExistingArtifactId` (app/utils/artifactPersistence.ts) matches positionally
-// so the rendered card adopts this row instead of minting a fresh id. The two
+// `artifact_{type}_{identifier}_{timestamp}_{index}` shape is what the client's id
+// readers parse positionally (see createArtifactId in @bike4mind/common). The two
 // parsers are a known fork; consolidating them is a separate change.
 //
 // Not interchangeable with `createArtifactId` (@bike4mind/common) despite the matching shape: this
@@ -37,10 +36,8 @@ import {
   generateCompleteArtifactId,
   parseArtifactsWithFallback,
 } from '@client/app/utils/artifactParser';
-// Static, unlike the barrels below - but note it pulls `@bike4mind/services` in transitively for
-// `resolveArtifactsEnabled`, so the dynamic imports below no longer keep that barrel off this path.
-// They stay because the barrel was already reachable from `agentExecute.ts` five other ways, so
-// nothing gets heavier either way; the injectable deps still earn their keep for test isolation.
+// The gate gets `resolveArtifactsEnabled` from the services leaf entry point. The persistence
+// dependencies below stay lazy and injectable for tests.
 import { resolveAgentArtifactGate } from '@bike4mind/server-utils/utils/artifactGate';
 import { createLazyArtifactSourceRefsGuard } from './artifactSourceRefsGuards';
 
@@ -57,6 +54,7 @@ export interface AgentArtifactPayload {
   tags: string[];
   sessionId: string;
   sourceQuestId: string;
+  identifier?: string;
   metadata: Record<string, unknown>;
 }
 
@@ -82,8 +80,8 @@ export function buildAgentArtifactPayloads(args: {
   // load-bearing only because `_{index}` must be STABLE across re-parses of the same reply for the
   // idempotency pre-check to recognize an already-written row. Reordering here would
   // remint every id and orphan the rows already persisted. (Adoption by the rendered
-  // card does not depend on it - `findExistingArtifactId` compares only the
-  // identifier segment, never the timestamp or index.)
+  // card does not depend on it - `findExistingArtifactId` matches on the identifier,
+  // never the timestamp or index.)
   return (
     artifacts
       .map((artifact, index) => ({
@@ -97,6 +95,7 @@ export function buildAgentArtifactPayloads(args: {
         tags: ['ai-generated'],
         sessionId: args.sessionId,
         sourceQuestId: args.questId,
+        identifier: artifact.identifier,
         metadata: {
           operation: artifact.operation,
           language: artifact.language,
@@ -121,9 +120,7 @@ export function buildAgentArtifactPayloads(args: {
 }
 
 /**
- * Injected so a test can drive this without a live database. Not a barrel guard: `./artifactGate`
- * already reaches @bike4mind/services statically, and @bike4mind/database is reachable from
- * `agentExecute.ts` regardless.
+ * Injected so tests can drive persistence without a live database or loading service/database barrels.
  */
 export interface PersistAgentArtifactsDeps {
   /**
@@ -156,8 +153,7 @@ function defaultDeps(sourceRefsGuard?: artifactService.ArtifactSourceRefsGuard):
       const { userRepository } = await import('@bike4mind/database');
       return userRepository.findById(userId);
     });
-  // Dynamic imports (same reason as the eventBus import in persistRunAsQuest):
-  // keep the barrels off this module's import graph so it stays cheap to load.
+  // Defer loading the service/database barrels until a persistence operation needs them.
   return {
     isArtifactsEnabled: async callerEnableArtifacts => {
       const { adminSettingsRepository } = await import('@bike4mind/database');

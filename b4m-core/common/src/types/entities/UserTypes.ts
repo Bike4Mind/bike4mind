@@ -29,6 +29,27 @@ export interface ISystemFileEntry {
   enabled: boolean;
 }
 
+/**
+ * Network facts about the request that created or signed in to an account, read server-side
+ * (apps/client server/auth/networkMeta.ts). Every field is null when unknown: a failed or missing
+ * lookup never blocks auth.
+ */
+export interface INetworkMeta {
+  ip: string | null;
+  userAgent: string | null;
+  asn: number | null;
+  /** Operator name, known only for ASNs on the bundled hosting-provider list. */
+  asnOrg: string | null;
+  /** ISO 3166-1 alpha-2. */
+  country: string | null;
+  /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
+  isDatacenter: boolean | null;
+}
+
+export interface ISignupMeta extends INetworkMeta {
+  capturedAt: Date;
+}
+
 export interface ILoginRecord {
   loginTime: Date;
   logoutTime?: Date; // Optional, in case the user doesn't explicitly logout
@@ -170,6 +191,8 @@ export interface IUserPreferences {
   showFunTools?: boolean;
   /** Whether to show the prompt suggestion cards on the splash screen. Default: false. */
   showSplashCards?: boolean;
+  /** Set once the user closes the "Try the desktop app" pill in the sidebar; it never shows again. */
+  desktopPromoDismissed?: boolean;
 }
 
 /** Source of a moderation flag - which moderation backend produced the hit. */
@@ -180,7 +203,7 @@ export type ModerationHitSource = 'openai' | 'bedrock';
  * - `active`: no action; normal usage.
  * - `throttled`: auto-applied on repeat hits; a tighter rate limit is enforced until `throttledUntil`.
  * - `suspend_pending`: threshold for suspension reached - flagged for a human to confirm. NOT auto-blocking.
- * - `suspended`: human-confirmed suspension; chat/generation is blocked (mirrored to `isModerated`).
+ * - `suspended`: human-confirmed suspension; the account is blocked at sign-in.
  */
 export type UserModerationStatus = 'active' | 'throttled' | 'suspend_pending' | 'suspended';
 
@@ -238,7 +261,11 @@ export interface IUser extends ICreditHolder {
   hasUsablePassword?: boolean;
   groups: Array<string> | null;
   isAdmin: boolean;
-  storageLimit: number /** Storage limit in MBs */;
+  storageLimit: number /** Effective storage limit in decimal MB */;
+  /** Manual or custom signup allocation; null means use plan/default. */
+  storageLimitOverride?: number | null;
+  /** Plan allocation in decimal MB, separate from the manual override. */
+  planStorageLimit?: number | null;
   currentStorageSize: number /** Current storage size in Bytes */;
   tags: Array<string> | null;
   /**
@@ -250,13 +277,20 @@ export interface IUser extends ICreditHolder {
    * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
+  /**
+   * Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under. Unset
+   * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
+   */
+  freeCreditClaimEmail?: string | null;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;
+  /** Admin override that trusts the account for personal API keys (userApiKeyService/trust.ts). Absent on legacy docs. */
+  apiKeyTrustApproved?: boolean;
   /**
    * Per-user moderation tracking + auto-throttle/suspend state.
-   * Absent until the user's first moderation hit. `moderation.status === 'suspended'`
-   * is mirrored to `isModerated` for legacy admin surfaces.
+   * Absent until the user's first moderation hit. Independent of `isModerated`, the admin's
+   * AI-only block.
    */
   moderation?: IUserModeration;
   /**
@@ -370,6 +404,7 @@ export interface IUser extends ICreditHolder {
   // Slack integration settings
   slackSettings?: {
     slackUserId?: string;
+    slackTeamId?: string;
     // User access token for user-scoped APIs (e.g., reminders). Protected by select: false in DB schema.
     slackUserToken?: string;
     // OAuth scopes granted by the user (e.g., ['identity.basic', 'reminders:write'])
@@ -627,6 +662,9 @@ export interface IUser extends ICreditHolder {
    */
   acquisition?: IUserAcquisition | null;
 
+  /** Network metadata of the signup request, written once at account creation. Admin-only PII. */
+  signupMeta?: ISignupMeta | null;
+
   /**
    * A test persona or test-domain account, decided at signup. Funnel analytics skip or tag these so
    * synthetic traffic never reaches conversion metrics.
@@ -702,8 +740,16 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   pullSystemFilesForUsers: (userIds: string[], fileIds: string[]) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
   removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;
-  /** Charge `count` referrals (floored at zero) and add the invites they created to `regInvites`. */
+  /**
+   * Charge `count` referrals (floored at zero) and add the invites they created to `regInvites`.
+   * @deprecated Reservations are not atomic and can overspend under concurrency. Use
+   * `reserveReferrals` before side effects and `settleReferrals` afterward.
+   */
   recordReferrals: (userId: string, count: number, newInviteIds: string[]) => Promise<void>;
+  /** Atomically charge `count` referrals; resolves false when the allowance is below `count`. */
+  reserveReferrals: (userId: string, count: number) => Promise<boolean>;
+  /** Refund `refundCount` failed referrals and add `newInviteIds` to `regInvites`; not idempotent, do not retry. */
+  settleReferrals: (userId: string, refundCount: number, newInviteIds: string[]) => Promise<void>;
   /**
    * Remove several group ids from ONE user's `groups[]` (idempotent $pull). Used when a member
    * leaves or is removed from an org, to strip that org's group ids from just that member.
@@ -724,6 +770,11 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   atomicReserveMfaAttempt: (userId: string) => Promise<{ reserved: boolean; user: IUserDocument | null }>;
   atomicClaimTotpStep: (userId: string, step: number) => Promise<boolean>;
   atomicConsumeBackupCode: (userId: string, codeHash: string) => Promise<boolean>;
+  /**
+   * Claim the one free-credit grant allowed per inbox. True when this account holds the claim
+   * (now or from an earlier attempt), false when another account already does.
+   */
+  claimFreeCreditGrant: (userId: string) => Promise<boolean>;
   /**
    * Enable MFA only while the stored secret is still `totpSecret` and MFA is still disabled.
    * Returns null when a concurrent setup replaced the secret, so a code verified against a
@@ -787,8 +838,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    */
   recordModerationHit: (userId: string, hit: IModerationHit) => Promise<IUserDocument | null>;
   /**
-   * Transition a user's moderation escalation state. Mirrors `isModerated` when
-   * moving to/from `suspended`. Returns the updated user.
+   * Transition a user's moderation escalation state. Leaves `isModerated` alone. Returns the
+   * updated user.
    */
   setModerationStatus: (
     userId: string,

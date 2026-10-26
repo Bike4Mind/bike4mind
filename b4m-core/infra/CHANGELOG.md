@@ -1,5 +1,19 @@
 # @bike4mind/infra
 
+## 5.0.0
+
+### Major Changes
+
+- [#5257](https://github.com/Bike4Mind/bike4mind/pull/5257) [`068b941`](https://github.com/Bike4Mind/bike4mind/commit/068b941bead19a117b6902b57d9f9a121ed4ad90) Thanks [@onoya](https://github.com/onoya)! - protect stored credentials and private data
+
+### Minor Changes
+
+- [#5241](https://github.com/Bike4Mind/bike4mind/pull/5241) [`bba40de`](https://github.com/Bike4Mind/bike4mind/commit/bba40de6be35c3a4742a8063f14bc837e931255d) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - deliver generated videos to the requesting Slack thread
+
+### Patch Changes
+
+- [#5252](https://github.com/Bike4Mind/bike4mind/pull/5252) [`af1c441`](https://github.com/Bike4Mind/bike4mind/commit/af1c441eff24c1648160f2515881dfb851b07baa) Thanks [@aflordelis](https://github.com/aflordelis)! - move the next-layer integration, data-lake and service files
+
 ## 4.2.0
 
 ### Minor Changes

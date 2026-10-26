@@ -6,7 +6,9 @@ import {
   assertBudgetConfig,
   completedResult,
   describeStall,
-  gatedAverageSec,
+  gatedMedianFirstTokenSec,
+  gatedMedianSec,
+  hasFirstAnswerText,
   incompleteResult,
   isLatencyObservation,
   isStreamComplete,
@@ -15,6 +17,8 @@ import {
   msToSec,
   StreamingTimeoutError,
   textStreamBudgetMs,
+  TurnTimer,
+  unexpectedArtifactIds,
 } from '../../../apps/client/e2e/ai-latency-budget';
 import type { PromptScenario, PromptResult } from '../../../apps/client/e2e/ai-latency-helpers';
 
@@ -31,8 +35,14 @@ import type { PromptScenario, PromptResult } from '../../../apps/client/e2e/ai-l
  * The rules pinned here are the ones whose regression is invisible at runtime: a budget that
  * quietly reverts to the flat cap still passes every e2e run (the prompt just fails as a "hang"
  * again), and a merge that drops an incomplete result still produces a perfectly well-formed
- * results file - one that reports a healthy average for a cell that timed out.
+ * results file - one that reports a healthy median for a cell that timed out.
  */
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const CHAT_PAGE = path.join(REPO, 'apps/client/e2e/pages/ChatPage.ts');
+const PROMPT_REPLIES = path.join(REPO, 'apps/client/app/components/Session/PromptReplies.tsx');
+const ARTIFACT_RENDERER = path.join(REPO, 'apps/client/app/components/Session/artifacts/ArtifactRenderer.tsx');
+const readSource = (file: string) => fs.readFileSync(file, 'utf8');
 
 const scenario = (over: Partial<PromptScenario> = {}): PromptScenario => ({
   id: 'p',
@@ -104,6 +114,35 @@ describe('module boundary', () => {
       'utf8'
     );
     expect(workflow).toContain(`--arg gate '${title}'`);
+  });
+
+  it('times every prompt from send, not from before typing', () => {
+    // The factory and ChatPage both import Playwright, so the wiring is pinned as text: the clock
+    // is a TurnTimer handed to both send helpers, and each helper marks it right after Enter.
+    const factory = fs.readFileSync(FACTORY, 'utf8');
+    expect(factory).toContain('new TurnTimer()');
+    expect(factory).not.toMatch(/startMs/);
+    expect(factory).toMatch(/sendImageMessageAndWaitForResponse\([^)]*, timer\)/);
+    expect(factory).toMatch(/sendMessageAndWaitForResponse\([^)]*, timer\)/);
+    const chatPage = fs.readFileSync(CHAT_PAGE, 'utf8');
+    expect(chatPage.match(/keyboard\.press\('Enter'\);\n\s+timer\?\.markSent\(\);/g) ?? []).toHaveLength(2);
+    expect(chatPage.match(/timer\?\.markSent\(/g) ?? []).toHaveLength(2);
+  });
+
+  it('records the attempt and the first token on every result', () => {
+    const factory = fs.readFileSync(FACTORY, 'utf8');
+    expect(factory).toContain('const attempt = test.info().retry;');
+    expect(factory.match(/firstTokenMs: timer\.firstTokenMs\(\)/g) ?? []).toHaveLength(2);
+    expect(factory.match(/\battempt,\n/g) ?? []).toHaveLength(2);
+  });
+
+  it('draws enough prompts per cell for the median to mean something', () => {
+    const factory = fs.readFileSync(FACTORY, 'utf8');
+    const perCell = Number(factory.match(/const PROMPTS_PER_CELL = (\d+);/)?.[1]);
+    expect(perCell).toBeGreaterThanOrEqual(5);
+    expect(factory).toContain('pickDeterministic(prompts, PROMPTS_PER_CELL, dailySeed)');
+    // One test per drawn prompt; a hard-coded count would drop or duplicate prompts.
+    expect(factory).toContain('i < selectedPrompts.length');
   });
 
   it('imports nothing that would drag in a Playwright runner', () => {
@@ -211,6 +250,28 @@ describe('assertBudgetConfig', () => {
 });
 
 describe('result builders', () => {
+  it('records the attempt (0 unless given) and the first token only when it was seen', () => {
+    const first = completedResult(scenario(), { response: 'x', responseTimeMs: 5000, renderTimeMs: 0 });
+    expect(first.attempt).toBe(0);
+    expect('firstTokenMs' in first).toBe(false);
+    expect('firstTokenSec' in first).toBe(false);
+
+    const retry = completedResult(scenario(), {
+      response: 'x',
+      responseTimeMs: 5000,
+      renderTimeMs: 0,
+      attempt: 2,
+      firstTokenMs: 1234.6,
+    });
+    expect(retry.attempt).toBe(2);
+    expect(retry.firstTokenMs).toBe(1234.6);
+    expect(retry.firstTokenSec).toBe(1.235);
+
+    const abandoned = incompleteResult(scenario(), 9000, { attempt: 1, firstTokenMs: 800 });
+    expect(abandoned.attempt).toBe(1);
+    expect(abandoned.firstTokenSec).toBe(0.8);
+  });
+
   it('rounds every duration field to the nearest millisecond', () => {
     // Asserted against literals at a value where rounding and truncating disagree (1.235 vs 1.234).
     // Comparing a builder to msToSec would pass for either rule, which is what this used to do.
@@ -241,7 +302,7 @@ describe('result builders', () => {
   });
 
   it('classifies measuresDeliverable identically whether the prompt finished or not', () => {
-    // Drift here would leak an abandoned artifact prompt into the text-only gated average.
+    // Drift here would leak an abandoned artifact prompt into the text-only gated median.
     for (const over of [{ expectsImage: true }, { generatesArtifact: true }, {}]) {
       const s = scenario(over);
       const done = completedResult(s, { response: 'x', responseTimeMs: 1, renderTimeMs: 0 });
@@ -270,19 +331,48 @@ describe('result builders', () => {
 });
 
 describe('mergeResults', () => {
-  it('lets a retry supersede a stored incomplete for the same id', () => {
-    // Playwright retries the prompt; the passing attempt must replace the abandoned one, or a
-    // flaky-but-passing prompt would keep reporting its timeout.
+  const attempt = (id: string, n: number, sec: number) =>
+    completedResult(scenario({ id }), { response: 'x', responseTimeMs: sec * 1000, renderTimeMs: 0, attempt: n });
+
+  it('keeps an abandoned attempt beside the retry that passed, marked retried', () => {
+    // Last-write-wins used to drop the first attempt, so the slow run that caused the retry never
+    // reached the gate.
     const abandoned = incompleteResult(scenario({ id: 'smartphone' }), 300_000);
-    const passed = completedResult(scenario({ id: 'smartphone' }), {
-      response: 'table',
-      responseTimeMs: 90_000,
-      renderTimeMs: 0,
-    });
+    const passed = attempt('smartphone', 1, 90);
     const merged = mergeResults([abandoned], [passed]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toMatchObject({ attempt: 0, incomplete: true, retried: true, responseTimeSec: 300 });
+    expect(merged[1]).toMatchObject({ attempt: 1, responseTimeSec: 90 });
+    expect(merged[1].retried).toBeUndefined();
+  });
+
+  it('keeps a slow completed attempt that was retried for another reason', () => {
+    // A keyword miss fails the test and retries it; the first attempt's timing is still real.
+    const merged = mergeResults([attempt('gpu', 0, 40)], [attempt('gpu', 1, 8)]);
+    expect(merged.map(r => [r.responseTimeSec, r.retried])).toEqual([
+      [40, true],
+      [8, undefined],
+    ]);
+  });
+
+  it('replaces a rewrite of the same attempt instead of duplicating it', () => {
+    // afterAll re-persists the worker's in-memory results over the per-prompt writes.
+    const merged = mergeResults([attempt('a', 0, 5)], [attempt('a', 0, 5)]);
     expect(merged).toHaveLength(1);
-    expect(merged[0].incomplete).toBeUndefined();
-    expect(merged[0].responseTimeSec).toBe(90);
+    expect(merged[0].retried).toBeUndefined();
+  });
+
+  it('marks retried by attempt number, whichever side the later attempt arrives on', () => {
+    const merged = mergeResults([attempt('a', 1, 3)], [attempt('a', 0, 9)]);
+    expect(merged.find(r => r.attempt === 0)?.retried).toBe(true);
+    expect(merged.find(r => r.attempt === 1)?.retried).toBeUndefined();
+  });
+
+  it('reads a row written before attempts were recorded as attempt 0', () => {
+    const { attempt: _omitted, ...legacy } = attempt('a', 0, 9);
+    const merged = mergeResults([legacy as PromptResult], [attempt('a', 1, 3)]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0].retried).toBe(true);
   });
 
   it('keeps prompts with different ids side by side', () => {
@@ -292,27 +382,53 @@ describe('mergeResults', () => {
   });
 });
 
-describe('gatedAverageSec', () => {
+describe('gatedMedianSec', () => {
   const text = (id: string, sec: number): PromptResult =>
     completedResult(scenario({ id }), { response: 'x', responseTimeMs: sec * 1000, renderTimeMs: 0 });
 
-  it('keeps an abandoned text prompt in the average', () => {
-    // The 2026-09-18 cell: dropping the timed-out prompt reported 34.22s against a 150s budget.
-    // The two kept timings and the 34.223 average are the numbers that run's artifact carried.
-    const dropped = gatedAverageSec([text('reuters', 16.204), text('gpu', 52.241)]);
-    expect(dropped).toBe(34.223);
+  it('takes the middle value of an odd count and the midpoint of an even one', () => {
+    expect(gatedMedianSec([text('a', 3), text('b', 10), text('c', 4)])).toBe(4);
+    expect(gatedMedianSec([text('a', 2), text('b', 4), text('c', 6), text('d', 100)])).toBe(5);
+  });
 
-    const kept = gatedAverageSec([
+  it('does not let one slow prompt swing the cell', () => {
+    // The mean of these is 44.4s; one spike decided the old gate on its own.
+    expect(gatedMedianSec([text('a', 4), text('b', 5), text('c', 6), text('d', 7), text('e', 200)])).toBe(6);
+  });
+
+  it('keeps an abandoned text prompt in the statistic', () => {
+    const kept = gatedMedianSec([
       text('reuters', 16.204),
       text('gpu', 52.241),
       incompleteResult(scenario({ id: 'smartphone' }), 300_000),
     ]);
-    expect(kept).toBe(122.815);
-    expect(kept).toBeGreaterThan(dropped);
+    expect(kept).toBe(52.241);
+  });
+
+  it('judges a retried prompt on its slowest attempt, as one data point', () => {
+    // The slow attempt that caused the retry still reaches the gate (last-write-wins dropped it)...
+    const retried = mergeResults(
+      [text('a', 4), text('b', 5), text('c', 60)],
+      [completedResult(scenario({ id: 'c' }), { response: 'x', responseTimeMs: 6000, renderTimeMs: 0, attempt: 1 })]
+    );
+    expect(retried).toHaveLength(4);
+    expect(gatedMedianSec([text('a', 30), text('b', 40), ...retried.filter(r => r.id === 'c')])).toBe(40);
+
+    // ...but its attempts are one prompt, so a flaky prompt cannot outvote the others. Counted per
+    // attempt, [10, 12, 50, 120, 120] would put the median at 50.
+    const flaky = mergeResults(
+      [text('a', 10), text('b', 12), incompleteResult(scenario({ id: 'c' }), 120_000)],
+      [
+        incompleteResult(scenario({ id: 'c' }), 120_000, { attempt: 1 }),
+        completedResult(scenario({ id: 'c' }), { response: 'x', responseTimeMs: 50_000, renderTimeMs: 0, attempt: 2 }),
+      ]
+    );
+    expect(flaky).toHaveLength(5);
+    expect(gatedMedianSec(flaky)).toBe(12);
   });
 
   it('excludes deliverable prompts whether they finished or were abandoned', () => {
-    const withArtifact = gatedAverageSec([
+    const withArtifact = gatedMedianSec([
       text('reuters', 10),
       incompleteResult(scenario({ id: 'storybook', generatesArtifact: true }), 466_000),
       completedResult(scenario({ id: 'taipei', generatesArtifact: true }), {
@@ -325,8 +441,60 @@ describe('gatedAverageSec', () => {
   });
 
   it('returns 0 when no gated prompt is present', () => {
-    expect(gatedAverageSec([])).toBe(0);
-    expect(gatedAverageSec([incompleteResult(scenario({ id: 'img', expectsImage: true }), 1000)])).toBe(0);
+    expect(gatedMedianSec([])).toBe(0);
+    expect(gatedMedianSec([incompleteResult(scenario({ id: 'img', expectsImage: true }), 1000)])).toBe(0);
+  });
+});
+
+describe('gatedMedianFirstTokenSec', () => {
+  const withFirstToken = (id: string, firstTokenMs?: number, over: Partial<PromptScenario> = {}) =>
+    completedResult(scenario({ id, ...over }), {
+      response: 'x',
+      responseTimeMs: 20_000,
+      renderTimeMs: 0,
+      firstTokenMs,
+    });
+
+  it('takes the median over the gated prompts that saw an answer token', () => {
+    expect(
+      gatedMedianFirstTokenSec([withFirstToken('a', 1000), withFirstToken('b', 3000), withFirstToken('c', 2000)])
+    ).toBe(2);
+  });
+
+  it('takes one value per prompt, its slowest attempt', () => {
+    const results = mergeResults(
+      [withFirstToken('a', 1000), withFirstToken('b', 2000), withFirstToken('c', 9000)],
+      [
+        { ...withFirstToken('c', 500), attempt: 1 },
+        { ...withFirstToken('c', 400), attempt: 2 },
+      ]
+    );
+    expect(gatedMedianFirstTokenSec(results)).toBe(2);
+  });
+
+  it('counts an attempt abandoned before its first token at its elapsed time', () => {
+    const results = [
+      withFirstToken('a', 1000),
+      withFirstToken('b', 2000),
+      incompleteResult(scenario({ id: 'c' }), 120_000),
+      incompleteResult(scenario({ id: 'd' }), 120_000),
+    ];
+    expect(gatedMedianFirstTokenSec(results)).toBe(61);
+  });
+
+  it('skips prompts with no first token and deliverable prompts', () => {
+    expect(
+      gatedMedianFirstTokenSec([
+        withFirstToken('a', 1500),
+        withFirstToken('b'),
+        withFirstToken('img', 90_000, { expectsImage: true }),
+      ])
+    ).toBe(1.5);
+  });
+
+  it('returns 0 when no gated prompt saw an answer token', () => {
+    expect(gatedMedianFirstTokenSec([withFirstToken('a')])).toBe(0);
+    expect(gatedMedianFirstTokenSec([])).toBe(0);
   });
 });
 
@@ -334,26 +502,50 @@ describe('latencyBreach', () => {
   const text = (id: string, sec: number): PromptResult =>
     completedResult(scenario({ id }), { response: 'x', responseTimeMs: sec * 1000, renderTimeMs: 0 });
 
-  it('passes a cell whose average is at or under the threshold', () => {
+  it('passes a cell whose median is at or under the threshold', () => {
     expect(latencyBreach([text('a', 5), text('b', 15)], 10)).toBeNull();
   });
 
-  it('fails a cell whose average exceeds the threshold, even if one prompt was fast', () => {
+  it('passes a cell where one spike sits among fast prompts', () => {
+    expect(latencyBreach([text('a', 1), text('b', 2), text('c', 3), text('d', 4), text('e', 200)], 10)).toBeNull();
+  });
+
+  it('fails a cell whose median exceeds the threshold, even if one prompt was fast', () => {
     const breach = latencyBreach([text('a', 2), text('b', 30)], 10);
-    expect(breach).toContain('average AI latency 16s exceeds the 10s threshold');
+    expect(breach).toContain('median AI latency 16s exceeds the 10s threshold');
     expect(breach).toContain('a=2s');
   });
 
-  it('fails on an abandoned prompt even when the average stays under the threshold', () => {
+  it('fails on an abandoned prompt even when the median stays under the threshold', () => {
     const breach = latencyBreach([text('a', 1), text('b', 1), incompleteResult(scenario({ id: 'c' }), 5000)], 10);
     expect(breach).toContain('1 prompt(s) never finished: c');
     expect(breach).not.toContain('exceeds');
   });
 
-  it('reports both causes when the average is over and a prompt never finished', () => {
+  it('reports both causes when the median is over and a prompt never finished', () => {
     expect(latencyBreach([text('a', 30), incompleteResult(scenario({ id: 'c' }), 5000)], 10)).toBe(
-      'Latency breach - average AI latency 17.5s exceeds the 10s threshold; 1 prompt(s) never finished: c [a=30s, c=5s (incomplete)]'
+      'Latency breach - median AI latency 17.5s exceeds the 10s threshold; 1 prompt(s) never finished: c [a=30s, c=5s (incomplete)]'
     );
+  });
+
+  it('does not fail on an abandoned attempt that a retry completed, but keeps it in the median', () => {
+    const results = mergeResults(
+      [text('a', 1), text('b', 2), incompleteResult(scenario({ id: 'c' }), 50_000)],
+      [completedResult(scenario({ id: 'c' }), { response: 'x', responseTimeMs: 3000, renderTimeMs: 0, attempt: 1 })]
+    );
+    expect(latencyBreach(results, 10)).toBeNull();
+    // Per prompt [1, 2, 50]: c is judged on its abandoned attempt, and the breach lists every attempt.
+    expect(latencyBreach(results, 1.5)).toBe(
+      'Latency breach - median AI latency 2s exceeds the 1.5s threshold [a=1s, b=2s, c=50s (incomplete, retried), c=3s]'
+    );
+  });
+
+  it('fails when the latest attempt was abandoned too', () => {
+    const results = mergeResults(
+      [text('a', 1), incompleteResult(scenario({ id: 'c' }), 50_000)],
+      [incompleteResult(scenario({ id: 'c' }), 50_000, { attempt: 1 })]
+    );
+    expect(latencyBreach(results, 100)).toContain('1 prompt(s) never finished: c');
   });
 
   it('ignores deliverable prompts and reports no breach when nothing is gated', () => {
@@ -368,6 +560,56 @@ describe('latencyBreach', () => {
     ).toBeNull();
     expect(latencyBreach([slowImage], 10)).toBeNull();
     expect(latencyBreach([], 10)).toBeNull();
+  });
+});
+
+describe('TurnTimer', () => {
+  it('times from send and reports the first answer text relative to it', () => {
+    const timer = new TurnTimer();
+    timer.markSent(1000);
+    timer.markFirstText(1800);
+    timer.markFirstText(2500);
+    expect(timer.firstTokenMs()).toBe(800);
+    expect(timer.elapsedSinceSendMs(4000)).toBe(3000);
+  });
+
+  it('refuses to report a timing for a turn that was never sent', () => {
+    const timer = new TurnTimer();
+    timer.markFirstText(500);
+    expect(timer.firstTokenMs()).toBeUndefined();
+    expect(() => timer.elapsedSinceSendMs(1000)).toThrow(/before the message was sent/);
+  });
+
+  it('reports no first token when no answer text was seen', () => {
+    const timer = new TurnTimer();
+    timer.markSent(1000);
+    expect(timer.firstTokenMs()).toBeUndefined();
+  });
+
+  it('keeps the first send time across a resend but forgets the failed attempt text', () => {
+    // The "request timed out" resend: the user waited through both attempts, and the first
+    // attempt's text was the error, not an answer token.
+    const timer = new TurnTimer();
+    timer.markSent(1000);
+    timer.markFirstText(1500);
+    timer.markSent(9000);
+    expect(timer.firstTokenMs()).toBeUndefined();
+    timer.markFirstText(9700);
+    expect(timer.firstTokenMs()).toBe(8700);
+    expect(timer.elapsedSinceSendMs(12_000)).toBe(11_000);
+  });
+});
+
+describe('hasFirstAnswerText', () => {
+  it('fires on answer text that was not there before send', () => {
+    expect(hasFirstAnswerText('Paris', '')).toBe(true);
+    expect(hasFirstAnswerText('Paris', 'an earlier answer')).toBe(true);
+  });
+
+  it('ignores an empty or whitespace answer and the prior turn left in place', () => {
+    expect(hasFirstAnswerText('', '')).toBe(false);
+    expect(hasFirstAnswerText('  \n', '')).toBe(false);
+    expect(hasFirstAnswerText('an earlier answer', 'an earlier answer')).toBe(false);
   });
 });
 
@@ -411,10 +653,6 @@ describe('describeStall', () => {
 });
 
 describe('ChatPage reply reader', () => {
-  const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-  const CHAT_PAGE = path.join(REPO, 'apps/client/e2e/pages/ChatPage.ts');
-  const PROMPT_REPLIES = path.join(REPO, 'apps/client/app/components/Session/PromptReplies.tsx');
-
   it('reads replies from the body inside the root container, never the <p>-only ai-response id', () => {
     // ChatPage imports Playwright, so no vitest project can load it; the selector is pinned as
     // text. Reverting to `ai-response` brings back the list-only-reply stall above.
@@ -431,5 +669,94 @@ describe('ChatPage reply reader', () => {
     // The reader falls back to the whole root when the body id is absent, so renaming the test id
     // would silently put reasoning text back into the returned string.
     expect(fs.readFileSync(PROMPT_REPLIES, 'utf8')).toMatch(/data-testid="ai-response-body"/);
+  });
+
+  it('reads the first token from the markdown answer, which reasoning and status chrome never enter', () => {
+    // The root shows "Thinking..." and reasoning before any answer token, so reading it would time
+    // the first token at the status line. The id is pinned on both sides.
+    expect(readSource(CHAT_PAGE)).toContain("getByTestId('ai-response-markdown')");
+    expect(readSource(PROMPT_REPLIES)).toContain('<div className="b4m-md" data-testid="ai-response-markdown">');
+  });
+});
+
+describe('unexpected artifact on a chat prompt', () => {
+  const chat = (id: string, sec: number, artifactRendered = false): PromptResult =>
+    completedResult(scenario({ id }), { response: 'x', responseTimeMs: sec * 1000, renderTimeMs: 0, artifactRendered });
+
+  it('marks an unflagged prompt that rendered an artifact as a deliverable and flags it', () => {
+    const result = chat('gpu', 70, true);
+    expect(result.measuresDeliverable).toBe(true);
+    expect(result.unexpectedArtifact).toBe(true);
+  });
+
+  it('leaves a chat-mode reply and the flagged-artifact behaviour unchanged', () => {
+    const plain = chat('reuters', 20);
+    expect(plain.measuresDeliverable).toBe(false);
+    expect(plain.unexpectedArtifact).toBeUndefined();
+
+    // A prompt that declares generatesArtifact is expected to render one: deliverable, not "unexpected".
+    const flagged = completedResult(scenario({ id: 'storybook', generatesArtifact: true }), {
+      response: 'x',
+      responseTimeMs: 1000,
+      renderTimeMs: 0,
+      artifactRendered: true,
+    });
+    expect(flagged.measuresDeliverable).toBe(true);
+    expect(flagged.unexpectedArtifact).toBeUndefined();
+  });
+
+  it('drops the artifact-mode result from the gated median and the breach check', () => {
+    const results = [chat('reuters', 20), chat('smartphone', 30), chat('gpu', 70, true)];
+    expect(gatedMedianSec(results)).toBe(25);
+    expect(latencyBreach(results, 26)).toBeNull();
+    // Without the exclusion the median (30s) would have breached the same threshold.
+    expect(latencyBreach([chat('reuters', 20), chat('smartphone', 30), chat('gpu', 70)], 26)).toContain(
+      'median AI latency 30s'
+    );
+  });
+
+  it('reads as No Data (median 0, no breach) when every gated prompt switched to an artifact', () => {
+    const results = [chat('gpu', 70, true), chat('reuters', 65, true)];
+    expect(gatedMedianSec(results)).toBe(0);
+    expect(latencyBreach(results, 30)).toBeNull();
+    expect(results.every(r => r.measuresDeliverable)).toBe(true);
+  });
+
+  it('lists the switched prompts so the summary can report them', () => {
+    expect(unexpectedArtifactIds([chat('a', 1), chat('gpu', 70, true), chat('b', 2, true)])).toEqual(['gpu', 'b']);
+    expect(unexpectedArtifactIds([chat('a', 1)])).toEqual([]);
+    // A retried prompt that switched on both attempts is one prompt, not two.
+    expect(
+      unexpectedArtifactIds(mergeResults([chat('gpu', 70, true)], [{ ...chat('gpu', 60, true), attempt: 1 }]))
+    ).toEqual(['gpu']);
+    // A switched attempt whose retry answered in chat is in the median, so it is not listed.
+    expect(unexpectedArtifactIds(mergeResults([chat('gpu', 70, true)], [{ ...chat('gpu', 6), attempt: 1 }]))).toEqual(
+      []
+    );
+  });
+
+  it('keeps an abandoned chat prompt gated, since an artifact cannot be told from a hang', () => {
+    const results = [chat('a', 1), incompleteResult(scenario({ id: 'gpu' }), 300_000)];
+    expect(latencyBreach(results, 30)).toContain('never finished: gpu');
+  });
+});
+
+describe('ChatPage artifact detector', () => {
+  it('keys on the html/react renderers, so a promoted python or mermaid fence stays a chat reply', () => {
+    // ChatPage imports Playwright, so no vitest project can load it; the wiring is pinned as text.
+    // The server promotes python/mermaid/recharts code fences into artifact cards after the
+    // stream, so matching any artifact-renderer-* would drop ordinary chat replies from the gate.
+    const chatPage = readSource(CHAT_PAGE);
+    expect(chatPage).toContain('[data-testid="artifact-renderer-html"]');
+    expect(chatPage).toContain('[data-testid="artifact-renderer-react"]');
+    expect(chatPage).not.toContain('[data-testid^="artifact-renderer-"]');
+    expect(chatPage).not.toContain('data-artifact-tag');
+  });
+
+  it('pins the placeholder test ids against the components that mount them', () => {
+    expect(readSource(ARTIFACT_RENDERER)).toContain('data-testid={`artifact-renderer-${artifact.type}`}');
+    expect(readSource(CHAT_PAGE)).toContain("getByTestId('generating-artifact-indicator')");
+    expect(readSource(PROMPT_REPLIES)).toContain('data-testid="generating-artifact-indicator"');
+    expect(readSource(ARTIFACT_RENDERER)).toContain('data-testid="artifact-loading"');
   });
 });

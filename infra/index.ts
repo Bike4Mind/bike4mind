@@ -27,6 +27,8 @@ export * from './dashboard';
 export * from './modelSunsetDashboard';
 export * from './dataLakeSearchDashboard';
 export * from './dlqAlarms';
+export * from './signupAlarms';
+export * from './llmSpend';
 // serviceHealthAlarms must come after subscriberFanout + chatCompletion (it alarms on both)
 export * from './serviceHealthAlarms';
 export * from './emailMarketing';

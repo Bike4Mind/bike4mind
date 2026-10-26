@@ -74,8 +74,7 @@ describe('GET /api/modals - non-admin publication-state filter', () => {
     const { req, res } = mocks(false);
     await mockRefs.getHandler!(req, res);
 
-    // An auto-generated What's New modal's startDate (apps/workers/src/queueHandlers/whatsNewGeneration.ts,
-    // hooks/data/whatsNewModals.ts both write `new Date().toISOString()`).
+    // The admin form (hooks/data/whatsNewModals.ts) writes `new Date().toISOString()`.
     const todaysTimestamp = new Date().toISOString();
     const startDateUpperBound = mockRefs.findFilter.$and[0].$or[2].startDate.$lte;
     expect(todaysTimestamp <= startDateUpperBound).toBe(true);

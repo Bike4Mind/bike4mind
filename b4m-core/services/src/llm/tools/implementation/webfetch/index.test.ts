@@ -24,7 +24,14 @@ const dnsLookup = vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]);
 vi.mock('node:dns/promises', () => ({ lookup: (...args: unknown[]) => dnsLookup(...args) }));
 
 import { FirecrawlError } from '@mendable/firecrawl-js';
-import { firecrawlFetch, truncationMarker, UnsupportedScrapeTargetError, webFetchBody, webFetchTool } from './index';
+import {
+  firecrawlFetch,
+  truncationMarker,
+  UnsupportedScrapeTargetError,
+  validateWebFetchResult,
+  webFetchBody,
+  webFetchTool,
+} from './index';
 import { UnsafeScrapeTargetError } from './errors';
 import { createFirecrawlApp } from './firecrawlApp';
 import { plainFetchScrape } from './plainFetch';
@@ -619,5 +626,39 @@ describe('web_fetch turn-wide citation numbering', () => {
     expect(result).not.toContain('[3]');
     expect(result).not.toContain('This page is source');
     expect(citables[0].metadata?.citationIndex).toBeUndefined();
+  });
+});
+
+describe('validateWebFetchResult', () => {
+  it.each([400, 403, 408, 502, 503, 504])('scores the message for a Firecrawl %i as a failure', async statusCode => {
+    scrapeUrl.mockRejectedValueOnce(new FirecrawlError(`Status code: ${statusCode}`, statusCode));
+
+    const { result } = await runTool();
+
+    expect(validateWebFetchResult(result)).toEqual({ confidence: 0.1, source: 'deterministic' });
+  });
+
+  it('scores the PDF-too-large message as a failure', async () => {
+    scrapeUrl.mockRejectedValueOnce(new FirecrawlError('PDF page count timed out', 500));
+
+    const { result } = await runTool('https://example.com/report.pdf');
+
+    expect(validateWebFetchResult(result)).toEqual({ confidence: 0.1, source: 'deterministic' });
+  });
+
+  it('scores the unreachable-page message as a failure', async () => {
+    scrapeUrl.mockRejectedValueOnce(new Error('socket hang up'));
+
+    const { result } = await runTool();
+
+    expect(validateWebFetchResult(result)).toEqual({ confidence: 0.1, source: 'deterministic' });
+  });
+
+  it('has no opinion on a fetched page', async () => {
+    scrapeMarkdown = '# A real page';
+
+    const { result } = await runTool();
+
+    expect(validateWebFetchResult(result)).toBeUndefined();
   });
 });

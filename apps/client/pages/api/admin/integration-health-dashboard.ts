@@ -11,9 +11,9 @@ import {
   RateLimitSnapshot,
 } from '@bike4mind/database';
 import type { IntegrationName } from '@bike4mind/database';
-import { getHealthSummary, runAllProbes, runProbe } from '@server/services/integrationHealthService';
+import { getHealthSummary, runAllProbes, runProbe } from '@bike4mind/server-utils/services/integrationHealthService';
 import { getStatus } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
-import { flushBreakerMetrics, getAllBreakerStates } from '@server/services/mcpCircuitBreakers';
+import { flushBreakerMetrics, getAllBreakerStates } from '@bike4mind/server-utils/services/mcpCircuitBreakers';
 import { rateLimit } from '@server/middlewares/rateLimit';
 
 const timeRangeSchema = z.enum(['24h', '7d', '30d']).default('24h');

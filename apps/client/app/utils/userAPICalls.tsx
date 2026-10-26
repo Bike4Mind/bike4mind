@@ -235,6 +235,9 @@ export function useUploadProfilePhoto() {
       // raw axios) and the same-origin app-file upload proxy (self-host, authed api).
       await uploadFileToUrl(url, file, file.type);
 
+      // photoUrl is only set once the bytes are in storage, so the avatar never points at a missing key.
+      await api.post(`/api/users/${userId}/confirm-photo`, { fileId });
+
       return fileId;
     },
     onSuccess: () => {

@@ -30,7 +30,6 @@ The sandbox is configured through JSON config files with a 3-layer merge system.
       "writeOnlyToWorkingDir": true,
       "allowedReadPaths": [
         "$HOME/.gitconfig",
-        "$HOME/.npmrc",
         "$HOME/.node_modules"
       ],
       "deniedPaths": [
@@ -38,6 +37,15 @@ The sandbox is configured through JSON config files with a 3-layer merge system.
         "$HOME/.aws",
         "$HOME/.gnupg",
         "$HOME/.env",
+        "$HOME/.claude",
+        "$HOME/.bike4mind",
+        "$HOME/.npmrc",
+        "$HOME/.netrc",
+        "$HOME/.config/gh",
+        "$HOME/.docker",
+        "$HOME/.kube",
+        "$HOME/.config/gcloud",
+        "$HOME/.azure",
         "/etc/shadow",
         "/etc/passwd"
       ]
@@ -83,26 +91,26 @@ When `true`, the sandbox restricts file writes to:
 - Your current working directory (and subdirectories)
 - `/tmp` and system temp directories
 
-All other write paths are denied at the OS level.
+All other write paths are denied at the OS level. The working directory's `.git` metadata and `.bike4mind` configuration remain read-only even when `writeOnlyToWorkingDir` is `false`. Run Git operations that update metadata, such as staging and committing, as trusted operations outside the sandbox.
 
 ### `allowedReadPaths`
 
-**Type:** `string[]` | **Default:** `["$HOME/.gitconfig", "$HOME/.npmrc", "$HOME/.node_modules"]`
+**Type:** `string[]` | **Default:** `["$HOME/.gitconfig", "$HOME/.node_modules"]`
 
-Paths the sandbox allows reading. These override the default read restrictions to let tools access common configuration files.
+Paths the sandbox allows reading. Explicit `deniedPaths` entries take precedence over `allowedReadPaths`, including when an allowed path is nested inside a denied directory.
 
 Supports [path variable expansion](#path-variable-expansion).
 
 ### `deniedPaths`
 
-**Type:** `string[]` | **Default:** `["$HOME/.ssh", "$HOME/.aws", "$HOME/.gnupg", "$HOME/.env", "/etc/shadow", "/etc/passwd"]`
+**Type:** `string[]` | **Default:** See the `deniedPaths` list in the [full schema](#full-schema).
 
 Paths blocked for both read and write access. These are enforced at the OS level — even if a command tries to read `~/.ssh/id_rsa`, the sandbox runtime will deny it.
 
 Supports [path variable expansion](#path-variable-expansion).
 
 :::tip
-On macOS (Seatbelt), denied paths generate `deny(N)` messages in stderr that the CLI captures as violations. On Linux (Bubblewrap), denied paths are hidden behind empty `tmpfs` mounts.
+On macOS (Seatbelt), access to denied paths is rejected. On Linux (Bubblewrap), denied directories are hidden behind empty `tmpfs` mounts and denied files are replaced by read-only empty files. Linux commands may report missing files or empty content rather than a permission error.
 :::
 
 ## Network Configuration
@@ -112,6 +120,8 @@ On macOS (Seatbelt), denied paths generate `deny(N)` messages in stderr that the
 **Type:** `boolean` | **Default:** `false`
 
 Must be `true` for the network proxy to start. When disabled, sandboxed commands have unrestricted network access.
+
+On macOS the sandbox profile permits only loopback traffic, so direct connections to other hosts are blocked and outbound traffic to them has to go through the proxy. On Linux the proxy is advisory: it is applied through proxy environment variables, and a process that ignores them can still connect directly. Node's built-in `fetch` honors the proxy only on recent Node releases (24.3 and newer are known to work); on older versions it connects directly and fails inside the sandbox.
 
 ### `allowedDomains`
 
@@ -183,6 +193,8 @@ The following variables are expanded in `allowedReadPaths` and `deniedPaths`:
 
 ## Example Configurations
 
+These examples inherit the default read allowlist and denied paths. If you configure `allowedReadPaths`, include every entry you want to retain: the array replaces the defaults. Configured `deniedPaths` extend the built-in denies, which remain enforced.
+
 ### Development (Recommended)
 
 Sandbox enabled, network filtering off. Good for everyday development where you want filesystem protection without network restrictions.
@@ -193,19 +205,7 @@ Sandbox enabled, network filtering off. Good for everyday development where you 
     "enabled": true,
     "mode": "auto-allow",
     "filesystem": {
-      "writeOnlyToWorkingDir": true,
-      "allowedReadPaths": [
-        "$HOME/.gitconfig",
-        "$HOME/.npmrc",
-        "$HOME/.node_modules",
-        "$HOME/.cargo"
-      ],
-      "deniedPaths": [
-        "$HOME/.ssh",
-        "$HOME/.aws",
-        "$HOME/.gnupg",
-        "$HOME/.env"
-      ]
+      "writeOnlyToWorkingDir": true
     },
     "network": {
       "enabled": false
@@ -224,18 +224,7 @@ Full sandbox with network filtering. Permissions mode requires approval for each
     "enabled": true,
     "mode": "permissions",
     "filesystem": {
-      "writeOnlyToWorkingDir": true,
-      "allowedReadPaths": ["$HOME/.gitconfig"],
-      "deniedPaths": [
-        "$HOME/.ssh",
-        "$HOME/.aws",
-        "$HOME/.gnupg",
-        "$HOME/.env",
-        "$HOME/.kube",
-        "$HOME/.docker",
-        "/etc/shadow",
-        "/etc/passwd"
-      ]
+      "writeOnlyToWorkingDir": true
     },
     "network": {
       "enabled": true,
@@ -261,17 +250,7 @@ Shared `.bike4mind/config.json` committed to the repo. Sets baseline sandbox set
     "enabled": true,
     "mode": "auto-allow",
     "filesystem": {
-      "writeOnlyToWorkingDir": true,
-      "allowedReadPaths": [
-        "$HOME/.gitconfig",
-        "$HOME/.npmrc"
-      ],
-      "deniedPaths": [
-        "$HOME/.ssh",
-        "$HOME/.aws",
-        "$HOME/.gnupg",
-        "$HOME/.env"
-      ]
+      "writeOnlyToWorkingDir": true
     },
     "network": {
       "enabled": true,

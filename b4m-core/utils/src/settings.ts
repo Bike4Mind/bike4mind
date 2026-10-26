@@ -5,6 +5,7 @@ import {
   ScopeRef,
   SettingKey,
   settingsMap,
+  resolveSettingDefinition,
   resolveTeamPlanSettings,
   TEAM_PLAN_SETTING_KEYS,
   type TeamPlanSettings,
@@ -86,7 +87,7 @@ export function getSettingsValue<K extends SettingKey>(
   settings: Record<string, string>,
   defaultValue?: z.output<(typeof settingsMap)[K]['schema']>
 ): z.output<(typeof settingsMap)[K]['schema']> | undefined {
-  const settingConfig = settingsMap[key];
+  const settingConfig = resolveSettingDefinition(key);
   if (!settingConfig) {
     // Log warning but don't break existing code
     Logger.globalInstance.warn(`Unknown setting key: ${key}`);
@@ -115,6 +116,18 @@ export function getSettingsValue<K extends SettingKey>(
 }
 
 /**
+ * `getSettingsValue` for a key that is not a `SettingKey` literal, i.e. one an extension
+ * registered with `registerContributedSettings`. An unregistered key returns `defaultValue`.
+ */
+export function getContributedSettingValue<T = unknown>(
+  key: string,
+  settings: Record<string, string>,
+  defaultValue?: T
+): T | undefined {
+  return getSettingsValue(key as SettingKey, settings, defaultValue as never) as T | undefined;
+}
+
+/**
  * Retrieves all admin settings from the database and converts them into a key-value map.
  * Uses caching for improved performance.
  */
@@ -131,7 +144,11 @@ export async function getSettingsMap(
 ): Promise<Record<string, string>> {
   const logger = options?.logger;
 
-  // Allow bypassing cache for testing or when explicit fresh data is needed
+  // Bypasses the per-process cache, which only invalidates locally: an admin write made in
+  // another process is otherwise invisible here for up to the cache TTL (5 min). Reserve it for a
+  // billing/security flag that must reflect that write on the next request/turn; it costs one
+  // read per call - `findBySettingNames` (indexed) when `names` is given, a full `findAll`
+  // otherwise - so never call it per chunk or loop iteration.
   if (options?.skipCache) {
     const settings = options?.names
       ? await db.adminSettings.findBySettingNames(options.names)

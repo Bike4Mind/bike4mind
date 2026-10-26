@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, IconButton, Typography, CircularProgress, Tooltip } from '@mui/joy';
-import { Close as CloseIcon, ErrorOutline as ErrorIcon } from '@mui/icons-material';
+import CloseIcon from '@mui/icons-material/Close';
+import ErrorIcon from '@mui/icons-material/ErrorOutline';
 import { IFabFileDocument } from '@bike4mind/common';
 import { GetFileIcon } from '@client/app/utils/fabFileUtils';
 import { gray } from '@client/app/utils/themes/colors';

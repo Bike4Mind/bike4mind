@@ -8,6 +8,7 @@ import {
   hearthEventOriginSchema,
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
+import { TurnTimingSchema } from './turnTiming';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
@@ -89,14 +90,16 @@ export const CliCompletionRequestAction = z.object({
   accessToken: z.string(),
   requestId: z.uuid(),
   model: z.string(),
-  messages: z.array(
-    z.object({
-      role: z.enum(['user', 'assistant', 'system']),
-      content: z.union([z.string(), z.array(z.unknown())]),
-      // per-message cache flag (Anthropic only - silently ignored elsewhere)
-      cache: z.boolean().optional(),
-    })
-  ),
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant', 'system']),
+        content: z.union([z.string(), z.array(z.unknown())]),
+        // per-message cache flag (Anthropic only - silently ignored elsewhere)
+        cache: z.boolean().optional(),
+      })
+    )
+    .min(1),
   options: z
     .object({
       temperature: z.number().optional(),
@@ -452,6 +455,7 @@ export const StreamedChatCompletionAction = z.object({
       // Add fallback info to support backend fallback mechanism. Nullish: a whole-quest payload
       // carries the null that clears a stale value (see IChatHistoryItem.fallbackInfo).
       fallbackInfo: FallbackInfoSchema.nullish(),
+      turnTiming: TurnTimingSchema.optional(),
       // MCP confirmation action awaiting user approval (confirm/cancel buttons)
       pendingAction: z
         .object({
@@ -1482,7 +1486,7 @@ export const ConfidenceGateAction = z.object({
   iteration: z.number(),
   /** 0..1, the agent's reported confidence for the paused iteration. */
   confidence: z.number(),
-  /** Pre-formatted server copy, e.g. "Iteration confidence 42% below threshold 60%". */
+  /** Pre-formatted server copy, e.g. "2 iterations in a row below the 60% confidence threshold (latest 42%)". */
   reason: z.string(),
 });
 

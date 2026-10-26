@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/workers",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "private": true,
   "scripts": {
     "typecheck": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
@@ -12,6 +12,7 @@
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1150.0",
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
+    "@aws-sdk/client-lambda": "^3.1150.0",
     "@aws-sdk/client-s3": "^3.1150.0",
     "@aws-sdk/client-sqs": "^3.1150.0",
     "@aws-sdk/s3-request-presigner": "^3.1150.0",
@@ -33,6 +34,7 @@
     "@bike4mind/utils": "workspace:*",
     "@casl/mongoose": "^8.0.5",
     "@slack/web-api": "^7.19.0",
+    "@sparticuz/chromium": "153.0.0",
     "archiver": "^7.0.0",
     "axios": "1.20.0",
     "dayjs": "^1.11.23",
@@ -43,6 +45,8 @@
     "mongodb": "^6.20.0",
     "mongoose": "^8.24.1",
     "p-limit": "^7.3.2",
+    "playwright-core": "1.64.0",
+    "sharp": "^0.35.5",
     "sst": "4.17.1",
     "stripe": "^22.6.2",
     "uuid": "^14.0.2",

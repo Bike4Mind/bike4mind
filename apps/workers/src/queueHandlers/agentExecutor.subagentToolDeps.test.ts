@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
+
 // Drives the real `handler` through a `dag_node_dispatch` message and asserts what
 // `processSubagentDispatch` hands `buildSharedTools`. Harness mirrors agentExecutor.subagentMediaBilling.test.ts.
 
@@ -133,6 +138,8 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.agentRepository, 'listForUser').mockResolvedValue([] as never);
   vi.spyOn(actual.agentRepository, 'listForOrganization').mockResolvedValue([] as never);
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
+  // No model configurations; an unread one fails the run closed (see loadRunnableModels).
+  vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 

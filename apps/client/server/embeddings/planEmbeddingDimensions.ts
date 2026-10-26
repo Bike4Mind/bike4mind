@@ -1,5 +1,8 @@
-import { OpenAIEmbeddingModel, VoyageAIEmbeddingModel, type SupportedEmbeddingModel } from '@bike4mind/common';
-import type { EmbeddingModelInfo } from '@bike4mind/fab-pipeline';
+import {
+  getEmbeddingModelCapabilities,
+  servableEmbeddingDimensions,
+  type SupportedEmbeddingModel,
+} from '@bike4mind/common';
 
 /**
  * How a requested output width is produced for one model.
@@ -15,33 +18,29 @@ export type EmbeddingDimensionPlan =
   | { kind: 'truncate'; dimensions: number }
   | { kind: 'unsupported'; message: string };
 
-const TRUNCATABLE_MODELS: ReadonlySet<SupportedEmbeddingModel> = new Set([
-  OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL,
-  OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE,
-]);
-
-// Must stay in sync with the providers whose generateEmbedding actually forwards `outputDimension`
-// (fab-pipeline VoyageAIEmbeddingService); Bedrock and Ollama ignore it.
-const PROVIDER_SHORTENED_MODELS: ReadonlySet<SupportedEmbeddingModel> = new Set(Object.values(VoyageAIEmbeddingModel));
-
+// A `discrete` catalog entry promises the provider forwards `outputDimension` (fab-pipeline
+// VoyageAIEmbeddingService today); Bedrock and Ollama ignore it, so their models are declared `fixed`.
 export function planEmbeddingDimensions(
   model: SupportedEmbeddingModel,
-  modelInfo: EmbeddingModelInfo<string>,
   requested: number | undefined
 ): EmbeddingDimensionPlan {
-  const [nativeWidth] = modelInfo.dimensions;
-  if (requested === undefined || requested === nativeWidth) return { kind: 'native' };
+  const capabilities = getEmbeddingModelCapabilities(model);
+  const { dimensions } = capabilities;
+  if (requested === undefined || requested === dimensions.native) return { kind: 'native' };
 
-  if (TRUNCATABLE_MODELS.has(model)) {
-    return requested <= nativeWidth
+  if (dimensions.kind === 'range') {
+    return requested >= dimensions.min && requested <= dimensions.native
       ? { kind: 'truncate', dimensions: requested }
-      : { kind: 'unsupported', message: `${model} supports dimensions from 1 to ${nativeWidth}.` };
+      : {
+          kind: 'unsupported',
+          message: `${model} supports dimensions from ${dimensions.min} to ${dimensions.native}.`,
+        };
   }
 
-  if (PROVIDER_SHORTENED_MODELS.has(model) && modelInfo.dimensions.includes(requested)) {
+  if (dimensions.kind === 'discrete' && dimensions.values.includes(requested)) {
     return { kind: 'provider', outputDimension: requested };
   }
 
-  const supported = PROVIDER_SHORTENED_MODELS.has(model) ? modelInfo.dimensions : [nativeWidth];
+  const supported = servableEmbeddingDimensions(capabilities);
   return { kind: 'unsupported', message: `${model} supports dimensions: ${supported.join(', ')}.` };
 }

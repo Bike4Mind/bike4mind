@@ -1,8 +1,10 @@
-// Intentional circular dependency: router.ts → waf.ts → wafPolicy.ts, and waf.ts is evaluated
-// after router.ts. This is safe because wafWebAcl is only consumed inside the transform.cdn
+// Intentional circular dependency: router.ts -> waf.ts -> wafPolicy.ts/wafAssociation.ts, and waf.ts is
+// evaluated after router.ts. This is safe because wafWebAcl is only consumed inside the transform.cdn
 // callback (lazy evaluation, not at import time). Do NOT access `router` from waf.ts at module
 // scope — it would be undefined at that point.
 import { wafWebAcl } from './waf';
+import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/usercontentRequest';
+import { minifyRouterFunction } from './routerFunctionCode';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -83,8 +85,7 @@ export const routePrefix = $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? `/${
 // The base list must mirror resolveProxyTarget in appFileProxy.ts (the allowlist of prefixes
 // routed through CloudFront) - i.e. the router.routeBucket(...) registrations in
 // infra/buckets.ts PLUS the tavern overlay's /tavern-sounds + /tavern-icons routes
-// (contributed via contributeTavernInfra, sst.config.ts) and /whats-new (a separate
-// distribution bucket the proxy can't serve, so it's here but absent from resolveProxyTarget).
+// (contributed via contributeTavernInfra, sst.config.ts).
 // KEEP IN SYNC with both; packages/scripts/src/checkUserFileCdnPrefixes.test.ts is the guard.
 // routePrefix is baked in so the prefixes are the literal URIs the viewer requests on EVERY
 // stage that owns its router - '' on deployed stages, '/<stage>' on `sst dev --stage
@@ -99,7 +100,6 @@ const userFileCdnPrefixes = [
   '/tavern-sounds/',
   '/tavern-icons/',
   '/app-config/',
-  '/whats-new/',
 ].map(prefix => `${routePrefix}${prefix}`);
 
 // Same inert-document CSP the self-host proxy sets (apps/client/pages/api/app-files/serve/
@@ -121,7 +121,7 @@ const USER_FILE_MARKER_HEADER = 'x-b4m-user-file';
 // INSIDE the viewer-request function (verified against the SST 4.17.1 Router source), so by
 // the viewer-response stage the URI is the rewritten S3 key (e.g. /generated/x -> /x), not
 // the public prefix. Matching prefixes at response time would therefore silently miss the
-// four rewritten prefixes (/generated, /whats-new, /admin-logos, /org-files) - the very case
+// three rewritten prefixes (/generated, /admin-logos, /org-files) - the very case
 // this backstop exists to cover. So we stamp a marker in the viewer-REQUEST injection, which
 // SST emits as the FIRST statement of the routing function (before its own rewrite), where
 // the URI is still the original prefix; the viewer-response function then keys off that
@@ -155,6 +155,14 @@ const originVerifyInjection = $interpolate`
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
 
+// Runs before SST routing AND cache lookup, including S3/static and cached SPA responses.
+const usercontentGateInjection = `
+  var __allowsUsercontentRequest = ${allowsUsercontentRequest.toString()};
+  if (!__allowsUsercontentRequest(event.request.headers.host.value, event.request.uri, event.request.method, ${JSON.stringify(domain ?? '')})) {
+    return { statusCode: 404, statusDescription: "Not Found", headers: { "cache-control": { value: "no-store" } } };
+  }
+`;
+
 // Applied ONLY to user-file responses so the SPA (default behavior) and the ALB API routes
 // (/api/ai/v1/completions, ...) are left untouched.
 const userFileCspInjection = `
@@ -179,6 +187,13 @@ const devCorsInjection = `
   event.response.headers["access-control-allow-methods"] = { value: "GET, HEAD, OPTIONS, POST, PUT" };
   event.response.headers["access-control-allow-headers"] = { value: "*" };
 `;
+
+// SST leaves parts of its generated routing function unminified. With the boundary gates,
+// that exceeds CloudFront's 10 KB limit. Transform only this Router's generated request code.
+$transform(aws.cloudfront.Function, (args, _opts, name) => {
+  if (name !== 'RouterCloudfrontFunctionRequest') return;
+  args.code = $output(args.code).apply(minifyRouterFunction);
+});
 
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
@@ -225,7 +240,7 @@ const routerInstance = shouldUseSharedRouter
       // `sst dev` stages.
       edge: {
         viewerRequest: {
-          injection: $interpolate`${originVerifyInjection}${userFileMarkerInjection}`,
+          injection: $interpolate`${usercontentGateInjection}${originVerifyInjection}${userFileMarkerInjection}`,
         },
         viewerResponse: {
           injection: userFileCspInjection + ($dev ? devCorsInjection : ''),
@@ -251,7 +266,8 @@ const routerInstance = shouldUseSharedRouter
             };
           }
 
-          // Attach SST-managed WAF if enabled (ENABLE_WAF=true).
+          // Attach the WAF if enabled (ENABLE_WAF=true): the stage-owned ACL, or the
+          // externally managed one looked up by name.
           // Uses SST v4's first-class webAclArn property on CdnArgs, which internally
           // maps to the CloudFront webAclId field — no manual transform chaining needed.
           if (wafWebAcl) {
@@ -338,12 +354,6 @@ export const router = routerInstance;
 export function appUrlForLambdaEnv() {
   return bareOrigin(routerInstance.url);
 }
-
-export const whatsNewDistributionId = new sst.Linkable('whatsNewDistributionId', {
-  properties: {
-    value: router.distributionID,
-  },
-});
 
 // Explicitly expose the CloudFront distribution ID for backend discovery
 // The backend (apps/client/server/security/wafLogsInsights.ts) needs this to query WAF logs

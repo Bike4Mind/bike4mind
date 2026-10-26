@@ -133,6 +133,7 @@ userSchema.index({ organizationId: 1, createdAt: -1 });   // performance indexes
 - **MUI Joy** (`@mui/joy`) is the primary UI library; use `@mui/system` utilities (`styled`, `keyframes`) for advanced styling.
 - **Do not install or use `@emotion`.**
 - Styled components: `styled('div')(...)` with proper TypeScript types.
+- **Admin UI** (`apps/client/app/components/admin/**`) follows [`DESIGN_GUIDE.md`](./apps/client/app/components/admin/DESIGN_GUIDE.md): page anatomy, the action/save model, shared components and copy rules.
 
 ## Theme mode guidelines
 
@@ -150,6 +151,20 @@ userSchema.index({ organizationId: 1, createdAt: -1 });   // performance indexes
 - Add/expose one by following [`b4m-core/common/src/api-contract/README.md`](./b4m-core/common/src/api-contract/README.md); copy the reference (`chat.contract.ts` + `apps/client/pages/api/chat.ts`).
 - The contract must also satisfy [`CONVENTIONS.md`](./b4m-core/common/src/api-contract/CONVENTIONS.md) (shared error envelope, status table, scope + version rules). Most of it is gated by `assertContractConventions.ts` at spec-generation time, so a violation fails the build.
 - Never call `.openapi()` in a shared schema/contract file (crashes the runtime handler); no `.catch()`/top-level `.transform()` in a public request schema (fail-quiet + not OpenAPI-representable).
+
+## Infrastructure principles
+
+Guardrails for new serverless resources in `infra/`:
+
+1. Default Lambdas to **non-VPC**; add VPC only when reaching private resources.
+2. One queue per (consumer, retry-policy) pair - merge duplicates with a discriminator field.
+3. EventBridge for fan-out and cross-domain notifications; SQS for work queues.
+4. Every async target gets a DLQ (Lambda async, SQS, EventBridge rules).
+5. Cron is a smell for *triggering*; acceptable for *cleanup/reconciliation*.
+6. Per-dev stages bill 24/7 - design for teardown.
+7. Memory tuning beats consolidation for cost - use Lambda Power Tuning on hot paths.
+
+Agent continuation queue depth limits (self-dispatch): a warning tier (`CHECKPOINT_DEPTH_WARNING`) and a hard stop (`MAX_CHECKPOINT_DEPTH`), both defined in `apps/workers/src/queueHandlers/agentExecutor.checkpointDepth.ts`.
 
 ## Dependency management
 

@@ -14,6 +14,7 @@ import type { BillingView } from '@client/app/utils/billingDeepLink';
 import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@client/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { CreditsSection } from './CreditsSection';
+import CreditsExplanation from './CreditsExplanation';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
@@ -354,6 +355,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
               )}
             </Box>
           </Box>
+          {open && <CreditsExplanation />}
           {(noCredits || isLowCredits) && (
             <Box
               role="status"

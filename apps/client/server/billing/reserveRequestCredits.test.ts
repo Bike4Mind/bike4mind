@@ -31,6 +31,12 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {
     statusCode = 400;
   },
+  ForbiddenError: class ForbiddenError extends Error {
+    statusCode = 403;
+  },
+  UnauthorizedError: class UnauthorizedError extends Error {
+    statusCode = 401;
+  },
 }));
 vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
@@ -50,7 +56,12 @@ vi.mock('@bike4mind/services', async () => {
   };
 });
 
-import { CREDIT_HOLD_TTL_MS, reserveRequestCredits, type CreditLedgerEntry } from './reserveRequestCredits';
+import {
+  CREDIT_HOLD_TTL_MS,
+  reserveRequestCredits,
+  settleHeldCredits,
+  type CreditLedgerEntry,
+} from './reserveRequestCredits';
 
 const logger = { error: vi.fn(), warn: vi.fn() };
 
@@ -101,6 +112,22 @@ describe('reserveRequestCredits', () => {
       return pending;
     });
   });
+
+  it.each([true, false])(
+    'refuses a moderated user before touching any balance (enforceCredits %s)',
+    async enforceCredits => {
+      const req = {
+        ...userReq(),
+        user: { id: 'u1', organizationId: null, isModerated: true },
+      } as unknown as Parameters<typeof reserveRequestCredits>[0]['req'];
+
+      await expect(
+        reserveRequestCredits({ req, requiredCredits: 5, enforceCredits, featureLabel: 'embeddings' })
+      ).rejects.toMatchObject({ statusCode: 403, message: expect.stringContaining('AI features are disabled') });
+      expect(userIncrement).not.toHaveBeenCalled();
+      expect(recordHold).not.toHaveBeenCalled();
+    }
+  );
 
   it('reserves nothing and touches no balance when credits are not enforced', async () => {
     const reservation = await reserveRequestCredits({
@@ -471,5 +498,101 @@ describe('reserveRequestCredits', () => {
     expect(await findSettlement('hold-1')).toBeNull();
     await reservation.refund();
     expect(userIncrement).toHaveBeenLastCalledWith('u1', 3);
+  });
+
+  describe('a hold persisted for a later settle (settleHeldCredits)', () => {
+    const reserve = (holdTtlMs?: number) =>
+      reserveRequestCredits({
+        req: userReq(),
+        requiredCredits: 3,
+        enforceCredits: true,
+        featureLabel: 'batch transforms',
+        holdTtlMs,
+      });
+    const context = { featureLabel: 'batch transforms', logger: logger as never };
+
+    it('carries the pending-hold id and expires after the requested TTL', async () => {
+      vi.useFakeTimers({ now: new Date('2026-10-19T12:00:00Z') });
+      try {
+        const reservation = await reserve(26 * 60 * 60_000);
+        expect(reservation.hold).toMatchObject({ pendingHoldId: 'hold-1', reservedCredits: 3 });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(recordHold.mock.calls[0][2]).toEqual(new Date(Date.parse('2026-10-19T12:00:00Z') + 26 * 60 * 60_000));
+    });
+
+    it('has no hold to persist when nothing was reserved', async () => {
+      const reservation = await reserveRequestCredits({
+        req: userReq(),
+        requiredCredits: 3,
+        enforceCredits: false,
+        featureLabel: 'batch transforms',
+      });
+      expect(reservation.hold).toBeNull();
+    });
+
+    it('moves no balance when the sweep refunded the hold first', async () => {
+      const { hold } = await reserve();
+      expect(await claimHold('hold-1')).not.toBeNull();
+      userIncrement.mockClear();
+
+      expect(await settleHeldCredits(hold!, 2, ledger, { ...context, throwOnUnconfirmed: true })).toBe(0);
+
+      expect(userIncrement).not.toHaveBeenCalled();
+      expect(deductCredits).not.toHaveBeenCalled();
+    });
+
+    it('leaves the row settled so a later sweep cannot refund it', async () => {
+      const { hold } = await reserve();
+
+      expect(await settleHeldCredits(hold!, 2, ledger, context)).toBe(2);
+
+      expect(markSettled).toHaveBeenCalledExactlyOnceWith('hold-1', 2);
+      expect(await findSettlement('hold-1')).toBe(2);
+      expect(await claimHold('hold-1')).toBeNull();
+    });
+
+    it('throws an unconfirmed async settlement and lets a later request retry the same hold', async () => {
+      const { hold } = await reserve();
+      markSettled
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockRejectedValueOnce(new Error('db down'));
+
+      await expect(settleHeldCredits(hold!, 2, ledger, { ...context, throwOnUnconfirmed: true })).rejects.toThrow(
+        'db down'
+      );
+      expect(await findSettlement('hold-1')).toBeNull();
+      expect(pendingHolds.has('hold-1')).toBe(true);
+      expect(deductCredits).not.toHaveBeenCalled();
+
+      expect(await settleHeldCredits(hold!, 2, ledger, { ...context, throwOnUnconfirmed: true })).toBe(2);
+      expect(await findSettlement('hold-1')).toBe(2);
+      expect(deductCredits).toHaveBeenCalledTimes(1);
+    });
+
+    it('replays a committed async settlement receipt without charging again', async () => {
+      const { hold } = await reserve();
+      expect(await settleHeldCredits(hold!, 2, ledger, { ...context, throwOnUnconfirmed: true })).toBe(2);
+      userIncrement.mockClear();
+      deductCredits.mockClear();
+
+      expect(await settleHeldCredits(hold!, 2, ledger, { ...context, throwOnUnconfirmed: true })).toBe(2);
+      expect(userIncrement).not.toHaveBeenCalled();
+      expect(deductCredits).not.toHaveBeenCalled();
+    });
+
+    it('settles a hold persisted before pending rows existed directly', async () => {
+      const { hold } = await reserve();
+      const { pendingHoldId: _pendingHoldId, ...legacy } = hold!;
+      userIncrement.mockClear();
+
+      expect(await settleHeldCredits(legacy, 2, ledger, context)).toBe(2);
+
+      expect(markSettled).not.toHaveBeenCalled();
+      expect(userIncrement).toHaveBeenCalledExactlyOnceWith('u1', 1);
+      expect(deductCredits).toHaveBeenCalledTimes(1);
+    });
   });
 });

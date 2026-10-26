@@ -56,7 +56,7 @@ concurrency:
 jobs:
   bundle:
     name: Lambda handlers bundle
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read

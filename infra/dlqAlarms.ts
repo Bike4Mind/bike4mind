@@ -32,6 +32,7 @@ import {
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
   questExportQueueDLQ,
+  publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
@@ -54,11 +55,19 @@ import {
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueueDLQ,
 } from './queues';
-import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
+import {
+  telemetryAlertDeadLetter,
+  sessionEnrichmentDeadLetter,
+  billingEventsDeadLetter,
+  emailEventsDeadLetter,
+  notebookEventsDeadLetter,
+  completionEventsDeadLetter,
+} from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
 import { isMonitoredStage as _isMonitoredStage, buildDlqAlarmSpecs } from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
+import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -68,6 +77,9 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
  * Subscribe once to receive alerts from all 28 DLQs.
  */
 export const dlqAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('DlqAlarmTopic') : undefined;
+
+/** Email-only topic (OPS_ALERT_EMAIL) that does not depend on the Slack forwarding Lambda. */
+export const oobAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('OobAlarmTopic') : undefined;
 
 /**
  * Wire DLQ alarm SNS topic → Slack.
@@ -119,7 +131,6 @@ if (isMonitoredStage) {
   // Routes to a dedicated SNS topic with a direct email subscription instead.
   // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
   // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
-  const oobAlarmTopic = new sst.aws.SnsTopic('OobAlarmTopic');
   if (process.env.OPS_ALERT_EMAIL) {
     // retainOnDelete: the AWS provider cannot destroy a PendingConfirmation subscription.
     // If OPS_ALERT_EMAIL is unset on a later deploy before the confirmation link is clicked,
@@ -130,7 +141,7 @@ if (isMonitoredStage) {
     new aws.sns.TopicSubscription(
       'OobAlarmTopicEmailSub',
       {
-        topic: oobAlarmTopic.arn,
+        topic: oobAlarmTopic!.arn,
         protocol: 'email',
         endpoint: process.env.OPS_ALERT_EMAIL,
       },
@@ -160,7 +171,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-    alarmActions: [oobAlarmTopic.arn],
+    alarmActions: [oobAlarmTopic!.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
   });
 
@@ -179,7 +190,7 @@ if (isMonitoredStage) {
     threshold: 3600,
     treatMissingData: 'notBreaching',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-    alarmActions: [oobAlarmTopic.arn],
+    alarmActions: [oobAlarmTopic!.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
   });
 }
@@ -362,6 +373,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: githubLakeRevokeQueueDLQ,
   },
   {
+    label: 'publish-thumbnail',
+    displayName: 'Published Artifact Thumbnail',
+    application: 'PublishedArtifacts',
+    sourceQueue: 'publishThumbnailQueue',
+    queue: publishThumbnailQueueDLQ,
+  },
+  {
     label: 'generation-job',
     displayName: 'Generation Job',
     application: 'GenerationJob',
@@ -512,6 +530,15 @@ if (isMonitoredStage) {
     createDlqAlarms(dlq);
   }
 
+  if (youngAccountSpendAlertDeadLetter) {
+    createDlqAlarms({
+      label: 'young-account-spend-alert',
+      displayName: 'Young Account Spend Alert',
+      application: 'Signup',
+      queue: youngAccountSpendAlertDeadLetter.queue,
+    });
+  }
+
   // FabFile Moderation DLQ — deliberately NOT added to DLQ_DESCRIPTORS above.
   // It backs apps/workers/src/s3/objectCreated's Lambda async-invocation dead-letter
   // target (see infra/queues.ts), not an sst.aws.Queue `.subscribe()` consumer. Every
@@ -529,24 +556,44 @@ if (isMonitoredStage) {
     queue: fabFileModerationDLQ,
   });
 
-  // Telemetry Alert rule DLQ - alarm-only for the same reason as fabFileModerationDLQ:
-  // it backs the EventBridge telemetry-alert rule target (see infra/eventBus.ts), not an
-  // sst.aws.Queue `.subscribe()` consumer, so there is no source queue for the admin
-  // "replay" UI to re-enqueue into (recovery is re-emitting the event onto the bus).
+  // Event bus dead letters - alarm-only for the same reason: they back EventBridge rule
+  // targets and their Lambdas' async-invoke failures, not a queue consumer, so there is no
+  // source queue to replay into (see infra/eventBusDeadLetter.ts).
   createDlqAlarms({
     label: 'telemetry-alert-rule',
     displayName: 'Telemetry Alert Rule',
     application: 'TelemetryAlerts',
-    queue: telemetryAlertRuleDLQ,
+    queue: telemetryAlertDeadLetter.queue,
   });
-
-  // Session enrichment DLQ - alarm-only for the same reason: it backs the session.* rule
-  // targets and their Lambdas' async-invoke failures (see infra/eventBus.ts), not a queue consumer.
   createDlqAlarms({
     label: 'session-enrichment',
     displayName: 'Session Enrichment',
     application: 'SessionEnrichment',
-    queue: sessionEnrichmentDLQ,
+    queue: sessionEnrichmentDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'billing-events',
+    displayName: 'Billing Events',
+    application: 'Billing',
+    queue: billingEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'email-events',
+    displayName: 'Email Events',
+    application: 'Email',
+    queue: emailEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'notebook-events',
+    displayName: 'Notebook Events',
+    application: 'NotebookCuration',
+    queue: notebookEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'completion-events',
+    displayName: 'Completion Events',
+    application: 'Completions',
+    queue: completionEventsDeadLetter.queue,
   });
 }
 

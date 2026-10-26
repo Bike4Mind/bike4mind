@@ -25,63 +25,10 @@ import { buildAgentPersonaPrompt, pairDataLakeTools, type IAgent, type Orchestra
 import { buildDefaultOrchestrationProfile } from '@bike4mind/server-utils/lib/agentOrchestration';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 
-/**
- * Subset of the orchestration fields the executor actually consumes when
- * deciding the top-level tool whitelist and iteration ceiling. Intentionally
- * narrower than `IAgent` so callers don't conflate it with a full persisted
- * agent.
- */
-export interface ResolvedOrchestrationProfile {
-  /** Stable id for logs / billing attribution. Persisted IAgent id, or `synthetic:*`. */
-  id: string;
-  /** Human-readable label for logs. */
-  name: string;
-  /** Tool whitelist sourced from agent OR admin defaults. */
-  allowedTools: string[];
-  /** Tool denylist sourced from agent OR admin defaults. */
-  deniedTools: string[];
-  /** Per-thoroughness iteration ceiling. */
-  maxIterations: { quick: number; medium: number; very_thorough: number };
-  /** Thoroughness selected when the caller does not override. */
-  defaultThoroughness: 'quick' | 'medium' | 'very_thorough';
-  /** Whether this profile was synthesized from admin defaults (vs sourced from a persisted IAgent). */
-  isSynthetic: boolean;
-  /**
-   * Whether `allowedTools` fell back to admin defaults instead of being the agent's own
-   * curation. `isSynthetic` does NOT answer this: a persisted agent with no whitelist of its
-   * own gets the org defaults and is still non-synthetic. Callers deciding whether a belt may
-   * be widened must read provenance, not doc-loaded-ness (see `pickEffectiveEnabledTools`).
-   * Always true for synthetic profiles, which are built from admin defaults by construction.
-   */
-  allowedToolsFromDefaults?: boolean;
-  /**
-   * Whether `allowedTools` IS the run's toolbelt rather than a default the payload may replace.
-   *
-   * A surface that authors its own profile is picking the toolset deliberately -- the loop only
-   * works if every tool in the walk is present -- and the client already tells the user as much
-   * ("your tool selection was replaced by the agent toolset") when the router upgrades a chat
-   * send. Left false for admin-default and persisted-agent profiles, where the caller's payload
-   * (a briefcase override, a quest node's scoped toolset) legitimately takes precedence.
-   */
-  toolsetIsExclusive?: boolean;
-  /**
-   * Persona system prompt for the agent (#agent-mode-persona). Sourced from a
-   * persisted IAgent's `systemPrompt` / `personality` via `buildAgentPersonaPrompt`.
-   * `undefined` for synthetic (agentless) profiles, which have no persona.
-   * The executor prepends this to the ReActAgent prompt so an Agent-mode run
-   * speaks in the agent's configured personality (the path previously injected none).
-   */
-  systemPrompt?: string;
-  /**
-   * Per-profile confidence-gate threshold. The executor pauses an iteration for human
-   * review when its confidence falls below this. Omitted => the executor's global default
-   * (CONFIDENCE_GATE_THRESHOLD). Set to 0 to effectively disable the gate for a profile
-   * whose tools are sandboxed and whose loop is meant to run unattended (e.g. the
-   * optimizer): a single recoverable tool error shouldn't halt an autonomous run for a
-   * human, and maxIterations remains the runaway backstop.
-   */
-  confidenceGateThreshold?: number;
-}
+import type { ResolvedOrchestrationProfile } from '@bike4mind/agents';
+
+// The profile shape lives with the agent-extension registry so contributed surface profiles can build it.
+export type { ResolvedOrchestrationProfile };
 
 export interface ResolveTopLevelProfileArgs {
   /** `agentId` from the start payload - undefined means agentless. */

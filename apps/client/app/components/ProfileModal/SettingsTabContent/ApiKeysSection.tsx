@@ -4,7 +4,7 @@ import AddApiKeyModal from '@client/app/components/ProfileModal/AddApiKeyModal';
 import AddVoiceModal from '@client/app/components/ProfileModal/AddVoiceModal';
 import { useDeleteApiKey, useGetAllApiKeys, useSetActiveApiKey } from '@client/app/hooks/data/apiKeys';
 import { useDeleteVoice, useGetAllVoice, useSetVoice } from '@client/app/hooks/data/voice';
-import { MoreVert as MoreVertIcon } from '@mui/icons-material';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import {
   Box,

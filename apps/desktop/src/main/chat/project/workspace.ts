@@ -1,6 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, realpath, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { ChatProject } from '@shared/chat';
+import type { WorktreeRemoval } from '@shared/worktreeRemoval';
+import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
 import type { WorktreeEntry } from './git';
 import { branchExists, containerDirectory, fetchRemoteFor, git, listWorktrees, resolveBaseRef } from './git';
@@ -52,6 +55,9 @@ export interface WorkspaceRequest {
   name?: string;
   /** Told the branch as soon as it is decided, ahead of the fetch and checkout that take the time. */
   onBranch?: (branch: string) => void;
+  timer?: PhaseTimer;
+  /** Cut from the repository's spare when it has one, and renew it afterwards. */
+  spares?: SpareWorktrees;
 }
 
 export interface WorkspaceResolution {
@@ -160,7 +166,7 @@ async function baseRefFor(directory: string, base: string): Promise<string> {
     await fetchRemoteFor(directory, fallback);
     return fallback;
   }
-  const remote = `origin/${base}`;
+  const remote = remoteRefFor(base);
   try {
     await fetchRemoteFor(directory, remote);
     await git(directory, ['rev-parse', '--verify', '--quiet', `${remote}^{commit}`]);
@@ -168,6 +174,323 @@ async function baseRefFor(directory: string, base: string): Promise<string> {
     return remote;
   } catch {
     return base;
+  }
+}
+
+function remoteRefFor(base: string): string {
+  return `origin/${base}`;
+}
+
+/**
+ * Start the fetch a branch cut from `base` will wait on, without waiting for it: the same ref
+ * baseRefFor fetches, so the cut finds it fresh (see fetchRemoteFor). Called where a start is
+ * about to be asked for - a spawn card drawn, a worktree toggle turned on.
+ */
+export function prefetchBase(directory: string, base: string): void {
+  const target = !base || base === 'HEAD' ? (base ? Promise.resolve(base) : resolveBaseRef(directory)) : null;
+  void (target ?? Promise.resolve(remoteRefFor(base)))
+    .then(ref => fetchRemoteFor(directory, ref))
+    .catch(() => undefined);
+}
+
+/** Where a repository's spare checkout waits: in the app's folder, beside the worktree root. */
+function sparePath(container: string): string {
+  return join(container, APP_DIRECTORY, 'spare');
+}
+
+/** Repositories that keep a spare at once; the least recently used one goes past this. */
+const MAX_SPARES = 2;
+
+/** A spare unused this long is removed, so a project left alone stops costing a checkout. */
+const SPARE_IDLE_MS = 30 * 60_000;
+
+/** After a cut, so the refill's checkout does not compete with the new session's first moments. */
+const SPARE_REFILL_DELAY_MS = 10_000;
+
+interface Spare {
+  projectDirectory: string;
+  path: string;
+  idle: NodeJS.Timeout;
+}
+
+/**
+ * One detached checkout kept ready per recently used repository, so cutting a session's
+ * worktree is a rename plus a switch that rewrites only the files that differ, rather than a
+ * checkout of every file - about 1.3s down to 0.2s on this monorepo.
+ *
+ * Bounded on every side: a repository gets one only after a worktree was cut in it this run,
+ * at most MAX_SPARES exist, each goes after SPARE_IDLE_MS unused, and `dispose` removes them
+ * all on quit. A spare left after a crash is recognised by its git metadata and original HEAD.
+ * Changed or unowned checkouts are left alone, and the spare is simply not made.
+ */
+export class SpareWorktrees {
+  /** By container, in order of last use. */
+  private readonly ready = new Map<string, Spare>();
+  private readonly refills = new Map<string, NodeJS.Timeout>();
+  private readonly chains = new Map<string, Promise<unknown>>();
+  private readonly generations = new Map<string, number>();
+  private disposed = false;
+
+  constructor(private readonly refillDelayMs = SPARE_REFILL_DELAY_MS) {}
+
+  /**
+   * Move this repository's spare to `path` on a new `branch` cut from `from`. False when there is
+   * none or it could not be used, and then nothing is left at `path`.
+   */
+  async take(projectDirectory: string, container: string, branch: string, path: string, from: string) {
+    // A fill already under way finishes sooner than a fresh checkout would.
+    if (!this.ready.has(container)) await this.chains.get(container);
+    const spare = this.ready.get(container);
+    if (!spare) return false;
+    this.ready.delete(container);
+    clearTimeout(spare.idle);
+    return this.serial(container, async () => {
+      if (!(await isOwnedSpare(spare.path)) || !(await cleanDetachedWorktree(spare.path))) return false;
+      try {
+        await git(projectDirectory, ['worktree', 'move', spare.path, path]);
+      } catch {
+        await removeWorktree(projectDirectory, spare.path);
+        return false;
+      }
+      try {
+        await git(path, ['switch', '--quiet', '--no-track', '-c', branch, from]);
+        return true;
+      } catch {
+        await removeWorktree(projectDirectory, path);
+        return false;
+      }
+    });
+  }
+
+  /** Make or renew this repository's spare at `from`, shortly; a no-op once disposed. */
+  refill(projectDirectory: string, container: string, from: string): void {
+    if (this.disposed) return;
+    clearTimeout(this.refills.get(container));
+    const generation = this.generations.get(container) ?? 0;
+    const timer = setTimeout(() => {
+      this.refills.delete(container);
+      void this.serial(container, () => this.fill(projectDirectory, container, from, generation));
+    }, this.refillDelayMs);
+    timer.unref();
+    this.refills.set(container, timer);
+  }
+
+  /** Drop the spare of the repository at `projectDirectory`, if it has one. */
+  async forget(projectDirectory: string): Promise<void> {
+    const container = await containerDirectory(projectDirectory).catch(() => null);
+    if (!container) return;
+    clearTimeout(this.refills.get(container));
+    this.refills.delete(container);
+    this.generations.set(container, (this.generations.get(container) ?? 0) + 1);
+    await this.chains.get(container);
+    await this.discard(container);
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    for (const timer of this.refills.values()) clearTimeout(timer);
+    this.refills.clear();
+    await Promise.all([...this.ready.keys()].map(container => this.discard(container)));
+    // A fill still running sees `disposed` and removes its own checkout; quit waits for that.
+    await Promise.all(this.chains.values());
+  }
+
+  private async fill(projectDirectory: string, container: string, from: string, generation: number): Promise<void> {
+    const cancelled = () => this.disposed || generation !== (this.generations.get(container) ?? 0);
+    if (cancelled() || this.ready.has(container)) return;
+    const path = sparePath(container);
+    const occupant = await registeredAt(await listWorktrees(projectDirectory), path);
+    if (occupant) {
+      if (occupant.branch || !(await isOwnedSpare(path))) return;
+      await removeWorktree(projectDirectory, path);
+    } else if (await directoryExists(path)) {
+      return;
+    }
+    try {
+      const head = (await git(projectDirectory, ['rev-parse', '--verify', `${from}^{commit}`])).trim();
+      await git(projectDirectory, ['worktree', 'add', '--quiet', '--detach', path, head]);
+      const gitDirectory = (await git(path, ['rev-parse', '--absolute-git-dir'])).trim();
+      await writeFile(join(gitDirectory, 'b4m-spare'), `bike4mind-spare:${head}\n`, 'utf8');
+    } catch {
+      return;
+    }
+    if (cancelled()) {
+      await removeWorktree(projectDirectory, path);
+      return;
+    }
+    const idle = setTimeout(() => void this.discard(container), SPARE_IDLE_MS);
+    idle.unref();
+    this.ready.set(container, { projectDirectory, path, idle });
+    for (const oldest of [...this.ready.keys()].slice(0, Math.max(0, this.ready.size - MAX_SPARES))) {
+      void this.discard(oldest);
+    }
+  }
+
+  private discard(container: string): Promise<void> {
+    const spare = this.ready.get(container);
+    if (!spare) return Promise.resolve();
+    this.ready.delete(container);
+    clearTimeout(spare.idle);
+    return this.serial(container, () => removeWorktree(spare.projectDirectory, spare.path));
+  }
+
+  /** One git operation at a time per repository, so a take never meets a fill half-done. */
+  private serial<T>(container: string, work: () => Promise<T>): Promise<T> {
+    const result = (this.chains.get(container) ?? Promise.resolve()).then(work);
+    const tail = result.catch(() => undefined);
+    this.chains.set(container, tail);
+    void tail.then(() => {
+      if (this.chains.get(container) === tail) this.chains.delete(container);
+    });
+    return result;
+  }
+}
+
+async function isOwnedSpare(path: string): Promise<boolean> {
+  try {
+    const gitDirectory = (await git(path, ['rev-parse', '--absolute-git-dir'])).trim();
+    const head = (await git(path, ['rev-parse', 'HEAD'])).trim();
+    return (await readFile(join(gitDirectory, 'b4m-spare'), 'utf8')) === `bike4mind-spare:${head}\n`;
+  } catch {
+    return false;
+  }
+}
+
+async function cleanDetachedWorktree(path: string): Promise<boolean> {
+  try {
+    return (
+      (await git(path, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim() === 'HEAD' &&
+      (await git(path, ['status', '--porcelain', '--untracked-files=normal', '--ignored=matching'])).trim() === ''
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Refuse changed checkouts, including a spare someone has started using after a crash. */
+async function removeWorktree(projectDirectory: string, path: string): Promise<void> {
+  try {
+    if (!(await isOwnedSpare(path)) || !(await cleanDetachedWorktree(path))) return;
+    await git(projectDirectory, ['worktree', 'remove', path]);
+  } catch {
+    // Already gone, or held open; see above.
+  }
+}
+
+type InspectedWorktreeRemoval = WorktreeRemoval & { preservedRef?: string };
+
+function containsPath(directory: string, path: string): boolean {
+  const within = relative(directory, path);
+  return !isAbsolute(within) && within !== '..' && !within.startsWith(`..${sep}`);
+}
+
+/** Only a branch this app cut can have a removable worktree; a cheap gate before any sharing scan. */
+export function hasAppWorkspaceBranch(
+  project: ChatProject | undefined
+): project is ChatProject & { workspaceBranch: string } {
+  return !!project?.workspaceBranch?.startsWith(BRANCH_PREFIX);
+}
+
+/** Shared by the delete dialog and execution: uncertainty always keeps the checkout. */
+export async function inspectWorktreeRemoval(
+  project: ChatProject | undefined,
+  otherProjects: readonly (ChatProject | undefined)[]
+): Promise<InspectedWorktreeRemoval | null> {
+  if (!hasAppWorkspaceBranch(project)) return null;
+  const path = await canonical(project.workingDirectory);
+  if (!path) return null;
+  const container = await containerDirectory(project.directory);
+  const root = await canonical(appWorktreeRoot(container));
+  if (!root || root !== appWorktreeRoot(await realpath(container))) return null;
+  if (root === path || !containsPath(root, path)) return null;
+  const branch = project.workspaceBranch;
+  const entries = await listWorktrees(project.directory);
+  const entry = await registeredAt(entries, path);
+  if (entry?.branch !== branch || (await canonical(project.directory)) === path) return null;
+
+  const result = (reason: string | null): WorktreeRemoval => ({ path, branch, safe: reason === null, reason });
+  for (const other of entries) {
+    const otherPath = (await canonical(other.path)) ?? resolve(other.path);
+    if (otherPath !== path && containsPath(path, otherPath)) return result('Contains another worktree');
+  }
+  for (const other of otherProjects) {
+    if (!other) continue;
+    const otherPath = (await canonical(other.workingDirectory)) ?? resolve(other.workingDirectory);
+    const otherDirectory = (await canonical(other.directory)) ?? resolve(other.directory);
+    if (containsPath(path, otherPath) || containsPath(path, otherDirectory)) {
+      return result('Used by another conversation');
+    }
+    if (other.workspaceBranch !== branch && other.branch !== branch) continue;
+    // A matching branch name in another repository does not share this checkout.
+    if ((await canonical(await containerDirectory(other.directory))) === (await canonical(container))) {
+      return result('Used by another conversation');
+    }
+  }
+  const status = await git(path, ['status', '--porcelain', '-z', '--untracked-files=all']);
+  if (status) {
+    const records = status.split('\0');
+    let count = 0;
+    for (let index = 0; index < records.length - 1; index++) {
+      count++;
+      if (/^[RC]|^.[RC]/.test(records[index])) index++;
+    }
+    return result(`${count} uncommitted file${count === 1 ? '' : 's'}`);
+  }
+  const upstream = (await git(path, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim();
+  // `branch -d` judges a branch with an upstream against that upstream alone, and a command-local
+  // `-c branch.<name>.merge` only adds a second value rather than replacing it. So only the
+  // upstream can prove preservation, or `-d` would refuse after the checkout is already gone.
+  const references = upstream
+    ? [upstream]
+    : project.branch && project.branch !== branch
+      ? [`refs/heads/${project.branch}`, `refs/remotes/origin/${project.branch}`, `refs/remotes/${project.branch}`]
+      : [];
+  let localOnly: number | null = null;
+  for (const reference of references) {
+    try {
+      const count = Number((await git(path, ['rev-list', '--count', `${reference}..refs/heads/${branch}`])).trim());
+      if (count === 0) return { ...result(null), preservedRef: reference };
+      if (Number.isSafeInteger(count) && count > 0) localOnly = Math.min(localOnly ?? count, count);
+    } catch {
+      // A deleted upstream or base cannot prove that the commits were preserved.
+    }
+  }
+  return result(
+    localOnly === null
+      ? 'Cannot verify the upstream or base branch'
+      : `${localOnly} commit${localOnly === 1 ? '' : 's'} not pushed or merged`
+  );
+}
+
+export async function removeSessionWorktree(
+  project: ChatProject,
+  otherProjects: readonly (ChatProject | undefined)[]
+): Promise<void> {
+  const inspection = await inspectWorktreeRemoval(project, otherProjects);
+  if (!inspection?.safe || !inspection.preservedRef) {
+    throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
+  }
+  await git(project.directory, ['worktree', 'remove', inspection.path]);
+  try {
+    const upstream = (
+      await git(project.directory, ['for-each-ref', '--format=%(upstream)', `refs/heads/${inspection.branch}`])
+    ).trim();
+    // Without an upstream, use the proven base rather than this checkout's possibly stale HEAD.
+    // With one, the inspection already proved against that upstream, which is what `-d` checks.
+    // Command-local settings never persist.
+    const comparison = upstream
+      ? []
+      : [
+          '-c',
+          `branch.${inspection.branch}.remote=.`,
+          '-c',
+          `branch.${inspection.branch}.merge=${inspection.preservedRef}`,
+        ];
+    await git(project.directory, [...comparison, 'branch', '-d', '--', inspection.branch]);
+  } catch (err) {
+    throw new Error(
+      `Worktree removed, but branch ${inspection.branch} was kept: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 }
 
@@ -200,7 +523,9 @@ export async function resolveWorkspace(
   projectDirectory: string,
   request: WorkspaceRequest
 ): Promise<WorkspaceResolution> {
+  const { timer } = request;
   const registered = await listWorktrees(projectDirectory);
+  timer?.lap('worktreeList');
   const base = (request.base ?? '').trim();
 
   let branch = (request.branch ?? '').trim();
@@ -246,13 +571,21 @@ export async function resolveWorkspace(
   await ensureWorktreeRoot(container);
 
   if (await branchExists(projectDirectory, branch)) {
+    timer?.lap('checks');
     await git(projectDirectory, ['worktree', 'add', path, branch]);
-  } else {
-    const from = await baseRefFor(projectDirectory, cutFrom);
-    // --no-track for the reason the shell helper gives: a feature branch should not track the
-    // base it forked from, or a later `git push` would aim at the wrong ref.
-    await git(projectDirectory, ['worktree', 'add', '--no-track', '-b', branch, path, from]);
+    timer?.lap('worktreeAdd');
+    return { workingDirectory: path, branch, outcome: 'created' };
   }
 
+  timer?.lap('checks');
+  const from = await baseRefFor(projectDirectory, cutFrom);
+  timer?.lap('fetch');
+  const { spares } = request;
+  const fromSpare = (await spares?.take(projectDirectory, container, branch, path, from)) ?? false;
+  // --no-track for the reason the shell helper gives: a feature branch should not track the
+  // base it forked from, or a later `git push` would aim at the wrong ref.
+  if (!fromSpare) await git(projectDirectory, ['worktree', 'add', '--no-track', '-b', branch, path, from]);
+  timer?.lap(fromSpare ? 'spareSwitch' : 'worktreeAdd');
+  spares?.refill(projectDirectory, container, from);
   return { workingDirectory: path, branch, outcome: 'created' };
 }

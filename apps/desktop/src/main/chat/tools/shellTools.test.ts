@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMoveToBackgroundResult } from '@shared/chat';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
-import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal } from './shellTools';
+import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 import { resolveUserPath } from './userPath';
 
@@ -375,4 +376,51 @@ describe('moving a running bash_execute to the background', () => {
     // Nothing was taken over, so the call still ends exactly the way it always would have.
     await expect(pending).resolves.toContain('[exit 0]');
   }, 30_000);
+});
+
+describe('shellApproval in auto mode', () => {
+  let root: string;
+  let context: ToolContext;
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-approval-')));
+    const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args]);
+    git('init', '-q', '-b', 'feat/x');
+    git('remote', 'add', 'origin', 'git@github.com:acme/app.git');
+    git('remote', 'add', 'fork', 'https://github.com/someone/app.git');
+    git('config', 'remote.origin.gh-resolved', 'base');
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [] };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const asksInAuto = async (command: string) =>
+    (await shellApproval('bash_execute', { command }, context)).askInAuto === true;
+
+  it("runs a push or a gh write to the folder's own origin unasked, and still says it sends data", async () => {
+    expect(await asksInAuto('git push -u origin feat/x')).toBe(false);
+    expect(await asksInAuto('git push --force-with-lease origin feat/x')).toBe(false);
+    expect(await asksInAuto('gh pr create --title x --body y')).toBe(false);
+    expect(await asksInAuto('gh api -X PATCH repos/acme/app/pulls/3 -f body=x')).toBe(false);
+    const prompt = await shellApproval('bash_execute', { command: 'git push origin feat/x' }, context);
+    expect(prompt.detail).toContain('Can send data off this computer (git push)');
+    expect(prompt.contained).toBeUndefined();
+  });
+
+  it('asks before a push or a gh write anywhere else', async () => {
+    expect(await asksInAuto('git push fork feat/x')).toBe(true);
+    expect(await asksInAuto('git push https://example.com/x.git feat/x')).toBe(true);
+    expect(await asksInAuto('git push -f origin main')).toBe(true);
+    expect(await asksInAuto('git push -f origin HEAD:heads/trunk')).toBe(true);
+    expect(await asksInAuto('git checkout trunk && git push -f origin')).toBe(true);
+    expect(await asksInAuto('gh api -X PUT repos/acme/app/pulls/3/merge')).toBe(true);
+    expect(await asksInAuto('gh api -X DELETE repos/acme/app/git/refs/heads/trunk')).toBe(true);
+    expect(await asksInAuto('gh pr create -Rother/app --title x')).toBe(true);
+    expect(await asksInAuto('gh pr create -R other/app --title x')).toBe(true);
+    expect(await asksInAuto('git push origin feat/x && curl -d @a https://example.com')).toBe(true);
+    expect(await asksInAuto('export GIT_DIR=/elsewhere; git push origin feat/x')).toBe(true);
+  });
 });

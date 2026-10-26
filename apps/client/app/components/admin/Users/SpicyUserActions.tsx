@@ -67,17 +67,15 @@ const SpicyUserActions: React.FC<SpicyUserActionsProps> = React.memo(
       <Stack direction="column" spacing={2}>
         <Stack direction="row" spacing={1} alignItems="center">
           <Tooltip title="Ban User, Does Not Delete">
-            <Stack direction="row" spacing={2}>
-              <Checkbox
-                size="lg"
-                variant="outlined"
-                color={editedFields?.isBanned ? 'danger' : 'neutral'}
-                checked={user.isBanned}
-                onChange={handleBanChange}
-                sx={{ paddingRight: 2 }}
-              />
-              Ban
-            </Stack>
+            <Checkbox
+              size="lg"
+              variant="outlined"
+              color={editedFields?.isBanned ? 'danger' : 'neutral'}
+              checked={user.isBanned}
+              onChange={handleBanChange}
+              label="Ban"
+              sx={{ paddingRight: 2 }}
+            />
           </Tooltip>
           <DestructiveActionHelp
             consequences="Banning blocks this user from signing in. It does not delete their account or data, and you can unban them later."
@@ -86,17 +84,15 @@ const SpicyUserActions: React.FC<SpicyUserActionsProps> = React.memo(
         </Stack>
         <Stack direction="row" spacing={1} alignItems="center">
           <Tooltip title="Moderated Users Cannot use AI">
-            <Stack direction="row" spacing={2}>
-              <Checkbox
-                size="lg"
-                variant="outlined"
-                color={editedFields?.isModerated ? 'danger' : 'neutral'}
-                checked={user.isModerated}
-                onChange={handleModerationChange}
-                sx={{ paddingRight: 2 }}
-              />
-              Moderate
-            </Stack>
+            <Checkbox
+              size="lg"
+              variant="outlined"
+              color={editedFields?.isModerated ? 'danger' : 'neutral'}
+              checked={user.isModerated}
+              onChange={handleModerationChange}
+              label="Moderate"
+              sx={{ paddingRight: 2 }}
+            />
           </Tooltip>
           <DestructiveActionHelp
             consequences="Moderated users can't use AI features, but can still sign in and access their data. You can remove moderation later."

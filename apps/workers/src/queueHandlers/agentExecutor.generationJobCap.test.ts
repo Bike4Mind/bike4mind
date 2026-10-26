@@ -36,8 +36,8 @@ vi.mock('@server/generationJobs/wiring', () => ({
   getVideoJobDeps: vi.fn(),
   getCreateVideoJobDeps: vi.fn(),
 }));
-vi.mock('@server/musicGenerations/buildMusicToolConfig', () => ({ buildMusicToolConfig: vi.fn() }));
-vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({ buildVideoToolConfig: vi.fn() }));
+vi.mock('@bike4mind/server-utils/musicGenerations/buildMusicToolConfig', () => ({ buildMusicToolConfig: vi.fn() }));
+vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({ buildVideoToolConfig: vi.fn() }));
 
 const { getAgentMusicToolConfigDeps } = await import('./agentExecutor.musicToolConfig');
 const { getAgentVideoToolConfigDeps } = await import('./agentExecutor.videoToolConfig');

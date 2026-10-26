@@ -3,6 +3,7 @@ import { BEDROCK_ANTHROPIC_PREFIX } from './claudeModelId';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
+import type { IUsageEventRates, UsagePriceSource } from './types/entities/UsageEventTypes';
 import type { ImageModelCapabilities } from './utils/imageCapabilities';
 
 /**
@@ -48,6 +49,13 @@ export enum ImageModels {
   FLUX_PRO_FILL = 'flux-pro-1.0-fill',
   FLUX_KONTEXT_PRO = 'flux-kontext-pro',
   FLUX_KONTEXT_MAX = 'flux-kontext-max',
+  FLUX_2_MAX = 'flux-2-max',
+  FLUX_2_PRO = 'flux-2-pro',
+  FLUX_2_PRO_PREVIEW = 'flux-2-pro-preview',
+  FLUX_2_FLEX = 'flux-2-flex',
+  FLUX_2_KLEIN_9B = 'flux-2-klein-9b',
+  FLUX_2_KLEIN_9B_PREVIEW = 'flux-2-klein-9b-preview',
+  FLUX_2_KLEIN_4B = 'flux-2-klein-4b',
   GROK_IMAGINE_IMAGE_QUALITY = 'grok-imagine-image-quality',
   GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image',
   GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview',
@@ -202,6 +210,9 @@ export enum ChatModels {
   // Bedrock hosted DeepSeek models
   DEEPSEEK_R1_BEDROCK = 'us.deepseek.r1-v1:0',
   DEEPSEEK_V3_1 = 'deepseek.v3-v1:0',
+
+  // Served by the generic Converse backend (llm-adapters bedrockBackend/converse.ts).
+  NOVA_PRO_BEDROCK = 'us.amazon.nova-pro-v1:0',
 
   TITAN_TEXT_G1_LITE = 'amazon.titan-text-lite-v1',
   TITAN_TEXT_G1_EXPRESS = 'amazon.titan-text-express-v1',
@@ -640,6 +651,9 @@ export const supportedModels = z.enum({
 
 export type ModelName = z.infer<typeof supportedModels>;
 
+/** Whether a model's rates came from a ModelPrice catalog row or the adapter's literal fallback. */
+export type ModelPriceSource = UsagePriceSource;
+
 export type ModelInfo = {
   id: ModelName;
   type: 'text' | 'image' | 'speech-to-text' | 'video';
@@ -681,6 +695,13 @@ export type ModelInfo = {
    */
   thinkingStyle?: 'legacy' | 'adaptive';
   pricing: Record<number, PricingInfo>;
+  /**
+   * Where `pricing` came from. 'catalog' when applyModelPriceCatalog overlaid a ModelPrice row;
+   * absent means the adapter literal priced the model. Read at settlement to stamp the UsageEvent.
+   */
+  priceSource?: ModelPriceSource;
+  /** The ModelPrice row in force when `priceSource` is 'catalog'. */
+  priceRowId?: string;
   /**
    * Marks a model as deliberately costless (e.g. local Ollama), so zero-rate
    * pricing is intent, not a gap. Without this, a $0 cost for real usage
@@ -724,6 +745,8 @@ export type ModelInfo = {
    * Format: YYYY-MM-DD
    */
   deprecationDate?: string;
+  /** Superseded but still selectable; folded into Older models in the picker. */
+  isSuperseded?: boolean;
   /**
    * Successor id for a model this adapter table is sunsetting. Rides into
    * `lifecycle.replacedBy` on the seed row, which is what feeds
@@ -825,6 +848,36 @@ const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number 
  */
 export const PUBLISHED_CACHE_READ_BACKENDS: ReadonlySet<string> = new Set([ModelBackend.Gemini, ModelBackend.XAI]);
 
+/** The per-token rates one pricing tier applies, in USD per token, as stored on a UsageEvent. */
+export type AppliedRates = IUsageEventRates;
+
+/**
+ * The rates costAtTier applies for a request whose whole prompt is `tierBasisTokens`, with the
+ * cache-read and cache-write defaults resolved, or null when the model has no priced tier. The one
+ * place tier selection and cache-rate defaults live, so a stamped rate can never disagree with the
+ * cost it explains.
+ */
+export const resolveAppliedRates = (model: ModelInfo, tierBasisTokens: number): Required<AppliedRates> | null => {
+  const tier = pricingTierForTokens(model, tierBasisTokens);
+  // Guard against a malformed or non-tiered pricing map (e.g. a flat
+  // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
+  // means "no cost", not a crash in post-processing.
+  const tierPricing = tier === null ? undefined : model.pricing[tier];
+  if (tier === null || !tierPricing) return null;
+
+  return {
+    tierKey: tier,
+    input: tierPricing.input,
+    output: tierPricing.output,
+    cacheRead:
+      tierPricing.cache_read ??
+      (PUBLISHED_CACHE_READ_BACKENDS.has(model.backend)
+        ? tierPricing.input
+        : tierPricing.input * CACHE_READ_MULTIPLIER),
+    cacheWrite: tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER,
+  };
+};
+
 const costAtTier = (
   model: ModelInfo,
   tierBasisTokens: number,
@@ -833,23 +886,14 @@ const costAtTier = (
   cacheReadTokens: number,
   cacheCreationTokens: number
 ): number => {
-  const tier = pricingTierForTokens(model, tierBasisTokens);
-  // Guard against a malformed or non-tiered pricing map (e.g. a flat
-  // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
-  // means "no cost", not a crash in post-processing.
-  const tierPricing = tier === null ? undefined : model.pricing[tier];
-  if (!tierPricing) return 0;
-
-  const cacheReadRate =
-    tierPricing.cache_read ??
-    (PUBLISHED_CACHE_READ_BACKENDS.has(model.backend) ? tierPricing.input : tierPricing.input * CACHE_READ_MULTIPLIER);
-  const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
+  const rates = resolveAppliedRates(model, tierBasisTokens);
+  if (!rates) return 0;
 
   return (
-    tierPricing.input * inputTokens +
-    tierPricing.output * outputTokens +
-    cacheReadRate * cacheReadTokens +
-    cacheWriteRate * cacheCreationTokens
+    rates.input * inputTokens +
+    rates.output * outputTokens +
+    rates.cacheRead * cacheReadTokens +
+    rates.cacheWrite * cacheCreationTokens
   );
 };
 

@@ -16,13 +16,21 @@ import {
   incompleteResult,
   isLatencyObservation,
   mergeResults,
-  gatedAverageSec,
+  gatedMedianSec,
+  gatedMedianFirstTokenSec,
   latencyBreach,
+  unexpectedArtifactIds,
+  TurnTimer,
 } from './ai-latency-budget';
 
 // Title of the per-cell latency gate. The workflow's Quality column excludes it by this exact
 // title so a slow-but-correct cell reads Quality=Pass, Latency=FAIL (e2e-ai-latency.yml).
-const LATENCY_GATE_TITLE = 'average AI latency is within the threshold';
+const LATENCY_GATE_TITLE = 'median AI latency is within the threshold';
+
+// Prompts drawn per cell, capped at the pool size (the tool and intermediate pools hold 5). Enough
+// gated rows for the median to shrug off one slow prompt. Prompts run serially, so raising this
+// lengthens the cell against the job's timeout-minutes in e2e-ai-latency.yml.
+const PROMPTS_PER_CELL = 7;
 
 // Normalizes to NFKC and strips invisible Unicode chars (zero-width joiners, soft hyphens,
 // non-breaking spaces) before matching - innerText-scraped AI text can differ invisibly and break a plain .includes().
@@ -51,7 +59,7 @@ export function createAiLatencySuite({
   disableSmartTools = false,
 }: AiLatencySuiteOptions) {
   assertBudgetConfig(prompts);
-  const selectedPrompts = pickDeterministic(prompts, 3, dailySeed);
+  const selectedPrompts = pickDeterministic(prompts, PROMPTS_PER_CELL, dailySeed);
   const collectedResults: PromptResult[] = [];
   // Resolved on the first prompt against the live AI Settings modal, then reused for the
   // afterAll summary. Stays 'unknown' only if no prompt ran (e.g. all skipped).
@@ -94,14 +102,14 @@ export function createAiLatencySuite({
     }
 
     const results = mergeResults(priorResults, newResults);
-    const averageResponseTimeSec = gatedAverageSec(results);
 
     // Never downgrade an already-resolved model back to 'unknown' (a recycled worker starts fresh).
     const output = {
       model: model !== 'unknown' ? model : priorModel,
       timestamp: new Date().toISOString(),
       thresholdSec,
-      averageResponseTimeSec,
+      medianResponseTimeSec: gatedMedianSec(results),
+      medianFirstTokenSec: gatedMedianFirstTokenSec(results),
       results,
     };
 
@@ -112,18 +120,22 @@ export function createAiLatencySuite({
     const scenario = selectedPrompts[index];
 
     test(scenario.prompt, async ({ navigationPage, chatPage, modelSelector }) => {
+      const testStartMs = Date.now();
       test.setTimeout(timeoutMultiplier * TIMEOUTS.TEST);
 
       await navigationPage.navigateToNewChat();
       resolvedModel = await resolveSelectedModel(modelSelector);
       await modelSelector.selectTextModel(resolvedModel, disableSmartTools ? { disableSmartTools: true } : undefined);
 
-      const startMs = Date.now();
+      const timer = new TurnTimer();
+      const attempt = test.info().retry;
       let imageAsserted = false;
-      // streamEndMs marks the end of the token stream (the send helper returns once the
-      // stop-generation button is gone). The image render and artifact settle that follow are a
-      // separate, much longer measurement, so latency and streaming rate below are taken over the
-      // stream window only and the render/settle tail is recorded separately as renderTimeMs.
+      let artifactRendered = false;
+      // The clock starts at Enter (TurnTimer), so typing is not timed. streamEndMs marks the end
+      // of the token stream (the send helper returns once the stop-generation button is gone). The
+      // image render and artifact settle that follow are a separate, much longer measurement, so
+      // latency and streaming rate below are taken over the stream window only and the
+      // render/settle tail is recorded separately as renderTimeMs.
       let streamEndMs: number;
       try {
         if (scenario.expectsImage) {
@@ -132,7 +144,7 @@ export function createAiLatencySuite({
           // image-generation budget, not just the render wait - a short send budget would throw
           // before the render budget is ever used. Do not gate on the text container (it only mounts
           // with the image); assert the image as the success signal.
-          await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.IMAGE_GENERATION);
+          await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.IMAGE_GENERATION, timer);
           streamEndMs = Date.now();
           imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
         } else {
@@ -142,19 +154,36 @@ export function createAiLatencySuite({
           const sendBudget = scenario.generatesArtifact
             ? TIMEOUTS.IMAGE_GENERATION
             : textStreamBudgetMs(thresholdSec, scenario);
-          await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget);
+          await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget, timer);
           streamEndMs = Date.now();
           // Streaming completing does not mean the artifact resolved; wait out the placeholders so
           // the scrape below reads the finished reply, not "Generating artifact..."/"Loading artifact...".
           if (scenario.generatesArtifact) {
             await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION);
+          } else if (await chatPage.hasArtifact()) {
+            // A chat prompt that came back as an artifact: settle it so the scrape reads the final
+            // reply, and flag it so the result is excluded from the gate (see completedResult).
+            // The settle is bounded by the test's remaining time so a stuck placeholder cannot
+            // outlast the test and discard the stream window already measured.
+            artifactRendered = true;
+            await chatPage
+              .waitForArtifactSettled(
+                Math.max(
+                  1_000,
+                  Math.min(TIMEOUTS.IMAGE_GENERATION, test.info().timeout - (Date.now() - testStartMs) - 15_000)
+                )
+              )
+              .catch(() => undefined);
           }
         }
       } catch (err: unknown) {
         // Recording is narrowed to a blown streaming budget; see isLatencyObservation for why a
         // send-ready or mount flake must not be stamped as one.
         if (isLatencyObservation(err)) {
-          const result = incompleteResult(scenario, Date.now() - startMs);
+          const result = incompleteResult(scenario, timer.elapsedSinceSendMs(), {
+            attempt,
+            firstTokenMs: timer.firstTokenMs(),
+          });
           collectedResults.push(result);
           persistResults(resolvedModel, [result]);
         }
@@ -165,7 +194,7 @@ export function createAiLatencySuite({
       // Measure latency and streaming rate over the token-stream window only; keep the image
       // render / artifact settle as a separate number so a 6-minute artifact mount neither reads
       // as a slow stream nor distorts chars/sec (a short article over a long settle).
-      const responseTimeMs = streamEndMs - startMs;
+      const responseTimeMs = timer.elapsedSinceSendMs(streamEndMs);
       const renderTimeMs = settleEndMs - streamEndMs;
 
       const allTexts = await chatPage.aiResponseRoot.allInnerTexts();
@@ -205,7 +234,20 @@ export function createAiLatencySuite({
           .toBeTruthy();
       }
 
-      const result = completedResult(scenario, { response: responseText, responseTimeMs, renderTimeMs });
+      const result = completedResult(scenario, {
+        response: responseText,
+        responseTimeMs,
+        renderTimeMs,
+        artifactRendered,
+        attempt,
+        firstTokenMs: timer.firstTokenMs(),
+      });
+      if (result.unexpectedArtifact) {
+        test.info().annotations.push({
+          type: 'unexpected-artifact',
+          description: `${scenario.id} answered with an artifact instead of chat; excluded from the latency gate`,
+        });
+      }
       collectedResults.push(result);
       // Persist immediately so this prompt's numbers survive a later prompt's timeout/worker recycle.
       persistResults(resolvedModel, [result]);
@@ -228,7 +270,7 @@ export function createAiLatencySuite({
       persistResults(resolvedModel, collectedResults);
     });
 
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < selectedPrompts.length; i++) {
       prompt(i);
     }
 
@@ -246,9 +288,18 @@ export function createAiLatencySuite({
       } catch {
         // No file: no prompt recorded a timing, so there is nothing to judge.
       }
+      const switched = unexpectedArtifactIds(results);
+      if (switched.length > 0) {
+        test.info().annotations.push({
+          type: 'unexpected-artifact',
+          description: `Excluded from the gate, answered with an artifact instead of chat: ${switched.join(', ')}`,
+        });
+      }
       test.skip(
         results.every(r => r.measuresDeliverable),
-        'No text-streaming latency was recorded for this cell (No Data).'
+        switched.length > 0
+          ? `No chat-mode latency was recorded for this cell (No Data); artifact-mode replies: ${switched.join(', ')}.`
+          : 'No text-streaming latency was recorded for this cell (No Data).'
       );
 
       const breach = latencyBreach(results, thresholdSec);

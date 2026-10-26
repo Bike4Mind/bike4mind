@@ -1,3 +1,4 @@
+import type { WorktreeRemoval } from './worktreeRemoval';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -7,6 +8,7 @@ import type {
   CookieImportResult,
   CookieImportState,
 } from './browserCookies';
+import type { ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   AddAttachmentsResult,
@@ -19,6 +21,9 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatImageAction,
+  ChatImageActionResult,
+  ChatImageRef,
   ChatModelCatalog,
   ChatMoveToBackgroundResult,
   ChatQueueEvent,
@@ -46,6 +51,7 @@ import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { SidebarSectionsState } from './sidebarSections';
+import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
 import type {
@@ -79,6 +85,7 @@ import type {
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LocalHistoryResult, LocalHistoryState } from './history';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -112,6 +119,11 @@ export const IPC_CHANNELS = {
   chatListModels: 'chat:list-models',
   chatListSuggestionModels: 'chat:list-suggestion-models',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSetSessionHistory: 'chat:set-session-history',
+  chatSearchHistory: 'chat:search-history',
+  chatClearHistory: 'chat:clear-history',
+  chatHistoryState: 'chat:history-state',
+  chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
@@ -128,11 +140,13 @@ export const IPC_CHANNELS = {
   chatListRecentFolders: 'chat:list-recent-folders',
   chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
+  chatWorkspaceChanges: 'chat:workspace-changes',
   chatAddContextDirectory: 'chat:add-context-directory',
   chatRemoveContextDirectory: 'chat:remove-context-directory',
   chatGetSession: 'chat:get-session',
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
+  chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
@@ -155,6 +169,8 @@ export const IPC_CHANNELS = {
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatImageAction: 'chat:image-action',
+  chatAttachImage: 'chat:attach-image',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -226,9 +242,26 @@ export const IPC_CHANNELS = {
   permissionsGetState: 'permissions:get-state',
   permissionsSetRules: 'permissions:set-rules',
   permissionsSetSharing: 'permissions:set-sharing',
+  /**
+   * Import from Claude, Settings only. No channel takes a path: folders and export files are
+   * picked through native dialogs in main, and the importer only ever reads them.
+   */
+  claudeImportGetState: 'claude:get-import-state',
+  claudeImportSetCodeSettings: 'claude:set-code-import',
+  claudeImportPickCodeFolder: 'claude:pick-code-folder',
+  claudeImportSyncCode: 'claude:sync-code',
+  claudeImportChatExport: 'claude:import-chat-export',
+  claudeImportSetWatchFolder: 'claude:set-watch-folder',
+  claudeImportRemove: 'claude:remove-imported',
+  /** main -> renderer push of the import state. */
+  claudeImportStateChanged: 'claude:import-state-changed',
+  /** main -> renderer push, batched: imported sessions were added or changed, so re-list. */
+  claudeImportedSessionsChanged: 'claude:imported-sessions-changed',
   updateGetState: 'update:get-state',
   updateCheck: 'update:check',
   updateDownload: 'update:download',
+  /** Hide the floating update notice for one version; main persists it. */
+  updateDismiss: 'update:dismiss',
   /** The one channel that can end this process. Main gates it on work in flight. */
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
@@ -469,6 +502,8 @@ export interface DesktopApi {
     /** Resolves when the check finishes; the OUTCOME arrives on onStateChanged. */
     check(): Promise<void>;
     download(): Promise<void>;
+    /** Hide the "update available" notice for this version only. Arrives back on onStateChanged. */
+    dismiss(version: string): Promise<void>;
     /**
      * Restart into the new version. Without `force` this reports what is still running and
      * does nothing, so the renderer can put that to the user before anything is lost.
@@ -534,6 +569,11 @@ export interface DesktopApi {
     listSuggestionModels(): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null>;
+    searchHistory(query: string): Promise<LocalHistoryResult[]>;
+    clearHistory(): Promise<LocalHistoryState>;
+    historyState(): Promise<LocalHistoryState>;
+    onHistoryChanged(listener: () => void): () => void;
     /** How hard this conversation's model should think. Null when the session is gone. */
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
@@ -567,6 +607,11 @@ export interface DesktopApi {
     /** Read a directory's branches, for the branch chip. */
     inspectProject(directory: string): Promise<ProjectInspection>;
     /**
+     * What this Code session's working directory has changed against its base branch, for the
+     * changes bar above the composer. Null when there is nothing to show or git cannot answer.
+     */
+    workspaceChanges(sessionId: string): Promise<WorkspaceChanges | null>;
+    /**
      * Share one more folder with this conversation: `path` when given (`/add-dir <path>`), the
      * folder picker otherwise. Allowed at any point in the session, a running turn included.
      */
@@ -575,7 +620,8 @@ export interface DesktopApi {
     /** Null when the session is gone (deleted in another window, or a stale id). */
     getSession(sessionId: string): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
-    deleteSession(sessionId: string): Promise<void>;
+    deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
+    inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
     /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
@@ -647,6 +693,10 @@ export interface DesktopApi {
     readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
     /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
     discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
+    /** One image context menu item, run in main against a ref main resolves itself. Never rejects. */
+    imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
+    /** Add a thread image to this session's draft, through the same intake as a paste. */
+    attachImage(sessionId: string, image: ChatImageRef): Promise<AddAttachmentsResult>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.
@@ -867,6 +917,24 @@ export interface DesktopApi {
     /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
     setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
     setSharing(share: boolean): Promise<PermissionsState>;
+  };
+  claudeImport: {
+    getState(): Promise<ClaudeImportState>;
+    setCodeSettings(patch: {
+      enabled?: boolean;
+      includeSubagents?: boolean;
+      projects?: 'all' | string[];
+    }): Promise<ClaudeImportState>;
+    /** Opens a folder picker in main; `reset` goes back to the default folder instead. */
+    pickCodeFolder(reset: boolean): Promise<ClaudeImportState>;
+    syncCode(): Promise<ClaudeImportState>;
+    /** Opens a file picker in main for an export .zip or conversations.json. */
+    importChatExport(): Promise<ClaudeImportResult>;
+    /** Opens a folder picker in main; `clear` stops watching instead. */
+    setWatchFolder(clear: boolean): Promise<ClaudeImportState>;
+    remove(kind: 'claude-code' | 'claude-chat'): Promise<ClaudeRemoveResult>;
+    onStateChanged(listener: (state: ClaudeImportState) => void): () => void;
+    onSessionsChanged(listener: () => void): () => void;
   };
   pullRequests: {
     /**

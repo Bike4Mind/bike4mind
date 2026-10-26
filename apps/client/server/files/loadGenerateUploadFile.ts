@@ -2,7 +2,7 @@ import { fabFileRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
 import { buildFabFileAdapter } from '@server/files/loadAccessibleFabFile';
-import { GENERATE_UPLOAD_MARKER } from '@server/files/fileScopes';
+import { isOwnedGenerateUpload } from '@bike4mind/server-utils/files/generateUploadMarker';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import type { Request } from 'express';
 
@@ -15,8 +15,7 @@ export async function loadGenerateUploadFile(req: Request, id: string) {
   if (!isValidObjectId(id)) throw new NotFoundError('Fabfile not found');
 
   const file = await fabFileRepository.findById(id);
-  const marker = (file?.sourceMetadata as { uploadedVia?: unknown } | undefined)?.uploadedVia;
-  if (!file || file.deletedAt || String(file.userId) !== String(req.user.id) || marker !== GENERATE_UPLOAD_MARKER) {
+  if (!isOwnedGenerateUpload(file, req.user.id)) {
     throw new NotFoundError('Fabfile not found');
   }
 

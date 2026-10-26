@@ -42,7 +42,7 @@ env:
 jobs:
   create-release:
     name: Create Production Release
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     env:
       NODE_OPTIONS: --max-old-space-size=14336
     permissions:
@@ -181,6 +181,7 @@ jobs:
           role-session-name: GitHubActions-${{ github.run_id }}-release-notes
 
       - name: Enqueue release notes
+        id: release-notes-enqueue
         if: success() && vars.RELEASE_NOTES_ENABLED == 'true' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != '' && steps.release-notes-creds.outcome == 'success'
         continue-on-error: true
         env:
@@ -190,6 +191,46 @@ jobs:
           RELEASE_TAG: ${{ steps.create.outputs.release_tag }}
         run: |
           pnpm --filter @bike4mind/scripts release-notes:enqueue --tag "$RELEASE_TAG"
+
+      # Best-effort like the release notes: a failure here must never fail the release.
+      # The video job reads the note this run enqueued, so it only runs after a successful enqueue.
+      - name: Resolve release video repo
+        id: video-repo
+        if: vars.RELEASE_VIDEO_REPO != '' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != '' && steps.release-notes-enqueue.outcome == 'success'
+        continue-on-error: true
+        env:
+          VIDEO_REPO: ${{ vars.RELEASE_VIDEO_REPO }}
+        run: |
+          echo "owner=${VIDEO_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${VIDEO_REPO#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release video App token
+        id: video-token
+        if: steps.video-repo.outcome == 'success'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          # The release App, installed on the video repo; the token is narrowed to that repo and to contents.
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          owner: ${{ steps.video-repo.outputs.owner }}
+          repositories: ${{ steps.video-repo.outputs.name }}
+
+      - name: Request release video
+        if: steps.video-repo.outcome == 'success' && steps.video-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.video-token.outputs.token }}
+          VIDEO_REPO: ${{ vars.RELEASE_VIDEO_REPO }}
+          RELEASE_TAG: ${{ steps.create.outputs.release_tag }}
+        run: |
+          if ! gh api "repos/$VIDEO_REPO/dispatches" \
+            -f event_type=release-video \
+            -f "client_payload[tag]=$RELEASE_TAG"; then
+            echo "::warning::Release video request failed; the release itself is unaffected."
+            exit 1
+          fi
 
       - name: Summary
         if: success()

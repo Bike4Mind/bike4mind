@@ -1,0 +1,2352 @@
+{
+  "model": "gpt-5.4-mini",
+  "samples": 1,
+  "generatedAt": "2026-10-22T10:30:19.333Z",
+  "arms": {
+    "lake": {
+      "pass": {
+        "passed": 28,
+        "total": 33,
+        "rate": 0.8484848484848485
+      },
+      "retrieval": {
+        "passed": 31,
+        "total": 33,
+        "rate": 0.9393939393939394
+      },
+      "byKind": {
+        "fact": {
+          "passed": 14,
+          "total": 15,
+          "rate": 0.9333333333333333
+        },
+        "stale-same-name": {
+          "passed": 6,
+          "total": 6,
+          "rate": 1
+        },
+        "stale-different-name": {
+          "passed": 5,
+          "total": 6,
+          "rate": 0.8333333333333334
+        },
+        "absent": {
+          "passed": 3,
+          "total": 6,
+          "rate": 0.5
+        }
+      }
+    },
+    "multi-lake": {
+      "pass": {
+        "passed": 27,
+        "total": 33,
+        "rate": 0.8181818181818182
+      },
+      "retrieval": {
+        "passed": 31,
+        "total": 33,
+        "rate": 0.9393939393939394
+      },
+      "byKind": {
+        "fact": {
+          "passed": 14,
+          "total": 15,
+          "rate": 0.9333333333333333
+        },
+        "stale-same-name": {
+          "passed": 5,
+          "total": 6,
+          "rate": 0.8333333333333334
+        },
+        "stale-different-name": {
+          "passed": 5,
+          "total": 6,
+          "rate": 0.8333333333333334
+        },
+        "absent": {
+          "passed": 3,
+          "total": 6,
+          "rate": 0.5
+        }
+      }
+    },
+    "plain": {
+      "pass": {
+        "passed": 23,
+        "total": 27,
+        "rate": 0.8518518518518519
+      },
+      "retrieval": {
+        "passed": 0,
+        "total": 33,
+        "rate": 0
+      },
+      "byKind": {
+        "fact": {
+          "passed": 15,
+          "total": 15,
+          "rate": 1
+        },
+        "stale-same-name": {
+          "passed": 5,
+          "total": 6,
+          "rate": 0.8333333333333334
+        },
+        "stale-different-name": {
+          "passed": 3,
+          "total": 6,
+          "rate": 0.5
+        },
+        "absent": null
+      }
+    }
+  },
+  "multiLakeDrop": 0.030303030303030276,
+  "turns": [
+    {
+      "arm": "lake",
+      "rowId": "moons-fact-galilean-discovery",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "moons-fact-largest-moon",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "moons-fact-titan-discoverer",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "moons-fact-cassini-end",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "moons-fact-juno-orbit",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "moons-same-name-saturn-count",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "moons-same-name-jupiter-count",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "moons-different-name-uranus-count",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "moons-different-name-neptune-count",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "moons-absent-pluto",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "absent",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "moons-absent-enceladus",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "absent",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-fact-base-unit-count",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-fact-caesium-frequency",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-fact-metre-constant",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-fact-treaty-year",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "did not cite si-base-units.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-fact-leap-second-end",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-same-name-kilogram-basis",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-same-name-kilogram-effective",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-different-name-tai-utc",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-different-name-leap-second-total",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-absent-magnetic-flux",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "si-absent-nist-director",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-fact-first-census",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-fact-census-day",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-fact-house-size",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-fact-department",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-fact-constitutional-basis",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-same-name-texas-seats",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-same-name-california-seats",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-different-name-population",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "asserted stale value: 308,?745,?538|308(?:\\.\\d+)? million in \"resident population figures: **308,745,538** in the 2010 Census highlights [1] and **331,449,281** in the 2020 Census highlights [2]\"",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": false,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-different-name-center",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-absent-puerto-rico",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "absent",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "lake",
+      "rowId": "census-absent-response-rate",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-fact-galilean-discovery",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-fact-largest-moon",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-fact-titan-discoverer",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-fact-cassini-end",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-fact-juno-orbit",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-same-name-saturn-count",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-same-name-jupiter-count",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "did not cite giant-planet-moons.md",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-different-name-uranus-count",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-different-name-neptune-count",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-absent-pluto",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "absent",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "moons-absent-enceladus",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "absent",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-fact-base-unit-count",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-fact-caesium-frequency",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-fact-metre-constant",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-fact-treaty-year",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "did not cite si-base-units.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-fact-leap-second-end",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-same-name-kilogram-basis",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-same-name-kilogram-effective",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-different-name-tai-utc",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-different-name-leap-second-total",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-absent-magnetic-flux",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "si-absent-nist-director",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-fact-first-census",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-fact-census-day",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-fact-house-size",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-fact-department",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-fact-constitutional-basis",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-same-name-texas-seats",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-same-name-california-seats",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-different-name-population",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "asserted stale value: 308,?745,?538|308(?:\\.\\d+)? million in \"The retrieved content gives two census figures for the resident population of the United States: **308,745,538** in the 2010 Census highlights[1] and **331,449,281** in the 2020 Census highlights[2]\"",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": false,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-different-name-center",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-absent-puerto-rico",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "absent",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "multi-lake",
+      "rowId": "census-absent-response-rate",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": true,
+        "via": "citables",
+        "summary": {
+          "attempted": true,
+          "outcome": "ok"
+        }
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-fact-galilean-discovery",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "answered from the current source",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "matched"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-fact-largest-moon",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite galilean-moons.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-fact-titan-discoverer",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite titan-and-cassini.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-fact-cassini-end",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite titan-and-cassini.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-fact-juno-orbit",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite galilean-moons.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-same-name-saturn-count",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "expected answer missing; did not cite giant-planet-moons.md",
+        "kind": "stale-same-name",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-same-name-jupiter-count",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite giant-planet-moons.md",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-different-name-uranus-count",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "expected answer missing; asserted stale value: 27 in \"Uranus has **27 known moons**\"; did not cite ice-giants-factsheet.md",
+        "kind": "stale-different-name",
+        "answer": false,
+        "staleRejected": false,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-different-name-neptune-count",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "expected answer missing; did not cite ice-giants-factsheet.md",
+        "kind": "stale-different-name",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-absent-pluto",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "moons-absent-enceladus",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-fact-base-unit-count",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite si-base-units.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-fact-caesium-frequency",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite si-base-units.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-fact-metre-constant",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite si-base-units.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-fact-treaty-year",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite si-base-units.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-fact-leap-second-end",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite utc-and-leap-seconds.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-same-name-kilogram-basis",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite kilogram-definition.md",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-same-name-kilogram-effective",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite kilogram-definition.md",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-different-name-tai-utc",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite utc-and-leap-seconds.md",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-different-name-leap-second-total",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite utc-and-leap-seconds.md",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-absent-magnetic-flux",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "si-absent-nist-director",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-fact-first-census",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite census-basics.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-fact-census-day",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite census-basics.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-fact-house-size",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite census-basics.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-fact-department",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite census-basics.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-fact-constitutional-basis",
+      "kind": "fact",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite census-basics.md",
+        "kind": "fact",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-same-name-texas-seats",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite apportionment.md",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-same-name-california-seats",
+      "kind": "stale-same-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite apportionment.md",
+        "kind": "stale-same-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-different-name-population",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "expected answer missing; did not cite census-2020-highlights.md",
+        "kind": "stale-different-name",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-different-name-center",
+      "kind": "stale-different-name",
+      "sample": 0,
+      "grade": {
+        "passed": true,
+        "reason": "did not cite census-2020-highlights.md",
+        "kind": "stale-different-name",
+        "answer": true,
+        "staleRejected": true,
+        "citation": {
+          "status": "missing"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-absent-puerto-rico",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    },
+    {
+      "arm": "plain",
+      "rowId": "census-absent-response-rate",
+      "kind": "absent",
+      "sample": 0,
+      "grade": {
+        "passed": false,
+        "reason": "answered without saying the lake lacks it",
+        "kind": "absent",
+        "answer": false,
+        "staleRejected": true,
+        "citation": {
+          "status": "not-applicable"
+        }
+      },
+      "retrieval": {
+        "ran": false,
+        "via": "none"
+      }
+    }
+  ]
+}

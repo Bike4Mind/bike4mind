@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { SQSService } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { SlackClient } from '../SlackClient';
@@ -260,7 +261,10 @@ export class WorkflowStepHandler {
    */
   private async findB4MUser(slackUserId: string): Promise<IUserDocument | null> {
     const { User } = getSlackDb();
-    return (User as any).findOne({ 'slackSettings.slackUserId': slackUserId });
+    return (User as { findOne(filter: Record<string, unknown>): Promise<IUserDocument | null> }).findOne({
+      'slackSettings.slackUserId': slackUserId,
+      ...VERIFIED_SLACK_IDENTITY_FILTER,
+    });
   }
 
   /**

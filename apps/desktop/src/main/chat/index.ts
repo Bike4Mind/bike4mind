@@ -6,6 +6,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  ClipboardItem,
   dialog,
   ipcMain,
   nativeImage,
@@ -57,11 +58,12 @@ import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { SidebarSectionStore } from './SidebarSectionStore';
+import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
-import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
+import { IMAGE_BYTE_CAP, IMAGE_MAX_EDGE, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
@@ -81,7 +83,11 @@ import { ModelCatalog } from './ModelCatalog';
 import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
-import { sessionScopeFor } from './sessionScope';
+import { LocalHistory } from './LocalHistory';
+import { registerHistoryIpc } from './historyIpc';
+import { captureHistoryPage } from './captureHistoryPage';
+import { OllamaLocal } from './OllamaLocal';
+import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
   currentBranch,
@@ -90,8 +96,10 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './project/git';
+import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
+import { ApprovalLog } from './permissions/ApprovalLog';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
@@ -100,14 +108,19 @@ import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { RecentFolderStore } from './project/RecentFolderStore';
+import { SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import type { PreparedImage } from './tools/types';
+import { desktopScreenCapturer } from './screen/desktopScreen';
 import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows } from '../windows';
+import { registerClaudeImport } from '../claudeImport';
+import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
@@ -166,6 +179,35 @@ function shrinkImage(bytes: Buffer, mediaType: string, maxEdge: number): { bytes
 }
 
 /**
+ * Fit an image a tool shows the model, as shrinkImage does an attachment. Unlike that one it
+ * reports the sizes for the tool's result, and passes through what already fits so a GIF the
+ * decoder reads keeps its frames.
+ */
+function prepareToolImage(bytes: Buffer, mediaType: string, maxBytes: number): PreparedImage | null {
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return null;
+
+  const { width: sourceWidth, height: sourceHeight } = image.getSize();
+  const oversized = Math.max(sourceWidth, sourceHeight) > IMAGE_MAX_EDGE;
+  if (!oversized && bytes.length <= maxBytes) {
+    return { bytes, mediaType, width: sourceWidth, height: sourceHeight, sourceWidth, sourceHeight };
+  }
+
+  const edge = sourceWidth >= sourceHeight ? { width: IMAGE_MAX_EDGE } : { height: IMAGE_MAX_EDGE };
+  const resized = oversized ? image.resize({ ...edge, quality: 'best' }) : image;
+  if (resized.isEmpty()) return null;
+  const sizes = { ...resized.getSize(), sourceWidth, sourceHeight };
+
+  const asPng = resized.toPNG();
+  if (asPng.length > 0 && asPng.length <= maxBytes) return { bytes: asPng, mediaType: 'image/png', ...sizes };
+  for (const quality of [SHRUNK_JPEG_QUALITY, 60]) {
+    const asJpeg = resized.toJPEG(quality);
+    if (asJpeg.length > 0 && asJpeg.length <= maxBytes) return { bytes: asJpeg, mediaType: 'image/jpeg', ...sizes };
+  }
+  return null;
+}
+
+/**
  * Build the chat service and expose it over IPC.
  *
  * Every channel here is main-side work on purpose: sending a message needs the access token,
@@ -203,6 +245,10 @@ export interface RegisteredChat {
   browser: BrowserManager;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
+  /** Import from Claude; started once the window is up so it never delays launch. */
+  claudeImport: ClaudeImportService;
+  /** Spare checkouts, removed on the quit pass that can wait for git. */
+  spareWorktrees: SpareWorktrees;
 }
 
 /**
@@ -295,7 +341,9 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
 
 export function registerChat(
   auth: AuthService,
-  hooks: Pick<ChatServiceDeps, 'sessionClosed'> & { observeStream?(event: ChatStreamEvent): void } = {}
+  hooks: Pick<ChatServiceDeps, 'sessionClosed' | 'releaseSessionTerminals'> & {
+    observeStream?(event: ChatStreamEvent): void;
+  } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
@@ -323,7 +371,7 @@ export function registerChat(
     join(userData, 'sessions'),
     PREFERRED_MODEL,
     randomUUID(),
-    () => sessionScopeFor(auth.getState()),
+    () => sessionScopeForChat(auth.getState()),
     approvalModes,
     REASONING_EFFORT
   );
@@ -331,10 +379,11 @@ export function registerChat(
   // App-wide like approval-mode.json; see SidebarSectionStore.
   const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
   const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
+  const spareWorktrees = new SpareWorktrees();
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
   const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'));
-  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData));
+  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData), logger);
   // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
   // are folders no allow rule may cover, since a call writing there would grant itself more.
   const home = app.getPath('home');
@@ -368,18 +417,42 @@ export function registerChat(
     writeClipboard: text => clipboard.writeText(text),
     logger,
   });
-  const models = new ModelCatalog({
-    logger,
-    getApiClient: () => auth.getApiClient(),
-    getEnvironmentUrl: () => auth.getState().environment.url,
-  });
-
+  const local = new OllamaLocal();
+  const models = new ModelCatalog(
+    {
+      logger,
+      getApiClient: () => auth.getApiClient(),
+      getEnvironmentUrl: () => auth.getState().environment.url,
+    },
+    local
+  );
   const send = (channel: string, payload: unknown) => {
     logDownstream(channel, payload);
     for (const window of appWindows()) {
       window.webContents.send(channel, payload);
     }
   };
+
+  // History is an opt-in, rebuildable index: an unopenable file must not take chat down with it.
+  let history: LocalHistory | undefined;
+  try {
+    history = new LocalHistory(
+      join(userData, 'local-history.sqlite'),
+      () => {
+        const scope = sessionScopeForChat(auth.getState());
+        return scope ? sessionScopeKey(scope) : null;
+      },
+      () => {
+        try {
+          send(IPC_CHANNELS.chatHistoryChanged, undefined);
+        } catch (error) {
+          logger.warn(`CHAT: could not notify local history change: ${String(error)}`);
+        }
+      }
+    );
+  } catch (err) {
+    logger.warn(`CHAT: local history is unavailable: ${err instanceof Error ? err.message : err}`);
+  }
 
   // Built before the service so the service's tool results can bind a PR. It reaches the
   // service only through `chat`, which is first called long after both exist.
@@ -458,7 +531,16 @@ export function registerChat(
 
   const browser = new BrowserManager(
     (sessionId, state) => send(IPC_CHANNELS.browserPageState, { sessionId, ...state }),
-    state => send(IPC_CHANNELS.browserCookiesChanged, state)
+    state => send(IPC_CHANNELS.browserCookiesChanged, state),
+    (sessionId, snapshot) =>
+      captureHistoryPage(sessionId, snapshot.model, {
+        history,
+        store,
+        scopeKey: () => {
+          const scope = sessionScopeForChat(auth.getState());
+          return scope ? sessionScopeKey(scope) : null;
+        },
+      })
   );
 
   const service = new ChatService({
@@ -472,15 +554,22 @@ export function registerChat(
     modelMemory: modelPreference,
     approvals,
     permissions,
+    // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
+    approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
+    spareWorktrees,
     media,
     videoJobs,
     activity,
     sidebarSections,
     mcp,
     browser,
+    screen: desktopScreenCapturer(app.getName()),
+    prepareImage: prepareToolImage,
+    history,
+    local,
     artifacts,
     queue,
     skills,
@@ -499,6 +588,7 @@ export function registerChat(
     },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
     sessionClosed: hooks.sessionClosed,
+    releaseSessionTerminals: hooks.releaseSessionTerminals,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
@@ -552,6 +642,7 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );
+  registerHistoryIpc(ipcMain, service, history);
   // Validated here rather than trusted, like the approval mode below: an unrecognised value
   // must not reach the store, where it would be sent verbatim on the next turn.
   ipcMain.handle(IPC_CHANNELS.chatSetSessionReasoningEffort, (_event, sessionId: string, effort: unknown) => {
@@ -570,11 +661,14 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.permissionsGetState, () => permissions.state());
   // Shapes checked here: this is the only door a rule comes in by besides the approval card.
-  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, (_event, scope: unknown, lists: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, async (_event, scope: unknown, lists: unknown) => {
     const parsedScope = permissionScope(scope);
     const parsedLists = permissionLists(lists);
     if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
-    return permissions.setRules(parsedScope, parsedLists);
+    const result = await permissions.setRules(parsedScope, parsedLists);
+    // An allow typed here answers any card it now covers, in every session.
+    if (result.ok) void approvals.settleCovered();
+    return result;
   });
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)
@@ -605,7 +699,10 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
   ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => recentFolders.list());
   ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, async (_event, directory: unknown) => {
-    if (typeof directory === 'string') await recentFolders.remove(directory);
+    if (typeof directory === 'string') {
+      await recentFolders.remove(directory);
+      void spareWorktrees.forget(directory);
+    }
     return recentFolders.list();
   });
 
@@ -660,11 +757,31 @@ export function registerChat(
     service.removeContextDirectory(sessionId, directory)
   );
   ipcMain.handle(IPC_CHANNELS.chatGetSession, (_event, sessionId: string) => service.getSession(sessionId));
+  // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
+  // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
+  // and a repository git cannot read already says so on the branch chip beside it.
+  ipcMain.handle(IPC_CHANNELS.chatWorkspaceChanges, async (_event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') return null;
+    const session = await store.get(sessionId);
+    try {
+      return await readWorkspaceChanges(session?.project);
+    } catch (err) {
+      logger.warn(`CHAT: could not read workspace changes for ${sessionId}: ${String(err)}`);
+      return null;
+    }
+  });
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     service.renameSession(sessionId, title)
   );
-  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: string) => {
-    await service.deleteSession(sessionId);
+  ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
+    return service.inspectSessionWorktreeRemoval(sessionId);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: unknown, removeWorktree: unknown) => {
+    if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
+      throw new Error('Invalid delete request');
+    }
+    await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
   });
   registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
@@ -739,6 +856,30 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatDiscardAttachment, (_event, sessionId: string, attachmentId: string) =>
     attachments.discard(sessionId, attachmentId)
   );
+
+  registerImageMenuIpc(ipcMain, {
+    media,
+    attachments,
+    readFile: path => readFile(path),
+    // Decoded from the bytes, not the path: attachment files carry no extension to decode by.
+    // Re-encoded as PNG, the one image type every platform clipboard takes.
+    copyImage: async bytes => {
+      const image = nativeImage.createFromBuffer(bytes);
+      if (image.isEmpty()) return false;
+      const png = image.toPNG();
+      await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
+      return true;
+    },
+    copyText: text => clipboard.writeText(text),
+    pickSavePath: async (sender, options) => {
+      const window = BrowserWindow.fromWebContents(sender);
+      const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+      return picked.canceled || !picked.filePath ? null : picked.filePath;
+    },
+    copyFile: (from, to) => copyFile(from, to),
+    reveal: path => shell.showItemInFolder(path),
+    downloadsDirectory: () => app.getPath('downloads'),
+  });
 
   ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());
   ipcMain.handle(IPC_CHANNELS.chatReadArtifact, (_event, artifactId: string) => artifactLibrary.read(artifactId));
@@ -894,7 +1035,27 @@ export function registerChat(
     return { ok: true, expiresAt: link.expiresAt };
   });
 
-  return { service, background, mcp, browser, pullRequests };
+  const claudeImport = registerClaudeImport(ipcMain, {
+    home,
+    userData,
+    store,
+    attachments,
+    scopeKey: () => {
+      const scope = sessionScopeFor(auth.getState());
+      return scope ? sessionScopeKey(scope) : null;
+    },
+    pickModel: () => service.modelForNewSession().catch(() => undefined),
+    listSessions: () => store.list(),
+    deleteImported: async (sessionId, scopeKey) => {
+      const outcome = await service.deleteImportedSession(sessionId, scopeKey);
+      if (outcome === 'removed') await pullRequests.forget(sessionId);
+      return outcome;
+    },
+    send,
+    logger,
+  });
+
+  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees };
 }
 
 export { ChatService } from './ChatService';

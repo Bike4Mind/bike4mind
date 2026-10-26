@@ -2,6 +2,7 @@ import {
   API_KEY_USER_CAP_ERROR_CODE,
   ApiKeyBillingOwnerType,
   ApiKeyScope,
+  ApiKeyScopeValue,
   ApiKeyStatus,
   CONFINED_API_KEY_SCOPES,
   CreditHolderType,
@@ -11,8 +12,11 @@ import {
   IEmbedBranding,
   isAgentOwnedByEmbedKey,
   IUserApiKeyDocument,
+  isBuiltInApiKeyScope,
+  isWellFormedApiKeyScope,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { encryptAtRest } from '@bike4mind/utils/security';
 import { randomBytes } from 'crypto';
@@ -22,6 +26,7 @@ import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit'
 import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
 import { computeKeyDigest } from './keyDigest';
+import { ApiKeyTrustAssessment, apiKeyTrustRequiredError, untrustedOwnerMayMint } from './trust';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
@@ -36,9 +41,18 @@ export const MAX_ACTIVE_EXCHANGE_KEYS_PER_USER = 25;
 /** Longest lifetime of a federated-exchange key, measured from mint time. */
 export const MAX_EXCHANGE_KEY_TTL_MS = 15 * 60 * 1000;
 
+const scopeListSchema = (isKnownScope: (value: string) => boolean) =>
+  z
+    .array(
+      z.custom<ApiKeyScopeValue>(value => isWellFormedApiKeyScope(value) && isKnownScope(value), {
+        message: 'Unknown API key scope',
+      })
+    )
+    .min(1);
+
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
-  scopes: z.array(z.enum(ApiKeyScope)).min(1),
+  scopes: scopeListSchema(isBuiltInApiKeyScope),
   expiresAt: z.date().optional(),
   // Embed key (epic #41). `allowedOrigins` reuses the common schema (dedup + cap;
   // each entry must be an already-normalized exact https origin). Host-aware
@@ -114,9 +128,21 @@ interface CreateUserApiKeyAdapters {
    * Undefined for a browser/JWT caller. Same no-escalation contract as rotate
    * (see rotate.ts): a key may only mint scopes it literally holds.
    */
-  callerScopes?: ApiKeyScope[];
+  callerScopes?: ApiKeyScopeValue[];
+  /**
+   * Whether a scope value is offered by this deployment: the app's merged built-in and contributed
+   * catalog. Absent -> built-in scopes only, so a caller that never loads contributions cannot mint one.
+   */
+  isKnownScope?: (value: string) => boolean;
   /** Expiry of the calling API key, when it has one. A key may not mint a child that outlives it. */
   callerExpiresAt?: Date;
+  /**
+   * The owner's standing with the API key trust gate (trust.ts). Ignored for the system user,
+   * org-billed keys and the exchange pool; every other mint without one fails closed, so a
+   * creation path that forgot it cannot silently mint for an untrusted account. Optional only so
+   * system-user callers that predate the gate keep compiling.
+   */
+  trust?: ApiKeyTrustAssessment;
 }
 
 export interface CreateUserApiKeyResult {
@@ -126,7 +152,7 @@ export interface CreateUserApiKeyResult {
   key: string; // Only returned once during creation
   /** Signs this key's generation completion callbacks. Only returned once, like `key`. */
   callbackSigningSecret: string;
-  scopes: ApiKeyScope[];
+  scopes: ApiKeyScopeValue[];
   status: ApiKeyStatus;
   expiresAt?: Date;
   rateLimit: {
@@ -194,7 +220,10 @@ const mintUserApiKey = async (
   adapters: CreateUserApiKeyAdapters
 ): Promise<CreateUserApiKeyResult> => {
   const { db, systemUserId } = adapters;
-  const params = secureParameters(parameters, createUserApiKeySchema);
+  const schema = adapters.isKnownScope
+    ? createUserApiKeySchema.extend({ scopes: scopeListSchema(adapters.isKnownScope) })
+    : createUserApiKeySchema;
+  const params = secureParameters(parameters, schema);
 
   // No escalation by minting: otherwise a leaked narrow key bootstraps a broad one for
   // the same owner.
@@ -222,7 +251,10 @@ const mintUserApiKey = async (
   // but risk. Checked before the embed-specific rules below so a mixed request like
   // ['embed:chat','notebooks:read'] reports this real reason, not a downstream missing
   // agentId. Same constant the runtime gate reads, so mint and runtime state one rule.
-  if (params.scopes.length > 1 && params.scopes.some(scope => CONFINED_API_KEY_SCOPES.includes(scope))) {
+  if (
+    params.scopes.length > 1 &&
+    params.scopes.some(scope => CONFINED_API_KEY_SCOPES.some(confined => confined === scope))
+  ) {
     throw new BadRequestError(
       `A confined scope (${CONFINED_API_KEY_SCOPES.join(', ')}) must be the only scope on a key`
     );
@@ -307,8 +339,18 @@ const mintUserApiKey = async (
   // Skip only for the shared system user - keyed on userId === systemUserId (NOT on
   // scope) to prevent rogue-admin bypass.
   const isSystemUser = systemUserId && userId === systemUserId;
-  const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
-  const cap = isExchangeKey ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER : MAX_ACTIVE_KEYS_PER_USER;
+  const untrusted = isSystemUser || isExchangeKey || billsOrg ? null : untrustedAssessment(adapters.trust);
+  // Refuse up front when there is no allowance at all; createIfUnderCap enforces the count atomically.
+  if (untrusted && !untrustedOwnerMayMint(untrusted, 0)) {
+    throw apiKeyTrustRequiredError(untrusted);
+  }
+  // An untrusted owner's allowance counts personal keys only: org-billed keys are not trust-limited.
+  const pool = isExchangeKey ? 'oauth-exchange' : untrusted ? 'personal' : 'standard';
+  const cap = isExchangeKey
+    ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER
+    : untrusted?.reason === 'not_yet_trusted'
+      ? Math.min(untrusted.maxActiveKeys, MAX_ACTIVE_KEYS_PER_USER)
+      : MAX_ACTIVE_KEYS_PER_USER;
 
   const { key, keyPrefix, keyDigest } = generateApiKey();
   const callbackSigningSecret = generateCallbackSigningSecret();
@@ -351,12 +393,21 @@ const mintUserApiKey = async (
   } else {
     const result = await db.userApiKeys.createIfUnderCap(docToCreate, cap, pool);
     if (result === 'at_cap') {
+      if (untrusted) throw apiKeyTrustRequiredError(untrusted);
       const message = isExchangeKey
         ? `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`
         : `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`;
       throw new BadRequestError(message, { errorCode: API_KEY_USER_CAP_ERROR_CODE });
     }
     apiKeyDocument = result;
+  }
+
+  // Count committed mints from every surface, without inheriting request identity or secrets.
+  // Rotation keeps the same record and is deliberately not a creation event.
+  try {
+    new Logger({ logInJson: true, prettyPrint: false, minLevel: 'info' }).info('user-api-key-created');
+  } catch {
+    // A metric output failure must not turn a successfully minted key into a failed request.
   }
 
   return {
@@ -381,4 +432,10 @@ const mintUserApiKey = async (
     preauthorizedLakeIds: apiKeyDocument.preauthorizedLakeIds,
     createdAt: apiKeyDocument.createdAt,
   };
+};
+
+/** Narrows the caller's assessment to the untrusted case; fails closed when a JS caller omitted it. */
+const untrustedAssessment = (trust: ApiKeyTrustAssessment | undefined) => {
+  if (!trust) throw new Error('createUserApiKey requires a trust assessment');
+  return trust.status === 'untrusted' ? trust : null;
 };

@@ -35,6 +35,7 @@ import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
+import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
@@ -87,11 +88,13 @@ const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callbac
 const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/callback'));
 const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
+const AdminUserProfilePage = lazy(() => import('./routes/admin/users/$userId'));
 const QuestsPage = lazy(() => import('./routes/quests'));
 const SlackInstallPage = lazy(() => import('./routes/integrations/slack/install'));
 const SlackSuccessPage = lazy(() => import('./routes/integrations/slack/success'));
 const SlackErrorPage = lazy(() => import('./routes/integrations/slack/error'));
 const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
+const DesktopDownloadPage = lazy(() => import('./routes/desktop'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
@@ -1172,7 +1175,12 @@ const activateRoute = createRoute({
 export const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin',
-  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  beforeLoad: async ({ location, search }) => {
+    await enforceConsentRedirect(location);
+    // The user view used to be a modal held in `?userId=`; keep those shared links working.
+    const legacyUserLink = legacyUserLinkRedirect(search);
+    if (legacyUserLink) throw redirect(legacyUserLink);
+  },
   component: () => (
     <RestrictedPage requireAdmin={true}>
       {/* These providers are not usually needed in an unprotected page. This prevents unnecessary API fetch */}
@@ -1189,6 +1197,23 @@ export const adminRoute = createRoute({
   validateSearch: parseAdminSearch,
 });
 
+// Admin user profile. Guarded exactly like adminRoute, which redirects its legacy `?userId=` here.
+export const adminUserProfileRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin/users/$userId',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  component: () => (
+    <RestrictedPage requireAdmin={true}>
+      <ProviderBundle>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <AdminUserProfilePage />
+        </Suspense>
+      </ProviderBundle>
+    </RestrictedPage>
+  ),
+  validateSearch: parseUserProfileSearch,
+});
+
 // Email unsubscribe route - public page for managing email preferences
 const emailUnsubscribeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1203,6 +1228,17 @@ const emailUnsubscribeRoute = createRoute({
       token: optionalStringParam(search, 'token'),
     };
   },
+});
+
+// Desktop app download page - no layout, public, so it can be linked from anywhere.
+const desktopDownloadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/desktop',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <DesktopDownloadPage />
+    </Suspense>
+  ),
 });
 
 // OAuth Authorization endpoint - no layout, public
@@ -1300,6 +1336,7 @@ const routeTree = rootRoute.addChildren([
   subscribeRoute,
   activateRoute,
   adminRoute,
+  adminUserProfileRoute,
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,
   // Slack integration routes (no layout)
@@ -1307,6 +1344,7 @@ const routeTree = rootRoute.addChildren([
   slackSuccessRoute,
   slackErrorRoute,
   emailUnsubscribeRoute,
+  desktopDownloadRoute,
   // Atlassian integration routes (no layout)
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint

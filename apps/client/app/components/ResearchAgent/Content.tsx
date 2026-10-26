@@ -1,7 +1,13 @@
 import { FC, useState } from 'react';
 import { Box, Breadcrumbs, Button, Grid, IconButton, Stack, Typography } from '@mui/joy';
 import { blackAlpha } from '../../utils/themes/colors';
-import { ArrowBack, Edit, Assignment, CheckCircle, Schedule, CalendarToday, SmartToy } from '@mui/icons-material';
+import ArrowBack from '@mui/icons-material/ArrowBack';
+import Edit from '@mui/icons-material/Edit';
+import Assignment from '@mui/icons-material/Assignment';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import Schedule from '@mui/icons-material/Schedule';
+import CalendarToday from '@mui/icons-material/CalendarToday';
+import SmartToy from '@mui/icons-material/SmartToy';
 import { IResearchAgent, ResearchTaskStatus } from '@bike4mind/common';
 import { ResearchTaskList, ResearchTaskDetail } from '../ResearchTasks';
 import { useListResearchTasksByAgentId } from '@client/app/hooks/data/researchTasks';

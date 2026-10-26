@@ -3,11 +3,13 @@ import {
   ModelBackend,
   type IModelCatalogRow,
   type IModelCatalogRowInput,
+  type ModelInfo,
 } from '@bike4mind/common';
-import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
+import { mergeCatalogWithDrops, resolveCatalogRecords } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials } from './__fixtures__/fakes';
 import { DISCOVERY_CONTRIBUTOR, planCatalogWrites, type CatalogWriteInput } from './catalogWrite';
+import { planLifecycleSignals } from './lifecyclePlan';
 import {
   normalizeBedrockModels,
   type BedrockAvailability,
@@ -46,6 +48,7 @@ const plan = (overrides: Partial<CatalogWriteInput> = {}) =>
     // The default is a healthy run: every fixture is OpenAI-backed, so the
     // aggregator enrich-only rule is off unless a test asks for it.
     coveredBackends: new Set<string>([ModelBackend.OpenAI]),
+    providerSourceNames: new Set(['openai', 'elevenlabs']),
     operatorOwnedModelIds: new Set(),
     credentials: testCredentials(),
     policy: 'priced',
@@ -184,10 +187,28 @@ describe('planCatalogWrites', () => {
           }
         : null;
 
+    /** The adapter literal the seven-id catalog carries for this model, once it is curated. */
+    const curated: ModelInfo = {
+      id: MODEL as ModelInfo['id'],
+      type: 'text',
+      name: 'Claude Opus 9',
+      backend: ModelBackend.Bedrock,
+      contextWindow: 200_000,
+      max_tokens: 8_192,
+      pricing: {},
+      can_stream: true,
+      supportsTools: true,
+      supportsImageVariation: false,
+      rank: 1,
+      description: 'the curated description',
+    };
+
     const bedrockRun = (
       inferenceTypes: string[],
       entitlement?: BedrockAvailability,
-      previous?: IModelCatalogRowInput
+      previous?: IModelCatalogRowInput,
+      // A priced run promotes on price; the unpriced ones pin what a run with no price in force does.
+      priced = true
     ): Partial<CatalogWriteInput> => ({
       contributions: [
         {
@@ -196,7 +217,7 @@ describe('planCatalogWrites', () => {
           records: normalizeBedrockModels({
             summaries: [summary(inferenceTypes)],
             availability: entitlement ? new Map([[MODEL, entitlement]]) : undefined,
-          }).map(record => ({ ...record, pricing: { inputPerMTok: 15, outputPerMTok: 75 } })),
+          }).map(record => (priced ? { ...record, pricing: { inputPerMTok: 15, outputPerMTok: 75 } } : record)),
         },
       ],
       coveredBackends: new Set<string>([ModelBackend.Bedrock]),
@@ -257,6 +278,223 @@ describe('planCatalogWrites', () => {
       expect(disabled.patch).toMatchObject({ autoDisabledReason: 'not entitled in this AWS account' });
 
       expect(plan(bedrockRun(['ON_DEMAND'], unentitled, disabled)).rows).toHaveLength(0);
+    });
+
+    it('serves a curated model disabled by a provider-declared disable', () => {
+      // Pins the availability half only: the Bedrock introduction already carries the curated name
+      // and claims no limits, so the name and window assertions would hold with or without a yield.
+      // The identity/limits side is pinned in mergeCatalog.test.ts.
+      const { rows } = plan(bedrockRun(['ON_DEMAND'], { ...available, authorizationStatus: 'NOT_AUTHORIZED' }));
+
+      const { models } = mergeCatalogWithDrops([curated], rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({
+        name: 'Claude Opus 9',
+        contextWindow: 200_000,
+        disabled: true,
+        disabledReason: 'not entitled in this AWS account',
+      });
+    });
+
+    it('keeps a provider-declared disable when a later run has no availability answer', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false));
+      expect(first.rows[0].patch).toMatchObject({
+        autoDisabled: true,
+        autoDisabledReason: 'not entitled in this AWS account',
+      });
+
+      // A throttled availability call returns null by contract, so this run only re-states the
+      // listing and promotion denies on price. Its verdict must not overwrite the provider's answer,
+      // which leaves nothing for the run to write.
+      const second = plan(bedrockRun(['ON_DEMAND'], undefined, first.rows[0], false));
+      expect(second.rows).toHaveLength(0);
+
+      // Nothing is rewritten, so run 1's row is the one the read path serves.
+      const { models } = mergeCatalogWithDrops([curated], first.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({
+        disabled: true,
+        disabledReason: 'not entitled in this AWS account',
+      });
+    });
+
+    it.each(['priced', 'all'] as const)(
+      'keeps a discovered provider disable when availability is unknown under policy %s',
+      policy => {
+        const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+        const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false));
+
+        const second = plan({
+          ...bedrockRun(['ON_DEMAND'], undefined, first.rows[0]),
+          policy,
+        });
+
+        expect(second.diff.every(entry => !entry.promoted)).toBe(true);
+        const held = asBase([...first.rows, ...second.rows]).get(MODEL)?.record;
+        expect(held).toMatchObject({
+          lifecycle: { status: 'discovered' },
+          autoDisabled: true,
+          autoDisabledReason: 'not entitled in this AWS account',
+        });
+      }
+    );
+
+    it('keeps a provider-credited legacy verdict disable when a newly trusted price arrives', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false)).rows[0];
+      const restamped = {
+        ...first,
+        patch: { ...first.patch, autoDisabledReason: 'discovered, awaiting price' },
+      };
+
+      const second = plan(bedrockRun(['ON_DEMAND'], undefined, restamped));
+
+      expect(second.diff.every(entry => !entry.promoted)).toBe(true);
+      expect(asBase([restamped, ...second.rows]).get(MODEL)?.record).toMatchObject({
+        lifecycle: { status: 'discovered' },
+        autoDisabled: true,
+        autoDisabledReason: 'discovered, awaiting price',
+      });
+    });
+
+    // The contributor is a supply credit, so the writer has to align it with the disable in force:
+    // the read path reads a provider credit as proof the provider is what disabled the model.
+    it('credits a run decision to discovery even when the same run cleared the provider disable', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan({ ...bedrockRun(['ON_DEMAND'], unentitled, undefined, false), policy: 'manual' });
+      expect(first.rows[0].contributors).toContainEqual({ group: 'availability', source: 'bedrock' });
+
+      // The provider now says callable, and a manual policy's promotion refuses for its own reason.
+      const second = plan({ ...bedrockRun(['ON_DEMAND'], available, first.rows[0]), policy: 'manual' });
+
+      expect(second.rows[0].patch).toMatchObject({
+        autoDisabled: true,
+        autoDisabledReason: 'discovered, awaiting admin approval',
+      });
+      expect(second.rows[0].contributors).toContainEqual({ group: 'availability', source: 'discovery' });
+
+      const { models } = mergeCatalogWithDrops([curated], second.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({ name: 'Claude Opus 9', contextWindow: 200_000 });
+      expect(models[0].disabled, "the credit is discovery's, so curation reclaims the disable").toBeFalsy();
+    });
+
+    it('persists a cleared legacy provider credit even when promotion restates the same verdict', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan({ ...bedrockRun(['ON_DEMAND'], unentitled), policy: 'manual' }).rows[0];
+      const legacy = {
+        ...first,
+        patch: { ...first.patch, autoDisabledReason: 'discovered, awaiting admin approval' },
+      };
+
+      const next = plan({ ...bedrockRun(['ON_DEMAND'], available, legacy), policy: 'manual' });
+
+      expect(next.rows).toHaveLength(1);
+      expect(next.rows[0].patch).toEqual(legacy.patch);
+      expect(next.diff[0].changedKeys).toEqual(['contributors']);
+      expect(next.rows[0].contributors).toContainEqual({ group: 'availability', source: 'discovery' });
+      const { models } = mergeCatalogWithDrops([curated], next.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+      expect(models[0].disabled).toBeFalsy();
+
+      const repeated = plan({ ...bedrockRun(['ON_DEMAND'], available, next.rows[0]), policy: 'manual' });
+      expect(repeated.rows).toHaveLength(0);
+    });
+
+    // No availability answer this run (a throttled call returns null by contract), so the disable
+    // in force stands; the row is written because the listing moved another field.
+    const relistedWithoutAnswer = (previous: IModelCatalogRowInput, policy?: CatalogWriteInput['policy']) =>
+      plan({
+        ...bedrockRun(['ON_DEMAND'], undefined, previous, false),
+        ...(policy && { policy }),
+        contributions: [
+          {
+            name: 'bedrock',
+            kind: 'provider',
+            records: normalizeBedrockModels({
+              summaries: [{ ...summary(['ON_DEMAND']), inputModalities: ['TEXT', 'IMAGE'] }],
+            }),
+          },
+        ],
+      });
+
+    it('keeps the provider credit on a row that writes a carried provider reason', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false));
+
+      const second = relistedWithoutAnswer(first.rows[0]);
+
+      expect(second.rows[0].patch).toMatchObject({
+        autoDisabled: true,
+        autoDisabledReason: 'not entitled in this AWS account',
+      });
+      expect(second.rows[0].contributors).toContainEqual({ group: 'availability', source: 'bedrock' });
+
+      const { models } = mergeCatalogWithDrops([curated], second.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({ disabled: true, disabledReason: 'not entitled in this AWS account' });
+    });
+
+    // The row main's writer left when a throttled run restamped a provider disable to a verdict: the
+    // wording is discovery's but the credit is still the provider's (mergeCatalog.test.ts pins its merge).
+    it('keeps the provider credit on a verdict-worded disable this run did not decide', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false)).rows[0];
+      const legacy = { ...first, patch: { ...first.patch, autoDisabledReason: 'discovered, awaiting admin approval' } };
+
+      const next = relistedWithoutAnswer(legacy, 'manual');
+
+      expect(next.rows[0].patch).toMatchObject({ autoDisabled: true });
+      expect(next.rows[0].contributors).toContainEqual({ group: 'availability', source: 'bedrock' });
+
+      const { models } = mergeCatalogWithDrops([curated], next.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({ disabled: true, disabledReason: 'discovered, awaiting admin approval' });
+    });
+
+    // Rows written before contributors existed carry no credit map; the merge then reads the wording.
+    it('leaves availability uncredited on a pre-contributor row that carries a provider reason', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const { contributors: _omitted, ...preContributor } = plan(
+        bedrockRun(['ON_DEMAND'], unentitled, undefined, false)
+      ).rows[0];
+
+      const next = relistedWithoutAnswer(preContributor);
+
+      expect(next.rows[0].patch).toMatchObject({ autoDisabledReason: 'not entitled in this AWS account' });
+      expect(next.rows[0].contributors?.find(credit => credit.group === 'availability')).toBeUndefined();
+
+      const { models } = mergeCatalogWithDrops([curated], next.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({ disabled: true, disabledReason: 'not entitled in this AWS account' });
     });
 
     it('leaves a manual disable in force when it lifts its own', () => {
@@ -697,7 +935,7 @@ describe('planCatalogWrites', () => {
         ]
       );
     const priorDiscoveryGroups = new Map([['gpt-6', GROUPS as never]]);
-    const providerUndated = new Map([['gpt-6', 'openai']]);
+    const providerUndated = new Map([['gpt-6', ['openai']]]);
     const litellmDate = {
       name: 'litellm',
       kind: 'aggregator' as const,
@@ -736,6 +974,135 @@ describe('planCatalogWrites', () => {
         modelId: 'gpt-6',
         reason: `deprecationDate ${FUTURE} refused: openai reports the model "active" with no deprecation date`,
       });
+    });
+
+    /** One run as runModelDiscovery drives it: signals first, then the plan over what the last run left. */
+    const run = (
+      contributions: CatalogWriteInput['contributions'],
+      previous: { rows: IModelCatalogRowInput[]; base?: ReturnType<typeof asBase> },
+      providerSourceNames: ReadonlySet<string> = new Set(['openai', 'azure', 'bedrock'])
+    ) => {
+      const signals = planLifecycleSignals({ contributions });
+      const last = previous.rows[0];
+      return plan({
+        contributions: signals.contributions,
+        base: previous.base ?? asBase(previous.rows),
+        priorDiscoveryGroups: new Map([['gpt-6', (last?.ownedGroups ?? GROUPS) as never]]),
+        priorContributors: new Map([['gpt-6', last?.contributors ?? []]]),
+        providerUndated: signals.providerUndated,
+        providerSourceNames,
+      });
+    };
+    const seeded = { rows: [], base: held({ status: 'active' }) };
+    const typedProvider = (name: string, lifecycle: Record<string, unknown>) => ({
+      name,
+      kind: 'provider' as const,
+      records: [{ ...gpt6({ lifecycle }), lifecycleEvidence: 'typed' as const }],
+    });
+    const openaiDated = typedProvider('openai', { status: 'active', deprecationDate: FUTURE });
+    const openaiUndated = typedProvider('openai', { status: 'active' });
+    /** A discovery row whose lifecycle group an earlier run credited to `source`, holding no date. */
+    const creditedTo = (source: string) => ({
+      rows: [
+        { ownedGroups: GROUPS, contributors: [{ group: 'lifecycle', source }] } as unknown as IModelCatalogRowInput,
+      ],
+      base: held({ status: 'active' }),
+    });
+
+    it('keeps a date one provider supplied when a different provider later reports the model undated', () => {
+      const dated = run([openaiDated], seeded);
+      expect(dated.rows[0].patch.lifecycle).toEqual({ status: 'active', deprecationDate: FUTURE });
+
+      const next = run([typedProvider('azure', { status: 'active' })], dated);
+
+      expect(next.rows).toEqual([]);
+      expect(dated.rows[0].contributors).toContainEqual({ group: 'lifecycle', source: 'openai' });
+      expect(next.dropped).toEqual([
+        {
+          source: 'azure',
+          modelId: 'gpt-6',
+          reason: `held deprecationDate ${FUTURE} kept: supplied by openai, azure reports the model "active" undated`,
+        },
+      ]);
+    });
+
+    it.each([
+      ['azure first', ['azure', 'openai']],
+      ['openai first', ['openai', 'azure']],
+    ])(
+      'lets the supplying provider clear its date when another provider also reports the model undated (%s)',
+      (_label, order) => {
+        const dated = run([openaiDated], seeded);
+        const next = run(
+          order.map(name => typedProvider(name, { status: 'active' })),
+          dated
+        );
+
+        expect(next.rows).toHaveLength(1);
+        expect(next.rows[0].patch.lifecycle).toEqual({ status: 'active' });
+        expect(next.rows[0].contributors).toContainEqual({ group: 'lifecycle', source: 'openai' });
+      }
+    );
+
+    it('lets the provider that supplied a date clear it by later reporting the model undated', () => {
+      const dated = run([openaiDated], seeded);
+      const next = run([openaiUndated], dated);
+
+      expect(next.rows).toHaveLength(1);
+      expect(next.rows[0].patch.lifecycle).toEqual({ status: 'active' });
+      expect(next.rows[0].contributors).toContainEqual({ group: 'lifecycle', source: 'openai' });
+    });
+
+    it('does not bring a cleared date back on a run where the provider source is down', () => {
+      const models = { ...litellmDate, name: 'models.dev' };
+      const held0 = { rows: [], base: held({ status: 'active', deprecationDate: FUTURE }) };
+
+      const cleared = run([openaiUndated, models], held0);
+      expect(cleared.rows[0].patch.lifecycle).toEqual({ status: 'active' });
+
+      const providerDown = run([models], { rows: cleared.rows });
+      expect(providerDown.rows).toEqual([]);
+      expect(providerDown.dropped).toEqual([
+        { source: 'models.dev', modelId: 'gpt-6', reason: 'record carries no usable fields' },
+      ]);
+
+      const providerBack = run([openaiUndated, models], { rows: cleared.rows });
+      expect(providerBack.rows).toEqual([]);
+    });
+
+    it('keeps a held date the down provider supplied when an aggregator repeats a future date', () => {
+      const dated = run([openaiDated], seeded);
+      const next = run([litellmDate], dated);
+
+      expect(next.rows).toEqual([]);
+      expect(next.dropped.filter(d => d.reason.includes('earlier run'))).toEqual([]);
+    });
+
+    const silent = { name: 'openai', kind: 'provider' as const, records: [] };
+    it.each([
+      {
+        name: 'withholds an unconfirmed date when the prior contributor was another aggregator',
+        contributions: [litellmDate],
+        previous: creditedTo('models.dev'),
+        providerSourceNames: undefined,
+      },
+      {
+        name: 'withholds an unconfirmed date when the credited provider is not configured',
+        contributions: [litellmDate],
+        previous: creditedTo('openai'),
+        providerSourceNames: new Set<string>(),
+      },
+      {
+        name: 'withholds an unconfirmed date when the provider ran but did not list the model',
+        contributions: [silent, litellmDate],
+        previous: creditedTo('openai'),
+        providerSourceNames: undefined,
+      },
+    ])('$name', ({ contributions, previous, providerSourceNames }) => {
+      const result = run(contributions, previous, providerSourceNames);
+
+      expect(result.dropped.filter(d => d.reason.includes('earlier run'))).toEqual([]);
+      expect(result.rows).toEqual([]);
     });
 
     it('keeps the date when only an aggregator speaks to the lifecycle', () => {

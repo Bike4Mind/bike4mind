@@ -19,6 +19,7 @@ import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
+import { recordSignupNetwork } from '@server/auth/networkMeta';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -154,6 +155,7 @@ const handler = baseApi({ auth: false })
             console.error('Failed to log OAuth registration:', logError);
           }
           await stampOAuthSourceTag(user.id, stateResult?.valid ? stateResult.payload.clientId : undefined);
+          await recordSignupNetwork({ req, userId: user.id, method: strategy });
           // Credit the signup to the product the visitor came through, if any, and only with
           // consent - see readConsentedAcquisitionTouches. Before the session is minted, as in
           // OTC: a mint failure after the account exists would otherwise lose the signup for
@@ -198,8 +200,9 @@ const handler = baseApi({ auth: false })
 
         // isNewUser/signupMethod ride the redirect fragment: /auth/success reads and
         // clears it exactly once, firing the signup ad conversion for new accounts.
-        const signupFragment =
+        const conversionFragment =
           isNewUser && !isSyntheticSignup ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
+        const signupFragment = `${conversionFragment}${isNewUser ? '&firstSignupSession=1' : ''}`;
 
         // Only a genuine new provider binding (flagged by verifyCallback) is an account-link.
         // Audited before the second-factor gate: verifyCallback has already persisted it.

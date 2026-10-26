@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
 import {
   AuthStrategy,
   CollectionType,
@@ -15,15 +16,20 @@ import {
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
 import { NotFoundError } from '@bike4mind/utils';
-import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
+import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
 import BaseRepository from '@bike4mind/db-core';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
+import { NETWORK_META_FIELDS } from './networkMetaFields';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
 }
 
 export interface IUserObject extends IUserDocument, Omit<Document, 'id'> {}
@@ -148,6 +154,7 @@ const UserPreferencesSchema = new Schema(
     agentModeDefault: { type: String, enum: ['off', 'auto', 'on'] },
     showFunTools: { type: Boolean },
     showSplashCards: { type: Boolean },
+    desktopPromoDismissed: { type: Boolean },
   },
   { _id: false }
 );
@@ -467,6 +474,35 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Claim the one free-credit grant allowed per inbox (canonicalizeEmail of the account's email).
+   * True when this account holds the claim, including from an earlier attempt, so a retried grant
+   * stays idempotent; false when another account already holds it. The unique
+   * freeCreditClaimEmail_1 index makes the claim atomic across concurrent signups; the pre-check
+   * covers a deployment whose index has not been built yet. An account without a usable email has
+   * nothing to dedupe on and is allowed.
+   */
+  async claimFreeCreditGrant(userId: string): Promise<boolean> {
+    const user = await this.model.findById(userId, { email: 1, freeCreditClaimEmail: 1 }).lean();
+    if (!user) return false;
+    if (user.freeCreditClaimEmail) return true;
+    const claimEmail = user.email ? canonicalizeEmail(user.email) : null;
+    if (!claimEmail) return true;
+
+    if (await this.model.exists({ freeCreditClaimEmail: claimEmail, _id: { $ne: userId } })) return false;
+    try {
+      const result = await this.model.updateOne(
+        { _id: userId, freeCreditClaimEmail: null },
+        { $set: { freeCreditClaimEmail: claimEmail } }
+      );
+      // A zero-match update means a concurrent call for this same account claimed first.
+      return result.modifiedCount === 1 || result.matchedCount === 0;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
+  }
+
+  /**
    * Remove `codeHash` from the stored backup codes, only if it is still present. Returns true
    * exactly once per code, so a backup code cannot be consumed by two requests at once. A
    * whole-document write from a pre-read snapshot would instead restore a code another request
@@ -688,6 +724,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    * concurrent change to either field is not reverted. Two writes: a pipeline update can't use
    * `$addToSet`, and pipeline values skip Mongoose's ObjectId casting. The invites are recorded
    * first so a failure between the writes under-charges rather than spending quota with no invite.
+   * @deprecated Use reserveReferrals before side effects and settleReferrals afterward.
    */
   async recordReferrals(userId: string, count: number, newInviteIds: string[]): Promise<void> {
     if (newInviteIds.length > 0) {
@@ -700,6 +737,32 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
         },
       },
     ]);
+  }
+
+  async reserveReferrals(userId: string, count: number): Promise<boolean> {
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error('Invalid referral reservation count');
+    const result = await this.model.updateOne(
+      { _id: userId, numReferralsAvailable: { $gte: count } },
+      { $inc: { numReferralsAvailable: -count } }
+    );
+    return result.matchedCount === 1;
+  }
+
+  /**
+   * Refund only failures before a usable invite exists; delivery failures retain their charge.
+   * The refund is a relative $inc not bounded by the current allowance, and it is not idempotent:
+   * callers must not retry it.
+   */
+  async settleReferrals(userId: string, refundCount: number, newInviteIds: string[]): Promise<void> {
+    if (!Number.isSafeInteger(refundCount) || refundCount < 0) throw new Error('Invalid referral refund count');
+    const result = await this.model.updateOne(
+      { _id: userId },
+      {
+        $inc: { numReferralsAvailable: refundCount },
+        $addToSet: { regInvites: { $each: newInviteIds } },
+      }
+    );
+    if (result.matchedCount !== 1) throw new NotFoundError(`User ${userId} not found`);
   }
 
   async incrementTokenVersion(userId: string): Promise<number> {
@@ -735,9 +798,9 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
-   * Transition a user's moderation escalation state. When moving to `suspended`,
-   * also mirrors `isModerated: true` so legacy admin surfaces reflect the suspension; any
-   * non-suspended status clears that mirror. `throttledUntil` is set only for `throttled`.
+   * Transition a user's moderation escalation state. `throttledUntil` is set only for `throttled`.
+   * Never touches `isModerated`: that is the admin's independent AI-only block, and a status change
+   * (a throttle, a lifted suspension) must not silently undo it.
    */
   async setModerationStatus(
     userId: string,
@@ -751,7 +814,6 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'moderation.status': status,
           'moderation.statusChangedAt': new Date(),
           'moderation.throttledUntil': status === 'throttled' ? (options?.throttledUntil ?? null) : null,
-          isModerated: status === 'suspended',
         },
       },
       { new: true }
@@ -778,6 +840,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async findBySlackUserId(slackUserId: string): Promise<IUserDocument | null> {
     const result = await this.model.findOne({
       'slackSettings.slackUserId': slackUserId,
+      ...VERIFIED_SLACK_IDENTITY_FILTER,
       deletedAt: { $exists: false },
     });
     return result?.toJSON() ?? null;
@@ -804,6 +867,14 @@ const UserAcquisitionSchema = new Schema(
   { _id: false }
 );
 
+const SignupMetaSchema = new Schema(
+  {
+    ...NETWORK_META_FIELDS,
+    capturedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 export const UserSchema = new Schema<IUserDocument, IUserModel>(
   {
     username: { type: String, required: true, unique: true },
@@ -820,17 +891,23 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     hasUsablePassword: { type: Boolean, default: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
-    storageLimit: { type: Number, default: 1000 }, // MBs
+    storageLimit: { type: Number, default: 1000 }, // Decimal MB
+    storageLimitOverride: { type: Number },
+    planStorageLimit: { type: Number },
     currentStorageSize: { type: Number, default: 0 }, // Bytes
     currentCredits: { type: Number, default: 0 },
     // Invite-resolved credits awaiting proof of email ownership; paired with
     // the pending-free-credits tag and nulled once granted.
     pendingCreditGrant: { type: Number, default: null },
+    // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
+    // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
+    freeCreditClaimEmail: { type: String },
     lastCreditsPurchasedAt: { type: Date, default: null },
     tags: { type: [String], default: [] },
     level: { type: String, default: 'DemoUser' },
     isBanned: { type: Boolean, default: false },
     isModerated: { type: Boolean, default: false },
+    apiKeyTrustApproved: { type: Boolean, default: false },
     // Per-user moderation tracking + auto-throttle/suspend state.
     // Lazily populated - undefined until the user's first moderation hit.
     moderation: { type: UserModerationSchema, required: false, default: undefined },
@@ -998,6 +1075,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Slack integration settings
     slackSettings: {
       slackUserId: { type: String, required: false },
+      slackTeamId: { type: String, required: false },
       slackUserToken: { type: String, required: false, select: false }, // User token for reminders API (protected by select: false)
       slackUserScopes: { type: [String], required: false, default: [] }, // OAuth scopes granted by user
       defaultNotebookId: { type: String, required: false },
@@ -1065,6 +1143,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
 
     // Written once at signup, consent-gated - see IUser.acquisition.
     acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
+    // Written once at signup - see IUser.signupMeta.
+    signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },
@@ -1127,6 +1207,17 @@ UserSchema.index({
 UserSchema.index(
   { email: 1 },
   { unique: true, partialFilterExpression: { email: { $type: 'string' } }, name: 'email_1' }
+);
+
+// One free-credit grant per inbox: see claimFreeCreditGrant. Partial so unclaimed accounts are
+// not indexed. Existing deployments are backfilled and indexed by migration 20260921235965.
+UserSchema.index(
+  { freeCreditClaimEmail: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { freeCreditClaimEmail: { $type: 'string' } },
+    name: 'freeCreditClaimEmail_1',
+  }
 );
 
 // Case-insensitive email index for collation-based lookups (findByEmail).
@@ -1284,11 +1375,14 @@ function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
     if (!container) return;
     const mfa = container.mfa as { totpSecret?: unknown } | null | undefined;
     if (mfa && typeof mfa === 'object' && typeof mfa.totpSecret === 'string') {
-      container.mfa = { ...mfa, totpSecret: encryptAtRest(mfa.totpSecret) };
+      container.mfa = {
+        ...mfa,
+        totpSecret: isEncrypted(mfa.totpSecret) ? mfa.totpSecret : encryptAtRest(mfa.totpSecret),
+      };
     }
     const dotted = container['mfa.totpSecret'];
     if (typeof dotted === 'string') {
-      container['mfa.totpSecret'] = encryptAtRest(dotted);
+      container['mfa.totpSecret'] = isEncrypted(dotted) ? dotted : encryptAtRest(dotted);
     }
   };
 
@@ -1298,11 +1392,40 @@ function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
 }
 
 UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], stripSecretlessMfaFromUpdate);
+
+const isHashedAnswer = (answer: string): boolean => /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(answer);
+async function hashSecurityQuestions(questions: unknown): Promise<void> {
+  if (!Array.isArray(questions)) return;
+  if (questions.length > 10) throw new Error('At most 10 security questions are allowed');
+  for (const question of questions) {
+    if (typeof question !== 'object' || question === null || typeof question.answer !== 'string') continue;
+    if (question.answer.length > 1024) throw new Error('Security answer is too long');
+    if (!isHashedAnswer(question.answer)) question.answer = await bcrypt.hash(question.answer, 12);
+  }
+}
+
+UserSchema.pre('validate', async function () {
+  if (this.isModified('securityQuestions')) await hashSecurityQuestions(this.securityQuestions);
+});
+UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], async function () {
+  const update = this.getUpdate();
+  if (!update || Array.isArray(update)) return;
+  for (const container of [update, update.$set, update.$setOnInsert]) {
+    if (!container || typeof container !== 'object') continue;
+    await hashSecurityQuestions(container.securityQuestions);
+    for (const [path, value] of Object.entries(container)) {
+      if (!/^securityQuestions\.[^.]+\.answer$/.test(path) || typeof value !== 'string') continue;
+      if (value.length > 1024) throw new Error('Security answer is too long');
+      container[path] = isHashedAnswer(value) ? value : await bcrypt.hash(value, 12);
+    }
+  }
+});
+
 UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], encryptTotpSecretInUpdate);
 
 // The document-save counterpart of encryptTotpSecretInUpdate (User.create / doc.save()).
 UserSchema.pre('save', function (next) {
-  if (this.mfa?.totpSecret && this.isModified('mfa.totpSecret')) {
+  if (this.mfa?.totpSecret && !isEncrypted(this.mfa.totpSecret) && this.isModified('mfa.totpSecret')) {
     this.mfa.totpSecret = encryptAtRest(this.mfa.totpSecret);
   }
   next();

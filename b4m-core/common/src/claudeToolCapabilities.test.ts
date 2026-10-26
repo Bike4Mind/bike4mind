@@ -2,54 +2,55 @@ import { describe, expect, it } from 'vitest';
 import {
   completionsSupportsToolChanges,
   completionsSupportsToolSearch,
+  supportsAssistantPrefill,
   supportsToolChanges,
   supportsToolSearch,
 } from './claudeToolCapabilities';
 import { CHAT_MODELS, ChatModels, isClaudeModelId, ModelBackend } from './models';
 
-// [tool search, tool changes]. Every Claude id in ChatModels must be listed, so a new one forces a decision.
-const EXPECTED: Record<string, [boolean, boolean]> = {
-  [ChatModels.CLAUDE_3_HAIKU_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_3_5_HAIKU_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_3_5_SONNET_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_4_OPUS_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_4_1_OPUS_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_4_SONNET_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_3_5_SONNET_V2_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_3_7_SONNET_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_4_5_SONNET_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_4_5_HAIKU_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_4_5_OPUS_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_4_6_SONNET_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_5_SONNET_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_5_5_SONNET_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_4_6_OPUS_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_4_7_OPUS_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_4_8_OPUS_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_FABLE_5_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_FABLE_5_1_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_5_OPUS_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_5_5_OPUS_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_3_OPUS]: [false, false],
-  [ChatModels.CLAUDE_3_5_HAIKU_ANTHROPIC]: [false, false],
-  [ChatModels.CLAUDE_3_5_SONNET_ANTHROPIC]: [false, false],
-  [ChatModels.CLAUDE_3_7_SONNET_ANTHROPIC]: [false, false],
-  [ChatModels.CLAUDE_4_OPUS]: [false, false],
-  [ChatModels.CLAUDE_4_1_OPUS]: [false, false],
-  [ChatModels.CLAUDE_4_SONNET]: [false, false],
-  [ChatModels.CLAUDE_4_5_SONNET]: [true, false],
-  [ChatModels.CLAUDE_4_5_HAIKU]: [true, false],
-  [ChatModels.CLAUDE_4_5_OPUS]: [true, false],
-  [ChatModels.CLAUDE_4_6_SONNET]: [true, false],
-  [ChatModels.CLAUDE_5_SONNET]: [true, false],
-  [ChatModels.CLAUDE_4_6_OPUS]: [true, false],
-  [ChatModels.CLAUDE_4_7_OPUS]: [true, false],
-  [ChatModels.CLAUDE_4_8_OPUS]: [true, true],
-  [ChatModels.CLAUDE_FABLE_5]: [true, true],
-  [ChatModels.CLAUDE_5_OPUS]: [true, true],
-  [ChatModels.CLAUDE_5_5_OPUS]: [true, true],
-  [ChatModels.CLAUDE_5_5_HAIKU]: [true, true],
+// [tool search, tool changes, assistant prefill]. Every Claude id in ChatModels must be listed, so a new one forces a decision.
+const EXPECTED: Record<string, [boolean, boolean, boolean]> = {
+  [ChatModels.CLAUDE_3_HAIKU_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_3_5_HAIKU_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_3_5_SONNET_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_4_OPUS_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_4_1_OPUS_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_4_SONNET_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_3_5_SONNET_V2_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_3_7_SONNET_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_4_5_SONNET_BEDROCK]: [true, false, true],
+  [ChatModels.CLAUDE_4_5_HAIKU_BEDROCK]: [true, false, true],
+  [ChatModels.CLAUDE_4_5_OPUS_BEDROCK]: [true, false, true],
+  [ChatModels.CLAUDE_4_6_SONNET_BEDROCK]: [true, false, false],
+  [ChatModels.CLAUDE_5_SONNET_BEDROCK]: [true, false, false],
+  [ChatModels.CLAUDE_5_5_SONNET_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_4_6_OPUS_BEDROCK]: [true, false, false],
+  [ChatModels.CLAUDE_4_7_OPUS_BEDROCK]: [true, false, false],
+  [ChatModels.CLAUDE_4_8_OPUS_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_FABLE_5_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_FABLE_5_1_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_5_OPUS_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_5_5_OPUS_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_3_OPUS]: [false, false, true],
+  [ChatModels.CLAUDE_3_5_HAIKU_ANTHROPIC]: [false, false, true],
+  [ChatModels.CLAUDE_3_5_SONNET_ANTHROPIC]: [false, false, true],
+  [ChatModels.CLAUDE_3_7_SONNET_ANTHROPIC]: [false, false, true],
+  [ChatModels.CLAUDE_4_OPUS]: [false, false, true],
+  [ChatModels.CLAUDE_4_1_OPUS]: [false, false, true],
+  [ChatModels.CLAUDE_4_SONNET]: [false, false, true],
+  [ChatModels.CLAUDE_4_5_SONNET]: [true, false, true],
+  [ChatModels.CLAUDE_4_5_HAIKU]: [true, false, true],
+  [ChatModels.CLAUDE_4_5_OPUS]: [true, false, true],
+  [ChatModels.CLAUDE_4_6_SONNET]: [true, false, false],
+  [ChatModels.CLAUDE_5_SONNET]: [true, false, false],
+  [ChatModels.CLAUDE_4_6_OPUS]: [true, false, false],
+  [ChatModels.CLAUDE_4_7_OPUS]: [true, false, false],
+  [ChatModels.CLAUDE_4_8_OPUS]: [true, true, false],
+  [ChatModels.CLAUDE_FABLE_5]: [true, true, false],
+  [ChatModels.CLAUDE_5_OPUS]: [true, true, false],
+  [ChatModels.CLAUDE_5_5_OPUS]: [true, true, false],
+  [ChatModels.CLAUDE_5_5_HAIKU]: [true, true, false],
 };
 
 const nativeBackend = (id: string) => (id.includes('anthropic.') ? ModelBackend.Bedrock : ModelBackend.Anthropic);
@@ -63,7 +64,9 @@ describe('supportsToolSearch / supportsToolChanges', () => {
     const claudeIds = CHAT_MODELS.filter(isClaudeModelId);
 
     expect(Object.keys(EXPECTED).sort()).toEqual([...claudeIds].sort());
-    for (const id of claudeIds) expect(flags(id), id).toEqual(EXPECTED[id]);
+    for (const id of claudeIds) {
+      expect([...flags(id), supportsAssistantPrefill({ id })], id).toEqual(EXPECTED[id]);
+    }
   });
 
   it.each([
@@ -106,8 +109,40 @@ describe('supportsToolSearch / supportsToolChanges', () => {
   });
 });
 
+describe('supportsAssistantPrefill', () => {
+  it.each([
+    ChatModels.CLAUDE_4_6_OPUS,
+    ChatModels.CLAUDE_4_7_OPUS,
+    ChatModels.CLAUDE_4_8_OPUS,
+    ChatModels.CLAUDE_5_OPUS,
+    ChatModels.CLAUDE_5_5_OPUS,
+    ChatModels.CLAUDE_4_6_SONNET,
+    ChatModels.CLAUDE_5_SONNET,
+    'claude-sonnet-5-5',
+    ChatModels.CLAUDE_5_5_HAIKU,
+    ChatModels.CLAUDE_FABLE_5,
+    'claude-fable-5-1',
+    'claude-mythos-5',
+    'claude-mythos-5-1',
+  ])('is false for documented non-prefill model %s', id => {
+    expect(supportsAssistantPrefill({ id })).toBe(false);
+  });
+
+  it.each([ChatModels.CLAUDE_4_5_OPUS, ChatModels.CLAUDE_4_5_SONNET, ChatModels.CLAUDE_4_5_HAIKU, ChatModels.GPT4o])(
+    'defaults to true for supported or non-Claude model %s',
+    id => {
+      expect(supportsAssistantPrefill({ id })).toBe(true);
+    }
+  );
+
+  it('classifies provider-prefixed and suffixed ids by Claude family version', () => {
+    expect(supportsAssistantPrefill({ id: 'global.anthropic.claude-opus-4-6-v1:0' })).toBe(false);
+    expect(supportsAssistantPrefill({ id: 'claude-opus-5-5[1m]' })).toBe(false);
+  });
+});
+
 describe('completionsSupportsToolSearch', () => {
-  it('is true only where the direct Anthropic adapter serves the model', () => {
+  it('is true where the direct Anthropic adapter serves the model', () => {
     expect(completionsSupportsToolSearch({ id: ChatModels.CLAUDE_5_5_OPUS, backend: ModelBackend.Anthropic })).toBe(
       true
     );
@@ -116,11 +151,23 @@ describe('completionsSupportsToolSearch', () => {
     );
   });
 
-  it('is false for a Bedrock row the model predicate accepts', () => {
+  it('is true for a Bedrock row the model predicate accepts, served by the Bedrock Claude adapter', () => {
     expect(flags(ChatModels.CLAUDE_5_5_OPUS_BEDROCK)).toEqual([true, true]);
     expect(
       completionsSupportsToolSearch({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })
+    ).toBe(true);
+    expect(
+      completionsSupportsToolSearch({ id: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK, backend: ModelBackend.Bedrock })
+    ).toBe(true);
+  });
+
+  it('is false for a Bedrock Claude row the model predicate rejects and for non-Claude Bedrock models', () => {
+    expect(
+      completionsSupportsToolSearch({ id: ChatModels.CLAUDE_4_1_OPUS_BEDROCK, backend: ModelBackend.Bedrock })
     ).toBe(false);
+    expect(completionsSupportsToolSearch({ id: ChatModels.DEEPSEEK_R1_BEDROCK, backend: ModelBackend.Bedrock })).toBe(
+      false
+    );
   });
 
   it('follows adapterFamily over backend, as getLlmByModel dispatches', () => {
@@ -130,10 +177,13 @@ describe('completionsSupportsToolSearch', () => {
     ).toBe(true);
     expect(
       completionsSupportsToolSearch({ id, backend: ModelBackend.Anthropic, adapterFamily: 'bedrock-anthropic' })
-    ).toBe(false);
+    ).toBe(true);
     expect(
       completionsSupportsToolSearch({ id, backend: ModelBackend.Anthropic, adapterFamily: 'anthropic-messages' })
     ).toBe(true);
+    expect(completionsSupportsToolSearch({ id, backend: ModelBackend.Bedrock, adapterFamily: 'bedrock-llama' })).toBe(
+      false
+    );
   });
 
   it('is false for unsupported Claude models and non-Claude models', () => {
@@ -155,6 +205,13 @@ describe('completionsSupportsToolChanges', () => {
     expect(supportsToolChanges({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })).toBe(true);
     expect(
       completionsSupportsToolChanges({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })
+    ).toBe(false);
+    expect(
+      completionsSupportsToolChanges({
+        id: 'claude-opus-5-5',
+        backend: ModelBackend.Anthropic,
+        adapterFamily: 'bedrock-anthropic',
+      })
     ).toBe(false);
   });
 

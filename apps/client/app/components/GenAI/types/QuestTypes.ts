@@ -1,18 +1,16 @@
 import { normalizeQuestComplexity } from '@bike4mind/common';
-import { SvgIconComponent } from '@mui/icons-material';
-import {
-  Description as TextIcon,
-  Image as ImageIcon,
-  RemoveRedEye as VisionIcon,
-  Casino as DiceIcon,
-  Search as WebSearchIcon,
-  Calculate as MathIcon,
-  Code as CodeIcon,
-  Person as HumanIcon,
-  Speed as EasyIcon,
-  Pending as MediumIcon,
-  Warning as HardIcon,
-} from '@mui/icons-material';
+import type { SvgIconComponent } from '@mui/icons-material';
+import TextIcon from '@mui/icons-material/Description';
+import ImageIcon from '@mui/icons-material/Image';
+import VisionIcon from '@mui/icons-material/RemoveRedEye';
+import DiceIcon from '@mui/icons-material/Casino';
+import WebSearchIcon from '@mui/icons-material/Search';
+import MathIcon from '@mui/icons-material/Calculate';
+import CodeIcon from '@mui/icons-material/Code';
+import HumanIcon from '@mui/icons-material/Person';
+import EasyIcon from '@mui/icons-material/Speed';
+import MediumIcon from '@mui/icons-material/Pending';
+import HardIcon from '@mui/icons-material/Warning';
 
 export enum TaskType {
   TEXT_GENERATION = 'text_generation',

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+import { FEDERATED_ADMIN_STATUS_SCOPE } from '@bike4mind/common';
 import { OAuthClientModel, type IOAuthClientDocument } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { fetchSeederPassword } from './UserSeeder';
@@ -104,7 +105,7 @@ export class OAuthClientSeeder {
         name: 'Preview Federated Client',
         tokenEndpointAuthMethod: 'client_secret_post',
         clientSecretHash: secretHash,
-        allowedScopes: ['openid', 'email', 'profile', 'ai:generate'],
+        allowedScopes: ['openid', 'email', 'profile', 'ai:generate', FEDERATED_ADMIN_STATUS_SCOPE],
         federatedIdp: {
           issuer: appUrl,
           audience: PREVIEW_FEDERATED_CLIENT_ID,

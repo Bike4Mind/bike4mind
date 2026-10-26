@@ -78,6 +78,29 @@ export class BadRequestError extends HTTPError {
   }
 }
 
+/**
+ * An outbound fetch refused by the SSRF guard. Still a 400, but its message can name the resolved
+ * address, so callers that echo a BadRequestError to end users must exclude it with
+ * `isUrlBlockedError`.
+ */
+export class UrlBlockedError extends BadRequestError {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'UrlBlockedError';
+  }
+}
+
+/**
+ * The one exclusion every echo site shares, so a new site cannot drop it by writing its own check.
+ * Name-matched as well as `instanceof`, like `isZodError`, because the error is thrown in one
+ * package and caught in another across a possible module-realm split. Returns boolean rather than a
+ * type guard: UrlBlockedError adds no members to BadRequestError, so a guard would narrow the
+ * negated branch at the call sites to `never`.
+ */
+export function isUrlBlockedError(err: unknown): boolean {
+  return Boolean(err && (err instanceof UrlBlockedError || (err as Error).name === 'UrlBlockedError'));
+}
+
 /** Narrows API_ERROR_CODES to the storage refusals (CONVENTIONS.md section 1). */
 export const STORAGE_ERROR_CODES = [
   'storage_limit_exceeded',
@@ -276,6 +299,17 @@ export class GatewayTimeoutError extends HTTPError {
   ) {
     super(HttpStatus.GatewayTimeout, message, additionalInfo);
     this.name = 'GatewayTimeoutError';
+  }
+}
+
+/** 503: a dependency we need (the database) is unreachable right now. Retrying later may succeed. */
+export class ServiceUnavailableError extends HTTPError {
+  constructor(
+    message?: string,
+    public additionalInfo?: Record<string, unknown>
+  ) {
+    super(HttpStatus.ServiceUnavailable, message, additionalInfo);
+    this.name = 'ServiceUnavailableError';
   }
 }
 

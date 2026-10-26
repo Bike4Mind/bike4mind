@@ -11,17 +11,15 @@ import {
   getExportFilename,
 } from '@client/app/utils/questExport';
 import { downloadFile } from '@client/app/components/common/DownloadMenu';
-import {
-  SaveAlt as ExportIcon,
-  Description as MarkdownIcon,
-  DataObject as JSONIcon,
-  TableChart as CSVIcon,
-  ContentCopy as CopyIcon,
-  FolderZip as ZIPIcon,
-  PictureAsPdf as PDFIcon,
-  GridOn as ExcelIcon,
-  Article as WordIcon,
-} from '@mui/icons-material';
+import ExportIcon from '@mui/icons-material/SaveAlt';
+import MarkdownIcon from '@mui/icons-material/Description';
+import JSONIcon from '@mui/icons-material/DataObject';
+import CSVIcon from '@mui/icons-material/TableChart';
+import CopyIcon from '@mui/icons-material/ContentCopy';
+import ZIPIcon from '@mui/icons-material/FolderZip';
+import PDFIcon from '@mui/icons-material/PictureAsPdf';
+import ExcelIcon from '@mui/icons-material/GridOn';
+import WordIcon from '@mui/icons-material/Article';
 import {
   CircularProgress,
   Divider,
