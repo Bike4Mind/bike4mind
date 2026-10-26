@@ -1,16 +1,17 @@
 import { IUserDocument, IUserRepository } from '@bike4mind/common';
-import {
-  generateTOTPSetup,
-  generateBackupCodes,
-  hashBackupCode,
-  userEligibleForMFA,
-} from './utils';
+import { generateTOTPSetup, generateBackupCodes, hashBackupCode, userEligibleForMFA } from './utils';
 import { claimTOTPCode, MfaAttemptRejectedError, withReservedMfaAttempt, type MfaAttemptRepository } from './attempt';
 
 export interface SetupMFARequest {
   user: IUserDocument;
   appName?: string;
 }
+
+/**
+ * How long an unconfirmed TOTP secret is re-served by setupMFA. Bounded so a secret handed to a
+ * briefly hijacked session cannot become the factor the real user enrolls days later.
+ */
+export const PENDING_SECRET_REUSE_MS = 60 * 60 * 1000;
 
 export interface SetupMFAResponse {
   secret: string;
@@ -36,13 +37,16 @@ export async function setupMFA(
     throw new Error('MFA is already enabled for this user.');
   }
 
-  // Clear any previous incomplete setup
-  if (user.mfa && user.mfa.totpEnabled === false) {
-    user.mfa = null;
-  }
+  // A repeat call (reload, second tab, step-up retry) keeps a recent unconfirmed secret, so the
+  // QR code the user already scanned stays valid. Needs the user loaded via findByIdWithMfaSecrets.
+  const pending = user.mfa && user.mfa.totpEnabled === false ? user.mfa : null;
+  const reusableSecret =
+    pending?.totpSecret && Date.now() - new Date(pending.setupAt).getTime() < PENDING_SECRET_REUSE_MS
+      ? pending.totpSecret
+      : undefined;
 
   const email = user.email || '';
-  const setup = await generateTOTPSetup(email, appName);
+  const setup = await generateTOTPSetup(email, appName, reusableSecret);
   const backupCodes = generateBackupCodes();
   const hashedBackupCodes = backupCodes.map(hashBackupCode);
 
@@ -53,7 +57,8 @@ export async function setupMFA(
       totpSecret: setup.secret,
       totpEnabled: false,
       backupCodes: hashedBackupCodes,
-      setupAt: new Date(),
+      // Kept on reuse so repeat calls cannot stretch the reuse window indefinitely.
+      setupAt: reusableSecret && pending ? pending.setupAt : new Date(),
       lastUsedAt: undefined,
     },
     // The step counter is a global clock, not tied to this secret: clear it so a code from the

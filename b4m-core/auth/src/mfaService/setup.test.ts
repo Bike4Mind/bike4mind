@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import speakeasy from 'speakeasy';
-import { setupMFA, verifyMFASetup } from './setup';
+import { PENDING_SECRET_REUSE_MS, setupMFA, verifyMFASetup } from './setup';
 import { MfaAttemptRejectedError } from './attempt';
 import { hashBackupCode } from './utils';
 import type { IUserDocument } from '@bike4mind/common';
@@ -49,6 +49,60 @@ describe('setupMFA', () => {
     const update = vi.fn(async (u: unknown) => u as IUserDocument);
     await setupMFA({ user: makePendingUser(), appName: 'Test App' }, { update });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1', totpLastStep: null }));
+  });
+
+  it('re-serves a recent pending secret so the QR code already scanned stays valid', async () => {
+    const setupAt = new Date(Date.now() - 5 * 60_000);
+    const update = vi.fn(async (u: unknown) => u as IUserDocument);
+
+    const result = await setupMFA({ user: makePendingUser({ setupAt }), appName: 'Test App' }, { update });
+
+    expect(result.secret).toBe(SECRET);
+    expect(result.manualEntryKey).toBe(SECRET);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ mfa: expect.objectContaining({ totpSecret: SECRET, setupAt }) })
+    );
+  });
+
+  it('issues fresh backup codes when it re-serves a pending secret', async () => {
+    const update = vi.fn(async (u: unknown) => u as IUserDocument);
+
+    const result = await setupMFA({ user: makePendingUser(), appName: 'Test App' }, { update });
+
+    const stored = (update.mock.calls[0][0] as { mfa: { backupCodes: string[] } }).mfa.backupCodes;
+    expect(stored).toEqual(result.backupCodes.map(hashBackupCode));
+    expect(stored).not.toEqual(BACKUP_CODES);
+  });
+
+  it('issues a new secret once the pending one is past the reuse window', async () => {
+    const setupAt = new Date(Date.now() - PENDING_SECRET_REUSE_MS - 1000);
+    const update = vi.fn(async (u: unknown) => u as IUserDocument);
+
+    const result = await setupMFA({ user: makePendingUser({ setupAt }), appName: 'Test App' }, { update });
+
+    expect(result.secret).not.toBe(SECRET);
+    const stored = (update.mock.calls[0][0] as { mfa: { setupAt: Date } }).mfa.setupAt;
+    expect(stored.getTime()).toBeGreaterThan(setupAt.getTime());
+  });
+
+  it('issues a new secret when the stored one could not be decrypted', async () => {
+    const update = vi.fn(async (u: unknown) => u as IUserDocument);
+
+    const result = await setupMFA({ user: makePendingUser({ totpSecret: '' }), appName: 'Test App' }, { update });
+
+    expect(result.secret).toMatch(/^[A-Z2-7]+$/);
+  });
+
+  it('issues a new secret when no setup is pending', async () => {
+    const update = vi.fn(async (u: unknown) => u as IUserDocument);
+
+    const result = await setupMFA(
+      { user: { id: 'user-1' } as unknown as IUserDocument, appName: 'Test App' },
+      { update }
+    );
+
+    expect(result.secret).toMatch(/^[A-Z2-7]+$/);
+    expect(result.secret).not.toBe(SECRET);
   });
 });
 
