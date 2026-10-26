@@ -86,8 +86,15 @@ vi.mock('./openRegistration', () => ({
   isOpenRegistrationAllowed: () => mockIsOpenRegistrationAllowed(),
 }));
 
+const mockIsSignupNetworkOverLimit = vi.fn();
+const mockCreateSignupRiskCollector = vi.fn();
+vi.mock('@server/auth/signupNetworkLimits', () => ({
+  isSignupNetworkOverLimit: (...args: unknown[]) => mockIsSignupNetworkOverLimit(...args),
+  createSignupRiskCollector: (...args: unknown[]) => mockCreateSignupRiskCollector(...args),
+}));
+
 import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
-import { verifyCallback } from './verifyCallback';
+import { selfServeVerifyCallback, verifyCallback } from './verifyCallback';
 
 const runStandard = (
   strategy: AuthStrategy,
@@ -139,6 +146,10 @@ beforeEach(() => {
   // Open by default so the pre-existing create-path tests keep exercising creation.
   mockIsOpenRegistrationAllowed.mockReset();
   mockIsOpenRegistrationAllowed.mockResolvedValue(true);
+  mockIsSignupNetworkOverLimit.mockReset();
+  mockIsSignupNetworkOverLimit.mockResolvedValue(false);
+  mockCreateSignupRiskCollector.mockReset();
+  mockCreateSignupRiskCollector.mockImplementation(network => ({ collectorFor: network ?? null }));
 });
 
 // Failure-safe restore of any vi.spyOn() (e.g. console.error) so a throwing
@@ -1437,5 +1448,63 @@ describe('verifyCallback - pending free credits on account link', () => {
     expect(err).toBeNull();
     expect(user).toBeDefined();
     expect(mockClearPending).not.toHaveBeenCalled();
+  });
+});
+
+describe('selfServeVerifyCallback - signup network limits', () => {
+  const freshProfile = {
+    id: 'sub-net',
+    displayName: 'Net Person',
+    emails: [{ value: 'net@example.com', verified: true }],
+  };
+  const req = { headers: { 'cloudfront-viewer-address': '203.0.113.9:4444', 'cloudfront-viewer-asn': '64500' } };
+  const runSelfServe = (strategy: AuthStrategy): Promise<{ err: unknown; user: unknown; info: unknown }> =>
+    new Promise(resolve => {
+      const done = (err: unknown, user?: unknown, info?: unknown) => resolve({ err, user, info });
+      void selfServeVerifyCallback(strategy)(req, 'access-tok', 'refresh-tok', freshProfile, done);
+    });
+
+  it('declares the arity passport-oauth2 needs to pass the request first', () => {
+    expect(selfServeVerifyCallback(AuthStrategy.Google)).toHaveLength(5);
+  });
+
+  it('refuses a first login whose network is over the signup limit', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+
+    const { user, info } = await runSelfServe(AuthStrategy.Github);
+
+    expect(user).toBeFalsy();
+    expect(info).toMatchObject({ code: 'signup_limited' });
+    expect(mockIsSignupNetworkOverLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ ip: '203.0.113.9', asn: 64500 }),
+      expect.anything()
+    );
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("assesses the new account's staged grant against the request network", async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'new-id', id: 'new-id' }));
+
+    const { user } = await runSelfServe(AuthStrategy.Google);
+
+    expect(user).toBeTruthy();
+    expect(mockCreateSignupRiskCollector).toHaveBeenCalledWith(expect.objectContaining({ ip: '203.0.113.9' }));
+    expect(mockReleasePending).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ collectRiskSignals: { collectorFor: expect.objectContaining({ asn: 64500 }) } })
+    );
+  });
+
+  it('does not gate the request-less verifyCallback (SAML wrapper)', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'saml-id', id: 'saml-id' }));
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+
+    const { user } = await runStandard(AuthStrategy.Google, freshProfile);
+
+    expect(user).toBeTruthy();
+    expect(mockIsSignupNetworkOverLimit).not.toHaveBeenCalled();
   });
 });

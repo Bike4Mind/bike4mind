@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import * as creditService from '../creditService';
+import * as stagedSignupGrant from './stagedSignupGrant';
 import { grantFreeCredits, releasePendingFreeCredits, resolveFreeCreditAmount } from './freeCredits';
 import * as signupProtection from './signupProtection';
 import * as stagedSignupGrant from './stagedSignupGrant';
@@ -150,6 +151,23 @@ describe('free credits service', () => {
       const adapters = buildAdapters('0');
       await grantFreeCredits({ id: 'user-1' }, adapters);
       expect(adapters.db.users.claimFreeCreditGrant).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('staged grant routing', () => {
+    it("forwards the risk collector to an enrolled account's tranche release", async () => {
+      const release = vi
+        .spyOn(stagedSignupGrant, 'releaseSignupTranche')
+        .mockResolvedValue({ creditsGranted: 40, currentCredits: 40 });
+      const adapters = buildAdapters('100');
+      adapters.db.users.findById.mockResolvedValue({ id: 'user-1', signupGrant: { stage: 'pending_email' } });
+      const collectRiskSignals = vi.fn();
+
+      const result = await grantFreeCredits({ id: 'user-1' }, { ...adapters, collectRiskSignals });
+
+      expect(result).toEqual({ creditsGranted: 40, currentCredits: 40 });
+      expect(release).toHaveBeenCalledWith('user-1', expect.objectContaining({ collectRiskSignals }));
+      expect(addCreditsSpy).not.toHaveBeenCalled();
     });
   });
 

@@ -88,9 +88,16 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
         {user.signupGrantAssessment && (
           <Typography level="body-sm" data-testid="admin-user-grant-assessment">
             Signup assessment: {user.signupGrantAssessment.band}; {user.signupGrantAssessment.status}; policy:{' '}
-            {user.signupGrantAssessment.policyVersion ?? 'none'}
+            {user.signupGrantAssessment.policyVersion ?? 'none'}; score: {user.signupGrantAssessment.score ?? 'n/a'}
           </Typography>
         )}
+        {user.signupGrantAssessment &&
+          (user.signupGrantAssessment.reasons.length > 0 || user.signupGrantAssessment.missing.length > 0) && (
+            <Typography level="body-sm" data-testid="admin-user-grant-assessment-reasons">
+              Matched: {user.signupGrantAssessment.reasons.join(', ') || 'none'}; missing:{' '}
+              {user.signupGrantAssessment.missing.join(', ') || 'none'}
+            </Typography>
+          )}
         {user.signupGrant?.stage === 'signup' && (
           <Stack spacing={1}>
             <Textarea

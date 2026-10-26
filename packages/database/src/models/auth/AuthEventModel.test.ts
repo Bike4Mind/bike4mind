@@ -51,6 +51,12 @@ describe('recentDistinctSignups', () => {
     });
   });
 
+  it('counts every account when no userId is given', async () => {
+    await AuthEventModel.collection.insertMany([row('one'), row('current')]);
+    const { userId: _omitted, ...withoutUser } = input;
+    expect(await authEventRepository.recentDistinctSignups(withoutUser)).toMatchObject({ ipSignups: 2 });
+  });
+
   it('returns unknown on missing metadata or scan saturation', async () => {
     expect(await authEventRepository.recentDistinctSignups({ ...input, ip: null, asn: null })).toEqual({
       ipSignups: null,

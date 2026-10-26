@@ -46,7 +46,8 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
-import { recordLoginEvent, recordSignupNetwork } from '@server/auth/networkMeta';
+import { recordLoginEvent, readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
+import { assertSignupNetworkWithinLimits, createSignupRiskCollector } from '@server/auth/signupNetworkLimits';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -377,6 +378,9 @@ const handler = baseApi({ auth: false })
     // a grant failure leaves a retry breadcrumb rather than losing credits.
     let newUser: Awaited<ReturnType<typeof userService.registerViaOTC>>;
     try {
+      const signupNetwork = readNetworkMeta(req);
+      // Inside the try so a refusal re-issues the token and the user can retry later.
+      await assertSignupNetworkWithinLimits(signupNetwork, req.logger);
       // Inside the try so a claim or lookup failure still re-issues the token (the nonce is spent).
       bootstrapClaimId = bootstrap.eligible ? await claimBootstrapAdmin() : null;
       const partnerDomainAllowed =
@@ -432,6 +436,7 @@ const handler = baseApi({ auth: false })
             },
             logger: req.logger,
             skipInviteCheck: bootstrapClaimId !== null || partnerDomainAllowed,
+            collectRiskSignals: createSignupRiskCollector(signupNetwork),
           }
         );
       // Roll back the losing account when concurrent signups redeem one single-use invite.

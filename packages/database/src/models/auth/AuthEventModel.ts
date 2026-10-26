@@ -74,9 +74,12 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
     return this.model.find({ userId }).sort({ createdAt: -1 }).limit(limit);
   }
 
-  /** Counts other accounts, not login events. A truncated scan is unknown, never a low count. */
+  /**
+   * Counts other accounts, not login events. A truncated scan is unknown, never a low count.
+   * Without a userId every signup counts (a gate run before the account exists).
+   */
   async recentDistinctSignups(input: {
-    userId: string;
+    userId?: string;
     since: Date;
     until: Date;
     ip: string | null;
@@ -99,7 +102,12 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
 
     const count = async (network: Record<string, unknown>): Promise<number | null> => {
       const rows = await this.model
-        .find({ ...network, type: 'signup', userId: { $ne: input.userId }, createdAt: { $gte: since, $lt: until } })
+        .find({
+          ...network,
+          type: 'signup',
+          ...(input.userId === undefined ? {} : { userId: { $ne: input.userId } }),
+          createdAt: { $gte: since, $lt: until },
+        })
         .select({ userId: 1, _id: 0 })
         .limit(maxRows + 1)
         .maxTimeMS(2000)
