@@ -19,6 +19,7 @@ import { createDeepAgentToolMaterializer } from '@server/deepAgent/toolMateriali
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { loadLinkedAgentContext } from '@server/deepAgent/missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
+import { resolveThinkingVisibilityForUserId } from '@server/utils/thinkingVisibility';
 
 /**
  * POST /api/deep-agent/spin  (admin/dev only)
@@ -100,6 +101,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
             logger,
             buildTools: createDeepAgentToolMaterializer({ llm: resolved.llm, model: resolved.modelId, logger }),
             loadLinkedAgent: loadLinkedAgentContext,
+            resolveThinkingVisibility: resolveThinkingVisibilityForUserId,
           })
         : noopRunAct;
       const deps: WakeDeps = {

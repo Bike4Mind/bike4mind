@@ -77,6 +77,7 @@ import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
 import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
@@ -1009,6 +1010,7 @@ async function processExecution(
     const storedUser = await User.findById(execution.userId);
     if (!storedUser) throw new Error(`User ${execution.userId} not found`);
     const user = execution.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
+    const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
 
     // Validate session ownership
     const loadedSession = await sessionRepository.findById(execution.sessionId);
@@ -1786,6 +1788,7 @@ async function processExecution(
       userId: execution.userId,
       user: user as IUserDocument,
       logger,
+      thinkingVisibility,
       // The run's active account, already membership-checked at start; lake-creating tools scope to it.
       organizationId: execution.organizationId,
       // How the run was started; the key also attributes a lake write a tool drives, as on the chat doors.
@@ -2258,6 +2261,9 @@ async function processExecution(
       // continuations (baked into the checkpoint) and when artifacts are off.
       ...(artifactEmissionPrompt && { artifactEmissionPrompt }),
       ...buildReActAgentRuntimeConfig(execution),
+      thinkingVisibility,
+      modelBackend: modelInfo?.backend,
+      modelAdapterFamily: modelInfo?.adapterFamily,
     });
 
     // Restore from checkpoint if continuing
@@ -3680,6 +3686,7 @@ async function processSubagentDispatch(
     const storedUser = await User.findById(child.userId);
     if (!storedUser) throw new Error(`User ${child.userId} not found`);
     const user = child.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
+    const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
     const loadedSession = await sessionRepository.findById(child.sessionId);
     if (!loadedSession) throw new Error(`Session ${child.sessionId} not found`);
     if (loadedSession.userId !== child.userId) {
@@ -3919,6 +3926,7 @@ async function processSubagentDispatch(
       userId: child.userId,
       user: user as IUserDocument,
       logger,
+      thinkingVisibility,
       organizationId: child.organizationId,
       ...executionTurnAuth(child),
       // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
@@ -4285,6 +4293,7 @@ async function processSubagentDispatch(
       userId: child.userId,
       llm,
       logger,
+      thinkingVisibility,
       parentTools: tools,
       // Granted to this dispatched subagent only when its `allowedTools` names
       // `lattice_*`; the orchestrator dedupes against `parentTools`.
