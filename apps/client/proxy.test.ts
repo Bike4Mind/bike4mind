@@ -96,6 +96,22 @@ describe('proxy CSP header', () => {
     expect(values).toContain('https://tile.openstreetmap.org');
   });
 
+  // Social post thumbnails load straight from each network's image CDN. connect-src as well, for
+  // the same service-worker re-fetch as the map tiles above.
+  it.each(['img-src', 'connect-src'])('%s allows the social CDN hosts that serve post thumbnails', directive => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values).toEqual(
+      expect.arrayContaining([
+        'https://cdn.bsky.app',
+        'https://video.bsky.app',
+        'https://*.fbcdn.net',
+        'https://i.ytimg.com',
+      ])
+    );
+  });
+
   it('connect-src allows the GitHub API the desktop download page reads its latest release from', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/desktop'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
