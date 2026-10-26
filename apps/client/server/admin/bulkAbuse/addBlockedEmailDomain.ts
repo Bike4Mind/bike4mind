@@ -1,8 +1,9 @@
-import { normalizeEmailDomain, partitionDomainList, settingsMap } from '@bike4mind/common';
+import { partitionDomainList, settingsMap } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import { assertOwnedDomain } from './assertOwnedDomain';
 
 type AuditRequest = Parameters<typeof recordAdminSettingChange>[0];
 
@@ -10,13 +11,12 @@ const SETTING = 'blockedEmailDomains';
 
 /**
  * Adds a domain to the blockedEmailDomains setting so the registration gate refuses new signups on
- * it. The second writer of that setting after pages/api/settings/update.ts: same normalization,
- * same strict audit entry in the write's transaction, same cache invalidation after the commit.
+ * it. The second writer of that setting after pages/api/settings/update.ts: same normalization and
+ * public-suffix refusal, same strict audit entry in the write's transaction, same cache invalidation after the commit.
  * Returns false when the domain was already listed.
  */
 export async function addBlockedEmailDomain(req: AuditRequest, rawDomain: string): Promise<boolean> {
-  const domain = normalizeEmailDomain(rawDomain);
-  if (!domain) throw new Error(`Not a valid domain: ${rawDomain}`);
+  const domain = assertOwnedDomain(rawDomain);
 
   const added = await withTransaction(async () => {
     const existing = await AdminSettings.findOne({ settingName: SETTING }).lean();

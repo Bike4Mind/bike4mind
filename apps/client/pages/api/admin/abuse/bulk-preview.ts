@@ -1,9 +1,4 @@
-import {
-  ApiKeyScope,
-  BulkAbusePreviewRequestSchema,
-  normalizeEmailDomain,
-  type BulkAbusePreview,
-} from '@bike4mind/common';
+import { ApiKeyScope, BulkAbusePreviewRequestSchema, type BulkAbusePreview } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { abuseService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -14,6 +9,7 @@ import {
   bulkAbusePreviewAdapters,
   denySelfInBulkAbuseTarget,
 } from '@server/admin/bulkAbuse/adapters';
+import { assertOwnedDomain } from '@server/admin/bulkAbuse/assertOwnedDomain';
 import { signBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToken';
 
 /**
@@ -25,6 +21,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
     if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const { target, actions } = BulkAbusePreviewRequestSchema.parse(req.body);
     await denySelfInBulkAbuseTarget(req, req.user, target);
+    const domain = target.kind === 'domain' ? assertOwnedDomain(target.domain) : null;
     // A domain ban writes blockedEmailDomains, so it needs the settings route's permission too.
     if (target.kind === 'domain' && actions.ban && !req.ability?.can('update', AdminSettings)) {
       throw new ForbiddenError('Banning a domain needs permission to edit admin settings.');
@@ -44,7 +41,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       excluded: cohort.excluded,
       hasMore: cohort.hasMore,
       nextAfterUserId: cohort.nextAfterUserId,
-      blocksDomain: target.kind === 'domain' && actions.ban ? normalizeEmailDomain(target.domain) : null,
+      blocksDomain: actions.ban ? domain : null,
       previewToken: signBulkAbusePreviewToken(req.user.id, fingerprint, cohort.upToUserId),
     };
     return res.json(preview);

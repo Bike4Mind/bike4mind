@@ -1,9 +1,4 @@
-import {
-  ApiKeyScope,
-  BulkAbuseExecuteRequestSchema,
-  normalizeEmailDomain,
-  type BulkAbuseExecuteResult,
-} from '@bike4mind/common';
+import { ApiKeyScope, BulkAbuseExecuteRequestSchema, type BulkAbuseExecuteResult } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { abuseService } from '@bike4mind/services';
 import { BadRequestError, ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -16,6 +11,7 @@ import {
   bulkAbuseExecuteAdapters,
   denySelfInBulkAbuseTarget,
 } from '@server/admin/bulkAbuse/adapters';
+import { assertOwnedDomain } from '@server/admin/bulkAbuse/assertOwnedDomain';
 import { verifyBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToken';
 
 /**
@@ -28,6 +24,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
     if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const { target, actions, previewToken, reason: rawReason } = BulkAbuseExecuteRequestSchema.parse(req.body);
     await denySelfInBulkAbuseTarget(req, req.user, target);
+    const domain = target.kind === 'domain' ? assertOwnedDomain(target.domain) : null;
     // A domain ban writes blockedEmailDomains, so it needs the settings route's permission too.
     if (target.kind === 'domain' && actions.ban && !req.ability?.can('update', AdminSettings)) {
       throw new ForbiddenError('Banning a domain needs permission to edit admin settings.');
@@ -47,7 +44,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
     }
 
     // Block the domain first, so no new account can sign up on it while the cohort is processed.
-    const blockedDomain = target.kind === 'domain' && actions.ban ? normalizeEmailDomain(target.domain) : null;
+    const blockedDomain = actions.ban ? domain : null;
     if (blockedDomain) await addBlockedEmailDomain(req, blockedDomain);
 
     const results = await abuseService.executeBulkAbuse(
@@ -82,7 +79,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       summary: `bulk abuse response: ${result.succeededCount} succeeded, ${result.failedCount} failed, ${cohort.excluded.length} excluded`,
       reason,
       details: {
-        target: target.kind === 'domain' ? { kind: 'domain', domain: normalizeEmailDomain(target.domain) } : target,
+        target: domain ? { kind: 'domain', domain } : target,
         actions,
         succeededCount: result.succeededCount,
         failedCount: result.failedCount,
