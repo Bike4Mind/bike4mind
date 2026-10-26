@@ -38,6 +38,12 @@ describe('signup burst detector', () => {
     const addresses = [9, 6, 4, 2, 1].map(value => `alice28aa0${value}@example.net`);
     expect(detectSignupBurst(observations(addresses), options).suspicious).toBe(true);
   });
+  it('leaves an ID-style cohort alone even when it contains a short increasing run', () => {
+    const ids = ['2041', '1187', '3302', '2290', '4415', '3876', '1550', '5123', '4790', '6034', '2755', '7012'];
+    const names = ['ab', 'cd', 'ef', 'gh', 'ij', 'kl', 'mn', 'op', 'qr', 'st', 'uv', 'wx'];
+    const addresses = ids.map((id, index) => `${names[index]}${id}@example.net`);
+    expect(detectSignupBurst(observations(addresses), options).suspicious).toBe(false);
+  });
   it('leaves five normal company employees alone', () => {
     const addresses = ['alice', 'bob', 'carol', 'dave', 'eve'].map(name => `${name}@example.net`);
     expect(detectSignupBurst(observations(addresses), options).suspicious).toBe(false);
