@@ -6,7 +6,7 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const DISCOVERY_MIN_ACCOUNT_AGE_MS = 2 * DAY_MS;
-export const DISCOVERY_COOLDOWN_MS = 3 * DAY_MS;
+export const DISCOVERY_COOLDOWN_MS = DAY_MS;
 export const DISCOVERY_MIN_CANDIDATES = 1;
 export const DISCOVERY_MAX_CARDS = 3;
 export const DISCOVERY_SETTLE_MS = 5000;

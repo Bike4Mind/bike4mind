@@ -124,7 +124,7 @@ describe('useGearsDiscovery', () => {
     ['on the gears page', () => (h.pathname = '/gears')],
     [
       'inside the cooldown',
-      () => writeDiscoveryState('u1', { lastShownAt: Date.now() - DAY, dismissed: false, rotation: 0 }),
+      () => writeDiscoveryState('u1', { lastShownAt: Date.now() - DAY / 2, dismissed: false, rotation: 0 }),
     ],
   ])('stays closed and writes nothing new: %s', (_label, arrange) => {
     arrange();

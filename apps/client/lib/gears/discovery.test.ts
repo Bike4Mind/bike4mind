@@ -67,7 +67,7 @@ describe('shouldShowDiscovery', () => {
     expect(shouldShowDiscovery({ ...base, candidateCount: 0 })).toBe(false);
   });
 
-  it('respects the 3-day cooldown', () => {
+  it('respects the 1-day cooldown', () => {
     const state = { ...EMPTY_DISCOVERY_STATE, lastShownAt: NOW - DISCOVERY_COOLDOWN_MS + 1 };
     expect(shouldShowDiscovery({ ...base, state })).toBe(false);
     expect(shouldShowDiscovery({ ...base, state: { ...state, lastShownAt: NOW - DISCOVERY_COOLDOWN_MS } })).toBe(true);

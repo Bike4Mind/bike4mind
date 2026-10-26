@@ -16,7 +16,7 @@ The modal opens on app load when ALL of these hold:
 
 - the account is older than **2 days** (`DISCOVERY_MIN_ACCOUNT_AGE_MS`);
 - at least **1** unused visible gear remains (`DISCOVERY_MIN_CANDIDATES`; started at 3, lowered so the last 1-2 gears still get shown);
-- at least **3 days** have passed since it was last shown (`DISCOVERY_COOLDOWN_MS`);
+- at least **1 day** has passed since it was last shown (`DISCOVERY_COOLDOWN_MS`);
 - the user has not chosen "Don't show again";
 - What's New has not been shown in this browser session;
 - no other modal dialog is visible (`isAnyModalDialogOpen()`), no chat response is streaming;
@@ -47,7 +47,7 @@ cooldown. "Don't show again" sets a permanent flag.
 One localStorage key per user: `gears_discovery_<userId>` holding
 `{ lastShownAt: number, dismissed: boolean, rotation: number }`. Same approach as
 What's New (`modalStorage` in `modalHelpers.ts`). Per-device by design; acceptable for a
-3-day reminder. Malformed or missing data is treated as the empty state.
+1-day reminder. Malformed or missing data is treated as the empty state.
 
 ## Components
 
