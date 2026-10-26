@@ -103,12 +103,22 @@ describe('POST /api/reg-invites/migrate', () => {
     );
   });
 
+  it('falls back to the org id when the name lookup fails', async () => {
+    h.findOrg.mockRejectedValue(new Error('db down'));
+    await run([{ email: 'a@b.test', name: 'A' }], false, 'org-1');
+
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ target: { kind: 'organization', id: 'org-1', displayName: 'org-1' } })
+    );
+  });
+
   it('does not look up an organization when orgId is absent', async () => {
     await run([{ email: 'a@b.test', name: 'A' }]);
     expect(h.findOrg).not.toHaveBeenCalled();
   });
 
-  it('still responds when the best-effort audit write fails and returns null', async () => {
+  it('still responds when the audit write returns no entry', async () => {
     h.audit.mockResolvedValueOnce(null);
     const res = { json: vi.fn() };
     await h.handler!(

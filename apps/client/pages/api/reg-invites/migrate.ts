@@ -148,7 +148,7 @@ const handler = baseApi().post(async (req, res) => {
 
   // Best effort: each user is created and added on its own, so a partial run is normal and there
   // is no single transaction to tie a strict entry to; record the outcome once the loop finishes.
-  const organization = orgId ? await organizationRepository.findById(orgId) : null;
+  const organization = orgId ? await organizationRepository.findById(orgId).catch(() => null) : null;
   await recordAdminActionFromRequest(req, {
     action: 'user.accounts.migrated',
     target: orgId
