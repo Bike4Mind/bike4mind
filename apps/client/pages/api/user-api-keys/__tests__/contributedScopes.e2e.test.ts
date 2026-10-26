@@ -74,7 +74,8 @@ afterEach(async () => {
 function post(body: unknown) {
   const userId = new mongoose.Types.ObjectId().toString();
   const { req, res } = createMocks({ method: 'POST', body });
-  (req as any).user = { id: userId, isAdmin: false };
+  // Scope tests start from a verified, trusted account so the trust gate stays real.
+  (req as any).user = { id: userId, isAdmin: false, emailVerified: true, apiKeyTrustApproved: true };
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res, userId };
 }
