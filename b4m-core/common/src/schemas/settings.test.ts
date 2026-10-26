@@ -1443,11 +1443,11 @@ describe('apiKeyAccess default', () => {
 });
 
 describe('API rate limit settings floor', () => {
-  it('lets the Free tier be set to 0 but rejects negatives and fractions', () => {
+  it('lets the Free tier be set to 0 but rejects negatives, and keeps a legacy fraction', () => {
     const { schema } = settingsMap.apiRateLimitFreePerMin;
     expect(schema.safeParse(0).success).toBe(true);
     expect(schema.safeParse(-1).success).toBe(false);
-    expect(schema.safeParse(1.5).success).toBe(false);
+    expect(schema.safeParse(1.5).success).toBe(true);
   });
 
   it.each(['apiRateLimitBasicPerMin', 'apiRateLimitProPerMin'] as const)('keeps a floor of 1 for %s', key => {
