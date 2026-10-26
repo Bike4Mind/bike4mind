@@ -15,8 +15,8 @@ import type { SandboxAsset } from './renderSandboxedBundle';
  *   - cumulative cap: stop inlining once the running ENCODED total (the `data:` URI
  *     length that actually lands in the response) reaches the budget, less
  *     `reservedBytes` for index.html
- * The ~1.5 MB between the budget and 6 MB absorbs attribute escaping, the wrapper
- * page and response headers.
+ * The ~1.5 MB between the budget and 6 MB absorbs the wrapper page and response
+ * headers; callers pass the ESCAPED index.html size as `reservedBytes`.
  *
  * Fetches run concurrently (bounded by CONCURRENCY) for latency, then the caps are
  * applied in a deterministic SECOND pass over the manifest order - so which assets
@@ -30,6 +30,11 @@ import type { SandboxAsset } from './renderSandboxedBundle';
 export const PER_ASSET_MAX_BYTES = 3 * 1024 * 1024;
 /** Stop inlining once the cumulative base64-encoded total reaches this size. */
 export const TOTAL_INLINE_MAX_BYTES = 4.5 * 1024 * 1024;
+/**
+ * Largest raw media body the overflow route may serve: a buffered Lambda response caps at
+ * 6 MB, and a base64-wrapped binary body is 4/3 of raw, so stay safely under 4.5 MB.
+ */
+export const OVERFLOW_MAX_BYTES = 4 * 1024 * 1024;
 /** Max concurrent asset downloads - bounds S3 fan-out without serializing latency. */
 const CONCURRENCY = 8;
 
@@ -49,6 +54,8 @@ export interface CollectInlineAssetsResult {
   assets: Map<string, SandboxAsset>;
   /** Paths skipped because they exceeded a size cap (per-asset or cumulative). */
   oversized: string[];
+  /** Raw byte size of each `oversized` path. */
+  oversizedBytes: Map<string, number>;
   /** Paths that failed to download. */
   failed: string[];
 }
@@ -82,6 +89,7 @@ export async function collectInlineAssets(input: CollectInlineAssetsInput): Prom
   // Pass 2 - apply caps deterministically in manifest order.
   const assets = new Map<string, SandboxAsset>();
   const oversized: string[] = [];
+  const oversizedBytes = new Map<string, number>();
   let runningTotal = 0;
   const mimeByPath = new Map(input.manifest.map(e => [e.path, e.mimeType]));
   for (const path of paths) {
@@ -91,6 +99,7 @@ export async function collectInlineAssets(input: CollectInlineAssetsInput): Prom
     const encoded = encodedSize(data.length, mimeType);
     if (data.length > perAssetMax || runningTotal + encoded > totalMax) {
       oversized.push(path);
+      oversizedBytes.set(path, data.length);
       continue;
     }
     runningTotal += encoded;
@@ -99,5 +108,5 @@ export async function collectInlineAssets(input: CollectInlineAssetsInput): Prom
 
   // Stable ordering for callers/tests regardless of fetch-completion order.
   failed.sort((a, b) => paths.indexOf(a) - paths.indexOf(b));
-  return { assets, oversized, failed };
+  return { assets, oversized, oversizedBytes, failed };
 }

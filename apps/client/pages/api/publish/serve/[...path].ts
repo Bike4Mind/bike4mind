@@ -18,6 +18,7 @@ import {
   checkVisibility,
   collectInlineAssets,
   loadLiveOwner,
+  OVERFLOW_MAX_BYTES,
   prepareShareMeta,
   recordGatedView,
   renderBundleLoaderShell,
@@ -876,7 +877,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     const collected = await collectInlineAssets({
       manifest: artifact.manifest,
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
-      reservedBytes: Buffer.byteLength(indexHtml),
+      // index.html ships inside a double-quoted srcdoc attribute: `&` and `"` grow (see renderBundleWrapper)
+      reservedBytes: Buffer.byteLength(indexHtml.replace(/&/g, '&amp;').replace(/"/g, '&quot;')),
     });
     inlineAssets = collected.assets;
     // Over-budget media loads through a same-origin, per-path tokenized URL instead of
@@ -884,7 +886,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     const overflowable = new Set(
       artifact.manifest.filter(e => /^(image|video|audio)\//.test(e.mimeType)).map(e => e.path)
     );
-    const overflow = new Set(collected.oversized.filter(p => overflowable.has(p)));
+    // Capped by what the buffered asset route can return; larger media stays dropped.
+    const overflow = new Set(
+      collected.oversized.filter(p => overflowable.has(p) && collected.oversizedBytes.get(p)! <= OVERFLOW_MAX_BYTES)
+    );
     overflowUrl = p =>
       overflow.has(p)
         ? `${docOrigin}${urlBase}/${p.split('/').map(encodeURIComponent).join('/')}?ot=${signOverflowAssetToken({ publicId: artifact.publicId, path: p })}`

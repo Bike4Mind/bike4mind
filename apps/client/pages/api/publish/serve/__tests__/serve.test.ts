@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { OVERFLOW_MAX_BYTES } from '@server/services/publish/collectInlineAssets';
 import { VIEWER_SANDBOX } from '@server/services/publish/viewerSecurity';
 
 const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne, mockUserFindById, mockStarterCredits } =
@@ -3329,6 +3330,102 @@ describe('GET /api/publish/serve - gated bundle inline budget and overflow media
     const data = res._getData() as string;
     expect(data).toContain('/a/tok123/img13.png?ot=');
     expect(data).not.toContain('/p/u/scope123/my-slug/img');
+  });
+
+  // Pull the emitted `<prefix><path>?ot=<token>` URL for `path` out of a rendered page.
+  const emittedOverflow = (data: string, prefix: string, encodedPath: string) => {
+    const m = data.match(new RegExp(`${prefix}${encodedPath.replace(/[.]/g, '\\.')}\\?ot=([^"&\\s]+)`));
+    expect(m).not.toBeNull();
+    return m![1];
+  };
+
+  it('replays the token the route emitted: authorizes exactly that file, including an encoded path', async () => {
+    const spaced = 'photos/my pic.png';
+    const manifest = [
+      { path: 'index.html', mimeType: 'text/html' },
+      ...imgs.map(path => ({ path, mimeType: 'image/png' })),
+      { path: spaced, mimeType: 'image/png' },
+    ];
+    const page = `<html><head></head><body>${imgs.map(p => `<img src="${p}">`).join('')}<img src="${spaced}"></body></html>`;
+    mockDownload.mockImplementation(async (key: string) =>
+      key.endsWith('index.html') ? Buffer.from(page) : Buffer.alloc(IMG_BYTES)
+    );
+    mockArtifactFindOne.mockReturnValue(bigBundle({ manifest }));
+    const first = run(['u', 'scope123', 'my-slug'], { cookie: await proof() });
+    await first.promise;
+    const data = first.res._getData() as string;
+    const prefix = '/p/u/scope123/my-slug/';
+
+    for (const [encoded, segments] of [
+      ['img13.png', ['img13.png']],
+      ['photos/my%20pic.png', ['photos', 'my pic.png']],
+    ] as const) {
+      const ot = emittedOverflow(data, prefix, encoded);
+      mockDownload.mockClear();
+      mockArtifactFindOne.mockReturnValue(bigBundle({ manifest }));
+      const { res, promise } = run(['u', 'scope123', 'my-slug', ...segments], { ot });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockDownload).toHaveBeenCalledWith(expect.stringMatching(/\/(img13\.png|photos\/my pic\.png)$/));
+      expect(mockDownload.mock.calls[0][0].endsWith(segments.join('/'))).toBe(true);
+    }
+  });
+
+  it('does not overflow media over the serveable cap: it stays dropped and is named in the header', async () => {
+    const manifest = [
+      { path: 'index.html', mimeType: 'text/html' },
+      { path: 'huge.png', mimeType: 'image/png' },
+    ];
+    mockDownload.mockImplementation(async (key: string) =>
+      key.endsWith('index.html')
+        ? Buffer.from('<html><head></head><body><img src="huge.png"></body></html>')
+        : Buffer.alloc(OVERFLOW_MAX_BYTES + 1)
+    );
+    mockArtifactFindOne.mockReturnValue(bigBundle({ manifest }));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: await proof() });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain('?ot=');
+    expect(res.getHeader('X-Publish-Dropped-Assets')).toBe('1');
+    expect(String(res.getHeader('X-Publish-Dropped-Asset-Names'))).toContain('huge.png');
+  });
+
+  it('reserves the ESCAPED index.html size: a quote-heavy page inlines fewer images and stays under 6 MB', async () => {
+    // 420k quotes become 420k x `&quot;` (2.5 MB) inside the srcdoc attribute.
+    const heavy = `<html><head></head><body><p>${'"'.repeat(420_000)}</p>${imgs.map(p => `<img src="${p}">`).join('')}</body></html>`;
+    mockDownload.mockImplementation(async (key: string) =>
+      key.endsWith('index.html') ? Buffer.from(heavy) : Buffer.alloc(IMG_BYTES)
+    );
+    mockArtifactFindOne.mockReturnValue(bigBundle());
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: await proof() });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(Buffer.byteLength(data)).toBeLessThan(6_000_000);
+    // The small-index case overflows 4 images (see above); here most of them must.
+    expect(data.match(/\?ot=/g)?.length).toBeGreaterThan(10);
+  });
+
+  it('authorizes a share-link asset request with the token its render emitted, and refuses another path', async () => {
+    mockArtifactFindOne.mockReturnValue(bigBundle());
+    serveBytes();
+    const page = run(['a', 'tok123'], { cookie: await proof() });
+    await page.promise;
+    const ot = emittedOverflow(page.res._getData() as string, '/a/tok123/', 'img13.png');
+
+    mockArtifactFindOne.mockReturnValue(bigBundle());
+    const ok = run(['a', 'tok123', 'img13.png'], { ot });
+    await ok.promise;
+    expect(ok.res._getStatusCode()).toBe(200);
+
+    mockArtifactFindOne.mockReturnValue(bigBundle());
+    const other = run(['a', 'tok123', 'img12.png'], { ot });
+    await other.promise;
+    expect(other.res._getStatusCode()).toBe(401);
   });
 
   describe('?ot= on an asset request', () => {

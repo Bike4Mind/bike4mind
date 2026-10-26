@@ -33,6 +33,7 @@ export {
   collectInlineAssets,
   type CollectInlineAssetsInput,
   type CollectInlineAssetsResult,
+  OVERFLOW_MAX_BYTES,
   PER_ASSET_MAX_BYTES,
   TOTAL_INLINE_MAX_BYTES,
 } from './collectInlineAssets';
