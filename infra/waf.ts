@@ -175,8 +175,8 @@ export const wafLoggingConfig =
         {
           // MUST be us-east-1 for CloudFront-scope WAF
           provider: wafProviderUsEast1,
-          // Retained in production so removing it from this stack never turns logging off
-          retainOnDelete: $app.stage === 'production',
+          // Retained so removing only this resource never turns logging off; AWS still drops it with the WebACL
+          retainOnDelete: ['production', 'dev'].includes($app.stage),
         }
       )
     : undefined;
@@ -198,7 +198,8 @@ export const wafAiRateLimitAlarmTopic =
     ? new aws.sns.Topic(
         'WafAiRateLimitAlarmTopic',
         { name: `${$app.name}-${$app.stage}-waf-ai-rate-limit-alarm` },
-        { provider: wafProviderUsEast1, retainOnDelete: true }
+        // Retained so subscriptions added outside this stack keep a stable topic ARN
+        { provider: wafProviderUsEast1, retainOnDelete: $app.stage === 'production' }
       )
     : undefined;
 
@@ -212,7 +213,8 @@ export const wafOobAlarmTopic =
     ? new aws.sns.Topic(
         'WafOobAlarmTopic',
         { name: `${$app.name}-${$app.stage}-waf-oob-alarm` },
-        { provider: wafProviderUsEast1 }
+        // Retained for the same reason as wafAiRateLimitAlarmTopic
+        { provider: wafProviderUsEast1, retainOnDelete: $app.stage === 'production' }
       )
     : undefined;
 
@@ -398,7 +400,7 @@ if (isWafEnabled && $app.stage === 'production' && wafWebAcl && wafAiRateLimitAl
           Severity: 'High',
         },
       },
-      { provider: wafProviderUsEast1, retainOnDelete: true }
+      { provider: wafProviderUsEast1 }
     );
   }
 }
