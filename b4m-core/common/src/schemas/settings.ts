@@ -1019,6 +1019,15 @@ export function isBlankSettingValue(raw: unknown): boolean {
   return raw == null || (typeof raw === 'string' && raw.trim() === '');
 }
 
+/** Blank (reverts to the default) or comma-separated positive whole numbers. Mirrors parseEscalationMinutes in server-utils. */
+function isEscalationScheduleOrBlank(value: string): boolean {
+  return value.trim() === '' || value.split(',').every(part => /^\d+$/.test(part.trim()) && Number(part) > 0);
+}
+
+function withSchema<T extends object, S extends z.ZodTypeAny>(setting: T, schema: S) {
+  return { ...setting, schema };
+}
+
 function makeStringSetting(
   config: {
     defaultValue: string | undefined;
@@ -3292,7 +3301,7 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
     order: 3,
   }),
-  oauthAbuseBlockEscalationMinutes: makeStringSetting({
+  oauthAbuseBlockEscalationMinutes: withSchema(makeStringSetting({
     key: 'oauthAbuseBlockEscalationMinutes',
     name: 'OAuth Abuse Block Escalation (minutes)',
     defaultValue: '10,60,1440',
@@ -3301,7 +3310,9 @@ export const settingsMap = {
     category: 'SecOps',
     group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
     order: 4,
-  }),
+  }), z.string().refine(isEscalationScheduleOrBlank, {
+    message: 'Use comma-separated whole minutes greater than 0, e.g. 10,60,1440',
+  })),
   oauthAbuseLookbackHours: makeNumberSetting({
     key: 'oauthAbuseLookbackHours',
     name: 'OAuth Abuse Escalation Lookback (hours)',

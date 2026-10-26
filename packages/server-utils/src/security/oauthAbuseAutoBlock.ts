@@ -1,9 +1,36 @@
-import { adminSettingsRepository, authFailLogRepository, blockedIPRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  authFailLogRepository,
+  blockedIPRepository,
+  type IBlockedIPDocument,
+} from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DEFAULT_SCHEDULE_MINUTES = [10, 60, 1440];
+
+/**
+ * AuthFailLog reasons that count as abuse of the shared OAuth flow. Deliberately excludes `internal`
+ * and `state_expired` (our own faults and slow users) and every other strategy's rows: a bug on our
+ * side must not auto-block an office. Keep in sync with OAUTH_FAILURE_REASONS in
+ * apps/client/server/utils/auth/oauthFailureReason.ts.
+ */
+export const OAUTH_ABUSE_REASONS = [
+  'registration_closed',
+  'state_invalid',
+  'state_missing',
+  'duplicate_account',
+  'forbidden_system_user',
+] as const;
+
+const POLICY_SETTING_NAMES = [
+  'oauthAbuseAutoBlockEnabled',
+  'oauthAbuseAttemptThreshold',
+  'oauthAbuseWindowMinutes',
+  'oauthAbuseBlockEscalationMinutes',
+  'oauthAbuseLookbackHours',
+] as const;
 
 export interface OauthAbusePolicy {
   enabled: boolean;
@@ -16,7 +43,9 @@ export interface OauthAbusePolicy {
 export interface OauthAbuseAutoBlockDeps {
   loadPolicy: () => Promise<OauthAbusePolicy>;
   getIPsWithHighAttempts: (since: Date, minAttempts: number) => Promise<Array<{ ip: string; attempts: number }>>;
-  countAutoBlocksSince: (ip: string, since: Date) => Promise<number>;
+  countAttemptsSince: (ip: string, since: Date) => Promise<number>;
+  findLatestBlock: (ip: string) => Promise<Pick<IBlockedIPDocument, 'active' | 'expiresAt' | 'unblockedAt'> | null>;
+  countAutoBlocksEndingSince: (ip: string, since: Date) => Promise<number>;
   block: (
     ip: string,
     reason: string,
@@ -43,7 +72,10 @@ export function resolveBlockDurationMs(priorAutoBlocks: number, scheduleMs: read
 
 async function loadPolicy(): Promise<OauthAbusePolicy> {
   // Fresh read so an admin change or the kill switch applies on the next run, not after a cache TTL.
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { skipCache: true });
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, {
+    skipCache: true,
+    names: [...POLICY_SETTING_NAMES],
+  });
   return {
     enabled: getSettingsValue('oauthAbuseAutoBlockEnabled', settings, true),
     threshold: getSettingsValue('oauthAbuseAttemptThreshold', settings, 20),
@@ -57,16 +89,27 @@ async function loadPolicy(): Promise<OauthAbusePolicy> {
 
 const defaultDeps: OauthAbuseAutoBlockDeps = {
   loadPolicy,
-  getIPsWithHighAttempts: (since, min) => authFailLogRepository.getIPsWithHighAttempts(since, min),
-  countAutoBlocksSince: (ip, since) => blockedIPRepository.countAutoBlocksSince(ip, since),
+  getIPsWithHighAttempts: (since, min) =>
+    authFailLogRepository.getIPsWithHighAttemptsForReasons(since, min, OAUTH_ABUSE_REASONS),
+  countAttemptsSince: (ip, since) => authFailLogRepository.countForIPAndReasons(ip, since, OAUTH_ABUSE_REASONS),
+  findLatestBlock: ip => blockedIPRepository.findLatestBlock(ip),
+  countAutoBlocksEndingSince: (ip, since) => blockedIPRepository.countAutoBlocksEndingSince(ip, since),
   block: (ip, reason, options) => blockedIPRepository.block(ip, reason, options),
 };
 
+/** When the IP's latest block stopped applying: an admin unblock, or its expiry. */
+function blockEndedAt(block: { expiresAt: Date; unblockedAt?: Date }): Date {
+  return block.unblockedAt && block.unblockedAt < block.expiresAt ? block.unblockedAt : block.expiresAt;
+}
+
 /**
- * Blocks every IP whose failed-auth count in the window reaches the threshold, escalating the block
+ * Blocks every IP whose OAuth abuse count in the window reaches the threshold, escalating the block
  * duration with each earlier auto block of that IP inside the lookback. Run every minute by the
  * oauthAbuseAutoBlock cron and on demand by the admin evaluate endpoint. A failure on one IP does
  * not stop the rest.
+ *
+ * Only failures after the IP's previous block ended count, so an admin unblock, or a block that
+ * simply expired, is not undone by the rows that caused it. IPs that are blocked right now are skipped.
  */
 export async function runOauthAbuseAutoBlock(
   options: { now?: Date; deps?: Partial<OauthAbuseAutoBlockDeps> } = {}
@@ -79,10 +122,20 @@ export async function runOauthAbuseAutoBlock(
   if (!policy.enabled) return result;
 
   const lookbackStart = new Date(now.getTime() - policy.lookbackMs);
-  for (const { ip, attempts } of await deps.getIPsWithHighAttempts(evaluatedSince, policy.threshold)) {
+  for (const candidate of await deps.getIPsWithHighAttempts(evaluatedSince, policy.threshold)) {
+    const { ip } = candidate;
+    let { attempts } = candidate;
     try {
+      const latest = await deps.findLatestBlock(ip);
+      if (latest?.active && latest.expiresAt > now) continue;
+      const endedAt = latest ? blockEndedAt(latest) : undefined;
+      if (endedAt && endedAt > evaluatedSince) {
+        attempts = await deps.countAttemptsSince(ip, endedAt);
+        if (attempts < policy.threshold) continue;
+      }
+
       const escalationLevel = Math.min(
-        await deps.countAutoBlocksSince(ip, lookbackStart),
+        await deps.countAutoBlocksEndingSince(ip, lookbackStart),
         policy.escalationMs.length - 1
       );
       const durationMs = resolveBlockDurationMs(escalationLevel, policy.escalationMs);

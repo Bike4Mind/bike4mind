@@ -77,9 +77,23 @@ export class BlockedIPRepository extends BaseRepository<IBlockedIPDocument> {
     return { doc, created: true };
   }
 
-  /** Auto blocks of this IP started at or after `since`; drives the escalation step. */
-  async countAutoBlocksSince(ip: string, since: Date): Promise<number> {
-    return this.model.countDocuments({ ip, source: 'auto', blockedAt: { $gte: since } });
+  /**
+   * Auto blocks of this IP that were still running at or after `since` and were not lifted early by
+   * an admin; drives the escalation step. Measured by expiry so a block as long as the lookback does
+   * not reset the step the moment it ends.
+   */
+  async countAutoBlocksEndingSince(ip: string, since: Date): Promise<number> {
+    return this.model.countDocuments({
+      ip,
+      source: 'auto',
+      expiresAt: { $gte: since },
+      $or: [{ unblockedAt: null }, { $expr: { $gte: ['$unblockedAt', '$expiresAt'] } }],
+    });
+  }
+
+  /** The most recent block of this IP, active or not. */
+  async findLatestBlock(ip: string): Promise<IBlockedIPDocument | null> {
+    return this.model.findOne({ ip }).sort({ blockedAt: -1 });
   }
 
   async unblock(ip: string): Promise<IBlockedIPDocument | null> {

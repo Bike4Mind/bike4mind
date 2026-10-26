@@ -37,4 +37,12 @@ describe('OAuth abuse settings', () => {
     if (high !== undefined) expect(schema.safeParse(high).success).toBe(false);
     expect(schema.safeParse(5).success).toBe(true);
   });
+
+  it.each(['10,abc', '10,0', '10,,60', '-5', '1.5'])('rejects the malformed escalation schedule %j', value => {
+    expect(settingsMap.oauthAbuseBlockEscalationMinutes.schema.safeParse(value).success).toBe(false);
+  });
+
+  it.each(['', '10,60,1440', ' 5, 30 '])('accepts the escalation schedule %j', value => {
+    expect(settingsMap.oauthAbuseBlockEscalationMinutes.schema.safeParse(value).success).toBe(true);
+  });
 });
