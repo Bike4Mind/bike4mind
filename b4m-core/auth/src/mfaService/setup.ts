@@ -54,6 +54,11 @@ export async function setupMFA(
   const backupCodes = reused?.backupCodes ?? generateBackupCodes();
   const hashedBackupCodes = backupCodes.map(hashBackupCode);
 
+  // The step counter is a global clock, not tied to this secret: clear it so a code from a NEW
+  // secret is not refused as a replay. Kept on reuse, where clearing it would let a code already
+  // claimed by a concurrent verify be accepted again.
+  const stepReset = reused ? {} : { totpLastStep: null };
+
   // Store hashed codes for verification; the plaintext copy lives only until enable clears it.
   const updatedUser = await userRepository.update({
     id: user.id,
@@ -66,10 +71,7 @@ export async function setupMFA(
       setupAt: reused ? reused.setupAt : new Date(),
       lastUsedAt: undefined,
     },
-    // The step counter is a global clock, not tied to this secret: clear it so a code from a NEW
-    // secret is not refused as a replay. Kept on reuse, where clearing it would let a code already
-    // claimed by a concurrent verify be accepted again.
-    ...(reused ? {} : { totpLastStep: null }),
+    ...stepReset,
     updatedAt: new Date(),
   });
 
