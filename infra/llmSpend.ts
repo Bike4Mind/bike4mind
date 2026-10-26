@@ -19,11 +19,13 @@ export const llmSpendNamespace = () => `${$app.name}/${$app.stage}/LLMSpend`;
 export const LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT = 25;
 const USAGE_MESSAGE = 'llm-usage-settled';
 
-export function llmSpendFilterPattern(): string {
-  return `{ $.message = "${USAGE_MESSAGE}" }`;
+export function llmSpendFilterPattern(value: 'usd' | 'outputTokens', byModel = false): string {
+  // CloudWatch only extracts fields selected by the pattern, including metric values/dimensions.
+  const modelSelector = byModel ? ' && $.model = *' : '';
+  return `{ $.message = "${USAGE_MESSAGE}" && $.provider = *${modelSelector} && $.${value} >= 0 }`;
 }
 
-export const LLM_SPEND_YOUNG_ACCOUNT_FILTER_PATTERN = `{ $.message = "${USAGE_MESSAGE}" && $.isYoungAccount IS TRUE }`;
+export const LLM_SPEND_YOUNG_ACCOUNT_FILTER_PATTERN = `{ $.message = "${USAGE_MESSAGE}" && $.isYoungAccount IS TRUE && $.usd >= 0 }`;
 
 const spendThreshold = parseAlarmThreshold(
   'LLM_SPEND_ALARM_USD_PER_5MIN',
@@ -60,7 +62,7 @@ if (isMonitoredStage) {
   new aws.cloudwatch.LogMetricFilter('llmSpendUsdFilter', {
     name: `${prefix}-llm-spend-usd`,
     logGroupName,
-    pattern: llmSpendFilterPattern(),
+    pattern: llmSpendFilterPattern('usd'),
     metricTransformation: {
       name: 'EstimatedUsd',
       namespace: LLM_SPEND_NAMESPACE,
@@ -73,7 +75,7 @@ if (isMonitoredStage) {
   new aws.cloudwatch.LogMetricFilter('llmSpendTokensFilter', {
     name: `${prefix}-llm-spend-output-tokens`,
     logGroupName,
-    pattern: llmSpendFilterPattern(),
+    pattern: llmSpendFilterPattern('outputTokens'),
     metricTransformation: {
       name: 'TokensOutput',
       namespace: LLM_SPEND_NAMESPACE,
@@ -108,7 +110,7 @@ if (isMonitoredStage) {
   new aws.cloudwatch.LogMetricFilter('llmSpendUsdByModelFilter', {
     name: `${prefix}-llm-spend-usd-by-model`,
     logGroupName,
-    pattern: llmSpendFilterPattern(),
+    pattern: llmSpendFilterPattern('usd', true),
     metricTransformation: {
       name: 'EstimatedUsdByModel',
       namespace: LLM_SPEND_NAMESPACE,
@@ -183,14 +185,15 @@ if (isMonitoredStage) {
             width: 6,
             height: 6,
             properties: {
-              title: 'Estimated USD today (UTC)',
+              title: 'Estimated USD in selected range',
               metrics: [
                 [{ expression: providerSum, label: 'Total', id: 'total' }],
                 ...providerMetrics('EstimatedUsd', 'Sum'),
               ],
               view: 'singleValue',
               region,
-              period: 86400,
+              period: 300,
+              setPeriodToTimeRange: true,
             },
           },
           {

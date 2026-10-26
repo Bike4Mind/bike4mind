@@ -67,6 +67,7 @@ import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion'
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
 import { isMonitoredStage as _isMonitoredStage, buildDlqAlarmSpecs } from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
+import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -527,6 +528,15 @@ function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
 if (isMonitoredStage) {
   for (const dlq of DLQ_DESCRIPTORS) {
     createDlqAlarms(dlq);
+  }
+
+  if (youngAccountSpendAlertDeadLetter) {
+    createDlqAlarms({
+      label: 'young-account-spend-alert',
+      displayName: 'Young Account Spend Alert',
+      application: 'Signup',
+      queue: youngAccountSpendAlertDeadLetter.queue,
+    });
   }
 
   // FabFile Moderation DLQ — deliberately NOT added to DLQ_DESCRIPTORS above.

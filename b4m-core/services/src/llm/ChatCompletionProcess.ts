@@ -4800,6 +4800,20 @@ export class ChatCompletionProcess {
           await this.releaseReservedCredits(questId, logger);
         }
 
+        if (!adminSettingsEnforceCredits) {
+          for (const usage of researchModeUsages(researchResults, models, inputTokens)) {
+            logLlmUsageSettled({
+              backend: usage.modelInfo.backend,
+              model: usage.modelInfo.id,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              usd: getTextModelCost(usage.modelInfo, usage.inputTokens, usage.outputTokens),
+              source: 'chat',
+              accountCreatedAt: this.user.createdAt,
+            });
+          }
+        }
+
         // This early return skips the normal-path cleanup below, so drop the controller entry
         // and the watcher here; the outer finally only clears the interval.
         cleanupAbortController();
@@ -6014,7 +6028,7 @@ export class ChatCompletionProcess {
           estimatedCost,
           creditsUsed: textCreditsUsed,
         };
-        logLlmUsageSettled(logger, {
+        logLlmUsageSettled({
           backend: currentModel.backend,
           model: currentModel.id,
           inputTokens: settledInputTokens,
@@ -7010,6 +7024,17 @@ export class ChatCompletionProcess {
     quest.creditsUsed = totalCredits;
 
     for (const usage of priced) {
+      logLlmUsageSettled({
+        backend: usage.modelInfo.backend,
+        model: usage.modelInfo.id,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadInputTokens,
+        cacheWriteTokens: usage.cacheCreationInputTokens,
+        usd: usage.costUsd,
+        source: 'chat',
+        accountCreatedAt: this.user.createdAt,
+      });
       this.db.usageEvents
         ?.record({
           requestId: quest.id,

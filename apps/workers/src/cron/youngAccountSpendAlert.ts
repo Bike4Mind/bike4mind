@@ -6,14 +6,15 @@ import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import axios from 'axios';
 import { Resource } from 'sst';
+import { z } from 'zod';
 
 const HOUR_MS = 60 * 60 * 1000;
 const TOP_SPENDER_LIMIT = 10;
 
-export interface YoungAccountSpendThresholds {
+export type YoungAccountSpendThresholds = {
   credits: number;
   accounts: number;
-}
+};
 
 function parseThreshold(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -63,7 +64,9 @@ export function formatYoungAccountSpendMessage(
   return lines.join('\n');
 }
 
-export async function handler() {
+const scheduledEventSchema = z.object({ time: z.iso.datetime() });
+
+export async function handler(event: unknown) {
   const logger = new Logger().withMetadata({ cron: 'youngAccountSpendAlert', stage: Resource.App.stage });
 
   if (Resource.App.stage !== 'production') {
@@ -71,7 +74,8 @@ export async function handler() {
   }
 
   const thresholds = readYoungAccountSpendThresholds();
-  const end = new Date();
+  // Event time stays fixed across delayed delivery and retries, so hourly windows stay adjacent.
+  const end = new Date(scheduledEventSchema.parse(event).time);
   const start = new Date(end.getTime() - HOUR_MS);
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);

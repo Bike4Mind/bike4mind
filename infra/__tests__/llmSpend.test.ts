@@ -39,6 +39,7 @@ vi.mock('../dlqAlarms', () => ({
   },
 }));
 vi.mock('@bike4mind/infra', () => import('../../b4m-core/infra/src/stageGating'));
+vi.mock('@bike4mind/observability', () => import('../../b4m-core/observability/src/index'));
 
 const PROVIDERS = ['anthropic', 'openai', 'bedrock', 'google', 'other'];
 
@@ -87,11 +88,11 @@ afterEach(() => {
 describe('LLM spend metric filters', () => {
   it('extracts estimated USD and output tokens with the provider as a dimension', async () => {
     await load();
-    const pattern = '{ $.message = "llm-usage-settled" }';
+    const pattern = (field: string) => `{ $.message = "llm-usage-settled" && $.provider = * && $.${field} >= 0 }`;
     expect(resources.filter).toHaveBeenCalledWith('llmSpendUsdFilter', {
       name: 'test-app-production-llm-spend-usd',
       logGroupName: expect.objectContaining({ value: 'chat-completion-logs' }),
-      pattern,
+      pattern: pattern('usd'),
       metricTransformation: {
         name: 'EstimatedUsd',
         namespace: 'test-app/production/LLMSpend',
@@ -103,7 +104,7 @@ describe('LLM spend metric filters', () => {
     expect(resources.filter).toHaveBeenCalledWith('llmSpendTokensFilter', {
       name: 'test-app-production-llm-spend-output-tokens',
       logGroupName: expect.objectContaining({ value: 'chat-completion-logs' }),
-      pattern,
+      pattern: pattern('outputTokens'),
       metricTransformation: {
         name: 'TokensOutput',
         namespace: 'test-app/production/LLMSpend',
@@ -117,7 +118,7 @@ describe('LLM spend metric filters', () => {
   it('breaks spend down by model and counts the young-account share', async () => {
     await load();
     expect(callFor(resources.filter, 'llmSpendUsdByModelFilter')).toMatchObject({
-      pattern: '{ $.message = "llm-usage-settled" }',
+      pattern: '{ $.message = "llm-usage-settled" && $.provider = * && $.model = * && $.usd >= 0 }',
       metricTransformation: {
         name: 'EstimatedUsdByModel',
         value: '$.usd',
@@ -125,7 +126,7 @@ describe('LLM spend metric filters', () => {
       },
     });
     expect(callFor(resources.filter, 'llmSpendYoungAccountUsdFilter')).toMatchObject({
-      pattern: '{ $.message = "llm-usage-settled" && $.isYoungAccount IS TRUE }',
+      pattern: '{ $.message = "llm-usage-settled" && $.isYoungAccount IS TRUE && $.usd >= 0 }',
       metricTransformation: {
         name: 'EstimatedUsdYoungAccounts',
         namespace: 'test-app/production/LLMSpend',
@@ -138,15 +139,24 @@ describe('LLM spend metric filters', () => {
     expect(resources.filter).toHaveBeenCalledTimes(4);
   });
 
+  it('selects every extracted metric value and dimension in the CloudWatch pattern', async () => {
+    await load();
+    for (const [, args] of resources.filter.mock.calls) {
+      const transformation = args.metricTransformation as { value: string; dimensions?: Record<string, string> };
+      const selectors = [transformation.value, ...Object.values(transformation.dimensions ?? {})];
+      const pattern = String(args.pattern);
+      for (const selector of selectors) {
+        // Match a complete selector, so $.model cannot be satisfied by $.modelName.
+        expect(pattern).toMatch(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+(?:=|>=)`));
+      }
+    }
+  });
+
   it('keeps the provider list in sync with the log line', async () => {
     const { LLM_SPEND_PROVIDERS } = await load();
-    const source = readFileSync(
-      new URL('../../b4m-core/services/src/llm/llmUsageSettledLog.ts', import.meta.url),
-      'utf8'
-    );
-    const quoted = LLM_SPEND_PROVIDERS.map(p => `'${p}'`).join(', ');
-    expect(source).toContain(`LLM_SPEND_PROVIDERS = [${quoted}] as const`);
-    expect(source).toContain("LLM_USAGE_SETTLED_MESSAGE = 'llm-usage-settled'");
+    const log = await import('../../b4m-core/services/src/llm/llmUsageSettledLog');
+    expect(LLM_SPEND_PROVIDERS).toEqual(log.LLM_SPEND_PROVIDERS);
+    expect(log.LLM_USAGE_SETTLED_MESSAGE).toBe('llm-usage-settled');
   });
 });
 
@@ -204,7 +214,7 @@ describe('LLM spend dashboard', () => {
     expect(titles).toEqual([
       'LLM Spend - Alarm Status',
       'Estimated USD per 5 min by provider',
-      'Estimated USD today (UTC)',
+      'Estimated USD in selected range',
       'Output tokens per 5 min by provider',
       'Young-account share of estimated USD (%)',
       'Estimated USD per 5 min by model',
@@ -215,7 +225,11 @@ describe('LLM spend dashboard', () => {
 
     expect(byTitle('LLM Spend - Alarm Status').alarms).toEqual(PROVIDERS.map(p => `alarm-arn-llmSpendRate-${p}`));
     expect(byTitle('Estimated USD per 5 min by provider')).toMatchObject({ stacked: true, period: 300 });
-    expect(byTitle('Estimated USD today (UTC)')).toMatchObject({ view: 'singleValue', period: 86400 });
+    expect(byTitle('Estimated USD in selected range')).toMatchObject({
+      view: 'singleValue',
+      period: 300,
+      setPeriodToTimeRange: true,
+    });
     expect(JSON.stringify(byTitle('Young-account share of estimated USD (%)').metrics)).toContain(
       'EstimatedUsdYoungAccounts'
     );

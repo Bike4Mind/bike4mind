@@ -1,4 +1,4 @@
-import type { Logger } from '@bike4mind/observability';
+import { Logger } from '@bike4mind/observability';
 
 /** Must stay in sync with the metric filters in infra/llmSpend.ts. */
 export const LLM_USAGE_SETTLED_MESSAGE = 'llm-usage-settled';
@@ -10,7 +10,7 @@ const YOUNG_ACCOUNT_WINDOW_MS = 168 * 60 * 60 * 1000;
 
 export type LlmUsageSource = 'chat' | 'api' | 'cli' | 'desktop' | 'agent' | 'web' | 'system';
 
-export interface LlmUsageSettled {
+export type LlmUsageSettled = {
   backend: string;
   model: string;
   inputTokens: number;
@@ -20,7 +20,7 @@ export interface LlmUsageSettled {
   usd: number;
   source: LlmUsageSource;
   accountCreatedAt?: Date | null;
-}
+};
 
 export function llmSpendProvider(backend: string): LlmSpendProvider {
   switch (backend) {
@@ -57,9 +57,17 @@ export function llmUsageSettledFields(usage: LlmUsageSettled, now: Date = new Da
 }
 
 /** One line per settled text completion; CloudWatch metric filters turn it into the LLM spend metrics. */
-export function logLlmUsageSettled(logger: Pick<Logger, 'info'> | undefined, usage: LlmUsageSettled): void {
+export function logLlmUsageSettled(usage: LlmUsageSettled): void {
   try {
-    logger?.info(LLM_USAGE_SETTLED_MESSAGE, llmUsageSettledFields(usage));
+    // Request loggers inherit user ids and other request metadata. Metrics have their own
+    // bounded context, and must survive a higher application log-level threshold.
+    const logger = new Logger({
+      metadata: { service: 'llmSpend' },
+      logInJson: true,
+      prettyPrint: false,
+      minLevel: 'info',
+    });
+    logger.info(LLM_USAGE_SETTLED_MESSAGE, llmUsageSettledFields(usage));
   } catch {
     // Observability only: never let it fail a settled completion.
   }

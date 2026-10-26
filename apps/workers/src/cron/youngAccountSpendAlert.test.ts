@@ -34,6 +34,7 @@ import {
   shouldAlertYoungAccountSpend,
 } from './youngAccountSpendAlert';
 
+const event = { time: '2026-10-26T11:00:00Z' };
 const createdAt = new Date('2026-10-25T00:00:00.000Z');
 const summary = (totalCredits: number, accountCount: number) => ({
   totalCredits,
@@ -99,31 +100,70 @@ describe('young-account spend message', () => {
 describe('young-account spend handler', () => {
   it('skips non-production stages before connecting', async () => {
     mocks.resource.App.stage = 'dev';
-    expect(await handler()).toMatchObject({ status: 'skipped' });
+    expect(await handler(event)).toMatchObject({ status: 'skipped' });
     expect(mocks.connect).not.toHaveBeenCalled();
   });
 
   it('queries the last hour and stays quiet below the ceilings', async () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
-    expect(await handler()).toMatchObject({ status: 'ok' });
+    expect(await handler(event)).toMatchObject({ status: 'ok' });
     expect(mocks.connect).toHaveBeenCalledWith('mongodb://example/production', expect.anything());
     const [start, end, limit] = mocks.findYoungAccountSpend.mock.calls[0];
-    expect(end.getTime() - start.getTime()).toBe(60 * 60 * 1000);
+    expect(start).toEqual(new Date('2026-10-26T10:00:00Z'));
+    expect(end).toEqual(new Date(event.time));
     expect(limit).toBe(10);
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
+  it('keeps the scheduled window on delayed delivery and retry', async () => {
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-26T11:05:00Z'));
+      await handler(event);
+      vi.setSystemTime(new Date('2026-10-26T12:15:00Z'));
+      await handler(event);
+      expect(mocks.findYoungAccountSpend.mock.calls[0]).toEqual(mocks.findYoungAccountSpend.mock.calls[1]);
+      expect(mocks.findYoungAccountSpend).toHaveBeenLastCalledWith(
+        new Date('2026-10-26T10:00:00Z'),
+        new Date(event.time),
+        10
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([{}, { time: 'invalid' }])('rejects a malformed scheduled event %j before connecting', async invalidEvent => {
+    await expect(handler(invalidEvent)).rejects.toThrow();
+    expect(mocks.connect).not.toHaveBeenCalled();
+  });
+
   it('posts to Slack when a ceiling is exceeded', async () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
-    expect(await handler()).toMatchObject({ status: 'alerted', totalCredits: 9000 });
+    expect(await handler(event)).toMatchObject({ status: 'alerted', totalCredits: 9000 });
     expect(mocks.post).toHaveBeenCalledExactlyOnceWith('https://hooks.example.com/x', {
       text: expect.stringContaining('`user-a`'),
     });
   });
 
+  it('propagates a failed spend query without reporting a quiet hour', async () => {
+    const error = new Error('database unavailable');
+    mocks.findYoungAccountSpend.mockRejectedValueOnce(error);
+    await expect(handler(event)).rejects.toBe(error);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failed Slack delivery for retry', async () => {
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+    const error = new Error('webhook unavailable');
+    mocks.post.mockRejectedValueOnce(error);
+    await expect(handler(event)).rejects.toBe(error);
+  });
+
   it('fails loudly when an alert has nowhere to go', async () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
     mocks.resolveSlackWebhookUrl.mockReturnValue('');
-    await expect(handler()).rejects.toThrow(/no Slack webhook/);
+    await expect(handler(event)).rejects.toThrow(/no Slack webhook/);
   });
 });

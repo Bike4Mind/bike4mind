@@ -28,7 +28,10 @@ subsequently fails token confirmation. No email address, code, or token is added
 to the dispatch log message.
 
 The Next.js server log group emits `otc-code-dispatched` and
-`user-api-key-created` as the JSON message field. Each filter reads that field
+`user-api-key-created` as the JSON message field. New API key records are logged
+by the shared mint service after creation succeeds, covering dashboard, API, CLI,
+bridge, admin, and exchange entry points. Rotations update an existing record and
+do not count as new key creation. Each filter reads that field
 inside Lambda-prefixed log lines. The metrics are `SignupCodeSends` and
 `ApiKeyCreations` in `<app-name>/<stage>/Signup`, so stages and applications in
 the same account do not combine their counts. Each alarm compares its `Sum` with
@@ -36,9 +39,9 @@ the configured threshold using `GreaterThanOrEqualToThreshold`; missing data is
 not breaching.
 
 ALARM and OK transitions go to the DLQ alarm topic (Slack; its handler drops OK)
-and to the out-of-band topic (`OPS_ALERT_EMAIL`). The 5-minute alarms return to
-OK between bursts, so a sustained attack notifies once per burst instead of once
-per episode.
+and to the out-of-band topic (`OPS_ALERT_EMAIL`). Each alarm notifies on an ALARM transition. A non-breaching evaluation returns it
+to OK, allowing a later burst to notify again; a continuous breach remains one
+alarm episode.
 
 ## WAF edge alarm (`infra/waf.ts`)
 
@@ -52,11 +55,14 @@ must share the alarm's region, so this alarm routes to the us-east-1 WAF topics:
 
 ## Young-account spend (`apps/workers/src/cron/youngAccountSpendAlert.ts`)
 
-Hourly, production only. Sums AI credit spend in the last hour by accounts created
-in the 7 days before the run and posts to the LiveOps Slack webhook when the total
+Hourly, production only. Uses the scheduled event time as the end of a fixed
+`[end - 1 hour, end)` window, so delayed delivery and retries query the same spend.
+Sums AI credit spend by accounts created in the 7 days before that end time and posts to the LiveOps Slack webhook when the total
 exceeds `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS` or the number of distinct spending
 accounts exceeds `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`. The message lists the top
 10 user ids by spend, the counts, and the window. It does not include emails.
+Both EventBridge delivery failures and exhausted Lambda retries reach a monitored
+14-day DLQ; recovery re-emits the original scheduled event.
 
 ## LLM spend (`infra/llmSpend.ts`)
 
@@ -67,7 +73,10 @@ JSON line with the message `llm-usage-settled`. It carries `provider`
 `model`, token counts, `usd` (the same per-model price the credit settlement
 uses, 6 decimals), `source`, and `isYoungAccount` (account created in the last
 168 hours, the young-account spend definition). It has no user id or prompt.
-The line is written in `b4m-core/services/src/llm/llmUsageSettledLog.ts`.
+The line is written by a dedicated info-level JSON logger in
+`b4m-core/services/src/llm/llmUsageSettledLog.ts`, without inheriting request
+metadata. Research completions log each settled configuration, including when
+credit enforcement is disabled; aborts carrying settled partial usage count too.
 
 Metric filters on the ChatCompletion log group write to the `<app>/<stage>/LLMSpend`
 namespace:
@@ -82,7 +91,7 @@ namespace:
 One alarm per provider fires when `EstimatedUsd` sums to at least
 `LLM_SPEND_ALARM_USD_PER_5MIN` (whole USD) in 5 minutes, sending ALARM and OK to
 the Slack DLQ topic and the out-of-band email topic. The
-`<app>-<stage>-llm-spend` dashboard shows spend per 5 minutes and today (UTC),
+`<app>-<stage>-llm-spend` dashboard shows spend per 5 minutes and across the selected dashboard range,
 output tokens, spend by model, the young-account share of spend, and the signup
 and WAF edge-signal counts from the alarms above.
 

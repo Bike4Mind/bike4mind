@@ -31,20 +31,20 @@ function newAccountExpression(createdAtField: string, windowEnd: Date) {
   };
 }
 
-export interface YoungAccountSpender {
+export type YoungAccountSpender = {
   userId: string;
   creditsSpent: number;
   accountCreatedAt: Date;
-}
+};
 
-export interface YoungAccountSpendSummary {
+export type YoungAccountSpendSummary = {
   totalCredits: number;
   accountCount: number;
   topSpenders: YoungAccountSpender[];
-}
+};
 
 /**
- * Per-user AI credit spend in [start, end] for accounts created in the 168 hours before `end`,
+ * Per-user AI credit spend in [start, end) for accounts created in the 168 hours before `end`,
  * highest spend first. Shares newAccountExpression with the report's `isNew` flag.
  */
 function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.PipelineStage[] {
@@ -53,7 +53,7 @@ function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.Pipeli
       $match: {
         ownerType: 'User',
         type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
-        createdAt: { $gte: start, $lte: end },
+        createdAt: { $gte: start, $lt: end },
       },
     },
     { $group: { _id: '$ownerId', creditsSpent: { $sum: { $abs: '$credits' } } } },
@@ -62,8 +62,8 @@ function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.Pipeli
     {
       $lookup: {
         from: 'users',
-        let: { userObjectId: '$userObjectId' },
-        pipeline: [{ $match: { $expr: { $eq: ['$_id', '$$userObjectId'] } } }, { $project: { _id: 1, createdAt: 1 } }],
+        localField: 'userObjectId',
+        foreignField: '_id',
         as: 'user',
       },
     },

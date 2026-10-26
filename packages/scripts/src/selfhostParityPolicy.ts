@@ -632,6 +632,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
     '024e7a2caa0084dc96d7337654c09dd2f281ffca2bc7c12fefa4f20761ed1eda'
   ),
+  broker(
+    'queue:infra/youngAccountSpendAlertDeadLetter.ts:youngAccountSpendAlertDlq',
+    '7c55bfdeaea409d972ba757cc5e3c8d50a5a0d1e8fd8629afab3473284bbbd6e'
+  ),
   wired('schedule:infra/cron.ts:adminAuditAlerts', '3d29c77c0415f6c9a1df4c5844222d599f060b9cc59f38fddcf9878c6882ec47', {
     source: 'apps/workers/src/selfhost/adminAuditAlerts.ts',
     symbol: 'registerAdminAuditAlerts',
@@ -861,7 +865,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:youngAccountSpendAlert',
-    'f371e0fa14ffc263e72291127a6e40f6d0d170514edfea04a5f0e02c5772ae7d',
+    '4d70a52fab52ffd079d447338a2aa4ead5ba19592604adf130905d0fa1e71898',
     'Hosted production abuse alert to Slack; not applicable to a portable deployment.'
   ),
   hostedOnly(

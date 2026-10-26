@@ -962,7 +962,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   if (modelInfo) {
     finalUsdCost = settledUsdCost(modelInfo);
     finalCredits = usdToCreditsStochastic(finalUsdCost);
-    logLlmUsageSettled(logger, {
+    logLlmUsageSettled({
       backend: modelInfo.backend,
       model: modelInfo.id,
       inputTokens: finalInputTokens,
