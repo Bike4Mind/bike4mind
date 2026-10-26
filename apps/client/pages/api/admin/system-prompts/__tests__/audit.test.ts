@@ -247,6 +247,14 @@ describe('system prompt admin audit', () => {
     expect(h.audit).not.toHaveBeenCalled();
   });
 
+  it('switch-version returns 404 and does not audit when the version is not in history', async () => {
+    h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 2, version: 3 });
+    h.repo.switchVersion.mockResolvedValue(null);
+    const res = await call(switchVersion, 'POST', { targetVersion: 9 });
+    expect(res._getStatusCode()).toBe(404);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it('reset records reset', async () => {
     h.repo.findByPromptId.mockResolvedValue({ version: 5 });
     h.repo.resetToDefault.mockResolvedValue({ deleted: true, historyPreserved: true });

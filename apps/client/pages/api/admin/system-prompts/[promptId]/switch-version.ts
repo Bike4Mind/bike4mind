@@ -69,6 +69,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       req.user?.name || 'Admin',
       codeDefaultContent
     );
+    if (!updated) {
+      return res.status(404).json({
+        error: 'Version not found',
+        message: `Version ${targetVersion} not found in history`,
+      });
+    }
 
     const previousVersion = prompt.activeVersion ?? prompt.version ?? 1;
     if (previousVersion !== targetVersion) {
