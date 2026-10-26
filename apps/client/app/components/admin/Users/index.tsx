@@ -136,7 +136,8 @@ const UsersTab: React.FC = () => {
             onOpenFilters={() => setFiltersDrawerOpen(true)}
           />
           <BulkAbuseBar
-            selectedCount={selectedUserIds.size}
+            // Rows are only selectable in slim mode, so the bar stays out of the other views.
+            selectedCount={displayMode === 'slim' ? selectedUserIds.size : 0}
             onClearSelection={clearSelection}
             onOpen={() => setBulkAbuseOpen(true)}
           />

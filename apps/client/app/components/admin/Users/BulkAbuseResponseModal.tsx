@@ -181,12 +181,13 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
                 <Radio
                   value="users"
                   label={`Selected users (${selectedUserIds.length})`}
-                  disabled={selectedUserIds.length === 0}
+                  disabled={selectedUserIds.length === 0 || executeMutation.isPending}
                   slotProps={{ input: { 'data-testid': 'bulk-abuse-target-users-radio' } }}
                 />
                 <Radio
                   value="domain"
                   label="Email domain"
+                  disabled={executeMutation.isPending}
                   slotProps={{ input: { 'data-testid': 'bulk-abuse-target-domain-radio' } }}
                 />
               </RadioGroup>
@@ -201,6 +202,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
                 <Input
                   placeholder="example.com"
                   value={domain}
+                  disabled={executeMutation.isPending}
                   onChange={event => {
                     setDomain(event.target.value);
                     setAfterUserId(undefined);
@@ -224,7 +226,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
                     key={action}
                     label={ACTION_LABELS[action]}
                     checked={effectiveActions[action]}
-                    disabled={action === 'revokeApiKeys' && actions.ban}
+                    disabled={executeMutation.isPending || (action === 'revokeApiKeys' && actions.ban)}
                     onChange={event => {
                       setActions(current => ({ ...current, [action]: event.target.checked }));
                       resetPreview();

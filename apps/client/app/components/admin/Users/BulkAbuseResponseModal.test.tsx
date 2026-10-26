@@ -8,8 +8,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 type MutateOptions<T> = { onSuccess?: (data: T) => void; onError?: (error: Error) => void };
 const previewMutate = vi.fn();
 const executeMutate = vi.fn();
-const mutationState: { previewError: Error | null; executePending: boolean } = {
+const mutationState: { previewError: Error | null; executeError: Error | null; executePending: boolean } = {
   previewError: null,
+  executeError: null,
   executePending: false,
 };
 
@@ -24,7 +25,7 @@ vi.mock('@client/app/hooks/data/adminBulkAbuse', () => ({
     mutate: executeMutate,
     reset: vi.fn(),
     isPending: mutationState.executePending,
-    error: null,
+    error: mutationState.executeError,
   }),
 }));
 
@@ -104,6 +105,7 @@ describe('BulkAbuseResponseModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mutationState.previewError = null;
+    mutationState.executeError = null;
     mutationState.executePending = false;
   });
 
@@ -241,6 +243,61 @@ describe('BulkAbuseResponseModal', () => {
       expect.objectContaining({ target: { kind: 'domain', domain: 'kashre.com', afterUserId: NEXT_ID } }),
       expect.anything()
     );
+  });
+
+  it('shows an execute failure and keeps the selection', () => {
+    resolvePreviewWith(preview());
+    executeMutate.mockImplementation((_req: unknown, options?: MutateOptions<BulkAbuseExecuteResult>) => {
+      mutationState.executeError = new Error('token expired');
+      options?.onError?.(mutationState.executeError);
+    });
+    const { onExecuted } = renderModal([USER_ID]);
+
+    fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
+    applyWithReason();
+
+    expect(onExecuted).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('bulk-abuse-result-summary')).not.toBeInTheDocument();
+  });
+
+  it('renders the per-user failures of a partial run', () => {
+    resolvePreviewWith(preview());
+    resolveExecuteWith(
+      executeResult({
+        succeededCount: 0,
+        failedCount: 1,
+        results: [
+          {
+            userId: USER_ID,
+            email: 'bot@np.kashre.com',
+            status: 'failed',
+            steps: {
+              ban: 'skipped',
+              revokeApiKeys: 'skipped',
+              revokeSessions: 'skipped',
+              clawbackFreeCredits: 'skipped',
+            },
+            revokedApiKeys: 0,
+            clawedBackCredits: 0,
+            error: 'audit store unavailable',
+          },
+        ],
+      })
+    );
+    renderModal([USER_ID]);
+
+    fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
+    applyWithReason();
+
+    expect(screen.getByTestId('bulk-abuse-failures')).toHaveTextContent('bot@np.kashre.com: audit store unavailable');
+  });
+
+  it('locks the form while a run is in flight', () => {
+    mutationState.executePending = true;
+    renderModal([USER_ID]);
+
+    expect(screen.getByTestId('bulk-abuse-action-ban-checkbox')).toBeDisabled();
+    expect(screen.getByTestId('bulk-abuse-target-domain-radio')).toBeDisabled();
   });
 
   it('disables preview for an invalid domain', () => {
