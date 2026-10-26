@@ -2455,7 +2455,11 @@ export class ChatCompletionProcess {
       this.modelAdmission = createModelAdmission({
         user: this.user,
         configs: await loadModelConfigurations(this.db.adminSettings),
-        getEntitlements: async () => (await this.resolveEntitlementKeys()).keys,
+        getEntitlements: async () => {
+          const { keys, resolved } = await this.resolveEntitlementKeys();
+          if (!resolved) throw new Error('entitlement resolution failed');
+          return keys;
+        },
         models,
         enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
         freeTierAllowedModels: await loadFreeTierAllowedModels(this.db.adminSettings),
