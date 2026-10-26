@@ -73,6 +73,68 @@ describe('isOperationalBillingEnabled', () => {
   });
 });
 
+describe('isOperationalBillingEnabled with a holder', () => {
+  const holder = (
+    overrides: { lastCreditsPurchasedAt?: Date; orgPurchasedAt?: Date; hasActivePlan?: boolean } = {}
+  ) => ({
+    user: { id: 'u1', lastCreditsPurchasedAt: overrides.lastCreditsPurchasedAt ?? null },
+    organization: overrides.orgPurchasedAt ? { lastCreditsPurchasedAt: overrides.orgPurchasedAt } : null,
+    activePlans: { hasActivePlan: vi.fn().mockResolvedValue(overrides.hasActivePlan ?? false) },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getSettingsMapMock.mockResolvedValue({});
+  });
+
+  it('bills a free-tier holder with the toggle off when credits are enforced', async () => {
+    setToggles({ bill: false, enforce: true });
+
+    await expect(isOperationalBillingEnabled(db, undefined, holder())).resolves.toBe(true);
+  });
+
+  it.each([
+    ['a user credit purchase', { lastCreditsPurchasedAt: new Date() }],
+    ['an org credit purchase', { orgPurchasedAt: new Date() }],
+    ['an active plan', { hasActivePlan: true }],
+  ])('does not bill a holder with %s while the toggle is off', async (_label, overrides) => {
+    setToggles({ bill: false, enforce: true });
+
+    await expect(isOperationalBillingEnabled(db, undefined, holder(overrides))).resolves.toBe(false);
+  });
+
+  it('skips the plan read when a purchase already settles it', async () => {
+    setToggles({ bill: false, enforce: true });
+    const paid = holder({ lastCreditsPurchasedAt: new Date() });
+
+    await isOperationalBillingEnabled(db, undefined, paid);
+
+    expect(paid.activePlans.hasActivePlan).not.toHaveBeenCalled();
+  });
+
+  it('bills a paying holder once the toggle is on, without reading plans', async () => {
+    setToggles({ bill: true, enforce: true });
+    const paid = holder({ hasActivePlan: true });
+
+    await expect(isOperationalBillingEnabled(db, undefined, paid)).resolves.toBe(true);
+    expect(paid.activePlans.hasActivePlan).not.toHaveBeenCalled();
+  });
+
+  it('never bills when credits are not enforced, free tier or not', async () => {
+    setToggles({ bill: true, enforce: false });
+
+    await expect(isOperationalBillingEnabled(db, undefined, holder())).resolves.toBe(false);
+  });
+
+  it('propagates a plan-read failure', async () => {
+    setToggles({ bill: false, enforce: true });
+    const failing = holder();
+    failing.activePlans.hasActivePlan.mockRejectedValue(new Error('plans down'));
+
+    await expect(isOperationalBillingEnabled(db, undefined, failing)).rejects.toThrow('plans down');
+  });
+});
+
 describe('areCreditsEnforced', () => {
   beforeEach(() => {
     vi.resetAllMocks();

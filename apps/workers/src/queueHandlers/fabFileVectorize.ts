@@ -1,4 +1,10 @@
-import { FabFileSourceType, SupportedEmbeddingModelSchema } from '@bike4mind/common';
+import {
+  FabFileSourceType,
+  getQuestErrorCode,
+  SupportedEmbeddingModelSchema,
+  usdToCredits,
+  usdToCreditsStochastic,
+} from '@bike4mind/common';
 import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
@@ -35,8 +41,11 @@ import {
   dataLakeService,
   embeddingCacheService,
   fabFilesService,
+  isOperationalBillingEnabled,
   recordOperationalUsage,
 } from '@bike4mind/services';
+import { reserveRequestCredits, type CreditReservation } from '@server/billing/reserveRequestCredits';
+import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
 import { getEmbeddingModelCost, provenancePayloadShape } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
@@ -342,6 +351,31 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         logger.log(`[spendGate] granted ~${estimatedMicroUsd} microUSD for ${missTokens} tokens`);
       }
 
+      // Work outside a data lake has no spend gate, so it is billed to the uploader under the
+      // operational billing policy, reserved up front so a holder who cannot cover it never embeds.
+      const missTokenTotal = missTokenCounts.reduce((sum, n) => sum + n, 0);
+      const missCostUsd = getEmbeddingModelCost(embeddingModel, missTokenTotal);
+      let creditReservation: CreditReservation | null = null;
+      let billingOrganization: Awaited<ReturnType<typeof organizationRepository.findById>> = null;
+      if (!spendScope) {
+        billingOrganization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
+        const billable =
+          missCostUsd > 0 &&
+          (await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, logger, {
+            user,
+            organization: billingOrganization,
+            activePlans: activePlanResolver,
+          }));
+        if (billable) {
+          creditReservation = await reserveRequestCredits({
+            req: { user, logger },
+            requiredCredits: usdToCredits(missCostUsd),
+            enforceCredits: true,
+            featureLabel: 'file indexing',
+          });
+        }
+      }
+
       let newVectors: number[][];
       try {
         if (missTexts.length === 1) {
@@ -367,6 +401,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           }
         }
       } catch (providerErr) {
+        await creditReservation?.refund();
         // The provider call failed, so the reserved money was never spent: return it to the
         // run and lake meters (the period window drains on its own). Scoped to EXACTLY the
         // provider call - a failure after embeddings succeeded is real spend and stays
@@ -434,6 +469,39 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             logger,
           }
         ).catch(err => logger.warn(`[recordOperationalUsage] ingestion spend record failed: ${err}`));
+      } else {
+        // Past this point the embeddings are paid for, so neither write may fail the file.
+        const settledCredits = creditReservation
+          ? await creditReservation
+              .settle(usdToCreditsStochastic(missCostUsd), {
+                type: 'text_generation_usage',
+                sessionId: fabFileId,
+                questId: fabFileId,
+                model: embeddingModel,
+                inputTokens: missTokenTotal,
+                outputTokens: 0,
+                source: 'system',
+              })
+              .catch(err => {
+                logger.error(`[fabFileVectorize] credit settlement failed for ${fabFileId}: ${err}`);
+                return 0;
+              })
+          : undefined;
+        await recordOperationalUsage(
+          {
+            requestId: fabFileId,
+            user,
+            organization: billingOrganization,
+            feature: 'embedding',
+            provider: requiredProvider,
+            model: embeddingModel,
+            inputTokens: missTokenTotal,
+            costUsd: missCostUsd,
+            source: 'system',
+            settledCredits,
+          },
+          { db: { usageEvents: usageEventRepository, adminSettings: adminSettingsRepository }, logger }
+        ).catch(err => logger.warn(`[recordOperationalUsage] file indexing spend record failed: ${err}`));
       }
 
       await Promise.all(
@@ -712,7 +780,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
     // switch does not flip itself): retrying only re-reserves spend from the wider meters
     // and burns delivery attempts, so it skips the retry deferral and accounts immediately.
-    const isTerminalSpendDenial = err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable;
+    // A holder short of credits is the same: the file fails now with the refusal as its message.
+    const isTerminalSpendDenial =
+      (err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable) ||
+      getQuestErrorCode(err) === 'insufficient_credits';
 
     // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
     // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
@@ -782,7 +853,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // rethrowing, so a deliberately stopped pipeline does not shovel messages into the
     // DLQ and page whoever flipped the switch.
     if (isTerminalSpendDenial) {
-      logger.warn(`Vectorization denied by spend gate for ${fabFileId}: ${errorMessage}`);
+      logger.warn(`Vectorization denied by spend gate or credit balance for ${fabFileId}: ${errorMessage}`);
       return;
     }
     throw err; // Re-throw so SQS marks the message failed

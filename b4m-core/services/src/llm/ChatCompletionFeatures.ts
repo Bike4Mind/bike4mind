@@ -120,6 +120,7 @@ import {
   type ForcedRetrievalFallbackReason,
 } from './forcedRetrievalCandidateSelection';
 import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
+import type { OperationalBillingAdapters } from '../billing/recordOperationalUsage';
 import { recordForcedRetrievalCutMetrics } from './forcedRetrievalSelectionMetrics';
 import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
 import {
@@ -235,6 +236,8 @@ interface DatabaseAdapters {
   creditTransactions?: ICreditTransactionRepository;
   /** Optional usage-event sink: dual-write analytics, never billing. */
   usageEvents?: IUsageEventRepository;
+  /** Flows to ToolContext.db unchanged; see its doc there. */
+  operationalBilling?: OperationalBillingAdapters;
   agents: IAgentRepository;
   /**
    * Optional skill repository - present when the host wires `/api/skills`

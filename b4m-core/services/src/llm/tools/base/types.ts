@@ -6,6 +6,7 @@ import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
 import type { ProviderSlotStore } from '../../../providerCapacity';
+import type { OperationalBillingAdapters } from '../../../billing/recordOperationalUsage';
 import {
   IChatHistoryItemDocument,
   IChatHistoryItemRepository,
@@ -212,6 +213,11 @@ export interface ToolContext {
      * where recording degrades to a no-op.
      */
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
+    /**
+     * Lets tool-internal operational spend (KB query embeddings, tool `llm.complete` calls) debit
+     * credits under the operational billing policy. Absent, that spend is recorded only.
+     */
+    operationalBilling?: OperationalBillingAdapters;
     /**
      * Owner lookup for usage attribution (`findById`) plus the org-membership resolution the
      * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -

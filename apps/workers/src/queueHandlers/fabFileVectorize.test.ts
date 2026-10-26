@@ -55,6 +55,10 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   organizationFindById: vi.fn(async () => null),
   recordOperationalUsage: vi.fn(async () => undefined),
+  isOperationalBillingEnabled: vi.fn(async () => false),
+  reserveRequestCredits: vi.fn(),
+  reservationRefund: vi.fn(async () => undefined),
+  reservationSettle: vi.fn(async () => 1),
   spendNotifier: vi.fn(async () => undefined),
   notifySlackIndexingComplete: vi.fn(async () => undefined),
   claimIndexNotification: vi.fn(async () => true),
@@ -105,6 +109,7 @@ vi.mock('@bike4mind/services', () => ({
   embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn().mockResolvedValue(undefined) },
   fabFilesService: { stampChunkEmbeddingModel: h.stampChunkEmbeddingModel },
   recordOperationalUsage: h.recordOperationalUsage,
+  isOperationalBillingEnabled: h.isOperationalBillingEnabled,
   dataLakeService: {
     enforceEmbeddingSpendGate: h.enforceEmbeddingSpendGate,
     resolveIngestSpendScope: h.resolveIngestSpendScope,
@@ -120,6 +125,9 @@ vi.mock('@bike4mind/services', () => ({
   },
   scopedSettingsService: { resolveScopedSetting: vi.fn(), scopeForLake: vi.fn() },
 }));
+vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: h.reserveRequestCredits }));
+const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
+vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
@@ -140,6 +148,10 @@ vi.mock('@bike4mind/common', async () => {
   return {
     SupportedEmbeddingModelSchema: z.string(),
     getEmbeddingModelCost: vi.fn(() => 0.0001),
+    getQuestErrorCode: actual.getQuestErrorCode,
+    usdToCredits: actual.usdToCredits,
+    // Pinned: settlement rounding is a coin flip.
+    usdToCreditsStochastic: vi.fn(() => 1),
     // Real enum, not a stub: the sourceType gate around the Slack notification claim compares
     // against this directly, so a fake value here would make every test pass for the wrong reason.
     FabFileSourceType: actual.FabFileSourceType,
@@ -560,12 +572,17 @@ describe('fabFileVectorize handler - usage ledger', () => {
     );
   });
 
-  it('never records for a turn-attached file (no batchId, no lake)', async () => {
+  it('records a turn-attached file unbilled when operational billing does not apply', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
-    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'embedding', inputTokens: 5, costUsd: 0.0001, settledCredits: undefined }),
+      expect.anything()
+    );
+    expect(h.recordOperationalUsage.mock.calls[0][1].db.creditTransactions).toBeUndefined();
   });
 
   it('never records on a cache hit (no spend occurred)', async () => {
@@ -1460,5 +1477,111 @@ describe('fabFileVectorize handler - keyless substitute on a deployment that has
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
     expect(h.hasVectorizedFileInEmbeddingSpace).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileVectorize handler - credit billing outside a data lake', () => {
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.isOperationalBillingEnabled.mockResolvedValue(true);
+    h.reserveRequestCredits.mockResolvedValue({ refund: h.reservationRefund, settle: h.reservationSettle });
+    h.reservationSettle.mockResolvedValue(1);
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+  });
+
+  it('asks the billing policy about the uploader with the plan resolver', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.isOperationalBillingEnabled).toHaveBeenCalledWith(expect.anything(), mockLogger, {
+      user: expect.objectContaining({ id: 'u1' }),
+      organization: null,
+      activePlans: activePlanResolver,
+    });
+  });
+
+  it('reserves before embedding, settles after, and records the settled credits', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.reserveRequestCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredCredits: 1, enforceCredits: true, featureLabel: 'file indexing' })
+    );
+    expect(h.reserveRequestCredits.mock.invocationCallOrder[0]).toBeLessThan(h.getVector.mock.invocationCallOrder[0]);
+    expect(h.reservationSettle).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ type: 'text_generation_usage', inputTokens: 5 })
+    );
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'embedding', settledCredits: 1 }),
+      expect.anything()
+    );
+  });
+
+  it('fails the file without embedding, and consumes the message, when the holder cannot cover it', async () => {
+    const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+    h.reserveRequestCredits.mockRejectedValue(
+      actual.insufficientCreditsError('You do not have enough credits for file indexing.')
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'You do not have enough credits for file indexing.');
+  });
+
+  it('refunds the reservation when the provider call fails', async () => {
+    h.getVector.mockRejectedValueOnce(new Error('openai 500'));
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
+
+    expect(h.reservationRefund).toHaveBeenCalledTimes(1);
+    expect(h.reservationSettle).not.toHaveBeenCalled();
+  });
+
+  it('still completes the file when settlement fails after the embeddings were paid for', async () => {
+    h.reservationSettle.mockRejectedValueOnce(new Error('ledger down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.chunkUpdate).toHaveBeenCalled();
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ settledCredits: 0 }),
+      expect.anything()
+    );
+  });
+
+  it('never reserves for data-lake work, which its own spend gate governs', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.isOperationalBillingEnabled).not.toHaveBeenCalled();
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+  });
+
+  it('never reserves on a cache hit', async () => {
+    h.getEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
   });
 });

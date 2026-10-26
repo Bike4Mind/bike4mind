@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
-import { BadRequestError, CreditHolderType } from '@bike4mind/common';
+import { BadRequestError, CreditHolderType, getQuestErrorCode } from '@bike4mind/common';
 
 const {
   mockSemanticSearch,
@@ -63,6 +63,8 @@ vi.mock('@bike4mind/utils', () => ({
   normalizeId: (value: unknown) => (value == null ? undefined : String(value)),
 }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
+const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
+vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 vi.mock('@bike4mind/server-utils/dataLakes/requestMembership', () => ({ getRequestMembershipOrgIds: async () => [] }));
 vi.mock('@bike4mind/server-utils/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
 
@@ -200,6 +202,31 @@ describe('runLakeSemanticSearch billing owner and source', () => {
 
     expect(mockFindAccessibleById).toHaveBeenCalledWith(jwtReq.user, 'seat-org');
     expect(recorded()).toMatchObject({ organization: SEAT_ORG, source: 'api' });
+  });
+
+  // The toggle alone is off; billing applies only once the helper sees this holder (free tier).
+  it('refuses a free-tier holder who cannot cover the query, asking with the holder and plan resolver', async () => {
+    const brokeUser = { ...USER, organizationId: undefined, currentCredits: 0 };
+    mockUserFindById.mockResolvedValue(brokeUser);
+    mockBillingEnabled.mockImplementation(async (_db: unknown, _logger: unknown, holder?: unknown) => !!holder);
+
+    const error = await runLakeSemanticSearch(apiKeyReq({ billingOwnerType: CreditHolderType.User }), input()).catch(
+      (err: unknown) => err
+    );
+
+    expect(getQuestErrorCode(error)).toBe('insufficient_credits');
+    expect(mockBillingEnabled).toHaveBeenCalledWith(expect.anything(), logger, {
+      user: brokeUser,
+      organization: null,
+      activePlans: activePlanResolver,
+    });
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+
+  it('settles with the plan resolver so the charge agrees with the pre-flight', async () => {
+    await runLakeSemanticSearch(apiKeyReq({ billingOwnerType: CreditHolderType.User }), input());
+
+    expect(mockRecordOperationalUsage.mock.calls[0][1].db.activePlans).toBe(activePlanResolver);
   });
 
   it('refuses an org-billed key whose holder has left the org when billing is on', async () => {

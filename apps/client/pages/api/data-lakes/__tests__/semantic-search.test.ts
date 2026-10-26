@@ -53,6 +53,10 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: unknown, _res: unknown) => undefined }));
 vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({ resolveRetrievalLakeScope: mockResolveScope }));
+// Paying by default, so the toggle tests below are not changed by the free-tier carve-out.
+vi.mock('@server/entitlements/activeSubscriptions', () => ({
+  activePlanResolver: { hasActivePlan: async () => true },
+}));
 // getProviderFromModel is stubbed so a test can choose the provider, but resolveEmbeddingConfig
 // is the real one: which credential a provider needs is the behaviour under test here.
 vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({

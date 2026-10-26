@@ -17,9 +17,10 @@ export type RecordToolOperationalUsageArgs = {
  * deep-research analysis, file edit, notebook generation). Resolves the owner + COGS
  * from the tool context and hands off to the shared recorder.
  *
- * Recorded-only by design: the narrowed tool db omits the billing repos, so this writes
- * analytics COGS but never debits credits (mirrors search_knowledge_base). Cost degrades
- * to 0 when the model isn't in the request's catalog, but the event is still written.
+ * Debits under the operational billing policy only on a host that wires
+ * `db.operationalBilling` and does not fold the spend itself via `onToolLlmUsage`; otherwise
+ * recorded only. Cost degrades to 0 when the model isn't in the request's catalog, but the
+ * event is still written.
  *
  * Best-effort: never throws, so a recording failure can't break the tool it measures.
  */
@@ -110,7 +111,15 @@ export async function recordToolOperationalUsage(
         source: 'system',
         finishReason: completionInfo?.stopReason,
       },
-      { db: { usageEvents: context.db.usageEvents, adminSettings: context.db.adminSettings }, logger: context.logger }
+      {
+        db: {
+          usageEvents: context.db.usageEvents,
+          adminSettings: context.db.adminSettings,
+          // A host that folds this spend through onToolLlmUsage already charges it.
+          ...(context.onToolLlmUsage ? {} : context.db.operationalBilling),
+        },
+        logger: context.logger,
+      }
     );
   } catch (err) {
     context.logger.warn('[recordToolOperationalUsage] failed to record operational usage', err);

@@ -385,7 +385,14 @@ async function recordEmbeddingUsage(
         costUsd: getEmbeddingModelCost(embeddingModel, queryTokens),
         source: 'system',
       },
-      { db: { usageEvents: context.db.usageEvents, adminSettings: context.db.adminSettings }, logger: context.logger }
+      {
+        db: {
+          usageEvents: context.db.usageEvents,
+          adminSettings: context.db.adminSettings,
+          ...context.db.operationalBilling,
+        },
+        logger: context.logger,
+      }
     );
   } catch (recordErr) {
     context.logger.warn(`📚 [semantic] failed to record embedding usage for ${embeddingModel}:`, recordErr);

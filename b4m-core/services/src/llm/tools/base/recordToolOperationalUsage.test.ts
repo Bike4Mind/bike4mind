@@ -161,6 +161,26 @@ describe('recordToolOperationalUsage', () => {
     expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({ organization: { id: 'org1' } });
   });
 
+  it('passes the host billing repos through so the spend can debit', async () => {
+    const operationalBilling = { creditTransactions: {}, users: {}, organizations: {}, activePlans: {} };
+    const context = makeContext();
+    context.db.operationalBilling = operationalBilling as never;
+
+    await recordToolOperationalUsage(context, { model: 'gpt-4o-mini', completionInfo, startTime: Date.now() });
+
+    expect(recordOperationalUsageMock.mock.calls[0][1].db).toMatchObject(operationalBilling);
+  });
+
+  // That host already folds the spend into its own charge; a debit here would bill it twice.
+  it('withholds the billing repos when the host folds the spend via onToolLlmUsage', async () => {
+    const context = makeContext({ onToolLlmUsage: vi.fn() });
+    context.db.operationalBilling = { creditTransactions: {}, users: {}, organizations: {} } as never;
+
+    await recordToolOperationalUsage(context, { model: 'gpt-4o-mini', completionInfo, startTime: Date.now() });
+
+    expect(recordOperationalUsageMock.mock.calls[0][1].db.creditTransactions).toBeUndefined();
+  });
+
   it('never throws when the underlying recorder fails', async () => {
     recordOperationalUsageMock.mockRejectedValueOnce(new Error('sink down'));
     await expect(
