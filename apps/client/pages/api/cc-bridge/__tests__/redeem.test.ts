@@ -11,6 +11,8 @@ const refs = vi.hoisted(() => ({
   createKey: vi.fn(),
   apiKeyUpdateOne: vi.fn(),
   deviceDeleteOne: vi.fn(),
+  findUser: vi.fn(),
+  resolveTrust: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -37,7 +39,9 @@ vi.mock('@bike4mind/database', () => ({
     findUnredeemedCandidatesByPrefix: refs.findCandidates,
     redeem: refs.redeemToken,
   },
+  userRepository: { findById: refs.findUser },
 }));
+vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: refs.resolveTrust }));
 vi.mock('@bike4mind/database/auth', () => ({
   UserApiKey: { updateOne: refs.apiKeyUpdateOne },
   userApiKeyRepository: {},
@@ -79,6 +83,8 @@ describe('POST /api/cc-bridge/redeem', () => {
     refs.createKey.mockResolvedValue({ id: 'key-1', key: 'b4m_plain', keyPrefix: 'b4m_plai' });
     refs.createDevice.mockResolvedValue({ _id: 'dev-1', deviceLabel: 'laptop' });
     refs.redeemToken.mockResolvedValue({ _id: 'tok-1' });
+    refs.findUser.mockResolvedValue({ id: 'owner-1' });
+    refs.resolveTrust.mockResolvedValue({ assessment: { status: 'trusted' } });
   });
 
   it('is an unauthenticated route guarded by a per-IP rate limit', () => {
@@ -112,6 +118,26 @@ describe('POST /api/cc-bridge/redeem', () => {
       bridgeVersion: '1.2.3',
     });
     expect(refs.redeemToken).toHaveBeenCalledWith('tok-1', 'dev-1');
+  });
+
+  it('judges the token owner against the API key trust gate, like the dashboard', async () => {
+    const assessment = { status: 'untrusted', reason: 'email_unverified' };
+    refs.resolveTrust.mockResolvedValue({ assessment });
+
+    await redeem(validBody);
+
+    expect(refs.findUser).toHaveBeenCalledWith('owner-1');
+    expect(refs.resolveTrust).toHaveBeenCalledWith({ id: 'owner-1' });
+    expect(refs.createKey.mock.calls[0][2]).toMatchObject({ trust: assessment });
+  });
+
+  it('mints nothing when the token owner no longer exists', async () => {
+    refs.findUser.mockResolvedValue(null);
+
+    const res = await redeem(validBody);
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(refs.createKey).not.toHaveBeenCalled();
   });
 
   it('is single-use: a second redeem finds no unredeemed candidate and mints nothing', async () => {

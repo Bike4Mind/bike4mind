@@ -257,6 +257,8 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
             agents: agentRepository,
           },
           isKnownScope: isKnownApiKeyScope,
+          // An admin minting for the user has already vouched for the account.
+          trust: { status: 'exempt' },
         }
       );
 
