@@ -67,7 +67,7 @@ interface DiscoverableGear {
 
 export function discoveryCandidates<T extends DiscoverableGear>(gears: readonly T[]): T[] {
   const rank = (key: string) => {
-    const i = DISCOVERY_PRIORITY.indexOf(key);
+    const i = (DISCOVERY_PRIORITY as readonly string[]).indexOf(key);
     return i === -1 ? DISCOVERY_PRIORITY.length : i;
   };
   // Array sort is stable, so unlisted keys keep the endpoint's order.
