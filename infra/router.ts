@@ -1,5 +1,5 @@
-// Intentional circular dependency: router.ts → waf.ts → wafPolicy.ts, and waf.ts is evaluated
-// after router.ts. This is safe because wafWebAcl is only consumed inside the transform.cdn
+// Intentional circular dependency: router.ts -> waf.ts -> wafPolicy.ts/wafAssociation.ts, and waf.ts is
+// evaluated after router.ts. This is safe because wafWebAcl is only consumed inside the transform.cdn
 // callback (lazy evaluation, not at import time). Do NOT access `router` from waf.ts at module
 // scope — it would be undefined at that point.
 import { wafWebAcl } from './waf';
@@ -266,7 +266,8 @@ const routerInstance = shouldUseSharedRouter
             };
           }
 
-          // Attach SST-managed WAF if enabled (ENABLE_WAF=true).
+          // Attach the WAF if enabled (ENABLE_WAF=true): the stage-owned ACL, or the
+          // externally managed one looked up by name.
           // Uses SST v4's first-class webAclArn property on CdnArgs, which internally
           // maps to the CloudFront webAclId field — no manual transform chaining needed.
           if (wafWebAcl) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { makeContributedNumberSetting, registerContributedSettings, resetContributedSettings } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
 import { AdminSettings, adminSettingsRepository } from './AdminSettingsModel';
@@ -59,5 +59,30 @@ describe('AdminSettingsRepository.getSettingsValue - contributed settings', () =
 
   it('returns undefined for a name with no definition', async () => {
     expect(await adminSettingsRepository.getSettingsValue('nobodyRegisteredThis' as never)).toBeUndefined();
+  });
+});
+
+describe('AdminSettingsRepository.getSettingsValue - enforceCredits hosted lock', () => {
+  setupMongoTest();
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('resolves true on a hosted deployment without reading the stored false', async () => {
+    vi.stubEnv('B4M_SELF_HOST', undefined);
+    await AdminSettings.create({ settingName: 'enforceCredits', settingValue: false });
+    const findOne = vi.spyOn(adminSettingsRepository, 'findOne');
+
+    expect(await adminSettingsRepository.getSettingsValue('enforceCredits')).toBe(true);
+    expect(findOne).not.toHaveBeenCalled();
+  });
+
+  it('honours a stored false on a self-host deployment', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    await AdminSettings.create({ settingName: 'enforceCredits', settingValue: false });
+
+    expect(await adminSettingsRepository.getSettingsValue('enforceCredits')).toBe(false);
   });
 });

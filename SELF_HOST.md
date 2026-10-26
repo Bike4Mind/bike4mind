@@ -59,7 +59,7 @@ B4M_BOOTSTRAP_ADMIN_EMAIL=you@example.com
 
 > **Serving on anything other than `http://localhost:3000`?** Set `APP_URL` to the origin your browser actually hits - a remapped `APP_HOST_PORT`, a LAN hostname, a tailnet name, or the public `https` origin of a reverse proxy in front of the app. `APP_URL` is the CSRF origin allow-list, and it fails closed: every state-changing request (saving settings, generating an API key, uploading) returns a 403, with a different message per cause. Unset, it is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected <your APP_URL>).` Reads keep working either way, which makes both look like a permissions bug rather than a config one.
 
-**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Settings > API Keys.
+**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Profile menu -> More -> API Keys.
 
 ```bash
 ANTHROPIC_API_KEY=      # Claude
@@ -198,7 +198,7 @@ For production use, point the `MAIL_*` variables at a real SMTP provider instead
 
 Everything you can do in the UI is also available over the HTTP API, authenticated with a scoped API key.
 
-1. **Create an API key**: in the app, open **Settings > API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
+1. **Create an API key**: in the app, open **Profile menu -> More -> API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
 
 2. **Send a chat message**:
 
@@ -211,7 +211,7 @@ curl -X POST http://localhost:3000/api/chat \
 
 `wait: true` processes the message synchronously and returns the reply in the response; omit it to get a `sessionId`/`questId` back immediately and let processing continue in the background. The model defaults to the admin `DefaultAPIModel` setting; pass `"model": "..."` to pick any model from `/api/models` (only providers you configured a key for are available).
 
-The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
+The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Profile menu -> More -> API Keys.
 
 ### Structured tool output (`toolPayloads`)
 
@@ -499,7 +499,7 @@ There are two independent paths to an image, and they support different things:
 | The `/image` chat command (`POST /api/ai/generate-image`, `POST /api/ai/edit-image`) | queued to the `worker` service | provider models only                                             |
 
 The queued path needs a provider key set in **Admin > Settings** (or the user's own key under
-**Settings > API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
+**Profile menu -> More -> API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
 
 **Image edit is limited to Gemini and BFL here.** OpenAI's edit and image-to-image endpoints
 require the input image be re-encoded to PNG under a size cap, which the hosted stack does with
@@ -600,7 +600,7 @@ Notes:
 Prefer a hosted embedder over the local one? Set a real key in `.env.selfhost` and it takes priority over the local Ollama default:
 
 - `OPENAI_API_KEY` - enables OpenAI embeddings (`text-embedding-3-small` by default).
-- `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Settings -> API Keys**.
+- `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Profile menu -> More -> API Keys**.
 
 Then pick the cloud model under **Settings -> AI -> Default Embedding Model** and re-upload (or reprocess via **/api/files/reprocess**) so files embed with it.
 
@@ -650,7 +650,7 @@ Re-run it whenever you edit the shipped docs. The failure is quieter than it sou
 
 Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQUIRED=false` to downgrade that to a logged skip, which is what a build pipeline that does not care about semantic help search wants.
 
-**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Settings -> API Keys**) as well as at build time.
+**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
 
 This is also the one place OpenAI specifically is required: help vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
 
@@ -690,7 +690,7 @@ B4M_DISCOVERY_DRIVER=true
 
 The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
 
-Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Profile menu -> More -> API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
 
 ### Amazon Bedrock (optional)
 
