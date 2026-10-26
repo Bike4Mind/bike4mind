@@ -24,9 +24,10 @@ export const oauthSignupsRefusedAlarm =
         new aws.cloudwatch.LogMetricFilter('oauthSignupsRefusedFilter', {
           name: `${$app.name}-${$app.stage}-oauth-signups-refused`,
           logGroupName: web.nodes.server.nodes.logGroup.apply(lg => lg?.name ?? ''),
-          // The server Lambda keeps the default text format (`ts\treqId\tLEVEL\t{json}`), so a JSON
-          // `{ $.field = ... }` selector never matches. A quoted term matches the token anywhere in the line.
-          pattern: '"oauth-signup-refused"',
+          // The server Lambda keeps the default text format (`ts\treqId\tLEVEL\t{json}`), so a JSON `{ $.field = ... }`
+          // selector never matches. Match the quoted key and value: a caller-controlled field (requestId, path)
+          // is JSON-escaped, so it cannot contain this sequence unescaped.
+          pattern: '"\\"message\\":\\"oauth-signup-refused\\""',
           metricTransformation: {
             name: METRIC_NAME,
             namespace: NAMESPACE,

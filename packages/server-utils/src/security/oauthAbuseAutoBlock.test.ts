@@ -4,6 +4,7 @@ import {
   resolveBlockDurationMs,
   runOauthAbuseAutoBlock,
   OAUTH_ABUSE_REASONS,
+  OAUTH_ABUSE_STRATEGIES,
   type OauthAbusePolicy,
 } from './oauthAbuseAutoBlock';
 
@@ -12,7 +13,6 @@ const h = vi.hoisted(() => ({
   getIPs: vi.fn(),
   countForIP: vi.fn(),
   findLatest: vi.fn(),
-  countBlocks: vi.fn(),
   block: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -23,7 +23,6 @@ vi.mock('@bike4mind/database', () => ({
   },
   blockedIPRepository: {
     findLatestBlock: h.findLatest,
-    countAutoBlocksEndingSince: h.countBlocks,
     block: h.block,
   },
 }));
@@ -45,8 +44,16 @@ const ago = (ms: number) => new Date(NOW.getTime() - ms);
 
 const setup = (
   overrides: Partial<OauthAbusePolicy> = {},
-  prior: Record<string, number> = {},
-  latest: Record<string, { active: boolean; expiresAt: Date; unblockedAt?: Date } | null> = {},
+  latest: Record<
+    string,
+    {
+      active: boolean;
+      expiresAt: Date;
+      unblockedAt?: Date;
+      source?: 'auto' | 'manual';
+      escalationLevel?: number;
+    } | null
+  > = {},
   attemptsSince = 0
 ) => {
   const block = vi.fn().mockResolvedValue({});
@@ -54,17 +61,15 @@ const setup = (
     { ip: '1.1.1.1', attempts: 25 },
     { ip: '2.2.2.2', attempts: 20 },
   ]);
-  const countAutoBlocksEndingSince = vi.fn(async (ip: string) => prior[ip] ?? 0);
   const countAttemptsSince = vi.fn(async () => attemptsSince);
   const deps = {
     loadPolicy: async () => ({ ...policy, ...overrides }),
     getIPsWithHighAttempts,
     countAttemptsSince,
     findLatestBlock: vi.fn(async (ip: string) => latest[ip] ?? null),
-    countAutoBlocksEndingSince,
     block,
   };
-  return { deps, block, getIPsWithHighAttempts, countAutoBlocksEndingSince, countAttemptsSince };
+  return { deps, block, getIPsWithHighAttempts, countAttemptsSince };
 };
 
 describe('runOauthAbuseAutoBlock', () => {
@@ -90,11 +95,17 @@ describe('runOauthAbuseAutoBlock', () => {
     expect(block).not.toHaveBeenCalled();
   });
 
-  it('escalates 10m -> 1h -> 24h and clamps, counting priors inside the lookback', async () => {
-    const { deps, block, countAutoBlocksEndingSince } = setup({}, { '1.1.1.1': 1, '2.2.2.2': 7 });
+  it('steps one past the previous auto block and clamps at the last step', async () => {
+    const ended = { active: false, expiresAt: ago(11 * MIN), source: 'auto' as const };
+    const { deps, block } = setup(
+      {},
+      {
+        '1.1.1.1': { ...ended, escalationLevel: 0 },
+        '2.2.2.2': { ...ended, escalationLevel: 2 },
+      }
+    );
     const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
 
-    expect(countAutoBlocksEndingSince).toHaveBeenCalledWith('1.1.1.1', new Date(NOW.getTime() - 24 * 60 * MIN));
     expect(result.blocked.map(b => [b.durationMs, b.escalationLevel])).toEqual([
       [60 * MIN, 1],
       [1440 * MIN, 2],
@@ -106,9 +117,21 @@ describe('runOauthAbuseAutoBlock', () => {
     );
   });
 
+  it.each([
+    ['a manual block', { source: 'manual' as const, escalationLevel: 0, expiresAt: ago(11 * MIN) }],
+    [
+      'an auto block that ended before the lookback',
+      { source: 'auto' as const, escalationLevel: 2, expiresAt: ago(25 * 60 * MIN) },
+    ],
+  ])('starts over at the first step after %s', async (_name, block) => {
+    const { deps } = setup({}, { '1.1.1.1': { active: false, ...block } });
+    const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
+    expect(result.blocked[0]).toMatchObject({ ip: '1.1.1.1', escalationLevel: 0 });
+  });
+
   it('does not re-block an IP an admin unblocked, on rows from before the unblock', async () => {
     const unblocked = { active: false, expiresAt: ago(-5 * MIN), unblockedAt: ago(2 * MIN) };
-    const { deps, block, countAttemptsSince } = setup({}, {}, { '1.1.1.1': unblocked, '2.2.2.2': unblocked }, 3);
+    const { deps, block, countAttemptsSince } = setup({}, { '1.1.1.1': unblocked, '2.2.2.2': unblocked }, 3);
     const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
     expect(countAttemptsSince).toHaveBeenCalledWith('1.1.1.1', ago(2 * MIN));
     expect(result.blocked).toEqual([]);
@@ -117,7 +140,7 @@ describe('runOauthAbuseAutoBlock', () => {
 
   it('blocks again when new failures after the unblock reach the threshold, without escalating the unblock', async () => {
     const unblocked = { active: false, expiresAt: ago(-5 * MIN), unblockedAt: ago(2 * MIN) };
-    const { deps, block } = setup({}, {}, { '1.1.1.1': unblocked }, 20);
+    const { deps, block } = setup({}, { '1.1.1.1': unblocked }, 20);
     const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
     expect(result.blocked.map(b => [b.ip, b.attempts, b.escalationLevel])).toEqual([
       ['1.1.1.1', 20, 0],
@@ -128,10 +151,7 @@ describe('runOauthAbuseAutoBlock', () => {
 
   it('does not re-block at expiry when the window is longer than the first step', async () => {
     const expired = { active: true, expiresAt: ago(MIN) };
-    const { deps, block } = setup({ windowMs: 60 * MIN }, { '1.1.1.1': 1, '2.2.2.2': 1 }, {
-      '1.1.1.1': expired,
-      '2.2.2.2': expired,
-    });
+    const { deps, block } = setup({ windowMs: 60 * MIN }, { '1.1.1.1': expired, '2.2.2.2': expired });
     const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
     expect(result.blocked).toEqual([]);
     expect(block).not.toHaveBeenCalled();
@@ -139,11 +159,10 @@ describe('runOauthAbuseAutoBlock', () => {
 
   it('skips an IP that is blocked right now', async () => {
     const active = { active: true, expiresAt: ago(-5 * MIN) };
-    const { deps, block, countAutoBlocksEndingSince } = setup({}, {}, { '1.1.1.1': active });
+    const { deps, block } = setup({}, { '1.1.1.1': active });
     const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
     expect(result.blocked.map(b => b.ip)).toEqual(['2.2.2.2']);
     expect(block).toHaveBeenCalledTimes(1);
-    expect(countAutoBlocksEndingSince).not.toHaveBeenCalledWith('1.1.1.1', expect.anything());
   });
 
   it('keeps going when one IP fails to block', async () => {
@@ -160,7 +179,7 @@ describe('default deps and policy', () => {
     vi.resetAllMocks();
     h.getIPs.mockResolvedValue([{ ip: '9.9.9.9', attempts: 7 }]);
     h.findLatest.mockResolvedValue(null);
-    h.countBlocks.mockResolvedValue(1);
+    h.findLatest.mockResolvedValue({ active: false, expiresAt: ago(MIN), source: 'auto', escalationLevel: 0 });
     h.block.mockResolvedValue({});
   });
 
@@ -178,8 +197,7 @@ describe('default deps and policy', () => {
       { adminSettings: { tag: 'settings' } },
       { skipCache: true, names: expect.arrayContaining(['oauthAbuseLookbackHours', 'oauthAbuseWindowMinutes']) }
     );
-    expect(h.getIPs).toHaveBeenCalledWith(ago(15 * MIN), 7, OAUTH_ABUSE_REASONS);
-    expect(h.countBlocks).toHaveBeenCalledWith('9.9.9.9', ago(48 * 60 * MIN));
+    expect(h.getIPs).toHaveBeenCalledWith(ago(15 * MIN), 7, OAUTH_ABUSE_REASONS, OAUTH_ABUSE_STRATEGIES);
     expect(h.block).toHaveBeenCalledWith('9.9.9.9', expect.any(String), {
       durationMs: 30 * MIN,
       source: 'auto',
@@ -190,27 +208,20 @@ describe('default deps and policy', () => {
 
   it('falls back to the documented defaults when no settings are stored', async () => {
     h.getSettingsMap.mockResolvedValue({});
-    h.countBlocks.mockResolvedValue(0);
+    h.findLatest.mockResolvedValue(null);
     await runOauthAbuseAutoBlock({ now: NOW });
-    expect(h.getIPs).toHaveBeenCalledWith(ago(10 * MIN), 20, OAUTH_ABUSE_REASONS);
-    expect(h.countBlocks).toHaveBeenCalledWith('9.9.9.9', ago(24 * 60 * MIN));
-    expect(h.block).toHaveBeenCalledWith('9.9.9.9', expect.any(String), expect.objectContaining({ durationMs: 10 * MIN }));
+    expect(h.getIPs).toHaveBeenCalledWith(ago(10 * MIN), 20, OAUTH_ABUSE_REASONS, OAUTH_ABUSE_STRATEGIES);
+    expect(h.block).toHaveBeenCalledWith(
+      '9.9.9.9',
+      expect.any(String),
+      expect.objectContaining({ durationMs: 10 * MIN })
+    );
   });
 
   it('does nothing when the kill switch is off', async () => {
     h.getSettingsMap.mockResolvedValue({ oauthAbuseAutoBlockEnabled: 'false' });
     await runOauthAbuseAutoBlock({ now: NOW });
     expect(h.getIPs).not.toHaveBeenCalled();
-  });
-
-  it('stays at 24h for the block after an expired 24h block with the default settings', async () => {
-    h.getSettingsMap.mockResolvedValue({});
-    // The earlier 24h block expired 1 minute ago, so it is still inside the 24h lookback.
-    h.findLatest.mockResolvedValue({ active: true, expiresAt: ago(MIN) });
-    h.countForIP.mockResolvedValue(25);
-    h.countBlocks.mockImplementation(async (_ip: string, since: Date) => (ago(MIN) >= since ? 2 : 0));
-    const result = await runOauthAbuseAutoBlock({ now: NOW });
-    expect(result.blocked.map(b => b.durationMs)).toEqual([1440 * MIN]);
   });
 });
 

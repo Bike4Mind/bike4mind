@@ -31,29 +31,6 @@ describe('BlockedIPRepository', () => {
     expect(await BlockedIP.countDocuments({ ip: '1.1.1.3' })).toBe(1);
   });
 
-  it('counts auto blocks still running at the lookback start, not ones an admin lifted early', async () => {
-    const ip = '2.2.2.2';
-    const now = Date.now();
-    const H = 3_600_000;
-    const row = (o: Record<string, unknown>) => ({
-      ip,
-      active: false,
-      source: 'auto',
-      blockedAt: new Date(now - 25 * H),
-      expiresAt: new Date(now - H),
-      ...o,
-    });
-    await BlockedIP.create([
-      row({ blockedAt: new Date(now - 48 * H), expiresAt: new Date(now - 47 * H) }), // ended before lookback
-      row({}), // 24h block that began outside the lookback but ended inside it
-      row({ unblockedAt: new Date(now - 20 * H) }), // lifted early by an admin
-      row({ unblockedAt: new Date(now - H) }), // cleaned up at expiry
-      row({ source: 'manual' }),
-      row({ ip: '2.2.2.3' }),
-    ]);
-    expect(await blockedIPRepository.countAutoBlocksEndingSince(ip, new Date(now - 24 * H))).toBe(2);
-  });
-
   it('returns the latest block of an IP regardless of state', async () => {
     const now = Date.now();
     await BlockedIP.create([

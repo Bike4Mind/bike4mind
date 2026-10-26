@@ -31,7 +31,7 @@ const BlockedIPSchema = new mongoose.Schema<IBlockedIPDocument>(
 );
 
 BlockedIPSchema.index({ ip: 1, active: 1 }, { unique: false });
-BlockedIPSchema.index({ ip: 1, source: 1, blockedAt: -1 });
+BlockedIPSchema.index({ ip: 1, blockedAt: -1 });
 
 export const DEFAULT_BLOCK_DURATION_MS = 10 * 60 * 1000;
 
@@ -75,20 +75,6 @@ export class BlockedIPRepository extends BaseRepository<IBlockedIPDocument> {
       escalationLevel,
     });
     return { doc, created: true };
-  }
-
-  /**
-   * Auto blocks of this IP that were still running at or after `since` and were not lifted early by
-   * an admin; drives the escalation step. Measured by expiry so a block as long as the lookback does
-   * not reset the step the moment it ends.
-   */
-  async countAutoBlocksEndingSince(ip: string, since: Date): Promise<number> {
-    return this.model.countDocuments({
-      ip,
-      source: 'auto',
-      expiresAt: { $gte: since },
-      $or: [{ unblockedAt: null }, { $expr: { $gte: ['$unblockedAt', '$expiresAt'] } }],
-    });
   }
 
   /** The most recent block of this IP, active or not. */

@@ -334,9 +334,11 @@ describe('[strategy]/callback - guards and refusal metric line', () => {
     ['internal', 0],
   ])('logs oauth-signup-refused for %s: %i time(s)', async (code, count) => {
     const info = vi.fn();
-    mockAuthenticate.mockImplementation((_s: string, _o: unknown, cb: (...args: unknown[]) => Promise<unknown>) => () => {
-      pending = cb(null, undefined, { code });
-    });
+    mockAuthenticate.mockImplementation(
+      (_s: string, _o: unknown, cb: (...args: unknown[]) => Promise<unknown>) => () => {
+        pending = cb(null, undefined, { code });
+      }
+    );
     let pending: Promise<unknown> | undefined;
     const { req, res } = makeReqRes();
     req.logger = { info };

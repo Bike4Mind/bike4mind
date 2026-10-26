@@ -3301,18 +3301,21 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
     order: 3,
   }),
-  oauthAbuseBlockEscalationMinutes: withSchema(makeStringSetting({
-    key: 'oauthAbuseBlockEscalationMinutes',
-    name: 'OAuth Abuse Block Escalation (minutes)',
-    defaultValue: '10,60,1440',
-    description:
-      'Comma-separated block durations in minutes. Each repeat block of the same IP within the lookback moves one step up; the last step repeats.',
-    category: 'SecOps',
-    group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
-    order: 4,
-  }), z.string().refine(isEscalationScheduleOrBlank, {
-    message: 'Use comma-separated whole minutes greater than 0, e.g. 10,60,1440',
-  })),
+  oauthAbuseBlockEscalationMinutes: withSchema(
+    makeStringSetting({
+      key: 'oauthAbuseBlockEscalationMinutes',
+      name: 'OAuth Abuse Block Escalation (minutes)',
+      defaultValue: '10,60,1440',
+      description:
+        'Comma-separated block durations in minutes. Each repeat block of the same IP within the lookback moves one step up; the last step repeats.',
+      category: 'SecOps',
+      group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
+      order: 4,
+    }),
+    z.string().refine(isEscalationScheduleOrBlank, {
+      message: 'Use comma-separated whole minutes greater than 0, e.g. 10,60,1440',
+    })
+  ),
   oauthAbuseLookbackHours: makeNumberSetting({
     key: 'oauthAbuseLookbackHours',
     name: 'OAuth Abuse Escalation Lookback (hours)',

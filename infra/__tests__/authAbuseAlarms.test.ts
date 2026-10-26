@@ -23,10 +23,19 @@ describe('oauth signups refused alarm', () => {
     const pattern = /pattern: '([^']*)'/.exec(ALARMS)?.[1] ?? '';
     // A JSON selector only evaluates lines that are JSON as a whole; the Lambda prefixes every line.
     expect(pattern).not.toMatch(/^\s*\{/);
-    const term = /^"([^"]+)"$/.exec(pattern)?.[1];
-    const prefixedLine = '2026-01-01T00:00:00.000Z\tc0ffee\tINFO\t{"severity":"info","message":"oauth-signup-refused"}';
+    // Model of a CloudWatch quoted term: a substring match after unescaping \" to ".
+    // `pattern` is TS source for a string literal; evaluate it, then strip the quotes and unescape \".
+    const term = /^"(.*)"$/.exec(new Function(`return '${pattern}'`)())?.[1]?.replace(/\\"/g, '"');
     expect(term).toBeDefined();
-    expect(prefixedLine).toContain(term);
+    const matches = (line: string) => line.includes(term as string);
+    const line = (fields: Record<string, string>) =>
+      `2026-01-01T00:00:00.000Z\tc0ffee\tINFO\t${JSON.stringify({ severity: 'info', message: 'oauth-ip-rate-limited', ...fields })}`;
+
+    expect(matches(line({ message: 'oauth-signup-refused', requestId: 'abc' }))).toBe(true);
+    // A caller controls X-Request-ID (sanitized to [A-Za-z0-9._-]) and the URL, not the message.
+    expect(matches(line({ requestId: 'oauth-signup-refused' }))).toBe(false);
+    expect(matches(line({ path: '/api/auth/google?x=oauth-signup-refused' }))).toBe(false);
+    expect(matches(line({ path: '/x?"message":"oauth-signup-refused"' }))).toBe(false);
   });
 
   it('feeds Lumina5/AuthSecurity OAuthSignupsRefused, summed over 5 minutes', () => {
