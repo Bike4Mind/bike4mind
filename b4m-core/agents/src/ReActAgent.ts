@@ -7,6 +7,7 @@ import {
   type TurnUsage,
   type ReasoningWithholder,
   createReasoningWithholder,
+  reasoningChannelOf,
   withholdsReasoning,
 } from '@bike4mind/common';
 import type { ICompletionOptionTools, CompletionInfo, ToolResultScore } from '@bike4mind/llm-adapters';
@@ -764,6 +765,7 @@ export class ReActAgent extends EventEmitter {
               }
             }
           );
+          currentText += this.flushHeldText(reasoningWithholder, iterationIndex);
         } catch (completionError) {
           if (!reactiveCompactionAttempted && options.onContextLimit && isContextLimitError(completionError)) {
             reactiveCompactionAttempted = true;
@@ -1060,11 +1062,10 @@ BEHAVIOR GUIDELINES:
 Remember: You are an autonomous AGENT. Act independently and solve problems proactively.`;
   }
 
-  /** Live text is requested only for a listening view; without one, the backend keeps full retry. */
   /** One filter per provider call, or null when the caller may see all of this model's reasoning. */
   private createReasoningWithholder(): ReasoningWithholder | null {
     return withholdsReasoning(this.context.thinkingVisibility ?? 'raw', this.context.model)
-      ? createReasoningWithholder()
+      ? createReasoningWithholder(reasoningChannelOf({ id: this.context.model }))
       : null;
   }
 
@@ -1076,6 +1077,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     return withholder && text ? withholder.visible(text, channel) : text;
   }
 
+  private flushHeldText(withholder: ReasoningWithholder | null, iteration: number): string {
+    const held = withholder?.flush() ?? '';
+    if (held) this.emit('text_delta', { delta: held, iteration });
+    return held;
+  }
+
+  /** Live text is requested only for a listening view; without one, the backend keeps full retry. */
   private hasTextDeltaListener(): boolean {
     return this.listenerCount('text_delta') > 0;
   }
@@ -1654,6 +1662,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           }
         }
       );
+      currentText += this.flushHeldText(reasoningWithholder, iterationIndex);
 
       // Final-answer decision deferred from the streaming callback. See the
       // matching comment in `run()` for full rationale.

@@ -58,9 +58,11 @@ import {
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
   createReasoningWithholder,
+  reasoningChannelOf,
   withholdsReasoning,
   type ThinkingVisibility,
 } from '@bike4mind/common';
+import { fallbackThinkingVisibility } from '../thinkingVisibility';
 import {
   BadRequestError,
   buildAndSortMessages,
@@ -1190,8 +1192,8 @@ export class ChatCompletionProcess {
       try {
         return await this.getThinkingVisibility(this.user);
       } catch (err) {
-        this.logger.warn(`Thinking visibility resolution failed; withholding reasoning: ${(err as Error)?.message}`);
-        return 'none';
+        this.logger.warn(`Thinking visibility resolution failed; using the free level: ${(err as Error)?.message}`);
+        return fallbackThinkingVisibility({ adminSettings: this.db.adminSettings });
       }
     })();
     return this.thinkingVisibilityPromise;
@@ -1888,6 +1890,8 @@ export class ChatCompletionProcess {
       return;
     }
 
+    // Started now so its reads overlap context assembly instead of delaying the first token.
+    void this.resolveThinkingVisibility();
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
     const {
       parsedBody,
@@ -5074,9 +5078,10 @@ export class ChatCompletionProcess {
 
             // Per attempt: a fallback hop restarts the stream and can change the answering model.
             const reasoningWithholder = withholdsReasoning(await this.resolveThinkingVisibility(), currentModel.id)
-              ? createReasoningWithholder()
+              ? createReasoningWithholder(reasoningChannelOf(currentModel))
               : null;
             this.withheldReasoningChars = 0;
+            let lastStreamIndex = 0;
 
             await currentLlm.complete(
               currentModel.id,
@@ -5212,6 +5217,7 @@ export class ChatCompletionProcess {
                     : streamedText;
                   this.withheldReasoningChars += streamedText.length - text.length;
                   if (!text) return;
+                  lastStreamIndex = index;
                   appendStreamedChunk(replies, text, index, transitionMode);
                   quest.replies = Object.values(replies);
                   // Send message to the client for each received streamed message
@@ -5267,6 +5273,13 @@ export class ChatCompletionProcess {
                 if (completionInfo?.stopReason != null) actualTokenUsage.stopReason = completionInfo.stopReason;
               }
             );
+            const heldText = reasoningWithholder?.flush();
+            if (heldText) {
+              this.withheldReasoningChars -= heldText.length;
+              appendStreamedChunk(replies, heldText, lastStreamIndex, transitionMode);
+              quest.replies = Object.values(replies);
+              smartSend();
+            }
             // Completion succeeded
             completionSuccess = true;
             logger.info(

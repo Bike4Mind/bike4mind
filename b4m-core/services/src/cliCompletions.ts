@@ -39,6 +39,7 @@ import {
   type ICacheStrategy,
   type ThinkingVisibility,
   createReasoningWithholder,
+  reasoningChannelOf,
   type ReasoningWithholder,
   providerSummarizesReasoning,
   withholdsReasoning,
@@ -76,6 +77,7 @@ import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { createModelAdmission, loadModelConfigurations } from './llm/modelAdmission';
 import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+import { fallbackThinkingVisibility } from './thinkingVisibility';
 
 /** Persistence boundary: implementations commit each callback and its hold transition atomically. */
 export type CompletionCreditHolds = {
@@ -420,25 +422,21 @@ function hasEffectiveConversationMessage(messages: IMessage[]): boolean {
   });
 }
 
-/**
- * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
- */
 async function resolveCallerThinkingVisibility(
-  params: Pick<CompletionParams, 'getThinkingVisibility' | 'userId'>,
+  params: Pick<CompletionParams, 'getThinkingVisibility' | 'userId' | 'db'>,
   actor: IUserDocument | null,
   logger: Logger | undefined
 ): Promise<ThinkingVisibility> {
   if (!params.getThinkingVisibility) return 'raw';
-  if (!actor) return 'none';
   try {
-    return await params.getThinkingVisibility(actor);
+    if (actor) return await params.getThinkingVisibility(actor);
   } catch (error) {
-    logger?.warn?.('[cliCompletions] thinking visibility resolution failed; withholding reasoning', {
+    logger?.warn?.('[cliCompletions] thinking visibility resolution failed; using the free level', {
       userId: params.userId,
       error: error instanceof Error ? error.message : String(error),
     });
-    return 'none';
   }
+  return fallbackThinkingVisibility({ adminSettings: params.db.adminSettings });
 }
 
 /**
@@ -458,6 +456,9 @@ export function withholdReasoningFromFrame(
   return { text: visibleText, info: rest };
 }
 
+/**
+ * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
+ */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
   const model = resolveOpenAiBareModelAlias(params.model);
@@ -572,6 +573,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     enforceCredits: Boolean(enforceCredits),
   }).assert(model);
   const withholdReasoning = withholdsReasoning(await resolveCallerThinkingVisibility(params, actor, logger), model);
+  const reasoningChannel = reasoningChannelOf(modelInfo ?? { id: model });
+  // Reasoning the caller may not see is not requested at all when the provider would return it raw.
+  const suppressThinking = withholdReasoning && reasoningChannel !== 'never' && !providerSummarizesReasoning(model);
 
   if (modelInfo && !supportsAssistantPrefill(modelInfo) && hasAssistantPrefill(messages)) {
     throw new BadRequestError(
@@ -662,7 +666,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
   // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
   const thinking = withOllamaThinkingDefault(
-    options?.thinking?.enabled && modelInfo?.can_think
+    options?.thinking?.enabled && modelInfo?.can_think && !suppressThinking
       ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
       : undefined,
     modelInfo
@@ -687,11 +691,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // This path has no complexity classifier and clients rarely send an effort, so an adaptive Claude
   // that thinks unasked would run every request at the provider default (high on Opus 5). Any
   // explicit effort or thinking value from the client wins.
-  const reasoningEffort =
-    options?.reasoningEffort ??
-    (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(model, modelInfo)
-      ? 'medium'
-      : undefined);
+  const reasoningEffort = suppressThinking
+    ? undefined
+    : (options?.reasoningEffort ??
+      (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(model, modelInfo)
+        ? 'medium'
+        : undefined));
 
   const completionOptions: Partial<ICompletionOptions> = {
     temperature: options?.temperature,
@@ -873,7 +878,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       tierBasisTokens: finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens,
     });
 
-  const reasoningWithholder = withholdReasoning ? createReasoningWithholder() : null;
+  const reasoningWithholder = withholdReasoning ? createReasoningWithholder(reasoningChannel) : null;
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -920,6 +925,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   try {
     await params.onReady?.();
     await llm.complete(model, messages, completionOptions, wrappedOnChunk);
+    const heldText = reasoningWithholder?.flush();
+    if (heldText) await onChunk([heldText]);
   } catch (error) {
     if (params.abortSignal?.aborted && streamedOutputChars > 0) {
       abortError = error;

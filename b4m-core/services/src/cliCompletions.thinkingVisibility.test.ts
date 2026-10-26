@@ -12,6 +12,8 @@ vi.mock('./creditService', async importOriginal => ({
 type Frame = [(string | null | undefined)[], CompletionInfo?];
 let frames: Frame[] = [];
 let availableModels: Array<Record<string, unknown>> = [];
+let capturedOptions: Record<string, unknown> | undefined;
+let freeLevel: ThinkingVisibility = 'summary';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
@@ -19,7 +21,13 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
     complete: vi.fn(
-      async (_model: unknown, _messages: unknown, _options: unknown, onChunk: (...frame: Frame) => Promise<void>) => {
+      async (
+        _model: unknown,
+        _messages: unknown,
+        options: Record<string, unknown>,
+        onChunk: (...frame: Frame) => Promise<void>
+      ) => {
+        capturedOptions = options;
         for (const [text, info] of frames) await onChunk(text, info);
       }
     ),
@@ -30,7 +38,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   usdToCredits: vi.fn(() => 10),
   usdToCreditsStochastic: vi.fn(() => 10),
   getSettingsMap: vi.fn().mockResolvedValue({}),
-  getSettingsValue: vi.fn(() => true),
+  getSettingsValue: vi.fn((key: string) => (key.startsWith('thinkingVisibility') ? freeLevel : true)),
   getSettingsByNames: vi.fn(),
 }));
 vi.mock('@bike4mind/common', async importOriginal => ({
@@ -86,7 +94,11 @@ function buildDb() {
   } as unknown as Parameters<typeof executeCompletion>[0]['db'];
 }
 
-async function run(model: string, getThinkingVisibility?: () => Promise<ThinkingVisibility>) {
+async function run(
+  model: string,
+  getThinkingVisibility?: () => Promise<ThinkingVisibility>,
+  options?: Parameters<typeof executeCompletion>[0]['options']
+) {
   const onChunk = vi.fn().mockResolvedValue(undefined);
   await executeCompletion({
     userId: 'user1',
@@ -94,6 +106,7 @@ async function run(model: string, getThinkingVisibility?: () => Promise<Thinking
     messages: [{ role: 'user', content: 'hi' }],
     db: buildDb(),
     onChunk,
+    options,
     ...(getThinkingVisibility && { getThinkingVisibility }),
   });
   const calls = onChunk.mock.calls as Array<[(string | null | undefined)[], CompletionInfo | undefined]>;
@@ -106,6 +119,8 @@ async function run(model: string, getThinkingVisibility?: () => Promise<Thinking
 describe('executeCompletion - thinking visibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    capturedOptions = undefined;
+    freeLevel = 'summary';
     availableModels = [
       modelRow(CLAUDE_4, 'anthropic'),
       modelRow(CLAUDE_3, 'anthropic'),
@@ -154,11 +169,29 @@ describe('executeCompletion - thinking visibility', () => {
     expect((await run(INLINE_REASONER)).text).toBe('<think>private trace</think>Visible answer.');
   });
 
-  it('withholds when the resolution fails', async () => {
-    frames = inlineStream;
+  it('falls back to the configured free level when the resolution fails', async () => {
     const failing = async (): Promise<ThinkingVisibility> => {
       throw new Error('subscription read failed');
     };
+    frames = inlineStream;
     expect((await run(INLINE_REASONER, failing)).text).toBe('Visible answer.');
+
+    freeLevel = 'raw';
+    expect((await run(INLINE_REASONER, failing)).text).toBe('<think>private trace</think>Visible answer.');
+  });
+
+  it('keeps a Claude answer that mentions the marker literally', async () => {
+    frames = [...taggedStream.slice(0, 3), [[null, 'Wrap it in <think> tags.']]];
+    expect((await run(CLAUDE_4, async () => 'none')).text).toBe('Wrap it in <think> tags.');
+  });
+
+  it('does not request thinking where the provider would return it raw', async () => {
+    frames = inlineStream;
+    await run(CLAUDE_3, async () => 'summary', { thinking: { enabled: true }, reasoningEffort: 'high' });
+    expect(capturedOptions).not.toHaveProperty('thinking');
+    expect(capturedOptions).not.toHaveProperty('reasoningEffort');
+
+    await run(CLAUDE_4, async () => 'none', { thinking: { enabled: true } });
+    expect(capturedOptions).toHaveProperty('thinking');
   });
 });

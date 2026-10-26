@@ -7,7 +7,7 @@ import type { IMessage, ThinkingVisibility } from '@bike4mind/common';
 type Callback = (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>;
 
 /** One turn: a tagged thinking block, inline reasoning, then the answer. */
-function reasoningLlm(): ICompletionBackend {
+function reasoningLlm(answer: string): ICompletionBackend {
   return {
     currentModel: 'deepseek-reasoner',
     getModelInfo: async () => [],
@@ -15,18 +15,22 @@ function reasoningLlm(): ICompletionBackend {
       await cb(['<think>'], { channel: 'reasoning' });
       await cb(['tagged trace'], { channel: 'reasoning' });
       await cb(['</think>'], { channel: 'reasoning' });
-      await cb(['<think>inline trace</think>The answer.'], { inputTokens: 10, outputTokens: 5, toolsUsed: [] });
+      await cb([answer], { inputTokens: 10, outputTokens: 5, toolsUsed: [] });
     },
     pushToolMessages: vi.fn(),
   };
 }
 
-function buildAgent(thinkingVisibility?: ThinkingVisibility) {
+function buildAgent(
+  thinkingVisibility?: ThinkingVisibility,
+  model = 'deepseek-reasoner',
+  answer = '<think>inline trace</think>The answer.'
+) {
   const context: AgentContext = {
     userId: 'u1',
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    llm: reasoningLlm(),
-    model: 'deepseek-reasoner',
+    llm: reasoningLlm(answer),
+    model,
     tools: [],
     maxIterations: 3,
     ...(thinkingVisibility && { thinkingVisibility }),
@@ -50,6 +54,12 @@ describe('ReActAgent thinking visibility', () => {
     const result = await agent.runIteration('q');
     expect(deltas.join('')).not.toMatch(/trace/);
     expect(JSON.stringify(result)).not.toMatch(/trace/);
+  });
+
+  it('keeps a Claude answer that mentions the marker literally', async () => {
+    const { agent } = buildAgent('none', 'claude-sonnet-4-5', 'Wrap it in <think> tags.');
+    const result = await agent.run('q');
+    expect(result.finalAnswer).toBe('Wrap it in <think> tags.');
   });
 
   it('leaves a raw run unchanged', async () => {

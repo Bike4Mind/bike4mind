@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidateSettingsCache } from '@bike4mind/utils';
-import { loadThinkingVisibilitySettings, resolveAccountThinkingVisibility } from './thinkingVisibility';
+import {
+  fallbackThinkingVisibility,
+  loadThinkingVisibilitySettings,
+  resolveAccountThinkingVisibility,
+} from './thinkingVisibility';
 
 function adminSettingsWith(rows: Record<string, string>) {
   const docs = Object.entries(rows).map(([settingName, settingValue]) => ({ settingName, settingValue }));
@@ -57,5 +61,25 @@ describe('resolveAccountThinkingVisibility', () => {
     await expect(
       resolveAccountThinkingVisibility(freeUser, { settings, hasActivePlan: async () => true })
     ).resolves.toBe('raw');
+  });
+});
+
+describe('fallbackThinkingVisibility', () => {
+  beforeEach(() => invalidateSettingsCache());
+
+  it('is the configured free level', async () => {
+    await expect(fallbackThinkingVisibility(adminSettingsWith({ thinkingVisibilityFree: 'none' }))).resolves.toBe(
+      'none'
+    );
+  });
+
+  it('is summary when settings cannot be read', async () => {
+    const broken = {
+      adminSettings: {
+        findAll: vi.fn().mockRejectedValue(new Error('settings down')),
+        findBySettingNames: vi.fn().mockRejectedValue(new Error('settings down')),
+      },
+    } as unknown as Parameters<typeof fallbackThinkingVisibility>[0];
+    await expect(fallbackThinkingVisibility(broken)).resolves.toBe('summary');
   });
 });

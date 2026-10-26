@@ -93,13 +93,7 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import {
-  CreditHolderType,
-  type AttachmentLakeAccess,
-  type IAgent,
-  type IUserDocument,
-  type ThinkingVisibility,
-} from '@bike4mind/common';
+import { CreditHolderType, type AttachmentLakeAccess, type IAgent, type IUserDocument } from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -670,19 +664,6 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
  * wiring, so a transient DB error here must not take down runs that use no MCP
  * tools (mirrors the userAgents/orgAgents fallbacks in each caller).
  */
-/** A failed lookup withholds reasoning rather than failing the run. */
-async function resolveRunThinkingVisibility(user: IUserDocument, logger: Logger): Promise<ThinkingVisibility> {
-  try {
-    return await resolveThinkingVisibility(user);
-  } catch (error) {
-    logger.warn('[AgentExecutor] thinking visibility resolution failed; withholding reasoning', {
-      userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return 'none';
-  }
-}
-
 async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMcpTools> {
   const enableMCPServer = (await adminSettingsRepository.getSettingsValue('EnableMCPServer')) ?? false;
   try {
@@ -1024,7 +1005,7 @@ async function processExecution(
     // Load user
     const user = await User.findById(execution.userId);
     if (!user) throw new Error(`User ${execution.userId} not found`);
-    const thinkingVisibility = await resolveRunThinkingVisibility(user as IUserDocument, logger);
+    const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
 
     // Validate session ownership
     const loadedSession = await sessionRepository.findById(execution.sessionId);
@@ -3707,7 +3688,7 @@ async function processSubagentDispatch(
     // Auth + ownership checks (mirror processExecution).
     const user = await User.findById(child.userId);
     if (!user) throw new Error(`User ${child.userId} not found`);
-    const thinkingVisibility = await resolveRunThinkingVisibility(user as IUserDocument, logger);
+    const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
     const loadedSession = await sessionRepository.findById(child.sessionId);
     if (!loadedSession) throw new Error(`Session ${child.sessionId} not found`);
     if (loadedSession.userId !== child.userId) {

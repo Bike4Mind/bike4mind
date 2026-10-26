@@ -2,6 +2,7 @@ import {
   ResearchModeParamsSchema,
   ModelInfo,
   createReasoningWithholder,
+  reasoningChannelOf,
   withholdsReasoning,
   type ThinkingVisibility,
 } from '@bike4mind/common';
@@ -111,9 +112,6 @@ export class ResearchModeService {
     let finalResponse = '';
     // Billed on what streamed, withheld reasoning included.
     let streamedChars = 0;
-    const reasoningWithholder = withholdsReasoning(thinkingVisibility, config.model)
-      ? createReasoningWithholder()
-      : null;
     try {
       this.logger.info(`🔬 [Research Mode] Processing configuration: ${config.label || config.model} (${config.id})`);
 
@@ -122,6 +120,9 @@ export class ResearchModeService {
       if (!modelInfo) {
         throw new Error(`Model ${config.model} not found`);
       }
+      const reasoningWithholder = withholdsReasoning(thinkingVisibility, config.model)
+        ? createReasoningWithholder(reasoningChannelOf(modelInfo))
+        : null;
 
       // Get LLM instance for this model
       const llm = getLlmByModel(this.apiKeyTable, {
@@ -203,6 +204,11 @@ export class ResearchModeService {
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (abortSignal && onAbort) abortSignal.removeEventListener('abort', onAbort);
+      }
+      const heldText = reasoningWithholder?.flush();
+      if (heldText) {
+        finalResponse += heldText;
+        await onStream(config.id, [heldText]);
       }
 
       this.logger.info(`🔬 [Research Mode] Configuration ${config.id} completed successfully`);

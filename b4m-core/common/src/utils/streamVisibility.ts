@@ -1,4 +1,5 @@
 import { parseClaudeModelId } from '../claudeModelId';
+import { isClaudeModelId } from '../models';
 import type { AdapterFamily } from '../types/entities/ModelCatalogTypes';
 
 /**
@@ -281,34 +282,77 @@ export function withholdsReasoning(visibility: ThinkingVisibility, modelId: stri
   return true;
 }
 
+/**
+ * Reasoning channel of a model row: its adapter family's entry, else inferred from its backend the
+ * way getLlmByModel dispatches (a bare Claude id reads as one of the two Claude adapters).
+ * Anything unrecognised reads as `always`, so callers fail closed.
+ */
+export function reasoningChannelOf(model: { id: string; backend?: string; adapterFamily?: string }): ReasoningChannel {
+  if (model.adapterFamily) {
+    return REASONING_CHANNEL_BY_ADAPTER_FAMILY[model.adapterFamily as AdapterFamily] ?? 'always';
+  }
+  if (model.backend === 'anthropic') return 'opt-in';
+  if ((model.backend === undefined || model.backend === 'bedrock') && isClaudeModelId(model.id)) return 'opt-in';
+  if (model.backend === 'openai' || model.backend === 'gemini') return 'never';
+  return 'always';
+}
+
 export interface ReasoningWithholder {
   /** The part of one streamed chunk the caller may see; reasoning is dropped. */
   visible(text: string, channel?: StreamChannel): string;
+  /** Text held back as a possible split marker; call once when the stream ends. */
+  flush(): string;
 }
 
 /**
- * Stateful filter over one stream's chunks, in arrival order. Drops reasoning-tagged frames and,
- * for families that inline reasoning untagged, every span between the think markers - tracked by
- * depth across chunks with the same rule as visibleReplyText, so the caller sees what the chat
- * transcript would render. Create one per provider call.
+ * Stateful filter over one stream's chunks, in arrival order; create one per provider call.
+ *
+ * Opt-in families separate reasoning by the frame's channel tag, so only tagged frames and bare
+ * marker frames are dropped and the answer is never parsed: a reply may mention `<think>` itself.
+ * Families that inline reasoning untagged are parsed by depth with the same rule as
+ * visibleReplyText, holding back a trailing partial marker until the next chunk resolves it.
  */
-export function createReasoningWithholder(): ReasoningWithholder {
+export function createReasoningWithholder(reasoningChannel: ReasoningChannel): ReasoningWithholder {
+  if (reasoningChannel !== 'always') {
+    return {
+      visible(text: string, channel?: StreamChannel): string {
+        if (!text || reasoningChannel === 'never') return text;
+        const trimmed = text.trim();
+        return channel === 'reasoning' || trimmed === THINK_OPEN_TAG || trimmed === THINK_CLOSE_TAG ? '' : text;
+      },
+      flush: () => '',
+    };
+  }
+
   let depth = 0;
+  let pending = '';
+  const scan = (text: string): string => {
+    let visible = '';
+    for (const token of text.split(THINK_TAG_TOKENS)) {
+      if (token === THINK_OPEN_TAG) {
+        depth += 1;
+      } else if (token === THINK_CLOSE_TAG) {
+        if (depth > 0) depth -= 1;
+        else visible += token;
+      } else if (depth === 0) {
+        visible += token;
+      }
+    }
+    return visible;
+  };
   return {
     visible(text: string, channel?: StreamChannel): string {
       if (!text) return text;
-      let visible = '';
-      for (const token of text.split(THINK_TAG_TOKENS)) {
-        if (token === THINK_OPEN_TAG) {
-          depth += 1;
-        } else if (token === THINK_CLOSE_TAG) {
-          if (depth > 0) depth -= 1;
-          else visible += token;
-        } else if (depth === 0) {
-          visible += token;
-        }
-      }
+      const combined = pending + text;
+      const holdLength = partialMarkerSuffixLength(combined);
+      pending = combined.slice(combined.length - holdLength);
+      const visible = scan(combined.slice(0, combined.length - holdLength));
       return channel === 'reasoning' ? '' : visible;
+    },
+    flush(): string {
+      const rest = pending;
+      pending = '';
+      return rest ? scan(rest) : '';
     },
   };
 }

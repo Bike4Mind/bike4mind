@@ -7,6 +7,7 @@ const {
   mockBuildDataLakeTools,
   mockGetEffectiveLLMApiKeys,
   mockAgentRun,
+  mockAgentCtor,
   mockReplSessionCtor,
   mockRecordReplSandboxUnavailable,
   meter,
@@ -15,6 +16,7 @@ const {
   mockBuildDataLakeTools: vi.fn(),
   mockGetEffectiveLLMApiKeys: vi.fn(),
   mockAgentRun: vi.fn(),
+  mockAgentCtor: vi.fn(),
   // Captures the options the route asks for. The executor it picks is the
   // whole security posture of this endpoint, so it has to be observable.
   mockReplSessionCtor: vi.fn(),
@@ -58,6 +60,9 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
 }));
 vi.mock('@bike4mind/agents', () => ({
   ReActAgent: class {
+    constructor(context: unknown) {
+      mockAgentCtor(context);
+    }
     run = mockAgentRun;
     toCheckpoint = () => meter.checkpoint;
   },
@@ -75,6 +80,7 @@ vi.mock('@bike4mind/agents', () => ({
 }));
 
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'none') }));
 // Balance mechanics are covered in meterPlatformCompletion.test.ts; this pins the route's call order.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({
@@ -159,6 +165,13 @@ describe('POST /api/data-lakes/rlm-answer - in-REPL retrieval credential', () =>
 
     expect(res.statusCode).toBe(200);
     expect(forwardedHeaders()).toEqual({ 'x-api-key': 'b4m_caller_key' });
+  });
+
+  it("runs the agent at the caller's thinking visibility", async () => {
+    const res = await call({ authorization: 'Bearer caller.jwt.token' });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockAgentCtor).toHaveBeenCalledWith(expect.objectContaining({ thinkingVisibility: 'none' }));
   });
 
   it('fails closed when the request carries no forwardable credential', async () => {

@@ -21,6 +21,17 @@ export const loadThinkingVisibilitySettings = async (db: {
   return { free: read('thinkingVisibilityFree'), paid: read('thinkingVisibilityPaid') };
 };
 
+/** For a caller whose tier could not be resolved: the free level, or `summary` without settings. */
+export const fallbackThinkingVisibility = async (
+  db: Parameters<typeof loadThinkingVisibilitySettings>[0]
+): Promise<ThinkingVisibility> => {
+  try {
+    return (await loadThinkingVisibilitySettings(db)).free;
+  } catch {
+    return 'summary';
+  }
+};
+
 /** The thinking visibility for one account: the paid level with paid standing, else the free level. */
 export const resolveAccountThinkingVisibility = async (
   user: PaidStandingSubject,

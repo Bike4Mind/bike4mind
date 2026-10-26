@@ -3469,7 +3469,7 @@ export const settingsMap = {
     name: 'Thinking Visibility: Free Accounts',
     defaultValue: 'summary',
     description:
-      'Model reasoning shown to accounts with no purchase, active plan or admin approval. "raw" shows it as the provider sent it, "summary" shows it only from models whose provider returns a summary instead of the raw trace (Claude 4 and later) and hides the rest, "none" hides all of it. Changes reach running servers within about 5 minutes (settings cache).',
+      'Model reasoning shown to accounts with no purchase, active plan or admin approval. "raw" shows it as the provider sent it. "summary" shows it only from models whose provider returns a summary instead of the raw trace (Claude 4 and later) and hides the rest; for other models the completions API does not request reasoning at all. "none" hides all reasoning text, but completions API callers that run tools themselves still receive the provider\'s summarized thinking blocks on Claude 4 and later, because those blocks must be echoed back on the next turn. Changes reach running servers within about 5 minutes (settings cache).',
     options: [...THINKING_VISIBILITY_LEVELS],
     category: 'AI',
     group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
@@ -3480,7 +3480,7 @@ export const settingsMap = {
     name: 'Thinking Visibility: Paid Accounts',
     defaultValue: 'raw',
     description:
-      'Model reasoning shown to admins and to accounts with a purchase, an active plan (own or org seat) or admin approval. Same levels as the free-account setting.',
+      'Model reasoning shown to admins and to accounts with a credit purchase, admin approval, or an active plan (own or org seat; only subscriptions in the active status count, so trialing, past-due and canceled plans do not). Same levels as the free-account setting.',
     options: [...THINKING_VISIBILITY_LEVELS],
     category: 'AI',
     group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
