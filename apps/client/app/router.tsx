@@ -745,7 +745,7 @@ export const qaStatusRoute = createRoute({
   path: '/status',
   validateSearch: parseQaStatusSearch,
   component: () => (
-    <RestrictedPage requireAdmin>
+    <RestrictedPage requireAdminPermission="support:read">
       <Suspense fallback={<RouteLoadingFallback />}>
         <QaStatusPage />
       </Suspense>
@@ -757,7 +757,7 @@ export const qaRunRoute = createRoute({
   getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/runs/$id',
   component: () => (
-    <RestrictedPage requireAdmin>
+    <RestrictedPage requireAdminPermission="support:read">
       <Suspense fallback={<RouteLoadingFallback />}>
         <QaRunPage />
       </Suspense>
@@ -771,7 +771,7 @@ export const qaTestRoute = createRoute({
   getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/tests/$testKey',
   component: () => (
-    <RestrictedPage requireAdmin>
+    <RestrictedPage requireAdminPermission="support:read">
       <Suspense fallback={<RouteLoadingFallback />}>
         <QaTestPage />
       </Suspense>
@@ -1197,13 +1197,14 @@ export const adminRoute = createRoute({
   validateSearch: parseAdminSearch,
 });
 
-// Admin user profile. Guarded exactly like adminRoute, which redirects its legacy `?userId=` here.
+// Admin user profile; adminRoute redirects its legacy `?userId=` here. Gated on support:read, the
+// permission every read on the page needs, so delegated operators reach it, not only full admins.
 export const adminUserProfileRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin/users/$userId',
   beforeLoad: ({ location }) => enforceConsentRedirect(location),
   component: () => (
-    <RestrictedPage requireAdmin={true}>
+    <RestrictedPage requireAdminPermission="support:read">
       <ProviderBundle>
         <Suspense fallback={<RouteLoadingFallback />}>
           <AdminUserProfilePage />

@@ -24,6 +24,8 @@ import {
 } from './router';
 import { AuditLogFiltersSchema } from '@bike4mind/common';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
+import type { ReactElement } from 'react';
+import RestrictedPage from './components/common/RestrictedPage';
 
 // The consent guard bootstraps a session over the network; the redirect tests below are about what
 // adminRoute does after it, so it passes here.
@@ -268,6 +270,13 @@ describe('admin user profile route', () => {
     await expect(
       adminBeforeLoad(adminRoute.options.validateSearch({ userId: '../organizations' }))
     ).resolves.toBeUndefined();
+  });
+
+  it('gates on support:read, so a delegated operator is not sent away like a non-admin', () => {
+    const element = (adminUserProfileRoute.options.component as () => ReactElement<Record<string, unknown>>)();
+    expect(element.type).toBe(RestrictedPage);
+    expect(element.props).toMatchObject({ requireAdminPermission: 'support:read' });
+    expect(element.props.requireAdmin).toBeUndefined();
   });
 
   it('deep-links a tab through ?tab=', () => {

@@ -80,6 +80,36 @@ describe('RestrictedPage — auth redirect', () => {
     expect(mockHistoryPush).toHaveBeenCalledWith('/new');
   });
 
+  it.each([
+    [
+      'a delegated operator holding the permission',
+      { id: 'operator', isAdmin: false, adminPermissions: ['support:read'] },
+    ],
+    ['a full admin without explicit grants', { id: 'full', isAdmin: true, adminPermissions: [] }],
+  ])('admits %s to a requireAdminPermission page', (_label, currentUser) => {
+    mockRouterState.location = { pathname: '/admin/users/u1', searchStr: '', hash: '', search: {} };
+    mockUseUser.mockReturnValue({ currentUser });
+    const { container } = render(
+      <RestrictedPage requireAdminPermission="support:read">
+        <div>user details</div>
+      </RestrictedPage>
+    );
+    expect(container.textContent).toBe('user details');
+    expect(mockHistoryPush).not.toHaveBeenCalled();
+  });
+
+  it('sends a delegate without the required permission to /new', () => {
+    mockRouterState.location = { pathname: '/admin/users/u1', searchStr: '', hash: '', search: {} };
+    mockUseUser.mockReturnValue({ currentUser: { id: 'keys', isAdmin: false, adminPermissions: ['keys:revoke'] } });
+    const { container } = render(
+      <RestrictedPage requireAdminPermission="support:read">
+        <div>user details</div>
+      </RestrictedPage>
+    );
+    expect(container.textContent).toBe('');
+    expect(mockHistoryPush).toHaveBeenCalledWith('/new');
+  });
+
   it('preserves the query string in redirectTo', () => {
     mockUseUser.mockReturnValue({ currentUser: null });
     mockRouterState.location = {
