@@ -297,6 +297,8 @@ export interface CliConfig {
   fallbackModels?: string[];
   /** Ollama endpoint for local models, saved by `b4m models --ollama-host`; the flag and B4M_OLLAMA_HOST override it. */
   ollamaHost?: string;
+  /** The defaultModel `b4m models use` last set; headless runs treat that model as local when it is missing. */
+  localDefaultModel?: string;
 }
 
 /**

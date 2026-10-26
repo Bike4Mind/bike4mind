@@ -26,7 +26,7 @@ describe('ConfigStore defaultModel and ollamaHost across processes', () => {
 
   const disk = async () => JSON.parse(await fs.readFile(configPath, 'utf-8'));
 
-  async function sessionThenModels(patch: { defaultModel?: string; ollamaHost?: string }) {
+  async function sessionThenModels(patch: { defaultModel?: string; ollamaHost?: string; localDefaultModel?: string }) {
     const session = new ConfigStore(configPath);
     await session.load();
     const models = new ConfigStore(configPath);
@@ -53,6 +53,27 @@ describe('ConfigStore defaultModel and ollamaHost across processes', () => {
 
     await session.update({ ollamaHost: undefined });
     expect(await disk()).not.toHaveProperty('ollamaHost');
+  });
+
+  it('keeps an explicit pick of the value the session loaded', async () => {
+    const seed = new ConfigStore(configPath);
+    await seed.load();
+    await seed.update({ defaultModel: 'hosted-a' });
+    const session = await sessionThenModels({ defaultModel: 'smollm2:135m', localDefaultModel: 'smollm2:135m' });
+
+    await session.save({ defaultModel: 'hosted-a' });
+    expect(await disk()).toMatchObject({ defaultModel: 'hosted-a', localDefaultModel: 'smollm2:135m' });
+  });
+
+  it('applies only changed fields from a whole config spread back', async () => {
+    const session = new ConfigStore(configPath);
+    const loaded = await session.load();
+    const models = new ConfigStore(configPath);
+    await models.load();
+    await models.update({ defaultModel: 'smollm2:135m' });
+
+    await session.save({ ...loaded, preferences: { ...loaded.preferences, theme: 'light' } });
+    expect((await disk()).defaultModel).toBe('smollm2:135m');
   });
 
   it('keeps a host another process cleared', async () => {
