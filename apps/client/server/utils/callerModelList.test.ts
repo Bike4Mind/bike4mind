@@ -102,7 +102,7 @@ describe('getCallerModelList free-tier gate', () => {
   const allowed = new Set(['priced']);
 
   beforeEach(() => {
-    mocks.getAvailableModels.mockResolvedValue([priced, unpriced, free, image]);
+    mocks.getAvailableModels.mockResolvedValue([priced, free, image]);
     mocks.loadFreeTierAllowedModels.mockResolvedValue(allowed);
   });
 
@@ -113,24 +113,24 @@ describe('getCallerModelList free-tier gate', () => {
   it('lists everything for a user holding plan:paid', async () => {
     mocks.getUserEntitlements.mockResolvedValue(['base', 'plan:paid']);
 
-    expect(await listedIds()).toEqual(['priced', 'unpriced', 'free', 'image-model']);
+    expect(await listedIds()).toEqual(['priced', 'free', 'image-model']);
   });
 
   it.each([
     ['an admin', { isAdmin: true }],
     ['a developer-tagged user', { tags: ['Developer'] }],
   ])('lists everything for %s', async (_label, overrides) => {
-    expect(await listedIds(makeUser(overrides))).toEqual(['priced', 'unpriced', 'free', 'image-model']);
+    expect(await listedIds(makeUser(overrides))).toEqual(['priced', 'free', 'image-model']);
   });
 
   it('lists everything when the gate is off', async () => {
     mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined);
 
-    expect(await listedIds()).toEqual(['priced', 'unpriced', 'free', 'image-model']);
+    expect(await listedIds()).toEqual(['priced', 'free', 'image-model']);
   });
 
   it('never filters an anonymous caller', async () => {
-    expect(await listedIds(null)).toEqual(['priced', 'unpriced', 'free', 'image-model']);
+    expect(await listedIds(null)).toEqual(['priced', 'free', 'image-model']);
     expect(mocks.loadFreeTierAllowedModels).not.toHaveBeenCalled();
   });
 
@@ -155,7 +155,7 @@ describe('getCallerModelList free-tier gate', () => {
     const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
     mocks.loadFreeTierAllowedModels.mockRejectedValue(new Error('settings db down'));
 
-    expect(await listedIds()).toEqual(['priced', 'unpriced', 'free', 'image-model']);
+    expect(await listedIds()).toEqual(['priced', 'free', 'image-model']);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('allowlist read failed'), expect.anything());
     warn.mockRestore();
   });
