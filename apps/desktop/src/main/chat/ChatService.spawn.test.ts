@@ -194,6 +194,32 @@ describe('ChatService spawn caps', () => {
     expect(sessions.filter(session => session.origin)).toHaveLength(MAX_CONCURRENT_SPAWNED);
   });
 
+  it('still accepts a message the user types into a spawned session while the cap is full', async () => {
+    const parent = await codeSession();
+    await service.send(parent.id, 'fill the slots');
+    await awaitStream(0);
+    requestSpawns(streams[0], MAX_CONCURRENT_SPAWNED, 'fill');
+    const filled = await startSuggested(parent.id, spawnTitles('fill', MAX_CONCURRENT_SPAWNED));
+    expect(filled.every(result => result.ok)).toBe(true);
+
+    // Settle one child so it can take a turn, then refill its slot: the cap is full again and the
+    // settled child is idle, which is the state a person would type into.
+    const settled = await awaitStreamOf('task fill-0');
+    settled.write(frame({ type: 'content', text: 'done with it' }));
+    settled.write(frame('[DONE]'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done' && event.content === 'done with it'), {
+      timeout: 5000,
+      interval: 5,
+    });
+    requestSpawns(await awaitStreamOf('fill the slots'), 1, 'refill');
+    expect((await startSuggested(parent.id, ['refill-0']))[0]?.ok).toBe(true);
+    requestSpawns(await awaitStreamOf('fill the slots'), 1, 'over');
+    expect((await startSuggested(parent.id, ['over-0']))[0]?.ok).toBe(false);
+
+    const idle = (await store.list()).find(session => session.title === 'fill-0');
+    expect((await service.send(idle!.id, 'a word from the user')).ok).toBe(true);
+  });
+
   it('frees a concurrency slot when a spawned session finishes, and not before', async () => {
     const parent = await codeSession();
     await service.send(parent.id, 'fill the slots');
