@@ -173,6 +173,7 @@ import {
   ELISION_NAME_MAX,
 } from './elisionStamp';
 import { buildEarlyStopStamp, buildIncompleteAnswerNotice, usageEventStatusForFinish } from './earlyStopStamp';
+import { logLlmUsageSettled } from './llmUsageSettledLog';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -6013,6 +6014,17 @@ export class ChatCompletionProcess {
           estimatedCost,
           creditsUsed: textCreditsUsed,
         };
+        logLlmUsageSettled(logger, {
+          backend: currentModel.backend,
+          model: currentModel.id,
+          inputTokens: settledInputTokens,
+          outputTokens: settledOutputTokens,
+          cacheReadTokens: cacheReadInputTokens,
+          cacheWriteTokens: cacheCreationInputTokens,
+          usd: estimatedCost,
+          source: 'chat',
+          accountCreatedAt: this.user.createdAt,
+        });
 
         // Drift detection: log when our tokenizer diverges substantially from what
         // the provider reports. With provider-basis settlement this no longer

@@ -256,6 +256,8 @@ const handler = baseApi()
       { ability: req.ability },
       req.logger
     );
+    // Stable message counted by the API key creation metric filter in infra/signupAlarms.ts.
+    req.logger.info('user-api-key-created');
 
     return res.status(201).json(newApiKey);
   });

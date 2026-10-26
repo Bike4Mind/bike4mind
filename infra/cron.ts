@@ -108,6 +108,28 @@ const signupBaselineReport = runsScheduledJobs
     })
   : undefined;
 
+const youngAccountSpendAlert = runsScheduledJobs
+  ? new sst.aws.Cron('youngAccountSpendAlert', {
+      schedule: 'rate(1 hour)',
+      enabled: $app.stage === 'production',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/youngAccountSpendAlert.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+          YOUNG_ACCOUNT_SPEND_ALERT_CREDITS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_CREDITS || '',
+          YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS || '',
+        },
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
 const secretRotationNotifierCron = runsScheduledJobs
   ? new sst.aws.Cron('secretRotationNotifier', {
       // Daily check at 9am UTC (4am EST)
@@ -1138,6 +1160,7 @@ export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
   signupBaselineReport,
+  youngAccountSpendAlert,
   secretRotationNotifierCron,
   scheduleTaskCron,
   apiKeyBaselineCalculation,

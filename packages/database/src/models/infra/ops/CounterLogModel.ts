@@ -31,6 +31,49 @@ function newAccountExpression(createdAtField: string, windowEnd: Date) {
   };
 }
 
+export interface YoungAccountSpender {
+  userId: string;
+  creditsSpent: number;
+  accountCreatedAt: Date;
+}
+
+export interface YoungAccountSpendSummary {
+  totalCredits: number;
+  accountCount: number;
+  topSpenders: YoungAccountSpender[];
+}
+
+/**
+ * Per-user AI credit spend in [start, end] for accounts created in the 168 hours before `end`,
+ * highest spend first. Shares newAccountExpression with the report's `isNew` flag.
+ */
+function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.PipelineStage[] {
+  return [
+    {
+      $match: {
+        ownerType: 'User',
+        type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+        createdAt: { $gte: start, $lte: end },
+      },
+    },
+    { $group: { _id: '$ownerId', creditsSpent: { $sum: { $abs: '$credits' } } } },
+    { $match: { creditsSpent: { $gt: 0 } } },
+    { $addFields: { userObjectId: { $convert: { input: '$_id', to: 'objectId', onError: null } } } },
+    {
+      $lookup: {
+        from: 'users',
+        let: { userObjectId: '$userObjectId' },
+        pipeline: [{ $match: { $expr: { $eq: ['$_id', '$$userObjectId'] } } }, { $project: { _id: 1, createdAt: 1 } }],
+        as: 'user',
+      },
+    },
+    { $unwind: '$user' },
+    { $match: { $expr: newAccountExpression('$user.createdAt', end) } },
+    { $project: { _id: 0, userId: '$_id', creditsSpent: 1, accountCreatedAt: '$user.createdAt' } },
+    { $sort: { creditsSpent: -1, userId: 1 } },
+  ];
+}
+
 // CounterLog.userId is a free-form string and real rows carry non-ObjectId values such as
 // 'SYSTEM'. Every user $lookup below therefore derives userObjectId with
 // `$convert ... onError: null` rather than `$toObjectId`: one such row makes $toObjectId abort the
@@ -93,6 +136,17 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
         { $limit: 20 },
       ])
     ).allowDiskUse(true);
+  }
+
+  async findYoungAccountSpend(start: Date, end: Date, limit: number): Promise<YoungAccountSpendSummary> {
+    const rows = await CreditTransaction.aggregate<YoungAccountSpender>(
+      convertPipelineForDocumentDB(buildYoungAccountSpendPipeline(start, end))
+    ).allowDiskUse(true);
+    return {
+      totalCredits: rows.reduce((sum, row) => sum + row.creditsSpent, 0),
+      accountCount: rows.length,
+      topSpenders: rows.slice(0, limit),
+    };
   }
 
   async findRecentByUserIdAndHasMetadata(userId: string): Promise<ICounterLogDocument[]> {

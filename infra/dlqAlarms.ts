@@ -77,6 +77,9 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
  */
 export const dlqAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('DlqAlarmTopic') : undefined;
 
+/** Email-only topic (OPS_ALERT_EMAIL) that does not depend on the Slack forwarding Lambda. */
+export const oobAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('OobAlarmTopic') : undefined;
+
 /**
  * Wire DLQ alarm SNS topic → Slack.
  * Only ALARM state transitions are forwarded; OK (resolved) events are suppressed.
@@ -127,7 +130,6 @@ if (isMonitoredStage) {
   // Routes to a dedicated SNS topic with a direct email subscription instead.
   // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
   // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
-  const oobAlarmTopic = new sst.aws.SnsTopic('OobAlarmTopic');
   if (process.env.OPS_ALERT_EMAIL) {
     // retainOnDelete: the AWS provider cannot destroy a PendingConfirmation subscription.
     // If OPS_ALERT_EMAIL is unset on a later deploy before the confirmation link is clicked,
@@ -138,7 +140,7 @@ if (isMonitoredStage) {
     new aws.sns.TopicSubscription(
       'OobAlarmTopicEmailSub',
       {
-        topic: oobAlarmTopic.arn,
+        topic: oobAlarmTopic!.arn,
         protocol: 'email',
         endpoint: process.env.OPS_ALERT_EMAIL,
       },
@@ -168,7 +170,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-    alarmActions: [oobAlarmTopic.arn],
+    alarmActions: [oobAlarmTopic!.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
   });
 
@@ -187,7 +189,7 @@ if (isMonitoredStage) {
     threshold: 3600,
     treatMissingData: 'notBreaching',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-    alarmActions: [oobAlarmTopic.arn],
+    alarmActions: [oobAlarmTopic!.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
   });
 }

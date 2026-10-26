@@ -544,6 +544,13 @@ describe('POST /api/user-api-keys - analytics is best effort', () => {
     expect(res._getStatusCode()).toBe(201);
     expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
   });
+
+  it('emits the creation metric message without key or user details', async () => {
+    const { req, res } = post({ name: 'k', scopes: [] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect((req as any).logger.info).toHaveBeenCalledExactlyOnceWith('user-api-key-created');
+  });
 });
 
 // Wiring only: the containment rule itself is covered by the service's create.test.ts.

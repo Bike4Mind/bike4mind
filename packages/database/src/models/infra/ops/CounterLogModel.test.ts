@@ -515,3 +515,46 @@ describe('CounterLogRepository.metricsByDate - daily topUsers leaderboard', () =
     expect(result.topUsers?.[1]).toEqual(expect.objectContaining({ creditsSpent: 0 }));
   });
 });
+
+describe('findYoungAccountSpend', () => {
+  const windowEnd = new Date('2026-06-01T12:00:00.000Z');
+  const windowStart = new Date('2026-06-01T11:00:00.000Z');
+  const halfHourAgo = new Date('2026-06-01T11:30:00.000Z');
+  const twoHoursAgo = new Date('2026-06-01T10:00:00.000Z');
+
+  it('totals hourly spend by accounts created in the last seven days and ranks the top spenders', async () => {
+    const big = await seedUser('big@example.com', threeDaysBefore);
+    const small = await seedUser('small@example.com', sixDaysBefore);
+    const veteran = await seedUser('veteran@example.com', eightDaysBefore);
+    const earlier = await seedUser('earlier@example.com', threeDaysBefore);
+    await spendFor(big, 300, halfHourAgo);
+    await spendFor(big, 200, halfHourAgo);
+    await spendFor(small, 40, halfHourAgo);
+    await spendFor(veteran, 9000, halfHourAgo);
+    await spendFor(earlier, 700, twoHoursAgo);
+    await mongoose.connection.collection('credittransactions').insertOne({
+      ownerId: 'SYSTEM',
+      ownerType: 'User',
+      type: 'text_generation_usage',
+      credits: -50,
+      createdAt: halfHourAgo,
+    });
+
+    const result = await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 1);
+
+    expect(result.totalCredits).toBe(540);
+    expect(result.accountCount).toBe(2);
+    expect(result.topSpenders).toEqual([{ userId: big, creditsSpent: 500, accountCreatedAt: threeDaysBefore }]);
+  });
+
+  it('returns an empty summary when no young account spent', async () => {
+    const veteran = await seedUser('veteran@example.com', eightDaysBefore);
+    await spendFor(veteran, 100, halfHourAgo);
+
+    expect(await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10)).toEqual({
+      totalCredits: 0,
+      accountCount: 0,
+      topSpenders: [],
+    });
+  });
+});
