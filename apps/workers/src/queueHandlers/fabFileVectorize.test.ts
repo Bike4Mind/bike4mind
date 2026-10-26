@@ -393,6 +393,30 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
   });
 });
 
+describe('fabFileVectorize handler - file deleted mid-run', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+  });
+
+  it('skips quietly instead of throwing when the file disappears before finalization', async () => {
+    h.findAccessibleById
+      .mockResolvedValueOnce({ id: 'ff1', vectorized: false, chunkCount: 1, vectorizedChunkCount: 0 })
+      .mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(mockLogger.error).not.toHaveBeenCalled();
+  });
+});
+
 describe('fabFileVectorize handler - spend gate', () => {
   const unvectorizedFile = (batchId?: string) => ({
     id: 'ff1',
