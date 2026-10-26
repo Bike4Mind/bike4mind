@@ -468,7 +468,6 @@ const handler = baseApi({ auth: false })
       trigger: 'otc-signup',
       logger: req.logger,
     });
-    await refreshSignupRiskScore(newUser.id, req.logger);
     if (domainGrant.currentCredits !== null) newUser.currentCredits = domainGrant.currentCredits;
     if (domainGrant.joinedOrganizationId) newUser.organizationId = domainGrant.joinedOrganizationId;
     if (domainGrant.tagsApplied.length > 0) {
@@ -483,6 +482,8 @@ const handler = baseApi({ auth: false })
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
     await recordSignupNetwork({ req, userId: newUser.id, method: 'otc' });
+    // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+    await refreshSignupRiskScore(newUser.id, req.logger);
     // Funnel floor (server/analytics/funnel.ts): keep the consented touches on the user so later
     // stages stay joinable to the door, then report the stages OTC completes in one step - the
     // code proved the email, and registerViaOTC plus the domain grant above seeded the credits.

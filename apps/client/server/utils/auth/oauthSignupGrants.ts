@@ -1,5 +1,4 @@
 import { Logger } from '@bike4mind/observability';
-import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { applySignupDomainGrant, type SignupDomainGrantResult } from '@server/entitlements/signupDomainGrant';
 
 const NO_GRANT: SignupDomainGrantResult = {
@@ -24,7 +23,5 @@ export async function applyOAuthSignupDomainGrant(userId: string, email: string)
     Logger.globalInstance.error(`OAuth signup domain grant failed for user ${userId}`, error);
     grant = { ...NO_GRANT, tagsApplied: [] };
   }
-  // Every brand-new OAuth account passes here.
-  await refreshSignupRiskScore(userId, Logger.globalInstance);
   return grant;
 }

@@ -425,6 +425,9 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
 
     expect(res._getStatusCode()).toBe(200);
     expect(refreshSignupRiskScore).toHaveBeenCalledWith('user-1', req.logger);
+    expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
+      refreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
   });
 
   it("credits the new account's signup to the product in its touch cookies, as an otc signup", async () => {

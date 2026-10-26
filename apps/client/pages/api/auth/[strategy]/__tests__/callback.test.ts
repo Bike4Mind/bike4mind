@@ -55,6 +55,11 @@ vi.mock('@server/auth/networkMeta', () => ({
   recordSignupNetwork: (...a: any[]) => mockRecordSignupNetwork(...a),
 }));
 
+const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/signupRiskScore', () => ({
+  refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
+}));
+
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
@@ -267,6 +272,15 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     );
   });
 
+  it('rescores a new account only after its signup network is stamped', async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockRefreshSignupRiskScore).toHaveBeenCalledWith('u-new', expect.anything());
+    expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRefreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
+  });
+
   it('keeps a synthetic new account out of the signup emit and the ad conversion fragment', async () => {
     mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: true });
     const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
@@ -285,6 +299,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(mockEmitSignup).not.toHaveBeenCalled();
     expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
     expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
+    expect(mockRefreshSignupRiskScore).not.toHaveBeenCalled();
   });
 
   // The REGISTER log and the emit are separate statements; folding the emit into the log's

@@ -20,6 +20,7 @@ import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -156,6 +157,8 @@ const handler = baseApi({ auth: false })
           }
           await stampOAuthSourceTag(user.id, stateResult?.valid ? stateResult.payload.clientId : undefined);
           await recordSignupNetwork({ req, userId: user.id, method: strategy });
+          // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+          await refreshSignupRiskScore(user.id, req.logger);
           // Credit the signup to the product the visitor came through, if any, and only with
           // consent - see readConsentedAcquisitionTouches. Before the session is minted, as in
           // OTC: a mint failure after the account exists would otherwise lose the signup for
