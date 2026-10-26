@@ -166,7 +166,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   // fixed and failed/failedMementos showing how many mementos failed and a sample of which.
   const pageMadeProgress = execute ? totals.reembedded > 0 : true;
 
-  // A dry run changes nothing, so only an execute pass is audited.
   if (execute) {
     await recordAdminActionFromRequest(req, {
       action: 'ops.mementos.reembedded',
