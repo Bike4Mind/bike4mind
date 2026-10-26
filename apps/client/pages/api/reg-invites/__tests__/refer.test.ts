@@ -207,7 +207,7 @@ describe('/api/reg-invites/refer — passwordless email content', () => {
   });
 
   it('includes an escaped existing invite code and preserves a custom registration link', async () => {
-    mockInviteFindOne.mockResolvedValue({ code: '<EXIST&>' });
+    mockInviteFindOne.mockResolvedValue({ code: '<EXIST&>', userId: 'user-1' });
     vi.mocked(getSettingsMap).mockResolvedValueOnce({
       RegistrationLink: 'https://signup.example.com/register?source=email&campaign=invite',
     });
