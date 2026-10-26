@@ -37,7 +37,7 @@ const PER_TOOL_CEILINGS: Record<string, number> = {
 
 /** Any tool without its own line above must stay under this. Catches re-inflating an unlisted tool. */
 const UNLISTED_TOOL_CEILING = 600;
-// Raised (1500/2300) for current_model_details, which is auto-offered on every tool-capable turn.
+// Auto-added tools (offered on every tool-capable turn, including current_model_details), alone and with the knowledge auto-offer.
 const AUTO_ADDED_CEILING = 1650;
 const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2450;
 /**
