@@ -548,19 +548,27 @@ describe('HuggingFaceHub Ollama refs', () => {
     expect(detail.builds.find(build => build.id === 'SmolLM2-135m Q8_0')?.ollamaRefIssue).toBe('ambiguous');
   });
 
-  it('plans a 4000-file repo in well under a second', async () => {
+  it('plans Ollama tags in near-linear time as the repo grows', async () => {
     // Each odd file's tails are all blocked by the even file just before it.
-    const repo = 'someone/many-GGUF';
-    const tree = Array.from({ length: 4000 }, (_, i) => {
-      const pair = `${Array.from({ length: 12 }, () => `p${i >> 1}`).join('-')}-Q4_K_M`;
-      return numbered(`v${String(i).padStart(5, '0')}/${i % 2 ? pair : `y-${pair}`}.gguf`, i + 1);
-    });
-    const server = await serve(simpleRoutes(repo, tree));
-    const hub = new HuggingFaceHub({ endpoint: server.baseUrl, requestTimeoutMs: 120_000 });
-    const started = performance.now();
-    const detail = await hub.getModel(repo);
-    expect(performance.now() - started).toBeLessThan(1000);
-    expect(detail.builds.filter(build => build.ollamaRefIssue === 'ambiguous')).toHaveLength(2000);
+    const plan = async (files: number) => {
+      const repo = `someone/many-${files}-GGUF`;
+      const tree = Array.from({ length: files }, (_, i) => {
+        const pair = `${Array.from({ length: 12 }, () => `p${i >> 1}`).join('-')}-Q4_K_M`;
+        return numbered(`v${String(i).padStart(5, '0')}/${i % 2 ? pair : `y-${pair}`}.gguf`, i + 1);
+      });
+      const server = await serve(simpleRoutes(repo, tree));
+      const hub = new HuggingFaceHub({ endpoint: server.baseUrl, requestTimeoutMs: 120_000 });
+      const started = performance.now();
+      const detail = await hub.getModel(repo);
+      const elapsed = performance.now() - started;
+      expect(detail.builds.filter(build => build.ollamaRefIssue === 'ambiguous')).toHaveLength(files / 2);
+      return elapsed;
+    };
+    await plan(500);
+    // 4x the files costs about 4x linear and 16x quadratic; best of three damps CI noise.
+    const small = Math.min(await plan(1000), await plan(1000), await plan(1000));
+    const large = Math.min(await plan(4000), await plan(4000));
+    expect(large / small).toBeLessThan(10);
   }, 120_000);
 
   it('answers null for a 404 manifest', async () => {
