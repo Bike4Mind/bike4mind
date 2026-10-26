@@ -54,6 +54,14 @@ describe('classifyTurnRetryReason', () => {
     expect(classifyTurnRetryReason(truncated)).toBe('stream_truncated');
   });
 
+  it('reads a Bedrock stall before the first token as truncated', () => {
+    const stalled = new Error(
+      '[BaseBedrockBackend] stream timeout - model "m" in region r returned an EMPTY response (no text, no tool call) without a terminal event.'
+    );
+
+    expect(classifyTurnRetryReason(stalled)).toBe('stream_truncated');
+  });
+
   it('reads a stream that ended without message_stop as truncated, not stalled', () => {
     const truncated = new Error(
       'Anthropic API stream timeout - the stream ended after 42 events without message_stop, so the response is truncated.'
