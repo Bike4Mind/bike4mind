@@ -47,6 +47,7 @@ import { Logger } from '@bike4mind/observability';
 registerLambdaErrorHandlers();
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { z } from 'zod';
 import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
@@ -177,6 +178,7 @@ export const getStaticOptions = () => {
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Entitlement-aware lake retrieval parity with questProcessor (see note there).
     getEntitlements: getUserEntitlements,
+    getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (
       questId: string,

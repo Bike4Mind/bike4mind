@@ -2539,6 +2539,50 @@ describe('ChatCompletionProcess', () => {
       });
     });
 
+    describe('thinking visibility', () => {
+      const streamReasoningTurn = () => {
+        const body = wireMinimalTurn();
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['<think>'], { channel: 'reasoning' });
+            await cb(['tagged trace'], { channel: 'reasoning' });
+            await cb(['</think>'], { channel: 'reasoning' });
+            await cb(['<think>inline trace</think>Visible answer.']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+        return body;
+      };
+      const storedText = () => `${(mockQuest.replies ?? []).join('')}|${mockQuest.reply ?? ''}`;
+
+      it('keeps reasoning out of a free caller stream and stored reply', async () => {
+        (service as any).getThinkingVisibility = vi.fn().mockResolvedValue('none');
+
+        await service.process({ body: streamReasoningTurn(), logger: mockLogger });
+
+        expect(storedText()).toContain('Visible answer.');
+        expect(storedText()).not.toMatch(/trace|<think>/);
+      });
+
+      it('leaves a paid caller at raw unchanged', async () => {
+        (service as any).getThinkingVisibility = vi.fn().mockResolvedValue('raw');
+
+        await service.process({ body: streamReasoningTurn(), logger: mockLogger });
+
+        expect(storedText()).toContain('<think>tagged trace</think>');
+        expect(storedText()).toContain('Visible answer.');
+      });
+
+      it('withholds when the resolution fails', async () => {
+        (service as any).getThinkingVisibility = vi.fn().mockRejectedValue(new Error('subscription read failed'));
+
+        await service.process({ body: streamReasoningTurn(), logger: mockLogger });
+
+        expect(storedText()).not.toMatch(/trace/);
+      });
+    });
+
     it('keeps a user-stopped quest as stopped when the aborted backend resolves normally', async () => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {

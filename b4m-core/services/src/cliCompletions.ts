@@ -37,6 +37,11 @@ import {
   isClaudeModelId,
   type CreditHoldRecord,
   type ICacheStrategy,
+  type ThinkingVisibility,
+  createReasoningWithholder,
+  type ReasoningWithholder,
+  providerSummarizesReasoning,
+  withholdsReasoning,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -197,6 +202,8 @@ export interface CompletionParams {
   onReady?: () => void | Promise<void>;
   /** Entitlement resolver for model admission; omitted means tag-only access. */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
+  /** Resolved on the reloaded caller; omitted means `raw`. A failed resolution withholds. */
+  getThinkingVisibility?: (user: IUserDocument) => Promise<ThinkingVisibility>;
 }
 
 /**
@@ -416,6 +423,41 @@ function hasEffectiveConversationMessage(messages: IMessage[]): boolean {
 /**
  * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
  */
+async function resolveCallerThinkingVisibility(
+  params: Pick<CompletionParams, 'getThinkingVisibility' | 'userId'>,
+  actor: IUserDocument | null,
+  logger: Logger | undefined
+): Promise<ThinkingVisibility> {
+  if (!params.getThinkingVisibility) return 'raw';
+  if (!actor) return 'none';
+  try {
+    return await params.getThinkingVisibility(actor);
+  } catch (error) {
+    logger?.warn?.('[cliCompletions] thinking visibility resolution failed; withholding reasoning', {
+      userId: params.userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 'none';
+  }
+}
+
+/**
+ * One frame with the caller-withheld reasoning removed. Anthropic thinking blocks ride client-tool
+ * frames so the caller can echo them unchanged on the next turn, which the provider requires; they
+ * are kept when the provider returns them summarized and dropped when they would carry the raw trace.
+ */
+export function withholdReasoningFromFrame(
+  withholder: ReasoningWithholder,
+  text: (string | null | undefined)[],
+  info: CompletionInfo | undefined,
+  model: string
+): { text: (string | null | undefined)[]; info: CompletionInfo | undefined } {
+  const visibleText = text.map(entry => (entry ? withholder.visible(entry, info?.channel) : entry));
+  if (!info?.thinking || providerSummarizesReasoning(model)) return { text: visibleText, info };
+  const { thinking: _withheld, ...rest } = info;
+  return { text: visibleText, info: rest };
+}
+
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
   const model = resolveOpenAiBareModelAlias(params.model);
@@ -529,6 +571,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
   }).assert(model);
+  const withholdReasoning = withholdsReasoning(await resolveCallerThinkingVisibility(params, actor, logger), model);
 
   if (modelInfo && !supportsAssistantPrefill(modelInfo) && hasAssistantPrefill(messages)) {
     throw new BadRequestError(
@@ -830,6 +873,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       tierBasisTokens: finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens,
     });
 
+  const reasoningWithholder = withholdReasoning ? createReasoningWithholder() : null;
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -861,6 +905,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // only frame with `credits`, so a client reading credits sees exactly one number, and it is
     // the one the ledger charged. A provisional round-up here (usdToCredits, minimum 1) used to
     // precede a stochastic settlement of 0 on cheap calls, which read as a double charge.
+    if (reasoningWithholder) {
+      const withheld = withholdReasoningFromFrame(reasoningWithholder, text, info, model);
+      await onChunk(withheld.text, withheld.info);
+      return;
+    }
     await onChunk(text, info);
   };
 

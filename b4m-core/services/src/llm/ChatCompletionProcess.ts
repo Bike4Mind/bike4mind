@@ -57,6 +57,9 @@ import {
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
+  createReasoningWithholder,
+  withholdsReasoning,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -972,6 +975,10 @@ export class ChatCompletionProcess {
   public priorUserPrompts?: string[];
 
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
+  private getThinkingVisibility: IChatCompletionServiceOptions['getThinkingVisibility'];
+  private thinkingVisibilityPromise?: Promise<ThinkingVisibility>;
+  /** Reasoning characters kept out of the current attempt's replies, still billed on an abort. */
+  private withheldReasoningChars = 0;
   /** Set once the turn's model resolves; gates the deprecated remap and every fallback hop. */
   private modelAdmission?: ModelAdmission;
   private entitlementsResolved = false;
@@ -1114,6 +1121,7 @@ export class ChatCompletionProcess {
     this.workspaceSessionSettings = options.workspaceSessionSettings;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
+    this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
@@ -1173,6 +1181,20 @@ export class ChatCompletionProcess {
       })();
     }
     return this.entitlementKeysPromise;
+  }
+
+  /** The caller's thinking visibility, resolved once per process. */
+  public resolveThinkingVisibility(): Promise<ThinkingVisibility> {
+    this.thinkingVisibilityPromise ??= (async (): Promise<ThinkingVisibility> => {
+      if (!this.getThinkingVisibility) return 'raw';
+      try {
+        return await this.getThinkingVisibility(this.user);
+      } catch (err) {
+        this.logger.warn(`Thinking visibility resolution failed; withholding reasoning: ${(err as Error)?.message}`);
+        return 'none';
+      }
+    })();
+    return this.thinkingVisibilityPromise;
   }
 
   private entitlementResolution(): EntitlementResolution {
@@ -3395,6 +3417,7 @@ export class ChatCompletionProcess {
         apiKeyTable,
         getAbortSignal: () => abortSignalHolder.signal,
         thinking: thinking ? { enabled: thinking.enabled, budget_tokens: thinking.budget_tokens ?? 16000 } : undefined,
+        thinkingVisibility: await this.resolveThinkingVisibility(),
         agentStore,
         externalTools,
         toolAvailability,
@@ -4774,7 +4797,8 @@ export class ChatCompletionProcess {
             // Handle streaming for each configuration
             this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);
           },
-          abortController.signal
+          abortController.signal,
+          await this.resolveThinkingVisibility()
         );
 
         // Update quest with Research Mode results. A Stop makes the cancellation watcher
@@ -5048,6 +5072,12 @@ export class ChatCompletionProcess {
               );
             }
 
+            // Per attempt: a fallback hop restarts the stream and can change the answering model.
+            const reasoningWithholder = withholdsReasoning(await this.resolveThinkingVisibility(), currentModel.id)
+              ? createReasoningWithholder()
+              : null;
+            this.withheldReasoningChars = 0;
+
             await currentLlm.complete(
               currentModel.id,
               outboundMessages,
@@ -5175,7 +5205,12 @@ export class ChatCompletionProcess {
                   visibleCharsAtLastToolCall = countVisibleChars(quest.replies);
                 }
 
-                streamedTexts.forEach((text, index) => {
+                streamedTexts.forEach((streamedText, index) => {
+                  if (!streamedText) return;
+                  const text = reasoningWithholder
+                    ? reasoningWithholder.visible(streamedText, completionInfo?.channel)
+                    : streamedText;
+                  this.withheldReasoningChars += streamedText.length - text.length;
                   if (!text) return;
                   appendStreamedChunk(replies, text, index, transitionMode);
                   quest.replies = Object.values(replies);
@@ -7087,10 +7122,12 @@ export class ChatCompletionProcess {
   ): Promise<void> {
     const basis = this.reservationBasis;
     if (!basis) return;
-    const streamedChars = (quest.replies?.length ? quest.replies : [quest.reply ?? '']).reduce(
-      (sum, reply) => sum + (reply?.length ?? 0),
-      0
-    );
+    const streamedChars =
+      this.withheldReasoningChars +
+      (quest.replies?.length ? quest.replies : [quest.reply ?? '']).reduce(
+        (sum, reply) => sum + (reply?.length ?? 0),
+        0
+      );
     const reported = basis.reported ?? {};
     const cacheReadInputTokens = reported.cacheReadInputTokens ?? 0;
     const cacheCreationInputTokens = reported.cacheCreationInputTokens ?? 0;

@@ -58,6 +58,7 @@ import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
@@ -208,6 +209,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     // comp-tag holder already gets here, closing the Q3b asymmetry on the generic surfaces
     // (not just the libonc Tutor). Pure fn ref; per-request resolution is memoized in core.
     getEntitlements: getUserEntitlements,
+    getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (questId, sessionId, userId, prompt, model, flags): Promise<void> => {
       await LLMEvents.CompletionCompleted.publish({

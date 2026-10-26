@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiKeyScope, BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({
   executeCompletion: (...args: unknown[]) => mockExecuteCompletion(...args),
 }));
@@ -69,6 +71,14 @@ describe('cliCompletion websocket handler', () => {
     await run();
 
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', source: 'cli' }));
+  });
+
+  it('resolves thinking visibility for the caller', async () => {
+    await run();
+
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ getThinkingVisibility: resolveThinkingVisibility })
+    );
   });
 
   it('rate-limits the JWT path at the cli source, not the default cap', async () => {

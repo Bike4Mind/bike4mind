@@ -77,6 +77,7 @@ import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
 import defineAbilitiesFor from '@server/auth/ability';
@@ -92,7 +93,13 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import { CreditHolderType, type AttachmentLakeAccess, type IAgent, type IUserDocument } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  type AttachmentLakeAccess,
+  type IAgent,
+  type IUserDocument,
+  type ThinkingVisibility,
+} from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -663,6 +670,19 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
  * wiring, so a transient DB error here must not take down runs that use no MCP
  * tools (mirrors the userAgents/orgAgents fallbacks in each caller).
  */
+/** A failed lookup withholds reasoning rather than failing the run. */
+async function resolveRunThinkingVisibility(user: IUserDocument, logger: Logger): Promise<ThinkingVisibility> {
+  try {
+    return await resolveThinkingVisibility(user);
+  } catch (error) {
+    logger.warn('[AgentExecutor] thinking visibility resolution failed; withholding reasoning', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 'none';
+  }
+}
+
 async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMcpTools> {
   const enableMCPServer = (await adminSettingsRepository.getSettingsValue('EnableMCPServer')) ?? false;
   try {
@@ -1004,6 +1024,7 @@ async function processExecution(
     // Load user
     const user = await User.findById(execution.userId);
     if (!user) throw new Error(`User ${execution.userId} not found`);
+    const thinkingVisibility = await resolveRunThinkingVisibility(user as IUserDocument, logger);
 
     // Validate session ownership
     const loadedSession = await sessionRepository.findById(execution.sessionId);
@@ -1791,6 +1812,7 @@ async function processExecution(
       userId: execution.userId,
       user: user as IUserDocument,
       logger,
+      thinkingVisibility,
       // The run's active account, already membership-checked at start; lake-creating tools scope to it.
       organizationId: execution.organizationId,
       // How the run was started; the key also attributes a lake write a tool drives, as on the chat doors.
@@ -2263,6 +2285,7 @@ async function processExecution(
       // continuations (baked into the checkpoint) and when artifacts are off.
       ...(artifactEmissionPrompt && { artifactEmissionPrompt }),
       ...buildReActAgentRuntimeConfig(execution),
+      thinkingVisibility,
     });
 
     // Restore from checkpoint if continuing
@@ -3684,6 +3707,7 @@ async function processSubagentDispatch(
     // Auth + ownership checks (mirror processExecution).
     const user = await User.findById(child.userId);
     if (!user) throw new Error(`User ${child.userId} not found`);
+    const thinkingVisibility = await resolveRunThinkingVisibility(user as IUserDocument, logger);
     const loadedSession = await sessionRepository.findById(child.sessionId);
     if (!loadedSession) throw new Error(`Session ${child.sessionId} not found`);
     if (loadedSession.userId !== child.userId) {
@@ -3923,6 +3947,7 @@ async function processSubagentDispatch(
       userId: child.userId,
       user: user as IUserDocument,
       logger,
+      thinkingVisibility,
       organizationId: child.organizationId,
       ...executionTurnAuth(child),
       // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
@@ -4289,6 +4314,7 @@ async function processSubagentDispatch(
       userId: child.userId,
       llm,
       logger,
+      thinkingVisibility,
       parentTools: tools,
       // Granted to this dispatched subagent only when its `allowedTools` names
       // `lattice_*`; the orchestrator dedupes against `parentTools`.

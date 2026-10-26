@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
 import type { ServerSubagentTracker } from '@bike4mind/services/llm';
 import { OPTI_SURFACE } from '@bike4mind/common';
 

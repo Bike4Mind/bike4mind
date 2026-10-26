@@ -5,6 +5,9 @@ import {
   type MessageContent,
   type ICacheStrategy,
   type TurnUsage,
+  type ReasoningWithholder,
+  createReasoningWithholder,
+  withholdsReasoning,
 } from '@bike4mind/common';
 import type { ICompletionOptionTools, CompletionInfo, ToolResultScore } from '@bike4mind/llm-adapters';
 import { isContextLimitError } from './errors';
@@ -537,6 +540,7 @@ export class ReActAgent extends EventEmitter {
         const processedToolIds = new Set<string>(); // Track which tool calls we've already processed
         let hadToolCalls = false; // Track if this iteration had any tool calls
         let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
+        const reasoningWithholder = this.createReasoningWithholder();
 
         // Drop the previous iteration's workflow reminder BEFORE trimming so
         // it is never counted as an iteration boundary and never stacks; a
@@ -597,7 +601,8 @@ export class ReActAgent extends EventEmitter {
             },
             async (texts, completionInfo) => {
               // Collect text chunks and emit deltas for live token streaming
-              for (const text of texts) {
+              for (const rawText of texts) {
+                const text = this.visibleText(reasoningWithholder, rawText, completionInfo?.channel);
                 if (text) {
                   currentText += text;
                   this.emit('text_delta', { delta: text, iteration: iterationIndex });
@@ -1056,6 +1061,21 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   }
 
   /** Live text is requested only for a listening view; without one, the backend keeps full retry. */
+  /** One filter per provider call, or null when the caller may see all of this model's reasoning. */
+  private createReasoningWithholder(): ReasoningWithholder | null {
+    return withholdsReasoning(this.context.thinkingVisibility ?? 'raw', this.context.model)
+      ? createReasoningWithholder()
+      : null;
+  }
+
+  private visibleText(
+    withholder: ReasoningWithholder | null,
+    text: string | null | undefined,
+    channel: CompletionInfo['channel']
+  ): string | null | undefined {
+    return withholder && text ? withholder.visible(text, channel) : text;
+  }
+
   private hasTextDeltaListener(): boolean {
     return this.listenerCount('text_delta') > 0;
   }
@@ -1433,6 +1453,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const gatedToolCalls: GatedToolCall[] = [];
       let hadToolCalls = false;
       let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
+      const reasoningWithholder = this.createReasoningWithholder();
       const iterStartInputTokens = this.totalInputTokens;
       const iterStartOutputTokens = this.totalOutputTokens;
       // Pre-call baselines for the assign-not-add fold in the stream callback below.
@@ -1463,7 +1484,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           cacheStrategy,
         },
         async (texts, completionInfo) => {
-          for (const text of texts) {
+          for (const rawText of texts) {
+            const text = this.visibleText(reasoningWithholder, rawText, completionInfo?.channel);
             if (text) {
               currentText += text;
               this.emit('text_delta', { delta: text, iteration: iterationIndex });

@@ -12,6 +12,7 @@ import {
   resolveToolArtifactType,
   type IChatHistoryItemDocument,
   type ModelInfo,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
 import { type BaseStorage } from '@bike4mind/utils';
 import {
@@ -110,6 +111,8 @@ export interface ToolBuilderDeps {
   subagentModels?: ModelInfo[];
   apiKeyTable?: ApiKeyTable;
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller, applied by every subagent this run spawns. */
+  thinkingVisibility?: ThinkingVisibility;
   agentStore?: ServerAgentStore;
   /** Session repository for entity extraction (optional - skipped if not provided) */
   sessionRepository?: MinimalSessionRepository;
@@ -640,6 +643,7 @@ export function buildSharedTools(
       ? (telemetry: unknown) => callbacks.onSubagentTelemetry!(telemetry)
       : undefined,
     thinking: deps.thinking,
+    thinkingVisibility: deps.thinkingVisibility,
     agentStore: deps.agentStore,
     apiKeyTable: deps.apiKeyTable ?? undefined,
     tracker: callbacks.subagentTracker,
@@ -670,6 +674,7 @@ export function buildSharedTools(
         ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
         : undefined,
       thinking: deps.thinking,
+      thinkingVisibility: deps.thinkingVisibility,
       agentStore: deps.agentStore,
       apiKeyTable: deps.apiKeyTable ?? undefined,
       tracker: callbacks.subagentTracker,

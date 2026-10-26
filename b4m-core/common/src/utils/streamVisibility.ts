@@ -1,3 +1,4 @@
+import { parseClaudeModelId } from '../claudeModelId';
 import type { AdapterFamily } from '../types/entities/ModelCatalogTypes';
 
 /**
@@ -250,4 +251,64 @@ export function inlinesReasoningIntoText(adapterFamily: string | null | undefine
   if (!adapterFamily) return true;
   const channel = REASONING_CHANNEL_BY_ADAPTER_FAMILY[adapterFamily as AdapterFamily];
   return channel === undefined || channel === 'always';
+}
+
+/**
+ * How much model reasoning a caller is shown. `raw` forwards it as the provider sent it, `summary`
+ * forwards it only from models whose provider returns a summary in place of the raw trace, and
+ * `none` forwards none. Chosen per account tier by the thinkingVisibility* admin settings.
+ */
+export const THINKING_VISIBILITY_LEVELS = ['raw', 'summary', 'none'] as const;
+export type ThinkingVisibility = (typeof THINKING_VISIBILITY_LEVELS)[number];
+
+export function isThinkingVisibility(value: unknown): value is ThinkingVisibility {
+  return typeof value === 'string' && (THINKING_VISIBILITY_LEVELS as readonly string[]).includes(value);
+}
+
+/**
+ * Whether the model's provider returns summarized (or empty) thinking rather than the raw trace.
+ * Claude 4 and later do on every API path; Claude 3.x and the reasoning_content providers do not.
+ */
+export function providerSummarizesReasoning(modelId: string): boolean {
+  const parsed = parseClaudeModelId(modelId);
+  return parsed !== null && parsed.major >= 4;
+}
+
+/** Whether reasoning from `modelId` must be kept from a caller holding `visibility`. */
+export function withholdsReasoning(visibility: ThinkingVisibility, modelId: string): boolean {
+  if (visibility === 'raw') return false;
+  if (visibility === 'summary') return !providerSummarizesReasoning(modelId);
+  return true;
+}
+
+export interface ReasoningWithholder {
+  /** The part of one streamed chunk the caller may see; reasoning is dropped. */
+  visible(text: string, channel?: StreamChannel): string;
+}
+
+/**
+ * Stateful filter over one stream's chunks, in arrival order. Drops reasoning-tagged frames and,
+ * for families that inline reasoning untagged, every span between the think markers - tracked by
+ * depth across chunks with the same rule as visibleReplyText, so the caller sees what the chat
+ * transcript would render. Create one per provider call.
+ */
+export function createReasoningWithholder(): ReasoningWithholder {
+  let depth = 0;
+  return {
+    visible(text: string, channel?: StreamChannel): string {
+      if (!text) return text;
+      let visible = '';
+      for (const token of text.split(THINK_TAG_TOKENS)) {
+        if (token === THINK_OPEN_TAG) {
+          depth += 1;
+        } else if (token === THINK_CLOSE_TAG) {
+          if (depth > 0) depth -= 1;
+          else visible += token;
+        } else if (depth === 0) {
+          visible += token;
+        }
+      }
+      return channel === 'reasoning' ? '' : visible;
+    },
+  };
 }
