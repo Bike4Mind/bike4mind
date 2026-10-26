@@ -143,12 +143,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       const updated = await ModalModel.findByIdAndUpdate(modalId, updateOp, { new: true }).lean();
       if (!updated) throw new NotFoundError('Modal not found');
 
-      await recordAdminActionFromRequest(req, {
-        action: 'settings.modal.variants_cleared',
-        target: { kind: 'settings', id: modalId, displayName: modalDisplayName(existing) },
-        summary: `cleared audience variants of modal ${modalDisplayName(existing)}`,
-        details: { clearedAudienceKeys: Object.keys(existingVariants ?? {}), contentFieldsReset: !hadCustomerVariant },
-      });
+      // No variants map means the unset changed nothing, so there is nothing to audit.
+      if (existingVariants) {
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.modal.variants_cleared',
+          target: { kind: 'settings', id: modalId, displayName: modalDisplayName(existing) },
+          summary: `cleared audience variants of modal ${modalDisplayName(existing)}`,
+          details: { clearedAudienceKeys: Object.keys(existingVariants), contentFieldsReset: !hadCustomerVariant },
+        });
+      }
 
       return res.json({ success: true, modal: updated });
     } catch (error) {

@@ -105,4 +105,13 @@ describe('DELETE /api/admin/modals/variants admin audit', () => {
       details: { clearedAudienceKeys: ['internal'], contentFieldsReset: true },
     });
   });
+
+  it('records nothing when the modal had no variants to clear', async () => {
+    h.findById.mockResolvedValue({ _id: 'modal-1', title: 'Welcome' });
+    h.findByIdAndUpdate.mockResolvedValue({ _id: 'modal-1', title: 'Welcome' });
+    const { res } = await run('DELETE', { modalId: 'modal-1' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
 });
