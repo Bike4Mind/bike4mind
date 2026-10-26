@@ -149,6 +149,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
       const setBtn = screen.getByTestId('credit-adjust-set-btn');
       expect(setBtn).toBeDisabled();
       expect(screen.queryByTestId('credit-adjust-add-btn')).not.toBeInTheDocument();
+      fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '0' } });
       expect(screen.getByTestId('credit-adjust-set-preview')).toHaveTextContent('-100');
 
       fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Abusive signup' } });
@@ -161,6 +162,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
 
     it('stays disabled when the balance input is cleared, instead of treating it as 0', () => {
       renderModal();
+      fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '0' } });
       fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Abusive signup' } });
       expect(screen.getByTestId('credit-adjust-set-btn')).toBeEnabled();
       fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '' } });
@@ -168,9 +170,9 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
       expect(screen.getByTestId('credit-adjust-set-input')).not.toHaveAttribute('aria-invalid', 'true');
     });
 
-    it('stays disabled when the target equals the current balance', () => {
+    it('defaults the new balance to the current balance and stays disabled while they match', () => {
       renderModal();
-      fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '100' } });
+      expect(screen.getByTestId('credit-adjust-set-input')).toHaveValue(100);
       fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Abusive signup' } });
       expect(screen.getByTestId('credit-adjust-set-btn')).toBeDisabled();
     });

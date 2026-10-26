@@ -16,6 +16,7 @@ import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { sessionWillInjectAuthoredPrompt } from '@server/utils/sessionSystemPromptResolver';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
@@ -39,8 +40,8 @@ const isStringArray = (value: unknown): value is string[] =>
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
   .use(
     rateLimit({
-      // More permissive rate limiting in development
-      limit: process.env.NODE_ENV === 'development' ? 100 : 10, // 100 req/min in dev vs 10 in prod
+      // Per-user tier limit (admins/developers and the dev server bypass); 0 blocks.
+      limit: req => resolveUserRateLimitPerMin(req.user, req),
       windowMs: 60 * 1000,
     })
   )

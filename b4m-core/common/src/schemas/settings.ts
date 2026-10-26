@@ -3039,7 +3039,7 @@ export const settingsMap = {
     max: 100000,
     int: true,
     description:
-      'Max requests per minute on every per-user rate-limited API route (chat and opti included) for users with no active paid subscription. Set to 0 to block all free-tier requests on those routes.',
+      'Max requests per minute on every per-user rate-limited route (in-app chat, optimize-input and other AI helper calls included) for users with no active paid subscription. Set to 0 to block all free-tier requests on those routes.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 1,

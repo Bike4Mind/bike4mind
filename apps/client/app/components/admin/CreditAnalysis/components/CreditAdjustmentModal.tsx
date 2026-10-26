@@ -45,7 +45,8 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
 }) => {
   const [mode, setMode] = useState<Mode>('adjust');
   const [creditAmount, setCreditAmount] = useState(100);
-  const [targetBalance, setTargetBalance] = useState<number | null>(0);
+  // undefined until edited, so the field follows the selected user's balance instead of defaulting to a wipe.
+  const [targetOverride, setTargetOverride] = useState<number | null | undefined>(undefined);
   const [creditNote, setCreditNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const queryClient = useQueryClient();
@@ -54,6 +55,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
 
   const isReasonValid = isValidAdminActionReason(creditNote);
   const currentBalance = selectedUser?.currentCredits ?? 0;
+  const targetBalance = targetOverride === undefined ? currentBalance : targetOverride;
   const setDelta = targetBalance === null ? 0 : targetBalance - currentBalance;
   const canSet =
     isReasonValid && targetBalance !== null && Number.isInteger(targetBalance) && targetBalance >= 0 && setDelta !== 0;
@@ -61,7 +63,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
   const handleClose = () => {
     setMode('adjust');
     setCreditAmount(100);
-    setTargetBalance(0);
+    setTargetOverride(undefined);
     setCreditNote('');
     onClose();
   };
@@ -142,14 +144,17 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                   />
                 </FormControl>
               ) : (
-                <FormControl sx={{ mb: 1 }} error={targetBalance !== null && setDelta === 0}>
+                <FormControl
+                  sx={{ mb: 1 }}
+                  error={targetOverride !== undefined && targetBalance !== null && setDelta === 0}
+                >
                   <FormLabel>New balance</FormLabel>
                   <Input
                     type="number"
                     value={targetBalance ?? ''}
                     onChange={e => {
                       const value = parseInt(e.target.value);
-                      setTargetBalance(isNaN(value) ? null : Math.min(Math.max(value, 0), MAX_BALANCE));
+                      setTargetOverride(isNaN(value) ? null : Math.min(Math.max(value, 0), MAX_BALANCE));
                     }}
                     endDecorator="credits"
                     slotProps={{ input: { min: 0, step: 1, 'data-testid': 'credit-adjust-set-input' } }}
