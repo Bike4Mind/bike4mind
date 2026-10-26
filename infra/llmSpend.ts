@@ -19,10 +19,8 @@ export const llmSpendNamespace = () => `${$app.name}/${$app.stage}/LLMSpend`;
 export const LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT = 25;
 const USAGE_MESSAGE = 'llm-usage-settled';
 
-export function llmSpendFilterPattern(provider?: string): string {
-  return provider
-    ? `{ $.message = "${USAGE_MESSAGE}" && $.provider = "${provider}" }`
-    : `{ $.message = "${USAGE_MESSAGE}" }`;
+export function llmSpendFilterPattern(): string {
+  return `{ $.message = "${USAGE_MESSAGE}" }`;
 }
 
 export const LLM_SPEND_YOUNG_ACCOUNT_FILTER_PATTERN = `{ $.message = "${USAGE_MESSAGE}" && $.isYoungAccount IS TRUE }`;
@@ -57,33 +55,35 @@ if (isMonitoredStage) {
   const prefix = `${$app.name}-${$app.stage}`;
   const LLM_SPEND_NAMESPACE = llmSpendNamespace();
 
+  // One filter per metric: the Provider dimension is read from the log line, so every provider
+  // lands in the same series set without a filter each.
+  new aws.cloudwatch.LogMetricFilter('llmSpendUsdFilter', {
+    name: `${prefix}-llm-spend-usd`,
+    logGroupName,
+    pattern: llmSpendFilterPattern(),
+    metricTransformation: {
+      name: 'EstimatedUsd',
+      namespace: LLM_SPEND_NAMESPACE,
+      value: '$.usd',
+      unit: 'None',
+      dimensions: { Provider: '$.provider' },
+    },
+  });
+
+  new aws.cloudwatch.LogMetricFilter('llmSpendTokensFilter', {
+    name: `${prefix}-llm-spend-output-tokens`,
+    logGroupName,
+    pattern: llmSpendFilterPattern(),
+    metricTransformation: {
+      name: 'TokensOutput',
+      namespace: LLM_SPEND_NAMESPACE,
+      value: '$.outputTokens',
+      unit: 'Count',
+      dimensions: { Provider: '$.provider' },
+    },
+  });
+
   for (const provider of LLM_SPEND_PROVIDERS) {
-    new aws.cloudwatch.LogMetricFilter(`llmSpendUsdFilter-${provider}`, {
-      name: `${prefix}-llm-spend-usd-${provider}`,
-      logGroupName,
-      pattern: llmSpendFilterPattern(provider),
-      metricTransformation: {
-        name: 'EstimatedUsd',
-        namespace: LLM_SPEND_NAMESPACE,
-        value: '$.usd',
-        unit: 'None',
-        dimensions: { Provider: '$.provider' },
-      },
-    });
-
-    new aws.cloudwatch.LogMetricFilter(`llmSpendTokensFilter-${provider}`, {
-      name: `${prefix}-llm-spend-output-tokens-${provider}`,
-      logGroupName,
-      pattern: llmSpendFilterPattern(provider),
-      metricTransformation: {
-        name: 'TokensOutput',
-        namespace: LLM_SPEND_NAMESPACE,
-        value: '$.outputTokens',
-        unit: 'Count',
-        dimensions: { Provider: '$.provider' },
-      },
-    });
-
     spendAlarms.push(
       new aws.cloudwatch.MetricAlarm(`llmSpendRate-${provider}`, {
         name: `${prefix}-llm-spend-rate-${provider}`,

@@ -85,11 +85,11 @@ afterEach(() => {
 });
 
 describe('LLM spend metric filters', () => {
-  it.each(PROVIDERS)('extracts estimated USD and output tokens for %s', async provider => {
+  it('extracts estimated USD and output tokens with the provider as a dimension', async () => {
     await load();
-    const pattern = `{ $.message = "llm-usage-settled" && $.provider = "${provider}" }`;
-    expect(resources.filter).toHaveBeenCalledWith(`llmSpendUsdFilter-${provider}`, {
-      name: `test-app-production-llm-spend-usd-${provider}`,
+    const pattern = '{ $.message = "llm-usage-settled" }';
+    expect(resources.filter).toHaveBeenCalledWith('llmSpendUsdFilter', {
+      name: 'test-app-production-llm-spend-usd',
       logGroupName: expect.objectContaining({ value: 'chat-completion-logs' }),
       pattern,
       metricTransformation: {
@@ -100,8 +100,8 @@ describe('LLM spend metric filters', () => {
         dimensions: { Provider: '$.provider' },
       },
     });
-    expect(resources.filter).toHaveBeenCalledWith(`llmSpendTokensFilter-${provider}`, {
-      name: `test-app-production-llm-spend-output-tokens-${provider}`,
+    expect(resources.filter).toHaveBeenCalledWith('llmSpendTokensFilter', {
+      name: 'test-app-production-llm-spend-output-tokens',
       logGroupName: expect.objectContaining({ value: 'chat-completion-logs' }),
       pattern,
       metricTransformation: {
@@ -135,7 +135,7 @@ describe('LLM spend metric filters', () => {
     expect(callFor(resources.filter, 'llmSpendYoungAccountUsdFilter')?.metricTransformation).not.toHaveProperty(
       'dimensions'
     );
-    expect(resources.filter).toHaveBeenCalledTimes(PROVIDERS.length * 2 + 2);
+    expect(resources.filter).toHaveBeenCalledTimes(4);
   });
 
   it('keeps the provider list in sync with the log line', async () => {
