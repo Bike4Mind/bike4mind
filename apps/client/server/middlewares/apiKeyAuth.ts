@@ -22,6 +22,7 @@ import { createHash } from 'crypto';
 import type { z } from 'zod';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import { applyUntrustedRateLimit } from '@server/utils/apiKeyTrust';
@@ -167,6 +168,26 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       }
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
+
+      // Must run before withholdAdminRole: admins bypass the paid-only switch.
+      if (
+        !(await isApiKeyAccessAllowed(
+          user,
+          {
+            billingOwnerType: validation.billingOwnerType,
+            organizationId: validation.organizationId,
+            createdByUserId: validation.createdByUserId,
+          },
+          req
+        ))
+      ) {
+        req.logger?.warn('API key rejected: apiKeyAccess setting denies this owner', {
+          keyId: validation.keyId,
+          userId: validation.userId,
+          endpoint: endpointPath,
+        });
+        throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
+      }
 
       // Subscription trust uses the authenticated owner through the request memo.
       req.user = user;

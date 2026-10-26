@@ -1,3 +1,5 @@
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 import { KeepCommandRequestAction } from '@bike4mind/common';
 import { verifyJwtToken, checkRateLimit } from '@server/cli/auth';
 import { withWebSocketContext, sendToClient, sendToConnection } from '@server/websocket/utils';
@@ -48,12 +50,15 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     const user = await verifyJwtToken(accessToken);
     userId = user.id;
     await checkRateLimit(userId, undefined, { bucket: 'ws' });
-  } catch {
+  } catch (error) {
     await sendToConnection(connectionId, endpoint, {
       action: 'keep_command_result' as const,
       requestId,
       success: false,
-      error: 'Authentication failed. Sign in again and retry.',
+      error:
+        error instanceof ForbiddenError || isAuthInfraFailure(error)
+          ? error.message
+          : 'Authentication failed. Sign in again and retry.',
     });
     return { statusCode: 200 };
   }
