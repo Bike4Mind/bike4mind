@@ -17,7 +17,12 @@ import {
   type WebhookAuditLogsSearch,
 } from './WebhookAuditLogs/webhookAuditLogsTabSearch';
 import { MODEL_LOGS_SEARCH_PARSERS, MODEL_LOGS_TAB_PARAMS, type ModelLogsSearch } from './modelLogsTabSearch';
-import { ORGS_SEARCH_PARSERS, ORGS_TAB_PARAMS, type OrganizationsSearch } from './organizationsTabSearch';
+import {
+  ADMIN_ORGANIZATIONS_TAB_SLUG,
+  ORGS_SEARCH_PARSERS,
+  ORGS_TAB_PARAMS,
+  type OrganizationsSearch,
+} from './organizationsTabSearch';
 
 /**
  * Which `/admin` search params belong to which tab, read by both `validateSearch` (router.tsx) and
@@ -32,7 +37,7 @@ export const ADMIN_SETTINGS_SEARCH_PARAM = 'q';
 export const ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG = 'webhook-audit-logs';
 export const ADMIN_MODEL_LOGS_TAB_SLUG = 'model-logs';
 export const ADMIN_INTEGRATION_DEMAND_TAB_SLUG = 'integration-demand';
-export const ADMIN_ORGANIZATIONS_TAB_SLUG = 'organizations';
+export { ADMIN_ORGANIZATIONS_TAB_SLUG };
 
 const EMERGENCY_ACCESS_PARAM = 'emergency_access';
 

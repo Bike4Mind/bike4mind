@@ -209,6 +209,10 @@ describe('Organizations tab params', () => {
     expect(parseAdminSearch({ tab: 'organizations', orgId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }).orgsPage).toBeUndefined();
   });
 
+  it('drops an invalid orgs view param on another tab instead of adding a default page', () => {
+    expect(parseAdminSearch({ tab: 'users', orgsSort: 'credits' }).orgsPage).toBeUndefined();
+  });
+
   it('keeps them on the organizations tab and drops them on a switch away', () => {
     expect(adminSearchForTab(organizationsSearch, 'organizations')).toMatchObject(organizationsSearch);
 

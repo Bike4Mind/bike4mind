@@ -1,8 +1,12 @@
+import { ADMIN_TAB_PARAM } from '@bike4mind/common';
 import { oneOf, parsePage, toNumber } from './adminSearchValues';
 
 // Kept React-free: router.tsx imports it eagerly through adminTabParams.ts. The free-text search is
 // left out because these URLs get shared and copied into login redirects; the `orgs` prefix is
 // because Users already owns the bare `page`/`limit`/`sort`/`order`.
+
+// Re-exported by adminTabParams.ts, which imports this file.
+export const ADMIN_ORGANIZATIONS_TAB_SLUG = 'organizations';
 
 export const ORGS_PAGE_PARAM = 'orgsPage';
 export const ORGS_LIMIT_PARAM = 'orgsLimit';
@@ -79,9 +83,12 @@ const parseOrgId = (value: unknown): string | undefined =>
 
 // A view param that fails to parse still asked for a view. Keeping the default page stops
 // `validateSearch` from reducing `?orgsSort=credits` to a bare visit that restores the saved view.
+// Other tabs get no fallback, so a stray invalid orgs param is dropped there rather than becoming a page.
 const parseOrgsPage = (value: unknown, search: Record<string, unknown> = {}): number | undefined =>
   parsePage(value) ??
-  (ORGS_VIEW_PARAMS.some(key => search[key] !== undefined) ? DEFAULT_ORGANIZATIONS_PARAMS.page : undefined);
+  (search[ADMIN_TAB_PARAM] === ADMIN_ORGANIZATIONS_TAB_SLUG && ORGS_VIEW_PARAMS.some(key => search[key] !== undefined)
+    ? DEFAULT_ORGANIZATIONS_PARAMS.page
+    : undefined);
 
 /**
  * Per-key coercion for the route's `validateSearch`, given the whole raw search as well; anything
