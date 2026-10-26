@@ -816,6 +816,21 @@ describe('/api/otc/verify - existing user verification and pending free credits'
       tags: ['Partner'],
     });
 
+  it('mints no second session when a proven code and token are replayed', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ emailVerified: true, tags: ['Customer'] }));
+    // A proven nonce is rotated away, so the store no longer holds it on replay (see the
+    // 'rotation retires the presented nonce for replay' repository test).
+    mockValidateNonce.mockResolvedValueOnce('hash').mockResolvedValueOnce(null);
+
+    const first = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(first.req, first.res);
+    expect(first.res._getStatusCode()).toBe(200);
+
+    const replay = makeReqRes(NON_DOMAIN_EMAIL);
+    await expect(handler(replay.req, replay.res)).rejects.toMatchObject({ message: 'Invalid code.' });
+    expect(authSessionService.issueSession).toHaveBeenCalledTimes(1);
+  });
+
   it('strips secrets and undeclared fields from the flat login body', async () => {
     // Deliberately not `pendingUser`: a loosened schema has to fail on a leaked secret, and a
     // toJSON on the seeded doc would instead serialize the login body without the accessToken.

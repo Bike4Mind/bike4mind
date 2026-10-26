@@ -364,6 +364,20 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return this.existsOtherUserWithValue('username', username, excludeUserId);
   }
 
+  // A regex rather than .collation() for DocumentDB portability (see existsOtherUserWithValue).
+  // A null emailVerifiedAt is a legacy verified row from before the field was written.
+  async existsVerifiedUserOnEmailDomain(domain: string, verifiedBefore: Date): Promise<boolean> {
+    const normalized = domain.trim().toLowerCase();
+    if (!normalized) return false;
+    const filter = {
+      email: { $regex: `[@.]${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
+      emailVerified: true,
+      $or: [{ emailVerifiedAt: { $lte: verifiedBefore } }, { emailVerifiedAt: null }],
+      deletedAt: { $exists: false },
+    };
+    return (await this.model.exists(filter)) !== null;
+  }
+
   // An anchored case-insensitive regex instead of .collation(): DocumentDB has no collation
   // support (see documentdb-compat.ts), so this is the one form that matches the same rows on
   // both engines. The \s* anchors also match legacy rows stored with surrounding whitespace. Soft-deleted rows count, because the unique index still covers them.

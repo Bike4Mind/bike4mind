@@ -76,7 +76,7 @@ const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, a
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
-  .use(otcCounterLimit({ bucket: 'verify-ip', ...OTC_LIMITS.verify.perIp, subject: ipSubject }))
+  .use(otcCounterLimit({ bucket: 'verify-ip', window: OTC_LIMITS.verify.perIp, subject: ipSubject }))
   .post(async (req, res) => {
     const { email, code, username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
     const parsedInviteCode = z.string().trim().optional().safeParse(req.body.inviteCode);

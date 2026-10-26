@@ -10,21 +10,36 @@ const mocks = vi.hoisted(() => ({
   deleteByKey: vi.fn(),
   decrementCounter: vi.fn(),
   isE2EEnabled: vi.fn(),
+  findByKey: vi.fn(),
+  createOrUpdate: vi.fn(),
+  existsVerifiedUserOnEmailDomain: vi.fn<(domain: string, verifiedBefore: Date) => Promise<boolean>>(),
+  settings: {} as Record<string, string>,
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: mocks.tryIncrement,
     tryAddWithinLimitFixedWindow: mocks.tryAdd,
     deleteByKey: mocks.deleteByKey,
     decrementCounter: mocks.decrementCounter,
+    findByKey: mocks.findByKey,
+    createOrUpdate: mocks.createOrUpdate,
   },
+  userRepository: { existsVerifiedUserOnEmailDomain: mocks.existsVerifiedUserOnEmailDomain },
+}));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: async () => mocks.settings,
 }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: () => mocks.isE2EEnabled() }));
 
+import { settingsMap } from '@bike4mind/common';
 import {
+  OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS,
   OTC_LIMITS,
+  OTC_SEND_DOMAIN_BUDGETS,
   OTC_SEND_EMAIL_BUDGETS,
   OTC_VERIFY_EMAIL_BUDGETS,
   chargeOtcEmailBudget,
@@ -34,7 +49,10 @@ import {
   otcEmailBudgetRetryAfter,
   otcEmailKey,
   otcIpBucket,
+  otcLimitDomain,
   otcLimitMailbox,
+  otcLimitOf,
+  otcSendBudgets,
   reserveOtcEmailBudget,
 } from './otcLimits';
 
@@ -58,7 +76,7 @@ describe('otcCounterLimit', () => {
     ] as const) {
       const res = makeRes();
       const next = vi.fn();
-      await otcCounterLimit({ bucket, ...cfg, subject: ipSubject })(makeReq('a@b.co'), res, next);
+      await otcCounterLimit({ bucket, window: cfg, subject: ipSubject })(makeReq('a@b.co'), res, next);
       expect(mocks.tryIncrement).toHaveBeenLastCalledWith(`otc-limit:${bucket}:203.0.113.7`, cfg.limit, cfg.windowMs);
       expect(next.mock.calls[0][0]).toBeInstanceOf(TooManyRequestsError);
       expect(res.setHeader).toHaveBeenCalledWith('Retry-After', 90);
@@ -66,11 +84,15 @@ describe('otcCounterLimit', () => {
   });
 
   it('skips the check when the subject is missing, and in E2E', async () => {
-    const mw = otcCounterLimit({ bucket: 'send-ip-total', ...OTC_LIMITS.send.perIpTotal, subject: () => undefined });
+    const mw = otcCounterLimit({
+      bucket: 'send-ip-total',
+      window: OTC_LIMITS.send.perIpTotal,
+      subject: () => undefined,
+    });
     const next = vi.fn();
     await mw(makeReq('a@b.co'), makeRes(), next);
     mocks.isE2EEnabled.mockReturnValue(true);
-    await otcCounterLimit({ bucket: 'send-ip-total', ...OTC_LIMITS.send.perIpTotal, subject: ipSubject })(
+    await otcCounterLimit({ bucket: 'send-ip-total', window: OTC_LIMITS.send.perIpTotal, subject: ipSubject })(
       makeReq('a@b.co'),
       makeRes(),
       next
@@ -117,7 +139,7 @@ describe('per-email budgets', () => {
     const inboxWide = OTC_SEND_EMAIL_BUDGETS.filter(
       b => b.subject('a@b.co', '1.1.1.1') === b.subject('a@b.co', '2.2.2.2')
     );
-    expect(inboxWide.map(b => b.windowMs)).toEqual([OTC_LIMITS.send.perEmail.windowMs]);
+    expect(inboxWide.map(b => b.window.windowMs)).toEqual([OTC_LIMITS.send.perEmail.windowMs]);
     expect(OTC_LIMITS.send.perEmail.windowMs).toBeLessThanOrEqual(15 * 60_000);
   });
 
@@ -302,5 +324,124 @@ describe('otcDistinctEmailsPerIpLimit', () => {
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', 90);
     expect(mocks.tryIncrement).toHaveBeenCalledTimes(1);
     expect(mocks.tryIncrement).not.toHaveBeenCalledWith(pairKey, expect.anything(), expect.anything());
+  });
+});
+
+describe('admin-lowered limits', () => {
+  const windows = [...Object.values(OTC_LIMITS.send), ...Object.values(OTC_LIMITS.verify)].filter(
+    w => typeof w === 'object'
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.settings = {};
+    mocks.isE2EEnabled.mockReturnValue(false);
+    mocks.tryIncrement.mockResolvedValue(allowed);
+  });
+
+  it("declares one setting per window, capped at the window's built-in limit", () => {
+    expect(new Set(windows.map(w => w.setting)).size).toBe(windows.length);
+    for (const window of windows) {
+      const setting = settingsMap[window.setting];
+      expect(setting.type).toBe('number');
+      expect(setting.defaultValue).toBe(0);
+      expect('max' in setting && setting.max).toBe(window.limit);
+    }
+  });
+
+  it('lowers a limit, and never raises one', async () => {
+    const { perIpTotal } = OTC_LIMITS.send;
+    expect(await otcLimitOf(perIpTotal)).toBe(perIpTotal.limit);
+    mocks.settings = { [perIpTotal.setting]: '3' };
+    expect(await otcLimitOf(perIpTotal)).toBe(3);
+    mocks.settings = { [perIpTotal.setting]: String(perIpTotal.limit + 100) };
+    expect(await otcLimitOf(perIpTotal)).toBe(perIpTotal.limit);
+    mocks.settings = { [perIpTotal.setting]: '0' };
+    expect(await otcLimitOf(perIpTotal)).toBe(perIpTotal.limit);
+  });
+
+  it('counts against the lowered limit', async () => {
+    const { perIpTotal } = OTC_LIMITS.send;
+    mocks.settings = { [perIpTotal.setting]: '2' };
+    await otcCounterLimit({ bucket: 'send-ip-total', window: perIpTotal, subject: ipSubject })(
+      makeReq('a@b.co'),
+      makeRes(),
+      vi.fn()
+    );
+    expect(mocks.tryIncrement).toHaveBeenCalledWith('otc-limit:send-ip-total:203.0.113.7', 2, perIpTotal.windowMs);
+  });
+});
+
+describe('otcLimitDomain', () => {
+  it('keys every subdomain and alias of a domain on its registrable domain', () => {
+    expect(otcLimitDomain('a@burner.io')).toBe('burner.io');
+    expect(otcLimitDomain('b+x@zz.burner.io')).toBe('burner.io');
+    expect(otcLimitDomain('c@q.Burner.IO.')).toBe('burner.io');
+    expect(otcLimitDomain('d@mail.acme.co.uk')).toBe('acme.co.uk');
+  });
+
+  it('exempts personal mail providers and unparseable domains', () => {
+    expect(otcLimitDomain('someone@gmail.com')).toBeUndefined();
+    expect(otcLimitDomain('someone@googlemail.com')).toBeUndefined();
+    expect(otcLimitDomain('someone@outlook.com')).toBeUndefined();
+    expect(otcLimitDomain('someone@co.uk')).toBeUndefined();
+  });
+});
+
+describe('otcSendBudgets', () => {
+  const spent = { success: false, count: 5, expiresAt: new Date(Date.now() + 60_000) };
+  const open = { success: true, count: 0, expiresAt: new Date(Date.now() + 60_000) };
+  const withDomain = [...OTC_SEND_EMAIL_BUDGETS, ...OTC_SEND_DOMAIN_BUDGETS];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.settings = {};
+    mocks.isE2EEnabled.mockReturnValue(false);
+    mocks.tryAdd.mockResolvedValue(open);
+    mocks.findByKey.mockResolvedValue(null);
+    mocks.existsVerifiedUserOnEmailDomain.mockResolvedValue(false);
+  });
+
+  it('adds no domain budget for a personal provider', async () => {
+    expect(await otcSendBudgets('someone@gmail.com', '1.1.1.1')).toEqual(OTC_SEND_EMAIL_BUDGETS);
+    expect(mocks.tryAdd).not.toHaveBeenCalled();
+  });
+
+  it('charges the domain budgets without a user lookup while they have room', async () => {
+    expect(await otcSendBudgets('x@new.example', '1.1.1.1')).toEqual(withDomain);
+    expect(mocks.tryAdd).toHaveBeenCalledWith(
+      `otc-limit:send-domain-hourly:${otcEmailKey('new.example')}`,
+      0,
+      OTC_LIMITS.send.perDomainHourly.limit,
+      OTC_LIMITS.send.perDomainHourly.windowMs
+    );
+    expect(mocks.existsVerifiedUserOnEmailDomain).not.toHaveBeenCalled();
+  });
+
+  it('keeps a spent domain budget for a domain with no week-old verified account, and caches that', async () => {
+    mocks.tryAdd.mockResolvedValue(spent);
+    const before = Date.now();
+    expect(await otcSendBudgets('x@new.example', '1.1.1.1')).toEqual(withDomain);
+
+    const [domain, verifiedBefore] = mocks.existsVerifiedUserOnEmailDomain.mock.calls[0];
+    expect(domain).toBe('new.example');
+    expect(verifiedBefore.getTime()).toBeLessThanOrEqual(before - OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS + 1000);
+    expect(mocks.createOrUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ key: `otc-domain-established:${otcEmailKey('new.example')}`, result: false })
+    );
+  });
+
+  it('lifts a spent domain budget for an established domain', async () => {
+    mocks.tryAdd.mockResolvedValue(spent);
+    mocks.existsVerifiedUserOnEmailDomain.mockResolvedValue(true);
+    expect(await otcSendBudgets('x@acme.example', '1.1.1.1')).toEqual(OTC_SEND_EMAIL_BUDGETS);
+  });
+
+  it('answers from the cache without scanning users', async () => {
+    mocks.tryAdd.mockResolvedValue(spent);
+    mocks.findByKey.mockResolvedValue({ result: true });
+    expect(await otcSendBudgets('x@acme.example', '1.1.1.1')).toEqual(OTC_SEND_EMAIL_BUDGETS);
+    expect(mocks.existsVerifiedUserOnEmailDomain).not.toHaveBeenCalled();
+    expect(mocks.createOrUpdate).not.toHaveBeenCalled();
   });
 });
