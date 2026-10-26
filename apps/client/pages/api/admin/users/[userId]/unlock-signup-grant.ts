@@ -1,4 +1,3 @@
-import { ApiKeyScope } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -11,7 +10,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
   .post(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');

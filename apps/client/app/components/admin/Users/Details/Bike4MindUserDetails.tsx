@@ -119,7 +119,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
               Unlock signup grant
             </Button>
             {unlockError && (
-              <Typography color="danger" level="body-sm">
+              <Typography color="danger" level="body-sm" data-testid="admin-user-grant-unlock-error">
                 {unlockError}
               </Typography>
             )}

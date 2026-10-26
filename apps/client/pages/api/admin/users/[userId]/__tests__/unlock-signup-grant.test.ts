@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -48,8 +47,8 @@ describe('admin signup unlock', () => {
     vi.clearAllMocks();
     h.unlock.mockResolvedValue({ creditsGranted: 0 });
   });
-  it('requires admin scope and rejects non-admin callers before invoking the grant', async () => {
-    expect(h.config).toEqual({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
+  it('is jwt-only and rejects non-admin callers before invoking the grant', async () => {
+    expect(h.config).toEqual({ auth: 'jwtOnly' });
     const req = request();
     req.user.isAdmin = false;
     await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('Admin access required');
