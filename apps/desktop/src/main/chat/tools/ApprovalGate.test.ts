@@ -338,6 +338,28 @@ describe('ApprovalGate', () => {
       gate.revoke('s', 'browser-open:https://example.com');
       expect(gate.coversCommands('s', remembered)).toBe(true);
     });
+
+    it('revokes tainted coverage without removing another exact grants normal coverage', async () => {
+      const gate = new ApprovalGate();
+      const remembered = always(['git status *'], ['git status'], ['/tmp/tainted']);
+      await allow(gate, remembered, true);
+      await gate.request(
+        's',
+        'other-key',
+        new AbortController().signal,
+        id => {
+          gate.resolve(id, { decision: 'always' });
+        },
+        { always: always(['git status *'], ['git status'], ['/tmp/normal']) }
+      );
+      expect(gate.coversCommands('s', remembered, true)).toBe(true);
+
+      gate.revoke('s', 'key');
+
+      expect(gate.coversCommands('s', remembered)).toBe(true);
+      expect(gate.coversCommands('s', remembered, true)).toBe(false);
+      expect(gate.uncoveredDirectories('s', ['/tmp/tainted', '/tmp/normal'])).toEqual(['/tmp/tainted']);
+    });
   });
 
   describe('pending cards a later answer covers', () => {
