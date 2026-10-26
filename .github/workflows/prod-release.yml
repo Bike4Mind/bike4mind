@@ -42,7 +42,7 @@ env:
 jobs:
   create-release:
     name: Create Production Release
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     env:
       NODE_OPTIONS: --max-old-space-size=14336
     permissions:

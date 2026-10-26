@@ -65,7 +65,7 @@ jobs:
   core-build:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Core Build
     timeout-minutes: 15
     permissions:
@@ -253,7 +253,7 @@ jobs:
     # Standard runner: tsgo (native TS) is fast and low-memory and runs against
     # the prebuilt core artifact, so this leg is I/O-bound, not CPU/memory-bound.
     # Keeping it off the capped ubuntu-latest-m pool frees a slot per PR.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Type Check
     timeout-minutes: 15
     permissions:
@@ -329,7 +329,7 @@ jobs:
     needs: core-build
     # Standard runner: ESLint is I/O-bound, not CPU/memory-bound. Off the capped
     # ubuntu-latest-m pool to free a slot per PR.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Lint
     timeout-minutes: 15
     permissions:
@@ -485,9 +485,10 @@ jobs:
     needs: core-build
     # Medium tier, via RUNNER_LABEL_MEDIUM. Pinned to the MEDIUM tier rather than the
     # deploy's HEAVY tier so raising HEAVY (e.g. to ubuntu-latest-l for the deploy runner)
-    # does not drag the test-shard fan-out onto the larger, pricier runner. The variable
-    # currently resolves to the standard 4-vCPU ubuntu-latest, not the fallback label, so
-    # size worker budgets for 4 cores.
+    # does not drag the test-shard fan-out onto the larger, pricier runner. MEDIUM is the
+    # 4-core tier shared by every job that builds core or runs a test suite; the plain
+    # RUNNER_LABEL default is the 2-core tier for API, guard and shell-only jobs. Size
+    # worker budgets for 4 cores.
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Run Tests (${{ matrix.shard.name }})
     # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
