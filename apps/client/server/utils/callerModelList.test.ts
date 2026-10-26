@@ -40,6 +40,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: (...a: unknown[]) => mocks.getSettingsMap(...a),
 }));
 
+import { Logger } from '@bike4mind/observability';
 import { getCallerModelList } from './callerModelList';
 
 const textModel = (id: string, overrides: Partial<ModelInfo> = {}): ModelInfo =>
@@ -134,5 +135,14 @@ describe('getCallerModelList free-tier gate', () => {
     mocks.getSupersededModels.mockReturnValue([toPaid, toAllowed]);
 
     expect((await callerList(makeUser())).supersededModels).toEqual([toAllowed]);
+  });
+
+  it('fails closed to the free-tier models, and warns, when the entitlement read rejects', async () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    mocks.getUserEntitlements.mockRejectedValue(new Error('subscription db down'));
+
+    expect(await listedIds()).toEqual(['priced', 'image-model']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('entitlement read failed'), expect.anything());
+    warn.mockRestore();
   });
 });

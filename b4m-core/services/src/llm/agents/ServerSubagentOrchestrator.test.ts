@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, ServerAgentDefinition } from '@bike4mind/agents';
-import { CREDITS_PER_USD_COST, getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
+import {
+  CREDITS_PER_USD_COST,
+  ForbiddenError,
+  getTextModelCost,
+  getTurnsCost,
+  type ModelInfo,
+} from '@bike4mind/common';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import {
@@ -216,6 +222,96 @@ describe('ServerSubagentOrchestrator', () => {
       expect(assert).toHaveBeenCalledWith(GATED_ID);
       expect(llm.complete).not.toHaveBeenCalled();
       expect(tracker.onStart).not.toHaveBeenCalled();
+    });
+
+    describe('free-tier refusal', () => {
+      const PAID_ID = 'claude-opus-5';
+      const FREE_ID = 'claude-haiku-5-5';
+      const PARENT_ID = 'parent-model';
+
+      const assertRefusingPaid = () =>
+        vi.fn(async (modelId: string) => {
+          if (modelId === PAID_ID) {
+            throw new ForbiddenError(`Model "${modelId}" requires a paid plan`, {
+              errorCode: 'model_requires_subscription',
+            });
+          }
+        });
+
+      const makeOrchestrator = (assert: (modelId: string) => Promise<void>, serviceable: string[]) => {
+        const resolveBackend = vi.fn((modelId: string) => (serviceable.includes(modelId) ? makeLlm(modelId) : null));
+        const orchestrator = new ServerSubagentOrchestrator({
+          userId: 'u1',
+          llm: makeLlm(PARENT_ID),
+          logger: makeLogger(),
+          parentTools: [],
+          resolveBackend,
+          modelAdmission: { assert },
+        });
+        return { orchestrator, resolveBackend };
+      };
+
+      beforeEach(() => {
+        vi.spyOn(ReActAgent.prototype, 'run').mockResolvedValue({
+          finalAnswer: 'done',
+          steps: [],
+          completionInfo: {
+            totalTokens: 100,
+            totalInputTokens: 80,
+            totalOutputTokens: 20,
+            totalCredits: 1,
+            iterations: 1,
+            toolCalls: 0,
+            reachedMaxIterations: false,
+          },
+        } satisfies AgentResult);
+      });
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it('runs on an admitted fallback instead of failing when the pinned model needs a paid plan', async () => {
+        const { orchestrator, resolveBackend } = makeOrchestrator(assertRefusingPaid(), [PAID_ID, FREE_ID]);
+
+        const result = await orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef({ model: PAID_ID, fallbackModels: [FREE_ID] }),
+          thoroughness: 'medium',
+        });
+
+        expect(resolveBackend).toHaveBeenCalledWith(FREE_ID);
+        expect(resolveBackend).not.toHaveBeenCalledWith(PAID_ID);
+        expect(result.model).toBe(FREE_ID);
+      });
+
+      it("runs on the parent's model when no fallback is admitted", async () => {
+        const { orchestrator, resolveBackend } = makeOrchestrator(assertRefusingPaid(), [PAID_ID]);
+
+        const result = await orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef({ model: PAID_ID, fallbackModels: [PAID_ID] }),
+          thoroughness: 'medium',
+        });
+
+        expect(resolveBackend).not.toHaveBeenCalled();
+        expect(result.model).toBe(PARENT_ID);
+      });
+
+      it('still rejects when the pinned model is refused for any reason other than the free-tier gate', async () => {
+        const assert = vi.fn(async (modelId: string) => {
+          if (modelId === PAID_ID) throw new Error(`Model "${modelId}" is not accessible and no fallback available`);
+        });
+        const { orchestrator } = makeOrchestrator(assert, [PAID_ID, FREE_ID]);
+
+        await expect(
+          orchestrator.delegateToAgent({
+            task: 't',
+            agentDef: makeAgentDef({ model: PAID_ID, fallbackModels: [FREE_ID] }),
+            thoroughness: 'medium',
+          })
+        ).rejects.toThrow(`Model "${PAID_ID}" is not accessible`);
+      });
     });
   });
 

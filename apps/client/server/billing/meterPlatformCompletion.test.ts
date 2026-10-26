@@ -9,6 +9,7 @@ const m = vi.hoisted(() => ({
   orgIncrement: vi.fn(),
   findBySettingName: vi.fn(),
   getUserEntitlements: vi.fn(),
+  loadFreeTierAllowedModels: vi.fn(async (): Promise<ReadonlySet<string> | undefined> => undefined),
   recordUsageEvent: vi.fn(),
   getSettingsMap: vi.fn(async (..._args: unknown[]) => ({})),
   enforceCredits: true,
@@ -38,6 +39,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: (...args: unknown[]) => m.getSettingsMap(...args),
   getSettingsValue: () => m.enforceCredits,
+}));
+// The free-tier gate reads settings this file's getSettingsValue stub answers for every key; the loader is
+// stubbed so the shared admission rule runs for real around it.
+vi.mock('@bike4mind/services/llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: m.loadFreeTierAllowedModels,
 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: m.getUserEntitlements }));
 
@@ -312,6 +319,7 @@ describe('createModelAdmission', () => {
       ],
     });
     m.getUserEntitlements.mockResolvedValue([]);
+    m.loadFreeTierAllowedModels.mockResolvedValue(undefined);
   });
 
   it('refuses a catalog-disabled model, even for an admin', async () => {
@@ -344,6 +352,32 @@ describe('createModelAdmission', () => {
     const system = await createModelAdmission(user(), [{ id: 'off', disabled: true } as ModelInfo], true);
     expect(await system.admits('gated')).toBe(true);
     expect(await system.admits('off')).toBe(false);
+  });
+
+  describe('free-tier gate', () => {
+    const gatedModel = { ...model, id: 'premium-model', type: 'text' } as ModelInfo;
+
+    beforeEach(() => {
+      m.loadFreeTierAllowedModels.mockResolvedValue(new Set(['free-model']));
+      m.getUserEntitlements.mockResolvedValue(['base']);
+    });
+
+    it('refuses a model outside the allowlist to a user without a paid plan with model_requires_subscription', async () => {
+      const error: unknown = await (
+        await createModelAdmission(user(), [gatedModel])
+      )
+        .assert('premium-model')
+        .catch((e: unknown) => e);
+
+      expect(error).toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'model_requires_subscription' } });
+    });
+
+    it('admits a platform-chosen model without consulting the free-tier loader', async () => {
+      const system = await createModelAdmission(user(), [gatedModel], true);
+
+      await expect(system.assert('premium-model')).resolves.toBeUndefined();
+      expect(m.loadFreeTierAllowedModels).not.toHaveBeenCalled();
+    });
   });
 });
 

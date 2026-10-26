@@ -165,7 +165,11 @@ export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<Setting
 ]);
 
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
-const STRING_LIST_SETTING_KEYS = new Set<string>(['ImageModerationReviewerEmails', 'blockedEmailDomains']);
+const STRING_LIST_SETTING_KEYS = new Set<string>([
+  'ImageModerationReviewerEmails',
+  'blockedEmailDomains',
+  'freeTierAllowedModels',
+]);
 
 const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();

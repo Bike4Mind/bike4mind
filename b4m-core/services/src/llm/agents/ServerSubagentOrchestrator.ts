@@ -13,7 +13,7 @@ import type { Logger } from '@bike4mind/observability';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
 import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
-import type { ModelAdmission } from '../modelAdmission';
+import { isModelRequiresSubscriptionError, type ModelAdmission } from '../modelAdmission';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -463,8 +463,14 @@ export class ServerSubagentOrchestrator {
    * two THROW, so the loop catches per candidate - letting one escape would
    * discard every remaining rung including the degradation this exists for.
    * See `getLlmByModel` + `backendForAdapterFamily` in @bike4mind/llm-adapters.
+   *
+   * A candidate the caller's plan does not cover (the free-tier gate) is skipped the same way, so a free
+   * account's subagent degrades instead of failing. Every other admission refusal is left for
+   * `assertModelAdmitted` to raise.
    */
-  private resolveAgentRuntime(agentDef: ServerAgentDefinition): { llm: ICompletionBackend; model: string } {
+  private async resolveAgentRuntime(
+    agentDef: ServerAgentDefinition
+  ): Promise<{ llm: ICompletionBackend; model: string }> {
     const parent = { llm: this.deps.llm, model: this.deps.llm.currentModel };
     if (!agentDef.model) return parent;
     // An agent can stay pinned to a retired id; map it to the successor before any backend lookup.
@@ -485,6 +491,10 @@ export class ServerSubagentOrchestrator {
     for (const model of candidates) {
       // The parent's own backend already serves this id; no need to build another.
       if (model === parent.model) return parent;
+      if (await this.isPaidOnlyForCaller(model)) {
+        this.deps.logger.warn(`🤖⚠️ [SubagentOrchestrator] "${model}" needs a paid plan; trying the next candidate`);
+        continue;
+      }
       let backend: ICompletionBackend | null;
       try {
         backend = this.deps.resolveBackend(model);
@@ -518,6 +528,15 @@ export class ServerSubagentOrchestrator {
         `(tried ${candidates.join(', ')}); running on the parent's model "${parent.model}"`
     );
     return parent;
+  }
+
+  private async isPaidOnlyForCaller(model: string): Promise<boolean> {
+    try {
+      await this.deps.modelAdmission?.assert(model);
+      return false;
+    } catch (err) {
+      return isModelRequiresSubscriptionError(err);
+    }
   }
 
   /** Throws the admission error itself, the same message the dispatched path records on its failed child. */
@@ -580,7 +599,7 @@ export class ServerSubagentOrchestrator {
     // `effectiveModel` on the child doc, and the child re-resolves its backend
     // from that id alone - so an unserviceable id has to be replaced here or
     // the child Lambda dies on "Failed to create LLM backend".
-    const { llm: effectiveLlm, model: effectiveModel } = this.resolveAgentRuntime(agentDef);
+    const { llm: effectiveLlm, model: effectiveModel } = await this.resolveAgentRuntime(agentDef);
     await this.assertModelAdmitted(agentDef.name, effectiveModel);
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
     const maxIterations = agentDef.maxIterations[effectiveThoroughness];
@@ -942,7 +961,7 @@ export class ServerSubagentOrchestrator {
     // backend from the persisted model id, so it must be one this deployment
     // can actually serve. The backend built here is discarded - the child
     // Lambda constructs its own.
-    const { model: effectiveModel } = this.resolveAgentRuntime(agentDef);
+    const { model: effectiveModel } = await this.resolveAgentRuntime(agentDef);
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
     const maxIterations = agentDef.maxIterations[effectiveThoroughness];
 

@@ -70,6 +70,12 @@ export async function loadFreeTierAllowedModels(
   return allowed;
 }
 
+/** Whether an admission error is the free-tier refusal, as opposed to any other reason a model is refused. */
+export function isModelRequiresSubscriptionError(error: unknown): boolean {
+  if (!(error instanceof ForbiddenError)) return false;
+  return error.additionalInfo?.errorCode === MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE;
+}
+
 /** Admins and developer-tagged users are never held to the free-tier allowlist. */
 export function isFreeTierExempt(user: Pick<ModelAdmissionInput['user'], 'isAdmin' | 'tags'>): boolean {
   return Boolean(user.isAdmin) || hasDeveloperUserTag(user.tags);

@@ -17,6 +17,7 @@ import {
   type SupersededModelInfo,
 } from '@bike4mind/common';
 import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
+import { Logger } from '@bike4mind/observability';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
 
@@ -68,12 +69,21 @@ async function buildCallerModelList(userId: string | null, enforceCredits: boole
  * cache so a plan change or a gate toggle shows on the next load. An anonymous caller is left unfiltered:
  * it cannot call a model, so this list is not a gate for it.
  */
+// Fails closed to "free", like createModelAdmission: a failed subscription read must not 500 the picker.
+async function holdsPaidPlan(user: IUserDocument): Promise<boolean> {
+  try {
+    return (await getUserEntitlements(toEntitlementUser(user))).includes(PAID_PLAN_ENTITLEMENT_KEY);
+  } catch (error) {
+    Logger.globalInstance.warn('callerModelList: entitlement read failed; listing free-tier models only', { error });
+    return false;
+  }
+}
+
 async function withoutPaidOnlyModels(list: CallerModelList, user: IUserDocument | null): Promise<CallerModelList> {
   if (!user || isFreeTierExempt(user)) return list;
   const allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
   if (!allowedModels) return list;
-  const entitlements = await getUserEntitlements(toEntitlementUser(user));
-  if (entitlements.includes(PAID_PLAN_ENTITLEMENT_KEY)) return list;
+  if (await holdsPaidPlan(user)) return list;
   const models = list.models.filter(model => isFreeTierModel(model.id, model, allowedModels));
   const offeredIds = new Set<string>(models.map(model => model.id));
   // An upgrade offer pointing at a paid-only model would only lead to a refusal.
