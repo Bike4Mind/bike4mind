@@ -91,6 +91,7 @@ describe('agent ops admin audit', () => {
     });
     const res = await call(settingsHandler, 'POST', { metaPrompt: 'private meta prompt', description: 'd' });
     expect(res._getStatusCode()).toBe(200);
+    expect(h.repo.addMetaPromptVersion).toHaveBeenCalledWith('private meta prompt', 'admin-1', 'd');
     expect(h.audit).toHaveBeenCalledTimes(1);
     const input = h.audit.mock.calls[0][1];
     expect(input).toMatchObject({ action: 'settings.agent_ops.version_added', target, details: { version: 2 } });
@@ -136,6 +137,11 @@ describe('agent ops admin audit', () => {
     h.repo.activateMetaPromptVersion.mockResolvedValue({});
     const res = await call(seed, 'POST');
     expect(res._getStatusCode()).toBe(200);
+    expect(h.repo.addMetaPromptVersion).toHaveBeenCalledWith(
+      expect.any(String),
+      'admin-1',
+      'Initial PromptCrafter meta-prompt for agent system prompt generation'
+    );
     expect(h.audit.mock.calls[0][1]).toMatchObject({ action: 'settings.agent_ops.seeded', target });
   });
 
