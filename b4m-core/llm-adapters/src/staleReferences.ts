@@ -11,8 +11,9 @@ import { DEPRECATED_MODEL_MAP, replacedByOverlayEntries } from './resolveDepreca
 /**
  * 'not-invocable': the catalog knows the id but the merged list does not carry
  * it - a metadata-only lifecycle ('discovered', 'unlisted'), or a backend this
- * deployment has no key for - or lists it as disabled. Routing to it fails exactly like 'unknown' does,
- * which is why it is a problem and not a clean bill of health.
+ * deployment has no key for - or lists it as disabled. Routing to it fails
+ * exactly like 'unknown' does, which is why it is a problem and not a clean
+ * bill of health.
  */
 export type StaleReferenceProblem = 'deprecated' | 'retired' | 'not-invocable' | 'unknown';
 
