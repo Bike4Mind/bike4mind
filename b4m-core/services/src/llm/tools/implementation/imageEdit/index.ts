@@ -34,7 +34,7 @@ import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
-import { NotFoundError, logImageGenerationFailure } from '@bike4mind/utils';
+import { ExpectedImageGenerationError, NotFoundError, logImageGenerationFailure } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { recordGeneratedImages } from '../../../recordGeneratedImages';
@@ -502,6 +502,9 @@ Please select a supported edit model in your image settings modal.`;
           return `Error: ${'question' in editResponse ? editResponse.question : 'Failed to edit image'}`;
         } catch (error) {
           logImageGenerationFailure(Logger.globalInstance, '[edit_image] BFL image editing failed:', error);
+          if (error instanceof ExpectedImageGenerationError) {
+            return `Error: ${error.message}`;
+          }
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
           if (axios.isAxiosError(error)) {
@@ -560,6 +563,9 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           return `Error: ${'question' in editResponse ? editResponse.question : 'Failed to edit image'}`;
         } catch (error) {
           logImageGenerationFailure(Logger.globalInstance, '[edit_image] Gemini image editing failed:', error);
+          if (error instanceof ExpectedImageGenerationError) {
+            return `Error: ${error.message}`;
+          }
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
           if (axios.isAxiosError(error)) {

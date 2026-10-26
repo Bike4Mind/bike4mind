@@ -345,6 +345,16 @@ describe('BFLImageService - expected failures stay below error level', () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
+  it('treats polling that ends on a non-Pending status as a genuine failure', async () => {
+    pollReturns({ status: 'Task not found' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const thrown = await (service as any).pollForResult('req-1', POLLING_URL, 1, 0).catch((e: unknown) => e);
+
+    expect(thrown).not.toBeInstanceOf(ImageProviderUnavailableError);
+    expect((thrown as Error).message).toBe('BFL polling ended on unexpected status: Task not found');
+  });
+
   it('logs a genuine task failure once, at error', async () => {
     pollReturns({ status: 'Error', result: { error: 'internal' } });
 

@@ -1,5 +1,3 @@
-import type { Logger } from '@bike4mind/observability';
-
 export type ExpectedImageFailureKind = 'moderation_blocked' | 'provider_unavailable' | 'input_rejected';
 
 /**
@@ -54,18 +52,28 @@ export class ImageInputRejectedError extends ExpectedImageGenerationError {
   }
 }
 
+type FailureLogger = {
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+};
+
 /**
  * The one place an image-generation caller reports a failure: expected failures at warn, anything
- * else at error (which pages).
+ * else at error (which pages). `context` is extra caller metadata (ids), never the prompt.
  */
 export function logImageGenerationFailure(
-  logger: Pick<Logger, 'warn' | 'error'>,
+  logger: FailureLogger,
   message: string,
-  error: unknown
+  error: unknown,
+  context?: Record<string, unknown>
 ): void {
   if (error instanceof ExpectedImageGenerationError) {
-    logger.warn(message, { kind: error.kind, ...error.logContext });
+    logger.warn(message, { ...context, kind: error.kind, ...error.logContext });
     return;
   }
-  logger.error(message, error);
+  if (context) {
+    logger.error(message, error, context);
+  } else {
+    logger.error(message, error);
+  }
 }

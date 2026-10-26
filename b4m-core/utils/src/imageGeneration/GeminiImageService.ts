@@ -154,9 +154,6 @@ export class GeminiImageService extends AIImageService {
     }
 
     const generatedImage = response.generatedImages[0];
-    if (generatedImage?.raiFilteredReason) {
-      throw geminiPolicyBlockedError(generatedImage.raiFilteredReason, undefined);
-    }
     if (!generatedImage?.image?.imageBytes) {
       this.logger.error('[DEBUG] No image bytes in Gemini generateImages response.', response);
       return null;

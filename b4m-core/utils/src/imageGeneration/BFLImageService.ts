@@ -286,7 +286,7 @@ export class BFLImageService extends AIImageService {
 
       return { type: 'success' as const, dataUrl: imageUrl };
     } catch (error) {
-      throw this.toReportableError(error, 'image generation', `${this.baseUrl}/${model}`);
+      throw this.toReportableError(error, 'image editing', `${this.baseUrl}/${model}`);
     } finally {
       // Delete mask file
     }
@@ -373,7 +373,7 @@ export class BFLImageService extends AIImageService {
         },
       });
 
-      Logger.globalInstance.debug(`[DEBUG] ✅ BFL API request successful:`, {
+      Logger.globalInstance.debug(`[DEBUG] BFL API request successful:`, {
         status: submitResponse.status,
         statusText: submitResponse.statusText,
         responseDataKeys: Object.keys(submitResponse.data || {}),
@@ -383,11 +383,11 @@ export class BFLImageService extends AIImageService {
       const requestId = submitResponse.data.id;
       const pollingUrl = submitResponse.data.polling_url;
       if (!requestId) {
-        Logger.globalInstance.error(`[DEBUG] ❌ No request ID in response:`, submitResponse.data);
+        Logger.globalInstance.error(`[DEBUG] No request ID in response:`, submitResponse.data);
         throw new Error('BFL API did not return a request ID');
       }
 
-      Logger.globalInstance.debug('[DEBUG] ✅ BFL Kontext transformation request submitted:', {
+      Logger.globalInstance.debug('[DEBUG] BFL Kontext transformation request submitted:', {
         requestId,
         pollingUrl,
         endpoint,
@@ -398,7 +398,7 @@ export class BFLImageService extends AIImageService {
       // Poll for result using the polling_url from BFL
       Logger.globalInstance.debug(`[DEBUG] Starting polling for request ID: ${requestId}`);
       const imageUrl = await this.pollForResult(requestId, pollingUrl);
-      Logger.globalInstance.debug('[DEBUG] ✅ Received BFL Kontext image URL:', {
+      Logger.globalInstance.debug('[DEBUG] Received BFL Kontext image URL:', {
         url: imageUrl.substring(0, 100) + '...',
         requestId,
         model,
@@ -434,6 +434,7 @@ export class BFLImageService extends AIImageService {
       baseInterval: interval,
     });
 
+    let lastStatus: unknown;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         Logger.globalInstance.debug(
@@ -455,6 +456,7 @@ export class BFLImageService extends AIImageService {
         });
 
         const { status, result } = pollResponse.data;
+        lastStatus = status;
         Logger.globalInstance.debug(`[DEBUG] Poll status analysis:`, {
           requestId,
           status,
@@ -516,6 +518,11 @@ export class BFLImageService extends AIImageService {
       }
     }
 
+    // Running out of attempts while BFL still says Pending is a slow provider. Any other status
+    // (e.g. `Task not found`, or one added later) means polling itself is broken, which must page.
+    if (lastStatus !== 'Pending') {
+      throw new Error(`BFL polling ended on unexpected status: ${String(lastStatus)}`);
+    }
     throw new ImageProviderUnavailableError(
       'Image generation is taking longer than usual and your request could not be completed. Please try again in a few minutes.',
       {

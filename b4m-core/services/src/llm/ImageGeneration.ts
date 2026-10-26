@@ -1333,7 +1333,7 @@ export class ImageGenerationService {
           Logger.globalInstance.debug(`[DEBUG] Prompt preview:`, truncatedPrompt.substring(0, 100) + '...');
 
           const transformedImage = await (service as any).transform(base64Image, truncatedPrompt, transformParams);
-          Logger.globalInstance.debug(`[DEBUG] ✅ Transform successful:`, {
+          Logger.globalInstance.debug(`[DEBUG] Transform successful:`, {
             resultType: typeof transformedImage,
             resultLength: transformedImage?.length,
             resultPreview: transformedImage?.substring(0, 100) + '...',
