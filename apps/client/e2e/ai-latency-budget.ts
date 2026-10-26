@@ -71,7 +71,8 @@ export function isStreamComplete(snapshot: StreamSnapshot, previousResponse: str
  * Whether this turn's first answer token is on the page, given the newest reply's markdown answer
  * text (`ai-response-markdown`) now and before send. Read from the markdown element, never the body
  * or root: the root shows "Thinking..." and reasoning before any answer token arrives, and the body
- * can mount for media or a notice alone.
+ * can mount for media or a notice alone. In a resumed chat the baseline is the prior reply, so a late
+ * re-render of it (citations, an artifact card settling) would mark a false-early first token.
  */
 export function hasFirstAnswerText(answerText: string, previousAnswerText: string): boolean {
   return answerText.trim() !== '' && answerText !== previousAnswerText;
@@ -315,9 +316,12 @@ export function gatedMedianFirstTokenSec(results: PromptResult[]): number {
   return medianSec(slowestPerPrompt(results, r => r.firstTokenSec ?? (r.incomplete ? r.responseTimeSec : undefined)));
 }
 
-/** Ids of unflagged prompts whose reply turned out to be an artifact (excluded from the gate). */
+/**
+ * Ids of unflagged prompts whose latest attempt answered with an artifact (excluded from the gate). A
+ * retried artifact attempt whose retry answered in chat is in the median, so it is not listed.
+ */
 export function unexpectedArtifactIds(results: PromptResult[]): string[] {
-  return [...new Set(results.filter(r => r.unexpectedArtifact).map(r => r.id))];
+  return [...new Set(results.filter(r => r.unexpectedArtifact && !r.retried).map(r => r.id))];
 }
 
 /**
@@ -326,8 +330,8 @@ export function unexpectedArtifactIds(results: PromptResult[]): string[] {
  * Must stay in sync with the aggregate step's Latency column in .github/workflows/e2e-ai-latency.yml:
  * a breach is a median over thresholdSec OR a gated prompt whose LATEST attempt was abandoned (an
  * abandoned prompt has no upper bound, so faster prompts could otherwise outvote it). An abandoned
- * attempt that a later retry completed only feeds its prompt's slowest attempt in the median. No gated result is "No Data"
- * there, not a breach, so it returns null here too.
+ * attempt that a later retry completed only feeds its prompt's slowest attempt in the median. No
+ * gated result is "No Data" there, not a breach, so it returns null here too.
  */
 export function latencyBreach(results: PromptResult[], thresholdSec: number): string | null {
   const gated = gatedResults(results);

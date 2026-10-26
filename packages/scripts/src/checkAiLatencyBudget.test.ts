@@ -729,6 +729,10 @@ describe('unexpected artifact on a chat prompt', () => {
     expect(
       unexpectedArtifactIds(mergeResults([chat('gpu', 70, true)], [{ ...chat('gpu', 60, true), attempt: 1 }]))
     ).toEqual(['gpu']);
+    // A switched attempt whose retry answered in chat is in the median, so it is not listed.
+    expect(unexpectedArtifactIds(mergeResults([chat('gpu', 70, true)], [{ ...chat('gpu', 6), attempt: 1 }]))).toEqual(
+      []
+    );
   });
 
   it('keeps an abandoned chat prompt gated, since an artifact cannot be told from a hang', () => {

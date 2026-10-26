@@ -28,8 +28,8 @@ import {
 const LATENCY_GATE_TITLE = 'median AI latency is within the threshold';
 
 // Prompts drawn per cell, capped at the pool size (the tool and intermediate pools hold 5). Enough
-// gated rows for the median to shrug off one slow prompt; a cell still runs well inside the job's
-// timeout-minutes in e2e-ai-latency.yml.
+// gated rows for the median to shrug off one slow prompt. Prompts run serially, so raising this
+// lengthens the cell against the job's timeout-minutes in e2e-ai-latency.yml.
 const PROMPTS_PER_CELL = 7;
 
 // Normalizes to NFKC and strips invisible Unicode chars (zero-width joiners, soft hyphens,

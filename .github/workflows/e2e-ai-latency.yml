@@ -705,8 +705,9 @@ jobs:
                 # abandoned as a breach in its own right; one a retry completed only feeds the median.
                 ABANDONED="$(jq -r '[.results[]? | select(.incomplete == true) | select(.measuresDeliverable != true) | select(.retried != true)] | length' "$LATENCY_JSON")"
                 # An unflagged prompt that answered with an artifact is excluded from the median; show it
-                # so the mode switch is noticed rather than hidden. Counted per prompt, not per attempt.
-                SWITCHED="$(jq -r '[.results[]? | select(.unexpectedArtifact == true) | .id] | unique | length' "$LATENCY_JSON")"
+                # so the mode switch is noticed rather than hidden. Counted per prompt on its latest attempt
+                # (unexpectedArtifactIds in ai-latency-budget.ts): a retry that answered in chat is in the median.
+                SWITCHED="$(jq -r '[.results[]? | select(.unexpectedArtifact == true) | select(.retried != true) | .id] | unique | length' "$LATENCY_JSON")"
                 # Earlier attempts of a retried gated prompt are kept and can set its value in the median;
                 # say how many.
                 RETRIED="$(jq -r '[.results[]? | select(.retried == true) | select(.measuresDeliverable != true)] | length' "$LATENCY_JSON")"
