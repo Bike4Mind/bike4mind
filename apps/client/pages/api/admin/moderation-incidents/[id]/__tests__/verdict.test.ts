@@ -689,10 +689,14 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       mockSetNcmecReportId.mockRejectedValue(new Error('db down'));
       const res = makeRes();
 
-      await runHandler(makeReq({ verdict: 'confirmed_csam' }), res);
+      const req = makeReq({ verdict: 'confirmed_csam' });
 
+      await runHandler(req, res);
+
+      expect(mockSetNcmecReportId).toHaveBeenCalledWith('inc-1', 'RPT-001');
       expect(res.status).toHaveBeenCalledWith(500);
       expect((res.json as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ ncmecReportId: 'RPT-001' });
+      expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('failed to persist reportId'));
     });
 
     it('falls back to the user id when the flagged user no longer exists', async () => {
