@@ -3,6 +3,7 @@ import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useUpdateUserCredits } from './useUpdateUserCredits';
 import { NotificationState } from '../types';
+import type { CreditChange } from '../components/CreditAdjustmentModal';
 
 export function useUserCreditsManager(onRefresh?: () => void) {
   const { value: searchQuery, debouncedValue: debouncedSearch, setValue: setSearchValue } = useDebounceValue('');
@@ -50,20 +51,22 @@ export function useUserCreditsManager(onRefresh?: () => void) {
 
   const users = allUsers.data?.users ?? [];
 
-  const handleCreditAdjustment = async (userId: string, adjustment: number, note: string) => {
+  const handleCreditAdjustment = async (userId: string, change: CreditChange, note: string) => {
     try {
       await updateUserCreditsMutation.mutateAsync({
         userId,
-        // Send the signed adjustment, not a client-computed absolute. The server
-        // applies it atomically against the live balance, so interim spend is not
+        // A delta applies atomically against the live balance, so interim spend is not
         // refunded and the balance never goes negative.
-        creditDelta: adjustment,
+        ...(change.kind === 'delta' ? { creditDelta: change.delta } : { currentCredits: change.balance }),
         // The admin's required "Reason for adjustment" - persisted on the audit record.
         note: note.trim(),
       });
       setNotification({
         open: true,
-        message: `Successfully ${adjustment > 0 ? 'added' : 'removed'} ${Math.abs(adjustment)} credits`,
+        message:
+          change.kind === 'set'
+            ? `Balance set to ${change.balance.toLocaleString()}`
+            : `Successfully ${change.delta > 0 ? 'added' : 'removed'} ${Math.abs(change.delta)} credits`,
         color: 'success',
       });
       handleRefresh();

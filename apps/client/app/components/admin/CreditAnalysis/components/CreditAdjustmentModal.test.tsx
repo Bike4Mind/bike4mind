@@ -49,9 +49,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add Credits/i }));
 
     await waitFor(() => expect(onCreditAdjustment).toHaveBeenCalledTimes(1));
-    // (userId, signed adjustment, note) - the stale currentCredits arg was removed; the
-    // server applies the signed delta atomically.
-    expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', 100, 'Compensation for outage');
+    expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', { kind: 'delta', delta: 100 }, 'Compensation for outage');
   });
 
   it('blocks add and remove until the reason is at least 5 characters', () => {
@@ -98,7 +96,46 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
     fireEvent.click(screen.getByRole('button', { name: /Remove Credits/i }));
 
     await waitFor(() => expect(onCreditAdjustment).toHaveBeenCalledTimes(1));
-    expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', -100, 'Refund reversal');
+    expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', { kind: 'delta', delta: -100 }, 'Refund reversal');
+  });
+
+  describe('set balance mode', () => {
+    const renderModal = (onCreditAdjustment = vi.fn().mockResolvedValue(undefined)) => {
+      render(
+        <TestWrapper>
+          <CreditAdjustmentModal
+            open
+            onClose={() => {}}
+            selectedUser={selectedUser}
+            onCreditAdjustment={onCreditAdjustment}
+          />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('credit-adjust-mode-set').querySelector('input') as HTMLInputElement);
+      return onCreditAdjustment;
+    };
+
+    it('sets the balance to 0 with a valid reason from the footer button', async () => {
+      const onCreditAdjustment = renderModal();
+      const setBtn = screen.getByTestId('credit-adjust-set-btn');
+      expect(setBtn).toBeDisabled();
+      expect(screen.queryByTestId('credit-adjust-add-btn')).not.toBeInTheDocument();
+      expect(screen.getByTestId('credit-adjust-set-preview')).toHaveTextContent('-100');
+
+      fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Abusive signup' } });
+      expect(setBtn).toBeEnabled();
+      fireEvent.click(setBtn);
+
+      await waitFor(() => expect(onCreditAdjustment).toHaveBeenCalledTimes(1));
+      expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', { kind: 'set', balance: 0 }, 'Abusive signup');
+    });
+
+    it('stays disabled when the target equals the current balance', () => {
+      renderModal();
+      fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '100' } });
+      fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Abusive signup' } });
+      expect(screen.getByTestId('credit-adjust-set-btn')).toBeDisabled();
+    });
   });
 
   it('renders the audit trail of recent adjustments', async () => {

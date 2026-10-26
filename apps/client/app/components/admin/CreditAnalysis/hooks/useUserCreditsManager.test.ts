@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 const mockUseGetUsers = vi.fn();
+const mockMutateAsync = vi.fn();
 
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetUsers: (...args: unknown[]) => mockUseGetUsers(...args),
 }));
 vi.mock('./useUpdateUserCredits', () => ({
-  useUpdateUserCredits: () => ({ mutateAsync: vi.fn() }),
+  useUpdateUserCredits: () => ({ mutateAsync: mockMutateAsync }),
 }));
 
 import { useUserCreditsManager } from './useUserCreditsManager';
@@ -28,6 +29,18 @@ describe('useUserCreditsManager', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+  it('sends a delta as creditDelta and a set as an absolute currentCredits', async () => {
+    mockMutateAsync.mockResolvedValue({});
+    const { result } = renderHook(() => useUserCreditsManager());
+
+    await act(() => result.current.handleCreditAdjustment('u1', { kind: 'delta', delta: -50 }, ' why not '));
+    expect(mockMutateAsync).toHaveBeenLastCalledWith({ userId: 'u1', creditDelta: -50, note: 'why not' });
+
+    await act(() => result.current.handleCreditAdjustment('u1', { kind: 'set', balance: 0 }, 'zeroed'));
+    expect(mockMutateAsync).toHaveBeenLastCalledWith({ userId: 'u1', currentCredits: 0, note: 'zeroed' });
+    expect(result.current.notification.message).toBe('Balance set to 0');
   });
 
   it('requests server-side sort by currentCredits (default highest first)', () => {

@@ -85,6 +85,29 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 50, expect.anything());
   });
 
+  it('sets an absolute 0 balance from a positive balance as an audited deduction', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(100);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 0, creditReason: 'Abusive signup' }, adapters);
+
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_deduct');
+    expect(createTransaction.mock.calls[0][1].metadata).toMatchObject({
+      note: 'Abusive signup',
+      previousBalance: 100,
+      resultingBalance: 0,
+    });
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -100);
+  });
+
+  it('sets an absolute 0 balance from a negative balance as a grant', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(-40);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 0, creditReason: 'Reset balance' }, adapters);
+
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_add');
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 40);
+  });
+
   it('routes a credit decrease through a generic_deduct transaction', async () => {
     const { adapters, createTransaction, incrementCredits } = makeAdapters(100);
 
