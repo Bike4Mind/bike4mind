@@ -16,37 +16,7 @@ async function loadRobots(canonicalOrigin: string, overlays: unknown[] = []) {
   return (await loadRobotsModule(canonicalOrigin, overlays)).default();
 }
 
-afterEach(() => {
-  vi.doUnmock('@client/config/general');
-  vi.unstubAllEnvs();
-});
-
-describe('robots.txt on non-production stages', () => {
-  it.each(['dev', 'pr1234'])('blocks everything on stage %s', async stage => {
-    vi.stubEnv('NEXT_PUBLIC_SEED_STAGE_NAME', stage);
-    const result = await loadRobots('https://example.test', [{ sitemapPaths: ['/x'], disallowPaths: [] }]);
-
-    expect(result.rules).toEqual([{ userAgent: '*', disallow: '/' }]);
-    expect(result).not.toHaveProperty('sitemap');
-  });
-
-  it('serves the normal policy on production', async () => {
-    vi.stubEnv('NEXT_PUBLIC_SEED_STAGE_NAME', 'production');
-    const result = await loadRobots('https://example.test');
-    const rule = Array.isArray(result.rules) ? result.rules[0] : result.rules;
-
-    expect(rule?.allow).toBe('/');
-    expect(rule?.disallow).toContain('/api/');
-  });
-
-  it('serves the normal policy when no stage is configured', async () => {
-    vi.stubEnv('NEXT_PUBLIC_SEED_STAGE_NAME', '');
-    const result = await loadRobots('https://example.test');
-    const rule = Array.isArray(result.rules) ? result.rules[0] : result.rules;
-
-    expect(rule?.allow).toBe('/');
-  });
-});
+afterEach(() => vi.doUnmock('@client/config/general'));
 
 describe('robots.txt', () => {
   it('allows the site and disallows the core private surfaces', async () => {

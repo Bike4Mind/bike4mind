@@ -65,6 +65,10 @@ B4M uses the `app.${SERVER_DOMAIN}` pattern:
 | `example.com` | `https://app.example.com` |
 | `staging.example.com` | `https://app.staging.example.com` |
 
+### Stage Name and Search Indexing
+
+Only the stage named `production` is indexable by search engines. Every other stage's CDN adds `X-Robots-Tag: noindex, nofollow` to all responses. Deploy your public site with `--stage production`; any other stage name keeps it out of search results.
+
 ### Security Model
 
 - All Lambda functions run in private VPC subnets
