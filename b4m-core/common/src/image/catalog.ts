@@ -1,7 +1,7 @@
 import { IMAGE_SIZE_CONSTRAINTS, ImageModels } from '../models';
 import { MAX_IMAGES_PER_REQUEST, type ImageOutputFormat, type OpenAIImageQuality } from '../schemas/openai';
 import type { ImageSizing } from '../utils/imageCapabilities';
-import { IMAGES_PER_EDIT_REQUEST, MAX_REFERENCE_IMAGES } from '../utils/modelHelpers';
+import { getMaxReferenceImages, IMAGES_PER_EDIT_REQUEST, MAX_REFERENCE_IMAGES } from '../utils/modelHelpers';
 import type { AspectRatioCapability, ImageModeCapabilities, ImageModelCatalogEntry } from './types';
 
 const GPT_IMAGE_QUALITIES = ['low', 'medium', 'high', 'auto'] as const satisfies readonly OpenAIImageQuality[];
@@ -90,6 +90,21 @@ const bfl = (overrides: Pick<ImageModelCatalogEntry, 'modes' | 'sizing'>): Image
   seed: true,
   ...overrides,
 });
+
+// FLUX.2 forwards the workbench image and any referenceImageFabFileIds together as input_image..input_image_N,
+// under one cap that counts all of them (getMaxReferenceImages). It has no edit dispatcher.
+const flux2 = (model: ImageModels): ImageModelCatalogEntry =>
+  bfl({
+    modes: {
+      generate: {
+        inputs: { reference: { max: getMaxReferenceImages(model) } },
+        maxOutputs: MAX_IMAGES_PER_REQUEST,
+        aspectRatios: null,
+        outputFormats: PNG_JPEG,
+      },
+    },
+    sizing: BFL_SIZING,
+  });
 
 // The gemini-*-image models are not served by the Imagen-style generateImages call GeminiImageService tries
 // first, so both modes land on generateContent with no imageConfig: no aspect ratio or format reaches Gemini.
@@ -190,6 +205,13 @@ export const IMAGE_MODEL_CATALOG: Record<ImageModels, ImageModelCatalogEntry> = 
     },
     sizing: { kind: 'inputImage', aspectRatio: true },
   }),
+  [ImageModels.FLUX_2_MAX]: flux2(ImageModels.FLUX_2_MAX),
+  [ImageModels.FLUX_2_PRO]: flux2(ImageModels.FLUX_2_PRO),
+  [ImageModels.FLUX_2_PRO_PREVIEW]: flux2(ImageModels.FLUX_2_PRO_PREVIEW),
+  [ImageModels.FLUX_2_FLEX]: flux2(ImageModels.FLUX_2_FLEX),
+  [ImageModels.FLUX_2_KLEIN_9B]: flux2(ImageModels.FLUX_2_KLEIN_9B),
+  [ImageModels.FLUX_2_KLEIN_9B_PREVIEW]: flux2(ImageModels.FLUX_2_KLEIN_9B_PREVIEW),
+  [ImageModels.FLUX_2_KLEIN_4B]: flux2(ImageModels.FLUX_2_KLEIN_4B),
   // xAI receives only the prompt and n; it takes no size, ratio or format and has no edit endpoint.
   [ImageModels.GROK_IMAGINE_IMAGE_QUALITY]: {
     provider: 'xai',
