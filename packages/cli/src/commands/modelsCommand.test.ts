@@ -315,6 +315,17 @@ describe('licenseFor', () => {
     expect(licenseFor(detail({ licenses: [] }), ENDPOINT)).toMatchObject({ label: 'none declared', restricted: true });
   });
 
+  it('treats a card that only names its license, or passes the cap, as restricted', () => {
+    expect(licenseFor(detail({ licenses: ['other'], licenseName: 'my-terms' }), ENDPOINT)).toMatchObject({
+      label: 'my-terms',
+      restricted: true,
+    });
+    expect(licenseFor(detail({ licenses: ['mit', 'other'] }), ENDPOINT)).toMatchObject({
+      label: 'mit, other',
+      restricted: true,
+    });
+  });
+
   it('is permissive only when every declared license is', () => {
     expect(licenseFor(detail({ licenses: ['apache-2.0', 'mit'] }), ENDPOINT)).toMatchObject({
       label: 'apache-2.0, mit',
