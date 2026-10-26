@@ -22,6 +22,7 @@ describe('signupRiskScoring setting', () => {
 
   it.each([
     ['a mistyped signal name', { weights: { burstCohrot: 60 } }],
+    ['a mistyped top-level field', { reviewTreshold: 80 }],
     ['a weight over 100', { weights: { burstCohort: 101 } }],
     ['a negative weight', { weights: { riskyDomain: -1 } }],
     ['a review threshold of 0, which would flag every account', { reviewThreshold: 0 }],

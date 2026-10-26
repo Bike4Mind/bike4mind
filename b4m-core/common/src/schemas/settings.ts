@@ -1201,27 +1201,29 @@ const signupRiskWeight = (defaultValue: number) => z.number().min(0).max(100).pr
 /**
  * Weights and thresholds for `scoreSignupRisk` (b4m-core/services/src/userService/signupRiskScore.ts).
  * The defaults are generic placeholders: a deployment tunes the real values in admin settings.
- * `weights` is strict so a mistyped signal name is refused on save instead of silently ignored.
+ * Both levels are strict so a mistyped signal or field name is refused on save instead of silently ignored.
  */
-export const SignupRiskScoringSchema = z.object({
-  weights: z
-    .object({
-      riskyDomain: signupRiskWeight(25),
-      burstCohort: signupRiskWeight(30),
-      datacenterNetwork: signupRiskWeight(15),
-      quickApiKey: signupRiskWeight(15),
-      fastSpend: signupRiskWeight(20),
-      generatedLocalPart: signupRiskWeight(10),
-    })
-    .strict()
-    .prefault({}),
-  /** A first API key minted within this many minutes of signup counts as quick. */
-  quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(60),
-  /** Credits spent in the first 24h at which fastSpend reaches its full weight; less scales linearly. */
-  fastSpendCredits: z.number().positive().prefault(1000),
-  /** A score at or above this needs review. */
-  reviewThreshold: z.number().min(1).max(100).prefault(50),
-});
+export const SignupRiskScoringSchema = z
+  .object({
+    weights: z
+      .object({
+        riskyDomain: signupRiskWeight(25),
+        burstCohort: signupRiskWeight(30),
+        datacenterNetwork: signupRiskWeight(15),
+        quickApiKey: signupRiskWeight(15),
+        fastSpend: signupRiskWeight(20),
+        generatedLocalPart: signupRiskWeight(10),
+      })
+      .strict()
+      .prefault({}),
+    /** A first API key minted within this many minutes of signup counts as quick. */
+    quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(60),
+    /** Credits spent in the first 24h at which fastSpend reaches its full weight; less scales linearly. */
+    fastSpendCredits: z.number().positive().prefault(1000),
+    /** A score at or above this needs review. */
+    reviewThreshold: z.number().min(1).max(100).prefault(50),
+  })
+  .strict();
 
 export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
 
