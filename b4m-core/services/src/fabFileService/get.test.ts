@@ -112,12 +112,13 @@ describe('generateSignedUrl - cached URL reuse', () => {
     return adapter;
   };
 
+  // 6 min here and 4 min below sit either side of the 5-minute refresh margin, pinning it.
   it('reuses an unexpired cached URL without fetching the object', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     const adapter = signingAdapter();
     const result = await generateSignedUrl(
-      fabFile({ filePath: 'owned/file.txt', fileUrl: cachedUrl, fileUrlExpireAt: minutesFromNow(30) }),
+      fabFile({ filePath: 'owned/file.txt', fileUrl: cachedUrl, fileUrlExpireAt: minutesFromNow(6) }),
       adapter
     );
     expect(result.fileUrl).toBe(cachedUrl);
@@ -128,7 +129,7 @@ describe('generateSignedUrl - cached URL reuse', () => {
 
   it.each([
     ['expired', -1],
-    ['about to expire', 2],
+    ['about to expire', 4],
   ])('re-signs a cached URL that is %s', async (_label, minutes) => {
     const adapter = signingAdapter();
     const result = await generateSignedUrl(
