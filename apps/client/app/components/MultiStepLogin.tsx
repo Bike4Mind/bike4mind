@@ -781,35 +781,33 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   testId="login-rate-limit-alert"
                 />
 
-                {enableRegister && (
-                  <Box
-                    className="register-prompt-container"
-                    sx={{ display: 'flex', justifyContent: 'center', mt: '20px' }}
-                  >
-                    <Typography sx={{ color: 'text.tertiary', fontSize: '14px' }}>
-                      {t('auth.noAccount')}{' '}
-                      <Link
-                        className="register-link"
-                        data-testid="signup-text"
-                        color="primary"
-                        onClick={() => {
-                          const searchParams = new URLSearchParams(window.location.search);
-                          const redirectTo = searchParams.get('redirectTo');
-                          navigate({ to: '/register', search: redirectTo ? { redirectTo } : undefined });
-                        }}
-                        sx={{
-                          fontWeight: 500,
-                          fontSize: '14px',
-                          cursor: 'pointer',
-                          transition: 'color 0.2s ease-in-out',
-                          '&:hover': { textDecoration: 'underline' },
-                        }}
-                      >
-                        {t('auth.registerNow')}
-                      </Link>
-                    </Typography>
-                  </Box>
-                )}
+                <Box
+                  className="register-prompt-container"
+                  sx={{ display: 'flex', justifyContent: 'center', mt: '20px' }}
+                >
+                  <Typography sx={{ color: 'text.tertiary', fontSize: '14px' }}>
+                    {t('auth.noAccount')}{' '}
+                    <Link
+                      className="register-link"
+                      data-testid="signup-text"
+                      color="primary"
+                      onClick={() => {
+                        const searchParams = new URLSearchParams(window.location.search);
+                        const redirectTo = searchParams.get('redirectTo');
+                        navigate({ to: '/register', search: redirectTo ? { redirectTo } : undefined });
+                      }}
+                      sx={{
+                        fontWeight: 500,
+                        fontSize: '14px',
+                        cursor: 'pointer',
+                        transition: 'color 0.2s ease-in-out',
+                        '&:hover': { textDecoration: 'underline' },
+                      }}
+                    >
+                      {enableRegister ? t('auth.registerNow') : 'Have an invite code?'}
+                    </Link>
+                  </Typography>
+                </Box>
               </form>
             )}
 

@@ -78,6 +78,11 @@ const handler = baseApi({ auth: false })
   .use(otcCounterLimit({ bucket: 'verify-ip', ...OTC_LIMITS.verify.perIp, subject: ipSubject }))
   .post(async (req, res) => {
     const { email, code, username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
+    const parsedInviteCode = z.string().trim().optional().safeParse(req.body.inviteCode);
+    if (!parsedInviteCode.success) {
+      return res.status(400).json({ error: 'Invalid invite code' });
+    }
+    const inviteCode = parsedInviteCode.data;
 
     if (!email || !code) {
       return res.status(400).json({ error: 'Email and code are required' });
@@ -377,6 +382,7 @@ const handler = baseApi({ auth: false })
           email: normalizedEmail,
           name: username.trim(),
           password: '',
+          inviteCode,
           // P0-B abuse gate: registerUser rejects creation unless these are present and
           // current, so a new OTC account is gated at creation just like the credentials path. The
           // client collects both before submitting (register form, or the inline username step).

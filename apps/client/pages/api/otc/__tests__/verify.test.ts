@@ -1002,6 +1002,29 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
     vi.unstubAllEnvs();
   });
 
+  it('forwards a validated invite without skipping the registration gate', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.inviteCode = ' INVITE123 ';
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.objectContaining({ inviteCode: 'INVITE123', email: NON_DOMAIN_EMAIL }),
+      expect.objectContaining({ skipInviteCheck: false })
+    );
+  });
+
+  it.each([123, {}, ['INVITE123'], null])(
+    'rejects malformed invite input %j before consuming the code',
+    async inviteCode => {
+      const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+      req.body.inviteCode = inviteCode;
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+      expect(mockValidateNonce).not.toHaveBeenCalled();
+    }
+  );
+
   it('skips the invite check once the code proves an email on an enabled partner rule', async () => {
     mockPartnerGrant.mockResolvedValue(matchedGrant);
     const { req, res } = makeReqRes(PARTNER_EMAIL);

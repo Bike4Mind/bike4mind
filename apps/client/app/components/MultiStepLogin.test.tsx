@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   setCurrentUser: vi.fn(),
   trackSignupConversion: vi.fn(),
   applyRedirect: vi.fn(),
+  navigate: vi.fn(),
   // Mutable so the "already logged in" tests can vary the session state. Not reset by
   // vi.clearAllMocks() (it only touches mock fns) - each describe's beforeEach resets these.
   userState: { currentUser: null as unknown },
@@ -77,7 +78,7 @@ vi.mock('@client/app/hooks/data/passkeys', () => ({
   passkeysSupported: () => false,
 }));
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mocks.navigate,
   useRouter: () => ({ history: {} }),
 }));
 // finishLogin calls applyRedirect(router.history, ...); stub it so the empty history is inert.
@@ -149,6 +150,13 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
       ok: true,
       json: async () => ({ requiresRedirect: false }),
     }) as unknown as typeof fetch;
+  });
+
+  it('links invite-only visitors to the registration form', async () => {
+    renderLogin({ enableRegister: false });
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
+    await userEvent.setup().click(screen.getByTestId('signup-text'));
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/register', search: undefined });
   });
 
   it('hydrates currentUser with a FLAT user (not the nested {user} wrapper) after inline registration', async () => {
