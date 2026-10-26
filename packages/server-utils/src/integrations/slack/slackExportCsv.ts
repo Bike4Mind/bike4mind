@@ -1,4 +1,4 @@
-/** Must stay in sync with CSV_FORMULA_PREFIX in apps/client/app/utils/csv.ts. */
+/** Leading characters that make a spreadsheet evaluate a cell as a formula. Also re-exported by apps/client/app/utils/csv.ts. */
 export const SLACK_CSV_FORMULA_PREFIX = /^[=+\-@\t\r]/;
 
 /**
