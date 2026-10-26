@@ -33,8 +33,9 @@ const SUITE_COUNTS = /^(\d+)\/(\d+)(?: \((\d+) did not run\))?$/;
 const CREDITS_VALUE = /^\d+(?:\.\d+)?$/;
 // printf '%.2fs / <=%ss' plus the breach suffixes, or N/A when the spec declares no threshold.
 // Median-era posts put ' (TTFT %.2fs)' after the value and may end in a retried-attempts note.
+// The suffixes come in the Aggregate step's order: artifact-mode, never finished, retried.
 const LATENCY_CELL =
-  /^(\d+\.\d{2})s(?: \(TTFT \d+\.\d{2}s\))? \/ <=(?:N\/A|(\d+(?:\.\d+)?)s)(?: FAIL(?: \(\d+ prompt\(s\) never finished\))?)?(?: \(\d+ retried attempt\(s\) kept\))?$/;
+  /^(\d+\.\d{2})s(?: \(TTFT \d+\.\d{2}s\))? \/ <=(?:N\/A|(\d+(?:\.\d+)?)s)(?: FAIL)?(?: \(\d+ artifact-mode excluded\))?(?: \(\d+ prompt\(s\) never finished\))?(?: \(\d+ retried attempt\(s\) kept\))?$/;
 // The Latency column's header names the statistic the cell holds: a mean before the switch to a
 // median, the median after. Each maps to the results-file key the Aggregate step read it from.
 const LATENCY_COLUMNS = new Map([
