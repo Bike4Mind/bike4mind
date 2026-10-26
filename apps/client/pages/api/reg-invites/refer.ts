@@ -35,7 +35,7 @@ const handler = baseApi().post(
     const user = req.user;
     const { userName, emailTitle, emailBody } = newReferralData;
     // Dedup before reserveReferrals so a duplicated address is charged once.
-    const friendEmail = Array.from(new Set(newReferralData.friendEmail));
+    const friendEmail = Array.from(new Set(newReferralData.friendEmail.map(e => e.trim().toLowerCase())));
     const userId = user.id;
 
     // Minting credit-bearing invite codes requires proof the sender's own email
@@ -113,15 +113,22 @@ const handler = baseApi().post(
 
         let inviteCode: string;
 
-        const found = await registrationInviteRepository.findOne({ email: target });
-        // Another sender's invite that can no longer be redeemed (closed, used, expired) does not
-        // block this sender: they get their own invite.
-        const isLive =
-          found?.status === RegInviteStatusType.open &&
-          !found.used &&
-          (!found.expiresAt || found.expiresAt > new Date());
-        const existingInvite = found && (found.userId === userId || isLive) ? found : null;
-        if (!existingInvite) {
+        const invites = await registrationInviteRepository.find({ email: target });
+        const now = new Date();
+        const isLive = (invite: IRegistrationInvite) =>
+          invite.status === RegInviteStatusType.open && !invite.used && (!invite.expiresAt || invite.expiresAt > now);
+        const ownLive = invites.find(invite => invite.userId === userId && isLive(invite));
+        const otherLive = invites.find(invite => invite.userId !== userId && isLive(invite));
+        if (ownLive) {
+          hasUsableInvite = true;
+          inviteCode = ownLive.code;
+        } else if (otherLive) {
+          // Someone else already invited this address; reusing their code would credit them while
+          // this sender is charged. Skipped silently like an existing account, so the response
+          // does not reveal it and the reservation stays spent.
+          slackErrorMessages.push(`Email ${target} already has an invite from another sender. Skipping invite.`);
+          continue;
+        } else {
           inviteCode = generateCode();
           const newRegInvite: IRegistrationInvite = {
             userId,
@@ -134,15 +141,6 @@ const handler = baseApi().post(
           hasUsableInvite = true;
           newInviteIds.push(savedInvite.id);
           user.regInvites.push(savedInvite.id);
-        } else if (existingInvite.userId !== userId) {
-          // Someone else already invited this address; reusing their code would credit them while
-          // this sender is charged. Skipped silently like an existing account, so the response
-          // does not reveal it and the reservation stays spent.
-          slackErrorMessages.push(`Email ${target} already has an invite from another sender. Skipping invite.`);
-          continue;
-        } else {
-          hasUsableInvite = true;
-          inviteCode = existingInvite.code;
         }
 
         const finalBody = `
