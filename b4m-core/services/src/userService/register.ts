@@ -283,7 +283,7 @@ export const registerUser = async (
   const invitesPerUserParsed = settingsMap.ReferralInvitesPerUser.schema.safeParse(invitesPerUserSetting?.settingValue);
   const numReferralsAvailable = invitesPerUserParsed.success
     ? invitesPerUserParsed.data
-    : (settingsMap.ReferralInvitesPerUser.defaultValue ?? 3);
+    : settingsMap.ReferralInvitesPerUser.schema.parse(undefined);
 
   const buildUser: Omit<IUserDocument, 'id'> = {
     username,
