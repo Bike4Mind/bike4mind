@@ -8,6 +8,7 @@ import {
   calculateHotMementoSize,
 } from '../../../services/MementoGroomingService';
 import { CreateMementoSchema } from '@server/validators/mementoValidators';
+import { describeMementoValidationError } from '@server/validators/mementoModelValidation';
 
 const handler = baseApi().post(async (req: Request, res: Response) => {
   req.logger.updateMetadata({ endpoint: 'mementos/create-batch' });
@@ -129,11 +130,10 @@ const handler = baseApi().post(async (req: Request, res: Response) => {
     return res.status(201).json(createdMementos);
   } catch (error) {
     if (isZodError(error)) throw error;
-    // The model requires a non-empty fullContent while the schema defaults it to ''.
-    if (error instanceof Error && error.name === 'ValidationError') {
-      const paths = Object.keys((error as Error & { errors?: Record<string, unknown> }).errors ?? {});
+    const invalidMemento = describeMementoValidationError(error);
+    if (invalidMemento) {
       req.logger.warn('Rejected mementos that failed model validation:', error);
-      return res.status(400).json({ error: `Invalid memento: ${paths.join(', ') || 'validation failed'}` });
+      return res.status(400).json({ error: invalidMemento });
     }
     req.logger.error('Error creating mementos:', error);
     return res.status(500).json({ error: 'Failed to create mementos' });
