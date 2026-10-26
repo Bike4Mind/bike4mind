@@ -161,6 +161,10 @@ function logClusters(clusters: ClaimCluster[]): void {
  * its claim; the other accounts keep the credits they already have and are logged by user id so
  * clustered signups can be reviewed. Runs on the raw collections so accounts flagged deletedAt count.
  *
+ * Invite-resolved grants share the verify-grant: id, so a pre-deploy invitee is backfilled as its
+ * inbox's holder even though a runtime invite grant no longer claims (see grantFreeCredits). The
+ * ledger cannot tell the two apart; the cost is that aliases of those invitees get no default grant.
+ *
  * Idempotent. Deployed environments migrate before the new code serves, so no runtime claim races
  * the backfill; if one does (code deployed first), the index build fails on the duplicate and a
  * re-run clears it. Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001),
