@@ -3,7 +3,7 @@ import { AdminSettings } from '@bike4mind/database';
 import type { MigrationFile } from './index';
 
 const migration: MigrationFile = {
-  id: 20260921235965,
+  id: 20260921235967,
   name: 'seed-staged-signup-settings',
   up: async () => {
     const legacy = await AdminSettings.findOne({ settingName: 'defaultFreeCredits' });

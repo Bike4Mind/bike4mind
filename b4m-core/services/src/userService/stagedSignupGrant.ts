@@ -19,6 +19,8 @@ export type SignupGrantValidator = (user: IUserDocument) => Promise<boolean | { 
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
+class InboxGrantClaimDeniedError extends Error {}
+
 async function releaseStage(
   userId: string,
   expected: SignupGrant['stage'],
@@ -92,6 +94,11 @@ async function releaseStage(
       let balance = user.currentCredits;
       let creditTransactionId: string | undefined;
       if (amount > 0) {
+        // Staged and legacy default grants share one canonical-inbox entitlement. Claim on
+        // the first actual payout, including an unlock after a zero-valued signup tranche.
+        // A duplicate claim may have aborted Mongo's transaction; throw out of it before
+        // performing another operation, rather than trying to commit a denied claim.
+        if (!(await db.users.claimFreeCreditGrant(userId))) throw new InboxGrantClaimDeniedError();
         const result = await addCreditsWithLedgerRow(
           {
             ownerId: userId,
@@ -128,7 +135,8 @@ async function releaseStage(
       return { creditsGranted: amount, currentCredits: balance };
     });
   } catch (error) {
-    if (!(error instanceof DuplicateCreditTransactionError)) throw error;
+    if (!(error instanceof DuplicateCreditTransactionError) && !(error instanceof InboxGrantClaimDeniedError))
+      throw error;
     return noGrant();
   }
 }

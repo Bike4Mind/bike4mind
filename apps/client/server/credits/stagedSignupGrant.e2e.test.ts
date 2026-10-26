@@ -52,6 +52,10 @@ beforeAll(async () => {
   await Organization.createCollection();
   await AdminSettings.createCollection();
   await CreditTransaction.collection.createIndex({ transactionId: 1 }, { unique: true, sparse: true });
+  await User.collection.createIndex(
+    { freeCreditClaimEmail: 1 },
+    { unique: true, partialFilterExpression: { freeCreditClaimEmail: { $type: 'string' } } }
+  );
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -78,6 +82,88 @@ async function createUser(enrolled = true) {
 }
 
 describe('staged signup ledger', () => {
+  async function createAlias(email: string, signupCredits = 12) {
+    return User.create({
+      username: email,
+      name: 'Alias user',
+      email,
+      emailVerified: true,
+      signupGrant: { ...(await newSignupGrant(adminSettings)), signupCredits },
+    });
+  }
+
+  it('shares the canonical inbox claim with legacy flat grants in either enrollment order', async () => {
+    const legacy = await User.create({ username: 'legacy', name: 'Legacy', email: 'flat@gmail.com' });
+    const legacyAdapters = {
+      ...adapters,
+      db: {
+        ...adapters.db,
+        adminSettings: {
+          findBySettingName: async () => ({ settingValue: '12' }),
+        } as unknown as typeof adminSettings,
+      },
+    };
+    expect((await userService.grantFreeCredits({ id: legacy.id }, legacyAdapters)).creditsGranted).toBe(12);
+    const stagedAlias = await createAlias('f.l.a.t+alias@googlemail.com');
+    expect((await userService.releaseSignupTranche(stagedAlias.id, adapters)).creditsGranted).toBe(0);
+    expect((await User.findById(stagedAlias.id))?.signupGrant?.stage).toBe('pending_email');
+
+    const staged = await createAlias('staged@gmail.com');
+    expect((await userService.releaseSignupTranche(staged.id, adapters)).creditsGranted).toBe(12);
+    const flatAlias = await User.create({
+      username: 'flat-alias',
+      name: 'Flat alias',
+      email: 's.t.a.g.e.d+alias@googlemail.com',
+    });
+    expect((await userService.grantFreeCredits({ id: flatAlias.id }, legacyAdapters)).creditsGranted).toBe(0);
+    expect(await CreditTransaction.countDocuments({})).toBe(2);
+  });
+
+  it('allows only one staged alias payout when claims race', async () => {
+    const users = await Promise.all([createAlias('race@gmail.com'), createAlias('r.a.c.e+alias@googlemail.com')]);
+    // Both contenders can miss the advisory pre-check; exercise the unique-index denial,
+    // which aborts the losing Mongo transaction before the repository returns false.
+    vi.spyOn(User, 'exists').mockResolvedValue(null);
+    const results = await Promise.all(users.map(user => userService.releaseSignupTranche(user.id, adapters)));
+    expect(results.reduce((sum, result) => sum + result.creditsGranted, 0)).toBe(12);
+    expect(await User.countDocuments({ freeCreditClaimEmail: 'race@gmail.com' })).toBe(1);
+    expect(await CreditTransaction.countDocuments({})).toBe(1);
+  });
+
+  it('checks inbox entitlement on an unlock after a zero signup tranche', async () => {
+    const denied = await createAlias('zero+denied@gmail.com', 0);
+    await userService.releaseSignupTranche(denied.id, adapters);
+    expect((await User.findById(denied.id))?.freeCreditClaimEmail).toBeUndefined();
+    const winner = await createAlias('zero@gmail.com');
+    await userService.releaseSignupTranche(winner.id, adapters);
+    expect((await userService.unlockSignupGrant(denied.id, 'activity', adapters)).creditsGranted).toBe(0);
+    expect((await User.findById(denied.id))?.currentCredits).toBe(0);
+    const allowed = await createAlias('another@gmail.com', 0);
+    await userService.releaseSignupTranche(allowed.id, adapters);
+    expect((await userService.unlockSignupGrant(allowed.id, 'activity', adapters)).creditsGranted).toBe(28);
+    expect((await User.findById(allowed.id))?.freeCreditClaimEmail).toBe('another@gmail.com');
+  });
+
+  it('keeps a simultaneous same-account signup payout idempotent', async () => {
+    const user = await createAlias('same@gmail.com');
+    const results = await Promise.all([
+      userService.releaseSignupTranche(user.id, adapters),
+      userService.releaseSignupTranche(user.id, adapters),
+    ]);
+    expect(results.reduce((sum, result) => sum + result.creditsGranted, 0)).toBe(12);
+    expect((await User.findById(user.id))?.currentCredits).toBe(12);
+    expect(await CreditTransaction.countDocuments({})).toBe(1);
+  });
+
+  it('fails closed when the canonical inbox claim is unavailable', async () => {
+    const user = await createAlias('unavailable@gmail.com');
+    vi.spyOn(userRepository, 'claimFreeCreditGrant').mockRejectedValueOnce(new Error('claim store unavailable'));
+    await expect(userService.releaseSignupTranche(user.id, adapters)).rejects.toThrow('claim store unavailable');
+    expect((await User.findById(user.id))?.currentCredits).toBe(0);
+    expect((await User.findById(user.id))?.signupGrant?.stage).toBe('pending_email');
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+  });
+
   it('recovers a failed organization acceptance release through persisted evidence and never mints twice', async () => {
     const user = await createUser();
     const email = 'NAME+TAG@example.test';
@@ -389,8 +475,10 @@ describe('staged signup ledger', () => {
     expect(await CreditTransaction.countDocuments({})).toBe(0);
     expect((await User.findById(user.id))?.currentCredits).toBe(0);
     expect((await User.findById(user.id))?.signupGrant?.stage).toBe('pending_email');
+    expect((await User.findById(user.id))?.freeCreditClaimEmail).toBeUndefined();
     update.mockRestore();
     expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(12);
+    expect((await User.findById(user.id))?.freeCreditClaimEmail).toBe('user@example.test');
   });
 
   it('rolls back the grant when the account update matches no user', async () => {

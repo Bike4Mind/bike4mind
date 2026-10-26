@@ -1,9 +1,20 @@
+import { readdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ findOne: vi.fn(), updateOne: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ AdminSettings: h }));
-import migration from './20260921235965_seed-staged-signup-settings';
+import migration from './20260921235967_seed-staged-signup-settings';
 
 describe('staged signup setting migration', () => {
+  it('has a distinct migration id so the inbox-claim backfill cannot suppress the seed', () => {
+    const migrationFiles = readdirSync(dirname(fileURLToPath(import.meta.url))).filter(
+      file => /^\d+_.+\.ts$/.test(file) && !file.includes('.test.') && !file.includes('.integration.')
+    );
+    const matchingFiles = migrationFiles.filter(file => Number(file.slice(0, file.indexOf('_'))) === migration.id);
+    expect(matchingFiles).toEqual([`${migration.id}_seed-staged-signup-settings.ts`]);
+  });
+
   beforeEach(() => {
     h.findOne.mockReset();
     h.updateOne.mockReset();

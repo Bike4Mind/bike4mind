@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   unlock: vi.fn(),
   findById: vi.fn(),
   audit: vi.fn(),
+  denySelf: vi.fn(),
+  selfOrImpersonator: vi.fn(),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config: unknown) => {
@@ -29,6 +31,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { unlockSignupGrant: h.unlock } }));
 vi.mock('@server/utils/adminAudit', () => ({
+  denySelfAdminAction: h.denySelf,
+  isSelfOrImpersonator: h.selfOrImpersonator,
   parseAdminActionReason: (reason: string) => {
     if (!reason) throw new Error('reason required');
     return reason;
@@ -45,6 +49,10 @@ const request = () => ({
 describe('admin signup unlock', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.selfOrImpersonator.mockImplementation((user: { id: string; impersonatedBy?: string }, targetId: string) =>
+      [user.id, user.impersonatedBy].some(id => id?.toLowerCase() === targetId.toLowerCase())
+    );
+    h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
     h.unlock.mockResolvedValue({ creditsGranted: 0 });
   });
   it('is jwt-only and rejects non-admin callers before invoking the grant', async () => {
@@ -60,9 +68,25 @@ describe('admin signup unlock', () => {
     await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('reason required');
     expect(h.unlock).not.toHaveBeenCalled();
   });
+  it.each([
+    { id: 'user-1', isAdmin: true },
+    { id: 'USER-1', isAdmin: true },
+    { id: 'other-admin', isAdmin: true, impersonatedBy: 'user-1' },
+  ])('denies and audits a self credit grant for %j before invoking the service', async user => {
+    const req = { ...request(), user };
+    await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('own account');
+    expect(h.selfOrImpersonator).toHaveBeenCalledExactlyOnceWith(user, 'user-1');
+    expect(h.denySelf).toHaveBeenCalledExactlyOnceWith(req, {
+      action: 'user.credits.denied',
+      attempted: 'user.credits.adjusted',
+      target: { kind: 'user', id: 'user-1', displayName: 'user-1' },
+    });
+    expect(h.unlock).not.toHaveBeenCalled();
+  });
   it('uses only the admin reason and rechecks persisted authorization', async () => {
     await h.handler!(request(), { json: vi.fn() });
     const [id, reason, adapters] = h.unlock.mock.calls[0];
+    expect(h.denySelf).not.toHaveBeenCalled();
     expect([id, reason]).toEqual(['user-1', 'admin']);
     h.findById.mockResolvedValue({ isAdmin: false });
     expect(await adapters.validators.admin()).toBe(false);

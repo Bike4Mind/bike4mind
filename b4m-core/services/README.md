@@ -34,7 +34,11 @@ not implement them. The staged engine enrolls only newly created eligible accoun
 existing accounts and explicit invite allocations retain their legacy grant path.
 
 `releaseSignupTranche` persists `signupGrantAssessment`, the ledger, balance, and
-released stage atomically. The assessment is admin-only and excluded from self,
+released stage atomically. Every positive payout also claims the same canonical-inbox
+entitlement used by legacy default grants inside that transaction. An inbox already
+claimed by another account receives no payout; zero-credit tranches wait until the
+first positive unlock to claim. A failed payout rolls the claim back for retry.
+The assessment is admin-only and excluded from self,
 public, and WebSocket responses. `collectRiskSignals`, when supplied by a trusted
 server integration, receives the persisted user. Without it, only persisted signup
 datacenter metadata is known; other observations remain unknown, never clean.
@@ -63,6 +67,8 @@ acceptance remains recoverable after the invite leaves the pending inbox, even w
 activity unlocks are disabled.
 Card and phone integrations must supply their own trusted validators; declaring a
 reason does not enable a verification flow. Admin releases require an audit writer.
+The admin HTTP route rejects grants to the acting admin or their original account
+under impersonation, matching the existing credit-adjustment policy.
 
 If a grant is held with `status: 'unavailable'`, check for the `[signup-risk]`
 assessment warning and inspect policy validity and observation collection.

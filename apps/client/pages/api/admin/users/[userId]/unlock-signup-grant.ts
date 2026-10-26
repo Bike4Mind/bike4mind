@@ -8,7 +8,12 @@ import { userService } from '@bike4mind/services';
 import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import {
+  denySelfAdminAction,
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@server/utils/adminAudit';
 
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
@@ -16,6 +21,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
     const userId = req.query.userId;
     if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
+    if (isSelfOrImpersonator(req.user, userId)) {
+      await denySelfAdminAction(req, {
+        action: 'user.credits.denied',
+        attempted: 'user.credits.adjusted',
+        target: { kind: 'user', id: userId, displayName: userId },
+      });
+    }
     const reason = parseAdminActionReason(req.body?.reason);
     const actorId = req.user.id;
     const result = await userService.unlockSignupGrant(userId, 'admin', {
