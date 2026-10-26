@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
+import { getServerErrorField } from '@client/app/utils/error';
 import { useUpdateUserCredits } from './useUpdateUserCredits';
 import { CreditChange, NotificationState } from '../types';
 
@@ -75,7 +76,7 @@ export function useUserCreditsManager(onRefresh?: () => void) {
     } catch (error) {
       setNotification({
         open: true,
-        message: 'Failed to update credits',
+        message: getServerErrorField(error) || 'Failed to update credits',
         color: 'danger',
       });
     }

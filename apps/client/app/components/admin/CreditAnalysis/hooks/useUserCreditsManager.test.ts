@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import { AxiosError } from 'axios';
 
 const mockUseGetUsers = vi.fn();
 const mockMutateAsync = vi.fn();
@@ -52,6 +53,24 @@ describe('useUserCreditsManager', () => {
     mockMutateAsync.mockResolvedValue({ currentCredits: 0 });
     await act(() => result.current.handleCreditAdjustment('u1', { kind: 'set', balance: 0 }, 'zeroed'));
     expect(result.current.notification.message).toBe('Requested balance 0; balance is now 0');
+  });
+
+  it("shows the server's reason when a credit update fails", async () => {
+    const reason = 'Balance is already at or below zero; nothing to deduct';
+    mockMutateAsync.mockRejectedValue(
+      new AxiosError('Request failed', '400', undefined, undefined, {
+        status: 400,
+        statusText: 'Bad Request',
+        headers: {},
+        config: {} as never,
+        data: { error: reason },
+      })
+    );
+    const { result } = renderHook(() => useUserCreditsManager());
+
+    await act(() => result.current.handleCreditAdjustment('u1', { kind: 'delta', delta: -50 }, 'penalty'));
+    expect(result.current.notification.message).toBe(reason);
+    expect(result.current.notification.color).toBe('danger');
   });
 
   it('requests server-side sort by currentCredits (default highest first)', () => {
