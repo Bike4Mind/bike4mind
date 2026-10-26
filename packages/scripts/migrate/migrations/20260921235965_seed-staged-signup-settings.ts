@@ -13,6 +13,7 @@ const migration: MigrationFile = {
       stagedSignupGrantEnabled: 'false',
       signupGrantRiskPolicy: JSON.stringify({ enabled: false }),
       signupGrantActivityEnabled: 'false',
+      signupGrantOrgInviteEnabled: 'false',
       signupGrantActivityMinMessages: '0',
       signupGrantActivityMinDays: '0',
     };

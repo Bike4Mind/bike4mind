@@ -66,6 +66,9 @@ async function releaseStage(
             policy = undefined;
           }
           assessment = evaluateSignupRisk(policy, signals, grant.signupCredits);
+          if (assessment.status === 'unavailable') {
+            console.warn('[signup-risk] Assessment unavailable; holding signup grant');
+          }
         }
         target = assessment.credits;
         if (!Number.isSafeInteger(target) || target < 0 || target > grant.signupCredits)

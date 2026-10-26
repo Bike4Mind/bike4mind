@@ -54,6 +54,13 @@ session-authenticated server invocation. Imported, legacy, API-key, pending, and
 failed turns do not qualify. Private message/day thresholds are disabled by zero;
 distinct UTC days must also span the corresponding elapsed whole days. The
 first-party activity-check endpoint and Billing status provide a retryable path.
+Organization invitation unlocks have their own `signupGrantOrgInviteEnabled` rollout
+flag, disabled by default. Keep it off until a replenishing organization grant budget
+is implemented or an operator explicitly decides to enable the flow. No lifetime
+organization grant cap is imposed. When enabled, Billing checks also retry persisted
+accepted organization invitations, so a failed credit release after successful
+acceptance remains recoverable after the invite leaves the pending inbox, even when
+activity unlocks are disabled.
 Card and phone integrations must supply their own trusted validators; declaring a
 reason does not enable a verification flow. Admin releases require an audit writer.
 

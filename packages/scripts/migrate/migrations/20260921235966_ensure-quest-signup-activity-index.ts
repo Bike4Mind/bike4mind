@@ -1,4 +1,4 @@
-import { Quest } from '@bike4mind/database';
+import { AuthEventModel, Quest } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 /**
@@ -7,6 +7,8 @@ import { type MigrationFile } from './index';
  * The signup-grant activity check aggregates a user's qualifying session turns by
  * `{ 'signupActivity.userId', status, 'signupActivity.startedAt' }`; the index keeps that
  * aggregate (3s maxTimeMS) off a scan of the largest collection in the database.
+ * Also build the network signup-count indexes added to AuthEvent. The earlier
+ * ensure-authevent-indexes migration may already have run before these keys existed.
  *
  * Migration rather than autoIndex, for the same reason as 20260917000200_ensure-quest-corrects-index:
  * prod runs DocumentDB, where an index build takes a foreground collection lock, and autoIndex
@@ -22,6 +24,7 @@ const migration: MigrationFile = {
 
   up: async () => {
     await Quest.createIndexes();
+    await AuthEventModel.createIndexes();
   },
 
   down: async () => {

@@ -9,8 +9,13 @@ import {
   CreditTransaction,
   Quest,
   adminSettingsRepository,
+  Invite,
+  Organization,
+  AdminSettings,
 } from '@bike4mind/database';
 import { unlockSignupGrantFromActivity } from './activityUnlock';
+import { unlockSignupGrantFromOrgInvite } from './orgInviteUnlock';
+import { checkSignupGrantEligibility } from './signupGrantEligibility';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -43,6 +48,9 @@ beforeAll(async () => {
   await User.createCollection();
   await CreditTransaction.createCollection();
   await Quest.createCollection();
+  await Invite.createCollection();
+  await Organization.createCollection();
+  await AdminSettings.createCollection();
   await CreditTransaction.collection.createIndex({ transactionId: 1 }, { unique: true, sparse: true });
 });
 afterAll(async () => {
@@ -54,6 +62,9 @@ beforeEach(async () => {
   await User.collection.deleteMany({});
   await CreditTransaction.collection.deleteMany({});
   await Quest.collection.deleteMany({});
+  await Invite.collection.deleteMany({});
+  await Organization.collection.deleteMany({});
+  await AdminSettings.collection.deleteMany({});
 });
 
 async function createUser(enrolled = true) {
@@ -67,26 +78,100 @@ async function createUser(enrolled = true) {
 }
 
 describe('staged signup ledger', () => {
-  it('holds an unavailable risk decision without minting credits and keeps its audit private', async () => {
+  it('recovers a failed organization acceptance release through persisted evidence and never mints twice', async () => {
     const user = await createUser();
-    const db = {
-      ...adapters.db,
-      adminSettings: {
-        ...adminSettings,
-        findBySettingName: async (name: string) =>
-          name === 'signupGrantRiskPolicy'
-            ? ({ settingValue: '{invalid' } as never)
-            : adminSettings.findBySettingName(name),
-      },
-    };
-    expect((await userService.releaseSignupTranche(user.id, { ...adapters, db })).creditsGranted).toBe(0);
-    const persisted = await User.findById(user.id);
-    expect(persisted?.signupGrantAssessment?.status).toBe('unavailable');
-    expect(persisted?.signupGrant?.stage).toBe('signup');
-    expect(await CreditTransaction.countDocuments({})).toBe(0);
-    expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(0);
-    expect((await userService.unlockSignupGrant(user.id, 'activity', adapters)).creditsGranted).toBe(40);
+    const email = 'NAME+TAG@example.test';
+    await User.updateOne({ _id: user.id }, { email });
+    await userService.releaseSignupTranche(user.id, adapters);
+    const organization = await Organization.create({
+      name: 'Synthetic organization',
+      userId: 'owner',
+      users: [{ userId: user.id, permissions: ['read'] }],
+    });
+    // A regexp-like address must not earn credits for someone else's acceptance.
+    await Invite.create({
+      type: 'Organization',
+      documentId: organization.id,
+      recipients: { pending: [], accepted: ['nameeeetag@exampleXtest'], refused: [] },
+      remaining: 0,
+    });
+    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
+    const acceptedInvite = await Invite.create({
+      type: 'Organization',
+      documentId: organization.id,
+      recipients: { pending: [], accepted: [email.toLowerCase()], refused: [] },
+      remaining: 0,
+    });
+    // Existing accepted invites cannot pay until an operator explicitly enables this source.
+    expect((await unlockSignupGrantFromOrgInvite(user.id, acceptedInvite.id)).creditsGranted).toBe(0);
+    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
+    expect((await User.findById(user.id))?.currentCredits).toBe(12);
+    await AdminSettings.create({ settingName: 'signupGrantOrgInviteEnabled', settingValue: 'true' });
+    const update = vi.spyOn(userRepository, 'update').mockRejectedValueOnce(new Error('temporary grant write failure'));
+    await expect(unlockSignupGrantFromOrgInvite(user.id, acceptedInvite.id)).rejects.toThrow(
+      'temporary grant write failure'
+    );
+    update.mockRestore();
+    expect((await User.findById(user.id))?.currentCredits).toBe(12);
+    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(28);
+    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
+    expect((await User.findById(user.id))?.currentCredits).toBe(40);
+    expect(await CreditTransaction.countDocuments({ transactionId: `unlock-grant:${user.id}` })).toBe(1);
   });
+
+  it.each(['malformed policy', 'invalid policy', 'collector failure'])(
+    'holds and diagnoses %s without minting credits or exposing private inputs',
+    async failure => {
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const user = await createUser();
+      const policy =
+        failure === 'malformed policy'
+          ? '{invalid'
+          : failure === 'invalid policy'
+            ? JSON.stringify({ enabled: false, unexpected: true })
+            : JSON.stringify({
+                enabled: true,
+                version: 'collector-failure',
+                rules: [
+                  {
+                    signal: 'datacenter',
+                    comparison: 'eq',
+                    threshold: 1,
+                    weight: 2,
+                    missing: 'review',
+                    missingWeight: 0,
+                  },
+                ],
+                reducedAt: 1,
+                reviewAt: 3,
+                reducedFraction: 0.5,
+              });
+      const db = {
+        ...adapters.db,
+        adminSettings: {
+          ...adminSettings,
+          findBySettingName: async (name: string) =>
+            name === 'signupGrantRiskPolicy'
+              ? ({ settingValue: policy } as never)
+              : adminSettings.findBySettingName(name),
+        },
+      };
+      const collectRiskSignals = vi.fn(async () => {
+        throw new Error('private collector failure');
+      });
+      expect(
+        (await userService.releaseSignupTranche(user.id, { ...adapters, db, collectRiskSignals })).creditsGranted
+      ).toBe(0);
+      expect(collectRiskSignals).toHaveBeenCalledTimes(failure === 'collector failure' ? 1 : 0);
+      const persisted = await User.findById(user.id);
+      expect(persisted?.signupGrantAssessment?.status).toBe('unavailable');
+      expect(persisted?.signupGrant?.stage).toBe('signup');
+      expect(await CreditTransaction.countDocuments({})).toBe(0);
+      expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(0);
+      expect(warning).toHaveBeenCalledExactlyOnceWith('[signup-risk] Assessment unavailable; holding signup grant');
+      expect((await userService.unlockSignupGrant(user.id, 'activity', adapters)).creditsGranted).toBe(40);
+    }
+  );
 
   it('unlocks from persisted completed session turns on distinct elapsed days, not pending or copied turns', async () => {
     const user = await createUser();

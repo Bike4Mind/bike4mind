@@ -6,7 +6,8 @@ import type { SignupGrant } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   grant: undefined as SignupGrant | undefined,
-  enabled: true as boolean | string,
+  enabled: true as boolean | string | undefined,
+  organizationInvites: false as boolean | string | undefined,
   post: vi.fn(),
   refresh: vi.fn(),
 }));
@@ -14,7 +15,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { signupGrant: h.grant }, refreshUser: h.refresh }),
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: h.post } }));
-vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => h.enabled }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: (key: string) => (key === 'signupGrantOrgInviteEnabled' ? h.organizationInvites : h.enabled),
+}));
 import SignupGrantStatus from './SignupGrantStatus';
 const theme = extendTheme({ ...getThemeConfig() });
 const show = () =>
@@ -28,6 +31,7 @@ describe('signup grant status', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.enabled = true;
+    h.organizationInvites = false;
     h.grant = {
       stage: 'signup',
       signupCredits: 12,
@@ -48,15 +52,27 @@ describe('signup grant status', () => {
     expect(screen.getByTestId('signup-grant-status')).toHaveTextContent('28 more credits');
     fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
     await waitFor(() => expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('28 credits unlocked'));
-    expect(h.post).toHaveBeenCalledWith('/api/users/signup-grant-activity');
+    expect(h.post).toHaveBeenCalledWith('/api/users/signup-grant-eligibility');
     expect(h.refresh).toHaveBeenCalled();
   });
-  it('does not promise an unavailable activity flow', () => {
+  it('keeps accepted organization invites retryable when activity is disabled', () => {
     h.enabled = false;
+    h.organizationInvites = true;
     show();
-    expect(screen.queryByTestId('signup-grant-check-btn')).toBeNull();
+    expect(screen.getByTestId('signup-grant-check-btn')).toHaveTextContent('Check grant eligibility');
   });
-  it('accepts persisted string booleans without treating false as enabled', () => {
+  it.each([false, 'false'])('does not advertise disabled activity with %s', async enabled => {
+    h.enabled = enabled;
+    h.organizationInvites = true;
+    h.post.mockResolvedValue({ data: { creditsGranted: 0 } });
+    show();
+    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
+    await waitFor(() =>
+      expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('accepted organization invite')
+    );
+    expect(screen.getByTestId('signup-grant-result')).not.toHaveTextContent('chat on different days');
+  });
+  it('accepts persisted string booleans', () => {
     h.enabled = 'true';
     const view = show();
     expect(screen.getByTestId('signup-grant-check-btn')).toBeInTheDocument();
@@ -64,6 +80,37 @@ describe('signup grant status', () => {
     h.enabled = 'false';
     show();
     expect(screen.queryByTestId('signup-grant-check-btn')).toBeNull();
+  });
+  it.each([
+    [undefined, undefined],
+    [false, false],
+    ['false', 'false'],
+    ['', 'TRUE'],
+  ])('hides eligibility checks when neither source is enabled (%j, %j)', (activity, organizationInvites) => {
+    h.enabled = activity;
+    h.organizationInvites = organizationInvites;
+    show();
+    expect(screen.queryByTestId('signup-grant-check-btn')).toBeNull();
+  });
+  it.each([true, 'true'])('does not advertise disabled organization unlocks when activity is %j', async activity => {
+    h.enabled = activity;
+    h.organizationInvites = 'false';
+    h.post.mockResolvedValue({ data: { creditsGranted: 0 } });
+    show();
+    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
+    await waitFor(() => expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('chat on different days'));
+    expect(screen.getByTestId('signup-grant-result')).not.toHaveTextContent('organization invite');
+  });
+  it.each([true, 'true'])('shows both enabled sources when organization unlocks are %j', async organizationInvites => {
+    h.organizationInvites = organizationInvites;
+    h.post.mockResolvedValue({ data: { creditsGranted: 0 } });
+    show();
+    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
+    await waitFor(() =>
+      expect(screen.getByTestId('signup-grant-result')).toHaveTextContent(
+        'Accept an organization invite or keep using chat'
+      )
+    );
   });
   it('explains ineligibility without claiming credits were granted', async () => {
     h.post.mockResolvedValue({ data: { creditsGranted: 0 } });

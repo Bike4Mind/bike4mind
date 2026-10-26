@@ -8,6 +8,10 @@ import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 export default function SignupGrantStatus() {
   const { currentUser, refreshUser } = useUser();
   const activity = useGetSettingsValue('signupGrantActivityEnabled');
+  const organizationInvites = useGetSettingsValue('signupGrantOrgInviteEnabled');
+  const activityEnabled = activity === true || activity === 'true';
+  const organizationInvitesEnabled = organizationInvites === true || organizationInvites === 'true';
+  const eligibilityEnabled = activityEnabled || organizationInvitesEnabled;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const grant = currentUser?.signupGrant;
@@ -22,7 +26,7 @@ export default function SignupGrantStatus() {
           : ' Your signup grant is fully released.'}
         {grant.stage === 'pending_email' && ' Verify your email to release your signup tranche.'}
       </Typography>
-      {remaining > 0 && grant.stage !== 'pending_email' && (activity === true || activity === 'true') && (
+      {remaining > 0 && grant.stage !== 'pending_email' && eligibilityEnabled && (
         <Button
           size="sm"
           variant="outlined"
@@ -32,12 +36,16 @@ export default function SignupGrantStatus() {
             setBusy(true);
             setMessage('');
             try {
-              const { data } = await api.post<{ creditsGranted: number }>('/api/users/signup-grant-activity');
+              const { data } = await api.post<{ creditsGranted: number }>('/api/users/signup-grant-eligibility');
               await refreshUser();
               setMessage(
                 data.creditsGranted > 0
                   ? `${data.creditsGranted.toLocaleString('en-US')} credits unlocked.`
-                  : 'Not eligible yet. Keep using chat on different days and check again later.'
+                  : activityEnabled && organizationInvitesEnabled
+                    ? 'Not eligible yet. Accept an organization invite or keep using chat on different days, then check again.'
+                    : activityEnabled
+                      ? 'Not eligible yet. Keep using chat on different days and check again later.'
+                      : 'Not eligible yet. An accepted organization invite can unlock the remaining credits.'
               );
             } catch {
               setMessage('Could not check eligibility. Please try again later.');
@@ -46,7 +54,7 @@ export default function SignupGrantStatus() {
             }
           }}
         >
-          Check activity eligibility
+          Check grant eligibility
         </Button>
       )}
       {message && (
