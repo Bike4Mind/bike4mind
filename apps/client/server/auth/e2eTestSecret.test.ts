@@ -70,6 +70,6 @@ describe('isValidE2eTestSecret', () => {
 
   it('compares bytes, so a multi-byte value of equal character count is rejected', () => {
     h.sstSecret = { value: 'abc' };
-    expect(isValidE2eTestSecret('abé')).toBe(false);
+    expect(isValidE2eTestSecret('ab\u00e9')).toBe(false);
   });
 });
