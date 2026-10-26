@@ -113,7 +113,14 @@ const handler = baseApi().post(
 
         let inviteCode: string;
 
-        const existingInvite = await registrationInviteRepository.findOne({ email: target });
+        const found = await registrationInviteRepository.findOne({ email: target });
+        // Another sender's invite that can no longer be redeemed (closed, used, expired) does not
+        // block this sender: they get their own invite.
+        const isLive =
+          found?.status === RegInviteStatusType.open &&
+          !found.used &&
+          (!found.expiresAt || found.expiresAt > new Date());
+        const existingInvite = found && (found.userId === userId || isLive) ? found : null;
         if (!existingInvite) {
           inviteCode = generateCode();
           const newRegInvite: IRegistrationInvite = {

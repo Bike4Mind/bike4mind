@@ -20,4 +20,10 @@ describe('inboxAliasKey', () => {
     expect(inboxAliasKey('jane@example.com')).not.toBe(inboxAliasKey('june@example.com'));
     expect(inboxAliasKey('jane@example.com')).not.toBe(inboxAliasKey('jane@example.org'));
   });
+
+  it('does not throw on empty or malformed input', () => {
+    expect(() => inboxAliasKey('')).not.toThrow();
+    expect(() => inboxAliasKey('nodomain')).not.toThrow();
+    expect(() => inboxAliasKey('+@gmail.com')).not.toThrow();
+  });
 });

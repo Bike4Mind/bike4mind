@@ -390,13 +390,25 @@ describe('/api/reg-invites/refer - reusing an existing invite', () => {
   });
 
   it('skips an address another sender already invited, keeps the charge and reports it as sent', async () => {
-    mockInviteFindOne.mockResolvedValue({ code: 'EXIST', userId: 'someone-else' });
+    mockInviteFindOne.mockResolvedValue({ code: 'EXIST', userId: 'someone-else', status: 'open' });
     vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
     const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
     await invokeHandler(req, res);
     expect(createRegInvite).not.toHaveBeenCalled();
     expect(mockEmailPublish).not.toHaveBeenCalled();
     expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 0, []);
+    expect(res._getJSONData()).toMatchObject({ sent: ['friend@example.com'], failed: [] });
+  });
+
+  it.each([
+    ['closed', { status: 'waiting' }],
+    ['used', { status: 'used', used: new Date() }],
+    ['expired', { status: 'open', expiresAt: new Date(Date.now() - 1000) }],
+  ])("mints the sender's own invite when another sender's invite is %s", async (_label, state) => {
+    mockInviteFindOne.mockResolvedValue({ code: 'EXIST', userId: 'someone-else', ...state });
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+    await invokeHandler(req, res);
+    expect(createRegInvite).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', source: 'referral' }));
     expect(res._getJSONData()).toMatchObject({ sent: ['friend@example.com'], failed: [] });
   });
 
