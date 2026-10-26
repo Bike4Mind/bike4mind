@@ -1,12 +1,17 @@
-import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type {
+  IDataLakeAccessGrantDocument,
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+  IDataLakeRepository,
+} from '@bike4mind/common';
 import { grantChange, ownershipChange } from './diffLakeConfig';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { resolveEffectiveOwnerIds, type LakeGrant, type ManageActor } from './manageRule';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 export interface LapseDepartedMemberLakeAccessAdapters extends LakeConfigAuditAdapters {
-  // The event repo is REQUIRED here, matching `transferLakeOwnership`: the only callers are the two
-  // org-departure routes, so nothing is spared by making it optional and a route that forgot to
+  // The event repo is REQUIRED here, matching `transferLakeOwnership`: the only callers are the
+  // org-departure and org-delete routes, so nothing is spared by making it optional and a route that forgot to
   // wire it would go dark silently - the one failure mode an access-revocation audit must not have.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
@@ -91,11 +96,67 @@ export async function lapseDepartedMemberLakeAccess(
   const orgLakes = await db.dataLakes.findByOrganizationId(organization.id);
   if (orgLakes.length === 0) return { lapsedLakeIds: [], succeededLakeIds: [] };
 
-  const audit = (
-    lake: IDataLakeDocument,
-    action: 'revoke-access' | 'membership-succession',
-    changes: ReturnType<typeof grantChange>[]
-  ) =>
+  const audit = auditFor(triggeredBy, adapters);
+
+  const lapsedLakeIds = await lapseOwnGrants(departedUserId, orgLakes, db, audit, now);
+  const succeededLakeIds = await passOnCreatedLakes(
+    departedUserId,
+    organization,
+    orgLakes,
+    db,
+    audit,
+    triggeredBy,
+    now,
+    logger
+  );
+
+  return { lapsedLakeIds, succeededLakeIds };
+}
+
+/**
+ * Whole-org counterpart of `lapseDepartedMemberLakeAccess`, for an organization being deleted: every
+ * member departs at once. Same two phases and the same billing-owner successor, but phase 1 runs for
+ * ALL members before any phase 2. Run member by member instead, a creator's phase 2 could still see
+ * another member's owner grant as live, skip the hand-off, and then have that grant lapse - leaving
+ * the lake resolving to its creator through the `createdByUserId` fallback.
+ *
+ * The billing owner is not lapsed: they are the successor, and neither departure path removes them
+ * either. Grants held by non-members and `organization`-principal grants are untouched, as in the
+ * single-member path. Phase 1 is one `listActiveByLakes` read for the whole org rather than one
+ * `listByPrincipal` per member. Idempotent under a transaction retry for the same reasons.
+ */
+export async function lapseDissolvedOrganizationLakeAccess(
+  memberUserIds: readonly string[],
+  organization: LapsingOrganization,
+  triggeredBy: LakeAccessLapseTrigger,
+  adapters: LapseDepartedMemberLakeAccessAdapters,
+  now: Date = new Date()
+): Promise<LapseDepartedMemberLakeAccessResult> {
+  const { db, logger } = adapters;
+  const departing = new Set(memberUserIds.filter(id => id && id !== organization.userId));
+  if (departing.size === 0) return { lapsedLakeIds: [], succeededLakeIds: [] };
+
+  const orgLakes = await db.dataLakes.findByOrganizationId(organization.id);
+  if (orgLakes.length === 0) return { lapsedLakeIds: [], succeededLakeIds: [] };
+
+  const audit = auditFor(triggeredBy, adapters);
+  const orgLakesById = new Map(orgLakes.map(lake => [lake.id, lake]));
+  const active = await db.dataLakeAccessGrants.listActiveByLakes([...orgLakesById.keys()], { activeAsOf: now });
+  const lapsing = active.filter(grant => grant.principalType === 'user' && departing.has(grant.principalId));
+  const lapsedLakeIds = await expireGrants(lapsing, orgLakesById, db, audit, now);
+
+  const succeededLakeIds: string[] = [];
+  for (const memberUserId of departing) {
+    succeededLakeIds.push(
+      ...(await passOnCreatedLakes(memberUserId, organization, orgLakes, db, audit, triggeredBy, now, logger))
+    );
+  }
+
+  return { lapsedLakeIds, succeededLakeIds };
+}
+
+function auditFor(triggeredBy: LakeAccessLapseTrigger, { db, logger }: LapseDepartedMemberLakeAccessAdapters): AuditFn {
+  return (lake, action, changes) =>
     recordLakeConfigChange(
       {
         // The audit row wants a PRINCIPAL (who caused this), not an AUTHORITY (what allowed it):
@@ -113,20 +174,6 @@ export async function lapseDepartedMemberLakeAccess(
       },
       { db, logger }
     );
-
-  const lapsedLakeIds = await lapseOwnGrants(departedUserId, orgLakes, db, audit, now);
-  const succeededLakeIds = await passOnCreatedLakes(
-    departedUserId,
-    organization,
-    orgLakes,
-    db,
-    audit,
-    triggeredBy,
-    now,
-    logger
-  );
-
-  return { lapsedLakeIds, succeededLakeIds };
 }
 
 type AuditFn = (
@@ -160,7 +207,16 @@ async function lapseOwnGrants(
   const held = await db.dataLakeAccessGrants.listByPrincipal('user', departedUserId, { activeAsOf: now });
   const orgLakesById = new Map(orgLakes.map(lake => [lake.id, lake]));
   const lapsing = held.filter(grant => orgLakesById.has(grant.dataLakeId));
+  return expireGrants(lapsing, orgLakesById, db, audit, now);
+}
 
+async function expireGrants(
+  lapsing: IDataLakeAccessGrantDocument[],
+  orgLakesById: Map<string, IDataLakeDocument>,
+  db: Db,
+  audit: AuditFn,
+  now: Date
+): Promise<string[]> {
   // Sequential, not Promise.all: both callers run inside `withTransaction`, and the ambient session
   // a Mongo transaction carries does not accept concurrent operations.
   for (const grant of lapsing) {

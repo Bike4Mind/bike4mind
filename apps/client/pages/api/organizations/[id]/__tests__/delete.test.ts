@@ -56,12 +56,23 @@ const withTransaction = vi.hoisted(() =>
     }
   })
 );
+const dataLakeRepository = vi.hoisted(() => ({}));
+const dataLakeAccessGrantRepository = vi.hoisted(() => ({}));
+const lakeConfigChangeEventRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   partnerSignupRuleRepository: { updateMany },
   integrationRequestRepository: { clearOrganization },
   withTransaction,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  lakeConfigChangeEventRepository,
+  adminSettingsRepository: {},
 }));
+
+const keyPrincipal = vi.hoisted(() => ({ kind: 'api-key' }));
+const lakeConfigAuditPrincipal = vi.hoisted(() => vi.fn(() => keyPrincipal as unknown));
+vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal }));
 
 const invalidatePartnerRuleCache = vi.hoisted(() => vi.fn());
 vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache }));
@@ -119,6 +130,21 @@ describe('DELETE /api/organizations/[id]', () => {
         }),
       })
     );
+  });
+
+  it("passes the data-lake adapters and audit principal so members' lake grants lapse in the same transaction", async () => {
+    await call();
+
+    const passedAdapters = deleteOrganization.mock.calls[0][2];
+    expect(passedAdapters.db).toEqual(
+      expect.objectContaining({
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        lakeConfigChangeEvents: lakeConfigChangeEventRepository,
+      })
+    );
+    expect(passedAdapters.auditPrincipal).toBe(keyPrincipal);
+    expect(lakeConfigAuditPrincipal).toHaveBeenCalledWith(expect.objectContaining({ id: 'admin1' }), undefined);
   });
 
   it('clears the dangling partner-rule reference and invalidates the cache after deleting', async () => {

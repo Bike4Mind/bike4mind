@@ -54,6 +54,10 @@ vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
   partnerSignupRuleRepository: {},
+  dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
   userRepository: {},
   withTransaction: async (fn: any) => {
     credit.events.push('tx:start');
