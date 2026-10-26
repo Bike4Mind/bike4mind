@@ -64,6 +64,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         throw new NotFoundError(`No telemetry data for quest: ${id}`);
       }
 
+      let deletedAt: string;
       try {
         // Remove telemetry but keep the quest (GDPR right to erasure).
         const result = await Quest.updateOne({ _id: id }, { $unset: { 'promptMeta.contextTelemetry': 1 } });
@@ -80,7 +81,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         }
 
         const durationMs = Date.now() - startTime;
-        const deletedAt = new Date().toISOString();
+        deletedAt = new Date().toISOString();
 
         // Log successful deletion for GDPR audit trail (fire-and-forget)
         telemetryAuditLogRepository
@@ -98,12 +99,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           .catch(() => {
             // Silent failure - audit logging should not block the response
           });
-
-        res.json({
-          success: true,
-          message: `Telemetry data deleted for quest: ${id}`,
-          deletedAt,
-        });
       } catch (error) {
         const durationMs = Date.now() - startTime;
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -134,6 +129,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         target: { kind: 'system', id, displayName: `Context telemetry for quest ${id}` },
         summary: `deleted context telemetry for quest ${id}`,
         details: { questId: id },
+      });
+
+      res.json({
+        success: true,
+        message: `Telemetry data deleted for quest: ${id}`,
+        deletedAt,
       });
     })
   );
