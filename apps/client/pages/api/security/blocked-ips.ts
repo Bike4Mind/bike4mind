@@ -29,9 +29,8 @@ const handler = baseApi()
     const { ip, reason } = parsed.data;
     const doc = await withTransaction(async () => {
       // block() returns an existing active block untouched, so only a new block is audited.
-      const existing = await blockedIPRepository.isBlocked(ip);
-      if (existing) return existing;
-      const blocked = await blockedIPRepository.block(ip, reason);
+      const { doc: blocked, created } = await blockedIPRepository.block(ip, reason);
+      if (!created) return blocked;
       await recordAdminActionFromRequest(req, {
         action: 'security.blocked_ip.added',
         target: { kind: 'settings', id: `blocked-ip:${ip}`, displayName: ip },

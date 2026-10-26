@@ -19,9 +19,9 @@ const handler = baseApi().post(async (req, res) => {
       await withTransaction(async () => {
         ipBlocked = false;
         // block() returns an existing active block untouched, so only a new block is audited.
-        if (await blockedIPRepository.isBlocked(r.ip)) return;
         const reason = `Auto-blocked: ${r.attempts} attempts in 10 minutes`;
-        await blockedIPRepository.block(r.ip, reason);
+        const { created } = await blockedIPRepository.block(r.ip, reason);
+        if (!created) return;
         ipBlocked = true;
         await recordAdminActionFromRequest(req, {
           action: 'security.blocked_ip.auto_added',

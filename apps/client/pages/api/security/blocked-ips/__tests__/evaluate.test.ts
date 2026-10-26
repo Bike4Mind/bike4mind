@@ -24,8 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const authFail = vi.hoisted(() => ({ getIPsWithHighAttempts: vi.fn().mockResolvedValue([]) }));
 const blockedIP = vi.hoisted(() => ({
-  block: vi.fn().mockResolvedValue({}),
-  isBlocked: vi.fn().mockResolvedValue(null),
+  block: vi.fn().mockResolvedValue({ doc: {}, created: true }),
 }));
 const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
 vi.mock('@bike4mind/database', () => ({
@@ -56,8 +55,7 @@ const ADMIN = { id: 'admin1', isAdmin: true };
 describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
   beforeEach(() => {
     authFail.getIPsWithHighAttempts.mockClear();
-    blockedIP.block.mockReset().mockResolvedValue({});
-    blockedIP.isBlocked.mockReset().mockResolvedValue(null);
+    blockedIP.block.mockReset().mockResolvedValue({ doc: {}, created: true });
     authFail.getIPsWithHighAttempts.mockResolvedValue([]);
     audit.record.mockReset().mockImplementation(async () => {
       audit.inTransaction.push(audit.txActive);
@@ -126,14 +124,14 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
     expect(res._getJSONData()).toMatchObject({ auditFailed: ['1.1.1.1'], blocked: ['2.2.2.2'] });
   });
 
-  it('does not re-block or re-audit an IP that already has an active block', async () => {
+  it('does not re-audit an IP that already has an active block', async () => {
     authFail.getIPsWithHighAttempts.mockResolvedValue([{ ip: '1.1.1.1', attempts: 12 }]);
-    blockedIP.isBlocked.mockResolvedValue({ ip: '1.1.1.1' });
+    blockedIP.block.mockResolvedValue({ doc: { ip: '1.1.1.1' }, created: false });
     const { req, res } = mocks(ADMIN);
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().blocked).toEqual(['1.1.1.1']);
-    expect(blockedIP.block).not.toHaveBeenCalled();
+    expect(blockedIP.block).toHaveBeenCalledTimes(1);
     expect(audit.record).not.toHaveBeenCalled();
   });
 });
