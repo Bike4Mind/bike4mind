@@ -21,8 +21,13 @@ const EXPECTED_REFERENCES = [
   'pages/api/admin/release-notes/index.ts',
   'pages/api/admin/users/[userId]/generate-api-key.ts',
   'server/files/fileScopes.ts',
+  // Types `alternateApiKeyPermission` to this scope; it grants reach only to a route that opts in by
+  // naming the scope itself (the release-note routes above).
+  'server/middlewares/adminApi.ts',
   // Reads the scope to skip IP-baseline alerts for the job's CI runners; grants no reach.
   'server/middlewares/apiKeyAnomalyDetection.ts',
+  // The release-note routes' admin guard: recognises a write-only key, grants no reach of its own.
+  'server/releaseNotes/releaseNotesWriteOnlyKey.ts',
 ];
 
 const rel = (f: string) =>
@@ -36,7 +41,7 @@ describe('release-notes:write reach', () => {
     expect(CONFINED_API_KEY_SCOPES).toContain(ApiKeyScope.RELEASE_NOTES_WRITE);
   });
 
-  it('is named only by the release-note routes, the createFabFile gate, the admin mint and anomaly detection', () => {
+  it('is named only by the release-note routes and their guards, the createFabFile gate, the admin mint and anomaly detection', () => {
     const referencing = [...tsFiles(PAGES_API), ...tsFiles(SERVER), ...tsFiles(SERVER_UTILS)]
       .filter(f => !/\.test\.tsx?$/.test(f) && !f.includes(`${path.sep}__tests__${path.sep}`))
       .filter(f => /ApiKeyScope\.RELEASE_NOTES_WRITE\b/.test(stripComments(readFileSync(f, 'utf8'))))

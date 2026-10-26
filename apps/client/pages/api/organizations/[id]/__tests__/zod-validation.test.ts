@@ -152,7 +152,11 @@ describe('PUT /api/organizations/[id] -- admin credit edit', () => {
   });
 
   it('books a raised balance to the ledger and records a signed audit entry', async () => {
-    const { req, res } = makeReq({ currentCredits: '1500', creditReason: 'Goodwill for the outage' }, 'org-123', true);
+    const { req, res } = makeReq(
+      { name: 'Acme Renamed', currentCredits: '1500', creditReason: 'Goodwill for the outage' },
+      'org-123',
+      true
+    );
     await mockRefs.putHandler!(req, res);
 
     expect(credit.addCreditsWithLedgerRow).toHaveBeenCalledWith(
@@ -193,18 +197,24 @@ describe('PUT /api/organizations/[id] -- admin credit edit', () => {
         related: { creditTransactionId: 'tx-sub' },
       })
     );
+    // A balance-only edit skips the profile update and re-reads the organization for the response.
+    expect(update).not.toHaveBeenCalled();
     expect(credit.events).toEqual([
       'tx:start',
       'findById',
       'subtractCreditsWithLedgerRow',
       'record',
-      'update',
+      'findById',
       'tx:end',
     ]);
   });
 
   it('reads the balance inside the transaction so a retry recomputes the delta', async () => {
-    const { req, res } = makeReq({ currentCredits: 1500, creditReason: 'Goodwill for the outage' }, 'org-123', true);
+    const { req, res } = makeReq(
+      { name: 'Acme Renamed', currentCredits: 1500, creditReason: 'Goodwill for the outage' },
+      'org-123',
+      true
+    );
     await mockRefs.putHandler!(req, res);
 
     expect(credit.events).toEqual(['tx:start', 'findById', 'addCreditsWithLedgerRow', 'record', 'update', 'tx:end']);

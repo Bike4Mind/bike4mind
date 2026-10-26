@@ -1,10 +1,10 @@
-import { ApiKeyScope, ApiKeyStatus, BadRequestError, NotFoundError } from '@bike4mind/common';
+import { ApiKeyStatus, BadRequestError, NotFoundError } from '@bike4mind/common';
 import { realtimeConnectionRepository, userApiKeyRepository, withTransaction } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
-const api = adminApi({ adminPermissions: { POST: 'keys:revoke' }, requiredScopes: [ApiKeyScope.ADMIN] });
+const api = adminApi({ adminPermissions: { POST: 'keys:revoke' }, auth: 'jwtOnly' });
 const handler = api.post(async (req, res) => {
   const { id } = req.query;
   if (typeof id !== 'string' || !id) throw new BadRequestError('Invalid API key ID');

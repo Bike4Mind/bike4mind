@@ -45,7 +45,8 @@ function routeFiles(dir: string): string[] {
   });
 }
 
-const files = routeFiles(ROUTES_DIR).filter(f => readFileSync(f, 'utf8').includes('baseApi('));
+// adminApi() wraps baseApi() and forwards its auth/scope options, so its routes carry the same exposure.
+const files = routeFiles(ROUTES_DIR).filter(f => /\b(baseApi|adminApi)\(/.test(readFileSync(f, 'utf8')));
 const rel = (f: string) => path.relative(ROUTES_DIR, f).split(path.sep).join('/');
 // Strip line comments first so a commented-out `// requiredScopes: [...]` does not count.
 const isPostured = (f: string) => {

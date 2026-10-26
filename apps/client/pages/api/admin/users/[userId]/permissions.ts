@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import {
   AdminPermissionsSchema,
-  ApiKeyScope,
   ForbiddenError,
   assertCanActOnAdminTarget,
   assertCanGrantAdminAccess,
@@ -26,7 +25,7 @@ const bodySchema = permissionsSchema.extend({ reason: z.string().trim().min(1).m
 const querySchema = z.object({ userId: z.string().regex(/^[a-f\d]{24}$/i) });
 
 const api = adminApi({
-  requiredScopes: [ApiKeyScope.ADMIN],
+  auth: 'jwtOnly',
   adminPermissions: { PUT: 'settings:manage' },
 });
 const handler = api.put(

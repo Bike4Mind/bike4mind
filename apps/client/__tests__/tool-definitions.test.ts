@@ -17,20 +17,37 @@ vi.mock('@server/utils/adminAudit', () => ({
 }));
 
 // Mock the middlewares
+// Each stored handler runs the adminApi permission guard (registered via .use) first and, like
+// baseApi's error handler, turns an HTTPError it throws into that status.
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const handlers: Record<string, any> = {};
+    const guards: ((req: any, res: any, next: () => void) => unknown)[] = [];
+    const route = (fn: any) => async (req: any, res: any) => {
+      try {
+        for (const guard of guards) await guard(req, res, () => {});
+      } catch (error) {
+        const statusCode = (error as { statusCode?: unknown }).statusCode;
+        if (typeof statusCode !== 'number') throw error;
+        return res.status(statusCode).json({ error: (error as Error).message });
+      }
+      return fn(req, res);
+    };
     const chain = {
+      use: (guard: (typeof guards)[number]) => {
+        guards.push(guard);
+        return chain;
+      },
       get: (fn: any) => {
-        handlers.get = fn;
+        handlers.get = route(fn);
         return chain;
       },
       put: (fn: any) => {
-        handlers.put = fn;
+        handlers.put = route(fn);
         return chain;
       },
       delete: (fn: any) => {
-        handlers.delete = fn;
+        handlers.delete = route(fn);
         return chain;
       },
       // Make the chain callable to get handlers
@@ -108,7 +125,7 @@ describe('/api/admin/tool-definitions', () => {
       await handlers.get(req as any, res as any);
 
       expect(res._getStatusCode()).toBe(403);
-      expect(res._getJSONData()).toEqual({ error: 'Unauthorized. Admin access required.' });
+      expect(res._getJSONData()).toEqual({ error: 'Missing permission: support:read' });
     });
 
     it('should return list of tools for admin users', async () => {

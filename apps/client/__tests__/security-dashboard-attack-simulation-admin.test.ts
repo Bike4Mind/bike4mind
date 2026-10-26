@@ -17,11 +17,26 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+// Runs the adminApi permission guard (registered via .use) before the route handler.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    get: (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response) => fn(req, res),
-    post: (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response) => fn(req, res),
-  }),
+  baseApi: () => {
+    type Handler = (req: Request, res: Response) => Promise<unknown>;
+    type Guard = (req: Request, res: Response, next: () => void) => unknown;
+    const guards: Guard[] = [];
+    const route = (fn: Handler) => async (req: Request, res: Response) => {
+      for (const guard of guards) await guard(req, res, () => {});
+      return fn(req, res);
+    };
+    const chain = {
+      use: (guard: Guard) => {
+        guards.push(guard);
+        return chain;
+      },
+      get: route,
+      post: route,
+    };
+    return chain;
+  },
 }));
 
 vi.mock('sst', () => ({
@@ -73,16 +88,16 @@ describe('GET /api/admin/security-dashboard/attack-simulation', () => {
   });
 
   it('rejects non-admin users with ForbiddenError', async () => {
-    const req = { user: nonAdminUser } as unknown as Request;
+    const req = { method: 'GET', user: nonAdminUser } as unknown as Request;
     const { res } = makeRes();
-    await expect(getHandler(req, res)).rejects.toThrow(/admin access required/i);
+    await expect(getHandler(req, res)).rejects.toThrow('Missing permission: support:read');
     expect(mockFindRecentByStage).not.toHaveBeenCalled();
   });
 
   it('rejects requests with no user with ForbiddenError', async () => {
-    const req = {} as unknown as Request;
+    const req = { method: 'GET' } as unknown as Request;
     const { res } = makeRes();
-    await expect(getHandler(req, res)).rejects.toThrow(/admin access required/i);
+    await expect(getHandler(req, res)).rejects.toThrow('Missing permission: support:read');
   });
 
   it('returns runs and findings for admin users', async () => {
@@ -91,7 +106,7 @@ describe('GET /api/admin/security-dashboard/attack-simulation', () => {
     mockFindRecentByStage.mockResolvedValue([sampleRun]);
     mockFindActiveByStage.mockResolvedValue([sampleFinding]);
 
-    const req = { user: adminUser } as unknown as Request;
+    const req = { method: 'GET', user: adminUser } as unknown as Request;
     const { res, json } = makeRes();
     await getHandler(req, res);
 
@@ -114,9 +129,9 @@ describe('POST /api/admin/security-dashboard/run-attack-simulation', () => {
   });
 
   it('rejects non-admin users with ForbiddenError', async () => {
-    const req = { user: nonAdminUser } as unknown as Request;
+    const req = { method: 'POST', user: nonAdminUser } as unknown as Request;
     const { res } = makeRes();
-    await expect(postHandler(req, res)).rejects.toThrow(/admin access required/i);
+    await expect(postHandler(req, res)).rejects.toThrow('Missing permission: settings:manage');
     expect(mockLambdaSend).not.toHaveBeenCalled();
   });
 
@@ -129,6 +144,7 @@ describe('POST /api/admin/security-dashboard/run-attack-simulation', () => {
       startedAt: new Date(Date.now() - 5 * 60 * 1000),
     });
     const req = {
+      method: 'POST',
       user: adminUser,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as Request;
@@ -145,6 +161,7 @@ describe('POST /api/admin/security-dashboard/run-attack-simulation', () => {
       startedAt: new Date(Date.now() - 60 * 60 * 1000), // 1 hour ago
     });
     const req = {
+      method: 'POST',
       user: adminUser,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as Request;
@@ -158,6 +175,7 @@ describe('POST /api/admin/security-dashboard/run-attack-simulation', () => {
 
   it('records a security.attack_simulation.run audit entry', async () => {
     const req = {
+      method: 'POST',
       user: adminUser,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as Request;
@@ -195,6 +213,7 @@ describe('POST /api/admin/security-dashboard/run-attack-simulation', () => {
 
     it('returns 500 without invoking the Lambda', async () => {
       const req = {
+        method: 'POST',
         user: adminUser,
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       } as unknown as Request;
