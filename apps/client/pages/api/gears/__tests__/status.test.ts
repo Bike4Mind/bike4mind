@@ -91,8 +91,6 @@ const run = (user?: { id: string }) => {
   };
 };
 
-const TRUSTED_USER = { createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true };
-
 const lockEverything = () => {
   mocks.projectExists.mockResolvedValue(null);
   mocks.agentCount.mockResolvedValue(0);
@@ -110,7 +108,9 @@ const lockEverything = () => {
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
   // Default: trusted account so existing status tests continue to pass.
-  mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve(TRUSTED_USER) });
+  mocks.userFindById.mockReturnValue({
+    lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true }),
+  });
 };
 
 beforeEach(() => {
@@ -184,6 +184,23 @@ describe('GET /api/gears/status', () => {
     await promise;
     const body = res._getJSONData() as { gears: Array<{ claimable?: boolean }> };
     expect(body.gears.some(g => g.claimable)).toBe(false);
+  });
+
+  it('untrusted account sees an unlocked gear as rewardPending, not claimable', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; unlocked: boolean; rewardPending?: boolean; claimable?: boolean }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.unlocked).toBe(true);
+    expect(projects.rewardPending).toBe(true);
+    expect(projects.claimable).toBeUndefined();
   });
 
   it('unlock by receipt: project membership (not just ownership) is queried', async () => {

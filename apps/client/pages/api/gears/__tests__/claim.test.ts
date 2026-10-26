@@ -99,8 +99,10 @@ const unlockProjects = () =>
   mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
 
 // An account that passes all trust checks (email verified, older than 7 days).
-const TRUSTED_USER = { createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true };
-const makeTrustedUser = () => mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve(TRUSTED_USER) });
+const makeTrustedUser = () =>
+  mocks.userFindById.mockReturnValue({
+    lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true }),
+  });
 
 const lockEverything = () => {
   mocks.projectExists.mockResolvedValue(null);
@@ -285,6 +287,17 @@ describe('POST /api/gears/claim', () => {
     expect(res._getStatusCode()).toBe(409);
     expect(res._getJSONData()).toEqual({ error: 'reward_pending' });
     expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('allows payout at exactly 7 days old (inclusive lower boundary)', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), emailVerified: true }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
   });
 
   it('pays a trusted account (email-verified and older than 7 days)', async () => {

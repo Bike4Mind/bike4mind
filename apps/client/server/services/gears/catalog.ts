@@ -58,8 +58,8 @@ export const GEAR_CREDITS_SCALE = (() => {
 export const gearTxId = (userId: string, key: GearKey) => `gear-unlock:${userId}:${key}`;
 
 // Accounts younger than this many days or without a verified email cannot
-// receive gear payouts (anti-farm: gears reward the exact actions the
-// 2026-10-25 credit-farm cohort performed on fresh, unverified accounts).
+// receive gear payouts (anti-farm: prevents rewards for actions that are
+// trivially automated on fresh unverified accounts).
 const GEAR_TRUST_MIN_AGE_DAYS = 7;
 
 // Hard ceiling on total gear credits any single account can ever collect.
@@ -165,8 +165,8 @@ const GEARS: GearDef[] = [
   },
   // --- Skills ---
   {
-    // Hard-locked for unverified accounts: these gears reward exactly the actions
-    // the 2026-10-25 farm cohort performed (mint a key, make one API call). An
+    // Hard-locked for unverified accounts: these gears reward the actions most
+    // easily automated on fresh accounts (mint a key, make one API call). An
     // unverified account sees neither gear as unlocked, not just as unrewarded.
     key: 'apikey',
     credits: 500,
@@ -394,12 +394,18 @@ export async function evaluateGears(
   );
   const unlockedFlags = await Promise.all(activeGears.map(g => g.check(facts)));
 
-  // One indexed query tells us which unlocks were already rewarded.
-  const txIds = activeGears.map(g => gearTxId(userId, g.key));
-  const existing = await creditTransactionRepository.find({ transactionId: { $in: txIds } });
-  const existingRows = existing as Array<{ transactionId?: string; credits?: number }>;
-  const rewarded = new Set(existingRows.map(t => t.transactionId).filter(Boolean));
-  const existingGearCreditTotal = existingRows.reduce((sum, t) => sum + (t.credits ?? 0), 0);
+  // Always query ALL gear transactions so the per-account cap is accurate
+  // even when the caller narrows the evaluation set via onlyKeys.
+  const allGearTxIds = GEARS.map(g => gearTxId(userId, g.key));
+  const allGearRows = (await creditTransactionRepository.find({
+    transactionId: { $in: allGearTxIds },
+  })) as Array<{ transactionId?: string; credits?: number }>;
+  const existingGearCreditTotal = allGearRows.reduce((sum, t) => sum + (t.credits ?? 0), 0);
+  // Per-gear rewarded tracking uses only the active (potentially filtered) set.
+  const activeGearTxSet = new Set(activeGears.map(g => gearTxId(userId, g.key)));
+  const rewarded = new Set(
+    allGearRows.map(t => t.transactionId).filter((id): id is string => id != null && activeGearTxSet.has(id))
+  );
 
   const trusted = isTrusted(facts);
 
