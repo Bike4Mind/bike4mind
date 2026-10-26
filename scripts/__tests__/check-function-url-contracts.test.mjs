@@ -515,7 +515,7 @@ describe('main', () => {
 
   it('passes the CliToolHandler shape: the wrapper imports the routed module', () => {
     const dir = writeTree({
-      'infra/fn.ts': fnDeclaration(ROUTER_URL),
+      'infra/fn.ts': fnDeclaration(ROUTER_URL.map((l) => l.replace('thing.handler', 'thing.handler.handler'))),
       'apps/workers/src/thing.handler.ts': "import { run } from './thing';\nexport const handler = run;",
       'apps/workers/src/thing.ts': ROUTED_HANDLER,
       [ADAPTER_FILE]: 'export function defineLambdaRoute(c, f) { return f; }',

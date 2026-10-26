@@ -5,7 +5,7 @@
 //
 // A Function URL is a public endpoint: it skips every middleware the Next.js
 // transport installs, so the contract has to be wired at the handler. This is the
-// third scan of scripts/check-contract-gate.sh; the other two cover
+// scan 4 of scripts/check-contract-gate.sh; the earlier scans cover
 // apps/client/pages/api and cannot see a Lambda declared in infra/.
 //
 // The repo-guards CI job installs nothing, so this is a hand-written scanner
@@ -13,6 +13,10 @@
 // string literal counts as a use (shared with the other two scans), and the import
 // walk proves a routed module is reachable from the handler, not that the exported
 // handler delegates to it, so importing any value from a routed module passes.
+// Declarations it cannot see: only the literal `new sst.aws.Function(` is found, so an
+// alias (`const Fn = sst.aws.Function`), a `$transform(sst.aws.Function, ...)` that sets
+// `url`, a spread const mutated after its declaration, and a spread name shadowed by an
+// inner `let` all pass unseen. A green gate is not proof none exist.
 //
 // Usage: node scripts/check-function-url-contracts.mjs <repo-root>
 //   stdout: violating handler files, sorted and deduped (empty when clean).
