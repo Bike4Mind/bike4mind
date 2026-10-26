@@ -35,6 +35,7 @@ import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
+import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
@@ -87,6 +88,7 @@ const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callbac
 const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/callback'));
 const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
+const AdminUserProfilePage = lazy(() => import('./routes/admin/users/$userId'));
 const QuestsPage = lazy(() => import('./routes/quests'));
 const SlackInstallPage = lazy(() => import('./routes/integrations/slack/install'));
 const SlackSuccessPage = lazy(() => import('./routes/integrations/slack/success'));
@@ -1173,7 +1175,12 @@ const activateRoute = createRoute({
 export const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin',
-  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  beforeLoad: async ({ location, search }) => {
+    await enforceConsentRedirect(location);
+    // The user view used to be a modal held in `?userId=`; keep those shared links working.
+    const legacyUserLink = legacyUserLinkRedirect(search);
+    if (legacyUserLink) throw redirect(legacyUserLink);
+  },
   component: () => (
     <RestrictedPage requireAdmin={true}>
       {/* These providers are not usually needed in an unprotected page. This prevents unnecessary API fetch */}
@@ -1188,6 +1195,23 @@ export const adminRoute = createRoute({
   // makes the console addressable, and each tab's own params come from the registry in
   // adminTabParams.ts, which the tab-sync hook rebuilds the URL from too.
   validateSearch: parseAdminSearch,
+});
+
+// Admin user profile. Guarded exactly like adminRoute, which redirects its legacy `?userId=` here.
+export const adminUserProfileRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin/users/$userId',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  component: () => (
+    <RestrictedPage requireAdmin={true}>
+      <ProviderBundle>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <AdminUserProfilePage />
+        </Suspense>
+      </ProviderBundle>
+    </RestrictedPage>
+  ),
+  validateSearch: parseUserProfileSearch,
 });
 
 // Email unsubscribe route - public page for managing email preferences
@@ -1312,6 +1336,7 @@ const routeTree = rootRoute.addChildren([
   subscribeRoute,
   activateRoute,
   adminRoute,
+  adminUserProfileRoute,
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,
   // Slack integration routes (no layout)

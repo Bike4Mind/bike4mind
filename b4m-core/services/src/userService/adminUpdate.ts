@@ -9,6 +9,8 @@ import {
 } from './update';
 import {
   ConflictError,
+  MAX_STORAGE_LIMIT_MB,
+  resolveUserStorageLimit,
   CreditHolderType,
   ICreditTransactionRepository,
   IOrganizationDocument,
@@ -36,7 +38,8 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   // feeds access control. Re-declared here so admins can still manage user tags.
   tags: z.array(z.string()).nullable().optional(),
   organizationId: z.string().optional().nullable(),
-  storageLimit: z.number().optional(),
+  storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).optional(),
+  storageLimitOverride: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
   currentCredits: z.number().optional(),
   isBanned: z.boolean().optional(),
   isModerated: z.boolean().optional(),
@@ -192,7 +195,23 @@ export async function adminUpdateUser(
   // Stamp a purchase timestamp only for a net grant: a deduction is not a purchase, and carrying
   // the field on every other admin save would $set the read snapshot back over a concurrent
   // purchase stamp (addCredits only stamps for type === 'purchase', so an admin grant needs this).
-  const builtParams = creditDelta > 0 ? { ...baseParams, lastCreditsPurchasedAt: new Date() } : baseParams;
+  const requestedOverride =
+    params.storageLimitOverride !== undefined ? params.storageLimitOverride : params.storageLimit;
+  const storageParams =
+    requestedOverride !== undefined
+      ? {
+          storageLimitOverride: requestedOverride,
+          storageLimit: resolveUserStorageLimit({
+            storageLimitOverride: requestedOverride,
+            planStorageLimit: user.planStorageLimit,
+          }).limitMb,
+        }
+      : {};
+  const builtParams = {
+    ...baseParams,
+    ...storageParams,
+    ...(creditDelta > 0 ? { lastCreditsPurchasedAt: new Date() } : {}),
+  };
   const builtUser = applyBaseUserUpdates(user, builtParams);
   // Persist ONLY the fields this request changed, never a spread of the read snapshot -
   // that is what let an admin save round-trip (and revert) a concurrent tokenVersion bump

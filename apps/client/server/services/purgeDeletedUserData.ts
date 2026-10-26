@@ -1,5 +1,6 @@
 import {
   User,
+  authEventRepository,
   embedConversationRepository,
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
@@ -78,6 +79,14 @@ export async function purgeDeletedUserData(
     logger.info(`Hid ${hidden} annotation(s) written by deleted user ${userId}`);
   } catch (err) {
     logger.error(`Failed to hide annotations for deleted user ${userId}: ${String(err)}`);
+  }
+
+  // The signup/login network rows hold raw IPs: deleted with the account, not left to their TTL.
+  try {
+    const deleted = await authEventRepository.deleteAllForUser(userId);
+    logger.info(`Deleted ${deleted} auth event(s) of deleted user ${userId}`);
+  } catch (err) {
+    logger.error(`Failed to delete auth events for deleted user ${userId}: ${String(err)}`);
   }
 
   // Last: the revokes call out to the providers, and a slow provider must not cost the local steps above.

@@ -1,6 +1,7 @@
 import { userRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
+  MAX_STORAGE_LIMIT_MB,
   AuthEvents,
   redactUserSecretsForSelf,
   sanitizeUsername,
@@ -26,7 +27,7 @@ const userImportSchema = z.object({
   first: z.string().optional(),
   last: z.string().optional(),
   startingCredits: z.number().int().min(0, 'Credits must be a positive number').optional(),
-  startingStorage: z.number().int().min(0, 'Storage must be a positive number').optional(),
+  startingStorage: z.number().int().min(0, 'Storage must be a positive number').max(MAX_STORAGE_LIMIT_MB).optional(),
   tags: z.array(z.string()).optional(),
 });
 
@@ -83,6 +84,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
                 // presence stays a truthful signal. Users sign in via OTC.
                 password: null,
                 hasUsablePassword: false,
+                storageLimit: validatedData.startingStorage,
               },
             },
             {
@@ -103,16 +105,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             creditsGranted: newUser.currentCredits ?? validatedData.startingCredits ?? 0,
           });
 
-          // Apply storage limit if provided (createUser hardcodes storageLimit: 1000, so we override after)
-          if (validatedData.startingStorage !== undefined) {
-            newUser.storageLimit = validatedData.startingStorage;
-          }
-
           if (validatedData.tags && validatedData.tags.length > 0) {
             newUser.tags = validatedData.tags;
           }
 
-          await userRepository.update({ id: newUser.id, storageLimit: newUser.storageLimit, tags: newUser.tags });
+          await userRepository.update({ id: newUser.id, tags: newUser.tags });
 
           const brand = process.env.APP_NAME || '';
           const logoUrl = getLogoUrl();

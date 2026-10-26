@@ -54,6 +54,7 @@ import {
   emitSignupFunnelEvents,
   recordSignupAcquisition,
 } from '@server/analytics/funnel';
+import { recordSignupNetwork } from '@server/auth/networkMeta';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -496,6 +497,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     user.password = null;
 
     if (isNewUser) {
+      await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.Okta });
       const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
       await emitSignupFunnelEvents({
         user: { id: user.id, ...signupFunnel },

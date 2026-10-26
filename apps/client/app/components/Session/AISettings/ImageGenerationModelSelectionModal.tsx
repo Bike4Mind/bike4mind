@@ -37,6 +37,7 @@ import {
   isGPTImageModel,
   isGPTImage25Model,
   supportsTransparentBackground,
+  supportsPromptUpsampling,
   isKontextModel as isKontextImageModel,
   EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
@@ -647,21 +648,23 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             {/* BFL-specific Prompt Upsampling & Safety controls */}
             {(BFL_IMAGE_MODELS as readonly string[]).includes(contextImageModel) && (
               <Grid container spacing={2}>
-                <Grid xs={12} md={6}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Tooltip title="Enhances prompt quality for better image generation">
-                      <Typography level="body-sm" sx={{ mb: 0.5 }}>
-                        Prompt Upsampling
-                      </Typography>
-                    </Tooltip>
-                    <Switch
-                      checked={_prompt_upsampling ?? false}
-                      onChange={(e: any) => setLLM({ prompt_upsampling: e.target.checked })}
-                      color={_prompt_upsampling ? 'success' : 'neutral'}
-                      data-testid="prompt-upsampling-switch"
-                    />
-                  </Box>
-                </Grid>
+                {supportsPromptUpsampling(contextImageModel) && (
+                  <Grid xs={12} md={6}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Tooltip title="Enhances prompt quality for better image generation">
+                        <Typography level="body-sm" sx={{ mb: 0.5 }}>
+                          Prompt Upsampling
+                        </Typography>
+                      </Tooltip>
+                      <Switch
+                        checked={_prompt_upsampling ?? false}
+                        onChange={event => setLLM({ prompt_upsampling: event.target.checked })}
+                        color={_prompt_upsampling ? 'success' : 'neutral'}
+                        data-testid="prompt-upsampling-switch"
+                      />
+                    </Box>
+                  </Grid>
+                )}
                 <Grid xs={12} md={6}>
                   <Box>
                     <Tooltip title="Controls content filtering: 0=Strictest, 2=Most permissive (hard-capped)">

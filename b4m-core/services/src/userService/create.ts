@@ -1,5 +1,6 @@
 import {
   isReservedUsername,
+  resolveUserStorageLimit,
   IUser,
   IUserRepository,
   RESERVED_USERNAME_MESSAGE,
@@ -62,13 +63,16 @@ export async function createUser(
   const plaintextPassword = record?.password ?? null;
   const password = plaintextPassword && (await hashPassword(plaintextPassword));
 
+  const storage = resolveUserStorageLimit(record ?? {});
   const userRecord: Omit<IUser, 'id'> = {
     name: name ?? username,
     groups: [],
     mementos: [],
     ...record,
     isAdmin: isAdmin ?? false,
-    storageLimit: 1000,
+    storageLimit: storage.limitMb,
+    storageLimitOverride: record?.storageLimitOverride ?? (storage.source === 'override' ? storage.limitMb : null),
+    planStorageLimit: record?.planStorageLimit ?? null,
     currentStorageSize: 0,
     currentCredits: initialCredits ?? 0,
     level: level ? level : 'DemoUser',
