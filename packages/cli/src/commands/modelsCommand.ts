@@ -191,19 +191,26 @@ function runtimeLabel({ runtime, source }: RuntimeTarget): string {
   return `${name} at ${runtime.baseUrl}${source === 'detected' ? ' (detected)' : ''}`;
 }
 
+/** Permissive only when at least one license is declared and every one is. */
 export function licenseFor(
   detail: Pick<HubModelDetail, 'id' | 'licenses' | 'licenseName' | 'licenseLink'>,
   endpoint: string
-): { label: string; link: string; restricted: boolean } {
-  const id = detail.licenses[0]?.toLowerCase() ?? null;
-  const label = (id === 'other' || !id ? detail.licenseName : null) ?? detail.licenses[0] ?? NO_LICENSE;
+): { label: string; link: string; restricted: boolean; plural: boolean } {
+  const ids = detail.licenses.map(license => license.toLowerCase());
+  const names = ids.map(id => (id === 'other' ? (detail.licenseName ?? id) : id));
+  const label = names.length > 0 ? names.join(', ') : NO_LICENSE;
   const raw = detail.licenseLink;
   const link = !raw
     ? `${endpoint}/${detail.id}`
     : /^https?:\/\//i.test(raw)
       ? raw
       : `${endpoint}/${detail.id}/blob/main/${raw.replace(/^\.?\//, '')}`;
-  return { label: clean(label), link: clean(link), restricted: !id || !PERMISSIVE_LICENSES.has(id) };
+  return {
+    label: clean(label),
+    link: clean(link),
+    restricted: ids.length === 0 || !ids.every(id => PERMISSIVE_LICENSES.has(id)),
+    plural: ids.length > 1,
+  };
 }
 
 function gatedMessage(repo: string, endpoint: string): string {
@@ -337,7 +344,7 @@ export async function searchModels(query: string, deps: ModelsDeps, opts: Models
       clean(model.id),
       formatCount(model.downloads),
       formatCount(model.likes),
-      clean(model.licenses[0]) || '-',
+      model.licenses.map(clean).join(', ') || '-',
       formatGated(model.gated),
     ]),
   ]);
@@ -462,22 +469,23 @@ async function requirePullable(deps: ModelsDeps): Promise<RuntimeTarget> {
 
 /** Restricted or undeclared licenses need a yes at the prompt or `--accept-license`. */
 async function acceptLicense(
-  license: { label: string; link: string; restricted: boolean },
+  license: { label: string; link: string; restricted: boolean; plural?: boolean },
   deps: ModelsDeps,
   opts: ModelsOptions
 ): Promise<boolean> {
   if (!license.restricted) return true;
   const declared = license.label !== NO_LICENSE;
+  const noun = license.plural ? 'licenses' : 'license';
   deps.log('');
   deps.log(
     declared
-      ? `This model is under the ${license.label} license, which is not a permissive open-source license.`
+      ? `This model is under the ${license.label} ${noun}, ${license.plural ? 'which are not all permissive open-source licenses' : 'which is not a permissive open-source license'}.`
       : 'This model does not declare a license.'
   );
-  deps.log(`Read ${declared ? 'it' : 'its page'} before downloading: ${license.link}`);
+  deps.log(`Read ${declared ? (license.plural ? 'them' : 'it') : 'its page'} before downloading: ${license.link}`);
   if (opts.acceptLicense) return true;
   if (!deps.isTTY) throw new Error('Re-run with --accept-license once you have read and accepted the license.');
-  return deps.confirm(declared ? `Do you accept the ${license.label} license? [y/N] ` : 'Download it anyway? [y/N] ');
+  return deps.confirm(declared ? `Do you accept the ${license.label} ${noun}? [y/N] ` : 'Download it anyway? [y/N] ');
 }
 
 async function pullFromOllamaRegistry(name: string, deps: ModelsDeps, opts: ModelsOptions): Promise<PullResult> {
