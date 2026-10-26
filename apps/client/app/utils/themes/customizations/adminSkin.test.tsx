@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { Button, Card, Modal, ModalDialog, Sheet, Typography } from '@mui/joy';
 import type { Components, Theme } from '@mui/joy/styles';
 import AppTheme from '../AppTheme';
-import { IN_ADMIN, IN_ADMIN_PORTAL, adminSkinComponents, withAdminSkin } from './adminSkin';
+import { IN_ADMIN, IN_ADMIN_PORTAL, IN_ADMIN_ROW, adminSkinComponents, withAdminSkin } from './adminSkin';
 
 const radiusOf = (testId: string) => getComputedStyle(screen.getByTestId(testId)).borderRadius;
 
@@ -13,19 +13,19 @@ describe('admin skin scope', () => {
       <AppTheme>
         <Card data-testid="outside-card">outside</Card>
         <Button data-testid="outside-btn">outside</Button>
-        <Sheet data-admin-surface>
+        <Sheet data-admin-surface data-testid="admin-root">
           <Card data-testid="admin-card">inside</Card>
-          <Button data-testid="admin-btn">inside</Button>
         </Sheet>
       </AppTheme>
     );
 
     expect(radiusOf('admin-card')).toBe('12px');
     expect(radiusOf('outside-card')).not.toBe('12px');
-    expect(getComputedStyle(screen.getByTestId('admin-btn')).backgroundColor).toBe('var(--joy-palette-admin-ink)');
-    expect(getComputedStyle(screen.getByTestId('outside-btn')).backgroundColor).not.toBe(
-      'var(--joy-palette-admin-ink)'
-    );
+    // Buttons read their fill through Joy's palette variables, which the admin root remaps to ink.
+    const solidBg = (testId: string) =>
+      getComputedStyle(screen.getByTestId(testId)).getPropertyValue('--joy-palette-primary-solidBg').trim();
+    expect(solidBg('admin-root')).toBe('var(--joy-palette-admin-ink)');
+    expect(solidBg('outside-btn')).not.toBe('var(--joy-palette-admin-ink)');
   });
 
   it.each([
@@ -56,7 +56,7 @@ describe('admin skin scope', () => {
     );
 
     expect(keys.length).toBeGreaterThan(0);
-    expect(keys.filter(key => key !== IN_ADMIN && key !== IN_ADMIN_PORTAL)).toEqual([]);
+    expect(keys.filter(key => ![IN_ADMIN, IN_ADMIN_PORTAL, IN_ADMIN_ROW].includes(key))).toEqual([]);
   });
 });
 

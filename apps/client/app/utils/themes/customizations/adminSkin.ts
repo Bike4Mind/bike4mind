@@ -1,4 +1,5 @@
 import type { Components, Theme } from '@mui/joy/styles';
+import { adminPalette, type AdminPalette } from '../admin';
 
 /**
  * The admin skin: Joy component overrides that only take effect under an element carrying
@@ -20,6 +21,8 @@ const portalRoots =
 // the component itself and would glue the selector onto it.
 export const IN_ADMIN = `*:where(${surface}, ${adminMounted} :is(${portalRoots})) &`;
 export const IN_ADMIN_PORTAL = `*:where(${adminMounted}) &`;
+/** Inside a table body row: a Joy `Table` row or a `role="row"` grid row. */
+export const IN_ADMIN_ROW = `*:where(${surface} :is(tbody tr, [role="row"])) &`;
 
 const admin = (token: string) => `var(--joy-palette-admin-${token})`;
 const tone = (name: string, part: 'foreground' | 'background') => admin(`status-${name}-${part}`);
@@ -27,12 +30,163 @@ const mix = (color: string, percent: number, base = admin('surface')) =>
   `color-mix(in srgb, ${color} ${percent}%, ${base})`;
 
 const FONT_SANS =
-  'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+  'var(--font-admin-sans), Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 const FONT_MONO = 'var(--font-reading-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+
+type JoyColor = 'primary' | 'neutral' | 'danger' | 'success' | 'warning';
+type ColorSpec = Record<string, string>;
+
+/** Joy's numbered shades, light to dark, as `[first shade, value]` steps. */
+const shades = (steps: [number, string][]) => {
+  const scale = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900];
+  return Object.fromEntries(
+    scale.map(shade => [String(shade), [...steps].reverse().find(([from]) => shade >= from)?.[1] ?? steps[0][1]])
+  );
+};
+
+/** Ink on surfaces: what `primary` and `neutral` become (guide section 2, "Mapping onto Joy"). */
+const inkSpec: ColorSpec = {
+  plainColor: admin('ink'),
+  plainHoverColor: admin('ink'),
+  plainHoverBg: admin('hover'),
+  plainActiveBg: admin('hover'),
+  plainDisabledColor: admin('inkMuted'),
+  outlinedColor: admin('ink'),
+  outlinedBorder: admin('borderStrong'),
+  outlinedHoverColor: admin('ink'),
+  outlinedHoverBorder: admin('borderStrong'),
+  outlinedHoverBg: admin('hover'),
+  outlinedActiveBg: admin('hover'),
+  outlinedDisabledColor: admin('inkMuted'),
+  outlinedDisabledBorder: admin('border'),
+  softColor: admin('ink'),
+  softBg: admin('hover'),
+  softHoverColor: admin('ink'),
+  softHoverBg: mix(admin('ink'), 8, admin('hover')),
+  softActiveColor: admin('ink'),
+  softActiveBg: mix(admin('ink'), 12, admin('hover')),
+  softDisabledColor: admin('inkMuted'),
+  softDisabledBg: admin('surfaceSubtle'),
+  solidColor: admin('surface'),
+  solidBg: admin('ink'),
+  solidHoverBg: mix(admin('ink'), 88),
+  solidActiveBg: mix(admin('ink'), 80),
+  solidDisabledColor: admin('inkMuted'),
+  solidDisabledBg: admin('hover'),
+  solidBorder: 'none',
+  ...shades([
+    [50, admin('surfaceSubtle')],
+    [100, admin('hover')],
+    [200, admin('border')],
+    [300, admin('borderStrong')],
+    [400, admin('inkMuted')],
+    [600, admin('inkSecondary')],
+    [800, admin('ink')],
+  ]),
+  500: admin('ink'),
+};
+
+/** A secondary button: `surface` fill and a `borderStrong` outline, for solid buttons that are not the primary action. */
+const secondarySolid: ColorSpec = {
+  solidColor: admin('ink'),
+  solidBg: admin('surface'),
+  solidHoverBg: admin('hover'),
+  solidActiveBg: admin('hover'),
+};
+
+/** A status tone: no saturated fills, every variant is the tone's label on its tint. */
+const toneSpec = (name: string): ColorSpec => {
+  const [fg, bg] = [tone(name, 'foreground'), tone(name, 'background')];
+  return {
+    plainColor: fg,
+    plainHoverColor: fg,
+    plainHoverBg: bg,
+    plainActiveBg: bg,
+    outlinedColor: fg,
+    outlinedBorder: mix(fg, 35),
+    outlinedHoverBorder: mix(fg, 35),
+    outlinedHoverBg: bg,
+    outlinedActiveBg: bg,
+    softColor: fg,
+    softHoverColor: fg,
+    softActiveColor: fg,
+    softBg: bg,
+    softHoverBg: bg,
+    softActiveBg: bg,
+    solidColor: fg,
+    solidBg: bg,
+    solidHoverBg: bg,
+    solidActiveBg: bg,
+    ...shades([
+      [50, bg],
+      [300, mix(fg, 50, bg)],
+      [500, fg],
+    ]),
+  };
+};
+
+const dangerSpec: ColorSpec = {
+  ...toneSpec('bad'),
+  plainColor: admin('danger'),
+  plainHoverColor: admin('danger'),
+  outlinedColor: admin('danger'),
+  outlinedBorder: mix(admin('danger'), 35),
+  outlinedHoverBorder: mix(admin('danger'), 35),
+  solidColor: admin('surface'),
+  solidBg: admin('danger'),
+  solidHoverBg: mix(admin('danger'), 85, admin('ink')),
+  solidActiveBg: mix(admin('danger'), 85, admin('ink')),
+  500: admin('danger'),
+  600: admin('danger'),
+};
+
+/** Controls and data bars take the one accent: checkboxes, radios, switches, sliders, progress. */
+// Labels keep the ink they inherit; only the control itself is accent.
+const accentSpec: ColorSpec = {
+  outlinedBorder: admin('borderStrong'),
+  softColor: admin('selection-foreground'),
+  softBg: admin('selection-background'),
+  solidColor: admin('surface'),
+  solidBg: admin('accent'),
+  solidHoverBg: mix(admin('accent'), 88, admin('ink')),
+  solidActiveBg: mix(admin('accent'), 88, admin('ink')),
+  ...shades([
+    [50, admin('selection-background')],
+    [200, admin('selection-border')],
+    [400, admin('accent')],
+  ]),
+};
+
+const paletteVars = (colors: JoyColor[], spec: ColorSpec) =>
+  Object.fromEntries(
+    colors.flatMap(color => Object.entries(spec).map(([key, value]) => [`--joy-palette-${color}-${key}`, value]))
+  );
+
+const channel = (hex: string) => [1, 3, 5].map(index => parseInt(hex.slice(index, index + 2), 16)).join(' ');
+
+/**
+ * Joy colors some text through `rgba(var(--joy-palette-<color>-mainChannel) / 1)`. A channel is a
+ * plain "r g b" triple that cannot reference a token, so it is computed per color scheme.
+ */
+const channelVars = (palette: AdminPalette) => {
+  const channels = (main: string, light: string) => ({
+    mainChannel: channel(main),
+    lightChannel: channel(light),
+    darkChannel: channel(main),
+  });
+  return {
+    ...paletteVars(['primary', 'neutral'], channels(palette.ink, palette.inkMuted)),
+    ...paletteVars(['success'], channels(palette.status.good.foreground, palette.status.good.foreground)),
+    ...paletteVars(['warning'], channels(palette.status.warn.foreground, palette.status.warn.foreground)),
+    ...paletteVars(['danger'], channels(palette.danger, palette.danger)),
+  };
+};
+const DARK = '[data-joy-color-scheme="dark"]';
 
 /**
  * Joy reads every color, font and radius through these variables, so remapping them on the admin
- * root re-skins raw `Sheet`s, `text.secondary` copy and `divider` lines that no override reaches.
+ * root re-skins every component, raw `Sheet`s, `text.secondary` copy and `color` props included:
+ * no Joy default blue, orange or yellow can reach the admin.
  */
 const rootVariables = {
   '--joy-fontFamily-body': FONT_SANS,
@@ -44,13 +198,24 @@ const rootVariables = {
   '--joy-palette-background-panel': admin('surface'),
   '--joy-palette-background-level1': admin('surfaceSubtle'),
   '--joy-palette-background-level2': admin('hover'),
+  '--joy-palette-background-level3': admin('hover'),
   '--joy-palette-text-primary': admin('ink'),
-  '--joy-palette-text-secondary': admin('inkMuted'),
+  '--joy-palette-text-secondary': admin('inkSecondary'),
   '--joy-palette-text-tertiary': admin('inkMuted'),
   '--joy-palette-text-icon': admin('inkMuted'),
   '--joy-palette-divider': admin('border'),
-  '--joy-palette-neutral-outlinedBorder': admin('controlBorder'),
   '--joy-palette-focusVisible': admin('accent'),
+  ...paletteVars(['primary', 'neutral'], inkSpec),
+  ...paletteVars(['success'], toneSpec('good')),
+  ...paletteVars(['warning'], toneSpec('warn')),
+  ...paletteVars(['danger'], dangerSpec),
+  // Joy sizes labels, radios and form text from this scale; the admin has no type above 15 px
+  // outside page and dialog titles, which the Typography override sets directly.
+  '--joy-fontSize-xs': '12px',
+  '--joy-fontSize-sm': '13px',
+  '--joy-fontSize-md': '14px',
+  '--joy-fontSize-lg': '15px',
+  '--joy-fontSize-xl': '15px',
   '--joy-focus-thickness': '2px',
   '--joy-radius-xs': '4px',
   '--joy-radius-sm': '6px',
@@ -60,6 +225,7 @@ const rootVariables = {
 };
 
 const focusable = ':focus-visible:not(input, textarea, .MuiSelect-button)';
+const helpIcons = ':is([data-testid="HelpOutlineIcon"], [data-testid="HelpIcon"], [data-testid="InfoOutlinedIcon"])';
 
 /** Global rules for the admin root itself and the popups it opens. Rendered once by `AppTheme`. */
 export const adminSkinGlobalStyles = {
@@ -68,29 +234,58 @@ export const adminSkinGlobalStyles = {
     backgroundColor: admin('canvas'),
     color: admin('ink'),
     fontFamily: FONT_SANS,
+    fontSize: '14px',
     WebkitFontSmoothing: 'antialiased',
   },
   [`${adminMounted} :is(${portalRoots}, .MuiTooltip-root)`]: rootVariables,
+  [`${surface}${surface}, ${adminMounted} :is(${portalRoots}, .MuiTooltip-root)`]: channelVars(adminPalette.light),
+  [`${DARK} ${surface}${surface}, ${DARK} ${adminMounted} :is(${portalRoots}, .MuiTooltip-root)`]: channelVars(
+    adminPalette.dark
+  ),
   // The app theme strips Joy's focus outline with !important; the extra specificity of the
   // attribute selector lets the 2px accent ring win back. Fields draw their own ring instead.
   [`${surface} ${focusable}, ${adminMounted} :is(${portalRoots}) ${focusable}`]: {
     outline: `2px solid ${admin('accent')} !important`,
     outlineOffset: '2px',
   },
+  // Material icons sit outside Joy's theme. Help icons are 16 px and muted, never larger than the heading they explain.
+  [`${surface} svg${helpIcons}`]: { fontSize: '16px', color: admin('inkMuted') },
+  [`${surface} a:not([class*="Mui"])`]: { color: admin('link') },
+  // globals.css paints radios green with !important and outlines the whole clickable overlay; inside
+  // the admin the overlay stays invisible and Joy's own radio circle carries the accent.
+  [`${surface} [class*='MuiRadio-input'], ${surface} [class*='MuiRadio-input']:is(:checked, :hover, .Mui-checked)`]: {
+    border: 'none !important',
+    backgroundColor: 'transparent !important',
+  },
+  [`${surface} [class*='MuiRadio-input']:checked::after`]: { display: 'none !important' },
+  [`${surface} [class*='MuiRadio-action'].Mui-checked`]: { border: 'none !important' },
+  [`${surface} .MuiRadio-radio`]: { borderColor: `${admin('borderStrong')} !important` },
+  [`${surface} .MuiRadio-radio.Mui-checked`]: { borderColor: `${admin('accent')} !important` },
+  [`${surface} [class*='MuiRadio-icon']`]: { backgroundColor: `${admin('accent')} !important` },
+  // Chart axes, ticks and legends are meta text; series colors stay with each chart.
+  [`${surface} :is(.recharts-cartesian-axis-tick-value, .recharts-label, .recharts-legend-item-text)`]: {
+    fontSize: '12px',
+  },
+  [`${surface} :is(.recharts-cartesian-axis-tick-value, .recharts-label) tspan`]: { fill: admin('inkMuted') },
+  [`${surface} .recharts-cartesian-grid line`]: { stroke: admin('border') },
 };
 
 const field = (prefix: string) => ({
   [IN_ADMIN]: {
     [`--${prefix}-radius`]: '8px',
     [`--${prefix}-minHeight`]: '36px',
+    // Same heights as buttons, so a `sm` field lines up with the `sm` buttons in a toolbar.
+    [`&.Mui${prefix}-sizeSm`]: { [`--${prefix}-minHeight`]: '32px', fontSize: '13px' },
     [`--${prefix}-focusedHighlight`]: admin('accent'),
     [`--${prefix}-focusedThickness`]: '2px',
+    '--Icon-color': admin('inkMuted'),
     borderRadius: '8px',
     fontSize: '14px',
+    color: admin('ink'),
     '&.MuiInput-variantOutlined, &.MuiTextarea-variantOutlined, &.MuiSelect-variantOutlined, &.MuiAutocomplete-variantOutlined':
       {
         backgroundColor: admin('surface'),
-        borderColor: admin('controlBorder'),
+        borderColor: admin('borderStrong'),
         boxShadow: 'none',
       },
   },
@@ -108,31 +303,66 @@ const popupList = {
   },
 };
 
-const chipTones = {
-  Success: 'good',
-  Primary: 'info',
-  Warning: 'warn',
-  Danger: 'bad',
-  Neutral: 'neutral',
-} as const;
+// Chips and alerts carry the status tones; `primary` reads as "new or notable", which is info.
+const toneByColor: [string, string][] = [
+  ['Primary', 'info'],
+  ['Neutral', 'neutral'],
+];
+const toneRules = (component: string) =>
+  Object.fromEntries(
+    toneByColor.map(([color, name]) => [
+      `&.Mui${component}-color${color}`,
+      paletteVars([color.toLowerCase() as JoyColor], toneSpec(name)),
+    ])
+  );
 
-const chipToneRules = Object.fromEntries(
-  Object.entries(chipTones).map(([color, name]) => [
-    `&.MuiChip-color${color}:is(.MuiChip-variantSoft, .MuiChip-variantSolid)`,
-    { color: tone(name, 'foreground'), backgroundColor: tone(name, 'background'), borderColor: 'transparent' },
-  ])
-);
+// Buttons are ink or danger only: a `warning` or `success` button renders as a neutral one.
+const neutralButtonColors = (component: string) => ({
+  [`&:is(.Mui${component}-colorWarning, .Mui${component}-colorSuccess)`]: paletteVars(['warning', 'success'], inkSpec),
+  // Only `primary` keeps the ink fill; any other solid button is secondary, so a view has one primary.
+  [`&.Mui${component}-variantSolid:not(.Mui${component}-colorPrimary, .Mui${component}-colorDanger)`]: {
+    ...paletteVars(['neutral', 'warning', 'success'], secondarySolid),
+    // The app theme gives solid buttons a currentColor border, which would draw an ink outline here.
+    borderColor: admin('borderStrong'),
+  },
+});
 
-const typographyLevels: Record<string, Record<string, string | number>> = {
-  h1: { fontSize: '28px', fontWeight: 600, letterSpacing: '-0.01em' },
-  h2: { fontSize: '24px', fontWeight: 600, letterSpacing: '-0.01em' },
-  h3: { fontSize: '20px', fontWeight: 600 },
-  h4: { fontSize: '18px', fontWeight: 600 },
-  'title-lg': { fontSize: '18px', fontWeight: 600 },
-  'title-md': { fontSize: '15px', fontWeight: 600 },
-  'title-sm': { fontSize: '14px', fontWeight: 600 },
+// Row actions are ghost buttons (guide section 5, "Tables"), whatever variant the tab asked for.
+// The doubled component class outranks the secondary-button rule above.
+const rowAction = (component: string) => ({
+  [IN_ADMIN_ROW]: {
+    [`&.Mui${component}-root:not(.Mui${component}-colorDanger)`]: {
+      ...paletteVars(['primary', 'neutral', 'warning', 'success'], {
+        ...inkSpec,
+        solidColor: admin('ink'),
+        solidBg: 'transparent',
+        solidHoverBg: admin('hover'),
+        solidActiveBg: admin('hover'),
+        outlinedBorder: 'transparent',
+        softBg: 'transparent',
+      }),
+      boxShadow: 'none',
+    },
+    minHeight: '28px',
+  },
+});
+
+/** The seven type levels (guide section 2, "Type"). Every Joy level maps onto one of them. */
+const pageTitle = { fontSize: '24px', fontWeight: 600, letterSpacing: '-0.01em', lineHeight: 1.3 };
+const sectionTitle = { fontSize: '15px', fontWeight: 600, letterSpacing: 'normal', lineHeight: 1.4 };
+const typographyLevels: Record<string, Record<string, string | number | Record<string, string>>> = {
+  h1: pageTitle,
+  h2: sectionTitle,
+  h3: sectionTitle,
+  h4: sectionTitle,
+  'title-lg': sectionTitle,
+  'title-md': sectionTitle,
+  'title-sm': { fontSize: '14px', fontWeight: 600, lineHeight: 1.4 },
+  'body-lg': { fontSize: '14px' },
   'body-md': { fontSize: '14px' },
-  'body-sm': { fontSize: '13px' },
+  // Joy draws body-sm in the tertiary (muted) color, but tabs use it for content like table cells.
+  // Only uncolored text moves: a `color` prop adds a colorX class, and `textColor` goes through sx, which wins anyway.
+  'body-sm': { fontSize: '13px', '&:not([class*="MuiTypography-color"])': { color: admin('inkSecondary') } },
   'body-xs': { fontSize: '12px', fontWeight: 500 },
 };
 
@@ -173,8 +403,9 @@ export const adminSkinComponents = {
         [IN_ADMIN]: {
           '--TableCell-height': '56px',
           '--TableCell-paddingX': '12px',
-          '--TableCell-borderColor': admin('hairline'),
+          '--TableCell-borderColor': admin('border'),
           '--TableCell-headBackground': admin('surfaceSubtle'),
+          '--TableCell-selectedBackground': admin('selection-background'),
           '--TableRow-hoverBackground': admin('surfaceSubtle'),
           '&.MuiTable-sizeSm': { '--TableCell-height': '44px' },
           color: admin('ink'),
@@ -185,12 +416,23 @@ export const adminSkinComponents = {
             fontSize: '12px',
             fontWeight: 500,
             color: admin('inkMuted'),
+            backgroundColor: admin('surfaceSubtle'),
             textTransform: 'none',
             letterSpacing: 'normal',
             verticalAlign: 'middle',
-            borderBottomColor: admin('border'),
+            borderBottom: `1px solid ${admin('border')}`,
           },
           '& tbody tr:hover > :is(td, th)': { backgroundColor: admin('surfaceSubtle') },
+          // A bare table is a surface card on the canvas; one already inside a Card or a framed DataTable is not.
+          '&:not(:is(.MuiCard-root, [data-admin-table-frame]) *)': {
+            backgroundColor: admin('surface'),
+            borderRadius: '12px',
+            boxShadow: `0 0 0 1px ${admin('border')}`,
+            '& thead tr:first-of-type > :first-child': { borderTopLeftRadius: '12px' },
+            '& thead tr:first-of-type > :last-child': { borderTopRightRadius: '12px' },
+            '& tbody tr:last-of-type > :first-child': { borderBottomLeftRadius: '12px' },
+            '& tbody tr:last-of-type > :last-child': { borderBottomRightRadius: '12px' },
+          },
           '& tbody tr:last-of-type > :is(td, th)': { borderBottomColor: 'transparent' },
           '& :is(td, th):is([align="right"], [data-numeric])': { textAlign: 'right' },
         },
@@ -203,47 +445,17 @@ export const adminSkinComponents = {
         [IN_ADMIN]: {
           '--Button-radius': '8px',
           '--Button-gap': '6px',
+          '--Icon-fontSize': '16px',
+          '--Icon-color': 'currentColor',
           borderRadius: '8px',
           fontWeight: 500,
-          '&.MuiButton-sizeMd': { fontSize: '13px', minHeight: '36px' },
-          '&.MuiButton-sizeSm': { fontSize: '13px', minHeight: '30px' },
-          '&.MuiButton-variantSolid:is(.MuiButton-colorPrimary, .MuiButton-colorNeutral)': {
-            backgroundColor: admin('ink'),
-            color: admin('surface'),
-            '&:hover': { backgroundColor: mix(admin('ink'), 88) },
-          },
-          '&.MuiButton-variantSolid.MuiButton-colorDanger': {
-            backgroundColor: admin('danger'),
-            color: admin('surface'),
-            '&:hover': { backgroundColor: mix(admin('danger'), 85, admin('ink')) },
-          },
-          '&.MuiButton-variantOutlined:not(.MuiButton-colorDanger)': {
-            backgroundColor: admin('surface'),
-            borderColor: admin('controlBorder'),
-            color: admin('ink'),
-            '&:hover': { backgroundColor: admin('hover') },
-          },
-          '&.MuiButton-variantOutlined.MuiButton-colorDanger': {
-            backgroundColor: admin('surface'),
-            borderColor: mix(admin('danger'), 35),
-            color: admin('danger'),
-            '&:hover': { backgroundColor: tone('bad', 'background') },
-          },
-          // Plain primary keeps Joy's link colour: tabs pair it with their own selected backgrounds.
-          '&.MuiButton-variantPlain.MuiButton-colorNeutral': {
-            color: admin('ink'),
-            '&:hover': { backgroundColor: admin('hover') },
-          },
-          '&.MuiButton-variantPlain.MuiButton-colorDanger': {
-            color: admin('danger'),
-            '&:hover': { backgroundColor: tone('bad', 'background') },
-          },
-          '&.MuiButton-variantSoft.MuiButton-colorNeutral': {
-            backgroundColor: admin('hover'),
-            color: admin('ink'),
-          },
+          fontSize: '13px',
+          '&.MuiButton-sizeLg, &.MuiButton-sizeMd': { minHeight: '36px', paddingInline: '14px' },
+          '&.MuiButton-sizeSm': { minHeight: '32px', paddingBlock: 0, paddingInline: '12px', fontSize: '13px' },
+          ...neutralButtonColors('Button'),
           '&.Mui-disabled': { opacity: 0.45 },
         },
+        ...rowAction('Button'),
       },
     },
   },
@@ -252,18 +464,16 @@ export const adminSkinComponents = {
       root: {
         [IN_ADMIN]: {
           '--IconButton-radius': '6px',
+          '--Icon-fontSize': '18px',
+          '--Icon-color': 'currentColor',
           borderRadius: '6px',
-          '&.MuiIconButton-variantPlain:not(.MuiIconButton-colorDanger)': {
+          ...neutralButtonColors('IconButton'),
+          '&.MuiIconButton-variantPlain:is(.MuiIconButton-colorNeutral, .MuiIconButton-colorPrimary)': {
             color: admin('inkMuted'),
-            '&:hover': { backgroundColor: admin('hover'), color: admin('ink') },
-          },
-          '&.MuiIconButton-variantOutlined:not(.MuiIconButton-colorDanger)': {
-            backgroundColor: admin('surface'),
-            borderColor: admin('controlBorder'),
-            color: admin('ink'),
-            '&:hover': { backgroundColor: admin('hover') },
+            '&:hover': { color: admin('ink') },
           },
         },
+        ...rowAction('IconButton'),
       },
     },
   },
@@ -272,11 +482,58 @@ export const adminSkinComponents = {
       root: {
         [IN_ADMIN]: {
           '--Chip-radius': '999px',
+          '--Icon-fontSize': '12px',
           borderRadius: '999px',
           fontSize: '12px',
           fontWeight: 500,
           '&.MuiChip-sizeSm, &.MuiChip-sizeMd': { minHeight: '22px', '--Chip-paddingInline': '8px' },
-          ...chipToneRules,
+          ...toneRules('Chip'),
+        },
+      },
+    },
+  },
+  JoyAlert: {
+    styleOverrides: {
+      root: {
+        [IN_ADMIN]: {
+          borderRadius: '12px',
+          fontSize: '13px',
+          ...toneRules('Alert'),
+        },
+      },
+    },
+  },
+  ...Object.fromEntries(
+    ['JoyCheckbox', 'JoyRadio', 'JoySlider', 'JoyLinearProgress', 'JoyCircularProgress'].map(name => [
+      name,
+      { styleOverrides: { root: { [IN_ADMIN]: paletteVars(['primary', 'neutral', 'success'], accentSpec) } } },
+    ])
+  ),
+  JoySwitch: {
+    styleOverrides: {
+      root: {
+        [IN_ADMIN]: {
+          ...paletteVars(['primary', 'neutral', 'success'], accentSpec),
+          // Joy fills a solid switch's track with solidBg even when off; off reads as a neutral track.
+          '&:not(.Mui-checked) .MuiSwitch-track': { backgroundColor: admin('borderStrong') },
+        },
+      },
+    },
+  },
+  JoyLink: {
+    styleOverrides: {
+      root: { [IN_ADMIN]: { color: admin('link'), '&:hover': { color: admin('selection-foreground') } } },
+    },
+  },
+  JoyAvatar: {
+    styleOverrides: {
+      root: {
+        [IN_ADMIN]: {
+          '&.MuiAvatar-variantSoft': {
+            backgroundColor: admin('selection-background'),
+            color: admin('selection-foreground'),
+            fontWeight: 600,
+          },
         },
       },
     },
@@ -300,16 +557,16 @@ export const adminSkinComponents = {
       root: {
         [IN_ADMIN]: {
           '&.MuiTab-horizontal.MuiTab-variantPlain': {
-            '--Tab-indicatorThickness': '2px',
             minHeight: '40px',
             paddingInline: '4px',
             fontSize: '14px',
             fontWeight: 500,
-            color: admin('inkMuted'),
+            color: admin('inkSecondary'),
             backgroundColor: 'transparent',
             '&:hover': { color: admin('ink'), backgroundColor: 'transparent' },
             '&[aria-selected="true"]': {
-              '--Tab-indicatorColor': admin('ink'),
+              // The app theme sets `disableIndicator` on every Tab (navigation.tsx), so draw the underline here.
+              boxShadow: `inset 0 -2px 0 ${admin('ink')}`,
               color: admin('ink'),
               backgroundColor: 'transparent',
             },
@@ -337,7 +594,7 @@ export const adminSkinComponents = {
           '--ModalDialog-radius': '16px',
           '--Card-padding': '24px',
           borderRadius: '16px',
-          backgroundColor: admin('surfaceSubtle'),
+          backgroundColor: admin('surface'),
           borderColor: admin('border'),
           color: admin('ink'),
           boxShadow: '0 24px 64px rgba(0, 0, 0, 0.3)',
