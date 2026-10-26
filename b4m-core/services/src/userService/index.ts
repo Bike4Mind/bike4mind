@@ -28,3 +28,5 @@ export * from './moderationPolicy';
 export * from './accountState';
 export * from './flagDisputePending';
 export * from './requestModerationAppeal';
+export * from './signupClusterKeys';
+export * from './signupCohorts';
