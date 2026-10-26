@@ -64,11 +64,10 @@ const loggedErrors = new WeakSet<Error>();
 
 /**
  * Message for a stream that produced no text and no tool call. A stall (no terminal event from an
- * adapter that signals one) is worded to match isStreamIdleTimeoutError and isTruncatedStreamError
- * in services/src/llm/llmErrorPredicates.ts, which buys the retry-once-then-fallback path; keep
- * "stream timeout" and "without a terminal event" in sync with them. Any other empty stream is
- * deterministic (the max-tool-calls cap) and must not match them, since a retry re-runs every tool
- * call only to fail again. Exported so the services tests pin the real wording.
+ * adapter that signals one) carries "stream timeout" so isStreamIdleTimeoutError in
+ * services/src/llm/llmErrorPredicates.ts retries it once then falls back; it must not say "without a
+ * terminal event", which isTruncatedStreamError reads as a mid-stream truncation. Any other empty
+ * stream is deterministic (the max-tool-calls cap) and must match neither.
  */
 export function bedrockEmptyResponseMessage(model: string, region: string, stalled: boolean): string {
   const profileHint =
@@ -78,7 +77,7 @@ export function bedrockEmptyResponseMessage(model: string, region: string, stall
   if (stalled) {
     return (
       `[BaseBedrockBackend] stream timeout - model "${model}" in region ${region} returned an EMPTY ` +
-      `response (no text, no tool call) without a terminal event. Usually a stalled Bedrock socket ` +
+      `response (no text, no tool call) and no terminal event. Usually a stalled Bedrock socket ` +
       `before the first token. ${profileHint}`
     );
   }
@@ -591,7 +590,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // FAIL LOUD on an empty completion: no text and no tool call (token counts can be phantom).
         // Aborted requests are excluded, as in the TRUNCATED guard below. A stall (no terminal event)
         // gets the retried wording; a single call cannot tell it from a misrouted profile, so a
-        // persistent misroute also retries then falls back. See bedrockEmptyResponseMessage.
+        // persistent misroute also retries then falls back. The retry is turn-level, so a stall on a
+        // later tool round re-runs the earlier rounds, as TRUNCATED does. See bedrockEmptyResponseMessage.
         if (
           emittedTextChars === 0 &&
           emittedProviderBlocks === 0 &&

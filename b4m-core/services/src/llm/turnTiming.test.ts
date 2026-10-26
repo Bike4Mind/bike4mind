@@ -58,10 +58,10 @@ describe('classifyTurnRetryReason', () => {
     expect(classifyTurnRetryReason(truncated)).toBe('stream_truncated');
   });
 
-  it('reads a Bedrock stall before the first token as truncated', () => {
+  it('reads a Bedrock stall before the first token as an idle timeout, not a truncation', () => {
     const stalled = new Error(bedrockEmptyResponseMessage('m', 'r', true));
 
-    expect(classifyTurnRetryReason(stalled)).toBe('stream_truncated');
+    expect(classifyTurnRetryReason(stalled)).toBe('stream_idle_timeout');
   });
 
   it('reads a stream that ended without message_stop as truncated, not stalled', () => {

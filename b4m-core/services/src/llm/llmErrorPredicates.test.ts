@@ -55,7 +55,7 @@ describe('timeout predicates', () => {
     const deterministic = new Error(bedrockEmptyResponseMessage('m', 'r', false));
 
     expect(isStreamIdleTimeoutError(stalled)).toBe(true);
-    expect(isTruncatedStreamError(stalled)).toBe(true);
+    expect(isTruncatedStreamError(stalled)).toBe(false);
     expect(isStreamIdleTimeoutError(deterministic)).toBe(false);
     expect(isTruncatedStreamError(deterministic)).toBe(false);
   });

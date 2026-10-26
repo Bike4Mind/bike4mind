@@ -149,7 +149,7 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
 
     expect(message).toMatch(/EMPTY response/i);
     expect(message).toMatch(/stream timeout/);
-    expect(message).toContain('without a terminal event');
+    expect(message).not.toContain('without a terminal event');
     expect(message).toContain('If every call on this model is empty');
   });
 
@@ -205,7 +205,7 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     const message = (err as Error).message;
 
     expect(message).toMatch(/stream timeout/);
-    expect(message).toContain('without a terminal event');
+    expect(message).not.toContain('without a terminal event');
   });
 
   // The retry and fallback downstream log the failure at WARN, so this backend log is the ERROR

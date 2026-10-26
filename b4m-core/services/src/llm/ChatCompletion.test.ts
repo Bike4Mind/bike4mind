@@ -11147,14 +11147,16 @@ describe('ChatCompletionProcess', () => {
 
     it('retries a stalled-empty Bedrock stream once on the same model, then falls back', async () => {
       setupStreamIdleTimeoutMocks();
-      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockQuest.promptMeta.model = { name: ChatModels.CLAUDE_5_SONNET_BEDROCK, backend: ModelBackend.Bedrock };
       const primaryComplete = vi
         .fn()
-        .mockRejectedValue(new Error(bedrockEmptyResponseMessage(ChatModels.GPT4, 'us-east-1', true)));
+        .mockRejectedValue(
+          new Error(bedrockEmptyResponseMessage(ChatModels.CLAUDE_5_SONNET_BEDROCK, 'us-east-1', true))
+        );
       mockedGetLlmByModel.mockReturnValue({
         complete: primaryComplete,
         getModelInfo: vi.fn().mockResolvedValue([]),
-        currentModel: ChatModels.GPT4,
+        currentModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
       });
       const fallbackModel = {
         id: 'claude-sonnet-4-8',
