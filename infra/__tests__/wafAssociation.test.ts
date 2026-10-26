@@ -66,7 +66,11 @@ async function loadWaf(stage: string) {
       WebAclLoggingConfiguration: resources.resource,
       getWebAclOutput: resources.lookup,
     },
-    cloudwatch: { LogGroup: resources.resource, MetricAlarm: resources.resource },
+    cloudwatch: {
+      LogGroup: resources.resource,
+      MetricAlarm: resources.resource,
+      LogMetricFilter: resources.resource,
+    },
     sns: { Topic: resources.resource, TopicSubscription: resources.resource, getTopicOutput: resources.topicLookup },
     lambda: { Permission: resources.resource },
     sqs: { Queue: resources.resource, QueuePolicy: resources.resource },

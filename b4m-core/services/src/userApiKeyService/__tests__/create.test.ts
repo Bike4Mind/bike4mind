@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'crypto';
 import {
   createUserApiKey,
@@ -998,5 +998,78 @@ describe('createUserApiKey - contributed scopes', () => {
         callerScopes: [ApiKeyScope.READ_NOTEBOOKS],
       })
     ).rejects.toThrow(/calling key does not have/);
+  });
+});
+
+describe('API-key creation metric', () => {
+  it.each(['missing', 'email_unverified'] as const)('does not count a trust-rejected mint (%s)', async rejection => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const repo = makeRepo();
+    await expect(
+      createUserApiKey('user-1', baseParams, {
+        db: { userApiKeys: repo as unknown as IUserApiKeyRepository, agents: { findById: vi.fn() } },
+        ...(rejection === 'email_unverified'
+          ? { trust: { status: 'untrusted', reason: 'email_unverified' } as const }
+          : {}),
+      })
+    ).rejects.toThrow(rejection === 'missing' ? /requires a trust assessment/ : /Verify your email/);
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(repo.createIfUnderCap).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(['dashboard', 'cli', 'api', 'bridge', 'overwatch-admin'] as const)(
+    'emits exactly one data-minimal event after a successful %s mint',
+    async createdFrom => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+      const repo = makeRepo();
+      await createUserApiKey(
+        'sys-1',
+        { ...baseParams, metadata: { createdFrom } },
+        {
+          db: { userApiKeys: repo as unknown as IUserApiKeyRepository, agents: { findById: vi.fn() } },
+          systemUserId: 'sys-1',
+        }
+      );
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(info.mock.calls[0][0]))).toEqual({ severity: 'info', message: 'user-api-key-created' });
+    }
+  );
+
+  it('counts exchange mints too', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const repo = makeRepo();
+    await createExchangeUserApiKey(
+      'sys-1',
+      {
+        ...baseParams,
+        expiresAt: new Date(Date.now() + 60_000),
+        metadata: { oauthClientId: 'client' },
+      },
+      {
+        db: { userApiKeys: repo as unknown as IUserApiKeyRepository, agents: { findById: vi.fn() } },
+        systemUserId: 'sys-1',
+      }
+    );
+    expect(info).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['at_cap', 'write_failed'] as const)('does not count a rejected mint (%s)', async failure => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const createIfUnderCap =
+      failure === 'at_cap' ? vi.fn().mockResolvedValue('at_cap') : vi.fn().mockRejectedValue(new Error('write failed'));
+    const repo = makeRepo({ createIfUnderCap });
+    await expect(
+      createUserApiKey('user-1', baseParams, {
+        trust: TRUSTED,
+        db: { userApiKeys: repo as unknown as IUserApiKeyRepository, agents: { findById: vi.fn() } },
+      })
+    ).rejects.toThrow(failure === 'at_cap' ? /Maximum 10 active API keys/ : /write failed/);
+    expect(createIfUnderCap).toHaveBeenCalledTimes(1);
+    expect(info).not.toHaveBeenCalled();
   });
 });

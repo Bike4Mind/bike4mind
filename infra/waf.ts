@@ -12,6 +12,7 @@ import { resolveExternalWafAssociation } from './wafAssociation';
 import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { parseAlarmThreshold, SIGNUP_EDGE_SIGNAL_DEFAULT } from './signupAlarmThreshold';
 
 // WAF is disabled by default. Enable via ENABLE_WAF=true environment variable.
 // For production and dev, set ENABLE_WAF=true in GitHub Variables.
@@ -195,6 +196,30 @@ export const wafLoggingConfig =
     : undefined;
 
 /**
+ * ARN of the externally managed rate-limit alarm topic (production only). Looked up rather than
+ * constructed so a missing topic fails the deploy instead of leaving a dangling subscription.
+ */
+const wafAiRateLimitAlarmTopicArn = externalWaf
+  ? aws.sns.getTopicOutput(
+      { name: `${$app.name}-${$app.stage}-waf-ai-rate-limit-alarm` },
+      { provider: wafProviderUsEast1 }
+    ).arn
+  : undefined;
+
+/**
+ * Email-only us-east-1 topic (OPS_ALERT_EMAIL subscription below); delivery does not depend on
+ * the Slack forwarding Lambda. Separate from the OobAlarmTopic in dlqAlarms.ts because
+ * CloudWatch alarm actions must be in the alarm's region, and the WAF alarms live in us-east-1.
+ */
+export const wafOobAlarmTopic = externalWaf
+  ? new aws.sns.Topic(
+      'WafOobAlarmTopic',
+      { name: `${$app.name}-${$app.stage}-waf-oob-alarm` },
+      { provider: wafProviderUsEast1 }
+    )
+  : undefined;
+
+/**
  * Lambda handler that forwards WAF alarm notifications to Slack.
  * Created in the default region; SNS cross-region invocation carries the
  * alarm payload from us-east-1 to the handler.
@@ -208,13 +233,7 @@ export const wafAlarmSlackHandler = externalWaf
     })
   : undefined;
 
-if (externalWaf && wafAlarmSlackHandler) {
-  // Looked up rather than constructed so a missing topic fails the deploy instead of leaving a dangling subscription.
-  const wafAiRateLimitAlarmTopicArn = aws.sns.getTopicOutput(
-    { name: `${$app.name}-${$app.stage}-waf-ai-rate-limit-alarm` },
-    { provider: wafProviderUsEast1 }
-  ).arn;
-
+if (externalWaf && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic && wafAlarmSlackHandler) {
   // Allow the us-east-1 SNS topic to invoke the Lambda handler.
   // Captured in a variable so the subscription can declare a dependsOn — without it
   // Pulumi creates both resources in parallel and SNS may attempt subscription
@@ -267,19 +286,10 @@ if (externalWaf && wafAlarmSlackHandler) {
     { provider: wafProviderUsEast1, dependsOn: [wafAlarmSlackHandlerSnsPermission, wafAlarmDlqPolicy] }
   );
 
-  // Out-of-band alarm for WafAlarmSlackHandlerDlq itself.
+  // Out-of-band alarm for WafAlarmSlackHandlerDlq itself routes to wafOobAlarmTopic.
   // Cannot route to the rate-limit alarm topic -- that would loop into the same failing Lambda.
-  // Must be in us-east-1: CloudWatch alarm actions must be in the same region as the alarm,
-  // and the DLQ + its alarm both live in us-east-1. This topic is intentionally separate from
-  // the OobAlarmTopic in dlqAlarms.ts (different regions -- they cannot be merged).
   // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
   // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
-  const wafOobAlarmTopic = new aws.sns.Topic(
-    'WafOobAlarmTopic',
-    { name: `${$app.name}-${$app.stage}-waf-oob-alarm` },
-    { provider: wafProviderUsEast1 }
-  );
-
   if (process.env.OPS_ALERT_EMAIL) {
     // retainOnDelete: same reason as OobAlarmTopicEmailSub in dlqAlarms.ts -- the AWS
     // provider cannot destroy a PendingConfirmation subscription, so retain it rather
@@ -347,6 +357,65 @@ if (externalWaf && wafAlarmSlackHandler) {
       dimensions: { QueueName: wafAlarmDlq.name },
       alarmActions: [wafOobAlarmTopic.arn],
       tags: { Application: 'WAF', Severity: 'High', MonitoringType: 'DLQ' },
+    },
+    { provider: wafProviderUsEast1 }
+  );
+}
+
+/**
+ * Sign-in code requests that the managed rule groups label as hosting-provider or bot-control
+ * traffic. The labels are attached whether the rule blocks or only counts, so this alarms on
+ * automated signup attempts even while those rules are in Count mode.
+ */
+export const WAF_OTC_EDGE_SIGNAL_FILTER_PATTERN =
+  '{ $.httpRequest.uri = "/api/otc/*" && ' +
+  '($.labels[*].name = "awswaf:managed:aws:anonymous-ip-list:HostingProviderIPList" || ' +
+  '$.labels[*].name = "awswaf:managed:aws:bot-control:signal:*") }';
+
+if (externalWaf && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic) {
+  const edgeSignalThreshold = parseAlarmThreshold(
+    'SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN',
+    process.env.SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN,
+    SIGNUP_EDGE_SIGNAL_DEFAULT
+  );
+  const signupNamespace = `${$app.name}/${$app.stage}/Signup`;
+  const actions = [wafAiRateLimitAlarmTopicArn, wafOobAlarmTopic.arn];
+
+  // The filter, its metric and the alarm all live in the log group's region (us-east-1). The log group is
+  // externally owned in production; the filter only needs its name.
+  new aws.cloudwatch.LogMetricFilter(
+    'wafOtcEdgeSignalFilter',
+    {
+      name: `${$app.name}-${$app.stage}-waf-otc-edge-signals`,
+      logGroupName: `aws-waf-logs-bike4mind-${$app.stage}`,
+      pattern: WAF_OTC_EDGE_SIGNAL_FILTER_PATTERN,
+      metricTransformation: {
+        name: 'OtcEdgeSignalRequests',
+        namespace: signupNamespace,
+        value: '1',
+        unit: 'Count',
+      },
+    },
+    { provider: wafProviderUsEast1 }
+  );
+
+  new aws.cloudwatch.MetricAlarm(
+    'wafOtcEdgeSignalRate',
+    {
+      name: `${$app.name}-${$app.stage}-waf-otc-edge-signal-rate`,
+      alarmDescription:
+        'Sign-in code requests from hosting-provider or bot-control labelled clients per 5 minutes at or above the ceiling',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'OtcEdgeSignalRequests',
+      namespace: signupNamespace,
+      period: 300,
+      statistic: 'Sum',
+      threshold: edgeSignalThreshold,
+      treatMissingData: 'notBreaching',
+      alarmActions: actions,
+      okActions: actions,
+      tags: { Application: 'Signup', Severity: 'High' },
     },
     { provider: wafProviderUsEast1 }
   );

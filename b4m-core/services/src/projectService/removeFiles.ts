@@ -6,6 +6,7 @@ import {
   IUserRepository,
   secureParameters,
   BadRequestError,
+  ForbiddenError,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
@@ -60,7 +61,7 @@ export const removeFiles = async (
   }
 
   if (project.userId !== userId && files.some(f => f.userId !== userId)) {
-    throw new Error('You are not authorized to remove files from this project');
+    throw new ForbiddenError('You are not authorized to remove files from this project');
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id

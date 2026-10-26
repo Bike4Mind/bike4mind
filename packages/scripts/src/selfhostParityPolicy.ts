@@ -630,7 +630,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
-    '4436a8d9e6d699648e62f7a433fbe0c924a906b5a8001fd4b9066ca9feceb10f'
+    '8b3c2656e21b9dff5acbd01785468e63296b670a2f64696ef6f97660dcd95f1c'
+  ),
+  broker(
+    'queue:infra/youngAccountSpendAlertDeadLetter.ts:youngAccountSpendAlertDlq',
+    '7c55bfdeaea409d972ba757cc5e3c8d50a5a0d1e8fd8629afab3473284bbbd6e'
   ),
   wired('schedule:infra/cron.ts:adminAuditAlerts', '3d29c77c0415f6c9a1df4c5844222d599f060b9cc59f38fddcf9878c6882ec47', {
     source: 'apps/workers/src/selfhost/adminAuditAlerts.ts',
@@ -860,6 +864,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   hostedOnly(
+    'schedule:infra/cron.ts:youngAccountSpendAlert',
+    '4d70a52fab52ffd079d447338a2aa4ead5ba19592604adf130905d0fa1e71898',
+    'Hosted production abuse alert to Slack; not applicable to a portable deployment.'
+  ),
+  hostedOnly(
     'schedule:infra/cron.ts:signupBaselineReport',
     'c5e21ed10e3d8b48ba363af2d0422119287414d2a0fce925897b7925e55b1a27',
     'Hosted production analytics report; not applicable to a portable deployment.'
@@ -914,7 +923,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',
-    '84d8a753d4398b1923cd6967f312436fd05f265f181f553686da48001a40fc31'
+    '7c36bbf7168b43b7f3a0a8f1f51130a9961e41d3cc9badc61efa50b45edd586d'
   ),
   gap(
     'snsSubscription:infra/serviceHealthAlarms.ts:ServiceHealthAlarmTopic',
@@ -922,11 +931,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafAlarmSlackHandlerSubscription',
-    '81258820089dd79426511eba079b7df300b084fb571f07ba51bb8f7d462614f2',
+    '631d4c7831d8394227a97df974d9db5101f72a7480b5ad5c22122245d5132e65',
     ['lambda:InvokeFunction']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafOobAlarmTopicEmailSub',
-    'cfdb21e48b31b60086497f7ccfeee9047b5c80dc83eec6576a273c692c1fa9fe'
+    '272cf415be518059312aca5c91ba55ee06246b562c35248878234cacfe305188'
   ),
 ];
