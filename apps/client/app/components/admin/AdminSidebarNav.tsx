@@ -9,24 +9,27 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
-import CloseIcon from '@mui/icons-material/Close';
-import DashboardIcon from '@mui/icons-material/Dashboard';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
-import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
-import SearchIcon from '@mui/icons-material/Search';
-import { Box, Dropdown, IconButton, Input, Menu, MenuButton, MenuItem, Tooltip, Typography } from '@mui/joy';
+import { ChevronDown, Ellipsis, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
+import { Avatar, Box, Dropdown, IconButton, Input, Menu, MenuButton, MenuItem, Tooltip } from '@mui/joy';
 import { adminFocus } from './shared/adminStyles';
 import {
   AdminTab,
   SIDEBAR_SECTIONS,
   filterSidebarSections,
   findSectionKeyForTab,
+  splitSectionItems,
   type SidebarGate,
   type SidebarItem,
 } from './adminSidebarConfig';
 import { adminTabToSlug } from './adminTabSlugs';
-import { useAdminSidebarSections } from './useAdminSidebarSections';
+import { useAdminSidebarMore } from './useAdminSidebarState';
+
+/** The signed-in admin shown in the sidebar footer. */
+export type SidebarAccount = {
+  name: string;
+  role: string;
+  photoUrl?: string;
+};
 
 export type SidebarNavProps = {
   /** The tab to highlight. The layout passes Users while a user profile is open. */
@@ -36,6 +39,7 @@ export type SidebarNavProps = {
   waitingSubscribersCount?: number;
   hiddenNotifications: string[];
   onTabSelect: (tab: AdminTab) => void;
+  account?: SidebarAccount;
   /** Folds the nav to an icon rail. */
   collapsed?: boolean;
   /** Omit to hide the collapse toggle (the phone drawer has nothing to collapse to). */
@@ -44,7 +48,6 @@ export type SidebarNavProps = {
   onClose?: () => void;
 };
 
-const DASHBOARD_LABEL = 'Dashboard';
 const EXPANDED_WIDTH = 248;
 const RAIL_WIDTH = 64;
 
@@ -53,97 +56,155 @@ const RAIL_WIDTH = 64;
 const FOCUSABLE_ATTR = 'data-admin-nav-focusable';
 const focusableProps = { [FOCUSABLE_ATTR]: '' };
 
-// Mixed from the admin tokens so the same values hold in light and dark mode.
-const HOVER_BACKGROUND = 'color-mix(in srgb, var(--joy-palette-admin-ink) 6%, transparent)';
-const IDLE_INK = 'color-mix(in srgb, var(--joy-palette-admin-ink) 80%, var(--joy-palette-admin-canvas))';
+/**
+ * DESIGN_GUIDE.md tokens the admin palette does not define yet. Each reads the palette variable
+ * first and falls back to a mix of the existing ones, so it is right in light and dark mode today
+ * and picks up the real token once the skin adds it.
+ */
+const tokens = {
+  inkSecondary:
+    'var(--joy-palette-admin-inkSecondary, color-mix(in srgb, var(--joy-palette-admin-ink) 80%, var(--joy-palette-admin-canvas)))',
+  hover:
+    'var(--joy-palette-admin-hover, color-mix(in srgb, var(--joy-palette-admin-ink) 6%, var(--joy-palette-admin-canvas)))',
+  borderStrong:
+    'var(--joy-palette-admin-borderStrong, color-mix(in srgb, var(--joy-palette-admin-ink) 12%, var(--joy-palette-admin-border)))',
+};
+
+const ICON_SIZE = 16;
+const ICON_STROKE = 2;
 
 const isApplePlatform = () =>
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+const isEditableTarget = (target: EventTarget | null) =>
+  target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 
 const tabHref = (tab: AdminTab) => {
   const slug = adminTabToSlug(tab);
   return slug ? `/admin?tab=${slug}` : '/admin';
 };
 
-const navItemSx = (active: boolean) => ({
+/** A plain left click selects in-app; modified clicks fall through so the link opens a new tab. */
+const isPlainClick = (event: MouseEvent) =>
+  event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+
+/** Only a label that actually got cut off earns a tooltip; set on hover, when layout is known. */
+const titleIfTruncated = (event: MouseEvent<HTMLElement>) => {
+  const label = event.currentTarget.querySelector<HTMLElement>('[data-nav-label]');
+  if (!label) return;
+  event.currentTarget.title = label.scrollWidth > label.clientWidth ? (label.textContent ?? '') : '';
+};
+
+const rowSx = {
   display: 'flex',
   alignItems: 'center',
   gap: '10px',
-  minHeight: 36,
+  width: '100%',
+  height: 36,
   px: '10px',
+  boxSizing: 'border-box',
   borderRadius: '8px',
+  border: 0,
+  fontFamily: 'inherit',
   fontSize: 14,
   fontWeight: 500,
-  lineHeight: 1.3,
+  lineHeight: '20px',
+  textAlign: 'left',
   textDecoration: 'none',
   cursor: 'pointer',
-  color: active ? 'admin.ink' : IDLE_INK,
+  '& > svg': { flexShrink: 0 },
+  ...adminFocus,
+} as const;
+
+const navItemSx = (active: boolean) => ({
+  ...rowSx,
+  color: active ? 'admin.ink' : tokens.inkSecondary,
   bgcolor: active ? 'admin.surface' : 'transparent',
   boxShadow: active ? '0 0 0 1px var(--joy-palette-admin-border)' : 'none',
-  '& > svg': { fontSize: 18, flexShrink: 0, color: active ? 'admin.accent' : 'inherit' },
-  '&:hover': { bgcolor: active ? 'admin.surface' : HOVER_BACKGROUND, color: 'admin.ink', textDecoration: 'none' },
-  ...adminFocus,
+  '& > svg': { flexShrink: 0, color: active ? 'admin.ink' : 'admin.inkMuted' },
+  '&:hover': {
+    bgcolor: active ? 'admin.surface' : tokens.hover,
+    color: 'admin.ink',
+    textDecoration: 'none',
+    '& > svg': { color: 'admin.ink' },
+  },
 });
 
-const railButtonSx = (active: boolean) => ({
-  width: 40,
-  height: 40,
+const iconButtonSx = (active = false) => ({
+  width: 36,
+  height: 36,
+  minHeight: 36,
   borderRadius: '8px',
-  color: active ? 'admin.accent' : IDLE_INK,
+  color: active ? 'admin.ink' : 'admin.inkMuted',
   bgcolor: active ? 'admin.surface' : 'transparent',
   boxShadow: active ? '0 0 0 1px var(--joy-palette-admin-border)' : 'none',
-  '&:hover': { bgcolor: active ? 'admin.surface' : HOVER_BACKGROUND, color: 'admin.ink' },
+  '&:hover': { bgcolor: active ? 'admin.surface' : tokens.hover, color: 'admin.ink' },
   ...adminFocus,
 });
 
 const kbdSx = {
   fontFamily: 'code',
   fontSize: 11,
-  lineHeight: 1.4,
+  lineHeight: '16px',
   px: '5px',
-  py: '1px',
   borderRadius: '4px',
   border: '1px solid',
-  borderColor: 'admin.border',
+  borderColor: tokens.borderStrong,
   bgcolor: 'admin.surface',
   color: 'admin.inkMuted',
   whiteSpace: 'nowrap',
 };
 
-/** A plain left click selects in-app; modified clicks fall through so the link opens a new tab. */
-const isPlainClick = (event: MouseEvent) =>
-  event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+// Hidden until the pointer is over the list, so a long nav does not wear a permanent scrollbar.
+const quietScrollSx = {
+  overflowY: 'auto',
+  overscrollBehavior: 'contain',
+  scrollbarWidth: 'none',
+  '&&::-webkit-scrollbar': { width: 0, height: 0 },
+  '&:hover': { scrollbarWidth: 'thin' },
+  '&&:hover::-webkit-scrollbar': { width: 6 },
+} as const;
+
+// The size goes in an inline style too: app-wide svg rules otherwise beat lucide's width attribute.
+const NavIcon = ({ Icon, size = ICON_SIZE, rotate }: { Icon: ElementType; size?: number; rotate?: boolean }) => (
+  <Icon
+    size={size}
+    strokeWidth={ICON_STROKE}
+    aria-hidden
+    focusable="false"
+    style={{ width: size, height: size, flexShrink: 0, transform: rotate ? 'rotate(180deg)' : undefined }}
+  />
+);
 
 type NavLinkProps = {
-  tab: AdminTab;
-  label: string;
-  Icon: ElementType;
+  item: SidebarItem;
   active: boolean;
-  testid?: string;
   endDecorator?: ReactNode;
   onSelect: (tab: AdminTab) => void;
 };
 
-const NavLink = ({ tab, label, Icon, active, testid, endDecorator, onSelect }: NavLinkProps) => (
+const NavLink = ({ item, active, endDecorator, onSelect }: NavLinkProps) => (
   <Box
     component="a"
-    href={tabHref(tab)}
+    href={tabHref(item.tab)}
     aria-current={active ? 'page' : undefined}
-    data-testid={testid}
+    data-testid={item.testid}
     {...focusableProps}
+    onMouseEnter={titleIfTruncated}
     onClick={(event: MouseEvent<HTMLAnchorElement>) => {
       if (!isPlainClick(event)) return;
       event.preventDefault();
-      onSelect(tab);
+      onSelect(item.tab);
     }}
     sx={navItemSx(active)}
   >
-    <Icon aria-hidden />
+    <NavIcon Icon={item.Icon} />
     <Box
       component="span"
+      data-nav-label=""
       sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
     >
-      {label}
+      {item.label}
     </Box>
     {endDecorator}
   </Box>
@@ -164,9 +225,44 @@ const BrandMark = () => (
       justifyContent: 'center',
       fontWeight: 700,
       fontSize: 12,
+      letterSpacing: '-0.01em',
     }}
   >
     B4
+  </Box>
+);
+
+const AccountAvatar = ({ account }: { account: SidebarAccount }) => (
+  <Avatar
+    src={account.photoUrl || undefined}
+    alt=""
+    sx={{
+      '--Avatar-size': '24px',
+      flexShrink: 0,
+      fontSize: 11,
+      fontWeight: 600,
+      bgcolor: tokens.hover,
+      color: 'admin.ink',
+    }}
+  >
+    {account.name.trim().charAt(0).toUpperCase()}
+  </Avatar>
+);
+
+const SectionLabel = ({ id, children }: { id: string; children: ReactNode }) => (
+  <Box
+    id={id}
+    sx={{
+      px: '10px',
+      pt: '20px',
+      pb: '6px',
+      fontSize: 12,
+      fontWeight: 500,
+      lineHeight: '16px',
+      color: 'admin.inkMuted',
+    }}
+  >
+    {children}
   </Box>
 );
 
@@ -177,11 +273,12 @@ export const SidebarNav = ({
   waitingSubscribersCount,
   hiddenNotifications,
   onTabSelect,
+  account,
   collapsed = false,
   onToggleCollapsed,
   onClose,
 }: SidebarNavProps) => {
-  const { isExpanded, toggleSection } = useAdminSidebarSections(activeTab);
+  const { isMoreOpen, toggleMore } = useAdminSidebarMore();
   const [query, setQuery] = useState('');
   const navRef = useRef<HTMLElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
@@ -195,13 +292,25 @@ export const SidebarNav = ({
   };
   const visibleSections = filterSidebarSections(SIDEBAR_SECTIONS, gates, query);
   const filtering = query.trim() !== '';
-  const showDashboard = !filtering || DASHBOARD_LABEL.toLowerCase().includes(query.trim().toLowerCase());
   const activeSectionKey = findSectionKeyForTab(activeTab);
 
   useEffect(() => {
     if (collapsed || !focusFilterOnExpand.current) return;
     focusFilterOnExpand.current = false;
     filterRef.current?.focus();
+  }, [collapsed]);
+
+  // "/" focuses the filter from anywhere in the admin, unless the admin is typing somewhere.
+  useEffect(() => {
+    if (collapsed) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (isEditableTarget(event.target) || !filterRef.current?.offsetParent) return;
+      event.preventDefault();
+      filterRef.current.focus();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, [collapsed]);
 
   const waitingBadge = (item: SidebarItem): ReactNode => {
@@ -221,14 +330,15 @@ export const SidebarNav = ({
           minWidth: 20,
           height: 20,
           px: '6px',
+          boxSizing: 'border-box',
           borderRadius: '999px',
           fontSize: 11,
           fontWeight: 600,
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
-          bgcolor: 'admin.status.bad.background',
-          color: 'admin.status.bad.foreground',
+          bgcolor: 'admin.status.neutral.background',
+          color: 'admin.status.neutral.foreground',
         }}
       >
         {waitingSubscribersCount}
@@ -265,7 +375,7 @@ export const SidebarNav = ({
       event.preventDefault();
       focusables()[0]?.focus();
     } else if (event.key === 'Enter') {
-      const firstMatch = showDashboard && filtering ? AdminTab.Dashboard : visibleSections[0]?.items[0]?.tab;
+      const firstMatch = visibleSections[0]?.items[0]?.tab;
       if (!filtering || firstMatch === undefined) return;
       event.preventDefault();
       setQuery('');
@@ -277,6 +387,31 @@ export const SidebarNav = ({
     }
   };
 
+  const collapseButton = onToggleCollapsed && (
+    <Tooltip title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} placement="right">
+      <IconButton
+        variant="plain"
+        color="neutral"
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        data-testid={collapsed ? 'admin-sidebar-expand-btn' : 'admin-sidebar-collapse-btn'}
+        {...(collapsed ? focusableProps : {})}
+        onClick={onToggleCollapsed}
+        sx={{ ...iconButtonSx(), width: 28, height: 28, minHeight: 28, minWidth: 28 }}
+      >
+        {collapsed ? <NavIcon Icon={PanelLeftOpen} /> : <NavIcon Icon={PanelLeftClose} />}
+      </IconButton>
+    </Tooltip>
+  );
+
+  const navFrameSx = {
+    height: '100%',
+    boxSizing: 'border-box',
+    display: 'flex',
+    flexDirection: 'column',
+    bgcolor: 'admin.canvas',
+    color: tokens.inkSecondary,
+  } as const;
+
   if (collapsed) {
     return (
       <Box
@@ -287,125 +422,120 @@ export const SidebarNav = ({
         data-collapsed="true"
         onKeyDown={handleNavKeyDown}
         sx={{
+          ...navFrameSx,
           width: RAIL_WIDTH,
-          height: '100%',
-          boxSizing: 'border-box',
-          py: '20px',
-          display: 'flex',
-          flexDirection: 'column',
           alignItems: 'center',
-          gap: '4px',
-          overflowY: 'auto',
-          bgcolor: 'admin.canvas',
+          pt: '20px',
           borderRight: '1px solid',
           borderColor: 'admin.border',
         }}
       >
-        <Box sx={{ pb: '10px' }}>
+        <Box sx={{ pt: '4px', pb: '18px' }}>
           <BrandMark />
         </Box>
-        {onToggleCollapsed && (
-          <Tooltip title="Expand sidebar" placement="right">
-            <IconButton
-              variant="plain"
-              color="neutral"
-              aria-label="Expand sidebar"
-              data-testid="admin-sidebar-expand-btn"
-              {...focusableProps}
-              onClick={onToggleCollapsed}
-              sx={railButtonSx(false)}
-            >
-              <KeyboardDoubleArrowRightIcon />
-            </IconButton>
-          </Tooltip>
-        )}
-        {onToggleCollapsed && (
-          <Tooltip title="Filter pages" placement="right">
-            <IconButton
-              variant="plain"
-              color="neutral"
-              aria-label="Filter pages"
-              data-testid="admin-sidebar-rail-filter-btn"
-              {...focusableProps}
-              onClick={() => {
-                focusFilterOnExpand.current = true;
-                onToggleCollapsed();
-              }}
-              sx={railButtonSx(false)}
-            >
-              <SearchIcon />
-            </IconButton>
-          </Tooltip>
-        )}
-        <Box sx={{ width: 32, my: '6px', borderTop: '1px solid', borderColor: 'admin.border' }} />
-        <Tooltip title={DASHBOARD_LABEL} placement="right">
-          <Box
-            component="a"
-            href={tabHref(AdminTab.Dashboard)}
-            aria-label={DASHBOARD_LABEL}
-            aria-current={activeTab === AdminTab.Dashboard ? 'page' : undefined}
-            data-testid="admin-dashboard-tab-btn"
-            {...focusableProps}
-            onClick={(event: MouseEvent<HTMLAnchorElement>) => {
-              if (!isPlainClick(event)) return;
-              event.preventDefault();
-              onTabSelect(AdminTab.Dashboard);
-            }}
-            sx={{
-              ...railButtonSx(activeTab === AdminTab.Dashboard),
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <DashboardIcon aria-hidden />
-          </Box>
-        </Tooltip>
-        {visibleSections.map(section => {
-          const { Icon: SectionIcon } = section;
-          const sectionActive = section.key === activeSectionKey;
-          return (
-            <Dropdown key={section.key}>
-              <Tooltip title={section.label} placement="right">
-                <MenuButton
-                  slots={{ root: IconButton }}
-                  slotProps={{
-                    root: {
-                      variant: 'plain',
-                      color: 'neutral',
-                      'aria-label': section.label,
-                      sx: railButtonSx(sectionActive),
-                      ...focusableProps,
-                    },
+        <Box
+          sx={{
+            ...quietScrollSx,
+            flex: 1,
+            minHeight: 0,
+            width: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '4px',
+          }}
+        >
+          {onToggleCollapsed && (
+            <Tooltip title="Filter pages" placement="right">
+              <IconButton
+                variant="plain"
+                color="neutral"
+                aria-label="Filter pages"
+                data-testid="admin-sidebar-rail-filter-btn"
+                {...focusableProps}
+                onClick={() => {
+                  focusFilterOnExpand.current = true;
+                  onToggleCollapsed();
+                }}
+                sx={iconButtonSx()}
+              >
+                <NavIcon Icon={Search} />
+              </IconButton>
+            </Tooltip>
+          )}
+          {visibleSections.map(section => {
+            const sectionActive = section.key === activeSectionKey;
+            return (
+              <Dropdown key={section.key}>
+                <Tooltip title={section.label} placement="right">
+                  <MenuButton
+                    slots={{ root: IconButton }}
+                    slotProps={{
+                      root: {
+                        variant: 'plain',
+                        color: 'neutral',
+                        'aria-label': section.label,
+                        sx: iconButtonSx(sectionActive),
+                        ...focusableProps,
+                      },
+                    }}
+                    data-testid={`admin-sidebar-rail-${section.key}-btn`}
+                  >
+                    <NavIcon Icon={section.Icon} />
+                  </MenuButton>
+                </Tooltip>
+                <Menu
+                  placement="right-start"
+                  // Clear the rail's right edge instead of overlapping it.
+                  modifiers={[{ name: 'offset', options: { offset: [-6, 14] } }]}
+                  size="sm"
+                  sx={{
+                    minWidth: 220,
+                    zIndex: 1300,
+                    p: '6px',
+                    borderRadius: '12px',
+                    bgcolor: 'admin.surface',
+                    borderColor: 'admin.border',
+                    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.08)',
                   }}
-                  data-testid={`admin-sidebar-rail-${section.key}-btn`}
                 >
-                  <SectionIcon />
-                </MenuButton>
-              </Tooltip>
-              <Menu placement="right-start" size="sm" sx={{ minWidth: 220, zIndex: 1300 }}>
-                <Typography level="body-xs" sx={{ px: 1.5, py: 0.5, fontWeight: 600, color: 'admin.inkMuted' }}>
-                  {section.label}
-                </Typography>
-                {section.items.map(item => {
-                  const { Icon: ItemIcon } = item;
-                  return (
-                    <MenuItem
-                      key={item.tab}
-                      selected={item.tab === activeTab}
-                      aria-current={item.tab === activeTab ? 'page' : undefined}
-                      onClick={() => onTabSelect(item.tab)}
-                    >
-                      <ItemIcon fontSize="small" aria-hidden />
-                      {item.label}
-                      {waitingBadge(item)}
-                    </MenuItem>
-                  );
-                })}
-              </Menu>
-            </Dropdown>
-          );
-        })}
+                  <Box
+                    sx={{ px: '10px', pt: '4px', pb: '6px', fontSize: 12, fontWeight: 500, color: 'admin.inkMuted' }}
+                  >
+                    {section.label}
+                  </Box>
+                  {section.items.map(item => {
+                    const active = item.tab === activeTab;
+                    return (
+                      <MenuItem
+                        key={item.tab}
+                        aria-current={active ? 'page' : undefined}
+                        onClick={() => onTabSelect(item.tab)}
+                        sx={{ ...navItemSx(active), minHeight: 36, gap: '10px' }}
+                      >
+                        <NavIcon Icon={item.Icon} />
+                        <Box component="span" sx={{ flex: 1 }}>
+                          {item.label}
+                        </Box>
+                        {waitingBadge(item)}
+                      </MenuItem>
+                    );
+                  })}
+                </Menu>
+              </Dropdown>
+            );
+          })}
+        </Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', py: '14px' }}>
+          {collapseButton}
+          {account && (
+            <Tooltip title={`${account.name} \u00B7 ${account.role}`} placement="right">
+              <Box data-testid="admin-sidebar-account">
+                <AccountAvatar account={account} />
+              </Box>
+            </Tooltip>
+          )}
+        </Box>
       </Box>
     );
   }
@@ -419,192 +549,133 @@ export const SidebarNav = ({
       data-collapsed="false"
       onKeyDown={handleNavKeyDown}
       sx={{
+        ...navFrameSx,
         width: { xs: '100%', md: EXPANDED_WIDTH },
-        height: '100%',
-        boxSizing: 'border-box',
-        display: 'flex',
-        flexDirection: 'column',
-        bgcolor: 'admin.canvas',
         borderRight: { md: '1px solid' },
         borderColor: { md: 'admin.border' },
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: '10px', px: '24px', pt: '20px', pb: '14px' }}>
-        <BrandMark />
-        <Typography sx={{ fontWeight: 600, fontSize: 14, color: 'admin.ink' }}>Admin</Typography>
-        <Box
-          component="kbd"
-          title="Command palette"
-          data-testid="admin-sidebar-command-hint"
-          sx={{ ...kbdSx, ml: 'auto' }}
-        >
-          {commandKeyHint}
-        </Box>
-        {onToggleCollapsed && (
-          <Tooltip title="Collapse sidebar" placement="right">
+      <Box sx={{ px: '14px', pt: '20px' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '10px', px: '10px', pt: '4px', pb: '18px' }}>
+          <BrandMark />
+          <Box sx={{ fontWeight: 600, fontSize: 14, lineHeight: '20px', color: 'admin.ink' }}>Admin</Box>
+          <Box
+            component="kbd"
+            title="Command palette"
+            data-testid="admin-sidebar-command-hint"
+            sx={{ ...kbdSx, ml: 'auto' }}
+          >
+            {commandKeyHint}
+          </Box>
+          {onClose && (
             <IconButton
-              size="sm"
               variant="plain"
               color="neutral"
-              aria-label="Collapse sidebar"
-              data-testid="admin-sidebar-collapse-btn"
-              onClick={onToggleCollapsed}
-              sx={{ color: 'admin.inkMuted', '&:hover': { bgcolor: HOVER_BACKGROUND }, ...adminFocus }}
+              aria-label="Close admin menu"
+              data-testid="admin-sidebar-close-btn"
+              onClick={onClose}
+              sx={{ ...iconButtonSx(), width: 28, height: 28, minHeight: 28, minWidth: 28, mr: '-6px' }}
             >
-              <KeyboardDoubleArrowLeftIcon />
+              <NavIcon Icon={X} />
             </IconButton>
-          </Tooltip>
-        )}
-        {onClose && (
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            aria-label="Close admin menu"
-            data-testid="admin-sidebar-close-btn"
-            onClick={onClose}
-            sx={{ color: 'admin.inkMuted', '&:hover': { bgcolor: HOVER_BACKGROUND }, ...adminFocus }}
-          >
-            <CloseIcon />
-          </IconButton>
-        )}
-      </Box>
-
-      <Box sx={{ px: '14px', pb: '8px' }}>
+          )}
+        </Box>
         <Input
-          size="sm"
           value={query}
           onChange={event => setQuery(event.target.value)}
           onKeyDown={handleFilterKeyDown}
           placeholder="Filter pages"
-          startDecorator={<SearchIcon aria-hidden />}
+          startDecorator={<NavIcon Icon={Search} size={14} />}
+          endDecorator={
+            filtering ? undefined : (
+              <Box component="kbd" aria-hidden sx={kbdSx}>
+                /
+              </Box>
+            )
+          }
           slotProps={{
             input: { ref: filterRef, 'aria-label': 'Filter admin pages', 'data-testid': 'admin-sidebar-filter-input' },
           }}
           sx={{
             '--Input-radius': '8px',
-            '--Input-minHeight': '34px',
+            '--Input-minHeight': '32px',
+            '--Input-paddingInline': '10px',
+            '--Input-gap': '8px',
+            '--Input-decoratorChildHeight': '20px',
+            fontSize: 13,
             bgcolor: 'admin.surface',
-            borderColor: 'admin.border',
+            border: '1px solid',
+            borderColor: tokens.borderStrong,
             color: 'admin.ink',
             boxShadow: 'none',
+            '& input::placeholder': { color: 'admin.inkMuted', opacity: 1 },
+            '& .MuiInput-startDecorator': { color: 'admin.inkMuted' },
+            '&:hover': { borderColor: tokens.borderStrong },
             '&:focus-within': { outline: '2px solid var(--joy-palette-admin-accent)', outlineOffset: 2 },
             '&::before': { display: 'none' },
           }}
         />
       </Box>
 
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: '14px', pb: '20px' }}>
-        {showDashboard && (
-          <NavLink
-            tab={AdminTab.Dashboard}
-            label={DASHBOARD_LABEL}
-            Icon={DashboardIcon}
-            active={activeTab === AdminTab.Dashboard}
-            testid="admin-dashboard-tab-btn"
-            onSelect={onTabSelect}
-          />
-        )}
-
+      <Box sx={{ ...quietScrollSx, flex: 1, minHeight: 0, px: '14px', pt: '2px', pb: '16px' }}>
         {visibleSections.map(section => {
-          const listId = `${idPrefix}-${section.key}`;
-          const open = filtering || isExpanded(section.key);
-          const holdsActiveTab = section.key === activeSectionKey;
-          const sectionHeaderSx = {
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            width: '100%',
-            minHeight: 30,
-            mt: '14px',
-            mb: '2px',
-            px: '10px',
-            border: 0,
-            borderRadius: '6px',
-            bgcolor: 'transparent',
-            color: 'admin.inkMuted',
-            fontFamily: 'inherit',
-            fontSize: 12,
-            fontWeight: 600,
-            letterSpacing: '0.04em',
-            textTransform: 'uppercase' as const,
-            textAlign: 'left' as const,
-          };
+          const labelId = `${idPrefix}-${section.key}`;
+          const moreOpen = filtering || isMoreOpen(section.key);
+          const { shown, hiddenCount } = splitSectionItems(section.items, activeTab, moreOpen);
+          const canCollapseAgain =
+            !filtering && moreOpen && splitSectionItems(section.items, activeTab, false).hiddenCount > 0;
           return (
-            <Box key={section.key} data-testid={`admin-sidebar-section-${section.key}`}>
-              {filtering ? (
-                <Box id={`${listId}-label`} sx={sectionHeaderSx}>
-                  {section.label}
-                </Box>
-              ) : (
-                <Box
-                  component="button"
-                  type="button"
-                  id={`${listId}-label`}
-                  aria-expanded={open}
-                  aria-controls={listId}
-                  data-testid={`admin-sidebar-section-${section.key}-btn`}
-                  {...focusableProps}
-                  onClick={() => toggleSection(section.key)}
-                  sx={{
-                    ...sectionHeaderSx,
-                    cursor: 'pointer',
-                    '&:hover': { color: 'admin.ink' },
-                    ...adminFocus,
-                  }}
-                >
-                  <Box component="span" sx={{ flex: 1 }}>
-                    {section.label}
-                  </Box>
-                  {holdsActiveTab && !open && (
-                    <Box
-                      component="span"
-                      aria-hidden
-                      title="Holds the current page"
-                      sx={{ width: 6, height: 6, borderRadius: '999px', bgcolor: 'admin.accent' }}
+            <Box key={section.key} component="section" data-testid={`admin-sidebar-section-${section.key}`}>
+              <SectionLabel id={labelId}>{section.label}</SectionLabel>
+              <Box
+                component="ul"
+                aria-labelledby={labelId}
+                sx={{ listStyle: 'none', m: 0, p: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}
+              >
+                {shown.map(item => (
+                  <li key={item.tab}>
+                    <NavLink
+                      item={item}
+                      active={item.tab === activeTab}
+                      endDecorator={waitingBadge(item)}
+                      onSelect={onTabSelect}
                     />
-                  )}
-                  <ExpandMoreIcon
-                    aria-hidden
-                    sx={{
-                      fontSize: 18,
-                      transition: 'transform 120ms ease',
-                      transform: open ? 'rotate(0deg)' : 'rotate(-90deg)',
-                    }}
-                  />
-                </Box>
-              )}
-              {open && (
-                <Box
-                  component="ul"
-                  id={listId}
-                  aria-labelledby={`${listId}-label`}
-                  sx={{ listStyle: 'none', m: 0, p: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}
-                >
-                  {section.items.map(item => (
-                    <li key={item.tab}>
-                      <NavLink
-                        tab={item.tab}
-                        label={item.label}
-                        Icon={item.Icon}
-                        active={item.tab === activeTab}
-                        testid={item.testid}
-                        endDecorator={waitingBadge(item)}
-                        onSelect={onTabSelect}
-                      />
-                    </li>
-                  ))}
-                </Box>
-              )}
+                  </li>
+                ))}
+                {(hiddenCount > 0 || canCollapseAgain) && (
+                  <li>
+                    <Box
+                      component="button"
+                      type="button"
+                      aria-expanded={moreOpen}
+                      data-testid={`admin-sidebar-more-${section.key}-btn`}
+                      {...focusableProps}
+                      onClick={() => toggleMore(section.key)}
+                      sx={{
+                        ...navItemSx(false),
+                        color: 'admin.inkMuted',
+                      }}
+                    >
+                      {moreOpen ? <NavIcon Icon={ChevronDown} rotate /> : <NavIcon Icon={Ellipsis} />}
+                      <Box component="span" sx={{ flex: 1 }}>
+                        {moreOpen ? 'Less' : 'More'}
+                      </Box>
+                      {!moreOpen && (
+                        <Box component="span" sx={{ fontSize: 12, color: 'admin.inkMuted' }}>
+                          {hiddenCount}
+                        </Box>
+                      )}
+                    </Box>
+                  </li>
+                )}
+              </Box>
             </Box>
           );
         })}
 
-        {filtering && visibleSections.length === 0 && !showDashboard && (
-          <Box data-testid="admin-sidebar-filter-empty" sx={{ px: '10px', pt: '16px' }}>
-            <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-              No pages match &ldquo;{query.trim()}&rdquo;.
-            </Typography>
+        {filtering && visibleSections.length === 0 && (
+          <Box data-testid="admin-sidebar-filter-empty" sx={{ px: '10px', pt: '20px' }}>
+            <Box sx={{ fontSize: 13, color: 'admin.inkMuted' }}>No pages match &ldquo;{query.trim()}&rdquo;.</Box>
             <Box
               component="button"
               type="button"
@@ -617,11 +688,12 @@ export const SidebarNav = ({
                 p: 0,
                 border: 0,
                 bgcolor: 'transparent',
-                color: 'admin.accent',
+                color: 'var(--joy-palette-admin-link, var(--joy-palette-admin-accent))',
                 fontFamily: 'inherit',
                 fontSize: 13,
                 fontWeight: 500,
                 cursor: 'pointer',
+                '&:hover': { textDecoration: 'underline' },
                 ...adminFocus,
               }}
             >
@@ -630,6 +702,46 @@ export const SidebarNav = ({
           </Box>
         )}
       </Box>
+
+      {(account || onToggleCollapsed) && (
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            mx: '14px',
+            px: '10px',
+            py: '12px',
+            borderTop: '1px solid',
+            borderColor: 'admin.border',
+          }}
+        >
+          {account && (
+            <Box
+              data-testid="admin-sidebar-account"
+              sx={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}
+            >
+              <AccountAvatar account={account} />
+              <Box sx={{ minWidth: 0, lineHeight: '16px' }}>
+                <Box
+                  sx={{
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: 'admin.ink',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {account.name}
+                </Box>
+                <Box sx={{ fontSize: 12, color: 'admin.inkMuted' }}>{account.role}</Box>
+              </Box>
+            </Box>
+          )}
+          <Box sx={{ ml: 'auto' }}>{collapseButton}</Box>
+        </Box>
+      )}
     </Box>
   );
 };

@@ -20,7 +20,7 @@ import { adminFocus } from './shared/adminStyles';
 import { resolveEnvironmentBanner } from './environmentBanner';
 import { useAdminModal } from './useAdminModal';
 import { useAdminNotifications } from './useAdminNotifications';
-import { useAdminSidebarCollapsed } from './useAdminSidebarSections';
+import { useAdminSidebarCollapsed } from './useAdminSidebarState';
 
 const ADMIN_CONSOLE_PATH = '/admin';
 
@@ -119,8 +119,17 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
     navigate({ to: '/admin', search: { tab: adminTabToSlug(tab) } });
   };
 
+  const account = currentUser
+    ? {
+        name: currentUser.name || currentUser.username || currentUser.email || 'Admin',
+        role: 'Admin',
+        photoUrl: currentUser.photoUrl ?? undefined,
+      }
+    : undefined;
+
   const navProps = {
     activeTab,
+    account,
     enableUserMigration,
     showLiveOpsTriageTab: liveOpsEnv?.showTab ?? false,
     waitingSubscribersCount: waitingSubscribers.data?.count,
