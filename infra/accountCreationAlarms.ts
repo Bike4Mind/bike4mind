@@ -12,9 +12,13 @@ import { lambdaVpc } from './vpc';
 import { otcEmailConfigurationSet } from './otcEmailMetrics';
 
 const signals = [
-  { metric: 'SuccessfulSignups', env: 'SIGNUP_ALARM_PER_HOUR' },
-  { metric: 'NewAccountApiKeys', env: 'NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR' },
-].map(signal => ({ ...signal, threshold: accountCreationAlarmThreshold(process.env[signal.env], signal.env) }));
+  { metric: 'SuccessfulSignups', env: 'SIGNUP_ALARM_PER_HOUR', raw: process.env.SIGNUP_ALARM_PER_HOUR },
+  {
+    metric: 'NewAccountApiKeys',
+    env: 'NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR',
+    raw: process.env.NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR,
+  },
+].map(signal => ({ ...signal, threshold: accountCreationAlarmThreshold(signal.raw, signal.env) }));
 
 if (
   runsScheduledJobs &&
@@ -111,9 +115,13 @@ if (
   });
 }
 
-for (const metric of ['Bounce', 'Complaint'] as const) {
-  const name = `OTC_SES_${metric.toUpperCase()}_ALARM_PERCENT`;
-  const threshold = emailRateThreshold(process.env[name], name);
+const emailSignals = [
+  { metric: 'Bounce', name: 'OTC_SES_BOUNCE_ALARM_PERCENT', raw: process.env.OTC_SES_BOUNCE_ALARM_PERCENT },
+  { metric: 'Complaint', name: 'OTC_SES_COMPLAINT_ALARM_PERCENT', raw: process.env.OTC_SES_COMPLAINT_ALARM_PERCENT },
+] as const;
+
+for (const { metric, name, raw } of emailSignals) {
+  const threshold = emailRateThreshold(raw, name);
   if (threshold === undefined) continue;
   if (!isMonitoredStage($app.stage, ['dev', 'production'], process.env.ENABLE_MONITORING)) continue;
   if (!otcEmailConfigurationSet) throw new Error(`${name} requires ENABLE_OTC_SES_METRICS on a monitored stage`);

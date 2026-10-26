@@ -47,13 +47,13 @@ const wired = (
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   hostedOnly(
     'eventRule:infra/accountCreationAlarms.ts:AccountCreationMetricsSchedule',
-    'f98be6da991e62a71cd993fb1407a083fe40374dc0762e9a5e367013de5e71a3',
+    '2d7b3f2d1303b7c23de92d38a94820b719099c869c09a140bde0ad4260107522',
     'Opt-in hosted CloudWatch account census; no local notification destination is configured.',
     ['cloudwatch:PutMetricData', 'cloudwatch:namespace', 'import:@aws-sdk/client-cloudwatch']
   ),
   broker(
     'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
-    'e73f19162f881d395539f1f644327e7e37f8818c6ec50be485b7e84ec75e00ab'
+    'c51286a11ea2ee3a29b05d4d3586737a2e39f3cc0f0268e083f506f614a5fc32'
   ),
   gap('event:infra/eventBus.ts:email-send', 'aaba28ff39ac5c43a28a31fd685a7dc27a77d23dd3567ba2eb1d02f42a5f65b0'),
   gap(
