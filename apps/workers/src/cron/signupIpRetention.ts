@@ -11,9 +11,6 @@ const retentionLogger = new Logger({ metadata: { service: 'signupIpRetention' } 
 // Same window as the AuthEvent TTL, so the full signup IP never outlives the login-history copy.
 const SIGNUP_IP_RETENTION_MS = AUTH_EVENT_RETENTION_SECONDS * 1000;
 const DEFAULT_BATCH_SIZE = 1000;
-// Matches truncateIp's output shapes (IPv4 /24, expanded IPv6 /48) so the query skips rows an
-// earlier run already truncated. The truncateIp comparison in the loop stays the source of truth.
-const TRUNCATED_IP_PATTERN = /(\.0|(:0){5})$/;
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),
@@ -48,6 +45,7 @@ export async function runSignupIpRetention(options: { logger?: Logger; batchSize
 
   const pending: Parameters<typeof User.bulkWrite>[0] = [];
   let truncatedCount = 0;
+  let unshortenableCount = 0;
   let batches = 0;
 
   const flush = async () => {
@@ -59,11 +57,13 @@ export async function runSignupIpRetention(options: { logger?: Logger; batchSize
   };
 
   // A single cursor pass rather than re-querying until empty: an IP truncateIp cannot shorten
-  // would otherwise match every iteration and never let the loop end.
+  // would otherwise match every iteration and never let the loop end. Already-truncated rows are
+  // filtered in process, not by a regex in the query, so the filter stays portable to DocumentDB.
+  // `$exists` lets DocumentDB use the sparse capturedAt index, which it ignores without one.
   const cursor = User.find(
     {
-      'signupMeta.capturedAt': { $lt: cutoff },
-      'signupMeta.ip': { $type: 'string', $not: TRUNCATED_IP_PATTERN },
+      'signupMeta.capturedAt': { $exists: true, $lt: cutoff },
+      'signupMeta.ip': { $type: 'string' },
     },
     { 'signupMeta.ip': 1 }
   )
@@ -74,7 +74,10 @@ export async function runSignupIpRetention(options: { logger?: Logger; batchSize
     const ip = user.signupMeta?.ip;
     if (!ip) continue;
     const truncatedIp = truncateIp(ip);
-    if (truncatedIp === ip) continue;
+    if (truncatedIp === ip) {
+      if (!hasIpShape(ip)) unshortenableCount++;
+      continue;
+    }
     pending.push({
       updateOne: {
         filter: { _id: user._id, 'signupMeta.ip': ip },
@@ -85,8 +88,17 @@ export async function runSignupIpRetention(options: { logger?: Logger; batchSize
   }
   await flush();
 
+  if (unshortenableCount > 0) {
+    logger.warn(`[SignupIpRetention] ${unshortenableCount} signup IPs are not an address truncateIp can shorten`);
+  }
   logger.log(
     `[SignupIpRetention] Truncated ${truncatedCount} signup IPs in ${batches} batches (cutoff: ${cutoff.toISOString()})`
   );
   return { truncatedCount, batches, cutoff: cutoff.toISOString() };
+}
+
+// The shapes truncateIp parses (any IPv6, dotted-quad IPv4). Anything else keeps its full value
+// forever, so it is counted and warned about rather than skipped silently.
+function hasIpShape(ip: string): boolean {
+  return ip.includes(':') || ip.split('.').length === 4;
 }

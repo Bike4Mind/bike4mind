@@ -62,7 +62,8 @@ describe('ensure-user-signupMeta-capturedAt-index migration (real DB)', () => {
 
     const plan = await User.collection
       .find(
-        { 'signupMeta.capturedAt': { $lt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) } },
+        // Same predicate shape as the cron: `$exists` is what lets DocumentDB use a sparse index.
+        { 'signupMeta.capturedAt': { $exists: true, $lt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) } },
         { projection: { 'signupMeta.ip': 1 } }
       )
       .explain('queryPlanner');

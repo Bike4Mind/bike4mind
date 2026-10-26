@@ -7,8 +7,8 @@ import { User } from '@bike4mind/database';
 import { runSignupIpRetention } from './signupIpRetention';
 
 /**
- * Retention sweep against a real mongod: the query's `$type` + regex filter and the conditional
- * bulk writes are what make a re-run a no-op, and a mocked collection cannot evaluate either.
+ * Retention sweep against a real mongod: the capturedAt/`$type` query and the conditional bulk
+ * writes are what decide which rows change, and a mocked collection cannot evaluate either.
  */
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -55,6 +55,7 @@ describe('signupIpRetention (real DB)', () => {
       { signupMeta: { ip: '203.0.113.42', country: 'US', capturedAt: OLD } },
       { signupMeta: { ip: '2001:db8:abcd:12:34:56:78:9a', capturedAt: OLD } },
       { signupMeta: { ip: '2001:db8:abcd::1', capturedAt: OLD } },
+      { signupMeta: { ip: '::ffff:198.51.100.9', capturedAt: OLD } },
       { signupMeta: { ip: '203.0.113.42', capturedAt: FRESH } },
       { signupMeta: { ip: null, capturedAt: OLD } },
       {},
@@ -66,11 +67,12 @@ describe('signupIpRetention (real DB)', () => {
       '203.0.113.0',
       '2001:db8:abcd:0:0:0:0:0',
       '2001:db8:abcd:0:0:0:0:0',
+      '::ffff:198.51.100.0',
       '203.0.113.42',
       null,
       undefined,
     ]);
-    expect(result.truncatedCount).toBe(3);
+    expect(result.truncatedCount).toBe(4);
     const untouched = await User.collection.findOne({ _id: ids[0] });
     expect(untouched?.signupMeta).toMatchObject({ country: 'US', capturedAt: OLD });
   });

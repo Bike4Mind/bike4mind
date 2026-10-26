@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from 'aws-lambda';
+import type { Logger } from '@bike4mind/observability';
 const { connect, find, bulkWrite, rows } = vi.hoisted(() => ({
   connect: vi.fn(),
   find: vi.fn(),
@@ -43,10 +44,16 @@ describe('signup IP retention adapter', () => {
     expect(find).not.toHaveBeenCalled();
   });
 
-  it('queries signups older than the 90-day AuthEvent window', async () => {
+  it('queries string IPs on signups older than the 90-day AuthEvent window', async () => {
     const now = new Date('2026-10-26T00:00:00Z');
     await runSignupIpRetention({ now });
-    expect(find.mock.calls[0][0]['signupMeta.capturedAt']).toEqual({ $lt: new Date('2026-07-28T00:00:00Z') });
+    expect(find).toHaveBeenCalledExactlyOnceWith(
+      {
+        'signupMeta.capturedAt': { $exists: true, $lt: new Date('2026-07-28T00:00:00Z') },
+        'signupMeta.ip': { $type: 'string' },
+      },
+      { 'signupMeta.ip': 1 }
+    );
   });
 
   it('truncates IPv4 to /24 and IPv6 to /48, conditioned on the IP it read', async () => {
@@ -75,14 +82,17 @@ describe('signup IP retention adapter', () => {
     expect(result.truncatedCount).toBe(2);
   });
 
-  it('skips rows with no IP or an IP truncation cannot shorten', async () => {
+  it('skips rows with no IP or an IP truncation cannot shorten, warning only about non-addresses', async () => {
     rows.current = [
-      { _id: 'done', signupMeta: { ip: '203.0.113.0' } },
+      { _id: 'done-v4', signupMeta: { ip: '203.0.113.0' } },
+      { _id: 'done-v6', signupMeta: { ip: '2001:db8:abcd:0:0:0:0:0' } },
       { _id: 'odd', signupMeta: { ip: 'not-an-ip' } },
       { _id: 'null', signupMeta: { ip: null } },
     ];
-    expect(await runSignupIpRetention()).toMatchObject({ truncatedCount: 0, batches: 0 });
+    const logger = { log: vi.fn(), warn: vi.fn() } as unknown as Logger;
+    expect(await runSignupIpRetention({ logger })).toMatchObject({ truncatedCount: 0, batches: 0 });
     expect(bulkWrite).not.toHaveBeenCalled();
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('1 signup IPs'));
   });
 
   it('flushes a write per full batch and one for the remainder', async () => {
