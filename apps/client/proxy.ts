@@ -103,6 +103,12 @@ export function proxy(request: NextRequest) {
   if (originSecret) {
     const headers = new Headers(request.headers);
     headers.delete(ORIGIN_VERIFY_HEADER);
+    if (process.env.B4M_SELF_HOST === 'true') headers.delete('cloudfront-viewer-ja4-fingerprint');
+    response = NextResponse.next({ request: { headers } });
+  } else if (request.headers.has('cloudfront-viewer-ja4-fingerprint')) {
+    // Without origin verification a direct client can supply this observation header.
+    const headers = new Headers(request.headers);
+    headers.delete('cloudfront-viewer-ja4-fingerprint');
     response = NextResponse.next({ request: { headers } });
   } else {
     response = NextResponse.next();

@@ -459,6 +459,27 @@ describe('proxy origin verification', () => {
     expect(response.status).toBe(200);
     expect(response.forwardedRequestHeaders).toBeUndefined();
   });
+
+  it('removes unverified fingerprint headers without refusing access', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', '');
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'cloudfront-viewer-ja4-fingerprint': 'client-supplied',
+      })
+    ) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders?.has('cloudfront-viewer-ja4-fingerprint')).toBe(false);
+  });
+
+  it('preserves a fingerprint only after origin verification', () => {
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'x-b4m-origin-verify': SECRET,
+        'cloudfront-viewer-ja4-fingerprint': 'synthetic',
+      })
+    ) as unknown as Forwarded;
+    expect(response.forwardedRequestHeaders?.get('cloudfront-viewer-ja4-fingerprint')).toBe('synthetic');
+  });
 });
 
 describe('proxy server-action probes', () => {
