@@ -22,8 +22,14 @@ import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUserCreditAdjustments, userCreditAdjustmentsKey } from '../hooks/useUserCreditAdjustments';
-import { isValidAdminActionReason } from '@bike4mind/common';
-import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
+import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
+import {
+  ADMIN_REASON_PRESETS,
+  type AdminReasonDraft,
+  EMPTY_ADMIN_REASON,
+  composeAdminReason,
+  isAdminReasonComplete,
+} from '@client/app/components/admin/shared/adminReason';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import type { CreditChange } from '../types';
 
@@ -47,13 +53,13 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
   const [creditAmount, setCreditAmount] = useState(100);
   // undefined until edited, so the field follows the selected user's balance instead of defaulting to a wipe.
   const [targetOverride, setTargetOverride] = useState<number | null | undefined>(undefined);
-  const [creditNote, setCreditNote] = useState('');
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: adjustments, isLoading: adjustmentsLoading } = useUserCreditAdjustments(selectedUser?.id, open);
 
-  const isReasonValid = isValidAdminActionReason(creditNote);
+  const isReasonValid = isAdminReasonComplete(reason);
   const currentBalance = selectedUser?.currentCredits ?? 0;
   const targetBalance = targetOverride === undefined ? currentBalance : targetOverride;
   const setDelta = targetBalance === null ? 0 : targetBalance - currentBalance;
@@ -64,7 +70,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
     setMode('adjust');
     setCreditAmount(100);
     setTargetOverride(undefined);
-    setCreditNote('');
+    setReason(EMPTY_ADMIN_REASON);
     onClose();
   };
 
@@ -73,7 +79,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
     if (!selectedUser || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      await onCreditAdjustment(selectedUser.id, change, creditNote.trim());
+      await onCreditAdjustment(selectedUser.id, change, composeAdminReason(reason));
       queryClient.invalidateQueries({ queryKey: userCreditAdjustmentsKey(selectedUser.id) });
       handleClose();
     } finally {
@@ -170,10 +176,10 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
               )}
 
               <Box sx={{ mb: 2 }}>
-                <AdminReasonField
-                  value={creditNote}
-                  onChange={setCreditNote}
-                  placeholder="Reason for adjustment (e.g., 'Promotional bonus', 'Compensation for issue')"
+                <ReasonPicker
+                  presets={ADMIN_REASON_PRESETS.creditAdjustment}
+                  value={reason}
+                  onChange={setReason}
                   data-testid="credit-adjust-reason-input"
                 />
               </Box>

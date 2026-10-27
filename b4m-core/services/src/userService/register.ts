@@ -2,10 +2,12 @@ import {
   IAdminSettingsRepository,
   ICreditLotRepository,
   ICreditTransactionRepository,
+  newSignupGrant,
   IUserDocument,
   IUserRepository,
+  type SignupProtection,
 } from '@bike4mind/common';
-import { IRegInviteDocument, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
+import { IRegInviteDocument, RegInviteSource, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
 import { ISubscriberRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
@@ -66,6 +68,7 @@ export type RegisterUserParameters = z.infer<typeof registerUserSchema>;
 interface RegisterUserAdapters {
   db: {
     users: IUserRepository;
+    signupProtection?: SignupProtection;
     adminSettings: IAdminSettingsRepository;
     registrationInvites: {
       findByCode: (code: string) => Promise<IRegInviteDocument | null>;
@@ -275,6 +278,18 @@ export const registerUser = async (
     }
   }
 
+  // Only an invite a user sent through the refer flow names an inviter. Admin bulk codes,
+  // admin-issued subscriber invites and unlimited codes have no sender to credit, and invites
+  // minted before `source` existed are deliberately not attributed.
+  const referredByUserId =
+    invite && !isUnlimitedInvite && invite.source === RegInviteSource.referral && invite.userId ? invite.userId : null;
+
+  const invitesPerUserSetting = await db.adminSettings.findBySettingName('ReferralInvitesPerUser');
+  const invitesPerUserParsed = settingsMap.ReferralInvitesPerUser.schema.safeParse(invitesPerUserSetting?.settingValue);
+  const numReferralsAvailable = invitesPerUserParsed.success
+    ? invitesPerUserParsed.data
+    : settingsMap.ReferralInvitesPerUser.schema.parse(undefined);
+
   const buildUser: Omit<IUserDocument, 'id'> = {
     username,
     email,
@@ -301,6 +316,7 @@ export const registerUser = async (
     currentStorageSize: 0,
     currentCredits: 0,
     pendingCreditGrant: freeCredits > 0 ? freeCredits : null,
+    ...(!hasInviteCode ? { signupGrant: await newSignupGrant(db.adminSettings) } : {}),
     level: 'DemoUser',
     isBanned: false,
     isModerated: false,
@@ -338,7 +354,8 @@ export const registerUser = async (
     pendingEmailExpires: null,
     pendingEmailUsed: null,
     regInvites: [],
-    numReferralsAvailable: 3,
+    referredByUserId,
+    numReferralsAvailable,
     stripeCustomerId: null,
     organizationId: null,
     googleDrive: null,
@@ -413,19 +430,23 @@ export const registerViaOTC = async (
   const { db, logger } = adapters;
   const newUser = await registerUser(params, adapters);
 
+  if (newUser.signupGrant) {
+    await db.users.update({ id: newUser.id, emailVerified: true, emailVerifiedAt: new Date() });
+  }
+
   const taggedUser = { ...newUser, tags: [...new Set([...(newUser.tags ?? []), 'Customer'])] };
-  const hasPendingCredits = taggedUser.tags.includes(PENDING_FREE_CREDITS_TAG);
 
   let finalTags = taggedUser.tags;
   let pendingCreditGrant = newUser.pendingCreditGrant ?? null;
 
-  if (hasPendingCredits && db.creditTransactions) {
+  if (db.creditTransactions) {
     const release = await releasePendingFreeCredits(taggedUser, {
       db: {
         adminSettings: db.adminSettings,
         creditTransactions: db.creditTransactions,
         creditLots: db.creditLots,
         users: db.users,
+        signupProtection: db.signupProtection,
       },
       reason: 'OTC registration (email verified)',
       logger,
@@ -451,6 +472,10 @@ export const registerViaOTC = async (
   // currentCredits is deliberately not written: addCredits already `$inc`ed it.
   await db.users.update({ id: newUser.id, ...verification });
 
+  if (newUser.signupGrant) {
+    const persisted = await db.users.findById(newUser.id);
+    if (persisted) return persisted;
+  }
   return { ...newUser, ...verification } as IUserDocument;
 };
 

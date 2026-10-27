@@ -43,7 +43,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
       </TestWrapper>
     );
 
-    fireEvent.change(screen.getByPlaceholderText(/Reason for adjustment/i), {
+    fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), {
       target: { value: 'Compensation for outage' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Add Credits/i }));

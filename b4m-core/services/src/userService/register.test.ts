@@ -3,6 +3,7 @@ import { registerUser, registerViaOTC, RegisterUserParameters } from './register
 import { BadRequestError } from '@bike4mind/utils';
 import {
   CURRENT_POLICY_VERSION,
+  RegInviteSource,
   RegInviteStatusType,
   PENDING_FREE_CREDITS_TAG,
   RESERVED_USERNAME_MESSAGE,
@@ -291,6 +292,88 @@ describe('registerUser', () => {
     });
   });
 
+  describe('inviter attribution and invite quota', () => {
+    const createdUser = () => mockAdapters.db.users.create.mock.calls[0][0];
+
+    it('saves the sender of a referral invite on the new user', async () => {
+      mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
+        ...mockInvite,
+        email: baseParams.email,
+        source: RegInviteSource.referral,
+      });
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().referredByUserId).toBe('inviterId');
+    });
+
+    it('leaves the inviter unset for an email-bound, non-unlimited invite an admin issued (no referral source)', async () => {
+      mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
+        ...mockInvite,
+        email: baseParams.email,
+        unlimitedUse: false,
+      });
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().referredByUserId).toBeNull();
+    });
+
+    it('leaves the inviter unset for an admin bulk code (no email)', async () => {
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().referredByUserId).toBeNull();
+    });
+
+    it('leaves the inviter unset for an unlimited code, even with an email', async () => {
+      mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
+        ...mockInvite,
+        email: baseParams.email,
+        source: RegInviteSource.referral,
+        unlimitedUse: true,
+      });
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().referredByUserId).toBeNull();
+    });
+
+    it('leaves the inviter unset when there is no invite code', async () => {
+      const findBySettingName = mockAdapters.db.adminSettings.findBySettingName;
+      mockAdapters.db.adminSettings.findBySettingName = vi
+        .fn()
+        .mockImplementation((name: string) =>
+          name === 'allowOpenRegistration' ? Promise.resolve({ settingValue: true }) : findBySettingName(name)
+        );
+      await registerUser({ ...baseParams, inviteCode: undefined }, mockAdapters);
+      expect(createdUser().referredByUserId).toBeNull();
+    });
+
+    it('starts a new user with 3 invites when the setting is unset', async () => {
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().numReferralsAvailable).toBe(3);
+    });
+
+    it.each([-1, 2.5, 'abc', 5000])('falls back to 3 invites when ReferralInvitesPerUser is %s', async configured => {
+      const findBySettingName = mockAdapters.db.adminSettings.findBySettingName;
+      mockAdapters.db.adminSettings.findBySettingName = vi
+        .fn()
+        .mockImplementation((name: string) =>
+          name === 'ReferralInvitesPerUser' ? Promise.resolve({ settingValue: configured }) : findBySettingName(name)
+        );
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().numReferralsAvailable).toBe(3);
+    });
+
+    it('starts a new user with the configured number of invites, including 0', async () => {
+      const findBySettingName = mockAdapters.db.adminSettings.findBySettingName;
+      for (const configured of [7, 0]) {
+        mockAdapters.db.users.create.mockClear();
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({ ...mockInvite });
+        mockAdapters.db.adminSettings.findBySettingName = vi
+          .fn()
+          .mockImplementation((name: string) =>
+            name === 'ReferralInvitesPerUser' ? Promise.resolve({ settingValue: configured }) : findBySettingName(name)
+          );
+        await registerUser(baseParams, mockAdapters);
+        expect(createdUser().numReferralsAvailable).toBe(configured);
+      }
+    });
+  });
+
   it('does not tag pending-free-credits when resolved invite credits are 0', async () => {
     mockAdapters.db.adminSettings.findBySettingName = vi.fn().mockImplementation((name: string) => {
       if (name === 'defaultTags') return Promise.resolve(mockSettings);
@@ -478,6 +561,29 @@ describe('registerUser', () => {
       expect(result).toMatchObject({ email: noInviteParams.email });
     });
 
+    it('snapshots staged grants only for new no-invite accounts when enabled', async () => {
+      setAllowOpenRegistration('true');
+      const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+        const values: Record<string, string> = {
+          stagedSignupGrantEnabled: 'true',
+          signupGrantCredits: '12',
+          verifiedUnlockCredits: '28',
+        };
+        return name in values ? { settingValue: values[name] } : readSetting(name);
+      });
+      const result = await registerUser(noInviteParams, mockAdapters);
+      expect(result.signupGrant).toEqual({
+        stage: 'pending_email',
+        signupCredits: 12,
+        unlockCredits: 28,
+        creditsReleased: 0,
+        nextCondition: 'email_verification',
+      });
+      const invited = await registerUser(baseParams, mockAdapters);
+      expect(invited.signupGrant).toBeUndefined();
+    });
+
     it('allows registration when invite check is skipped (OTC \u2014 email already proven)', async () => {
       setAllowOpenRegistration('false');
       const result = await registerUser(noInviteParams, { ...mockAdapters, skipInviteCheck: true });
@@ -510,6 +616,7 @@ describe('registerViaOTC', () => {
           create: vi.fn().mockImplementation(async (user: any) => ({ ...user, id: 'newUserId' })),
           update: vi.fn().mockImplementation(async (user: any) => user),
           claimFreeCreditGrant: vi.fn().mockResolvedValue(true),
+          findById: vi.fn().mockResolvedValue(null),
         },
         adminSettings: {
           findBySettingName: vi.fn().mockImplementation((name: string) => {
@@ -607,6 +714,23 @@ describe('registerViaOTC', () => {
     expect(result.emailVerified).toBe(true);
     expect(result.tags).toContain(PENDING_FREE_CREDITS_TAG);
     expect(mockAdapters.logger.error).toHaveBeenCalled();
+  });
+
+  it('defers the grant when the signup domain is held, through db.signupProtection', async () => {
+    mockAdapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'newUserId', email: otcParams.email });
+    mockAdapters.db.users.addTagsToUser = vi.fn();
+    mockAdapters.db.adminSettings.findBySettingNames = vi.fn().mockResolvedValue([]);
+    mockAdapters.db.signupProtection = {
+      repository: {
+        findReview: vi.fn().mockResolvedValue({ domain: 'example.com', status: 'held_pending_review' }),
+        isOrganizationDomain: vi.fn().mockResolvedValue(false),
+      },
+    };
+    const result = await registerViaOTC(otcParams, mockAdapters);
+
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(result.emailVerified).toBe(true);
+    expect(result.tags).toContain(PENDING_FREE_CREDITS_TAG);
   });
 
   // P0-B abuse gate: OTC is now the primary new-signup surface (the password

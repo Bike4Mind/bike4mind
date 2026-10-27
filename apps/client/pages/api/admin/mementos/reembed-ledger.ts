@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { migrateLedgerVectorsForPrincipal } from '@server/memory/reembedMementos';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * Admin-only, dry-run-by-default repair for LEDGER vectors: backfills events written without one and
@@ -128,6 +129,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       failedPrincipals.push({ ...target, error: err instanceof Error ? err.message : String(err) });
     }
     cursor = target;
+  }
+
+  // A dry run changes nothing, and an empty page (the end of a paged walk) touched nothing, so neither is audited.
+  if (execute && processedPrincipals > 0) {
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.memory_ledger.reembedded',
+      target: { kind: 'system', id: 'memory-ledger-reembed', displayName: 'Memory ledger re-embed' },
+      summary: `re-embedded ${totals.reembedded + totals.backfilled + totals.truncated} memory ledger vectors across ${processedPrincipals} principals`,
+      details: { ...totals, processedPrincipals, failedPrincipals: failedPrincipals.length },
+    });
   }
 
   return res.json({

@@ -17,6 +17,7 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
 const {
+  mockCheckFreeTierDailySpendCap,
   mockValidate,
   mockUserFindById,
   mockUserUpdate,
@@ -30,6 +31,7 @@ const {
   mockOrgFindById,
   mockResolveUserRateLimitPerMin,
 } = vi.hoisted(() => ({
+  mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
   mockUserUpdate: vi.fn(),
@@ -52,6 +54,10 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Remaining-Day': '999',
   'X-RateLimit-Reset-Day': '0',
 };
+
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
+}));
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
   applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
@@ -162,7 +168,7 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import handler from '../llm';
-import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 const OWN_ORG = '650000000000000000000abc';
@@ -221,6 +227,27 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
   });
 
+  it('returns the daily cap response before creating a session or dispatching a quest', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: 'daily_free_limit_reached',
+        retryAfter: 3600,
+      })
+    );
+    const { req, res } = fire({ body: { sessionId: undefined, sessionName: 'New notebook' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'daily_free_limit_reached' });
+    expect(res.getHeader('Retry-After')).toBe('3600');
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ user: req.user, req, billingOrganizationId: null })
+    );
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
   it('rejects a key lacking ai:chat (403) before dispatching any billed completion', async () => {
     validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
     const { req, res } = fire();
@@ -250,6 +277,28 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ quest: { id: 'quest-1' } });
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, VALID_KEY])('withholds server-only quest fields from a %j caller', async apiKey => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockInvoke.mockResolvedValue({
+      id: 'quest-1',
+      status: 'pending',
+      prompt: 'Hello there',
+      signupActivity: { userId: 'private-user', turnId: 'private-turn', startedAt: new Date() },
+      callback: { url: 'https://private.example.test', apiKeyId: 'private-key' },
+      embedding: [0.1, 0.2],
+      slackNotification: { channel: 'private-channel' },
+    });
+    const { req, res } = fire({ apiKey });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body.quest).toMatchObject({ id: 'quest-1', status: 'pending', prompt: 'Hello there' });
+    for (const field of ['signupActivity', 'callback', 'embedding', 'slackNotification']) {
+      expect(body.quest).not.toHaveProperty(field);
+    }
+    expect(JSON.stringify(body)).not.toContain('private-');
   });
 
   describe('data-lake write tools vs the key scopes', () => {
@@ -523,6 +572,10 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(mockInvoke.mock.calls[0][0].body.organizationId).toBe(KEY_ORG);
       expect(mockOrgFindAccessibleById).not.toHaveBeenCalled();
+      expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+        expect.objectContaining({ user: req.user, req, billingOrganizationId: KEY_ORG })
+      );
+      expect(mockCheckFreeTierDailySpendCap.mock.calls[0][0].req).toBe(req);
     });
 
     it("accepts the key's own org in the body", async () => {

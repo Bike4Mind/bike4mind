@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collectInlineAssets } from './collectInlineAssets';
+import { collectInlineAssets, TOTAL_INLINE_MAX_BYTES } from './collectInlineAssets';
 
 const m = (path: string, mimeType = 'image/png') => ({ path, mimeType });
 
@@ -35,9 +35,9 @@ describe('collectInlineAssets', () => {
       manifest,
       load,
       perAssetMaxBytes: 100,
-      totalMaxBytes: 80,
+      totalMaxBytes: 160,
     });
-    // a (40) + b (40) = 80 fits; c would exceed.
+    // Each 40-byte asset encodes to 78 bytes: a + b = 156 fits; c would exceed.
     expect(assets.size).toBe(2);
     expect(oversized).toEqual(['c.png']);
   });
@@ -54,7 +54,7 @@ describe('collectInlineAssets', () => {
       manifest,
       load,
       perAssetMaxBytes: 100,
-      totalMaxBytes: 60, // only one 40-byte asset fits
+      totalMaxBytes: 100, // only one 78-byte encoded asset fits
     });
     expect([...assets.keys()]).toEqual(['first.png']);
     expect(oversized).toEqual(['second.png']);
@@ -69,5 +69,67 @@ describe('collectInlineAssets', () => {
     const { assets, failed } = await collectInlineAssets({ manifest, load });
     expect(failed).toEqual(['broken.png']);
     expect(assets.has('ok.png')).toBe(true);
+  });
+
+  // 30 raw bytes -> 40 base64 + the 22-byte `data:image/png;base64,` prefix = 62 encoded.
+  const thirtyBytes = async () => Buffer.alloc(30);
+  const three = [m('a.png'), m('b.png'), m('c.png')];
+
+  it('counts base64-encoded size, not raw size, against the budget', async () => {
+    const { assets, oversized } = await collectInlineAssets({
+      manifest: three,
+      load: thirtyBytes,
+      totalMaxBytes: 110, // raw total 90 fits, encoded 186 does not
+    });
+    expect([...assets.keys()]).toEqual(['a.png']);
+    expect(oversized).toEqual(['b.png', 'c.png']);
+  });
+
+  it('subtracts reservedBytes from the budget', async () => {
+    const { assets, oversized } = await collectInlineAssets({
+      manifest: three,
+      load: thirtyBytes,
+      totalMaxBytes: 130, // two encoded assets (124) fit...
+      reservedBytes: 10, // ...until index.html claims room
+    });
+    expect(assets.size).toBe(1);
+    expect(oversized).toEqual(['b.png', 'c.png']);
+  });
+
+  it('budgets assets without a fallback before ones that have one, whatever the manifest order', async () => {
+    const manifest = [m('a.png'), m('b.png'), m('style.css', 'text/css')];
+    const { assets, oversized } = await collectInlineAssets({
+      manifest,
+      load: async () => Buffer.alloc(40),
+      perAssetMaxBytes: 100,
+      totalMaxBytes: 160, // two 78-byte encoded assets fit
+      hasFallback: p => p.endsWith('.png'),
+    });
+    expect([...assets.keys()]).toEqual(['style.css', 'a.png']);
+    expect(oversized).toEqual(['b.png']);
+  });
+
+  it('reports oversized paths in manifest order when the budget order differs', async () => {
+    const manifest = [m('a.png'), m('b.png'), m('big.css', 'text/css')];
+    const { oversized } = await collectInlineAssets({
+      manifest,
+      load: async p => Buffer.alloc(p === 'big.css' ? 200 : 40),
+      perAssetMaxBytes: 100,
+      totalMaxBytes: 80,
+      hasFallback: p => p.endsWith('.png'),
+    });
+    expect(oversized).toEqual(['b.png', 'big.css']);
+  });
+
+  it('keeps the default budget under Lambda 6 MB for ~5 MB of raw images', async () => {
+    const manifest = Array.from({ length: 14 }, (_, i) => m(`img${i}.png`));
+    const { assets, oversized } = await collectInlineAssets({
+      manifest,
+      load: async () => Buffer.alloc(360 * 1024),
+    });
+    const encoded = [...assets.values()].reduce((n, a) => n + a.data.toString('base64').length, 0);
+    expect(encoded).toBeLessThanOrEqual(TOTAL_INLINE_MAX_BYTES);
+    expect(assets.size + oversized.length).toBe(14);
+    expect(oversized.length).toBeGreaterThan(0);
   });
 });

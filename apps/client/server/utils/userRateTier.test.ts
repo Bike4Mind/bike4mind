@@ -130,6 +130,18 @@ describe('resolveUserRateTier', () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_standalone' }]);
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('free');
   });
+
+  it.each(['membership', 'subscriptions'])('strict tier resolution propagates an org %s read failure', async leg => {
+    const error = new Error('org lookup unavailable');
+    if (leg === 'membership') {
+      findPlanHolderOrgIdsMock.mockRejectedValue(error);
+    } else {
+      findPlanHolderOrgIdsMock.mockResolvedValue(['org1']);
+      findActiveSubscriptionsByOwnersMock.mockRejectedValue(error);
+    }
+
+    await expect(resolveUserRateTier({ id: 'u1' }, undefined, { strict: true })).rejects.toBe(error);
+  });
 });
 
 describe('resolveUserRateLimitPerMin', () => {

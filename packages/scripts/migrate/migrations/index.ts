@@ -11,6 +11,11 @@
  */
 
 // 2. Import the file here:
+// Backdated below the fail-closed OAuth backfill; $setOnInsert makes an old-id rerun safe.
+import SeedStagedSignupSettings from './20260921235967_seed-staged-signup-settings';
+import EnsureQuestSignupActivityIndex from './20260921235966_ensure-quest-signup-activity-index';
+import EnsureUserSignupGrantOrgIndex from './20260921235968_ensure-user-signup-grant-org-index';
+import RedropShareTokenScalarIndex from './20260921235975_redrop-share-token-scalar-index';
 import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
 import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';
@@ -99,6 +104,8 @@ import NormalizeQuestMasterVocabularies from './20260827074044_normalize-questma
 // EnsureQuestStatusUpdatedAtIndex migration above, which merged into main first.
 import SplitChunkStallMarkersOffNotes from './20260828000000_split-chunk-stall-markers-off-notes';
 import EnsureQuestRetrievalIndex from './20260902000000_ensure-quest-retrieval-index';
+// Run before the deferred OAuth backfill: its operator gate must not block this index build.
+import EnsureQuestModelLogsPaginationIndex from './20260921235938_ensure-quest-model-logs-pagination-index';
 // Renamed from 20260902000000 to 20260903000000 to resolve an id collision with the
 // EnsureQuestRetrievalIndex migration above, which merged into main first.
 import EnsureScopedSettingSettingNameIndex from './20260903000000_ensure-scopedsetting-settingname-index';
@@ -332,6 +339,7 @@ const coreMigrations: MigrationFile[] = [
   NormalizeQuestMasterVocabularies,
   SplitChunkStallMarkersOffNotes,
   EnsureQuestRetrievalIndex,
+  EnsureQuestModelLogsPaginationIndex,
   EnsureScopedSettingSettingNameIndex,
   EncryptIdentityProviderSecrets,
   BackfillLakeMemoryEnabledFromLedger,
@@ -407,6 +415,10 @@ const coreMigrations: MigrationFile[] = [
   EnsureSignupFingerprintWindowIndex,
   EnsureUserSignupMetaCapturedAtIndex,
   BackfillStorageLimitOverrides,
+  SeedStagedSignupSettings,
+  EnsureQuestSignupActivityIndex,
+  EnsureUserSignupGrantOrgIndex,
+  RedropShareTokenScalarIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

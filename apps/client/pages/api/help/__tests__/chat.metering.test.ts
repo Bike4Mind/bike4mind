@@ -66,6 +66,7 @@ vi.mock('@bike4mind/services', async () => ({
 }));
 vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   loadModelConfigurations: async () => [],
+  loadFreeTierAllowedModels: async () => undefined,
   createModelAdmission: () => ({ admits: async () => true, assert: async () => undefined }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));

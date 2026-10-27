@@ -129,7 +129,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     expect(JSON.stringify(loggedArg)).not.toContain('E11000');
 
     const redirectUrl = res._getRedirectUrl();
-    expect(redirectUrl).toBe('/login?error=Authentication%20failed');
+    expect(redirectUrl).toBe('/login?error=callback_error');
     expect(redirectUrl).not.toContain('victim');
     expect(redirectUrl).not.toContain('E11000');
   });
@@ -141,9 +141,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_expired' }));
-    expect(res._getRedirectUrl()).toBe(
-      `/login?error=${encodeURIComponent('Your login request expired. Please try again.')}`
-    );
+    expect(res._getRedirectUrl()).toBe('/login?error=invalid_state');
   });
 
   it('maps state_missing and state_invalid to their own distinct canonical reasons', async () => {
@@ -152,7 +150,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
       message: 'Missing state parameter',
     });
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_missing' }));
-    expect(missingRes._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(missingRes._getRedirectUrl()).toBe('/login?error=callback_error');
 
     vi.clearAllMocks();
 
@@ -161,7 +159,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
       message: 'Invalid authorization state.',
     });
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_invalid' }));
-    expect(invalidRes._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(invalidRes._getRedirectUrl()).toBe('/login?error=callback_error');
   });
 
   it('default-denies an unrecognized or absent code to internal - raw info.message never substitutes for reason', async () => {
@@ -175,7 +173,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
 
     const withNoInfo = await runCallback(null, undefined, undefined);
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'internal' }));
-    expect(withNoInfo._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(withNoInfo._getRedirectUrl()).toBe('/login?error=callback_error');
     void withUnknownCode;
   });
 
@@ -186,7 +184,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'forbidden_system_user' }));
-    expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
   });
 });
 
@@ -221,7 +219,7 @@ describe('[strategy]/callback - !user branch log level', () => {
     expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', info);
     expect(errorSpy).not.toHaveBeenCalled();
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'access_denied' }));
-    expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
     errorSpy.mockRestore();
     warnSpy.mockRestore();
   });
@@ -247,6 +245,42 @@ describe('[strategy]/callback - guards', () => {
   });
 });
 
+describe('[strategy]/callback - err branch log level', () => {
+  /** Shaped like passport-oauth2's TokenError, which carries the provider's OAuth error code. */
+  function tokenError(code: string) {
+    return Object.assign(new Error('Bad Request'), { name: 'TokenError', code });
+  }
+
+  it('logs a replayed or expired authorization code (invalid_grant) at warn', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const err = tokenError('invalid_grant');
+
+    const res = await runCallback(err, undefined, undefined);
+
+    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate Error:', undefined, err);
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it.each([
+    ['another TokenError code', tokenError('invalid_client')],
+    ['a non-token error', new Error('boom')],
+  ])('keeps %s at error', async (_label, err) => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runCallback(err, undefined, undefined);
+
+    expect(errorSpy).toHaveBeenCalledWith('Passport Authenticate Error:', undefined, err);
+    expect(warnSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+});
+
 describe('[strategy]/callback - banned user gate', () => {
   it('refuses to issue a session for a banned user and records the refusal', async () => {
     const res = await runCallback(null, { id: 'u-banned', email: 'banned@example.com', isBanned: true }, undefined);
@@ -268,13 +302,11 @@ describe('[strategy]/callback - banned user gate', () => {
 });
 
 describe('[strategy]/callback - invite gate', () => {
-  it('surfaces registration_closed with an invite-only message', async () => {
+  it('surfaces registration_closed as a login error code', async () => {
     const res = await runCallback(null, undefined, { code: 'registration_closed' });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'registration_closed' }));
-    expect(res._getRedirectUrl()).toBe(
-      `/login?error=${encodeURIComponent('This instance is invite-only. Ask an administrator for an invite.')}`
-    );
+    expect(res._getRedirectUrl()).toBe('/login?error=registration_closed');
   });
 });
 

@@ -53,7 +53,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: { record: vi.fn() },
   // Pulled in by the completions route for org-billed API keys; unused by these
   // personal/JWT cases but must exist or the mocked-module export getter throws.
@@ -116,6 +116,7 @@ vi.mock('@bike4mind/observability', () => ({
     debug = vi.fn();
     updateMetadata = vi.fn();
   },
+  describeErrorCause: () => undefined,
 }));
 
 vi.mock('@bike4mind/utils', async importOriginal => ({

@@ -82,6 +82,7 @@ See CONTRIBUTING.md → "Preview deploys".
 
 - [ ] I have added the new AdminSettings to Staging, prod and the hydration script (if applicable)
 - [ ] I have made the UI/UX feel good (toasters, size, responsive, etc)
+- [ ] Admin UI changes follow the [admin design guide](../apps/client/app/components/admin/DESIGN_GUIDE.md) and use the shared toolkit (if applicable)
 - [ ] I have performed a self-review of my own code
 - [ ] I have commented my code, particularly in hard-to-understand areas
 - [ ] I have made corresponding changes to the documentation (if applicable)

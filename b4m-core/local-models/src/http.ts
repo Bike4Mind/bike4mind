@@ -20,9 +20,15 @@ export interface RequestOptions {
   timeoutMs?: number;
 }
 
-const errorBodySchema = z.object({
-  error: z.union([z.string(), z.object({ message: z.string() }).transform(error => error.message)]),
-});
+// `detail` is the FastAPI error shape.
+const errorBodySchema = z.union([
+  z
+    .object({
+      error: z.union([z.string(), z.object({ message: z.string() }).transform(error => error.message)]),
+    })
+    .transform(body => body.error),
+  z.object({ detail: z.string() }).transform(body => body.detail),
+]);
 
 /**
  * Accepts `host:port`, `http://host:port` or an OpenAI-style base ending in `/v1`; null when unusable or when
@@ -130,7 +136,7 @@ export async function send(client: HttpClient, path: string, options: RequestOpt
   if (!response.ok) {
     const text = await response.text().catch(() => '');
     const parsed = errorBodySchema.safeParse(safeJsonParse(text));
-    const detail = parsed.success ? parsed.data.error : null;
+    const detail = parsed.success ? parsed.data : null;
     throw new RuntimeHttpError(
       `${client.runtimeId} ${path} returned HTTP ${response.status}${detail === null ? '' : `: ${detail}`}`,
       client.runtimeId,

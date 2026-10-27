@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Box, Button, Checkbox, Option, Select, Skeleton, Stack, Table, Typography } from '@mui/joy';
 import { EmptyState } from './EmptyState';
 import { ErrorState } from './ErrorState';
-import { adminFocus, adminFocusScope, adminSurface } from './adminStyles';
+import { adminFocus, adminFocusScope, adminScrollGutter, adminSurface } from './adminStyles';
 import type { AdminSelection } from './BulkActionBar';
 
 export type DataColumn<Row> = {
@@ -27,6 +27,8 @@ export type DataTableProps<Row> = {
   activeRowId?: string;
   testId?: string;
   rowTestId?: (row: Row) => string;
+  /** Disable when the caller paginates rows on the server. */
+  pagination?: boolean;
   /** Changing this (e.g. the serialized filter state) returns the table to its first page. */
   pageResetKey?: string;
 };
@@ -48,6 +50,7 @@ export function DataTable<Row>({
   activeRowId,
   testId = 'admin-data-table',
   rowTestId,
+  pagination = true,
   pageResetKey,
 }: DataTableProps<Row>) {
   const [sort, setSort] = useState<Sort>();
@@ -72,7 +75,7 @@ export function DataTable<Row>({
     : rows;
   const lastPage = Math.max(0, Math.ceil(rows.length / pageSize) - 1);
   const currentPage = Math.min(page, lastPage);
-  const visibleRows = sorted.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const visibleRows = pagination ? sorted.slice(currentPage * pageSize, (currentPage + 1) * pageSize) : sorted;
   const selectable = selection !== undefined && onSelectionChange !== undefined;
   const isSelected = (id: string) => selection?.mode === 'allMatching' || (selection?.ids.includes(id) ?? false);
   const selectedVisible = visibleRows.filter(row => isSelected(getRowId(row))).length;
@@ -112,12 +115,15 @@ export function DataTable<Row>({
       <Box
         role="region"
         aria-label={label}
+        // Tells the admin skin this table already has its own frame (adminSkin.ts, JoyTable).
+        data-admin-table-frame
         tabIndex={0}
         sx={{
           ...adminSurface,
           ...adminFocus,
           overflowX: 'auto',
           maxHeight: '65vh',
+          ...adminScrollGutter,
           borderWidth: 1,
           borderStyle: 'solid',
         }}
@@ -131,7 +137,6 @@ export function DataTable<Row>({
           data-testid={testId}
           sx={{
             minWidth: '40rem',
-            '--TableCell-headBackground': 'var(--joy-palette-admin-surface)',
             '--TableCell-selectedBackground': 'var(--joy-palette-admin-canvas)',
             '& th, & td': { borderColor: 'admin.border', color: 'admin.ink' },
             '& th': { color: 'admin.inkMuted' },
@@ -199,7 +204,8 @@ export function DataTable<Row>({
                   return (
                     <tr
                       key={id}
-                      tabIndex={onRowActivate ? 0 : undefined}
+                      tabIndex={onRowActivate || selectable ? 0 : undefined}
+                      aria-keyshortcuts={selectable ? 'x' : undefined}
                       aria-selected={selectable ? isSelected(id) : activeRowId === id}
                       data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
                       onClick={event => {
@@ -207,6 +213,21 @@ export function DataTable<Row>({
                         onRowActivate?.(row);
                       }}
                       onKeyDown={event => {
+                        if (
+                          event.target === event.currentTarget &&
+                          selectable &&
+                          event.key.toLowerCase() === 'x' &&
+                          !event.metaKey &&
+                          !event.ctrlKey &&
+                          !event.altKey &&
+                          !event.shiftKey &&
+                          !event.repeat &&
+                          !event.nativeEvent.isComposing
+                        ) {
+                          event.preventDefault();
+                          toggleRows([id], !isSelected(id));
+                          return;
+                        }
                         if (
                           event.target !== event.currentTarget ||
                           !onRowActivate ||
@@ -245,49 +266,51 @@ export function DataTable<Row>({
           </tbody>
         </Table>
       </Box>
-      <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
-        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-          {rows.length === 0 ? 0 : currentPage * pageSize + 1}-{Math.min((currentPage + 1) * pageSize, rows.length)} of{' '}
-          {rows.length.toLocaleString()}
-        </Typography>
-        <Select
-          aria-label="Rows per page"
-          size="sm"
-          value={pageSize}
-          disabled={loading}
-          data-testid="admin-table-page-size"
-          onChange={(_, value) => {
-            if (value !== null) {
-              setPageSize(value);
-              setPage(0);
-            }
-          }}
-        >
-          {PAGE_SIZES.map(size => (
-            <Option key={size} value={size} data-testid={`admin-table-page-size-${size}`}>
-              {size}
-            </Option>
-          ))}
-        </Select>
-        <Button
-          size="sm"
-          variant="outlined"
-          disabled={loading || currentPage === 0}
-          onClick={() => setPage(currentPage - 1)}
-          data-testid="admin-table-previous-btn"
-        >
-          Previous
-        </Button>
-        <Button
-          size="sm"
-          variant="outlined"
-          disabled={loading || currentPage === lastPage}
-          onClick={() => setPage(currentPage + 1)}
-          data-testid="admin-table-next-btn"
-        >
-          Next
-        </Button>
-      </Stack>
+      {pagination && (
+        <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            {rows.length === 0 ? 0 : currentPage * pageSize + 1}-{Math.min((currentPage + 1) * pageSize, rows.length)}{' '}
+            of {rows.length.toLocaleString()}
+          </Typography>
+          <Select
+            aria-label="Rows per page"
+            size="sm"
+            value={pageSize}
+            disabled={loading}
+            data-testid="admin-table-page-size"
+            onChange={(_, value) => {
+              if (value !== null) {
+                setPageSize(value);
+                setPage(0);
+              }
+            }}
+          >
+            {PAGE_SIZES.map(size => (
+              <Option key={size} value={size} data-testid={`admin-table-page-size-${size}`}>
+                {size}
+              </Option>
+            ))}
+          </Select>
+          <Button
+            size="sm"
+            variant="outlined"
+            disabled={loading || currentPage === 0}
+            onClick={() => setPage(currentPage - 1)}
+            data-testid="admin-table-previous-btn"
+          >
+            Previous
+          </Button>
+          <Button
+            size="sm"
+            variant="outlined"
+            disabled={loading || currentPage === lastPage}
+            onClick={() => setPage(currentPage + 1)}
+            data-testid="admin-table-next-btn"
+          >
+            Next
+          </Button>
+        </Stack>
+      )}
     </Stack>
   );
 }

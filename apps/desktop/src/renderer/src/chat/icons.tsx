@@ -383,6 +383,16 @@ export function SlidersIcon() {
   );
 }
 
+/** Models: a chip, for the models that run on this computer. */
+export function ModelsIcon() {
+  return (
+    <Glyph>
+      <rect x="4" y="4" width="8" height="8" rx="1.2" />
+      <path d="M6.5 2v2M9.5 2v2M6.5 12v2M9.5 12v2M2 6.5h2M2 9.5h2M12 6.5h2M12 9.5h2" />
+    </Glyph>
+  );
+}
+
 /** A conversation's pull request, on the bar above the composer. */
 export function PullRequestIcon({ size }: { size?: number } = {}) {
   return (

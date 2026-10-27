@@ -29,6 +29,7 @@ import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import { useHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { useHelpIndex, searchEntries, getEntryBySlug } from '@client/app/hooks/useHelpIndex';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
+import { adminSurfaceExcludeProps } from '@client/app/utils/themes/customizations/adminSkin';
 import HelpContent from './HelpContent';
 import HelpTOC from './HelpTOC';
 import HelpBreadcrumbs from './HelpBreadcrumbs';
@@ -474,6 +475,8 @@ const HelpPanel: React.FC = () => {
       anchor="right"
       open={open}
       onClose={close}
+      // App-wide chrome: the admin skin stops here (adminSkin.ts).
+      {...adminSurfaceExcludeProps}
       slotProps={{
         content: {
           sx: {

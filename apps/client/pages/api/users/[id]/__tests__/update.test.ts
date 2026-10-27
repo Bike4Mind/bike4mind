@@ -817,6 +817,15 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     securityQuestions: [{ question: 'Pet name?', answer: 'Fluffy' }],
     userNotes: [{ note: 'admin note', timestamp: '2026-01-01', userName: 'admin' }],
     signupMeta: { ip: '203.0.113.7', asn: 16509, isDatacenter: true },
+    signupGrantAssessment: {
+      band: 'review',
+      credits: 0,
+      score: 3,
+      reasons: ['datacenter'],
+      missing: [],
+      policyVersion: 'test',
+      status: 'evaluated',
+    },
     notInSchema: 'x',
   };
 
@@ -831,6 +840,7 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     expect(json.securityQuestions).toEqual([{ question: 'Pet name?', answer: '' }]);
     expect(json.userNotes).toEqual(profile.userNotes);
     expect(json.signupMeta).toEqual(profile.signupMeta);
+    expect(json.signupGrantAssessment).toEqual(profile.signupGrantAssessment);
     expect(json).not.toHaveProperty('notInSchema');
   });
 
@@ -849,6 +859,7 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     expect(json.securityQuestions).toEqual([{ question: 'Pet name?', answer: '' }]);
     expect(json).not.toHaveProperty('userNotes');
     expect(json).not.toHaveProperty('signupMeta');
+    expect(json).not.toHaveProperty('signupGrantAssessment');
     expect(json).not.toHaveProperty('notInSchema');
   });
 });

@@ -50,6 +50,7 @@ import type {
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
+import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsState } from './skills';
@@ -83,6 +84,17 @@ import type {
   TerminalsChangedEvent,
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
+import type {
+  HubDetailResult,
+  HubSearchRequest,
+  HubSearchResult,
+  InstalledModelsResult,
+  ModelPull,
+  ModelPullRequest,
+  ModelPullResult,
+  ModelRemoveResult,
+  ModelRuntimeStatus,
+} from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
@@ -118,7 +130,11 @@ export const IPC_CHANNELS = {
   fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
   chatListSuggestionModels: 'chat:list-suggestion-models',
+  chatGetLocalContext: 'chat:get-local-context',
+  chatSetLocalContext: 'chat:set-local-context',
+  chatGetLocalContextFit: 'chat:get-local-context-fit',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSettleLocalModel: 'chat:settle-local-model',
   chatSetSessionHistory: 'chat:set-session-history',
   chatSearchHistory: 'chat:search-history',
   chatClearHistory: 'chat:clear-history',
@@ -266,6 +282,20 @@ export const IPC_CHANNELS = {
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
   updateStateChanged: 'update:state-changed',
+  modelsGetStatus: 'models:get-status',
+  modelsListInstalled: 'models:list-installed',
+  modelsSearch: 'models:search',
+  modelsGetDetail: 'models:get-detail',
+  modelsListPulls: 'models:list-pulls',
+  /** Starts a download; resolves when it finishes, fails or is cancelled. */
+  modelsPull: 'models:pull',
+  modelsCancelPull: 'models:cancel-pull',
+  modelsDismissPull: 'models:dismiss-pull',
+  modelsRemove: 'models:remove',
+  /** main -> renderer push of every pull in flight or failed. */
+  modelsPullsChanged: 'models:pulls-changed',
+  /** main -> renderer push: a pull finished or a model was removed. */
+  modelsInstalledChanged: 'models:installed-changed',
   /**
    * Where the agent's browser should be drawn, if anywhere. Renderer -> main only: the view is
    * an overlay the renderer cannot see, so the renderer is the only thing that knows where the
@@ -511,6 +541,19 @@ export interface DesktopApi {
     install(force: boolean): Promise<UpdateInstallResult>;
     onStateChanged(listener: (state: UpdateState) => void): () => void;
   };
+  models: {
+    getStatus(): Promise<ModelRuntimeStatus>;
+    listInstalled(): Promise<InstalledModelsResult>;
+    search(request: HubSearchRequest): Promise<HubSearchResult>;
+    getDetail(repo: string): Promise<HubDetailResult>;
+    listPulls(): Promise<ModelPull[]>;
+    pull(request: ModelPullRequest): Promise<ModelPullResult>;
+    cancelPull(key: string): Promise<void>;
+    dismissPull(key: string): Promise<void>;
+    remove(name: string): Promise<ModelRemoveResult>;
+    onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
+    onInstalledChanged(listener: () => void): () => void;
+  };
   auth: {
     getState(): Promise<AuthState>;
     signIn(): Promise<void>;
@@ -567,8 +610,15 @@ export interface DesktopApi {
     listModels(force?: boolean): Promise<ChatModelCatalog>;
     /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
     listSuggestionModels(): Promise<ChatModelCatalog>;
+    /** How local models size their context window; see @shared/localContextSetting. */
+    getLocalContext(): Promise<LocalContextSetting>;
+    setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
+    /** Which local models each fixed size may not fit, by the memory estimate. */
+    getLocalContextFit(): Promise<LocalContextFit>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    /** Device-local only: moves a conversation whose model is not installed to the pick a send would use. */
+    settleLocalModel(sessionId: string): Promise<{ session: ChatSessionSummary; notice?: string } | null>;
     setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null>;
     searchHistory(query: string): Promise<LocalHistoryResult[]>;
     clearHistory(): Promise<LocalHistoryState>;

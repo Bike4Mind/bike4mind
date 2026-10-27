@@ -21,12 +21,11 @@ export async function readDriveLakePollFlags(): Promise<{ featureOn: boolean; po
 }
 
 /**
- * Whether the poll actually runs on this deployment. It is an SST cron (infra/cron.ts) the self-host
- * worker runner (apps/workers/src/selfhost/main.ts) does not schedule, so the flags alone would claim
- * automatic sync there. Must change if the self-host runner ever schedules driveLakeResyncPoll.
+ * Whether the poll actually runs on this deployment. Both schedulers (the SST cron in infra/cron.ts and
+ * the self-host worker runner, apps/workers/src/selfhost/driveLakeResyncPoll.ts) gate on the same flags,
+ * so the flags alone decide. Must change if either scheduler stops running the poll.
  */
 export async function isDriveLakePollScheduled(): Promise<boolean> {
-  if (process.env.B4M_SELF_HOST === 'true') return false;
   const { featureOn, pollOn } = await readDriveLakePollFlags();
   return featureOn && pollOn;
 }

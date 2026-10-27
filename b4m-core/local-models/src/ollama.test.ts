@@ -182,6 +182,7 @@ describe('OllamaRuntime.inspect', () => {
       contextMax: 262144,
       blockCount: 30,
       headCount: 16,
+      embeddingLength: 2816,
       full: { layers: 30, kvHeads: 8, keyLength: 256, valueLength: 256 },
       mtpLayers: 0,
     });
@@ -460,6 +461,18 @@ describe('OllamaRuntime.pull', () => {
       },
     });
     await expect(runtimeFor(server).pull('qwen3:8b', { idleTimeoutMs: 500 })).resolves.toBeUndefined();
+  });
+
+  it.each([0, -1, -Infinity, NaN])('rejects idleTimeoutMs %s before contacting the runtime', async idleTimeoutMs => {
+    server = await startFakeServer({});
+    const runtime = runtimeFor(server);
+    const pull = runtime.pull('qwen3:8b', { idleTimeoutMs });
+    await expect(pull).rejects.toBeInstanceOf(LocalRuntimeError);
+    await expect(pull).rejects.toMatchObject({
+      runtimeId: runtime.id,
+      message: `idleTimeoutMs must be a positive number or Infinity, got ${idleTimeoutMs}`,
+    });
+    expect(server.requests).toHaveLength(0);
   });
 
   it('treats an infinite idle timeout as no watchdog', async () => {

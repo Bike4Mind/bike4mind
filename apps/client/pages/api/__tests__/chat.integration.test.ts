@@ -24,6 +24,7 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
 const {
+  mockCheckFreeTierDailySpendCap,
   mockValidate,
   mockFindById,
   mockRateLimit,
@@ -45,6 +46,7 @@ const {
   mockSendStatusUpdate,
   waitTurnLimits,
 } = vi.hoisted(() => ({
+  mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
   mockRateLimit: vi.fn(),
@@ -98,6 +100,10 @@ const RATE_LIMIT_HEADERS = {
 
 // The Mongo-backed per-API-key rate-limit counter (buffers forever against a
 // stubbed connectDB otherwise). Overridable per-test.
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
+}));
+
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
   // checkApiKeyRateLimit is stubbed.
@@ -243,7 +249,7 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import handler from '../chat';
-import { ApiKeyScope, BadRequestError } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, TooManyRequestsError } from '@bike4mind/common';
 import { Types } from 'mongoose';
 
 const VALID_KEY = 'sk-test-valid-key';
@@ -311,6 +317,32 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       })
     );
     mockIsChatModelUsable.mockReturnValue(true);
+  });
+
+  it.each([
+    ['API key', VALID_KEY, { message: 'hello' }],
+    ['new conversation', null, { message: 'hello', newConversation: true }],
+    ['inline completion', VALID_KEY, { message: 'hello', wait: true }],
+  ] as const)('rejects a capped %s before creating a notebook or quest', async (_label, apiKey, body) => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: 'daily_free_limit_reached',
+        retryAfter: 3600,
+      })
+    );
+    const { req, res } = fire({ apiKey, body });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'daily_free_limit_reached' });
+    expect(res.getHeader('Retry-After')).toBe('3600');
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ user: req.user, req, billingOrganizationId: undefined })
+    );
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
   });
 
   it('rejects a key holding neither ai:chat nor ai:generate (403)', async () => {
@@ -589,6 +621,29 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     });
   });
 
+  describe('output-budget minimum', () => {
+    it.each(['max_tokens', 'maxTokens', 'maxOutputTokens'])(
+      'rejects a tiny %s with 422 before any quest is created',
+      async field => {
+        validateWithScopes([ApiKeyScope.AI_CHAT]);
+        const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', [field]: 8 } });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(422);
+        expect(mockInvoke).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['max_tokens', 'maxTokens', 'maxOutputTokens'])('forwards a %s at the minimum (2xx)', async field => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', [field]: 16 } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(
+        (mockInvoke.mock.calls[0][0] as { body: { params: { max_tokens?: number } } }).body.params.max_tokens
+      ).toBe(16);
+    });
+  });
+
   // Persisted on promptMeta by ChatCompletionInvoke so the tool-calling scorecard can split by it.
   describe('toolMode forwarding', () => {
     const invokedToolMode = () => (mockInvoke.mock.calls[0][0] as { body: { toolMode?: unknown } }).body.toolMode;
@@ -654,6 +709,10 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       const { body } = invokedBody();
       expect(body.organizationId).toBe(orgId);
       expect(body.promptMeta?.session?.organizationId).toBe(orgId);
+      expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+        expect.objectContaining({ user: req.user, req, billingOrganizationId: orgId })
+      );
+      expect(mockCheckFreeTierDailySpendCap.mock.calls[0][0].req).toBe(req);
       expect(mockOrgFindAccessibleById).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), orgId);
     });
 

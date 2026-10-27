@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import bcrypt from 'bcryptjs';
 
 // Mock all external dependencies before importing the route handler.
@@ -509,10 +509,13 @@ describe('/api/otc/verify — enumeration resistance', () => {
     mockJwtVerify.mockReturnValue(validToken());
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockUserHasMFA.mockReturnValue(false);
-    // enforceMFA = true for this call only - vi.clearAllMocks() clears calls, not
-    // implementations, so a non-Once override here would leak into every later test.
+    // enforceMFA = true for this call only. Keyed on the setting name because the OTC limit
+    // settings are read first; vi.clearAllMocks() keeps implementations, so restore it after.
     const { getSettingsValue } = await import('@bike4mind/utils');
-    vi.mocked(getSettingsValue).mockReturnValueOnce(true);
+    vi.mocked(getSettingsValue).mockImplementation(key => key === 'enforceMFA');
+    onTestFinished(() => {
+      vi.mocked(getSettingsValue).mockReturnValue(false);
+    });
     mockJwtSign.mockReturnValue('mfa-setup-access-token');
     mockFindByEmail.mockResolvedValue({
       id: 'u2',

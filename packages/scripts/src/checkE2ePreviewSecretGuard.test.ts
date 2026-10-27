@@ -138,7 +138,8 @@ describe('e2e skip rendering', () => {
 
   it('renders the PR comment as Skipped rather than Passed', () => {
     const contents = read('e2e-on-label.yml');
-    expect(contents).toMatch(/const skipped = '\$\{\{ steps\.e2e\.outputs\.preview_skipped \}\}' === 'true'/);
+    expect(contents).toMatch(/const skipped = process\.env\.E2E_PREVIEW_SKIPPED === 'true'/);
+    expect(contents).toMatch(/^\s*E2E_PREVIEW_SKIPPED: \$\{\{ steps\.e2e\.outputs\.preview_skipped \}\}$/m);
     // Anchored to the front of the statement, not matched anywhere in it: `passed ? 'Passed' :
     // skipped ? 'Skipped' : 'Failed'` still contains the inner arm, so an unanchored match would
     // pass while a skip rendered a green "E2E Tests Passed" on a PR where zero tests ran.

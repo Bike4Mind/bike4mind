@@ -1,5 +1,5 @@
 import { useUser } from '@client/app/contexts/UserContext';
-import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
+import { useSendOTC, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
@@ -39,13 +39,14 @@ import { useBrandingSettings, usePublicConfig } from '../hooks/data/settings';
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
-import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
+import { applyRedirect } from '@client/app/utils/authRedirect';
 import { isSubmittableOtcCode, OTC_CODE_PLACEHOLDER, sanitizeOtcInput } from '@client/app/utils/otcCode';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { CURRENT_POLICY_VERSION, FirstRunEvents, usernameSchema } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { useJoinWaitlist } from '@client/app/hooks/useJoinWaitlist';
 
 const registerSchema = z.object({
   // Same rules the server enforces in registerUser.
@@ -66,9 +67,11 @@ type RegisterStep = 'form' | 'otc';
 const Register: React.FC = () => {
   const { setCurrentUser, currentUser } = useUser();
   const navigate = useNavigate();
+  const joinWaitlist = useJoinWaitlist();
   const router = useRouter();
   const theme = useTheme();
   const { t } = useTranslation();
+  const startOAuthSignIn = useStartOAuthSignIn();
   const { mutate: logEvent } = useLogEvent();
 
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
@@ -344,11 +347,9 @@ const Register: React.FC = () => {
   };
 
   const handleSocialLogin = (provider: 'google' | 'github' | 'okta') => {
-    const redirectUrl = `/api/auth/${provider}`;
-    // Carry redirectTo across the provider round-trip - the full-page navigation
-    // drops the in-URL ?redirectTo=, so merge it onto the provider URL and let the
-    // server re-attach it to /auth/success after callback (see appendRedirectTo).
-    window.location.href = appendRedirectTo(redirectUrl, new URLSearchParams(window.location.search).get('redirectTo'));
+    startOAuthSignIn(`/api/auth/${provider}`).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : 'Sign-in could not start. Please try again.');
+    });
   };
 
   if (isPublicConfigLoading) {
@@ -446,6 +447,7 @@ const Register: React.FC = () => {
                 >
                   <Button
                     className="google-login-button"
+                    data-testid="register-google-btn"
                     type="button"
                     variant="outlined"
                     color="neutral"
@@ -462,6 +464,7 @@ const Register: React.FC = () => {
                   </Button>
                   <Button
                     className="github-login-button"
+                    data-testid="register-github-btn"
                     type="button"
                     variant="outlined"
                     color="neutral"
@@ -478,6 +481,7 @@ const Register: React.FC = () => {
                   </Button>
                   <Button
                     className="okta-login-button"
+                    data-testid="register-okta-btn"
                     type="button"
                     variant="outlined"
                     color="neutral"
@@ -613,6 +617,19 @@ const Register: React.FC = () => {
                         onChange={e => setInviteCode(e.target.value)}
                         sx={inputStyles}
                       />
+                      {registrationClosed && (
+                        <Typography level="body-xs" sx={{ mt: '6px', color: 'text.tertiary' }}>
+                          {t('auth.noInviteCode')}{' '}
+                          <Link
+                            component="button"
+                            type="button"
+                            data-testid="register-join-waitlist-link"
+                            onClick={() => joinWaitlist('register_signup_closed', emailValue)}
+                          >
+                            {t('auth.joinWaitlist')}
+                          </Link>
+                        </Typography>
+                      )}
                     </FormControl>
 
                     {/* P0-B abuse gate: AUP/ToS acceptance + 18+ attestation. Both are
