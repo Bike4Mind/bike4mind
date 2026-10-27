@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { build, fixtureManifest, ownEval, sha } from '../modelHub/__fixtures__/hubManifest';
 import {
   CuratedCatalogSchema,
+  HUB_MAX_SEQUENCE,
   HubManifestSchema,
   ModelArchSchema,
   parseHubManifest,
@@ -465,6 +466,11 @@ describe('curated sequence, changelog and tiers', () => {
   it('rejects an envelope whose sequence is not a positive integer', () => {
     expect(() => parseHubManifest({ ...curated(), sequence: 0 })).toThrow();
     expect(() => parseHubManifest({ ...curated(), sequence: 1.5 })).toThrow();
+  });
+
+  it('caps the sequence at HUB_MAX_SEQUENCE', () => {
+    expect(parseHubManifest({ ...curated(), sequence: HUB_MAX_SEQUENCE }).manifest.sequence).toBe(HUB_MAX_SEQUENCE);
+    expect(() => parseHubManifest({ ...curated(), sequence: HUB_MAX_SEQUENCE + 1 })).toThrow();
   });
 
   it('reads revoked key ids, defaulting to none, and rejects the envelope when they are unreadable', () => {

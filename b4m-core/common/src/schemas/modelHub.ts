@@ -9,7 +9,9 @@ const MAX_FAMILIES = 200;
 const MAX_BUILDS = 16;
 const MAX_CHANGELOG = 200;
 const MAX_TIERS = 32;
-const MAX_SEQUENCE = 2 ** 31;
+/** The highest curated list sequence; the publish script also caps each step over live. */
+export const HUB_MAX_SEQUENCE = 1_000_000;
+const MAX_SEQUENCE = HUB_MAX_SEQUENCE;
 /** The shortest trained context, in tokens, a chat entry may declare. */
 export const MIN_CHAT_CONTEXT = 16384;
 
@@ -721,9 +723,8 @@ export type HubManifest = z.infer<typeof HubManifestSchema>;
 export type HubManifestInput = z.input<typeof HubManifestSchema>;
 
 /**
- * The published catalog, stricter than clients read it: CI and the publish script require a sequence, a changelog
- * whose sequences strictly decrease from it, and a newest item naming only entries that exist (removals: that don't).
- * Older items are history, so an entry they added may since have been removed.
+ * The published catalog as CI and the publish script hold it: a sequence its changelog leads with and strictly
+ * decreases from, and a newest item naming only listed entries (older items are history, removals unlisted ones).
  */
 export const CuratedCatalogSchema = HubManifestSchema.superRefine((manifest, ctx) => {
   const issue = (path: PropertyKey[], message: string) => ctx.addIssue({ code: 'custom', path, message });
