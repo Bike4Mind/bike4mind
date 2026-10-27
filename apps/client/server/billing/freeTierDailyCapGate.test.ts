@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike4mind/common';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 
 // Hoisted mocks (vi.hoisted runs before imports)
 const { getSettingsMapMock, getSettingsValueMock, resolveUserRateTierMock, findDailySpendByUserMock, findByIdMock } =
@@ -62,8 +63,80 @@ function callGate(user: IUserDocument) {
 }
 
 describe('checkFreeTierDailySpendCap', () => {
+  it('preserves the admin billing exemption when a key withholds admin permissions', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => (key === 'enforceCredits' ? true : 200));
+    const user = withholdAdminRole({ ...makeUser(10 * DAY_MS), isAdmin: true });
+
+    await expect(callGate(user)).resolves.toBeUndefined();
+
+    expect(user.isAdmin).toBe(false);
+    expect(resolveUserRateTierMock).not.toHaveBeenCalled();
+    expect(findDailySpendByUserMock).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    getSettingsMapMock.mockResolvedValue({});
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-27T12:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['one millisecond before 24 hours', DAY_MS - 1, 300, false],
+    ['exactly 24 hours', DAY_MS, 300, true],
+    ['one millisecond before 7 days', 7 * DAY_MS - 1, 200, false],
+    ['exactly 7 days', 7 * DAY_MS, 200, true],
+  ])('selects the correct allowance at %s', async (_, age, spend, refused) => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      if (key === 'freeTierDay1SpendCapCredits') return 500;
+      if (key === 'freeTierDays2To7SpendCapCredits') return 300;
+      return undefined;
+    });
+    resolveUserRateTierMock.mockResolvedValue('free');
+    findDailySpendByUserMock.mockResolvedValue(spend);
+
+    const result = callGate(makeUser(age));
+    if (refused) {
+      await expect(result).rejects.toBeInstanceOf(TooManyRequestsError);
+      return;
+    }
+    await expect(result).resolves.toBeUndefined();
+  });
+
+  it.each(['settings', 'user', 'tier'] as const)('fails open when the %s lookup rejects', async source => {
+    const failure = new Error(`${source} unavailable`);
+    const user = makeUser(10 * DAY_MS);
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+    findByIdMock.mockResolvedValue(user);
+    resolveUserRateTierMock.mockResolvedValue('free');
+    findDailySpendByUserMock.mockResolvedValue(500);
+    if (source === 'settings') getSettingsMapMock.mockRejectedValueOnce(failure);
+    if (source === 'user') findByIdMock.mockRejectedValueOnce(failure);
+    if (source === 'tier') resolveUserRateTierMock.mockRejectedValueOnce(failure);
+
+    await expect(
+      checkFreeTierDailySpendCap({
+        userId: user.id,
+        userRepository: mockUserRepo,
+        usageEventRepository: mockUsageRepo,
+        logger: mockLogger,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(findDailySpendByUserMock).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith('[freeTierDailyCapGate] cap check failed; allowing request', {
+      error: failure,
+    });
   });
 
   it('skips when enforceCredits is off', async () => {
@@ -103,6 +176,8 @@ describe('checkFreeTierDailySpendCap', () => {
 
     await callGate(makeUser(10 * DAY_MS));
 
+    expect(findByIdMock).not.toHaveBeenCalled();
+    expect(resolveUserRateTierMock).not.toHaveBeenCalled();
     expect(findDailySpendByUserMock).not.toHaveBeenCalled();
   });
 
@@ -342,5 +417,25 @@ describe('checkFreeTierDailySpendCap', () => {
 
   it('does not treat an unrelated 429 as the daily cap', () => {
     expect(isFreeTierDailyCapError(new TooManyRequestsError('slow down'))).toBe(false);
+  });
+
+  it('fails open and logs when strict tier resolution cannot establish the org plan', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+    const user = makeUser(10 * DAY_MS);
+    const error = new Error('org subscriptions unavailable');
+    resolveUserRateTierMock.mockRejectedValueOnce(error);
+    findDailySpendByUserMock.mockResolvedValue(500);
+
+    await expect(callGate(user)).resolves.toBeUndefined();
+
+    expect(resolveUserRateTierMock).toHaveBeenCalledWith(user, undefined, { strict: true });
+    expect(findDailySpendByUserMock).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith('[freeTierDailyCapGate] cap check failed; allowing request', {
+      error,
+    });
   });
 });

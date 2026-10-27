@@ -1,13 +1,18 @@
-import type { IUserDocument, IUsageEventRepository } from '@bike4mind/common';
+import type { IUserDocument } from '@bike4mind/common';
 import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
+import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
 
 interface IUserRepository {
   findById(id: string): Promise<IUserDocument | null>;
 }
+
+type DailySpendRepository = {
+  findDailySpendByUser(userId: string, since: Date): Promise<number>;
+};
 
 type CapCheckInput =
   // Caller already holds the resolved user (e.g. request middleware) - no extra DB read.
@@ -44,7 +49,7 @@ export async function checkFreeTierDailySpendCap({
   billingOrganizationId,
   ...input
 }: CapCheckInput & {
-  usageEventRepository: IUsageEventRepository;
+  usageEventRepository: DailySpendRepository;
   logger: ILogger;
   /** Request memo for the tier lookup, so it reuses the request's subscription reads. */
   req?: ActiveSubscriptionsRequest;
@@ -60,21 +65,22 @@ export async function checkFreeTierDailySpendCap({
     // Org-billed turns are settled against the org's shared pool, not the user's personal credits.
     if (billingOrganizationId) return;
 
-    // When only a userId is provided, defer the DB read until here so callers that
-    // reach this point rarely (paid tier, enforcement off) don't pay it on every request.
-    // When the caller already holds the resolved user (e.g. req.user from middleware),
-    // skip the second lookup entirely to avoid a silent skip on replica lag or deletion.
+    const steadyCap = getSettingsValue('freeTierDailySpendCapCredits', settings) ?? 0;
+    if (steadyCap <= 0) return;
+
+    // Reuse a resolved user; ID-only callers defer their lookup until enforcement is enabled.
     const user = 'user' in input && input.user ? input.user : await input.userRepository.findById(input.userId);
     if (!user) return;
+    // This is a billing exemption for the owner, independent of the key's permission scopes.
+    if (persistedIsAdmin(user)) return;
 
     // Dynamic: userRateTier pulls in the Subscription model at module init, which crashes route tests
     // that mock @bike4mind/database but never reach the cap check.
     const { resolveUserRateTier } = await import('@server/utils/userRateTier');
-    const tier = await resolveUserRateTier(user, req);
+    // A degraded org-seat lookup cannot establish that the caller is free. Let the error
+    // reach the fail-open handler instead of denying a paid seat's personal turn.
+    const tier = await resolveUserRateTier(user, req, { strict: true });
     if (tier !== 'free') return;
-
-    const steadyCap = getSettingsValue('freeTierDailySpendCapCredits', settings) ?? 0;
-    if (steadyCap <= 0) return;
 
     const now = new Date();
     // A legacy user without createdAt predates the ramp, so it gets the steady-state cap.

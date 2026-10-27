@@ -278,6 +278,7 @@ describe('reserveRequestCredits', () => {
       });
 
       expect(reservation).toMatchObject({ ownerId: 'teamOrg', ownerType: CreditHolderType.Organization });
+      expect(checkDailyCap).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: 'teamOrg' }));
       expect(orgIncrement).toHaveBeenCalledWith('teamOrg', -5);
       expect(userIncrement).not.toHaveBeenCalled();
     });
@@ -286,6 +287,7 @@ describe('reserveRequestCredits', () => {
       const reservation = await reserveRequestCredits({ ...base, req: homeOrgReq(), billingOrganizationId: null });
 
       expect(reservation).toMatchObject({ ownerId: 'u1', ownerType: CreditHolderType.User });
+      expect(checkDailyCap).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: undefined }));
       expect(userIncrement).toHaveBeenCalledWith('u1', -5);
       expect(orgIncrement).not.toHaveBeenCalled();
     });
@@ -306,6 +308,7 @@ describe('reserveRequestCredits', () => {
       });
 
       expect(reservation).toMatchObject({ ownerId: 'o1', ownerType: CreditHolderType.Organization });
+      expect(checkDailyCap).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: 'o1' }));
       expect(orgIncrement).toHaveBeenCalledWith('o1', -5);
     });
   });
@@ -322,6 +325,7 @@ describe('reserveRequestCredits', () => {
     });
 
     expect(reservation).toMatchObject({ ownerId: 'o1', ownerType: CreditHolderType.Organization });
+    expect(checkDailyCap).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: 'o1' }));
     expect(orgIncrement).toHaveBeenCalledWith('o1', -2);
     expect(userIncrement).not.toHaveBeenCalled();
   });

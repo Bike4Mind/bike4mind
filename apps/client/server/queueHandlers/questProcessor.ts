@@ -281,7 +281,6 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   logger.debug('User and session queries completed', { durationMs: Date.now() - queryStartTime });
 
   if (!storedUser) throw new NotFoundError('User not found');
-  const user = params.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
 
   logger.updateMetadata({
     userId: params.userId,
@@ -322,6 +321,9 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     });
     return;
   }
+
+  // Withholding mutates the document, so do it after the billing exemption check.
+  const user = params.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
 
   // Prepare the request body with server-side searchers augmentation
   // Note: searchers are server-side only and not part of the API schema

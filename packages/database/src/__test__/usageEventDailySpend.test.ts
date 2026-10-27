@@ -40,8 +40,7 @@ describe('UsageEventRepository.findDailySpendByUser', () => {
   } as const;
 
   let seedIndex = 0;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test seed: partial usage event
-  const seed = (userId: string, creditsCharged: number, writtenOff?: number, at?: Date): Promise<any> => {
+  const seed = (userId: string, creditsCharged: number, writtenOff?: number, at?: Date) => {
     const ts = at ?? new Date();
     return UsageEvent.create({
       ...baseEvent,
@@ -86,5 +85,33 @@ describe('UsageEventRepository.findDailySpendByUser', () => {
     await seed('user-a', 50);
     const result = await usageEventRepository.findDailySpendByUser('user-a', today());
     expect(result).toBe(50);
+  });
+
+  it('excludes organization-funded usage by the same actor', async () => {
+    await seed('user-a', 50);
+    await UsageEvent.create({
+      ...baseEvent,
+      requestId: 'org-funded-turn',
+      userId: 'user-a',
+      // Deliberate collision also pins ownerType; ownerId alone must not match.
+      ownerId: 'user-a',
+      ownerType: CreditHolderType.Organization,
+      creditsCharged: 999,
+    });
+
+    expect(await usageEventRepository.findDailySpendByUser('user-a', today())).toBe(50);
+  });
+
+  it('counts by personal billing owner rather than the actor', async () => {
+    await UsageEvent.create({
+      ...baseEvent,
+      requestId: 'different-actor-turn',
+      userId: 'user-b',
+      ownerId: 'user-a',
+      creditsCharged: 75,
+    });
+
+    expect(await usageEventRepository.findDailySpendByUser('user-a', today())).toBe(75);
+    expect(await usageEventRepository.findDailySpendByUser('user-b', today())).toBe(0);
   });
 });

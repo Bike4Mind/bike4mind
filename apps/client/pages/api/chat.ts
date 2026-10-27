@@ -151,6 +151,15 @@ const handler = nextRouteForContract(chatContract, {
   // is what lets an org member whose org pool is empty still spend their own credits.
   const organizationId = await resolveActiveOrg(req, simplifiedRequest.organizationId);
 
+  // Refuse capped turns before creating a notebook or quest.
+  await checkFreeTierDailySpendCap({
+    user: req.user,
+    req,
+    billingOrganizationId: organizationId,
+    usageEventRepository,
+    logger: req.logger,
+  });
+
   // Resolve the notebook only AFTER the org check: an API-key/newConversation caller gets a
   // freshly created notebook, and a request that resolveActiveOrg rejects (403/404) must not have
   // already minted one. `createdNotebook` marks a session this request opened, so a later reject
@@ -205,15 +214,6 @@ const handler = nextRouteForContract(chatContract, {
       await dispatchQuest(params, req.logger);
     },
   };
-
-  // Daily spend cap: check before quest creation so a capped request never creates a quest.
-  await checkFreeTierDailySpendCap({
-    user: req.user,
-    req,
-    billingOrganizationId: organizationId,
-    usageEventRepository,
-    logger: req.logger,
-  });
 
   // Create the quest (this is immediate)
   apiTimer.phase('invoke');

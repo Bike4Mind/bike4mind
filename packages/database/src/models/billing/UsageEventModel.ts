@@ -701,6 +701,11 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return result?.usd ?? 0;
   }
 
+  /**
+   * Personal credits spent since UTC midnight. writtenOffCredits is already part of
+   * creditsCharged, so adding it would double count. The cap's read-before-request
+   * check is non-atomic; concurrent requests may overshoot the allowance.
+   */
   async findDailySpendByUser(userId: string, since: Date): Promise<number> {
     // {ownerId, ownerType, createdAt} index covers this; ownerType: 'User' excludes org-billed turns.
     const [result] = await this.model.aggregate<{ total: number }>([

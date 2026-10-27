@@ -6,6 +6,10 @@ const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
+}));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({
@@ -349,4 +353,29 @@ it('relays a live CLI access refusal without starting a completion', async () =>
       error: 'CLI and desktop access requires an active paid subscription',
     })
   );
+});
+
+describe('daily cap billing target', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecuteCompletion.mockResolvedValue(undefined);
+  });
+
+  it.each([undefined, 'team-org'])('uses the completion billing target %s', async organizationId => {
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      organizationId,
+    } as never);
+
+    await run();
+
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', billingOrganizationId: organizationId })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+  });
 });

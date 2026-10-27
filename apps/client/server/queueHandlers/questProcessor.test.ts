@@ -184,6 +184,9 @@ describe('processQuest', () => {
       const { processQuest } = await import('./questProcessor');
       const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
       processOptions.mockClear();
+      mockCapCheck.mockImplementationOnce(({ user }: { user: { isAdmin?: boolean } }) => {
+        expect(user.isAdmin).toBe(true);
+      });
 
       await processQuest(
         { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
@@ -191,6 +194,26 @@ describe('processQuest', () => {
       );
 
       expect(processOptions.mock.calls[0][0].user.isAdmin).toBe(expected);
+      expect(mockCapCheck).toHaveBeenCalled();
+    },
+    120_000
+  );
+
+  it.each([undefined, 'team-org'])(
+    'forwards the quest billing organization %s to the daily cap',
+    async organizationId => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, organizationId } as never,
+        logger as never
+      );
+
+      expect(mockCapCheck).toHaveBeenLastCalledWith(expect.objectContaining({ billingOrganizationId: organizationId }));
+      expect(mockProcess).toHaveBeenLastCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ organizationId }) })
+      );
     },
     120_000
   );

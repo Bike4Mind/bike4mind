@@ -1133,3 +1133,24 @@ describe('POST /api/ai/v1/completions - admin role on the reloaded owner', () =>
     expect(scopeActorOfCall()).toBeUndefined();
   });
 });
+
+describe('daily cap billing target', () => {
+  it.each([undefined, 'team-org'])('uses the completion billing target %s', async organizationId => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', scopes: [ApiKeyScope.AI_CHAT], organizationId },
+    });
+
+    const response = await post();
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', billingOrganizationId: organizationId })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+  });
+});
