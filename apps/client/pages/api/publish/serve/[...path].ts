@@ -358,7 +358,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   let artifact: PublishedArtifactLean | null = null;
   if (resolved.kind === 'share') {
     // Shared filter, not a hand-rolled one: findByShareToken cannot be used here (it needs a
-    // lean read), but the rollout tolerance and revocation semantics must not diverge from it.
+    // lean read), but its index use and revocation semantics must not diverge from it.
     artifact = await PublishedArtifact.findOne({
       deletedAt: null,
       ...shareTokenFilter(resolved.shareToken),
