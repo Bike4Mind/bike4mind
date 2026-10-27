@@ -11,6 +11,7 @@ import MinimizeIcon from '@mui/icons-material/Minimize';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ChatPanelControls from './ChatPanelControls';
+import { adminSurfaceExcludeProps } from '@client/app/utils/themes/customizations/adminSkin';
 
 // react-draggable v4.7 types DraggableProps to cover nodeRef/handle/position/
 // bounds/onDrag/onStop directly, so no cast is needed.
@@ -359,6 +360,8 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({
         })}
         onClick={handleMinimize}
         data-testid="floating-chat-minimized"
+        // App-wide chrome: the admin skin stops here (adminSkin.ts).
+        {...adminSurfaceExcludeProps}
       >
         <SmartToyIcon sx={{ fontSize: 16 }} />
         <Typography level="body-sm" fontWeight="md" sx={{ color: 'inherit' }}>
@@ -380,6 +383,8 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({
       <Box
         ref={nodeRef}
         data-testid="floating-chat-window"
+        // App-wide chrome: the admin skin stops here (adminSkin.ts).
+        {...adminSurfaceExcludeProps}
         sx={theme => ({
           position: 'fixed',
           width: localSize.width,

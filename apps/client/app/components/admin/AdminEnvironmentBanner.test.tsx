@@ -17,7 +17,7 @@ const renderBanner = (withAdminSurface: boolean) => {
     </AppTheme>
   );
   const elements = [
-    screen.getByText(/./, { selector: 'p' }),
+    screen.getByTestId('environment-banner-title'),
     screen.getByTestId('admin-help-center-btn'),
     screen.getByTestId('close-admin-page-banner-btn').closest('button') as HTMLElement,
   ];
@@ -32,8 +32,20 @@ describe('AdminEnvironmentBanner', () => {
     expect(renderBanner(true)).toEqual(renderBanner(false));
   });
 
-  it('keeps its title and buttons white', () => {
+  it('keeps its title and buttons in the banner foreground', () => {
     const [title, help, close] = renderBanner(true);
-    expect([title[0], help[0], close[0]]).toEqual(['rgb(255, 255, 255)', 'rgb(255, 255, 255)', 'rgb(255, 255, 255)']);
+    expect([title[0], help[0], close[0]]).toEqual(['rgb(244, 244, 245)', 'rgb(244, 244, 245)', 'rgb(244, 244, 245)']);
+  });
+
+  it('is a 24 px strip with a 12/500 label on the local fill', () => {
+    render(
+      <AppTheme>
+        <EnvironmentBanner />
+      </AppTheme>
+    );
+    const strip = getComputedStyle(screen.getByTestId('environment-banner'));
+    const title = getComputedStyle(screen.getByTestId('environment-banner-title'));
+    expect([strip.height, strip.backgroundColor]).toEqual(['24px', 'rgb(47, 94, 72)']);
+    expect([title.fontSize, title.fontWeight]).toEqual(['12px', '500']);
   });
 });
