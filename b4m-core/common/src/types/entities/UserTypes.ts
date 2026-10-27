@@ -46,6 +46,14 @@ export interface INetworkMeta {
   /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
   isDatacenter: boolean | null;
   ja4?: string | null;
+  /**
+   * WAF anonymous-IP label matched; null on self-host and when ORIGIN_VERIFY_SECRET is absent (no WAF attached).
+   * Only set to true on /api/otc/ paths -- the AnonymousIpList rule is scoped there;
+   * false on other deployed paths means unchecked, not "not anonymous".
+   */
+  wafAnonIp?: boolean | null;
+  /** WAF bot-control bot label matched; null on self-host and when ORIGIN_VERIFY_SECRET is absent (no WAF attached). */
+  wafBotSignal?: boolean | null;
 }
 
 export interface ISignupMeta extends INetworkMeta {
