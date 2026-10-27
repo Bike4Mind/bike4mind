@@ -1,20 +1,15 @@
 // @vitest-environment node
 /**
- * A skills:read key is per user, not per org, so leaving an org does not (and must not) revoke it:
- * it still serves the user's other orgs. What cuts the departed member off is that the feed and
- * zip routes re-check membership (memberOrgIdsFor) on every request. This suite proves that against
- * a real mongod and the real departure services, so a cached or removed membership check fails it.
- *
- * `baseApi` is stubbed as in claudeMarketplace.test.ts, so key authentication is not driven here;
- * `call` re-reads `req.user` from the DB per request, as apiKeyAuth does. The services run without
- * withTransaction because a standalone mongod rejects writes inside a session.
+ * A skills:read key is not org-bound, so departure leaves it ACTIVE; the feed and zip routes cut the
+ * member off by re-checking membership (memberOrgIdsFor) per request. `call` re-reads `req.user` from
+ * the DB as apiKeyAuth does. Services run without withTransaction: standalone mongod rejects writes
+ * inside a session.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { ApiKeyScope, ApiKeyStatus, Permission } from '@bike4mind/common';
-// createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
@@ -99,12 +94,7 @@ const newUser = (name: string) =>
 
 async function call(handler: typeof feedHandler | typeof zipHandler, userId: string, query: Record<string, string>) {
   const { req, res } = createMocks<MarketplaceRequest, MarketplaceResponse>({ method: 'GET', query });
-  const key = await UserApiKey.findOne({ userId });
-  Object.assign(req, {
-    user: await User.findById(userId),
-    apiKeyInfo: { id: key!.id, scopes: key!.scopes },
-    logger,
-  });
+  Object.assign(req, { user: await User.findById(userId), logger });
   try {
     await handler(req, res);
   } catch (err) {
@@ -113,7 +103,6 @@ async function call(handler: typeof feedHandler | typeof zipHandler, userId: str
   return res._getStatusCode();
 }
 
-/** An org owned by `owner` with `memberId` as a read/write member, holding one approved Organization listing. */
 async function seedOrg(owner: { id: string }, memberId: string, name: string) {
   const org = await Organization.create({
     name,
@@ -159,6 +148,8 @@ async function seed() {
   return { owner, memberId: member.id as string, a };
 }
 
+type Owner = Awaited<ReturnType<typeof seed>>['owner'];
+
 const keyStatus = async (userId: string) => (await UserApiKey.findOne({ userId }))?.status;
 
 const feedStatus = (userId: string, orgId: string) => call(feedHandler, userId, { orgId });
@@ -168,7 +159,7 @@ describe('skills:read key after its owner exits an org', () => {
   it.each([
     [
       'is removed by an admin',
-      (owner: Awaited<ReturnType<typeof seed>>['owner'], memberId: string, orgId: string) =>
+      (owner: Owner, memberId: string, orgId: string) =>
         organizationService.revokeAccess(owner, { id: orgId, userId: memberId }, departureAdapters),
     ],
     [
@@ -178,7 +169,7 @@ describe('skills:read key after its owner exits an org', () => {
     ],
     [
       'loses the org to deletion',
-      (owner: Awaited<ReturnType<typeof seed>>['owner'], _memberId: string, orgId: string) =>
+      (owner: Owner, _memberId: string, orgId: string) =>
         organizationService.deleteOrganization(owner, { id: orgId }, departureAdapters),
     ],
   ])("stays active but loses the org's feed and zip when the member %s", async (_label, depart) => {
