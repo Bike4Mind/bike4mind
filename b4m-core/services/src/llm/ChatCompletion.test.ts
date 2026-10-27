@@ -12746,7 +12746,9 @@ describe('prompt moderation', () => {
         name: 'GPT-4',
         backend: 'openai',
         max_tokens: 100,
-        contextWindow: 1000,
+        // Must exceed CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, or the turn aborts on context overflow
+        // before the model is called and no completion-path assertion can run.
+        contextWindow: 200_000,
         can_stream: false,
         pricing: {},
         supportsImageVariation: false,
