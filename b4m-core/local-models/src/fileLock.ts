@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { link, open, readFile, rename, rm, stat, utimes } from 'node:fs/promises';
+import { link, open, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { hostname, uptime } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { LocalRuntimeError, ModelFileBusyError, RuntimeStorageError } from './errors';
 
 /** How often a held lock's mtime is refreshed (ms). */
@@ -40,9 +41,9 @@ export async function onDisk<T>(
 }
 
 export interface FileLock {
-  /** Throws `ModelFileBusyError` once a refresh found the lock taken over. */
+  /** Throws `ModelFileBusyError` once a refresh or `verify()` found the lock taken over. */
   assertHeld(): void;
-  /** Reads the lock back and throws `ModelFileBusyError` unless it is still this one. */
+  /** Reads the lock back: `ModelFileBusyError` unless it is still this one, `RuntimeStorageError` if unreadable. */
   verify(): Promise<void>;
   /** Removes the lock if it is still this one. */
   release(): Promise<void>;
@@ -90,19 +91,21 @@ function isStale(holder: { mtimeMs: number }, staleMs: number): boolean {
   return holder.mtimeMs < bootedAt || Date.now() - holder.mtimeMs > staleMs;
 }
 
+const readText = (path: string) => readFile(path, 'utf8').catch(() => null);
+
 /** Moves a takeover guard left by a process that died during its takeover out of the way, once it is stale. */
 async function clearStaleGuard(guard: string, nonce: string, staleMs: number): Promise<void> {
-  const left = await stat(guard, { bigint: true }).catch(() => null);
-  if (!left || !isStale({ mtimeMs: Number(left.mtimeMs) }, staleMs)) return;
+  const left = await stat(guard).catch(() => null);
+  if (!left || !isStale(left, staleMs)) return;
+  const text = await readText(guard);
   const aside = `${guard}.stale-${nonce}`;
   const renamed = await rename(guard, aside).then(
     () => true,
     () => false
   );
   if (!renamed) return;
-  // A contender may have replaced the stale guard with its own between the stat and the rename.
-  const moved = await stat(aside, { bigint: true }).catch(() => null);
-  if (moved && moved.ino !== left.ino) await link(aside, guard).catch(() => undefined);
+  // Each guard holds its owner's nonce: different text means a contender replaced the stale one before the rename.
+  if ((await readText(aside)) !== text) await link(aside, guard).catch(() => undefined);
   await rm(aside, { force: true });
 }
 
@@ -112,20 +115,27 @@ const same = (a: Holder | null, b: Holder) => a !== null && a.ino === b.ino && a
  * Removes the lock judged stale unless it changed since; false when it was not removed. `<lock>.takeover` admits one
  * contender at a time, since one that moved a fresh lock aside would leave a gap for a third to create its own.
  */
-async function takeOver(lockPath: string, judged: Holder, nonce: string, staleMs: number): Promise<boolean> {
+async function takeOver(
+  lockPath: string,
+  judged: Holder,
+  nonce: string,
+  options: { force: boolean; staleMs: number }
+): Promise<boolean> {
   const guard = `${lockPath}.takeover`;
   for (let attempt = 0; ; attempt++) {
     try {
-      await (await open(guard, 'wx')).close();
+      await writeFile(guard, nonce, { flag: 'wx' });
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       if (attempt > 0) return false;
-      await clearStaleGuard(guard, nonce, staleMs);
+      await clearStaleGuard(guard, nonce, options.staleMs);
     }
   }
   try {
-    if (!same(await readHolder(lockPath), judged)) return false;
+    const current = await readHolder(lockPath);
+    // A holder that woke up and refreshed since it was judged keeps its lock.
+    if (!current || !same(current, judged) || (!options.force && !isStale(current, options.staleMs))) return false;
     const aside = `${lockPath}.stale-${nonce}`;
     try {
       await rename(lockPath, aside);
@@ -133,31 +143,63 @@ async function takeOver(lockPath: string, judged: Holder, nonce: string, staleMs
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
       throw error;
     }
-    // Only the old holder releasing between the read and the rename can make these differ.
-    const moved = await readHolder(aside).catch(() => null);
-    if (!same(moved, judged)) await link(aside, lockPath).catch(() => undefined);
+    // Text, not inode: FAT and exFAT may renumber a file on rename. Only a release in between makes these differ.
+    const moved = await readText(aside);
+    if (moved !== judged.text) await link(aside, lockPath).catch(() => undefined);
     await rm(aside, { force: true });
-    return same(moved, judged);
+    return moved === judged.text;
   } finally {
     await rm(guard, { force: true });
   }
 }
 
-function holding(lockPath: string, path: string, runtimeId: string, nonce: string, refreshMs: number): FileLock {
+/** Removes `.stale-<nonce>` files a crash left between a rename and its cleanup, once they are past `staleMs`. */
+async function sweepLeftovers(lockPath: string, staleMs: number): Promise<void> {
+  const prefixes = [`${basename(lockPath)}.stale-`, `${basename(lockPath)}.takeover.stale-`];
+  const names = await readdir(dirname(lockPath)).catch(() => []);
+  for (const name of names) {
+    if (!prefixes.some(prefix => name.startsWith(prefix))) continue;
+    const path = join(dirname(lockPath), name);
+    // ctime, not mtime: a rename keeps the stale lock's old mtime but sets ctime.
+    const info = await stat(path).catch(() => null);
+    if (info && Date.now() - info.ctimeMs > staleMs) await rm(path, { force: true }).catch(() => undefined);
+  }
+}
+
+type LockState = 'held' | 'lost' | { error: unknown };
+
+function holding(
+  lockPath: string,
+  path: string,
+  runtimeId: string,
+  nonce: string,
+  options: { refreshMs: number; staleMs: number }
+): FileLock {
   let lost = false;
   let released = false;
-  const check = async () => {
-    const text = await readFile(lockPath, 'utf8').catch(() => null);
-    if (parse(text).nonce !== nonce) lost = true;
-    return !lost;
+  let confirmedAt = Date.now();
+  const check = async (): Promise<LockState> => {
+    if (lost) return 'lost';
+    try {
+      if (parse(await readFile(lockPath, 'utf8')).nonce !== nonce) lost = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') lost = true;
+      // EACCES, EBUSY, EMFILE and the like pass; only a lock unconfirmed for the stale window counts as lost.
+      else if (Date.now() - confirmedAt <= options.staleMs) return { error };
+      else lost = true;
+    }
+    if (lost) return 'lost';
+    confirmedAt = Date.now();
+    return 'held';
   };
   const timer = setInterval(() => {
-    void check().then(async mine => {
-      if (!mine) return clearInterval(timer);
+    void check().then(async state => {
+      if (state === 'lost') return clearInterval(timer);
+      if (state !== 'held') return;
       const now = new Date();
       await utimes(lockPath, now, now).catch(() => undefined);
     });
-  }, refreshMs);
+  }, options.refreshMs);
   timer.unref();
   const busy = () => new ModelFileBusyError(runtimeId, path, null);
   return {
@@ -165,13 +207,15 @@ function holding(lockPath: string, path: string, runtimeId: string, nonce: strin
       if (lost) throw busy();
     },
     verify: async () => {
-      if (!(await check())) throw busy();
+      const state = await check();
+      if (state === 'lost') throw busy();
+      if (state !== 'held') throw storageError(runtimeId, lockPath, state.error, 'read');
     },
     release: async () => {
       if (released) return;
       released = true;
       clearInterval(timer);
-      if (await check()) await rm(lockPath, { force: true });
+      if ((await check()) === 'held') await rm(lockPath, { force: true });
     },
   };
 }
@@ -193,7 +237,9 @@ export async function lockFile(path: string, runtimeId: string, options: LockOpt
       const holder = await onDisk(runtimeId, lockPath, () => readHolder(lockPath), 'read');
       if (!holder) continue;
       if (!options.force && !isStale(holder, staleMs)) throw new ModelFileBusyError(runtimeId, path, holder.pid);
-      const removed = await onDisk(runtimeId, lockPath, () => takeOver(lockPath, holder, nonce, staleMs));
+      const removed = await onDisk(runtimeId, lockPath, () =>
+        takeOver(lockPath, holder, nonce, { force: options.force === true, staleMs })
+      );
       if (!removed) throw new ModelFileBusyError(runtimeId, path, holder.pid);
       continue;
     }
@@ -206,7 +252,8 @@ export async function lockFile(path: string, runtimeId: string, options: LockOpt
       await rm(lockPath, { force: true });
       throw storageError(runtimeId, lockPath, failed.error);
     }
-    return holding(lockPath, path, runtimeId, nonce, options.refreshMs ?? LOCK_REFRESH_MS);
+    await sweepLeftovers(lockPath, staleMs);
+    return holding(lockPath, path, runtimeId, nonce, { refreshMs: options.refreshMs ?? LOCK_REFRESH_MS, staleMs });
   }
   throw new ModelFileBusyError(runtimeId, path, null);
 }

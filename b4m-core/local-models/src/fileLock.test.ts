@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -88,6 +88,41 @@ describe('lockFile', () => {
     await expect(lockFile(path, 'test')).rejects.toBeInstanceOf(ModelFileBusyError);
     await second.release();
     await expect(stat(`${path}.lock`)).rejects.toThrow();
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'rides out a lock it cannot read for a while, and gives it up only after the stale window',
+    async () => {
+      const path = target();
+      const lock = await lockFile(path, 'test', { refreshMs: 20, staleMs: 400 });
+      await chmod(`${path}.lock`, 0o000);
+      await wait(100);
+      lock.assertHeld();
+      await expect(lock.verify()).rejects.toMatchObject({ name: 'RuntimeStorageError', code: 'EACCES' });
+      await chmod(`${path}.lock`, 0o644);
+      await lock.verify();
+      await chmod(`${path}.lock`, 0o000);
+      await wait(600);
+      expect(() => lock.assertHeld()).toThrow(ModelFileBusyError);
+      await chmod(`${path}.lock`, 0o644);
+      await lock.release();
+      expect(JSON.parse(await readFile(`${path}.lock`, 'utf8'))).toMatchObject({ pid: process.pid });
+    }
+  );
+
+  it('sweeps aside files a crash left behind once they are past the stale window', async () => {
+    const path = target();
+    await writeFile(`${path}.lock.stale-0123`, '{}');
+    await writeFile(`${path}.lock.takeover.stale-4567`, '');
+    await writeFile(`${path}.other`, '');
+    const fresh = await lockFile(path, 'test', { staleMs: 60_000 });
+    await fresh.release();
+    await expect(stat(`${path}.lock.stale-0123`)).resolves.toBeTruthy();
+    await wait(80);
+    await (await lockFile(path, 'test', { staleMs: 50 })).release();
+    await expect(stat(`${path}.lock.stale-0123`)).rejects.toThrow();
+    await expect(stat(`${path}.lock.takeover.stale-4567`)).rejects.toThrow();
+    await expect(stat(`${path}.other`)).resolves.toBeTruthy();
   });
 
   it('clears a takeover guard left by a process that died during a takeover', async () => {
