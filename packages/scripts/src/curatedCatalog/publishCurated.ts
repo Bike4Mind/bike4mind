@@ -46,13 +46,17 @@ interface Live {
   midPublish: boolean;
 }
 
-/** Live state from the bucket; a pair caught mid-publish is read through its sig's hint, as clients do. */
+/** Live state from the bucket; a pair caught mid-publish or a lone sig is read through the sig's hint, as clients do. */
 async function readLive(deps: PublishDeps): Promise<Live | string> {
   const [json, sig] = await Promise.all([deps.store.get(LATEST), deps.store.get(LATEST_SIG)]);
-  if (!json) return { list: null, sigEtag: sig?.etag ?? null, jsonEtag: null, midPublish: false };
+  if (!json && !sig) return { list: null, sigEtag: null, jsonEtag: null, midPublish: false };
   if (!sig) return `${LATEST} is live without ${LATEST_SIG}; fix the bucket by hand`;
-  const direct = verifyCandidate(json.bytes, sig.bytes, deps.keyring);
-  if (direct.ok) return { list: direct.value, sigEtag: sig.etag, jsonEtag: json.etag, midPublish: false };
+  let failure = `${LATEST} is missing and ${LATEST_SIG} does not lead to a verified list`;
+  if (json) {
+    const direct = verifyCandidate(json.bytes, sig.bytes, deps.keyring);
+    if (direct.ok) return { list: direct.value, sigEtag: sig.etag, jsonEtag: json.etag, midPublish: false };
+    failure = `the live list does not verify (${direct.error})`;
+  }
   const hint = parseCuratedSignatureFile(sig.bytes)?.sequence;
   if (hint) {
     const [pairJson, pairSig] = await Promise.all([
@@ -62,10 +66,10 @@ async function readLive(deps: PublishDeps): Promise<Live | string> {
     const paired = pairJson && pairSig ? verifyCandidate(pairJson.bytes, pairSig.bytes, deps.keyring) : null;
     if (paired?.ok) {
       deps.log(`live is mid-publish; reading it as ${CURATED_PREFIX}${hint}.json`);
-      return { list: paired.value, sigEtag: sig.etag, jsonEtag: json.etag, midPublish: true };
+      return { list: paired.value, sigEtag: sig.etag, jsonEtag: json?.etag ?? null, midPublish: true };
     }
   }
-  return `the live list does not verify (${direct.error})`;
+  return failure;
 }
 
 const same = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(Buffer.from(b));

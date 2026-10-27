@@ -191,6 +191,20 @@ describe('publishCandidate', () => {
     expect(store.objects.get(`${P}latest.json`)?.bytes).toEqual(three.manifest);
   });
 
+  it('reads a lone latest.json.sig through its hint instead of as a first publish', async () => {
+    goLive(store, signed(5));
+    store.objects.delete(`${P}latest.json`);
+    expect(await publishCandidate(signed(4), deps())).toBe(EXIT.behindLive);
+    expect(await publishCandidate(signed(5), deps())).toBe(EXIT.ok);
+    expect(lines).toContain('plan: finish the interrupted publish of sequence 5');
+    expect(store.puts.at(-1)).toMatchObject({ key: `${P}latest.json`, condition: { ifNoneMatch: '*' } });
+
+    store.objects.delete(`${P}latest.json`);
+    store.objects.delete(`${P}5.json`);
+    expect(await publishCandidate(signed(6), deps())).toBe(EXIT.failed);
+    expect(lines.at(-1)).toBe(`${P}latest.json is missing and ${P}latest.json.sig does not lead to a verified list`);
+  });
+
   it('writes nothing on a dry run', async () => {
     goLive(store, signed(2));
     expect(await publishCandidate(signed(3), deps({ dryRun: true }))).toBe(EXIT.ok);
