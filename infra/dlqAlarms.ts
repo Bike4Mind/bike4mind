@@ -124,7 +124,7 @@ if (isMonitoredStage) {
   dlqAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
-      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
+      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
     },
     {
@@ -171,7 +171,7 @@ if (isMonitoredStage) {
   new aws.cloudwatch.MetricAlarm('DlqAlarmHandlerDlqMessages', {
     name: `${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-messages`,
     alarmDescription:
-      'DlqAlarmHandlerDlq has messages -- the alarm-to-Slack Lambda is failing; check SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
+      'DlqAlarmHandlerDlq has messages -- the alarm-to-Slack Lambda is failing; check SLACK_ALARMS_WEBHOOK_URL, SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
     metricName: 'ApproximateNumberOfMessagesVisible',
