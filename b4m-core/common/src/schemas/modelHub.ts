@@ -7,6 +7,9 @@ const MAX_BYTES = 2 ** 50;
 const MAX_ENTRIES = 500;
 const MAX_FAMILIES = 200;
 const MAX_BUILDS = 16;
+const MAX_CHANGELOG = 200;
+const MAX_TIERS = 32;
+const MAX_SEQUENCE = 2 ** 31;
 
 // The manifest is fetched remotely and its links are opened externally, so every URL is https on a public host
 // name, and every repo path or ref is restricted to a charset that cannot traverse or inject.
@@ -191,11 +194,33 @@ const ModelfileOverrideSchema = z.object({
   draftNumPredict: z.number().int().min(1).max(16).optional(),
 });
 
+// Every layer the registry serves beside the weights; a client pulls only while it serves exactly these. hf.co
+// builds template and params from the repo's main branch, so they can change without the GGUF changing. numCtx is the
+// params layer's num_ctx. installedTemplate is the sha256 of the template /api/show reports once installed, needed
+// when no template layer is served (Ollama then shows the GGUF's own template or its renderer's placeholder).
+const OllamaLayersSchema = z
+  .object({
+    template: Sha256Schema.nullable(),
+    params: Sha256Schema.nullable(),
+    license: Sha256Schema.nullable(),
+    numCtx: ContextSchema.nullable(),
+    projector: Sha256Schema.nullable().default(null),
+    draft: Sha256Schema.nullable().default(null),
+    installedTemplate: Sha256Schema.optional(),
+  })
+  .refine(layers => layers.params !== null || layers.numCtx === null, { message: 'numCtx needs a params layer' });
+
 const OllamaSourceSchema = z.discriminatedUnion('kind', [
   // sizeBytes includes the projector and any draft layer; digest is the model layer digest.
-  z.object({ kind: z.literal('library'), ref: OllamaLibRefSchema, sizeBytes: ByteCountSchema, digest: Sha256Schema }),
+  z.object({
+    kind: z.literal('library'),
+    ref: OllamaLibRefSchema,
+    sizeBytes: ByteCountSchema,
+    digest: Sha256Schema,
+    layers: OllamaLayersSchema.optional(),
+  }),
   // Single-file HF GGUF; the hf.co ref is derived from the build, never stored.
-  z.object({ kind: z.literal('hf-pull'), modelfile: ModelfileOverrideSchema }),
+  z.object({ kind: z.literal('hf-pull'), modelfile: ModelfileOverrideSchema, layers: OllamaLayersSchema.optional() }),
   // Split GGUF or separate mmproj: the hub downloads, then runs `ollama create` with one FROM per file.
   z.object({ kind: z.literal('create'), modelfile: ModelfileOverrideSchema }),
 ]);
@@ -288,11 +313,11 @@ const SmokeSchema = z.object({
 
 const BuildSchema = z.object({
   id: SlugSchema,
-  // Pinned because community repos force-push.
-  hf: z.object({ repo: HfRepoSchema, revision: CommitShaSchema }),
+  // Pinned because community repos force-push. An Ollama library build has no Hugging Face files of its own.
+  hf: z.object({ repo: HfRepoSchema, revision: CommitShaSchema }).optional(),
   quant: QuantSchema,
   // Shards in order.
-  weights: z.array(GgufFileSchema).min(1).max(64),
+  weights: z.array(GgufFileSchema).max(64).default([]),
   // Hugging Face weight sizes exclude the projector.
   mmproj: GgufFileSchema.optional(),
   draft: DraftSchema.optional(),
@@ -373,6 +398,10 @@ const FamilySchema = z.object({
 });
 export type HubFamily = z.infer<typeof FamilySchema>;
 
+export const TOOL_USE_RATINGS = ['unrated', 'weak', 'ok', 'strong'] as const;
+const ToolUseSchema = z.object({ rating: z.enum(TOOL_USE_RATINGS), note: z.string().min(1).max(200).optional() });
+export type HubToolUse = z.infer<typeof ToolUseSchema>;
+
 const EntryHeaderSchema = z.object({
   id: SlugSchema,
   name: z.string().min(1).max(80),
@@ -387,7 +416,10 @@ const EntryHeaderSchema = z.object({
     activeB: z.number().positive().max(100000).nullable(),
   }),
   arch: ModelArchSchema,
+  // What the model supports, as its chat template and Ollama's reported capabilities say. Our evals never gate it.
   capabilities: z.object({ tools: z.boolean(), vision: z.boolean(), thinking: z.boolean(), embeddings: z.boolean() }),
+  // How well it calls tools in our evals: shown to the user as information, never used to withhold tools.
+  toolUse: ToolUseSchema.default({ rating: 'unrated' }),
   flags: z.object({
     abliterated: z.boolean(),
     experimental: z.boolean(),
@@ -423,6 +455,9 @@ function headerIssues(entry: EntryHeader): EntryIssue[] {
   }
   if (roles.includes('embeddings') !== capabilities.embeddings) {
     issue(['roles'], 'embeddings role and capabilities.embeddings must agree');
+  }
+  if (!capabilities.tools && entry.toolUse.rating !== 'unrated') {
+    issue(['toolUse', 'rating'], 'a tool-use rating needs capabilities.tools');
   }
   if (entry.params.activeB !== null && entry.params.activeB > entry.params.totalB) {
     issue(['params', 'activeB'], 'activeB cannot exceed totalB');
@@ -465,8 +500,13 @@ function buildIssues(entry: EntryHeader, build: HubBuild, b: number): EntryIssue
   if (build.quant.family === 'custom' && !flags.customQuant) {
     issue(['flags', 'customQuant'], 'custom quant requires flags.customQuant');
   }
-  if (capabilities.vision && !build.mmproj && build.ollama?.kind !== 'library') {
-    issue(at('mmproj'), 'a vision build needs an mmproj or an Ollama library source');
+  const library = build.ollama?.kind === 'library';
+  if (!library && (!build.hf || build.weights.length === 0)) {
+    issue(at('weights'), 'a build needs Hugging Face weights unless it is an Ollama library build');
+  }
+  const servedProjector = build.ollama?.kind === 'hf-pull' && !!build.ollama.layers?.projector;
+  if (capabilities.vision && !build.mmproj && !library && !servedProjector) {
+    issue(at('mmproj'), 'a vision build needs an mmproj, a pinned projector layer or an Ollama library source');
   }
   if (build.weights.length > 1) {
     if (!build.routing.reasons.includes('sharded')) issue(at('routing', 'reasons'), 'sharded weights need sharded');
@@ -538,12 +578,6 @@ function buildIssues(entry: EntryHeader, build: HubBuild, b: number): EntryIssue
   return issues;
 }
 
-function toolIssues(entry: EntryShape): EntryIssue[] {
-  const clean = entry.builds.some(b => b.evidence.some(e => e.ownEval?.toolCall.malformed === 0));
-  if (!entry.capabilities.tools || clean) return [];
-  return [{ path: ['capabilities', 'tools'], message: 'tools needs an own eval with zero malformed tool calls' }];
-}
-
 function refineEntry(entry: EntryShape, ctx: z.RefinementCtx<EntryShape>): void {
   const issues = headerIssues(entry);
   const buildIds = new Set<string>();
@@ -552,7 +586,6 @@ function refineEntry(entry: EntryShape, ctx: z.RefinementCtx<EntryShape>): void 
     buildIds.add(build.id);
     issues.push(...buildIssues(entry, build, b));
   });
-  issues.push(...toolIssues(entry));
   for (const { path, message } of issues) ctx.addIssue({ code: 'custom', path, message });
 }
 
@@ -574,19 +607,66 @@ export type HubPolicy = z.infer<typeof HubPolicySchema>;
 
 const maxKeys = (n: number) => (record: Record<string, unknown>) => Object.keys(record).length <= n;
 
+const SlugListSchema = z.array(SlugSchema).max(50);
+// Newest first; `removed` carries the name because the entry is gone.
+const ChangelogItemSchema = z.object({
+  sequence: z.number().int().min(1).max(MAX_SEQUENCE),
+  date: z.iso.date(),
+  added: SlugListSchema,
+  removed: z.array(z.object({ id: SlugSchema, name: z.string().min(1).max(80) })).max(50),
+  changed: SlugListSchema,
+  notes: z.string().max(280),
+});
+export type HubChangelogItem = z.infer<typeof ChangelogItemSchema>;
+
+// The Curated tab's per-machine slots; CPU-only machines get a light pick where GPUs get a long-context one.
+export const CURATED_SLOTS = ['best', 'fast', 'long-context', 'light'] as const;
+export type CuratedSlot = (typeof CURATED_SLOTS)[number];
+const TierPickSchema = z.object({ slot: z.enum(CURATED_SLOTS), entry: SlugSchema, build: SlugSchema });
+// minGiB is GPU memory on a discrete machine and total memory otherwise, in the GiB the hardware is sold with.
+const TierSchema = z.object({
+  memoryKind: z.enum(['discrete', 'unified', 'cpu']),
+  minGiB: z.number().int().nonnegative().max(65536),
+  picks: z.array(TierPickSchema).max(CURATED_SLOTS.length),
+});
+export type HubTier = z.infer<typeof TierSchema>;
+export type HubTierPick = z.infer<typeof TierPickSchema>;
+
+function pickIssue(pick: HubTierPick, entries: readonly HubEntry[]): string | null {
+  const entry = entries.find(candidate => candidate.id === pick.entry);
+  if (!entry) return `no entry ${pick.entry}`;
+  return entry.builds.some(build => build.id === pick.build) ? null : `no build ${pick.build} in ${pick.entry}`;
+}
+
 const ManifestObjectSchema = z.object({
   schemaVersion: z.literal(2),
+  // Strictly increases on every published change; the only ordering key between two lists.
+  sequence: z.number().int().min(1).max(MAX_SEQUENCE).optional(),
+  // Also the date the Curated tab shows for the list.
   updatedAt: z.iso.datetime(),
   notesUrl: HttpsUrlSchema.nullable().optional(),
+  changelog: z.array(ChangelogItemSchema).max(MAX_CHANGELOG).default([]),
   policy: HubPolicySchema.prefault({}),
   families: z.record(SlugSchema, FamilySchema).refine(maxKeys(MAX_FAMILIES), 'too many families'),
   // Per role, best first.
   rankings: z.partialRecord(HubRoleSchema, z.array(SlugSchema).max(MAX_ENTRIES)),
+  tiers: z.array(TierSchema).max(MAX_TIERS).default([]),
   entries: z.array(HubEntrySchema).max(MAX_ENTRIES),
 });
 type ManifestShape = z.infer<typeof ManifestObjectSchema>;
 
 function refineManifest(manifest: ManifestShape, ctx: z.RefinementCtx<ManifestShape>): void {
+  manifest.tiers.forEach((tier, t) => {
+    const issue = (path: PropertyKey[], message: string) =>
+      ctx.addIssue({ code: 'custom', path: ['tiers', t, ...path], message });
+    if (manifest.tiers.slice(0, t).some(o => o.memoryKind === tier.memoryKind && o.minGiB === tier.minGiB))
+      issue([], 'duplicate tier');
+    tier.picks.forEach((pick, p) => {
+      const reason = pickIssue(pick, manifest.entries);
+      if (reason) issue(['picks', p], reason);
+      if (tier.picks.slice(0, p).some(other => other.slot === pick.slot)) issue(['picks', p, 'slot'], 'slot taken');
+    });
+  });
   const byId = new Map<string, HubEntry>();
   manifest.entries.forEach((entry, i) => {
     if (byId.has(entry.id)) {
@@ -637,8 +717,11 @@ const POLICY_FALLBACK: HubPolicy = {
 
 const ManifestEnvelopeSchema = z.object({
   schemaVersion: z.literal(2),
+  sequence: z.number().int().min(1).max(MAX_SEQUENCE).optional(),
   updatedAt: z.iso.datetime(),
   notesUrl: HttpsUrlSchema.nullable().optional(),
+  changelog: z.unknown().optional(),
+  tiers: z.unknown().optional(),
   policy: z.record(z.string(), z.unknown()).optional(),
   families: z.record(z.string(), z.unknown()).refine(maxKeys(MAX_FAMILIES), 'too many families'),
   rankings: z.record(z.string(), z.unknown()).refine(maxKeys(16), 'too many rankings'),
@@ -650,6 +733,17 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 function knownOnly(value: unknown, known: readonly string[]): unknown {
   return Array.isArray(value) ? value.filter(v => typeof v === 'string' && known.includes(v)) : value;
+}
+
+/** The rating is a label, so a problem with it (unknown rating, rating without tools, bad note) costs only the label. */
+function knownToolUse(value: unknown, capabilities: unknown): unknown {
+  if (value === undefined) return value;
+  if (!isRecord(value)) return { rating: 'unrated' };
+  const known = (TOOL_USE_RATINGS as readonly unknown[]).includes(value.rating);
+  const tools = isRecord(capabilities) && capabilities.tools === true;
+  if (!known || (!tools && value.rating !== 'unrated')) return { rating: 'unrated' };
+  const note = ToolUseSchema.shape.note.safeParse(value.note);
+  return { rating: value.rating, ...(note.success && note.data !== undefined ? { note: note.data } : {}) };
 }
 
 const describeIssue = (issue: { path: PropertyKey[]; message: string }) =>
@@ -725,7 +819,11 @@ class TolerantReader {
       this.drop(path, 'not an object');
       return null;
     }
-    const header = EntryHeaderSchema.safeParse({ ...raw, roles: knownOnly(raw.roles, HUB_ROLES) });
+    const header = EntryHeaderSchema.safeParse({
+      ...raw,
+      roles: knownOnly(raw.roles, HUB_ROLES),
+      toolUse: knownToolUse(raw.toolUse, raw.capabilities),
+    });
     if (!header.success) {
       this.drop(path, firstIssue(header.error));
       return null;
@@ -751,13 +849,48 @@ class TolerantReader {
       this.drop(path, 'no usable builds');
       return null;
     }
-    const entry: HubEntry = { ...header.data, builds };
-    const late = toolIssues(entry);
-    if (late.length) {
-      this.drop(path, describeIssue(late[0]));
-      return null;
+    return { ...header.data, builds };
+  }
+
+  changelog(raw: unknown): HubChangelogItem[] {
+    if (raw === undefined) return [];
+    if (!Array.isArray(raw) || raw.length > MAX_CHANGELOG) {
+      this.drop('changelog', 'not a list of at most 200 items');
+      return [];
     }
-    return entry;
+    return raw.flatMap((item, i) => {
+      const parsed = ChangelogItemSchema.safeParse(item);
+      if (parsed.success) return [parsed.data];
+      this.drop(`changelog.${i}`, firstIssue(parsed.error));
+      return [];
+    });
+  }
+
+  /** A pick whose entry or build was dropped leaves its slot empty; no other pick moves into it. */
+  tiers(raw: unknown, entries: HubEntry[]): HubTier[] {
+    if (raw === undefined) return [];
+    if (!Array.isArray(raw) || raw.length > MAX_TIERS) {
+      this.drop('tiers', 'not a list of at most 32 tiers');
+      return [];
+    }
+    const tiers: HubTier[] = [];
+    raw.forEach((rawTier, t) => {
+      const path = `tiers.${t}`;
+      const picks = isRecord(rawTier) ? this.items(rawTier.picks, `${path}.picks`, TierPickSchema) : undefined;
+      const parsed = TierSchema.safeParse(isRecord(rawTier) ? { ...rawTier, picks } : rawTier);
+      if (!parsed.success) return this.drop(path, firstIssue(parsed.error));
+      const tier = parsed.data;
+      if (tiers.some(other => other.memoryKind === tier.memoryKind && other.minGiB === tier.minGiB))
+        return this.drop(path, 'duplicate tier');
+      const kept = tier.picks.filter((pick, p) => {
+        const reason =
+          pickIssue(pick, entries) ?? (tier.picks.slice(0, p).some(o => o.slot === pick.slot) && 'slot taken');
+        if (reason) this.drop(`${path}.picks.${p}`, reason);
+        return !reason;
+      });
+      tiers.push({ ...tier, picks: kept });
+    });
+    return tiers;
   }
 
   rankings(raw: Record<string, unknown>, entries: HubEntry[]): HubManifest['rankings'] {
@@ -808,11 +941,14 @@ export function parseHubManifest(input: unknown): HubManifestParse {
   });
   const manifest: HubManifest = {
     schemaVersion: 2,
+    ...(envelope.sequence === undefined ? {} : { sequence: envelope.sequence }),
     updatedAt: envelope.updatedAt,
     notesUrl: envelope.notesUrl,
+    changelog: reader.changelog(envelope.changelog),
     policy,
     families,
     rankings: reader.rankings(envelope.rankings, entries),
+    tiers: reader.tiers(envelope.tiers, entries),
     entries,
   };
   return { manifest: deepFreeze(manifest), dropped: reader.dropped };
