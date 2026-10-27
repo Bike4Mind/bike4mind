@@ -10,7 +10,7 @@ import { InitialsAvatar } from '../../shared/InitialsAvatar';
 import { InlineBar } from '../../shared/InlineBar';
 import { StatusChip } from '../../shared/StatusChip';
 import type { DataColumn } from '../../shared/DataTable';
-import { formatAccountAge, formatAccountCreatedTitle } from '../formatAccountAge';
+import { formatAccountAge, formatAccountCreatedTitle, formatLastActiveTitle } from '../formatAccountAge';
 
 export const PLAN_LABELS: Record<string, string> = {
   DemoUser: 'Demo',
@@ -143,7 +143,7 @@ export function usersColumns({ now, maxSpend }: { now: Date; maxSpend: number })
       width: '7rem',
       render: row => {
         const age = formatAccountAge(row.lastActiveAt, now);
-        return age ? <Muted title={formatAccountCreatedTitle(row.lastActiveAt) ?? undefined}>{age}</Muted> : <Dash />;
+        return age ? <Muted title={formatLastActiveTitle(row.lastActiveAt) ?? undefined}>{age}</Muted> : <Dash />;
       },
     },
     {

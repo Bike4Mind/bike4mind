@@ -20,7 +20,9 @@ export function toAdminUsersFilter(params: UsersListParams): AdminUsersFilter {
   };
 }
 
-export const adminUsersQueryKey = ['admin-users-list'] as const;
+// Nested under 'users' so the existing ['users'] invalidations (CreateUserModal, the
+// profile actions, bulk abuse) refresh the list too.
+export const adminUsersQueryKey = ['users', 'admin-list'] as const;
 
 export function useAdminUsersList(params: UsersListParams) {
   const query = {
