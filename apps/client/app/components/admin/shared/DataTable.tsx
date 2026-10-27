@@ -31,6 +31,13 @@ export type DataTableProps<Row> = {
   pagination?: boolean;
   /** Changing this (e.g. the serialized filter state) returns the table to its first page. */
   pageResetKey?: string;
+  serverPagination?: {
+    page: number;
+    pageSize: number;
+    total: number;
+    onPageChange: (page: number) => void;
+    onPageSizeChange: (size: number) => void;
+  };
 };
 type Sort = { columnId: string; direction: 'asc' | 'desc' };
 const PAGE_SIZES = [25, 50, 100] as const;
@@ -52,6 +59,7 @@ export function DataTable<Row>({
   rowTestId,
   pagination = true,
   pageResetKey,
+  serverPagination,
 }: DataTableProps<Row>) {
   const [sort, setSort] = useState<Sort>();
   const [page, setPage] = useState(0);
@@ -61,7 +69,7 @@ export function DataTable<Row>({
     setPage(0);
   }
   const [pageSize, setPageSize] = useState<number>(25);
-  const sortedColumn = columns.find(column => column.id === sort?.columnId);
+  const sortedColumn = serverPagination ? undefined : columns.find(column => column.id === sort?.columnId);
   const sorted = sortedColumn?.sortValue
     ? [...rows].sort((left, right) => {
         const leftValue = sortedColumn.sortValue!(left);
@@ -73,10 +81,18 @@ export function DataTable<Row>({
         return sort?.direction === 'desc' ? -result : result;
       })
     : rows;
-  const lastPage = Math.max(0, Math.ceil(rows.length / pageSize) - 1);
-  const currentPage = Math.min(page, lastPage);
-  const visibleRows = pagination ? sorted.slice(currentPage * pageSize, (currentPage + 1) * pageSize) : sorted;
-  const selectable = selection !== undefined && onSelectionChange !== undefined;
+  const total = serverPagination?.total ?? rows.length;
+  const effectivePageSize = serverPagination?.pageSize ?? pageSize;
+  const lastPage = Math.max(0, Math.ceil(total / effectivePageSize) - 1);
+  const currentPage = serverPagination ? Math.max(0, serverPagination.page - 1) : Math.min(page, lastPage);
+  const visibleRows = serverPagination
+    ? rows
+    : pagination
+      ? sorted.slice(currentPage * effectivePageSize, (currentPage + 1) * effectivePageSize)
+      : sorted;
+  // Server pages cannot enumerate the complete all-matching selection or sort it locally.
+  const selectable = !serverPagination && selection !== undefined && onSelectionChange !== undefined;
+  const changePage = (next: number) => (serverPagination ? serverPagination.onPageChange(next + 1) : setPage(next));
   const isSelected = (id: string) => selection?.mode === 'allMatching' || (selection?.ids.includes(id) ?? false);
   const selectedVisible = visibleRows.filter(row => isSelected(getRowId(row))).length;
   const toggleRows = (ids: string[], checked: boolean) => {
@@ -97,7 +113,7 @@ export function DataTable<Row>({
     setPage(0);
   };
   if (error) return <ErrorState message={error} onRetry={onRetry} />;
-  if (!loading && rows.length === 0)
+  if (!loading && rows.length === 0 && !serverPagination)
     return (
       empty ?? (
         <EmptyState
@@ -160,7 +176,7 @@ export function DataTable<Row>({
                 <th
                   key={column.id}
                   aria-sort={
-                    column.sortValue
+                    column.sortValue && !serverPagination
                       ? sort?.columnId === column.id
                         ? sort.direction === 'asc'
                           ? 'ascending'
@@ -170,7 +186,7 @@ export function DataTable<Row>({
                   }
                   style={{ textAlign: column.numeric ? 'right' : 'left' }}
                 >
-                  {column.sortValue ? (
+                  {column.sortValue && !serverPagination ? (
                     <Button
                       size="sm"
                       variant="plain"
@@ -189,97 +205,125 @@ export function DataTable<Row>({
             </tr>
           </thead>
           <tbody>
-            {loading
-              ? Array.from({ length: 5 }, (_, index) => (
-                  <tr key={index} data-testid="admin-table-skeleton-row">
-                    {Array.from({ length: columns.length + (selectable ? 1 : 0) }, (_, cell) => (
-                      <td key={cell}>
-                        <Skeleton variant="text" />
+            {loading ? (
+              Array.from({ length: 5 }, (_, index) => (
+                <tr key={index} data-testid="admin-table-skeleton-row">
+                  {Array.from({ length: columns.length + (selectable ? 1 : 0) }, (_, cell) => (
+                    <td key={cell}>
+                      <Skeleton variant="text" />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : visibleRows.length === 0 ? (
+              <tr>
+                <td colSpan={columns.length}>
+                  {empty ?? (
+                    <EmptyState
+                      title="No records to show"
+                      action={
+                        <Button variant="outlined" onClick={onRetry} data-testid="admin-table-refresh-btn">
+                          Refresh records
+                        </Button>
+                      }
+                    />
+                  )}
+                </td>
+              </tr>
+            ) : (
+              visibleRows.map(row => {
+                const id = getRowId(row);
+                return (
+                  <tr
+                    key={id}
+                    tabIndex={onRowActivate || selectable ? 0 : undefined}
+                    aria-keyshortcuts={selectable ? 'x' : undefined}
+                    aria-selected={selectable ? isSelected(id) : activeRowId === id}
+                    data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
+                    onClick={event => {
+                      if ((event.target as HTMLElement).closest('button, input, a, [role="checkbox"]')) return;
+                      onRowActivate?.(row);
+                    }}
+                    onKeyDown={event => {
+                      if (
+                        event.target === event.currentTarget &&
+                        selectable &&
+                        event.key.toLowerCase() === 'x' &&
+                        !event.metaKey &&
+                        !event.ctrlKey &&
+                        !event.altKey &&
+                        !event.shiftKey &&
+                        !event.repeat &&
+                        !event.nativeEvent.isComposing
+                      ) {
+                        event.preventDefault();
+                        toggleRows([id], !isSelected(id));
+                        return;
+                      }
+                      if (
+                        event.target !== event.currentTarget ||
+                        !onRowActivate ||
+                        (event.key !== 'Enter' && event.key !== ' ')
+                      )
+                        return;
+                      event.preventDefault();
+                      onRowActivate(row);
+                    }}
+                    style={{ cursor: onRowActivate ? 'pointer' : undefined }}
+                  >
+                    {selectable && (
+                      <td>
+                        <Checkbox
+                          aria-label={`Select ${id}`}
+                          data-testid={`admin-table-select-${id}`}
+                          checked={isSelected(id)}
+                          onChange={event => toggleRows([id], event.target.checked)}
+                        />
+                      </td>
+                    )}
+                    {columns.map(column => (
+                      <td
+                        key={column.id}
+                        style={{
+                          textAlign: column.numeric ? 'right' : 'left',
+                          fontVariantNumeric: column.numeric ? 'tabular-nums' : undefined,
+                        }}
+                      >
+                        {column.render(row)}
                       </td>
                     ))}
                   </tr>
-                ))
-              : visibleRows.map(row => {
-                  const id = getRowId(row);
-                  return (
-                    <tr
-                      key={id}
-                      tabIndex={onRowActivate || selectable ? 0 : undefined}
-                      aria-keyshortcuts={selectable ? 'x' : undefined}
-                      aria-selected={selectable ? isSelected(id) : activeRowId === id}
-                      data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
-                      onClick={event => {
-                        if ((event.target as HTMLElement).closest('button, input, a, [role="checkbox"]')) return;
-                        onRowActivate?.(row);
-                      }}
-                      onKeyDown={event => {
-                        if (
-                          event.target === event.currentTarget &&
-                          selectable &&
-                          event.key.toLowerCase() === 'x' &&
-                          !event.metaKey &&
-                          !event.ctrlKey &&
-                          !event.altKey &&
-                          !event.shiftKey &&
-                          !event.repeat &&
-                          !event.nativeEvent.isComposing
-                        ) {
-                          event.preventDefault();
-                          toggleRows([id], !isSelected(id));
-                          return;
-                        }
-                        if (
-                          event.target !== event.currentTarget ||
-                          !onRowActivate ||
-                          (event.key !== 'Enter' && event.key !== ' ')
-                        )
-                          return;
-                        event.preventDefault();
-                        onRowActivate(row);
-                      }}
-                      style={{ cursor: onRowActivate ? 'pointer' : undefined }}
-                    >
-                      {selectable && (
-                        <td>
-                          <Checkbox
-                            aria-label={`Select ${id}`}
-                            data-testid={`admin-table-select-${id}`}
-                            checked={isSelected(id)}
-                            onChange={event => toggleRows([id], event.target.checked)}
-                          />
-                        </td>
-                      )}
-                      {columns.map(column => (
-                        <td
-                          key={column.id}
-                          style={{
-                            textAlign: column.numeric ? 'right' : 'left',
-                            fontVariantNumeric: column.numeric ? 'tabular-nums' : undefined,
-                          }}
-                        >
-                          {column.render(row)}
-                        </td>
-                      ))}
-                    </tr>
-                  );
-                })}
+                );
+              })
+            )}
           </tbody>
         </Table>
       </Box>
-      {pagination && (
+      {(pagination || serverPagination) && (
         <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
           <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-            {rows.length === 0 ? 0 : currentPage * pageSize + 1}-{Math.min((currentPage + 1) * pageSize, rows.length)}{' '}
-            of {rows.length.toLocaleString()}
+            {rows.length === 0 ? 0 : currentPage * effectivePageSize + 1}-
+            {rows.length === 0
+              ? 0
+              : Math.min(
+                  currentPage * effectivePageSize + rows.length,
+                  total,
+                  (currentPage + 1) * effectivePageSize
+                )}{' '}
+            of {total.toLocaleString()}
           </Typography>
           <Select
             aria-label="Rows per page"
             size="sm"
-            value={pageSize}
+            value={effectivePageSize}
             disabled={loading}
             data-testid="admin-table-page-size"
             onChange={(_, value) => {
               if (value !== null) {
+                if (serverPagination) {
+                  serverPagination.onPageSizeChange(value);
+                  return;
+                }
                 setPageSize(value);
                 setPage(0);
               }
@@ -295,7 +339,7 @@ export function DataTable<Row>({
             size="sm"
             variant="outlined"
             disabled={loading || currentPage === 0}
-            onClick={() => setPage(currentPage - 1)}
+            onClick={() => changePage(currentPage - 1)}
             data-testid="admin-table-previous-btn"
           >
             Previous
@@ -303,8 +347,8 @@ export function DataTable<Row>({
           <Button
             size="sm"
             variant="outlined"
-            disabled={loading || currentPage === lastPage}
-            onClick={() => setPage(currentPage + 1)}
+            disabled={loading || currentPage >= lastPage}
+            onClick={() => changePage(currentPage + 1)}
             data-testid="admin-table-next-btn"
           >
             Next
