@@ -188,7 +188,7 @@ export class AdminPage extends BasePage {
   }
 
   /** Pick an action from the profile header's More menu. */
-  private async clickProfileMenuItem(action: string) {
+  private async clickProfileMenuItem(action: 'loginAs' | 'delete') {
     await this.page.getByTestId('user-profile-more-btn').click();
     await this.page.getByTestId(`user-profile-menu-${action}-item`).click();
   }
@@ -253,7 +253,7 @@ export class AdminPage extends BasePage {
     await expect(this.page.getByTestId('modal-close-btn')).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
   }
 
-  // --- Delete User (SpicyUserActions) ---
+  // --- Delete User (profile More menu) ---
 
   async clickDeleteUserButton() {
     await this.clickProfileMenuItem('delete');
