@@ -341,13 +341,15 @@ export function contextFloor(arch: ModelArch, mode: FitMode, contextCap?: number
   return mode === 'embeddings' ? target : Math.min(MODE_CONTEXT_FLOORS[mode], target);
 }
 
-interface Budgets {
+export interface MemoryBudgets {
+  /** Bytes a model may use on the GPU, or in RAM on a CPU-only machine. */
   gpu: number;
+  /** System RAM layer or expert offload may spill into on a discrete GPU; 0 elsewhere. */
   ramPool: number;
   cpuOnly: boolean;
 }
 
-function memoryBudgets(hw: HardwareProfile): Budgets {
+export function memoryBudgets(hw: HardwareProfile): MemoryBudgets {
   if (hw.memoryKind === 'unified') {
     const fraction =
       hw.totalMemoryBytes >= FIT_CONSTANTS.unifiedLargeMinBytes
@@ -379,7 +381,7 @@ function kvCandidates(runtime: FitRuntime, arch: ModelArch): KvPair[] {
 }
 
 class Planner {
-  private readonly budgets: Budgets;
+  private readonly budgets: MemoryBudgets;
   private readonly kvs: KvPair[];
   private readonly slots: number;
   private readonly moeLayers: number;
