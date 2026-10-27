@@ -42,6 +42,7 @@ import { registerAdminAuditAlerts } from './adminAuditAlerts';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
+import { registerDriveLakeResyncPoll } from './driveLakeResyncPoll';
 import { registerStorageReconciliation } from './storageReconciliation';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
 import { registerLakeConnectorOrphanReap } from './lakeConnectorOrphanReap';
@@ -116,6 +117,7 @@ async function main() {
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);
+  registerDriveLakeResyncPoll(worker);
   registerStorageReconciliation(worker);
   registerGitHubLakeReconcile(worker);
   registerLakeConnectorOrphanReap(worker);

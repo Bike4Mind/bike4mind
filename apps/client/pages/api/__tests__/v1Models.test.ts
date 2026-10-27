@@ -109,7 +109,7 @@ describe('GET /api/v1/models', () => {
     expect(ListModelsResponseSchema.safeParse(body).success).toBe(true);
     expect(body.data.map((model: { id: string }) => model.id)).toEqual(['gpt-image-1', 'model-a', 'model-c']);
     expect(body.next_cursor).toBeNull();
-    expect(getCallerModelList).toHaveBeenCalledWith('u1', logger);
+    expect(getCallerModelList).toHaveBeenCalledWith({ id: 'u1' }, logger);
   });
 
   it('omits speech-to-text models, which no public endpoint can serve', async () => {

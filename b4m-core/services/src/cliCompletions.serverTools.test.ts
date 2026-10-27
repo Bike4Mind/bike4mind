@@ -7,6 +7,12 @@ import { BadRequestError } from '@bike4mind/common';
 let capturedOptions: Record<string, any> | undefined;
 let completeImpl: (onChunk: (text: string[], info?: Record<string, unknown>) => Promise<void>) => Promise<void>;
 
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 // Keep the real pure cap helpers (isMemberCreditCapExceeded etc.); only stub the write.
 vi.mock('./creditService', async importOriginal => ({

@@ -231,6 +231,25 @@ describe('Register - second-factor handoff', () => {
     expect(mocks.sendOTC).not.toHaveBeenCalled();
   });
 
+  it('sends an invite-less visitor to the waitlist with the email they typed', async () => {
+    mocks.allowOpenRegistration = false;
+    renderRegister();
+    const user = userEvent.setup();
+    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await user.click(screen.getByTestId('register-join-waitlist-link'));
+
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: '/subscribe', search: { source: 'register_signup_closed' } })
+    );
+    const { state } = mocks.navigate.mock.calls.at(-1)[0];
+    expect(state({})).toEqual({ waitlistEmail: 'new@test.com' });
+  });
+
+  it('hides the waitlist link when registration is open', () => {
+    renderRegister();
+    expect(screen.queryByTestId('register-join-waitlist-link')).not.toBeInTheDocument();
+  });
+
   it('marks a freshly registered account first session before entering the app', async () => {
     mocks.verifyOTC.mockResolvedValueOnce({ user: { id: 'new-user' }, accessToken: 'full' });
     renderRegister();

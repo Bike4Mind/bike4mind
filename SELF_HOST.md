@@ -1140,6 +1140,10 @@ Probes use global `fetch`. If proxy support is added to an integration client, t
 
 Every hour the worker compares each user's and organization's `currentStorageSize` counter with the bytes of the files charged to that owner, using the same sweep hosted deployments run. Self-host always runs it as a dry run: drift is recorded in MongoDB, and no counter is ever rewritten. One pass walks every owner across successive hourly ticks, completing when the last owner is visited (about a day on a typical install), and resumes from a cursor persisted in MongoDB, so a restarted worker continues the pass instead of starting it again. It sends no CloudWatch metrics, and the Slack drift alert posts only if a Slack webhook resolves: the LiveOps or default channel webhook in admin settings, or `SLACK_WEBHOOK_URL`. There is no run at startup.
 
+### Drive lake re-sync poll
+
+Every hour the worker enqueues each connected Google Drive folder that is due onto the Drive lake ingest queue, the same path the manual Re-sync button uses, so connected folders stay in sync without a click. A folder is due once it has not been polled for 6 hours, and each run enqueues at most 200, the longest-waiting first. It runs only while both the `EnableDataLakes` and `EnableDataLakeDrivePoll` admin settings are on, and does nothing otherwise. A connection that has not been fully re-walked in 24 hours is re-walked in full; the rest sync incrementally. There is no run at startup, and Drive push notifications are not used.
+
 ### Daily telemetry retention
 
 The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.

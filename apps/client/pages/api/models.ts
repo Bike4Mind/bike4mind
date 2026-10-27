@@ -10,7 +10,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { getCallerModelList } from '@server/utils/callerModelList';
 
 const handler = baseApi().get(async (req, res) => {
-  const payload = await getCallerModelList(req.user?.id ?? null, req.logger);
+  const payload = await getCallerModelList(req.user ?? null, req.logger);
   return res.status(200).json(payload);
 });
 

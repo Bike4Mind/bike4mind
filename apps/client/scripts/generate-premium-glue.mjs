@@ -818,7 +818,8 @@ const isReservedGrantKey = key =>
   key.startsWith('embed:') ||
   key.startsWith('source:') ||
   key === 'customer' ||
-  key === 'pending-free-credits';
+  key === 'pending-free-credits' ||
+  key === 'plan:paid';
 const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
 const ENTITLEMENT_GRANT_FIELDS = ['tagGrants', 'impliedEntitlements', 'signupCredits', 'internalStaffEntitlements'];
 

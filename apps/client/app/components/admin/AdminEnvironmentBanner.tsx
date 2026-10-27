@@ -4,6 +4,7 @@ import HelpCenterIcon from '@mui/icons-material/HelpCenter';
 import { Box, IconButton, Tooltip, Typography } from '@mui/joy';
 import { useRouter } from '@tanstack/react-router';
 import { resolveEnvironmentBanner } from './environmentBanner';
+import { adminFocus } from './shared/adminStyles';
 
 /** The coloured strip naming the environment. It sits outside `data-admin-surface`, so the admin skin never reaches it. */
 const EnvironmentBanner = () => {
@@ -11,6 +12,13 @@ const EnvironmentBanner = () => {
   const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
 
   const { bannerColor, environmentName } = resolveEnvironmentBanner(hostname, process.env.NEXT_PUBLIC_SERVER_DOMAIN);
+
+  const bannerButtonSx = {
+    color: 'white',
+    padding: '4px',
+    '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.2)' },
+    ...adminFocus,
+  };
 
   return (
     <Box
@@ -20,13 +28,13 @@ const EnvironmentBanner = () => {
         padding: '4px 8px',
         textAlign: 'center',
         fontWeight: 'bold',
-        position: 'sticky',
-        top: 0,
+        flexShrink: 0,
         zIndex: 1100,
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
         height: '32px',
+        boxSizing: 'border-box',
       }}
     >
       <Box flexBasis="40px" />
@@ -37,30 +45,15 @@ const EnvironmentBanner = () => {
         <Tooltip title="Help Center (Shift+?)" placement="bottom">
           <IconButton
             onClick={() => openHelpPanel()}
-            sx={{
-              color: 'white',
-              padding: '4px',
-              '&:hover': {
-                backgroundColor: 'rgba(255, 255, 255, 0.2)',
-              },
-            }}
+            sx={bannerButtonSx}
             size="sm"
+            aria-label="Open Help Center"
             data-testid="admin-help-center-btn"
           >
             <HelpCenterIcon fontSize="small" sx={{ color: 'white' }} />
           </IconButton>
         </Tooltip>
-        <IconButton
-          onClick={() => router.history.back()}
-          sx={{
-            color: 'white',
-            padding: '4px',
-            '&:hover': {
-              backgroundColor: 'rgba(255, 255, 255, 0.2)',
-            },
-          }}
-          size="sm"
-        >
+        <IconButton onClick={() => router.history.back()} sx={bannerButtonSx} size="sm" aria-label="Leave admin">
           <CloseIcon fontSize="small" sx={{ color: 'white' }} data-testid="close-admin-page-banner-btn" />
         </IconButton>
       </Box>

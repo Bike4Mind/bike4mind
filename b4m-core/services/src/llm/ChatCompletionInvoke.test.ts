@@ -8,6 +8,15 @@ import { getAvailableModels, resetReplacedByOverlay, updateReplacedByOverlay } f
 // for the rejected-caller test, and used as a downstream sentinel (the "no model
 // found" BadRequestError) proving the owner/sharee cases got PAST the access check
 // rather than asserting the whole multi-step invoke() pipeline.
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+const gate = vi.hoisted(() => ({
+  loadFreeTierAllowedModels: vi.fn(async (): Promise<ReadonlySet<string> | undefined> => undefined),
+}));
+vi.mock('./modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./modelAdmission')>()),
+  loadFreeTierAllowedModels: gate.loadFreeTierAllowedModels,
+}));
+
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: vi.fn(),
@@ -309,6 +318,7 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
   });
 
   beforeEach(() => {
+    gate.loadFreeTierAllowedModels.mockReset().mockResolvedValue(undefined);
     mockedGetAvailableModels.mockReset();
     logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     invokeLambda = vi.fn();
@@ -372,6 +382,46 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     expect(mockDb.quests.update).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'error', reply: expect.stringContaining(`"${SUCCESSOR_ID}" is not accessible`) })
     );
+  });
+
+  // invoke() records an admission refusal on the error quest rather than throwing, so the ForbiddenError
+  // is observable through the logged message and the quest reply.
+  it('passes the free-tier allowlist into admission, refusing a model outside it for a caller without a paid plan', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+    const getEntitlements = vi.fn().mockResolvedValue(['base']);
+
+    const invoke = makeInvoke({ getEntitlements });
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect(gate.loadFreeTierAllowedModels).toHaveBeenCalledWith(mockDb.adminSettings);
+    expect((invoke as any).questStartParams).toBeNull();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(`Model ${SUCCESSOR_ID} is not admitted`));
+    expectErrorWithoutPin('requires a paid plan');
+  });
+
+  it('answers a failed entitlement read with a retryable error, not the upgrade prompt', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+
+    const invoke = makeInvoke({ getEntitlements: vi.fn().mockRejectedValue(new Error('subscription DB down')) });
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).toBeNull();
+    expectErrorWithoutPin('Could not verify your plan');
+    expect(mockDb.quests.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reply: expect.stringContaining('requires a paid plan') })
+    );
+  });
+
+  it('admits the same model once the caller holds the paid-plan entitlement', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+
+    const invoke = makeInvoke({ getEntitlements: vi.fn().mockResolvedValue(['base', 'plan:paid']) });
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).not.toBeNull();
   });
 
   const pinnedModels = () =>
