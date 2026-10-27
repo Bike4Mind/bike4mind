@@ -50,7 +50,7 @@ const PLAN_COLUMNS: readonly DataColumn<CatalogPlan>[] = [
     label: 'Stripe price id',
     render: plan =>
       plan.priceId ? (
-        <Typography level="body-xs" sx={{ fontFamily: 'code' }}>
+        <Typography level="body-xs" sx={{ fontFamily: 'code', wordBreak: 'break-all' }}>
           {plan.priceId}
         </Typography>
       ) : (
