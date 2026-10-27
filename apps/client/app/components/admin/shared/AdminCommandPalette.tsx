@@ -22,9 +22,11 @@ const shortcuts = [
 export function AdminCommandPalette({
   commands = [],
   onNavigate,
+  onOpenHelp,
 }: {
   commands?: AdminCommand[];
   onNavigate?: (tab: AdminTab) => void;
+  onOpenHelp?: () => void;
 }) {
   const navigate = useNavigate();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -41,6 +43,7 @@ export function AdminCommandPalette({
     { id: 'organizations', label: 'Find organizations', run: () => go(AdminTab.Organizations) },
     { id: 'settings', label: 'Open admin settings', run: () => go(AdminTab.AdminSettings) },
     { id: 'audit', label: 'Open audit log', run: () => go(AdminTab.AuditLog) },
+    ...(onOpenHelp ? [{ id: 'help', label: 'Open Help Center', run: onOpenHelp }] : []),
   ];
   const userId = parseUserId(query.trim().toLowerCase());
   const results = [

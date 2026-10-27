@@ -22,6 +22,21 @@ const setup = (commands: AdminCommand[] = []) =>
   );
 
 describe('AdminCommandPalette', () => {
+  it('opens the mounted Help Center through its host callback', async () => {
+    const onOpenHelp = vi.fn();
+    render(
+      <CssVarsProvider theme={theme}>
+        <AdminCommandPalette onOpenHelp={onOpenHelp} />
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByTestId('admin-command-open-btn'));
+    const input = screen.getByTestId('admin-search-input');
+    fireEvent.change(input, { target: { value: 'Help Center' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(onOpenHelp).toHaveBeenCalledExactlyOnceWith());
+    expect(screen.queryByTestId('admin-search-input')).not.toBeInTheDocument();
+  });
+
   it('does not execute Enter during composition or after unmount', async () => {
     const run = vi.fn();
     const view = setup([{ id: 'credits', label: 'Adjust credits', run }]);

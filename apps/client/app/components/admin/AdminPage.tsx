@@ -36,6 +36,7 @@ import VoiceSettingsTab from './VoiceSettingsTab';
 import DocumentationTab from './DocumentationTab';
 import KnowledgeModal from '../Knowledge/KnowledgeModal';
 import { AdminCommandPalette } from './shared/AdminCommandPalette';
+import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import ToolDefinitionsTab from './ToolDefinitionsTab';
 import EmailMarketingTab from './EmailMarketingTab';
 import SystemSecretsTab from './SystemSecretsTab';
@@ -163,7 +164,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   return (
     <UndoToastProvider>
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <AdminCommandPalette onNavigate={setActiveTab} />
+        <AdminCommandPalette onNavigate={setActiveTab} onOpenHelp={openHelpPanel} />
         <Tabs
           aria-label="Admin tabs"
           value={activeTab}

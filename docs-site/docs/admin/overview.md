@@ -21,7 +21,7 @@ The admin panel is organized as a full-screen view with three main areas:
 
 ## Keyboard commands
 
-On the admin page or a user profile, press Cmd/Ctrl+K outside an input to open **Admin commands**. Use ArrowUp and ArrowDown to select a command, Enter to run it, and Escape to close the palette. You can navigate to Users, Organizations, settings or the audit log, or paste a user ID to open its profile. Use the Users or Organizations page search for name and email lookup.
+On the admin page or a user profile, press Cmd/Ctrl+K outside an input to open **Admin commands**. Use ArrowUp and ArrowDown to select a command, Enter to run it, and Escape to close the palette. You can navigate to Users, Organizations, settings or the audit log, or paste a user ID to open its profile. On the admin page, **Open Help Center** opens the existing help panel. Use the Users or Organizations page search for name and email lookup.
 
 | Key | Action |
 |-----|--------|
