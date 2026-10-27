@@ -40,6 +40,11 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
   }),
 }));
 
+const { logoutMutate } = vi.hoisted(() => ({ logoutMutate: vi.fn() }));
+vi.mock('@client/app/hooks/data/user', () => ({
+  useUserLogout: () => ({ mutate: logoutMutate, isPending: false }),
+}));
+
 // Keep the modal + toasts inert so the test focuses on the effect's call behavior.
 vi.mock('@client/app/components/common/MFAModal', () => ({ default: () => null }));
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
@@ -138,6 +143,30 @@ describe('MFAEnforcementWrapper - dismissed verification prompt', () => {
 
     fireEvent.click(continueButton);
     await waitFor(() => expect(mfaSetupCalls()).toBe(2));
+  });
+});
+
+describe('MFAEnforcementWrapper - a session stuck at the verification prompt', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    get.mockResolvedValue({ data: { enabled: false } });
+    // Setup waits on the "Confirm it's you" prompt the user never completes.
+    post.mockReturnValue(new Promise(() => {}));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('offers a sign-out, so the user can sign in fresh and skip the prompt', async () => {
+    renderWrapper();
+
+    const signOut = await screen.findByTestId('mfa-enforcement-sign-out-btn');
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+
+    fireEvent.click(signOut);
+    expect(logoutMutate).toHaveBeenCalledTimes(1);
   });
 });
 
