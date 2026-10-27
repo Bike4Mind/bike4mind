@@ -32,7 +32,7 @@ vi.mock('@bike4mind/services', () => ({
 
 const tryIncrementWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
 const rateLimit = vi.hoisted(() => vi.fn((options: unknown) => ({ rateLimitOptions: options })));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit }));
 
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryIncrementWithinLimitFixedWindow },

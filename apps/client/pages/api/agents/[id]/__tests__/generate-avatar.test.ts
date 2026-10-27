@@ -25,7 +25,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { create: h.fabFileCreate },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: h.getOperationsModel },
 }));
 

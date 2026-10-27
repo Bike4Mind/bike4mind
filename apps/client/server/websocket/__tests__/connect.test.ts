@@ -48,7 +48,7 @@ vi.mock('@bike4mind/common', () => ({
 }));
 vi.mock('@server/auth/tokenGenerator', () => ({ authTokenGenerator: { verifyToken: h.verifyToken } }));
 vi.mock('@server/cli/auth', () => ({ verifyApiKey: h.verifyApiKey }));
-vi.mock('@server/auth/assertAccountStateUsable', () => ({
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: h.assertAccountStateUsable,
 }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({

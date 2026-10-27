@@ -22,7 +22,7 @@ import {
 import { mcpConnectionRepository } from '@bike4mind/database';
 import { RemoteMcpError } from '@bike4mind/mcp/remote';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import type {
   McpConnectionApiKeyBody,
   McpConnectionCreateBody,

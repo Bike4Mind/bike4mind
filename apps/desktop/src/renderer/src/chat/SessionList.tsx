@@ -43,11 +43,13 @@ import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
 import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
+import { keepMenuOpen } from './keepMenuOpen';
 import {
   ArrowLeftIcon,
   ArtifactIcon,
   CheckIcon,
   ChevronIcon,
+  ModelsIcon,
   MoreIcon,
   PanelLeftIcon,
   PlusIcon,
@@ -158,11 +160,6 @@ interface RowProps {
   sectionId: string | undefined;
   actions: RowActions;
 }
-
-/** Joy closes a Dropdown on any MenuItem click unless the click says otherwise. */
-const keepMenuOpen = (event: SyntheticEvent) => {
-  (event as SyntheticEvent & { defaultMuiPrevented?: boolean }).defaultMuiPrevented = true;
-};
 
 /** Shown in place of the main menu items, not as a flyout: Joy has no nested menu. */
 function MoveToItems({
@@ -756,6 +753,7 @@ export function SessionList({
   userSections,
   sectionActions,
   customize,
+  onOpenModels,
   footer,
 }: {
   sessions: ChatSessionSummary[];
@@ -789,6 +787,7 @@ export function SessionList({
   sectionActions: SidebarSectionActions;
   /** The Customize nav row, which carries its own attention badge. */
   customize?: ReactNode;
+  onOpenModels?: () => void;
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
@@ -1140,6 +1139,9 @@ export function SessionList({
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
         {customize}
+        {onOpenModels && (
+          <NavItem icon={<ModelsIcon />} label="Models" onClick={onOpenModels} testId="chat-models-btn" />
+        )}
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
             size="sm"

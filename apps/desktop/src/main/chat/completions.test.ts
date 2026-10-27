@@ -243,6 +243,22 @@ describe('streamCompletion', () => {
     expect(post.mock.calls[0][1].messages[0].content).toEqual(content);
   });
 
+  it('keeps the local-only turn marker off the wire', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+
+    const done = streamCompletion(
+      instance,
+      '/c',
+      { model: 'm', messages: [{ role: 'user', content: 'Image from the call above.', continuesTurn: true }] },
+      () => {}
+    );
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1].messages).toEqual([{ role: 'user', content: 'Image from the call above.' }]);
+  });
+
   it("describes a 403 as not allowed, with the server's words, rather than as an expired session", async () => {
     const post = vi.fn().mockRejectedValue(
       Object.assign(new Error('Request failed'), {

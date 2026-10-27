@@ -1,5 +1,18 @@
+import { INTEGRATION_DEMAND_SEARCH_KEYS } from './integrationDemandSearch';
 import React, { useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { Alert, Button, CircularProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
+import {
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  FilterBar,
+  SavedViews,
+  StatStrip,
+  StatTile,
+  StatusChip,
+  useAdminListUrlState,
+  type DataColumn,
+} from './shared';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { toast } from 'sonner';
 import type { IntegrationDemand, IntegrationStage } from '@bike4mind/common';
@@ -43,22 +56,57 @@ async function copyRequesterEmails(lookup: Promise<EmailLookup>): Promise<boolea
   }
 }
 
-const STAGE_CHIP: Record<IntegrationStage, { label: string; color: 'neutral' | 'warning' | 'success' }> = {
-  planned: { label: 'Roadmap', color: 'neutral' },
-  beta: { label: 'Beta', color: 'warning' },
-  ga: { label: 'Live', color: 'success' },
+const STAGE_CHIP: Record<IntegrationStage, { label: string; tone: 'neutral' | 'warn' | 'good' }> = {
+  planned: { label: 'Roadmap', tone: 'neutral' },
+  beta: { label: 'Beta', tone: 'warn' },
+  ga: { label: 'Live', tone: 'good' },
 };
 
-const StageChip: React.FC<{ stage: IntegrationStage | null }> = ({ stage }) =>
-  stage ? (
-    <Chip size="sm" variant="soft" color={STAGE_CHIP[stage].color}>
-      {STAGE_CHIP[stage].label}
-    </Chip>
-  ) : (
-    <Chip size="sm" variant="outlined" color="neutral">
-      Not in catalog
-    </Chip>
-  );
+// Sort by lifecycle, with integrations missing from the catalog first.
+const STAGE_RANK: Record<IntegrationStage, number> = { planned: 1, beta: 2, ga: 3 };
+
+const StageChip: React.FC<{ stage: IntegrationStage | null }> = ({ stage }) => (
+  <StatusChip
+    tone={stage ? STAGE_CHIP[stage].tone : 'neutral'}
+    label={stage ? STAGE_CHIP[stage].label : 'Not in catalog'}
+  />
+);
+
+const DEMAND_COLUMNS: readonly DataColumn<IntegrationDemand>[] = [
+  { id: 'name', label: 'Integration', render: row => row.name, sortValue: row => row.name },
+  {
+    id: 'stage',
+    label: 'Stage',
+    render: row => <StageChip stage={row.stage} />,
+    sortValue: row => (row.stage ? STAGE_RANK[row.stage] : 0),
+  },
+  {
+    id: 'total',
+    label: 'Requests',
+    render: row => row.total.toLocaleString(),
+    sortValue: row => row.total,
+    numeric: true,
+  },
+  {
+    id: 'organizations',
+    label: 'Organizations',
+    render: row => row.organizations.toLocaleString(),
+    sortValue: row => row.organizations,
+    numeric: true,
+  },
+  {
+    id: 'first',
+    label: 'First request',
+    render: row => formatDate(row.firstRequestedAt),
+    sortValue: row => row.firstRequestedAt,
+  },
+  {
+    id: 'latest',
+    label: 'Latest request',
+    render: row => formatDate(row.latestRequestedAt),
+    sortValue: row => row.latestRequestedAt,
+  },
+];
 
 const RequestersPanel: React.FC<{ integration: IntegrationDemand }> = ({ integration }) => {
   const { integrationId, name } = integration;
@@ -163,78 +211,98 @@ const RequestersPanel: React.FC<{ integration: IntegrationDemand }> = ({ integra
  */
 export const IntegrationDemandTab: React.FC = () => {
   const demand = useIntegrationDemand();
+  const [view, updateView] = useAdminListUrlState(INTEGRATION_DEMAND_SEARCH_KEYS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const integrations = demand.data?.integrations ?? [];
-  const selected = integrations.find(row => row.integrationId === selectedId) ?? null;
+  const visibleIntegrations = integrations.filter(
+    row =>
+      row.name.toLowerCase().includes(view.query.toLowerCase()) &&
+      (!view.filters.stage || row.stage === view.filters.stage)
+  );
+  const selected = visibleIntegrations.find(row => row.integrationId === selectedId) ?? null;
 
   return (
-    <Stack spacing={2} data-testid="admin-integration-demand-tab">
-      <Box>
-        <Typography level="h4">Integration demand</Typography>
-        <Typography level="body-sm" textColor="text.secondary">
-          Requests filed from the roadmap cards on the Integrations page, most requested first. An integration that has
-          left the roadmap keeps its history and shows its current stage. Select a row to see who asked.
-        </Typography>
-      </Box>
-
-      {demand.error ? (
-        <Alert color="danger" data-testid="admin-integration-demand-error">
-          Couldn&apos;t load integration demand.
-        </Alert>
-      ) : demand.isPending ? (
-        <CircularProgress size="sm" />
-      ) : integrations.length === 0 ? (
-        <Alert color="neutral" data-testid="admin-integration-demand-empty">
-          No integration requests yet.
-        </Alert>
-      ) : (
-        <Table size="sm" hoverRow data-testid="admin-integration-demand-table">
-          <thead>
-            <tr>
-              <th>Integration</th>
-              <th>Stage</th>
-              <th>Requests</th>
-              <th>Organizations</th>
-              <th>First request</th>
-              <th>Latest request</th>
-            </tr>
-          </thead>
-          <tbody>
-            {integrations.map(row => {
-              const isSelected = row.integrationId === selectedId;
-              return (
-                <tr
-                  key={row.integrationId}
-                  tabIndex={0}
-                  aria-selected={isSelected}
-                  onClick={() => setSelectedId(row.integrationId)}
-                  onKeyDown={event => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      setSelectedId(row.integrationId);
-                    }
+    <Stack
+      spacing={2}
+      sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', p: 2, borderRadius: 'md' }}
+      data-testid="admin-integration-demand-tab"
+    >
+      <AdminPageHeader
+        title="Integration demand"
+        count={integrations.length}
+        description="Requests filed from the roadmap cards on the Integrations page, most requested first. Select a row to see who asked."
+      />
+      <StatStrip>
+        <StatTile label="Integrations requested" value={integrations.length} />
+        <StatTile label="Requests" value={integrations.reduce((total, row) => total + row.total, 0)} />
+        <StatTile label="Live integrations" value={integrations.filter(row => row.stage === 'ga').length} />
+      </StatStrip>
+      <SavedViews
+        state={view}
+        onChange={updateView}
+        views={[
+          { id: 'all', label: 'All demand', filters: {} },
+          { id: 'roadmap', label: 'Roadmap', filters: { stage: 'planned' } },
+          { id: 'live', label: 'Live', filters: { stage: 'ga' } },
+        ]}
+      />
+      <FilterBar
+        state={view}
+        onChange={updateView}
+        searchLabel="Search integrations"
+        filters={[
+          {
+            id: 'stage',
+            label: 'Stage',
+            options: [
+              { value: 'planned', label: 'Roadmap' },
+              { value: 'beta', label: 'Beta' },
+              { value: 'ga', label: 'Live' },
+            ],
+          },
+        ]}
+      />
+      <div
+        data-testid={
+          demand.error
+            ? 'admin-integration-demand-error'
+            : !demand.isPending && integrations.length === 0
+              ? 'admin-integration-demand-empty'
+              : undefined
+        }
+      >
+        <DataTable
+          rows={visibleIntegrations}
+          pageResetKey={JSON.stringify([view.query, view.filters])}
+          columns={DEMAND_COLUMNS}
+          label="Integration demand"
+          getRowId={row => row.integrationId}
+          testId="admin-integration-demand-table"
+          rowTestId={row => `admin-integration-demand-row-${row.integrationId}`}
+          loading={demand.isPending}
+          error={demand.error ? "Couldn't load integration demand." : undefined}
+          onRetry={() => void demand.refetch()}
+          onRowActivate={row => setSelectedId(row.integrationId)}
+          activeRowId={selectedId ?? undefined}
+          empty={
+            <EmptyState
+              title={integrations.length ? 'No matching integrations' : 'No integration requests yet.'}
+              action={
+                <Button
+                  variant="outlined"
+                  data-testid="admin-demand-reset-btn"
+                  onClick={() => {
+                    updateView({ query: '', filters: {}, view: '' });
+                    void demand.refetch();
                   }}
-                  style={{ cursor: 'pointer' }}
-                  data-testid={`admin-integration-demand-row-${row.integrationId}`}
                 >
-                  <td>
-                    <Typography level="body-sm" fontWeight={isSelected ? 'lg' : undefined}>
-                      {row.name}
-                    </Typography>
-                  </td>
-                  <td>
-                    <StageChip stage={row.stage} />
-                  </td>
-                  <td>{row.total}</td>
-                  <td>{row.organizations}</td>
-                  <td>{formatDate(row.firstRequestedAt)}</td>
-                  <td>{formatDate(row.latestRequestedAt)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </Table>
-      )}
+                  {integrations.length ? 'Clear filters' : 'Refresh demand'}
+                </Button>
+              }
+            />
+          }
+        />
+      </div>
 
       {selected ? <RequestersPanel key={selected.integrationId} integration={selected} /> : null}
     </Stack>

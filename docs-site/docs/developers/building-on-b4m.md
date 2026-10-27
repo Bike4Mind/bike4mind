@@ -293,21 +293,11 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 
 `POST /api/ai/v1/completions` checks everything it can before it opens the stream: the JSON body, the key and its scopes, the rate limit, the model and the user's credits. Any of those failing returns a JSON error with a real HTTP status and no stream:
 
-| Status | Meaning | `errorCode` |
-|--------|---------|-------------|
-| 400 | Malformed JSON, or a `model` B4M does not know or cannot serve you. | - |
-| 400 | The model provider rejected your request. Change the request or choose another model; do not retry it unchanged. | `invalid_request` |
-| 401 | The key was rejected. Re-mint once (see "One re-mint" above). | - |
-| 403 | The key lacks a scope this endpoint needs; `required_scopes` names them. | - |
-| 405 | Wrong HTTP method; use `POST`. | - |
-| 413 | The body is over 25 MB. | - |
-| 422 | The user or their org is out of credits, or the org's per-member credit cap is reached. Prompt them to top up their B4M balance. | `insufficient_credits` |
-| 422 | The body failed validation; `error` names the failing fields. | - |
-| 429 | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | - |
-| 500 | Internal error. Retry, and log `request_id` if it persists. | - |
-| 503 | The database is unavailable, the model's provider is not configured on this deployment, or the self-hosted model server that lists the model (Ollama, local image) is unreachable. Retry later or pick another model. | `provider_not_configured` for the model cases |
+Every status code and its `errorCode` values are listed in the [in-app API reference](https://app.bike4mind.com/api/v1/docs). Branch on the status and `errorCode`, never on the `error` prose. A key missing a scope is a 403 and `required_scopes` names the scopes. Without it, the account may be suspended or under a dispute (contact support), or a JWT caller may need to enroll in MFA in the web app.
 
-The body is `{ "error": "...", "request_id": "...", "errorCode": "..." }` (`errorCode` only where the table shows one), and `request_id` also arrives as the `X-Request-ID` header. Branch on the status and `errorCode`, never on `error`, which is prose and can change. The public API never returns 402.
+Out of credits is a 422 with `errorCode: "insufficient_credits"` (never 402). A failure body also carries `request_id`, which arrives as the `X-Request-ID` header too.
+
+Retry summary: a 400 `invalid_request` must not be retried unchanged. A 429 is retried after the `Retry-After` seconds. A 503, including `provider_not_configured` (the model's provider is not configured here, or a self-hosted model server such as Ollama or local image is unreachable), is retried later or with another model.
 
 Once the stream opens the status is 200 and stays 200. A failure after that point arrives as one in-band event:
 
@@ -322,7 +312,7 @@ Once the stream opens the status is 200 and stays 200. A failure after that poin
 - `code: "provider_error"`: the model provider failed. Retry, or pick another model. The provider's own response body is never forwarded.
 - `code` absent, or any other `code`: show `message` and log `requestId`.
 
-The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. A successful stream ends with `data: [DONE]`. An `error` event is terminal and is not followed by `[DONE]`; a stream that ends with neither is incomplete. A `stopReason` of `max_tokens` on the last event means the reply was cut off. Any other `stopReason` that is not a clean finish (`end_turn`, `stop`, `tool_use`, `stop_sequence`), such as `degenerate_repetition`, `refusal` or a provider-specific value, means the reply is not usable even though `[DONE]` still arrives.
+The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. A successful stream ends with `data: [DONE]`. An `error` event is terminal and is not followed by `[DONE]`; a stream that ends with neither is incomplete. Check the terminal event's `stopReason` too: `max_tokens` means the reply was truncated, even when `[DONE]` follows. Handle other non-success reasons as an incomplete or unusable reply; see the [streaming guide](../api/completions/streaming.md).
 
 Branch on `code`, never on `message`, which is prose and can change. (The JSON, non-streaming B4M APIs report the credit condition the same way this endpoint does before the stream: HTTP 422 with `errorCode: "insufficient_credits"`.)
 
@@ -330,20 +320,21 @@ Branch on `code`, never on `message`, which is prose and can change. (The JSON, 
 
 A reasoning model spends tokens thinking before it writes the visible reply, and those thinking tokens count against `max_tokens`. With a small budget the model can use all of it on reasoning and the stream ends with no visible text.
 
-For a short streamed reply, set a small `maxTokens` and turn thinking off with `reasoningEffort: "none"`:
+For a short streamed reply, set a small `max_tokens` and turn thinking off with `reasoningEffort: "none"`:
 
 ```json
 {
   "model": "claude-sonnet-5",
   "messages": [{ "role": "user", "content": "Summarize this in one sentence: ..." }],
   "stream": true,
-  "options": { "maxTokens": 800, "reasoningEffort": "none" }
+  "max_tokens": 800,
+  "options": { "reasoningEffort": "none" }
 }
 ```
 
 Otherwise, omit `max_tokens` on reasoning models and let B4M size the ceiling.
 
-On a model that cannot turn thinking off, `none` falls back to the lowest effort, so the model still reasons a little and a very small `maxTokens` can still come back short. Adapters that do not support the field ignore it. See the `reasoningEffort` field of the completions request in the API reference (`https://<your-b4m-host>/api/v1/docs`, spec at `/api/v1/openapi.json`) for the allowed values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) and the per-adapter behavior.
+On a model that cannot turn thinking off, `none` falls back to the lowest effort, so the model still reasons a little and a very small `max_tokens` can still come back short. Adapters that do not support the field ignore it. See the `reasoningEffort` field of the completions request in the API reference (`https://<your-b4m-host>/api/v1/docs`, spec at `/api/v1/openapi.json`) for the allowed values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) and the per-adapter behavior.
 
 ## 7. Read the user's state
 
@@ -544,17 +535,6 @@ class RateLimitedError extends Error {
     super(`Rate limited; retry in ${retryAfterS}s`);
   }
 }
-class TruncatedReplyError extends Error {
-  constructor(readonly partial: string) {
-    super('Reply was cut off at max_tokens');
-  }
-}
-class UnusableReplyError extends Error {
-  constructor(readonly stopReason: string) {
-    super(`Reply ended early: ${stopReason}`);
-  }
-}
-const CLEAN_STOP_REASONS = new Set(['end_turn', 'stop', 'tool_use', 'stop_sequence']);
 
 async function checkBalance(key: string): Promise<Response> {
   return fetch(`${B4M}/api/v1/credits`, { headers: { Authorization: `Bearer ${key}` } });
@@ -597,34 +577,43 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
   let buffer = '';
   const decoder = new TextDecoder();
   const reader = res.body.getReader();
-  for (let r = await reader.read(); !r.done; r = await reader.read()) {
-    buffer += decoder.decode(r.value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop()!;
-    for (const line of lines) {
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      // Reasoning models wrap their reasoning in <think> spans; never show it to users.
-      if (data === '[DONE]') {
-        const reply = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-        if (stopReason === 'max_tokens') throw new TruncatedReplyError(reply);
-        if (stopReason && !CLEAN_STOP_REASONS.has(stopReason)) throw new UnusableReplyError(stopReason);
-        return reply;
+  try {
+    for (let r = await reader.read(); !r.done; r = await reader.read()) {
+      buffer += decoder.decode(r.value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop()!;
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        // Reasoning models wrap their reasoning in <think> spans; never show it to users.
+        if (data === '[DONE]') {
+          if (stopReason === 'max_tokens') throw new Error('Completion was truncated; increase max_tokens');
+          if (stopReason && !['end_turn', 'stop', 'stop_sequence'].includes(stopReason)) {
+            throw new Error(`Completion did not finish with an answer: ${stopReason}`);
+          }
+          return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        }
+        const event = JSON.parse(data);
+        if (event.type === 'error') {
+          if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
+          throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
+        }
+        if (typeof event.stopReason === 'string') stopReason = event.stopReason;
+        if (event.type === 'content') text += event.text;
       }
-      const event = JSON.parse(data);
-      if (event.type === 'error') {
-        if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
-        throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
-      }
-      if (event.stopReason) stopReason = event.stopReason;
-      if (event.type === 'content') text += event.text;
+    }
+    throw new Error('Completion stream ended without [DONE]');
+  } finally {
+    try {
+      await reader.cancel();
+    } finally {
+      reader.releaseLock();
     }
   }
-  throw new Error('Completion stream ended without [DONE]');
 }
 ```
 
-Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `RateLimitedError`, wait `retryAfterS` seconds before retrying. On `TruncatedReplyError`, show `partial` marked as incomplete, or retry with a higher `max_tokens`. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling. On `UnusableReplyError` (for example `degenerate_repetition` or `refusal`), do not show the text; retry or tell the user the reply failed.
+Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `RateLimitedError`, wait `retryAfterS` seconds before retrying. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling.
 
 ## Further reading
 

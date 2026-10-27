@@ -11,7 +11,7 @@ vi.mock('@bike4mind/database', () => ({
   slackDevWorkspaceRepository: { findByIdWithCredentials: h.findByIdWithCredentials },
 }));
 vi.mock('@server/generations/signOutputUrl', () => ({ downloadServeableOutput: vi.fn(), signOutputUrl: vi.fn() }));
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: h.initializeSlackPackage }));
 vi.mock('@bike4mind/slack', () => ({ SlackClient: h.SlackClient }));
 

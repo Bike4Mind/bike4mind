@@ -46,9 +46,13 @@ import type {
 import {
   awaitsWorktree,
   branchHolder,
+  isLocalBackend,
+  isLocalModel,
   isResumableStop,
   isTurnBudgetStop,
+  localBackend,
   messagesSinceBoundary,
+  parseLocalModelId,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { shouldAutoCompact } from '@shared/contextLimit';
@@ -119,7 +123,8 @@ import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
-import { LOCAL_MODEL_PREFIX, OllamaLocal } from './OllamaLocal';
+import { OllamaLocal } from './OllamaLocal';
+import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
@@ -137,7 +142,6 @@ import { readableThinking } from './thinkingBlocks';
 import { COMPACT_MAX_TOKENS, compactRequestMessages, renderForSummary, sanitizeSummary } from './compaction';
 import { pickTitleModel, sanitizeGeneratedTitle, TITLE_MAX_TOKENS, titleRequestMessages } from './sessionTitle';
 import {
-  isLocalModel,
   pickSuggestionModel,
   sanitizeSuggestion,
   SUGGESTION_MAX_TOKENS,
@@ -163,6 +167,7 @@ import {
 } from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
+import { BackgroundWake } from './backgroundWake';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { webContextFor } from './tools/webTools';
@@ -264,6 +269,17 @@ const TURN_LIMITS: TurnLimits = {
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 
+/** Rides with a message typed while the turn ran, so the model answers it without dropping the task. */
+const MID_TURN_NOTE =
+  'The user sent this while you were still working. Answer or act on it now, then carry on with the task unless it changes what they want.';
+
+/** Something that reached a running turn between rounds; see takeArrivals. */
+interface MidTurnArrival {
+  message: ChatMessage;
+  /** The queue entry it came from, for the event that clears its row. Absent on a notice. */
+  queuedId?: string;
+}
+
 /** Stored on a turn the session expired under; the thread shows it as paused, not as an error. */
 const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished. Sign in again, then press Continue.';
 
@@ -289,7 +305,7 @@ type SendOptions = {
  *
  * Counts autonomous runs only. A user typing into a spawned session is not rationed.
  */
-const MAX_CONCURRENT_SPAWNED = 3;
+export const MAX_CONCURRENT_SPAWNED = 10;
 
 /**
  * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
@@ -331,6 +347,10 @@ const LOCAL_SUGGESTION_TIMEOUT_MS = 30_000;
  * limit. Abandoning it changes nothing - see compactContext.
  */
 const COMPACT_TIMEOUT_MS = 120_000;
+// A local summary reads most of the window, about 14k tokens on a 16k model: over two minutes of
+// CPU prefill. Stop cannot reach a compaction, so this stays the bound on the user's wait.
+const LOCAL_COMPACT_TIMEOUT_MS = 300_000;
+const SUMMARY_SHRINK_RETRIES = 2;
 
 /**
  * How far a message may travel from the turn the USER typed, in agent-to-agent hops.
@@ -396,6 +416,8 @@ export interface ChatServiceDeps {
   approvalLog?: Pick<ApprovalLog, 'append'>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
   background?: BackgroundProcessRegistry;
+  /** How long exits are gathered into one notice before an idle conversation is woken; tests shorten it. */
+  backgroundWakeDelayMs?: number;
   /** Where a running command offers itself up for moving. Absent in tests, which never move one. */
   foreground?: ForegroundCommandRegistry;
   /** Installs a new worktree's dependencies. Absent in tests, which then never install. */
@@ -661,7 +683,17 @@ export class ChatService {
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
 
+  /** Background commands that ended on their own, waiting to be told to their conversation. */
+  private readonly wake?: BackgroundWake;
+
   constructor(private readonly deps: ChatServiceDeps) {
+    this.wake = deps.background
+      ? new BackgroundWake(
+          deps.background,
+          sessionId => void this.wakeForBackground(sessionId),
+          deps.backgroundWakeDelayMs
+        )
+      : undefined;
     this.projectContext = new ProjectContextCache(deps.userInstructionsRoot);
     this.skillsPrompt = deps.skills ? new SkillsPromptCache(deps.skills) : undefined;
   }
@@ -766,6 +798,47 @@ export class ChatService {
     return { ok: false, busy: false, error: result.error };
   }
 
+  private wakeIfIdle(sessionId: string): void {
+    if (this.wake?.has(sessionId) && !this.hasTurnInFlight(sessionId)) void this.wakeForBackground(sessionId);
+  }
+
+  /** A background command this conversation's agent started has ended on its own. */
+  backgroundExited(sessionId: string, processId: string): void {
+    this.wake?.exited(sessionId, processId);
+  }
+
+  /**
+   * Tell an IDLE conversation that its background commands finished, as an automatic turn.
+   *
+   * A busy one is left alone: its running turn takes the notice at its next round boundary
+   * (takeArrivals), and a turn that ends without another round comes back here from
+   * settleQueue. The same approval mode applies as to any turn - in 'ask' the model can read the
+   * notice and answer, and anything it then runs still stops at the card.
+   */
+  private async wakeForBackground(sessionId: string): Promise<void> {
+    const wake = this.wake;
+    if (!wake?.has(sessionId) || this.hasTurnInFlight(sessionId)) return;
+    const session = await this.deps.store.get(sessionId);
+    if (!session || session.archived) {
+      wake.forget(sessionId);
+      return;
+    }
+    // Re-read after the await. Whatever started in the gap will take the notice instead.
+    if (this.hasTurnInFlight(sessionId) || (this.deps.queue?.list(sessionId).length ?? 0) > 0) return;
+    const notice = wake.take(sessionId);
+    if (!notice) return;
+    if (!wake.claimWake(sessionId)) {
+      this.deps.logger.warn(`CHAT: not waking ${sessionId} for ${notice.summary}: too many wakes in a row`);
+      return;
+    }
+    const result = await this.startAutomaticTurn(sessionId, notice.text, {
+      kind: 'background-exit',
+      processIds: notice.processIds,
+      summary: notice.summary,
+    });
+    if (!result.ok) this.deps.logger.warn(`CHAT: could not wake ${sessionId}: ${result.error}`);
+  }
+
   async setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
     if (archived) this.archiveCleanup(sessionId);
     const updated = await this.deps.store.setArchived(sessionId, archived);
@@ -774,6 +847,7 @@ export class ChatService {
   }
 
   private archiveCleanup(sessionId: string): void {
+    this.wake?.forget(sessionId);
     // Stops polling only; opening the conversation again lists its cards, which resumes them.
     this.deps.videoJobs?.stopSession(sessionId);
     this.webSearches.forget(sessionId);
@@ -1511,6 +1585,7 @@ export class ChatService {
       );
     });
     this.promoted.delete(sessionId);
+    this.wake?.forget(sessionId);
     // A deleted session is neither a child that can still report nor a parent that can still be
     // told. Dropping the watch here is also what gives its concurrency slot back, so deleting a
     // running spawned session does not leak one for the rest of the run.
@@ -1537,6 +1612,7 @@ export class ChatService {
     // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
     // way out: each abort settles a reply, and settleQueue would otherwise send it.
     this.promoted.clear();
+    this.wake?.dispose();
     // Before the aborts, so an open card is recorded as closed by the quit rather than by a stop.
     this.deps.approvals?.dispose();
     for (const controller of this.active.values()) controller.abort();
@@ -1572,6 +1648,9 @@ export class ChatService {
       // send started a reply. A refused queued message is the exception: sendTaken hands it back
       // and the chain stops there.
       if (!(options.released && !result?.ok)) this.flushQueue(sessionId);
+      // An exit that came due while this send was being accepted was skipped as busy; a send
+      // that was then refused starts no turn that would deliver it.
+      this.wakeIfIdle(sessionId);
     }
   }
 
@@ -1718,8 +1797,7 @@ export class ChatService {
     const { released, seedHops } = options;
     const notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
-    if (!api && !existing.model.startsWith(LOCAL_MODEL_PREFIX))
-      return { ok: false, error: 'Sign in to send a message.' };
+    if (!api && !isLocalModel(existing.model)) return { ok: false, error: 'Sign in to send a message.' };
     // First turns only: they are where a session start spends its time.
     const timer = existing.messages.length === 0 ? new PhaseTimer() : undefined;
 
@@ -1778,7 +1856,7 @@ export class ChatService {
       createdAt: new Date().toISOString(),
       ...(released?.relay ? { system: true, relay: released.relay } : {}),
       ...(released?.automatic
-        ? { system: true, automatic: released.automatic, display: `Auto-fix: ${released.automatic.summary}` }
+        ? { system: true, automatic: released.automatic, display: automaticDisplay(released.automatic) }
         : {}),
       ...(attached.length > 0 ? { attachments: attached } : {}),
       ...(skill ? { skill } : {}),
@@ -1805,11 +1883,13 @@ export class ChatService {
     // it: runReply emits 'start' the moment it is called.
     if (released || options.announce) this.deps.queue?.sent(sessionId, released?.id ?? userMessage.id, userMessage);
 
-    if (released?.automatic) this.autoFixTurns.add(sessionId);
+    if (released?.automatic?.kind === 'auto-fix') this.autoFixTurns.add(sessionId);
     else this.autoFixTurns.delete(sessionId);
-    // A relay, an auto-fix and a spawn's seed prompt all start a turn nobody typed here.
-    if (!released?.relay && !released?.automatic && seedHops === undefined) this.attendedTurns.add(sessionId);
-    else this.attendedTurns.delete(sessionId);
+    // A relay, an automatic turn and a spawn's seed prompt all start a turn nobody typed here.
+    if (!released?.relay && !released?.automatic && seedHops === undefined) {
+      this.attendedTurns.add(sessionId);
+      this.wake?.attended(sessionId);
+    } else this.attendedTurns.delete(sessionId);
     const replyId = this.startReply(session, api, historyScope, undefined, released?.relay?.hops ?? seedHops ?? 0);
 
     // After the reply is in flight, and never awaited: a first answer that waited on a title
@@ -1850,8 +1930,7 @@ export class ChatService {
     const session = await this.deps.store.get(sessionId);
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
 
-    if (!api && !session.model.startsWith(LOCAL_MODEL_PREFIX))
-      return { ok: false, error: 'Sign in to continue this reply.' };
+    if (!api && !isLocalModel(session.model)) return { ok: false, error: 'Sign in to continue this reply.' };
 
     const last = session.messages[session.messages.length - 1];
     if (!last || last.role !== 'assistant' || !isResumableStop(last.stopReason)) {
@@ -1931,8 +2010,9 @@ export class ChatService {
    * message released from the queue, which has no caller to read a result, still reports it.
    */
   private async autoCompact(session: ChatSession): Promise<void> {
-    const window = this.deps.models?.cached()?.find(model => model.id === session.model)?.contextWindow;
-    if (!shouldAutoCompact(session.messages, window) && !importedHistoryNeedsCompaction(session)) return;
+    const window = await this.contextWindowOf(session.model);
+    const local = isLocalModel(session.model);
+    if (!shouldAutoCompact(session.messages, window, local) && !importedHistoryNeedsCompaction(session)) return;
 
     const sessionId = session.id;
     this.compacting.add(sessionId);
@@ -1944,6 +2024,16 @@ export class ChatService {
     } finally {
       this.compacting.delete(sessionId);
       this.emit({ type: 'auto-compact', sessionId, running: false, ...(error ? { error } : {}) });
+    }
+  }
+
+  /** For a local model, the num_ctx its requests are sent with (OllamaLocal.contextTokens). */
+  private async contextWindowOf(model: string): Promise<number | undefined> {
+    if (!isLocalModel(model)) return this.deps.models?.cached()?.find(option => option.id === model)?.contextWindow;
+    try {
+      return await (this.deps.local ?? new OllamaLocal()).contextTokens(model);
+    } catch {
+      return undefined;
     }
   }
 
@@ -1970,35 +2060,55 @@ export class ChatService {
   private async compact(session: ChatSession, focus: string, automatic: boolean): Promise<ContextBoundaryResult> {
     const sessionId = session.id;
     const api = this.deps.getApiClient();
-    if (!api && !session.model.startsWith(LOCAL_MODEL_PREFIX))
-      return { ok: false, error: 'Sign in to compact this conversation.' };
+    if (!api && !isLocalModel(session.model)) return { ok: false, error: 'Sign in to compact this conversation.' };
 
     if (!hasClearableHistory(session.messages)) {
       return { ok: false, error: 'There is nothing in this conversation to compact yet.' };
     }
     const history = messagesSinceBoundary(session.messages);
+    const localWindow = isLocalModel(session.model) ? await this.contextWindowOf(session.model) : undefined;
+    let transcript = renderForSummary(
+      history,
+      localWindow === undefined ? undefined : localTranscriptChars(localWindow, COMPACT_MAX_TOKENS)
+    );
 
     const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
     let answer = '';
     try {
-      timer = setTimeout(() => controller.abort(), COMPACT_TIMEOUT_MS);
-      await this.streamAuxiliary(
-        api,
-        {
-          // The session's own model, as asked: a summary of a long coding conversation is the
-          // kind of reading a small model does badly, and this one is the handoff everything
-          // after the boundary depends on.
-          model: session.model,
-          messages: compactRequestMessages(renderForSummary(history), focus),
-          tools: [],
-          maxTokens: COMPACT_MAX_TOKENS,
-        },
-        event => {
-          if (event.type === 'content') answer += event.text ?? '';
-        },
-        controller.signal
+      timer = setTimeout(
+        () => controller.abort(),
+        isLocalModel(session.model) ? LOCAL_COMPACT_TIMEOUT_MS : COMPACT_TIMEOUT_MS
       );
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await this.streamAuxiliary(
+            api,
+            {
+              // The session's own model, as asked: a summary of a long coding conversation is the
+              // kind of reading a small model does badly, and this one is the handoff everything
+              // after the boundary depends on.
+              model: session.model,
+              messages: compactRequestMessages(transcript, focus),
+              tools: [],
+              maxTokens: COMPACT_MAX_TOKENS,
+            },
+            event => {
+              if (event.type === 'content') answer += event.text ?? '';
+            },
+            controller.signal
+          );
+          break;
+        } catch (err) {
+          // One message cannot be trimmed by OllamaLocal, so the transcript shrinks by what Ollama
+          // measured: dense text such as CJK runs far fewer characters to a token than estimated.
+          if (!(err instanceof ContextOverflowError) || attempt === SUMMARY_SHRINK_RETRIES) throw err;
+          transcript = renderForSummary(
+            history,
+            shrunkTranscriptChars(transcript.length, err.tokens, err.limit, COMPACT_MAX_TOKENS)
+          );
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`CHAT: could not compact ${sessionId}: ${message}`);
@@ -2084,7 +2194,7 @@ export class ChatService {
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
         // that was mid-turn takes delivery of anything that finished while it was busy.
         // Reporting to the PARENT writes a different session's file, so it needs no ordering here.
-        void this.settleSpawnedTurn(sessionId, session.model.startsWith(LOCAL_MODEL_PREFIX));
+        void this.settleSpawnedTurn(sessionId, isLocalModel(session.model));
 
         // Awaited, and before the queue: both append to THIS session, and appendMessage is a
         // read-modify-write with no lock of its own - overlapping them would let the later
@@ -2114,7 +2224,7 @@ export class ChatService {
     if (!available || available.length === 0) return { session };
     if (available.some(model => model.id === session.model)) return { session };
     // A device-local model is never swapped for a hosted one: that would send the conversation to the server.
-    if (session.model.startsWith(LOCAL_MODEL_PREFIX)) return { session };
+    if (isLocalModel(session.model)) return { session };
 
     const replacement = await this.pickModel(available);
     if (!replacement) return { session };
@@ -2199,13 +2309,15 @@ export class ChatService {
    */
   private async runReply(
     session: ChatSession,
-    replyId: string,
+    firstReplyId: string,
     api: AuthenticatedApiClient | null,
     controller: AbortController,
     historyScope: string | null,
     resume?: ResumedReply
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
+    // A new id from each mid-turn message on: see takeArrivals and the round loop below.
+    let replyId = firstReplyId;
     const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
     const turnStartedAt = Date.now();
     const deadline = turnStartedAt + limits.wallClockMs;
@@ -2223,19 +2335,19 @@ export class ChatService {
     let content = resume?.content ?? '';
     let stopReason: string | undefined;
     let usage: ChatUsage | undefined = resume?.usage;
-    const toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
+    let toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
     let thinking: unknown[] | undefined;
     let previousRound: string | null = null;
     let stalled = 0;
     let roundsSincePlanUpdate = 0;
     // Only this run's rounds: the resumed ones were parsed and cleaned when they were stored,
     // and putting them back through the artifact parser would mint their ids a second time.
-    const produced: RawRound[] = [];
+    let produced: RawRound[] = [];
 
     try {
       // Read before any await: a folder changed while the config loads must still reach the first refresh.
       let scopeVersion = this.scopeVersion(sessionId);
-      const localTurn = session.model.startsWith(LOCAL_MODEL_PREFIX);
+      const localTurn = isLocalModel(session.model);
       if (!api && !localTurn) throw new Error('Sign in to send a message.');
       const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
@@ -2402,6 +2514,75 @@ export class ChatService {
       this.pendingPlanReminder.delete(sessionId);
       if (carried && !resume) appendToLastUserTurn(wire, carried);
 
+      /**
+       * Store what the reply has produced so far as its own message and announce it finished:
+       * once at the end, and once for every mid-turn message, which has to land in the thread
+       * after the rounds it followed rather than after the whole turn.
+       */
+      const settleSegment = async (): Promise<void> => {
+        // Artifacts are resolved BEFORE the message is stored or announced, so the thread never
+        // shows raw <artifact> markup that is then replaced, and a reloaded conversation reads
+        // back exactly what the live one showed. An aborted reply is included on purpose: a
+        // complete artifact followed by a stop is still a complete artifact.
+        // Parsed per round rather than over the whole reply: an artifact is emitted inside one
+        // round's text and never spans two, and this is what keeps each round's prose and its own
+        // cards together once the markup is out.
+        const parsed = produced.map(round => ({ round, ...extractArtifacts(round.text) }));
+        const newArtifacts = parsed.flatMap(entry => entry.artifacts);
+        const published =
+          !localTurn && newArtifacts.length > 0 && this.deps.artifacts
+            ? await this.deps.artifacts.publish(newArtifacts, sessionId)
+            : newArtifacts;
+        // A resumed run only ever sees markup the rounds AFTER the interruption emitted - the
+        // seeded rounds were stripped before they were stored - so the earlier artifacts are
+        // carried across rather than parsed again, and none of them is published twice.
+        const artifacts = [...(resume?.artifacts ?? []), ...published];
+
+        const rounds = [
+          ...(resume?.rounds ?? []),
+          ...parsed
+            // Trimmed so the join below lands exactly one blank line between rounds, and so a
+            // round does not draw a gap under itself where the model happened to end on newlines.
+            .map(entry => ({
+              text: entry.content.trim(),
+              toolCallIds: entry.round.toolCallIds,
+              timing: entry.round.timing,
+              ...(entry.round.usage ? { usage: entry.round.usage } : {}),
+              ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
+            }))
+            // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
+            .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage),
+        ];
+        // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
+        const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
+        const finalContent = joinRounds(rounds.map(round => round.text));
+
+        const message: ChatMessage = {
+          id: replyId,
+          role: 'assistant',
+          content: finalContent,
+          createdAt: new Date().toISOString(),
+          stopReason,
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
+          ...(keepRounds ? { rounds } : {}),
+          ...(thinking ? { thinking } : {}),
+          ...(artifacts.length > 0 ? { artifacts } : {}),
+          ...(usage ? { usage } : {}),
+        };
+        await this.settleReply(sessionId, !!resume, historyScope, message);
+        this.emit({
+          type: 'done',
+          sessionId,
+          messageId: replyId,
+          content: finalContent,
+          stopReason,
+          usage,
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
+          ...(keepRounds ? { rounds } : {}),
+          ...(artifacts.length > 0 ? { artifacts } : {}),
+        });
+      };
+
       // Wire positions of the screenshot messages this turn added, oldest first; see pruneScreenshots.
       const screenshotTurns: number[] = [];
 
@@ -2462,7 +2643,7 @@ export class ChatService {
           if (event.stopReason) stopReason = event.stopReason;
           turnUsage = foldUsage(turnUsage, event);
         };
-        const failure = session.model.startsWith(LOCAL_MODEL_PREFIX)
+        const failure = isLocalModel(session.model)
           ? await streamLocalRound(
               this.deps.local ?? new OllamaLocal(),
               {
@@ -2476,7 +2657,8 @@ export class ChatService {
                 ...(maxTokens ? { maxTokens } : {}),
               },
               onCompletionEvent,
-              controller.signal
+              controller.signal,
+              dropped => this.emit({ type: 'context-trimmed', sessionId, dropped })
             )
           : await streamRound(
               api!.getAxiosInstance(),
@@ -2692,6 +2874,7 @@ export class ChatService {
                 source: { type: 'base64', media_type: image.mediaType, data: image.data },
               })),
             ],
+            continuesTurn: true,
           });
           screenshotTurns.push(wire.length - 1);
           pruneScreenshots(wire, screenshotTurns);
@@ -2703,7 +2886,41 @@ export class ChatService {
           stopReason = 'turn_time_limit';
           break;
         }
-        if (roundIndex === limits.rounds - 1) stopReason = 'tool_turn_limit';
+        if (roundIndex === limits.rounds - 1) {
+          stopReason = 'tool_turn_limit';
+          break;
+        }
+
+        // Only where another request is certain to follow, so nothing taken here waits on a turn
+        // that is about to end; a turn that stops instead sends the queue as a turn of its own.
+        const arrivals = controller.signal.aborted ? [] : await this.takeArrivals(sessionId, session.model);
+        if (arrivals.length > 0) {
+          await settleSegment();
+          for (const arrival of arrivals) {
+            const updated = await this.deps.store.appendMessage(sessionId, arrival.message);
+            if (updated) session = updated;
+            if (arrival.queuedId) this.deps.queue?.sent(sessionId, arrival.queuedId, arrival.message);
+            else this.emit({ type: 'message', sessionId, message: arrival.message });
+          }
+          // The rest of the turn is a new reply under the new messages. The resumed message, if
+          // any, was just written back whole, so nothing more carries over from it.
+          resume = undefined;
+          replyId = randomUUID();
+          content = '';
+          toolCalls = [];
+          produced = [];
+          usage = undefined;
+          thinking = undefined;
+          stopReason = undefined;
+          // New input is new information: repeating the last round may be the right answer to it.
+          stalled = 0;
+          previousRound = null;
+          this.emit({ type: 'start', sessionId, messageId: replyId });
+          for (const arrival of arrivals) {
+            const turn = await this.arrivalWire(session, arrival.message);
+            if (turn) wire.push(turn);
+          }
+        }
       }
 
       if (controller.signal.aborted) stopReason = 'aborted';
@@ -2722,65 +2939,7 @@ export class ChatService {
         if (unfinished) this.pendingPlanReminder.set(sessionId, unfinished);
       }
 
-      // Artifacts are resolved BEFORE the message is stored or announced, so the thread never
-      // shows raw <artifact> markup that is then replaced, and a reloaded conversation reads
-      // back exactly what the live one showed. An aborted reply is included on purpose: a
-      // complete artifact followed by a stop is still a complete artifact.
-      // Parsed per round rather than over the whole reply: an artifact is emitted inside one
-      // round's text and never spans two, and this is what keeps each round's prose and its own
-      // cards together once the markup is out.
-      const parsed = produced.map(round => ({ round, ...extractArtifacts(round.text) }));
-      const newArtifacts = parsed.flatMap(entry => entry.artifacts);
-      const published =
-        !localTurn && newArtifacts.length > 0 && this.deps.artifacts
-          ? await this.deps.artifacts.publish(newArtifacts, sessionId)
-          : newArtifacts;
-      // A resumed run only ever sees markup the rounds AFTER the interruption emitted - the
-      // seeded rounds were stripped before they were stored - so the earlier artifacts are
-      // carried across rather than parsed again, and none of them is published twice.
-      const artifacts = [...(resume?.artifacts ?? []), ...published];
-
-      const rounds = [
-        ...(resume?.rounds ?? []),
-        ...parsed
-          // Trimmed so the join below lands exactly one blank line between rounds, and so a
-          // round does not draw a gap under itself where the model happened to end on newlines.
-          .map(entry => ({
-            text: entry.content.trim(),
-            toolCallIds: entry.round.toolCallIds,
-            timing: entry.round.timing,
-            ...(entry.round.usage ? { usage: entry.round.usage } : {}),
-            ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
-          }))
-          .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning),
-      ];
-      // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
-      const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
-      const finalContent = joinRounds(rounds.map(round => round.text));
-
-      await this.settleReply(sessionId, !!resume, historyScope, {
-        id: replyId,
-        role: 'assistant',
-        content: finalContent,
-        createdAt: new Date().toISOString(),
-        stopReason,
-        ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        ...(keepRounds ? { rounds } : {}),
-        ...(thinking ? { thinking } : {}),
-        ...(artifacts.length > 0 ? { artifacts } : {}),
-        ...(usage ? { usage } : {}),
-      });
-      this.emit({
-        type: 'done',
-        sessionId,
-        messageId: replyId,
-        content: finalContent,
-        stopReason,
-        usage,
-        ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        ...(keepRounds ? { rounds } : {}),
-        ...(artifacts.length > 0 ? { artifacts } : {}),
-      });
+      await settleSegment();
       // A truncated reply ('max_tokens'), a budget stop and a context stop all count as
       // completed: the model said something and the user can read it. Only the user's own stop
       // is 'aborted'.
@@ -2926,11 +3085,108 @@ export class ChatService {
     }
     if (outcome === 'completed') {
       this.flushQueue(sessionId);
+      // Behind anything the user queued: their turn is started first and takes the notice itself.
+      this.wakeIfIdle(sessionId);
       return;
     }
+    // A stopped or failed turn is not followed by an automatic one. Exits after this still wake.
+    this.wake?.discard(sessionId);
     const reason = outcome === 'aborted' ? 'stopped' : outcome === 'expired' ? 'session-expired' : 'failed';
     const stranded = this.deps.queue?.releaseAll(sessionId, reason) ?? [];
     void this.strandRelay(sessionId, stranded).catch(() => undefined);
+  }
+
+  /**
+   * What reached a running turn since its last request, taken for the next one: whatever the
+   * user typed ahead, and any background-exit notice. Two map lookups and nothing else when
+   * neither is waiting, which is every round of almost every turn.
+   *
+   * Only the user's own typed entries ride along. A relay stays a turn of its own: it is
+   * another agent's words, framed and hop-counted per turn, and folding it into this one would
+   * spend this turn's relay budget and blur whose turn it is. An auto-fix entry stays one too,
+   * because it switches on its own tool guard. A `/skill` invocation waits as well: its body is a
+   * new set of instructions, expanded when its turn starts. So does a message whose image the
+   * model cannot read, so it is refused and handed back exactly as before.
+   *
+   * The notice goes before the user's message, so their words are the last thing the model reads.
+   */
+  private async takeArrivals(sessionId: string, model: string): Promise<MidTurnArrival[]> {
+    const queue = this.deps.queue;
+    const queued = queue?.list(sessionId) ?? [];
+    // "Send now" already has it in hand and is about to interrupt this turn.
+    if (this.promoted.has(sessionId)) return [];
+    const typed = queued.filter(
+      entry =>
+        !entry.relay &&
+        !entry.automatic &&
+        !(this.deps.skills && parseSkillInvocation(entry.text.trim())) &&
+        !this.refuseUnreadableImages(model, entry.attachments ?? [])
+    );
+    if (typed.length === 0 && !this.wake?.has(sessionId)) return [];
+
+    // Taken before any await, so a cancel or a "send now" racing this finds nothing to act on.
+    const taken = queue ? typed.flatMap(entry => queue.take(sessionId, entry.id) ?? []) : [];
+    const notice = this.wake?.take(sessionId) ?? null;
+    const arrivals: MidTurnArrival[] = [];
+    const createdAt = new Date().toISOString();
+
+    if (notice) {
+      const automatic: ChatAutomaticOrigin = {
+        kind: 'background-exit',
+        processIds: notice.processIds,
+        summary: notice.summary,
+      };
+      arrivals.push({
+        message: {
+          id: randomUUID(),
+          role: 'user',
+          content: notice.text,
+          createdAt,
+          system: true,
+          automatic,
+          display: automaticDisplay(automatic),
+        },
+      });
+    }
+
+    if (taken.length > 0) {
+      const attachments = await this.resolveAttachments(
+        sessionId,
+        taken.flatMap(entry => entry.attachments ?? [])
+      );
+      const notes = [...taken.flatMap(entry => entry.notes ?? []), MID_TURN_NOTE];
+      arrivals.push({
+        queuedId: taken[0].id,
+        message: {
+          id: randomUUID(),
+          role: 'user',
+          content: taken
+            .map(entry => entry.text.trim())
+            .filter(Boolean)
+            .join('\n'),
+          createdAt,
+          ...(attachments.length > 0 ? { attachments } : {}),
+          notes,
+        },
+      });
+      this.wake?.attended(sessionId);
+    }
+    return arrivals;
+  }
+
+  /**
+   * One arrival as the next request carries it: built by the same code a replay uses, so this
+   * turn's wire and the next turn's rebuild agree. Text goes as a one-block array rather than a
+   * string, because the server's Anthropic path folds a string into an earlier user turn that
+   * already holds text (this round's screenshot turn) and drops it there.
+   */
+  private async arrivalWire(session: ChatSession, message: ChatMessage): Promise<CompletionMessage | null> {
+    const [turn] = await toCompletionMessages(
+      { ...session, messages: [message] },
+      (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
+    );
+    if (!turn) return null;
+    return typeof turn.content === 'string' ? { ...turn, content: [{ type: 'text', text: turn.content }] } : turn;
   }
 
   /**
@@ -3273,9 +3529,7 @@ export class ChatService {
     const project = session.project;
     if (!project) return undefined;
     const visibleTitle = (target: Pick<ChatSession, 'title' | 'model'>): string =>
-      !session.model.startsWith(LOCAL_MODEL_PREFIX) && target.model.startsWith(LOCAL_MODEL_PREFIX)
-        ? 'Local conversation'
-        : target.title;
+      !isLocalModel(session.model) && isLocalModel(target.model) ? 'Local conversation' : target.title;
 
     const addressable = async (sessionId: string): Promise<ChatSession | null> => {
       if (!isValidSessionId(sessionId)) return null;
@@ -3307,7 +3561,7 @@ export class ChatService {
 
       readSession: async sessionId => {
         const target = await addressable(sessionId);
-        if (target?.model.startsWith(LOCAL_MODEL_PREFIX) && !session.model.startsWith(LOCAL_MODEL_PREFIX)) {
+        if (target && isLocalModel(target.model) && !isLocalModel(session.model)) {
           throw new Error('A hosted model cannot read a device-local conversation. Open it directly to read it.');
         }
         return target ? renderTranscript(target) : null;
@@ -3614,7 +3868,7 @@ export class ChatService {
     if (!target) {
       return { ok: false, reason: 'no-target', message: 'No conversation with that id in this project.' };
     }
-    if (from.model.startsWith(LOCAL_MODEL_PREFIX) && !target.model.startsWith(LOCAL_MODEL_PREFIX)) {
+    if (isLocalModel(from.model) && !isLocalModel(target.model)) {
       return {
         ok: false,
         reason: 'unavailable',
@@ -3622,10 +3876,7 @@ export class ChatService {
           'A device-local conversation cannot send messages to a hosted model. Choose a local conversation instead.',
       };
     }
-    const title =
-      !from.model.startsWith(LOCAL_MODEL_PREFIX) && target.model.startsWith(LOCAL_MODEL_PREFIX)
-        ? 'Local conversation'
-        : target.title;
+    const title = !isLocalModel(from.model) && isLocalModel(target.model) ? 'Local conversation' : target.title;
     if (target.archived === true) {
       return {
         ok: false,
@@ -3988,7 +4239,7 @@ export class ChatService {
       });
       if (!retained) await onFailed?.(reason);
       await this.deliverChildReport(parentId, {
-        localOnly: child.model.startsWith(LOCAL_MODEL_PREFIX),
+        localOnly: isLocalModel(child.model),
         content:
           `The session you started, "${child.title}" (${child.id}), could not start and ${outcome}: ${reason} ` +
           (retained
@@ -4110,7 +4361,7 @@ export class ChatService {
 
     for (const report of queued) {
       const parent = report.localOnly ? await this.deps.store.get(sessionId) : null;
-      const withheld = report.localOnly && !parent?.model.startsWith(LOCAL_MODEL_PREFIX);
+      const withheld = report.localOnly && !(parent && isLocalModel(parent.model));
       const localNotice = 'A device-local child session finished. Open that conversation to read its report.';
       const message: ChatMessage = {
         id: randomUUID(),
@@ -4864,7 +5115,7 @@ export class ChatService {
     onEvent: (event: CompletionStreamEvent) => void,
     signal: AbortSignal
   ): Promise<void> {
-    if (request.model.startsWith(LOCAL_MODEL_PREFIX)) {
+    if (isLocalModel(request.model)) {
       const thinking = createThinkFilter();
       await (this.deps.local ?? new OllamaLocal()).stream(
         { ...request, thinking: false },
@@ -4904,7 +5155,7 @@ export class ChatService {
     // Everything is inside, including reading the catalog: this runs as a floating promise, so
     // a throw out of it would be an unhandled rejection in main rather than a missing title.
     try {
-      const model = session.model.startsWith(LOCAL_MODEL_PREFIX)
+      const model = isLocalModel(session.model)
         ? session.model
         : pickTitleModel(this.deps.models?.cached() ?? [], session.model);
       if (!model) return;
@@ -4983,17 +5234,21 @@ export class ChatService {
         .find(message => message.role === 'user' && !message.system && message.content.trim());
       if (!prompt) return null;
 
-      const available = session.model.startsWith(LOCAL_MODEL_PREFIX)
+      const available = isLocalModel(session.model)
         ? []
         : (this.deps.models?.cached() ?? (await this.listModels()).models);
-      const model = session.model.startsWith(LOCAL_MODEL_PREFIX)
-        ? { id: session.model, name: session.model, backend: 'local-ollama' }
+      const model = isLocalModel(session.model)
+        ? {
+            id: session.model,
+            name: session.model,
+            backend: localBackend(parseLocalModelId(session.model)?.runtimeId ?? ''),
+          }
         : pickSuggestionModel(available, preferredModel);
       if (!model) return null;
 
       timer = setTimeout(
         () => controller.abort(),
-        isLocalModel(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
+        isLocalBackend(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
       );
 
       let answer = '';
@@ -5283,6 +5538,9 @@ export function buildSystemMessage(
       'bash_execute. Background processes belong to this conversation, are all killed when the app',
       'quits, and none survive a restart - so check bash_list rather than assuming one from an',
       'earlier session is still up, and stop what you no longer need with bash_kill.',
+      'When one you started exits on its own you are told in a message, even after your turn has',
+      'ended. To wait for a long build or test run, end your turn saying what you are waiting for;',
+      'never sleep or poll bash_output in a loop until it finishes.',
       'To test a running app, drive the app itself: take its URL from bash_list and bash_output or',
       'the user, read code only for the routes, request bodies and test credentials you need, then',
       'exercise it (curl with a cookie jar, or a short script) and report the responses you saw.',
@@ -5378,6 +5636,7 @@ function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
     wire[index] = {
       role: 'user',
       content: [{ type: 'text', text: '[An earlier image was here. Capture or read it again if you need to see it.]' }],
+      continuesTurn: true,
     };
   }
 }
@@ -5546,10 +5805,11 @@ async function streamLocalRound(
   local: OllamaLocal,
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onTrimmed?: (dropped: number) => void
 ): Promise<Error | null> {
   try {
-    await local.stream(request, onEvent, signal);
+    await local.stream(request, onEvent, signal, onTrimmed);
     return null;
   } catch (err) {
     if (signal?.aborted) return null;
@@ -6127,6 +6387,13 @@ function frameRelay(message: ChatMessage, text: string): string {
     '',
     text,
   ].join('\n');
+}
+
+/** The thread's line for a turn the app started; see ChatMessage.display. */
+function automaticDisplay(automatic: ChatAutomaticOrigin): string {
+  return automatic.kind === 'background-exit'
+    ? `Background command finished: ${automatic.summary}`
+    : `Auto-fix: ${automatic.summary}`;
 }
 
 /** Reads one attachment's stored bytes, or null when the file is gone. */

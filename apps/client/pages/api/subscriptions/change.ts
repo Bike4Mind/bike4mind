@@ -1,5 +1,5 @@
 import { BadRequestError } from '@bike4mind/utils';
-import { SubscriptionSource, resolveSubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionSource, resolveSubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionPlanSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
 import { SubscriptionPlanInterval } from '@client/lib/userSubscriptions/types';
 import { getSubscriptionPlanByPriceId } from '@client/lib/userSubscriptions/utils';

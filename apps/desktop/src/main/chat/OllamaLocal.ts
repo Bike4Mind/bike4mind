@@ -1,13 +1,21 @@
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
-import { LOCAL_MODEL_PREFIX, type ChatModelOption } from '@shared/chat';
+import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
 import type { CompletionMessage, CompletionRequest } from './completions';
+import {
+  ContextOverflowError,
+  estimateTokens,
+  fitToContext,
+  localContextTokens,
+  overflowTokens,
+  type OllamaMessage,
+} from './localContext';
 import type { CompletionStreamEvent } from './streamEvents';
 
-export { LOCAL_MODEL_PREFIX } from '@shared/chat';
+export const OLLAMA_RUNTIME_ID = 'ollama';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 const TIMEOUT_MS = 1_000;
-const DEFAULT_CONTEXT_TOKENS = 4_096;
+const MAX_TRIM_RETRIES = 3;
 const remoteFields = { remote_host: z.string().optional(), remote_model: z.string().optional() };
 const tagsSchema = z.object({ models: z.array(z.object({ name: z.string().min(1), ...remoteFields })) });
 const showSchema = z.object({
@@ -17,11 +25,32 @@ const showSchema = z.object({
   ...remoteFields,
 });
 
+async function ollamaError(response: Response): Promise<Error> {
+  const message = await httpError(response);
+  // Ollama answers "model '...' not found" once the model is deleted, e.g. from the Models screen.
+  if (response.status === 404 && /model .* not found/i.test(message))
+    return new Error('This model was removed from Ollama. Pick another model.');
+  return new Error(message);
+}
+
 function usesRemoteModel(model: { remote_host?: string; remote_model?: string }): boolean {
   return !!(model.remote_host?.trim() || model.remote_model?.trim());
 }
 
+const CHAT_URL = `${OLLAMA_URL}/api/chat` as const;
+
+/** Typed to the chat URL alone, so the 1 s calls in json() cannot be routed through it. */
+export type ChatFetch = (url: typeof CHAT_URL, init: RequestInit) => Promise<Response>;
+
 export class OllamaLocal {
+  /**
+   * Main passes Electron's net.fetch: Node's fetch gives up after five minutes without response
+   * headers, and Ollama sends none until prefill ends, which takes that long for a CPU-only model.
+   * Only chat uses it: Chromium allows 6 sockets per host and each open stream holds one, so the
+   * short calls stay on Node's fetch, which a full pool cannot starve.
+   */
+  constructor(private readonly chatFetch: ChatFetch = (url, init) => globalThis.fetch(url, init)) {}
+
   async models(): Promise<ChatModelOption[]> {
     const tags = tagsSchema.safeParse(await this.json('/api/tags').catch(() => null));
     if (!tags.success) return [];
@@ -30,45 +59,104 @@ export class OllamaLocal {
     ).filter((model): model is ChatModelOption => model !== null);
   }
 
+  /**
+   * The num_ctx requests to this model are sent with, which is also the window the catalog
+   * advertises; ChatService compacts and sizes summaries against it. Asks Ollama when not cached.
+   */
+  async contextTokens(modelId: string, signal?: AbortSignal): Promise<number> {
+    const known = contextByModel.get(modelId);
+    if (known !== undefined) return known;
+    const name = ollamaModelName(modelId);
+    return rememberContext(modelId, showSchema.parse(await this.json('/api/show', { name }, signal)));
+  }
+
   async stream(
     request: CompletionRequest,
     onEvent: (event: CompletionStreamEvent) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /** Called with how many of the oldest messages were left out because the prompt overflowed. */
+    onTrimmed?: (dropped: number) => void
   ): Promise<void> {
-    const model = request.model.startsWith(LOCAL_MODEL_PREFIX) ? request.model.slice(LOCAL_MODEL_PREFIX.length) : '';
-    if (!model) throw new Error('Invalid local model id.');
+    const model = ollamaModelName(request.model);
     const inspection = showSchema.parse(await this.json('/api/show', { name: model }, signal));
     // A localhost daemon can proxy cloud models, including aliases without a cloud suffix.
     // Inspect again before sending private messages, even when discovery was cached.
     if (usesRemoteModel(inspection)) throw new Error('Cloud-backed Ollama models cannot be used as local models.');
     if (!inspection.capabilities.includes('completion')) throw new Error('This Ollama model cannot answer chat.');
-    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      signal,
-      body: JSON.stringify({
-        model,
-        stream: true,
-        messages: toMessages(request.messages),
-        ...(request.thinking !== undefined && inspection.capabilities.includes('thinking')
-          ? { think: request.thinking }
-          : {}),
-        options: {
-          num_ctx: contextWindow(inspection),
-          ...(request.maxTokens ? { num_predict: request.maxTokens } : {}),
-        },
-        ...(request.tools?.length
-          ? { tools: request.tools.map(tool => ({ type: 'function', function: tool.toolSchema })) }
-          : {}),
-      }),
-    });
-    if (!response.ok || !response.body) throw new Error(`Ollama returned HTTP ${response.status}.`);
+    const numCtx = rememberContext(request.model, inspection);
+    const messages = toMessages(request.messages);
+    const tools = (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
+    const post = (fitted: OllamaMessage[]) =>
+      this.chatFetch(CHAT_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal,
+        body: JSON.stringify({
+          model,
+          stream: true,
+          messages: fitted.map(({ continuesTurn: _continuesTurn, ...message }) => message),
+          // Ollama's own truncation and its context shift (once prompt plus reply reach num_ctx) both
+          // keep the first few tokens and the tail, cutting the system prompt. With shift off the
+          // reply stops at num_ctx instead, as done_reason 'length' (a visible max_tokens stop).
+          truncate: false,
+          shift: false,
+          ...(request.thinking !== undefined && inspection.capabilities.includes('thinking')
+            ? { think: request.thinking }
+            : {}),
+          options: {
+            num_ctx: numCtx,
+            ...(request.maxTokens ? { num_predict: request.maxTokens } : {}),
+          },
+          ...(tools.length > 0 ? { tools } : {}),
+        }),
+      });
+    // Everything goes out first: auto-compaction works from the measured size and must get its
+    // chance before turns are dropped, which happens only once Ollama refuses the prompt.
+    let sent = messages;
+    let response = await post(sent);
+    let measured = await refusedSize(response);
+    const whole = measured;
+    let left = 0;
+    for (let retry = 0; measured !== undefined; retry++) {
+      // Rescaled from each refusal: the dropped turns need not be as token-dense as the kept ones.
+      const fit = fitToContext(sent, tools, numCtx, request.maxTokens, (1.1 * measured) / estimateTokens(sent, tools));
+      if (fit.dropped === 0)
+        throw new ContextOverflowError(
+          `This turn and Desktop's instructions take ${measured} tokens, more than the ${numCtx} this model is run with.`,
+          measured,
+          numCtx
+        );
+      if (retry === MAX_TRIM_RETRIES)
+        throw new ContextOverflowError(
+          `This conversation still takes ${measured} tokens after leaving out its ${left} oldest messages, more than the ${numCtx} this model is run with. Run /compact to summarise it.`,
+          measured,
+          numCtx
+        );
+      left += fit.visible;
+      sent = fit.messages;
+      response = await post(sent);
+      measured = await refusedSize(response);
+    }
+    if (!response.ok || !response.body) throw await ollamaError(response);
+    if (left > 0) onTrimmed?.(left);
+    // Recorded now, not only on the done frame, so a reply stopped early still makes the next turn compact.
+    if (whole !== undefined) onEvent({ type: 'content', usage: { inputTokens: whole } });
+    // Report the whole conversation's size, so the next turn compacts instead of trimming again.
+    const report: typeof onEvent =
+      whole === undefined
+        ? onEvent
+        : event =>
+            onEvent(
+              event.type === 'content' && event.usage
+                ? { ...event, usage: { ...event.usage, inputTokens: whole } }
+                : event
+            );
     const reader = response.body.getReader();
     const decoder = new StringDecoder('utf8');
     let pending = '';
     let completed = false;
     const consume = (line: string) => {
-      if (line.trim()) completed = emitLine(line, onEvent) || completed;
+      if (line.trim()) completed = emitLine(line, report) || completed;
     };
     try {
       while (true) {
@@ -92,25 +180,26 @@ export class OllamaLocal {
     // Embedding-only models cannot answer /api/chat; failed inspection is not a plain-text capability.
     if (!show.success || usesRemoteModel(show.data) || !show.data.capabilities.includes('completion')) return null;
     const capabilities = show.data.capabilities;
+    const id = localModelId(OLLAMA_RUNTIME_ID, name);
     return {
-      id: `${LOCAL_MODEL_PREFIX}${name}`,
+      id,
       name,
-      backend: 'local-ollama',
+      backend: localBackend(OLLAMA_RUNTIME_ID),
       supportsTools: capabilities.includes('tools'),
       supportsVision: capabilities.includes('vision'),
-      contextWindow: contextWindow(show.data),
+      contextWindow: rememberContext(id, show.data),
       ...(capabilities.includes('thinking') ? { thinkingToggle: true } : {}),
     };
   }
 
   private async json(path: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
-    const response = await fetch(`${OLLAMA_URL}${path}`, {
+    const response = await globalThis.fetch(`${OLLAMA_URL}${path}`, {
       method: body ? 'POST' : 'GET',
       headers: body ? { 'content-type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS),
     });
-    if (!response.ok) throw new Error(`Ollama returned HTTP ${response.status}.`);
+    if (!response.ok) throw await ollamaError(response);
     return response.json();
   }
 }
@@ -136,10 +225,11 @@ function blockText(content: unknown): string {
  * Maps the Anthropic-style blocks `ChatService` builds onto Ollama's chat format: tool calls on the
  * assistant message, one `role: 'tool'` message per result, screenshots in `images`.
  */
-function toMessages(messages: CompletionMessage[]): Record<string, unknown>[] {
+function toMessages(messages: CompletionMessage[]): OllamaMessage[] {
   const toolNames = new Map<string, string>();
   return messages.flatMap(message => {
-    if (typeof message.content === 'string') return [{ role: message.role, content: message.content }];
+    const continues = message.continuesTurn ? { continuesTurn: true } : {};
+    if (typeof message.content === 'string') return [{ role: message.role, content: message.content, ...continues }];
     const blocks = message.content.filter((b): b is Block => !!b && typeof b === 'object');
     const text = blocks.map(block => (block.type === 'text' ? blockText(block.text) : '')).join('');
     const toolCalls = blocks.flatMap(block => {
@@ -171,6 +261,8 @@ function toMessages(messages: CompletionMessage[]): Record<string, unknown>[] {
               content: text,
               ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
               ...(images.length > 0 ? { images } : {}),
+              // Text riding on tool results is a note on them, not a new prompt.
+              ...(results.length > 0 ? { continuesTurn: true } : continues),
             },
           ]
         : [];
@@ -242,16 +334,42 @@ function tokenCount(value: unknown): number | undefined {
     : undefined;
 }
 
+async function httpError(response: Response): Promise<string> {
+  const body: unknown = await response.json().catch(() => null);
+  const detail =
+    body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : '';
+  return `Ollama returned HTTP ${response.status}${detail ? `: ${detail}` : '.'}`;
+}
+
+async function refusedSize(response: Response): Promise<number | undefined> {
+  return response.status === 400 ? overflowTokens(await response.clone().text()) : undefined;
+}
+
+function ollamaModelName(modelId: string): string {
+  const parsed = parseLocalModelId(modelId);
+  if (parsed?.runtimeId !== OLLAMA_RUNTIME_ID) throw new Error('Invalid local model id.');
+  return parsed.model;
+}
+
+// Module-wide so every OllamaLocal instance (catalog, chat, tests) reads the same figure.
+const contextByModel = new Map<string, number>();
+
+function rememberContext(modelId: string, inspection: z.infer<typeof showSchema>): number {
+  const tokens = contextWindow(inspection);
+  contextByModel.set(modelId, tokens);
+  return tokens;
+}
+
 /** Keep the advertised limit equal to the allocation every inference actually requests. */
 function contextWindow(inspection: z.infer<typeof showSchema>): number {
   const architectureLimit = Object.entries(inspection.model_info ?? {}).find(
     ([key, value]) => key.endsWith('.context_length') && positiveTokenCount(value) !== undefined
   )?.[1];
   const configured = /^num_ctx[ \t]+(\S+)[ \t]*$/m.exec(inspection.parameters ?? '')?.[1];
-  const requested =
-    positiveTokenCount(configured === undefined ? undefined : Number(configured)) ?? DEFAULT_CONTEXT_TOKENS;
-  const maximum = positiveTokenCount(architectureLimit);
-  return maximum === undefined ? requested : Math.min(requested, maximum);
+  return localContextTokens(
+    positiveTokenCount(architectureLimit),
+    positiveTokenCount(configured === undefined ? undefined : Number(configured))
+  );
 }
 
 function positiveTokenCount(value: unknown): number | undefined {

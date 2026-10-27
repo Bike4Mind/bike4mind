@@ -1,4 +1,5 @@
 export * from './AgentExecutionModel';
+export * from './CreditGrantIdentityClaimModel';
 export * from './CreditLotModel';
 export * from './CreditTransactionModel';
 export * from './FailedRefundModel';

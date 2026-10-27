@@ -6,7 +6,15 @@ import type { WorktreeRemoval } from '@shared/worktreeRemoval';
 import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
 import type { WorktreeEntry } from './git';
-import { branchExists, containerDirectory, fetchRemoteFor, git, listWorktrees, resolveBaseRef } from './git';
+import {
+  branchExists,
+  containerDirectory,
+  currentBranch,
+  fetchRemoteFor,
+  git,
+  listWorktrees,
+  resolveBaseRef,
+} from './git';
 
 /**
  * A branch's folder name under the app's worktree root.
@@ -151,18 +159,32 @@ export function sessionBranchName(name?: string): string {
 /**
  * What to cut a new branch from, given the branch the user picked.
  *
- * Prefers the base's remote-tracking ref, but only once it is proven to contain the local one.
- * A long-lived local `main` drifts hundreds of commits behind `origin/main` without anyone
- * noticing, and a branch cut from it starts life needing a merge nobody asked for; the ancestor
- * check is what keeps that from costing unpushed work on a branch the user has been committing
- * to. With no base picked this falls back to resolveBaseRef, matching the default in the user's
- * `worktree` command. A base that is itself one of that fallback's answers (`origin/main`,
- * `HEAD`), as a spawned session carries when its parent is on no branch, comes out unchanged:
- * `origin/origin/main` never resolves, and `HEAD` is checked here because `origin/HEAD` might.
+ * Main-based tasks use verified upstream history, never local-only main commits. Local main
+ * stays untouched. Explicit feature bases retain unpushed work and best-effort offline fetches.
  */
 async function baseRefFor(directory: string, base: string): Promise<string> {
+  const selected = base || (await resolveBaseRef(directory));
+  const defaultMain = !base && selected === 'HEAD' && (await currentBranch(directory)) === 'main';
+  if (selected === 'main' || selected === 'origin/main' || defaultMain) {
+    const remotes = (await git(directory, ['remote'])).trim().split('\n');
+    if (remotes.includes('origin')) {
+      try {
+        await fetchRemoteFor(directory, 'origin/main', true);
+      } catch (err) {
+        // The app's sandboxed git can fail where the user's terminal git works (repo-scoped
+        // credential helpers and ssh commands are dropped, see hostGitArgs.ts), so name the fix.
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Could not update origin/main, so this session cannot start from upstream main: ${reason}. ` +
+            'Check network access and credentials for this repository, or pick another base branch.'
+        );
+      }
+      await git(directory, ['rev-parse', '--verify', '--quiet', 'origin/main^{commit}']);
+      return 'origin/main';
+    }
+  }
   if (!base || base === 'HEAD') {
-    const fallback = base || (await resolveBaseRef(directory));
+    const fallback = selected;
     await fetchRemoteFor(directory, fallback);
     return fallback;
   }

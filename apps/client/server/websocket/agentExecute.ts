@@ -14,6 +14,7 @@
  */
 
 import { withWebSocketContext } from '@server/websocket/utils';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
@@ -239,10 +240,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       const user = await verifyJwtToken(body.accessToken);
       userId = user.id;
       await checkRateLimit(userId, undefined, { bucket: 'ws' });
-    } catch {
+    } catch (error) {
       await sendAgentEvent(connectionId, endpoint, {
         action: 'agent_error',
-        message: 'Authentication failed',
+        message: error instanceof ForbiddenError || isAuthInfraFailure(error) ? error.message : 'Authentication failed',
       });
       return { statusCode: 200 };
     }

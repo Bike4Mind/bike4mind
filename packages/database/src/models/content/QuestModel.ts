@@ -1736,13 +1736,13 @@ function initializeQuestModel() {
     // this the sweep collection-scans the largest collection every 5 minutes.
     // Dense on purpose: both fields exist on every quest. Pre-built by
     // 20260826000000_ensure-quest-status-updatedat-index rather than left to
-    // autoIndex, because prod runs DocumentDB where the build takes a foreground
-    // collection lock and would otherwise land on a request path.
+    // autoIndex, whose build is fire-and-forget (a failure is silent) and would
+    // otherwise start on whichever request path cold-boots onto quests first.
     ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });
 
     // Serves findUndispatchedCallbacks (questTimeoutSweep backstop). Partial, so it holds only
     // the handful of quests whose callback is armed but not yet claimed. Pre-built by
-    // 20260921235900_ensure-quest-callback-pending-index for the same DocumentDB reason as above.
+    // 20260921235900_ensure-quest-callback-pending-index for the same reason as above.
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, updatedAt: 1 },
       { name: 'callbackState_updatedAt', partialFilterExpression: { 'callback.state': 'pending' } }
@@ -1753,6 +1753,14 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, 'callback.dispatchedAt': 1 },
       { name: 'callbackState_dispatchedAt', partialFilterExpression: { 'callback.state': 'dispatched' } }
+    );
+
+    // Serves the telemetry opt-out delete (telemetryDeletion.ts) and the user/admin telemetry
+    // exports, which match a user's regenerated per-day hashes with $in. Sparse, so only quests
+    // that carry context telemetry are indexed. Pre-built by 20260921235969_ensure-advisor-indexes.
+    ChatHistoryItemSchema.index(
+      { 'promptMeta.contextTelemetry.anonymousSessionId.hash': 1 },
+      { name: 'contextTelemetry_anonymousSessionHash', sparse: true }
     );
   } catch (error) {
     // Plugin already applied, ignore error

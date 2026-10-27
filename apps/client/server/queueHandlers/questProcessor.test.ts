@@ -5,6 +5,7 @@ import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premi
 
 const mockProcess = vi.hoisted(() => vi.fn());
 const processOptions = vi.hoisted(() => vi.fn());
+const mockCapCheck = vi.hoisted(() => vi.fn());
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -74,6 +75,11 @@ vi.mock('@bike4mind/database', async () => {
 
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 
+vi.mock('@server/billing/freeTierDailyCapGate', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/billing/freeTierDailyCapGate')>()),
+  checkFreeTierDailySpendCap: mockCapCheck,
+}));
+
 vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({
   buildVideoToolConfig: vi.fn(async () => ({ usableModels: ['test-video'], createJob: vi.fn() })),
 }));
@@ -115,6 +121,13 @@ describe('questProcessor getMusicToolConfigResolver', () => {
 });
 
 describe('questProcessor getStaticOptions', () => {
+  it('wires the shared operational billing adapter into tool execution', async () => {
+    const { getStaticOptions } = await import('./questProcessor');
+    const { operationalBillingAdapters } = await import('@server/billing/operationalBilling');
+
+    expect(getStaticOptions().db.operationalBilling).toBe(operationalBillingAdapters);
+  }, 120_000);
+
   it('wires the save_content_to_data_lake audit adapters', async () => {
     // The handler's transitive import graph (services + database + slack) is heavy enough
     // that resolving it inside a test can exceed the default timeout.
@@ -171,6 +184,9 @@ describe('processQuest', () => {
       const { processQuest } = await import('./questProcessor');
       const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
       processOptions.mockClear();
+      mockCapCheck.mockImplementationOnce(({ user }: { user: { isAdmin?: boolean } }) => {
+        expect(user.isAdmin).toBe(true);
+      });
 
       await processQuest(
         { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
@@ -178,7 +194,69 @@ describe('processQuest', () => {
       );
 
       expect(processOptions.mock.calls[0][0].user.isAdmin).toBe(expected);
+      expect(mockCapCheck).toHaveBeenCalled();
     },
     120_000
   );
+
+  it.each([undefined, 'team-org'])(
+    'forwards the quest billing organization %s to the daily cap',
+    async organizationId => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, organizationId } as never,
+        logger as never
+      );
+
+      expect(mockCapCheck).toHaveBeenLastCalledWith(expect.objectContaining({ billingOrganizationId: organizationId }));
+      expect(mockProcess).toHaveBeenLastCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ organizationId }) })
+      );
+    },
+    120_000
+  );
+
+  it('settles a capped quest with the limit message instead of throwing or calling the model', async () => {
+    const { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } = await import('@bike4mind/common');
+    const { questRepository } = await import('@bike4mind/database');
+    const settle = vi.spyOn(questRepository, 'settleIfUnfinished').mockResolvedValue(true);
+    const capError = new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+      errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+    });
+    mockCapCheck.mockRejectedValueOnce(capError);
+    mockProcess.mockClear();
+    const { processQuest } = await import('./questProcessor');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+
+    await expect(
+      processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+        logger as never
+      )
+    ).resolves.toBeUndefined();
+
+    expect(settle).toHaveBeenCalledWith('quest-1', {
+      status: 'stopped',
+      type: 'error',
+      reply: capError.message,
+      replies: [capError.message],
+    });
+    expect(mockProcess).not.toHaveBeenCalled();
+    settle.mockRestore();
+  }, 120_000);
+
+  it('still throws an unrelated error from the cap check', async () => {
+    mockCapCheck.mockRejectedValueOnce(new Error('boom'));
+    const { processQuest } = await import('./questProcessor');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+
+    await expect(
+      processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+        logger as never
+      )
+    ).rejects.toThrow('boom');
+  }, 120_000);
 });

@@ -494,7 +494,7 @@ function movableOptions(
 
   return {
     offerMove: move => foreground.register(sessionId, callId, move),
-    adopt: handover => background.adopt({ sessionId, ...started, ...handover }),
+    adopt: handover => background.adopt({ sessionId, ...started, ...handover, wakeOnExit: true }),
   };
 }
 
@@ -505,7 +505,8 @@ function formatMoved(command: string, cwd: string, info: BackgroundProcessInfo):
     '',
     `[the user moved this command to the background; it is still running as [${info.id}]]`,
     `[bash_output id="${info.id}" returns everything it has printed, including what it printed`,
-    'before the move. bash_kill stops it.]',
+    'before the move. bash_kill stops it. You are told automatically when it exits, so there is',
+    'no need to poll it: carry on, or end your turn if all that is left is waiting for it.]',
   ].join('\n');
 }
 

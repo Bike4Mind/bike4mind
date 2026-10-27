@@ -4,7 +4,8 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import type { EndpointContract } from '../api-contract/types';
-import { buildOpenApiDocument } from './document';
+import { PUBLIC_DOC_API_KEY_SCOPES } from '../types/entities/UserApiKeyTypes';
+import { buildOpenApiDocument, infoDescription } from './document';
 import { registerContracts } from './operations';
 
 // Must match the sidecar name apps/client/scripts/generate-premium-glue.mjs writes.
@@ -36,6 +37,20 @@ export function buildDeploymentOpenApiDocument(
     tags.push({ name: tag });
   }
   doc.tags = tags;
+
+  // The Scopes list must cover every scope this document's operations require, including
+  // built-in scopes the core spec deliberately leaves unlisted.
+  const listed = new Set<string>(PUBLIC_DOC_API_KEY_SCOPES);
+  const paths = (doc.paths ?? {}) as Record<string, Record<string, { 'x-required-scopes'?: string[] }>>;
+  for (const item of Object.values(paths)) {
+    for (const op of Object.values(item)) {
+      for (const scope of op?.['x-required-scopes'] ?? []) listed.add(scope);
+    }
+  }
+  if (listed.size > PUBLIC_DOC_API_KEY_SCOPES.length) {
+    const info = doc.info as { description: string };
+    info.description = infoDescription([...listed]);
+  }
   return doc;
 }
 

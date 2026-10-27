@@ -33,7 +33,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-927 routes: 52 contracted, 9 aliases of another route, 199 with no static caller in `apps/client/app`.
+928 routes: 52 contracted, 9 aliases of another route, 199 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
-| ai | 20 | 4 | 17 | 2 | 0 | 1 | 6 |
+| ai | 20 | 4 | 12 | 7 | 0 | 1 | 6 |
 | analytics | 3 | 0 | 2 | 0 | 0 | 1 | 1 |
 | api-keys | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | app-files | 7 | 0 | 6 | 0 | 0 | 1 | 3 |
@@ -60,7 +60,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | credits | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | data-lakes | 60 | 0 | 59 | 1 | 0 | 0 | 8 |
-| deep-agent | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
+| deep-agent | 5 | 0 | 3 | 2 | 0 | 0 | 0 |
 | documentation | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | elabs | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | email | 10 | 0 | 4 | 1 | 0 | 5 | 2 |
@@ -87,8 +87,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | integrations | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | internal | 2 | 0 | 0 | 0 | 0 | 2 | 2 |
 | invites | 4 | 0 | 4 | 0 | 0 | 0 | 1 |
-| jupyter | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
-| keep | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| jupyter | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
+| keep | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
 | lattice | 7 | 0 | 7 | 0 | 0 | 0 | 0 |
 | logout | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | mcp | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
@@ -138,7 +138,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | usage | 2 | 0 | 1 | 0 | 0 | 1 | 1 |
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 7 | 0 | 7 | 0 | 0 | 0 | 1 |
-| users | 31 | 0 | 29 | 2 | 0 | 0 | 4 |
+| users | 32 | 0 | 28 | 4 | 0 | 0 | 4 |
 | v1 | 50 | 46 | 44 | 0 | 0 | 6 | 39 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
@@ -422,7 +422,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/api/ai/audio-providers` | GET | jwt | - | no | - | 1: `hooks/data/audioProviders.ts` |
-| `/api/ai/barkeep-chat` | POST | jwt+key | - | no | - | 0 |
+| `/api/ai/barkeep-chat` | POST | jwt | - | no | - | 0 |
 | `/api/ai/classify-intent` | POST | jwt+key | - | no | - | 1: `hooks/useIntentClassifier.ts` |
 | `/api/ai/context-dry-run` | POST | jwt+key | `files:read` | no | - | 1: `hooks/useAttachmentFitWarning.ts` |
 | `/api/ai/edit-image` | POST | jwt+key | `ai:generate` | yes | `/api/v1/image-edits` | 1: `components/commands/ImageGenerationCommand.ts` |
@@ -430,11 +430,11 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/ai/generate-video` | any | handler | - | no | - | 0 |
 | `/api/ai/llm` | POST | jwt+key | `ai:chat` | no | - | 1: `components/commands/LLMCommand.tsx` |
 | `/api/ai/music` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/ai/optimize-input` | POST | jwt+key | - | no | - | 1: `components/Session/RephraseButton.tsx` |
-| `/api/ai/rapid-reply` | POST | jwt+key | - | no | - | 1: `components/commands/LLMCommand.tsx` |
-| `/api/ai/refineText` | POST | jwt+key | `ai:generate` | no | - | 1: `hooks/useRefineText.ts` |
+| `/api/ai/optimize-input` | POST | jwt | - | no | - | 1: `components/Session/RephraseButton.tsx` |
+| `/api/ai/rapid-reply` | POST | jwt | - | no | - | 1: `components/commands/LLMCommand.tsx` |
+| `/api/ai/refineText` | POST | jwt | - | no | - | 1: `hooks/useRefineText.ts` |
 | `/api/ai/sound-effects` | POST | jwt+key | `ai:generate` | yes | - | 1: `components/AudioStudio/useGenerateAudio.ts` |
-| `/api/ai/tavern-conversation` | POST | jwt+key | - | no | - | 0 |
+| `/api/ai/tavern-conversation` | POST | jwt | - | no | - | 0 |
 | `/api/ai/test-realtime-voice` | POST | jwt+key | - | no | - | 0 |
 | `/api/ai/transcribe` | POST | jwt+key | - | no | - | 1: `components/common/VoiceRecordButton.tsx` |
 | `/api/ai/transcribe/init` | POST | jwt+key | - | no | - | 1: `components/common/VoiceRecordButton.tsx` |
@@ -663,8 +663,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/deep-agent/agents` | GET | jwt+key | - | no | - | 1: `hooks/data/deepAgents.ts` |
 | `/api/deep-agent/agents/[agentId]` | GET | jwt+key | - | no | - | 1: `hooks/data/deepAgents.ts` |
 | `/api/deep-agent/mission-counts` | GET | jwt+key | - | no | - | 1: `hooks/data/deepAgents.ts` |
-| `/api/deep-agent/review` | POST | jwt+key | - | no | - | 1: `hooks/data/deepAgents.ts` |
-| `/api/deep-agent/spin` | POST | jwt+key | - | no | - | 1: `hooks/data/deepAgents.ts` |
+| `/api/deep-agent/review` | POST | jwt | - | no | - | 1: `hooks/data/deepAgents.ts` |
+| `/api/deep-agent/spin` | POST | jwt | - | no | - | 1: `hooks/data/deepAgents.ts` |
 
 ### documentation
 
@@ -904,14 +904,14 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
-| `/api/jupyter/execute` | POST | jwt+key | - | no | - | 1: `components/Session/NotebookExecutionButtons.tsx` |
-| `/api/jupyter/progress` | POST | jwt+key | - | no | - | 1: `components/Session/NotebookExecutionButtons.tsx` |
+| `/api/jupyter/execute` | POST | jwt | - | no | - | 1: `components/Session/NotebookExecutionButtons.tsx` |
+| `/api/jupyter/progress` | POST | jwt | - | no | - | 1: `components/Session/NotebookExecutionButtons.tsx` |
 
 ### keep
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
-| `/api/keep/command` | GET, POST | unknown | - | no | - | 0 |
+| `/api/keep/command` | GET, POST | jwt | - | no | - | 0 |
 
 ### lattice
 
@@ -1484,6 +1484,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/users/[id]/activities` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/users/[id]/agents` | GET | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
 | `/api/users/[id]/collections` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/[id]/confirm-photo` | POST | jwt | - | no | - | 1: `utils/userAPICalls.tsx` |
 | `/api/users/[id]/delete` | DELETE | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/users/[id]/docx-template` | GET, POST, DELETE | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/DocxTemplateSection.tsx` |
 | `/api/users/[id]/email-settings` | GET, PATCH | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/EmailIntegrationSection.tsx` |
@@ -1496,11 +1497,11 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/users/[id]/organizations` | GET | jwt+key | - | no | - | 0 |
 | `/api/users/[id]/projects` | GET | jwt+key | - | no | - | 1: `hooks/data/projects.ts` |
 | `/api/users/[id]/recalculate-storage` | POST | jwt+key | - | no | - | 1: `components/admin/Users/Details/Bike4MindUserDetails.tsx` |
-| `/api/users/[id]/revoke-sessions` | POST | jwt+key | - | no | - | 0 |
+| `/api/users/[id]/revoke-sessions` | POST | jwt+key | `admin:*` | no | - | 0 |
 | `/api/users/[id]/slack-settings` | GET, PATCH | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/GitHubNotificationsSection.tsx`, `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
 | `/api/users/[id]/telemetry-export` | GET | jwt+key | - | no | - | 1: `components/ProfileModal/ExperimentalFeatureToggle.tsx` |
 | `/api/users/[id]/update` | PUT | jwt+key | - | no | - | 5: `components/AgentList/VoiceCustomizeModal.tsx`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx`, `components/Session/AISettings/AdvancedAIModal.tsx` +2 more |
-| `/api/users/[id]/upload-photo` | POST | jwt+key | - | no | - | 1: `utils/userAPICalls.tsx` |
+| `/api/users/[id]/upload-photo` | POST | jwt | - | no | - | 1: `utils/userAPICalls.tsx` |
 | `/api/users/[id]/userInvites` | GET | jwt+key | - | no | - | 1: `utils/invitesAPICalls.ts` |
 | `/api/users/activities/recent` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/users/by-email/[email]` | GET | jwt+key | - | no | - | 2: `hooks/data/skills.ts`, `hooks/data/user.ts` |

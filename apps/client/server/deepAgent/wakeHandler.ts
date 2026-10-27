@@ -27,6 +27,7 @@ import {
   pauseMission,
 } from './wakeMetering';
 import type { CompletionMeter } from '@bike4mind/services';
+import { resolveThinkingVisibilityForUserId } from '@server/utils/thinkingVisibility';
 
 /**
  * Deep-agent wake trigger. One SQS message -> one wake cycle for one agent.
@@ -88,6 +89,7 @@ export async function buildDefaultWakeDeps(
         logger,
         buildTools,
         loadLinkedAgent: loadLinkedAgentContext,
+        resolveThinkingVisibility: resolveThinkingVisibilityForUserId,
       })
     : noopRunAct;
   const steps = new LlmWakeSteps({

@@ -46,7 +46,7 @@ vi.mock('@client/lib/userSubscriptions/constants', () => ({
   TEAM_PLAN: { priceId: 'price_team', tier: 2 },
 }));
 
-import { resolveUserRateTier, resolveUserRateLimitPerMin } from './userRateTier';
+import { hasPaidSubscription, resolveUserRateTier, resolveUserRateLimitPerMin } from './userRateTier';
 
 const TIER_LIMITS: Record<string, number> = {
   apiRateLimitFreePerMin: 10,
@@ -129,6 +129,18 @@ describe('resolveUserRateTier', () => {
   it('treats tier-less standalone plans as "free" (not on the ladder)', async () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_standalone' }]);
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('free');
+  });
+
+  it.each(['membership', 'subscriptions'])('strict tier resolution propagates an org %s read failure', async leg => {
+    const error = new Error('org lookup unavailable');
+    if (leg === 'membership') {
+      findPlanHolderOrgIdsMock.mockRejectedValue(error);
+    } else {
+      findPlanHolderOrgIdsMock.mockResolvedValue(['org1']);
+      findActiveSubscriptionsByOwnersMock.mockRejectedValue(error);
+    }
+
+    await expect(resolveUserRateTier({ id: 'u1' }, undefined, { strict: true })).rejects.toBe(error);
   });
 });
 
@@ -217,5 +229,21 @@ describe('resolveUserRateLimitPerMin', () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_pro' }]);
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(60);
     expect(getSettingsValueMock).toHaveBeenCalledWith('apiRateLimitProPerMin', expect.anything());
+  });
+});
+
+describe('hasPaidSubscription', () => {
+  it('counts a standalone (tier-less) paid plan as paid, unlike the rate tier', () => {
+    expect(hasPaidSubscription([{ priceId: 'price_standalone' }])).toBe(true);
+  });
+
+  it('counts ladder and Team plans as paid', () => {
+    expect(hasPaidSubscription([{ priceId: 'price_basic' }])).toBe(true);
+    expect(hasPaidSubscription([{ priceId: 'price_team' }])).toBe(true);
+  });
+
+  it('treats no rows, unknown and empty price ids as not paid', () => {
+    expect(hasPaidSubscription([])).toBe(false);
+    expect(hasPaidSubscription([{ priceId: 'price_unknown' }, { priceId: '' }])).toBe(false);
   });
 });

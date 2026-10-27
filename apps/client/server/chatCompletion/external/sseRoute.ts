@@ -1,4 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
@@ -54,6 +55,7 @@ import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -307,9 +309,19 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let finalCreditsUsed: number | undefined;
       let hasToolCalls = false;
 
+      // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+      await checkFreeTierDailySpendCap({
+        userId,
+        userRepository,
+        billingOrganizationId: apiKeyInfo?.organizationId,
+        usageEventRepository,
+        logger,
+      });
+
       timing?.phase('completionStarted');
       await executeCompletion({
         getEntitlements: getUserEntitlements,
+        getThinkingVisibility: resolveThinkingVisibility,
         creditHolds: createCompletionCreditHolds(logger),
         userId,
         model: body.model,

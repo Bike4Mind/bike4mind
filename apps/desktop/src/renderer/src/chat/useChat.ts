@@ -312,6 +312,9 @@ export function useModelCatalog(): ModelCatalogController {
     });
   }, [load]);
 
+  // A model pulled or removed on the Models screen changes the local half of the list.
+  useEffect(() => window.b4m.models.onInstalledChanged(() => void load(true)), [load]);
+
   const reload = useCallback(() => load(true), [load]);
 
   return { models, loading, error, reload };
@@ -733,6 +736,13 @@ export function useConversation(
             `Could not compact automatically, so your message went out with the whole conversation. ${event.error}`
           );
         }
+        return;
+      }
+
+      if (event.type === 'context-trimmed') {
+        setNotice(
+          `This conversation no longer fits the model's context, so ${event.dropped === 1 ? 'its oldest message was' : `its ${event.dropped} oldest messages were`} left out of this reply. Your next message compacts it first, or run /compact now.`
+        );
         return;
       }
 

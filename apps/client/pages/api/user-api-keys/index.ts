@@ -26,6 +26,7 @@ import {
   isKnownApiKeyScope,
 } from '@client/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
+import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { Request } from 'express';
 
@@ -174,6 +175,14 @@ const handler = baseApi()
         throw new ForbiddenError('You do not have permission to mint API keys billed to this organization');
       }
     }
+
+    // The admin paid-only switch, after the org check so an unauthorized caller learns nothing
+    // about an org's plan. The same gate re-runs on every use of the key (apiKeyAuth).
+    await assertApiKeyAccessAllowed(
+      req.user,
+      organizationId ? { billingOwnerType: CreditHolderType.Organization, organizationId } : undefined,
+      req
+    );
 
     // Embed keys: apply the host-aware origin screen here (needs the runtime app
     // host). The service re-validates format/dedup/cap and enforces the agentId

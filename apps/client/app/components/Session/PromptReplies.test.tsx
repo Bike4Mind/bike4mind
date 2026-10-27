@@ -16,6 +16,7 @@ import {
   ReplyCompleteContext,
 } from './PromptReplies';
 import PromptReplies from './PromptReplies';
+import type { ReactArtifactGroupRole } from '../../utils/reactArtifactGroup';
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 
@@ -48,8 +49,21 @@ vi.mock('./artifacts/ArtifactRenderer', async () => {
   const { generateCompleteArtifactId, getArtifactTimestamp } =
     await vi.importActual<typeof import('../../utils/artifactParser')>('../../utils/artifactParser');
   return {
-    default: ({ artifact, index, messageId }: { artifact: ParsedArtifact; index: number; messageId: string }) => (
-      <div data-testid={`artifact-card-${artifact.identifier}`}>
+    default: ({
+      artifact,
+      index,
+      messageId,
+      reactGroup,
+    }: {
+      artifact: ParsedArtifact;
+      index: number;
+      messageId: string;
+      reactGroup?: ReactArtifactGroupRole;
+    }) => (
+      <div
+        data-testid={`artifact-card-${artifact.identifier}`}
+        data-sibling-files={reactGroup?.role === 'entry' ? Object.keys(reactGroup.files).join(',') : ''}
+      >
         {generateCompleteArtifactId(artifact.type, artifact.identifier ?? '', getArtifactTimestamp(messageId), index)}
       </div>
     ),
@@ -721,5 +735,34 @@ describe('artifact card ids agree with the rows persistence writes', () => {
     expect(screen.getByTestId('artifact-card-App')).toHaveTextContent(rows.App);
     expect(screen.getByTestId('artifact-card-Stopwatch')).toHaveTextContent(rows.Stopwatch);
     expect(midStreamId).not.toBe(rows.Stopwatch);
+  });
+
+  it.each(['', '\n\n', ' \t\n'])(
+    'keeps entry offsets stable through a sibling stream with leading whitespace %j',
+    prefix => {
+      const { rerender } = render(reply(`${prefix}${app}`, 'running'));
+      const entryCard = screen.getByTestId('artifact-card-App');
+      expect(entryCard).toHaveAttribute('data-sibling-files', '');
+
+      const partialSibling = '<artifact identifier="Stopwatch" type="application/vnd.ant.react" title="Stopwatch">';
+      rerender(reply(`${prefix}${app}\n\n${partialSibling}`, 'running'));
+      expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+
+      rerender(reply(`${prefix}${app}\n\n${stopwatch}`, 'done'));
+      expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+      expect(entryCard).toHaveAttribute('data-sibling-files', 'Stopwatch');
+    }
+  );
+
+  it('keeps an earlier entry mounted when a later opening tag is cut off at completion', () => {
+    const prefix = '\n\n';
+    const { rerender } = render(reply(`${prefix}${app}`, 'running'));
+    const entryCard = screen.getByTestId('artifact-card-App');
+    const partialReply = `${prefix}${app}\n\n<artifact identifier="Stopwatch"`;
+
+    rerender(reply(partialReply, 'running'));
+    expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+    rerender(reply(partialReply, 'done'));
+    expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
   });
 });

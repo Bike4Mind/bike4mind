@@ -33,7 +33,7 @@ vi.mock('@server/cli/auth', () => ({
 }));
 
 const mockAssertAccountStateUsable = vi.fn();
-vi.mock('@server/auth/assertAccountStateUsable', () => ({
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
 }));
 

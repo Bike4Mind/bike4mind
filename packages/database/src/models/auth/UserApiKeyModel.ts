@@ -417,6 +417,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
 UserApiKeySchema.index({ userId: 1, status: 1 });
 UserApiKeySchema.index({ keyPrefix: 1, status: 1 });
 UserApiKeySchema.index({ expiresAt: 1 });
+UserApiKeySchema.index({ createdAt: 1 });
 UserApiKeySchema.index({ productId: 1, status: 1 }, { sparse: true });
 UserApiKeySchema.index({ organizationId: 1, status: 1 }, { sparse: true });
 UserApiKeySchema.index({ agentId: 1, status: 1 }, { sparse: true });

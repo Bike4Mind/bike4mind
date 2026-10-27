@@ -6,7 +6,7 @@ import {
   sessionRepository,
 } from '@bike4mind/database';
 import { NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import type { ArtifactRefAccessDeps } from '@server/utils/assertArtifactSourceRefsAccessible';
+import type { ArtifactRefAccessDeps } from '@bike4mind/server-utils/utils/assertArtifactSourceRefsAccessible';
 
 // any: the database repositories do not structurally satisfy the services' repository interfaces;
 // the SPA artifact routes cast the same way.

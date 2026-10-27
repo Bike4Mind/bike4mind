@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 import { API_KEY_DEPARTED_HOLDER_MESSAGE, isApiKeyOrgMembershipStale } from '@server/billing/assertApiKeyOrgMembership';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { resolveBillingOrgId } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import type { Request } from 'express';
 

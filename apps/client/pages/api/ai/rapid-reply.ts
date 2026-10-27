@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -13,7 +13,7 @@ import { StatusManager } from '@bike4mind/services/llm/StatusManager';
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
-import { assertSessionAccess } from '@server/utils/sessionAccess';
+import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
 import { ChatModels, NotFoundError } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
@@ -37,7 +37,8 @@ const OPTI_RAPID_SYSTEM_PROMPT =
  * This endpoint only saves to the database. The main quest processor
  * handles WebSocket notifications when it detects the rapid reply result.
  */
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 200 : 50,
