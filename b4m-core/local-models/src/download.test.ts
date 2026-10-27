@@ -15,6 +15,7 @@ import {
   RuntimeProtocolError,
   RuntimeStorageError,
 } from './errors';
+import { lockFile } from './fileLock';
 import { HuggingFaceHub, type HubGgufFile } from './huggingface';
 import type { PullProgress } from './types';
 import { startFakeServer, type FakeServer, type Handler, type RecordedRequest } from './__test__/fakeServer';
@@ -70,7 +71,7 @@ function blob(body: Buffer, options: { ignoreRange?: boolean; cut?: { at: number
 }
 
 /** A Hub that redirects the resolve URL to a CDN on another origin, as huggingface.co does. */
-async function hubWithCdn(cdnHandler: Handler, path = FILE_PATH) {
+async function hubWithCdn(cdnHandler: Handler, path = FILE_PATH, body = BYTES) {
   const cdn = await serve({ [`GET /blob/${path}`]: cdnHandler });
   const hub = await serve({
     [`GET /${REPO}/resolve/${COMMIT}/${path}`]: (_request, response) => {
@@ -81,8 +82,8 @@ async function hubWithCdn(cdnHandler: Handler, path = FILE_PATH) {
   const client = new HuggingFaceHub({ endpoint: hub.baseUrl, token: TOKEN });
   const file: HubGgufFile = {
     path,
-    sizeBytes: BYTES.length,
-    sha256: SHA,
+    sizeBytes: body.length,
+    sha256: body === BYTES ? SHA : createHash('sha256').update(body).digest('hex'),
     url: client.resolveUrl(REPO, COMMIT, path),
   };
   return { hub, cdn, client, file };
@@ -90,6 +91,12 @@ async function hubWithCdn(cdnHandler: Handler, path = FILE_PATH) {
 
 function destination(name: string): string {
   return join(dir, `${name}-${randomBytes(4).toString('hex')}.gguf`);
+}
+
+/** A partial download as an earlier attempt for the file with `sha256` leaves it. */
+async function writePartial(target: string, bytes: Buffer, sha256 = SHA, sizeBytes = BYTES.length): Promise<void> {
+  await writeFile(`${target}.partial`, bytes);
+  await writeFile(`${target}.partial.json`, JSON.stringify({ sha256, sizeBytes }));
 }
 
 describe('HuggingFaceHub.download', () => {
@@ -152,17 +159,66 @@ describe('HuggingFaceHub.download', () => {
       response.end(BYTES);
     });
     const target = destination('wrong-range');
-    await writeFile(`${target}.partial`, BYTES.subarray(0, 1000));
+    await writePartial(target, BYTES.subarray(0, 1000));
     await expect(client.download(file, target)).rejects.toBeInstanceOf(RuntimeProtocolError);
   });
 
   it('starts over once when the range is not satisfiable', async () => {
     const { cdn, client, file } = await hubWithCdn(blob(BYTES));
     const target = destination('unsatisfiable');
-    await writeFile(`${target}.partial`, Buffer.alloc(BYTES.length));
+    await writePartial(target, Buffer.alloc(BYTES.length), SHA, BYTES.length + 10);
     const shorter = { ...file, sizeBytes: BYTES.length + 10 };
     await expect(client.download(shorter, target)).rejects.toBeInstanceOf(RuntimeConnectionError);
     expect(cdn.requests.map(request => request.headers.range)).toEqual([`bytes=${BYTES.length}-`, undefined]);
+  });
+
+  it('starts over when the partial was started for another file', async () => {
+    const { cdn, client, file } = await hubWithCdn(blob(BYTES));
+    const target = destination('other-revision');
+    await writePartial(target, BYTES.subarray(0, 1000), 'b'.repeat(64));
+    const result = await client.download(file, target);
+    expect(result.resumedBytes).toBe(0);
+    expect(cdn.requests.map(request => request.headers.range)).toEqual([undefined]);
+    expect((await readFile(target)).equals(BYTES)).toBe(true);
+    await expect(stat(`${target}.partial.json`)).rejects.toThrow();
+
+    const unrecorded = destination('unrecorded');
+    await writeFile(`${unrecorded}.partial`, BYTES.subarray(0, 1000));
+    expect((await client.download(file, unrecorded)).resumedBytes).toBe(0);
+  });
+
+  it('keeps a file another download finished while this one waited, and refuses a different one', async () => {
+    const { cdn, client, file } = await hubWithCdn(blob(BYTES));
+    const target = destination('finished');
+    await writeFile(target, BYTES);
+    expect(await client.download(file, target)).toEqual({
+      path: target,
+      sizeBytes: BYTES.length,
+      sha256: SHA,
+      resumedBytes: 0,
+    });
+    const other = destination('different');
+    await writeFile(other, randomBytes(BYTES.length));
+    await expect(client.download(file, other)).rejects.toMatchObject({
+      name: 'ModelFileConflictError',
+      reason: 'sha256',
+    });
+    expect(cdn.requests).toHaveLength(0);
+  });
+
+  it('reads its lock back while writing, so a writer whose lock was taken over stops within 16 MiB', async () => {
+    const body = randomBytes(64 * 1024 * 1024);
+    const { client, file } = await hubWithCdn(blob(body), FILE_PATH, body);
+    const target = destination('taken-over');
+    const pending = client.download(file, target).catch((caught: unknown) => caught);
+    let at = 0;
+    while ((at = (await stat(`${target}.partial`).catch(() => null))?.size ?? 0) < 1024 * 1024)
+      await new Promise(r => setTimeout(r, 1));
+    const thief = await lockFile(target, 'test', { force: true });
+    expect(await pending).toBeInstanceOf(ModelFileBusyError);
+    expect((await stat(`${target}.partial`)).size).toBeLessThan(at + 20 * 1024 * 1024);
+    await expect(stat(target)).rejects.toThrow();
+    await thief.release();
   });
 
   it('deletes the partial file when the sha256 does not match', async () => {

@@ -1,8 +1,14 @@
 import { createHash, type Hash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { open, rename, rm } from 'node:fs/promises';
+import { open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { DownloadVerificationError, LocalRuntimeError, RuntimeConnectionError, RuntimeProtocolError } from './errors';
+import {
+  DownloadVerificationError,
+  LocalRuntimeError,
+  ModelFileConflictError,
+  RuntimeConnectionError,
+  RuntimeProtocolError,
+} from './errors';
 import { type FileLock, lockFile, onDisk, storageError } from './fileLock';
 import type { FetchLike, PullProgress } from './types';
 
@@ -10,6 +16,8 @@ export const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 const MAX_DOWNLOAD_REDIRECTS = 5;
 const PROGRESS_INTERVAL_MS = 250;
 const MAX_TIMER_MS = 2 ** 31 - 1;
+/** A download reads its lock back at least this often, so a writer whose lock was taken over stops soon. */
+const LOCK_VERIFY_BYTES = 16 * 1024 * 1024;
 
 export interface DownloadOptions {
   signal?: AbortSignal;
@@ -63,9 +71,58 @@ export async function downloadFile(
   options.signal?.throwIfAborted();
   const lock = await lockFile(destination, transport.runtimeId);
   try {
+    // Another download may have finished this file while this one waited for the lock.
+    if (await exists(destination)) return await checkFinished(transport.runtimeId, target, destination, options);
     return await downloadLocked(transport, target, destination, options, lock);
   } finally {
     await lock.release();
+  }
+}
+
+const exists = (path: string) =>
+  stat(path).then(
+    () => true,
+    () => false
+  );
+
+async function checkFinished(
+  runtimeId: string,
+  target: DownloadTarget,
+  destination: string,
+  options: DownloadOptions
+): Promise<DownloadResult> {
+  const name = basename(destination);
+  const size = (await onDisk(runtimeId, destination, () => stat(destination), 'read')).size;
+  if (size !== target.sizeBytes) throw new ModelFileConflictError(runtimeId, name, 'size');
+  const expectedSha = target.sha256?.toLowerCase() ?? null;
+  options.onProgress?.({ status: 'verifying', completedBytes: 0, totalBytes: size });
+  if (expectedSha) {
+    const hash = createHash('sha256');
+    try {
+      for await (const chunk of createReadStream(destination, { signal: options.signal })) hash.update(chunk as Buffer);
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      throw storageError(runtimeId, destination, error, 'read');
+    }
+    if (hash.digest('hex') !== expectedSha) throw new ModelFileConflictError(runtimeId, name, 'sha256');
+  }
+  options.onProgress?.({ status: 'success', completedBytes: size, totalBytes: size });
+  return { path: destination, sizeBytes: size, sha256: expectedSha, resumedBytes: 0 };
+}
+
+/** What a partial was started for, kept as `<file>.partial.json`; a partial for another file starts over. */
+interface PartialRecord {
+  sha256: string;
+  sizeBytes: number;
+}
+
+async function readPartialRecord(path: string): Promise<PartialRecord | null> {
+  try {
+    const record = JSON.parse(await readFile(path, 'utf8')) as Partial<PartialRecord>;
+    if (typeof record.sha256 !== 'string' || typeof record.sizeBytes !== 'number') return null;
+    return { sha256: record.sha256, sizeBytes: record.sizeBytes };
+  } catch {
+    return null;
   }
 }
 
@@ -87,6 +144,7 @@ async function downloadLocked(
   const { runtimeId } = transport;
   const name = basename(destination);
   const partial = `${destination}.partial`;
+  const recordPath = `${partial}.json`;
   const disk = <T>(operation: () => Promise<T>) => onDisk(runtimeId, partial, operation);
   const total = target.sizeBytes;
   const expectedSha = target.sha256?.toLowerCase() ?? null;
@@ -118,6 +176,7 @@ async function downloadLocked(
   const mismatch = async (check: 'size' | 'sha256', expected: string, actual: string) => {
     await handle.close().catch(() => undefined);
     await rm(partial, { force: true });
+    await rm(recordPath, { force: true });
     return new DownloadVerificationError(
       `${runtimeId} download of ${name} failed its ${check} check: expected ${expected}, got ${actual}`,
       runtimeId,
@@ -129,9 +188,15 @@ async function downloadLocked(
 
   try {
     let offset = (await disk(() => handle.stat())).size;
-    if (offset > total || (offset > 0 && !expectedSha)) {
+    const record = await readPartialRecord(recordPath);
+    const sameFile = expectedSha !== null && record?.sha256 === expectedSha && record.sizeBytes === total;
+    if (offset > total || (offset > 0 && !sameFile)) {
       await disk(() => handle.truncate(0));
       offset = 0;
+    }
+    if (expectedSha && !sameFile) {
+      const text = JSON.stringify({ sha256: expectedSha, sizeBytes: total } satisfies PartialRecord);
+      await onDisk(runtimeId, recordPath, () => writeFile(recordPath, text));
     }
     let resumedBytes = offset;
     let hash: Hash | null = expectedSha ? createHash('sha256') : null;
@@ -151,6 +216,7 @@ async function downloadLocked(
     }
 
     arm();
+    let verifiedAt = offset;
     let retriedRange = false;
     while (offset < total) {
       const { response, url } = await fetchFollowingRedirects(transport, target.url, offset, signal);
@@ -184,6 +250,10 @@ async function downloadLocked(
           arm();
           if (offset + value.length > total) throw await mismatch('size', String(total), `more than ${total}`);
           lock.assertHeld();
+          if (offset - verifiedAt >= LOCK_VERIFY_BYTES) {
+            await lock.verify();
+            verifiedAt = offset;
+          }
           const at = offset;
           await disk(() => handle.write(value, 0, value.length, at));
           hash?.update(value);
@@ -208,6 +278,7 @@ async function downloadLocked(
     await disk(() => handle.close());
     await lock.verify();
     await onDisk(runtimeId, destination, () => rename(partial, destination));
+    await rm(recordPath, { force: true }).catch(() => undefined);
     report('success', offset, true);
     return { path: destination, sizeBytes: offset, sha256: actualSha, resumedBytes };
   } catch (error) {
