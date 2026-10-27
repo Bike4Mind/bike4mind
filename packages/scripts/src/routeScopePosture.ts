@@ -4,6 +4,7 @@
  * or be listed in routeScopePostureBaseline.ts. Enforced by checkRouteScopePosture.test.ts.
  */
 import { createHash } from 'node:crypto';
+import ts from 'typescript';
 import type { HttpMethod, RouteAnalysis } from './apiRouteInventory';
 
 export type ScopePosture =
@@ -18,9 +19,21 @@ export const UNCLASSIFIED_REASONS = {
   routerUnion: 'several baseApi routers in one file; scopes are read as their union',
 } as const;
 
-const BASE_API_CALL = /\bbaseApi\s*\(/g;
 /** A route can install the API-key shim itself (e.g. under `auth: false`); its scope argument is not read. */
 const DIRECT_KEY_SHIM = /\bapiKeyAuth\s*\(/;
+
+function hasSeveralRouters(source: string): boolean {
+  const file = ts.createSourceFile('route.ts', source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
+  let routerCount = 0;
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'baseApi') {
+      routerCount += 1;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return routerCount > 1;
+}
 
 /**
  * `optional` counts as key-accepting: optionalAuth installs the API-key shim with no scopes, and the
@@ -31,10 +44,11 @@ export function classifyScopePosture(analysis: RouteAnalysis, source: string): S
   const acceptsKey =
     analysis.auth.some(mode => mode === 'jwt+key' || mode === 'optional') || DIRECT_KEY_SHIM.test(source);
   if (!acceptsKey) return { kind: 'no-key' };
+  if (!analysis.auth.includes('jwt+key')) return { kind: 'unscoped' };
   if (analysis.scopes.length === 0) return { kind: 'unscoped' };
   const verbs = analysis.methodScopes?.filter(group => group.scopes.length === 0).flatMap(group => group.methods);
   if (verbs?.length) return { kind: 'unscoped', verbs };
-  if (!analysis.contracted && (source.match(BASE_API_CALL)?.length ?? 0) > 1) {
+  if (!analysis.contracted && hasSeveralRouters(source)) {
     return { kind: 'unclassified', reason: UNCLASSIFIED_REASONS.routerUnion };
   }
   return { kind: 'scoped' };
@@ -43,7 +57,7 @@ export function classifyScopePosture(analysis: RouteAnalysis, source: string): S
 export type ScopeBaseline = {
   /** Routes that accepted any API key when this check was introduced. Only ever shrinks. */
   legacyUnscoped: readonly string[];
-  /** legacyDigest() of every route legacyUnscoped was seeded with, so an added entry is rejected. */
+  /** Digests of remaining legacy routes; prune alongside legacyUnscoped. */
   legacySeed: ReadonlySet<string>;
   /** Routes reviewed to accept any API key, each with the reason. */
   reviewedUnscoped: Readonly<Record<string, string>>;
@@ -67,6 +81,12 @@ export function scopePostureFailures(routes: readonly PostureRoute[], baseline: 
   const failures: string[] = [];
   const byRoute = new Map(routes.map(entry => [entry.route, entry]));
   const legacy = new Set(baseline.legacyUnscoped);
+  const legacyDigests = new Set(baseline.legacyUnscoped.map(legacyDigest));
+  for (const digest of baseline.legacySeed) {
+    if (!legacyDigests.has(digest)) {
+      failures.push(`${digest} in legacySeed has no legacyUnscoped route. Remove the digest from ${BASELINE_FILE}.`);
+    }
+  }
 
   for (const { route, file, posture } of routes) {
     if (posture.kind === 'unscoped' && !legacy.has(route) && !(route in baseline.reviewedUnscoped)) {

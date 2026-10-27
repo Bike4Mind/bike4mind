@@ -49,6 +49,30 @@ describe('classifyScopePosture', () => {
     });
   });
 
+  it('does not credit baseApi scopes to optional or directly installed key shims', () => {
+    const source = 'const shim = apiKeyAuth(); baseApi({ auth: false, requiredScopes: [S] });';
+    for (const auth of [['optional'], ['handler']] as const) {
+      expect(classifyScopePosture(analysis({ auth: [...auth], scopes: ['s'] }), source)).toEqual({
+        kind: 'unscoped',
+      });
+    }
+  });
+
+  it('counts generic baseApi calls when checking for several routers', () => {
+    for (const requestType of ['Request', 'Request & { callback: () => void }']) {
+      const source = `baseApi<Request, Response>({ requiredScopes: [S] }); baseApi<${requestType}, Response>();`;
+      expect(classifyScopePosture(analysis({ scopes: ['s'] }), source)).toEqual({
+        kind: 'unclassified',
+        reason: UNCLASSIFIED_REASONS.routerUnion,
+      });
+    }
+  });
+
+  it('does not count router examples in comments or strings', () => {
+    const source = 'baseApi({ requiredScopes: [S] }); // baseApi()\nconst example = "baseApi()";';
+    expect(classifyScopePosture(analysis({ scopes: ['s'] }), source)).toEqual({ kind: 'scoped' });
+  });
+
   it('fails closed when the posture cannot be read', () => {
     expect(classifyScopePosture(analysis({ auth: ['unknown'] }), ONE_ROUTER)).toEqual({
       kind: 'unclassified',
@@ -124,6 +148,13 @@ describe('scopePostureFailures', () => {
     expect(
       scopePostureFailures([unclassified], { ...empty, unclassified: { '/api/u': UNCLASSIFIED_REASONS.dynamicAuth } })
     ).toEqual([]);
+  });
+
+  it('requires seed digests to be pruned alongside removed legacy entries', () => {
+    const failures = scopePostureFailures([], { ...empty, legacySeed: new Set([legacyDigest('/api/gone')]) });
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('has no legacyUnscoped route');
+    expect(scopePostureFailures([], empty)).toEqual([]);
   });
 });
 
