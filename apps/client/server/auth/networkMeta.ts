@@ -5,6 +5,11 @@ import { getClientIp, getClientNetwork, type ClientIpRequest } from '@bike4mind/
 import { CLOUDFRONT_VIEWER_JA4_HEADER } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import { DATACENTER_ASNS } from './datacenterAsns';
 
+// x-amzn-waf- + the InsertHeaders name of the forward-anon-ip-label / forward-bot-signal-label rules
+// in infra/waf/bike4mind-api-protection-dev.json.
+const WAF_ANON_IP_HEADER = 'x-amzn-waf-x-waf-anon-ip';
+const WAF_BOT_SIGNAL_HEADER = 'x-amzn-waf-x-waf-bot-signal';
+
 export type NetworkRequest = ClientIpRequest & {
   headers: Record<string, string | string[] | undefined>;
 };
@@ -19,10 +24,12 @@ export function readNetworkMeta(req: NetworkRequest): INetworkMeta {
   const { asn, country } = getClientNetwork(req);
   const deployed = Boolean(process.env.ORIGIN_VERIFY_SECRET) && process.env.B4M_SELF_HOST !== 'true';
   const ja4 = deployed ? ja4FingerprintSchema.safeParse(req.headers[CLOUDFRONT_VIEWER_JA4_HEADER]) : null;
-  // x-waf-* headers are injected by WAF after the CloudFront viewer-request function strips any
-  // viewer-forged copies, so they are authoritative only on deployed stages with WAF attached.
-  const wafAnonIp = deployed ? req.headers['x-waf-anon-ip'] === '1' : null;
-  const wafBotSignal = deployed ? req.headers['x-waf-bot-signal'] === '1' : null;
+  // AWS WAF prefixes every header it inserts with x-amzn-waf-. Null unless the attached ACL carries
+  // the label-forward rules (WAF_LABEL_FORWARDING, set in infra/web.ts), so "not checked" is never
+  // stored as "clean".
+  const wafForwarding = deployed && process.env.WAF_LABEL_FORWARDING === 'true';
+  const wafAnonIp = wafForwarding ? req.headers[WAF_ANON_IP_HEADER] === '1' : null;
+  const wafBotSignal = wafForwarding ? req.headers[WAF_BOT_SIGNAL_HEADER] === '1' : null;
   return {
     ip: ip === 'unknown' ? null : ip,
     userAgent: (Array.isArray(userAgent) ? userAgent[0] : userAgent) || null,
