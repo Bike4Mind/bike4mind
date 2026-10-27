@@ -57,7 +57,7 @@ interface CommitGroups {
  *   fix: resolve spinner issue
  *   perf(server)!: optimize database queries
  */
-function parseConventionalCommit(message: string): ParsedCommit {
+export function parseConventionalCommit(message: string): ParsedCommit {
   // Remove merge commit noise
   const firstLine = message.split('\n')[0].trim();
 

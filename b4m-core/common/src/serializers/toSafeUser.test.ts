@@ -293,6 +293,17 @@ describe('redactUserSecretsForSelf', () => {
     }
   });
 
+  // The signals and reasons say how the score is built, so the scored user must never see them.
+  it('never shows a user their own risk score, in any view', () => {
+    const scored = {
+      ...fullUser,
+      riskScore: { score: 70, signals: [], computedAt: new Date(), reviewState: 'pending' },
+    } as unknown as IUser;
+
+    expect('riskScore' in redactUserSecretsForSelf(scored)!).toBe(false);
+    expect('riskScore' in toSafeUser(scored, 'self')!).toBe(false);
+  });
+
   it('drops every non-rebuilt USER_SECRET_FIELDS entry present on the input', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     const rebuilt = new Set<string>(USER_SUBFIELD_REDACTED_FIELDS);

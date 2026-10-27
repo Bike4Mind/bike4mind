@@ -27,13 +27,13 @@ const ZIP_ENTRY_DATE = new Date(Date.UTC(2000, 0, 1));
 
 const appUrl = () => requireEnv('APP_URL', process.env.APP_URL);
 
-const pluginZipUrl = (listingId: string, version: number): string =>
-  toAbsoluteUrl(
-    appUrl(),
-    `/api/v1/skills/market/${encodeURIComponent(listingId)}/claude-plugin.zip?version=${version}`
-  );
+const pluginZipUrl = (baseUrl: string, listingId: string, version: number): string =>
+  toAbsoluteUrl(baseUrl, `/api/v1/skills/market/${encodeURIComponent(listingId)}/claude-plugin.zip?version=${version}`);
 
-/** Same stamp as the listing page's SKILL.md export (ListingDetail), minus the export date. */
+/**
+ * Same stamp as the listing page's SKILL.md export (ListingDetail), minus the export date. Stays on
+ * APP_URL, not the request origin: it is hashed into the feed's sha256.
+ */
 function skillMdFor(listing: ISkillListing, version: ISkillListingVersion): string {
   return toSkillMd(version.snapshot, {
     sourceUrl: toAbsoluteUrl(appUrl(), `/skills/market/${encodeURIComponent(String(listing.id))}`),
@@ -83,10 +83,14 @@ const servable = (version: ISkillListingVersion | undefined): ISkillListingVersi
 // and the zip depends on no other listing.
 const skillDirName = (version: ISkillListingVersion) => claudeSkillNameFor(version.snapshot.name);
 
-/** The marketplace.json for one org: its approved Organization listings, oldest first. */
+/**
+ * The marketplace.json for one org: its approved Organization listings, oldest first. `baseUrl` is
+ * the origin for the zip URLs: pass publicAppUrl(req) so they match the feed URL the tab shows.
+ */
 export async function buildClaudeMarketplace(
   org: { id: string; name?: string },
-  memberOrgIds: string[]
+  memberOrgIds: string[],
+  baseUrl: string
 ): Promise<ClaudeMarketplace> {
   const docs = await SkillListing.find({
     ...marketVisibilityFilter(memberOrgIds),
@@ -131,7 +135,7 @@ export async function buildClaudeMarketplace(
         version: String(version.version),
         source: {
           source: 'archive' as const,
-          url: pluginZipUrl(String(listing.id), version.version),
+          url: pluginZipUrl(baseUrl, String(listing.id), version.version),
           sha256: sha256(zip),
         },
       };

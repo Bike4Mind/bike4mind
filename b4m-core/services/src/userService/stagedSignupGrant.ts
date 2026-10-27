@@ -1,5 +1,6 @@
 import {
   CreditHolderType,
+  PENDING_FREE_CREDITS_TAG,
   type IUserDocument,
   type SignupGrant,
   type SignupGrantUnlockReason,
@@ -9,10 +10,10 @@ import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../cre
 import type { FreeCreditAdapters, GrantFreeCreditsResult } from './freeCredits';
 import { evaluateSignupRisk, signupRiskPolicySchema, type SignupRiskSignals } from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
+import { protectSignupCredits } from './signupProtection';
 
 type GrantAdapters = FreeCreditAdapters & {
   audit?: (input: { userId: string; credits: number; creditTransactionId?: string }) => Promise<void>;
-  collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
 };
 
 /** `unlockedOrgId` releases the full remainder and records the org that vouched for the account. */
@@ -24,6 +25,18 @@ const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredi
 
 class InboxGrantClaimDeniedError extends Error {}
 
+function isReleaseEligible(
+  user: IUserDocument | null | undefined,
+  expected: SignupGrant['stage']
+): user is IUserDocument & { signupGrant: SignupGrant } {
+  return !!(
+    user?.signupGrant &&
+    !accountBlockReasons(user).length &&
+    !isAiAccessRevoked(user) &&
+    (expected === 'pending_email' ? user.signupGrant.stage === expected : user.signupGrant.stage !== 'pending_email')
+  );
+}
+
 async function releaseStage(
   userId: string,
   expected: SignupGrant['stage'],
@@ -32,18 +45,24 @@ async function releaseStage(
   adapters: GrantAdapters
 ): Promise<GrantFreeCreditsResult> {
   const { db, audit } = adapters;
+  if (db.signupProtection) {
+    const user = await db.users.findById(userId);
+    if (!isReleaseEligible(user, expected)) return noGrant();
+    if (!user.emailVerified) {
+      if (expected === 'pending_email') throw new Error('Email verification required for signup grant');
+      return noGrant();
+    }
+    // Detection may notify reviewers; keep it outside the retried payout transaction.
+    if (await protectSignupCredits(userId, db)) {
+      if (expected === 'pending_email') await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
+      return { ...noGrant(), withheld: true };
+    }
+  }
   try {
     return await withTransaction(async () => {
       const user = await db.users.findById(userId);
-      const grant = user?.signupGrant;
-      if (
-        !user ||
-        !grant ||
-        accountBlockReasons(user).length ||
-        isAiAccessRevoked(user) ||
-        (expected === 'pending_email' ? grant.stage !== expected : grant.stage === 'pending_email')
-      )
-        return noGrant();
+      if (!isReleaseEligible(user, expected)) return noGrant();
+      const grant = user.signupGrant;
       const evidence = await validate(user);
       if (!evidence) return noGrant();
       const maximum = grant.signupCredits + grant.unlockCredits;

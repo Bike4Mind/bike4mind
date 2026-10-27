@@ -36,6 +36,7 @@ export interface SkillPayload {
   description: string;
   body: string;
   argumentHint?: string;
+  claudeCodeAllowedTools: string[];
   disableModelInvocation: boolean;
 }
 
@@ -86,9 +87,10 @@ function descriptionFor(fields: SkillMdFields): string {
 }
 
 /**
- * Built from an explicit field list (never a spread of parsed data) so
- * allowedTools can't reach the server: Claude Code tool names don't map to B4M.
- * disableModelInvocation is always sent so an update mirrors the file.
+ * Built from an explicit field list (never a spread of parsed data). The file's
+ * allowed-tools goes to claudeCodeAllowedTools, never allowedTools: Claude Code
+ * tool names don't map to B4M. claudeCodeAllowedTools and disableModelInvocation
+ * are always sent so an update mirrors the file.
  */
 export function buildSkillPayload(fields: SkillMdFields, fallbackName: string): SkillPayload {
   return {
@@ -96,6 +98,7 @@ export function buildSkillPayload(fields: SkillMdFields, fallbackName: string): 
     description: descriptionFor(fields),
     body: fields.body ?? '',
     ...(fields.argumentHint !== undefined && { argumentHint: fields.argumentHint }),
+    claudeCodeAllowedTools: fields.claudeCodeAllowedTools ?? [],
     disableModelInvocation: fields.disableModelInvocation ?? false,
   };
 }
@@ -262,10 +265,20 @@ export async function publishToMarket(
     const live = data.find(l => l.status !== 'withdrawn' && l.status !== 'delisted');
     const tags = opts.tags ? { tags: opts.tags } : {};
     if (live) {
-      const { version } = await api.post<SkillMarketSubmitResponse>(
-        `/api/v1/skills/market/listings/${live.id}/versions`,
-        tags
-      );
+      let version: SkillMarketSubmitResponse['version'];
+      try {
+        ({ version } = await api.post<SkillMarketSubmitResponse>(
+          `/api/v1/skills/market/listings/${live.id}/versions`,
+          tags
+        ));
+      } catch (error) {
+        const status = (error as { response?: { status?: number } }).response?.status;
+        if (status === 400 && serverMessage(error).includes('already live or waiting for review')) {
+          log(`Listing "${live.name}" is already up to date`);
+          return;
+        }
+        throw error;
+      }
       log(`Submitted version ${version.version} of listing "${live.name}": ${describeVersion(version)}`);
       return;
     }

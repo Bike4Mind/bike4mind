@@ -5,16 +5,24 @@ import { AdminTab } from '../adminSidebarConfig';
 import { adminTabToSlug } from '../adminTabSlugs';
 import { parseUserId } from '../Users/usersTabSearch';
 import { adminFocusScope, adminSurface } from './adminStyles';
-import { focusAdminSearch, isAdminChordEvent, isAdminShortcutEvent } from './adminKeyboard';
+import { focusAdminSearch, isAdminChordEvent, isAdminOverlayOpen, isAdminShortcutEvent } from './adminKeyboard';
 
-export type AdminCommand = { id: string; label: string; shortcut?: string; disabled?: boolean; run: () => void };
+export type AdminCommand = {
+  id: string;
+  label: string;
+  shortcut?: string;
+  disabled?: boolean;
+  /** Keep it out of the visible button strip when the page already shows its own control for it. */
+  paletteOnly?: boolean;
+  run: () => void;
+};
 
 const shortcuts = [
   ['Cmd/Ctrl+K', 'Open command palette'],
   ['/', 'Focus the current page search'],
   ['x', 'Toggle selection of the focused table row'],
   ['c', 'Adjust credits on a user profile'],
-  ['s', 'Open audited suspension preview on a user profile'],
+  ['s', 'Suspend the account on a user profile'],
   ['Cmd/Ctrl+S', 'Save the settings editor you are working in'],
   ['?', 'Show keyboard shortcuts'],
 ];
@@ -69,7 +77,7 @@ export function AdminCommandPalette({
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      if (isAdminOverlayOpen()) return;
       const key = event.key.toLowerCase();
       if (isAdminChordEvent(event) && key === 'k' && !event.shiftKey) {
         event.preventDefault();
@@ -129,20 +137,22 @@ export function AdminCommandPalette({
         >
           Keyboard shortcuts (?)
         </Button>
-        {commands.map(command => (
-          <Button
-            key={command.id}
-            variant="plain"
-            color="neutral"
-            size="sm"
-            data-testid={`admin-command-${command.id}-btn`}
-            disabled={command.disabled}
-            onClick={command.run}
-          >
-            {command.label}
-            {command.shortcut ? ` (${command.shortcut})` : ''}
-          </Button>
-        ))}
+        {commands
+          .filter(command => !command.paletteOnly)
+          .map(command => (
+            <Button
+              key={command.id}
+              variant="plain"
+              color="neutral"
+              size="sm"
+              data-testid={`admin-command-${command.id}-btn`}
+              disabled={command.disabled}
+              onClick={command.run}
+            >
+              {command.label}
+              {command.shortcut ? ` (${command.shortcut})` : ''}
+            </Button>
+          ))}
       </Stack>
       <Modal open={open} onClose={() => setOpen(false)}>
         <ModalDialog

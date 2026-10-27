@@ -7,6 +7,7 @@ import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { ApiKeyScope, type ContextTelemetry } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { createTelemetryIssue } from '@server/utils/telemetryIssueCreator';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const paramsSchema = z.object({
   id: z.string().min(1),
@@ -66,6 +67,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     switch (result.status) {
       case 'created':
+        await recordAdminActionFromRequest(req, {
+          action: 'ops.context_telemetry.issue_created',
+          target: { kind: 'system', id, displayName: `Context telemetry for quest ${id}` },
+          summary: `created issue #${result.issue.number} in ${repository} from context telemetry`,
+          details: { questId: id, repository, issueNumber: result.issue.number },
+        });
         res.json({
           success: true,
           issue: {

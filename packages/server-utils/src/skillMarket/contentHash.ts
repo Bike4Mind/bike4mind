@@ -6,17 +6,19 @@ import type { ISkill } from '@bike4mind/common';
  * and may be changed on import to avoid a collision, which must not read as "locally modified".
  */
 export function skillContentHash(
-  skill: Pick<ISkill, 'description' | 'body' | 'argumentHint' | 'allowedTools' | 'disableModelInvocation'>
+  skill: Pick<
+    ISkill,
+    'description' | 'body' | 'argumentHint' | 'allowedTools' | 'claudeCodeAllowedTools' | 'disableModelInvocation'
+  >
 ): string {
-  return createHash('sha256')
-    .update(
-      JSON.stringify([
-        skill.description,
-        skill.body,
-        skill.argumentHint ?? '',
-        skill.allowedTools ?? [],
-        Boolean(skill.disableModelInvocation),
-      ])
-    )
-    .digest('hex');
+  const parts: unknown[] = [
+    skill.description,
+    skill.body,
+    skill.argumentHint ?? '',
+    skill.allowedTools ?? [],
+    Boolean(skill.disableModelInvocation),
+  ];
+  // Appended only when set, so every hash computed before this field existed stays valid.
+  if (skill.claudeCodeAllowedTools?.length) parts.push(skill.claudeCodeAllowedTools);
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }

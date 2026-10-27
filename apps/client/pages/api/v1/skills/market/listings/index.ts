@@ -23,10 +23,18 @@ const MAX_PAGE = 1000;
 // keyset; rows can skip or repeat if rankings shift mid-iteration. Keyset per sort if that bites.
 const browseRoute = nextRouteForContract(listSkillMarketListingsContract).get(async (req, res) => {
   const { limit, cursor, q, scope, tags, tools, min_rating, sort } = req.validatedQuery;
-  const page = cursor === undefined ? 1 : Number(decodeCursor(cursor, CURSOR_SCOPE));
-  // A cursor is only ever minted for page 2 onwards.
-  if (cursor !== undefined && !(Number.isSafeInteger(page) && page >= 2 && page <= MAX_PAGE)) {
-    throw new UnprocessableEntityError('Invalid cursor');
+  let page = 1;
+  if (cursor !== undefined) {
+    const parts = decodeCursor(cursor, CURSOR_SCOPE).split(':');
+    page = Number(parts[0]);
+    // A cursor is only ever minted for page 2 onwards, and only for the limit it was issued under.
+    if (
+      parts.length !== 2 ||
+      !(Number.isSafeInteger(page) && page >= 2 && page <= MAX_PAGE) ||
+      Number(parts[1]) !== limit
+    ) {
+      throw new UnprocessableEntityError('Invalid cursor');
+    }
   }
 
   const result = await searchListings(await memberOrgIdsFor(req.user.id), {
@@ -46,7 +54,7 @@ const browseRoute = nextRouteForContract(listSkillMarketListingsContract).get(as
 
   return res.json({
     data: result.data.map(listing => toPublicListing(listing)),
-    next_cursor: result.hasMore && page < MAX_PAGE ? encodeCursor(CURSOR_SCOPE, String(page + 1)) : null,
+    next_cursor: result.hasMore && page < MAX_PAGE ? encodeCursor(CURSOR_SCOPE, `${page + 1}:${limit}`) : null,
   });
 });
 

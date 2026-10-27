@@ -85,7 +85,7 @@ async function writeSkill(rel: string, content: string): Promise<string> {
 }
 
 describe('readSkillFile', () => {
-  it('reads <dir> and <dir>/SKILL.md the same way, dropping allowed-tools', async () => {
+  it('reads <dir> and <dir>/SKILL.md the same way, keeping allowed-tools out of allowedTools', async () => {
     const file = await writeSkill('my-skill/SKILL.md', SKILL);
     const fromDir = await readSkillFile(path.dirname(file));
     const fromFile = await readSkillFile(file);
@@ -95,10 +95,11 @@ describe('readSkillFile', () => {
       description: 'Does a thing',
       body: 'Body text',
       argumentHint: '<file>',
+      claudeCodeAllowedTools: ['Read', 'Bash'],
       disableModelInvocation: false,
     });
     expect(fromDir.payload).not.toHaveProperty('allowedTools');
-    expect(fromDir.dropped).toEqual(expect.arrayContaining(['allowed-tools', 'model']));
+    expect(fromDir.dropped).toEqual(['model']);
   });
 
   it('falls back to the folder name, trimmed and lowercased', async () => {
@@ -164,8 +165,15 @@ describe('buildSkillPayload', () => {
       name: 'x',
       description: 'b',
       body: 'b',
+      claudeCodeAllowedTools: [],
       disableModelInvocation: true,
     });
+  });
+
+  it("sends the file's allowed-tools as claudeCodeAllowedTools, never as allowedTools", () => {
+    const payload = buildSkillPayload({ name: 'commit', claudeCodeAllowedTools: ['Bash(git:*)', 'Read'] }, 'f');
+    expect(payload.claudeCodeAllowedTools).toEqual(['Bash(git:*)', 'Read']);
+    expect(payload).not.toHaveProperty('allowedTools');
   });
 
   it('falls back to the first body line, without heading marks, when there is no description', () => {
@@ -210,7 +218,7 @@ const noApiCalls = (api: ReturnType<typeof makeDeps>['api']) =>
   Object.values(api).forEach(fn => expect(fn).not.toHaveBeenCalled());
 
 const file = (extra: Partial<SkillFile> = {}): SkillFile => ({
-  payload: { name: 'my-skill', description: 'd', body: 'b', disableModelInvocation: false },
+  payload: { name: 'my-skill', description: 'd', body: 'b', claudeCodeAllowedTools: [], disableModelInvocation: false },
   dropped: [],
   extraFiles: [],
   ...extra,
@@ -538,6 +546,24 @@ describe('publishToMarket', () => {
     const a = api([listing('withdrawn')]);
     await publishToMarket('s1', { visibility: 'unlisted' }, a as never, () => {});
     expect(a.post).toHaveBeenCalledWith('/api/v1/skills/market/listings', { skill_id: 's1', visibility: 'unlisted' });
+  });
+
+  it('reports an unchanged re-publish as up to date', async () => {
+    const a = api([listing('approved')]);
+    a.post.mockRejectedValue({
+      response: { status: 400, data: { error: 'This exact content is already live or waiting for review' } },
+    });
+    const lines: string[] = [];
+    await publishToMarket('s1', { visibility: 'public' }, a as never, l => lines.push(l));
+    expect(lines).toEqual(['Listing "my-skill" is already up to date']);
+  });
+
+  it('still fails on any other 400 from the versions endpoint', async () => {
+    const a = api([listing('approved')]);
+    a.post.mockRejectedValue({ response: { status: 400, data: { error: 'Skill has no content' } } });
+    await expect(publishToMarket('s1', { visibility: 'public' }, a as never, () => {})).rejects.toThrow(
+      'Publishing to the Skill Market failed: Skill has no content'
+    );
   });
 
   it("surfaces the server's refusal", async () => {

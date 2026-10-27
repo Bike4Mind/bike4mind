@@ -436,10 +436,10 @@ describe('/api/v1/skills/market wire shapes', () => {
     const second = await fire(listingsHandler, {
       method: 'GET',
       url: '/api/v1/skills/market/listings',
-      query: { q: 'review', cursor: page1.next_cursor },
+      query: { q: 'review', limit: '10', cursor: page1.next_cursor },
     });
     expect(second._getJSONData().next_cursor).toBeNull();
-    expect(h.search).toHaveBeenLastCalledWith([ORG_ID], expect.objectContaining({ page: 2 }));
+    expect(h.search).toHaveBeenLastCalledWith([ORG_ID], expect.objectContaining({ page: 2, limit: 10 }));
   });
 
   it('browse rejects a malformed cursor and an over-cap limit (422)', async () => {
@@ -518,6 +518,22 @@ describe('/api/v1/skills/market wire shapes', () => {
       expect(res._getStatusCode()).toBe(422);
     }
     expect(h.search).not.toHaveBeenCalled();
+  });
+
+  it('browse rejects a cursor reused with a different limit (422)', async () => {
+    h.search.mockResolvedValueOnce({ data: [serializeListing(LISTING)], hasMore: true });
+    const first = await fire(listingsHandler, {
+      method: 'GET',
+      url: '/api/v1/skills/market/listings',
+      query: { limit: '1' },
+    });
+    const res = await fire(listingsHandler, {
+      method: 'GET',
+      url: '/api/v1/skills/market/listings',
+      query: { limit: '2', cursor: first._getJSONData().next_cursor },
+    });
+    expect(res._getStatusCode()).toBe(422);
+    expect(h.search).toHaveBeenCalledTimes(1);
   });
 
   it('detail answers 404 for an unknown listing', async () => {

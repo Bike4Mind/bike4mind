@@ -65,7 +65,10 @@ export const listSkillMarketListingsContract = defineEndpoint({
   responses: {
     200: { description: 'One page of listings.', schema: BrowseSkillListingsResponseSchema },
     403: { description: READ_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
-    422: { description: 'A query value is out of range, or `cursor` is malformed.', schema: ApiErrorSchema },
+    422: {
+      description: 'A query value is out of range, or `cursor` is malformed or was issued for a different `limit`.',
+      schema: ApiErrorSchema,
+    },
     429: { description: KEY_429, schema: ApiErrorSchema },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
