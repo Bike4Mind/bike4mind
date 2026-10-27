@@ -41,16 +41,21 @@ export async function assertAgentLimit(user: { id: string; level?: UserLevelType
  * Without `useOwnCredits` the agent always starts at 0, so a request can't create an unpaid balance.
  * Shared by POST /api/agents and POST /api/v1/agents. Throws BadRequestError on any rejection: an
  * AgentValidationError for an invalid body field, and the tier cap carries `errorCode: agent_limit_reached`.
- * `label` renames a field in an error message (see validateAgentUpdate).
+ * `label` renames a field in an error message and `logger` is the request logger for the model catalog lookup (see validateAgentUpdate).
  */
-export async function createAgent(agentData: Partial<IAgent>, userId: string, label?: (field: string) => string) {
+export async function createAgent(
+  agentData: Partial<IAgent>,
+  userId: string,
+  label?: (field: string) => string,
+  logger?: Parameters<typeof validateAgentUpdate>[3]
+) {
   // Validate required fields
   if (!agentData.name) {
     throw new AgentValidationError('Agent name is required');
   }
 
   // Normalizes agentData in place, so the fields below read the validated values.
-  await validateAgentUpdate(agentData, userId, label);
+  await validateAgentUpdate(agentData, userId, label, logger);
 
   // Always use a default description if empty or undefined
   // This ensures the MongoDB schema validation passes
