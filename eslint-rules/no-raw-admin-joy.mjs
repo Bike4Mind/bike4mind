@@ -5,6 +5,17 @@ import { createHash } from 'node:crypto';
 const restricted = new Set(['Card', 'Modal', 'Table']);
 const adminPath = '/apps/client/app/components/admin/';
 
+function classifyModule(source) {
+  const subpath = source
+    .replace(/^@mui\/joy\/?/, '')
+    .replace(/^(?:node|modern)(?:\/|$)/, '')
+    .replace(/\.js$/, '');
+  if (subpath === '' || subpath === 'index') return '*';
+  const [component, entry, ...remaining] = subpath.split('/');
+  if (!restricted.has(component) || remaining.length) return undefined;
+  return entry === undefined || entry === 'index' || entry === component ? component : undefined;
+}
+
 /** @type {import('eslint').Rule.RuleModule} */
 export default {
   meta: {
@@ -27,18 +38,18 @@ export default {
       if (!node.source || node.importKind === 'type' || node.exportKind === 'type') return;
       const source = node.source.value;
       if (typeof source !== 'string' || !/^@mui\/joy(?:\/|$)/.test(source)) return;
-      const subpath = source.slice('@mui/joy/'.length).split('/')[0];
-      const components = restricted.has(subpath)
+      const moduleComponent = classifyModule(source);
+      const components = restricted.has(moduleComponent)
         ? (node.specifiers ?? []).flatMap(specifier => {
             if (specifier.importKind === 'type' || specifier.exportKind === 'type') return [];
             if (specifier.type === 'ImportDefaultSpecifier' || specifier.type === 'ImportNamespaceSpecifier') {
-              return [subpath];
+              return [moduleComponent];
             }
             const imported = specifier.imported ?? specifier.local;
             const name = imported?.name ?? imported?.value;
-            return !imported || name === 'default' || name === subpath ? [subpath] : [];
+            return !imported || name === 'default' || name === moduleComponent ? [moduleComponent] : [];
           })
-        : source === '@mui/joy'
+        : moduleComponent === '*'
           ? (node.specifiers ?? []).flatMap(specifier => {
               if (specifier.importKind === 'type' || specifier.exportKind === 'type') return [];
               if (specifier.type === 'ImportNamespaceSpecifier' || specifier.type === 'ImportDefaultSpecifier') {
@@ -50,8 +61,7 @@ export default {
             })
           : [];
       if (node.type === 'ExportAllDeclaration') {
-        if (source === '@mui/joy') components.push('*');
-        else if (restricted.has(subpath)) components.push(subpath);
+        if (moduleComponent) components.push(moduleComponent);
       }
       if (!components.length) return;
       const fingerprint = createHash('sha256').update(context.sourceCode.getText(node)).digest('hex').slice(0, 16);

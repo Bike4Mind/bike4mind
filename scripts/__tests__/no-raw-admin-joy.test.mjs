@@ -33,6 +33,18 @@ tester.run('no-raw-admin-joy', rule, {
     valid("import { type CardProps } from '@mui/joy/Card';"),
     valid("export { type TableProps } from '@mui/joy/Table';"),
     valid("import { cardClasses } from '@mui/joy/Card';"),
+    ...[
+      'Card/cardClasses',
+      'Modal/modalClasses',
+      'Table/tableClasses',
+      'node/Card/cardClasses.js',
+      'modern/Modal/modalClasses.js',
+    ].flatMap(source => [
+      valid(`import classes from '@mui/joy/${source}';`),
+      valid(`import * as helpers from '@mui/joy/${source}';`),
+      valid(`export { default as classes } from '@mui/joy/${source}';`),
+      valid(`export * from '@mui/joy/${source}';`),
+    ]),
     valid(
       "// admin-toolkit-allow 2026-10-27 -- Read-only preview needs a custom focus container\nimport { Modal } from '@mui/joy';"
     ),
@@ -41,6 +53,27 @@ tester.run('no-raw-admin-joy', rule, {
   ],
   invalid: [
     invalid("import { Modal } from '@mui/joy';"),
+    ...['index', 'index.js', 'node', 'node/index', 'node/index.js', 'modern', 'modern/index.js'].flatMap(source => [
+      invalid(`import { Modal } from '@mui/joy/${source}';`),
+      invalid(`export { Modal as Dialog } from '@mui/joy/${source}';`),
+      invalid(`import * as Joy from '@mui/joy/${source}';`, ['*']),
+      invalid(`export * from '@mui/joy/${source}';`, ['*']),
+    ]),
+    ...['Card', 'Modal', 'Table'].flatMap(component =>
+      [
+        component,
+        `${component}/index.js`,
+        `${component}/${component}.js`,
+        `node/${component}`,
+        `node/${component}/${component}.js`,
+        `modern/${component}/index.js`,
+        `modern/${component}/${component}.js`,
+      ].flatMap(source => [
+        invalid(`import Raw from '@mui/joy/${source}';`, [component]),
+        invalid(`export { default as Raw } from '@mui/joy/${source}';`, [component]),
+        invalid(`export * from '@mui/joy/${source}';`, [component]),
+      ])
+    ),
     invalid("import { Card as Panel, Modal as Dialog, Table as Grid } from '@mui/joy';", ['Card', 'Modal', 'Table']),
     invalid("import Dialog from '@mui/joy/Modal';"),
     invalid("import { default as Panel } from '@mui/joy/Card';", ['Card']),
@@ -50,7 +83,6 @@ tester.run('no-raw-admin-joy', rule, {
     invalid("export { Modal as Dialog } from '@mui/joy';"),
     invalid("export { default as Grid } from '@mui/joy/Table';", ['Table']),
     invalid("export * from '@mui/joy';", ['*']),
-    invalid("export * from '@mui/joy/Card';", ['Card']),
     invalid("import * as Dialog from '@mui/joy/Modal';"),
     invalid("import { default as First, default as Second } from '@mui/joy/Card';", ['Card', 'Card']),
     invalid("// admin-toolkit-allow -- A reason without a date\nimport { Modal } from '@mui/joy';"),
