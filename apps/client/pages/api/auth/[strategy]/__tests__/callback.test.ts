@@ -134,7 +134,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     expect(JSON.stringify(loggedArg)).not.toContain('E11000');
 
     const redirectUrl = res._getRedirectUrl();
-    expect(redirectUrl).toBe('/login?error=Authentication%20failed');
+    expect(redirectUrl).toBe('/login?error=callback_error');
     expect(redirectUrl).not.toContain('victim');
     expect(redirectUrl).not.toContain('E11000');
   });
@@ -146,9 +146,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_expired' }));
-    expect(res._getRedirectUrl()).toBe(
-      `/login?error=${encodeURIComponent('Your login request expired. Please try again.')}`
-    );
+    expect(res._getRedirectUrl()).toBe('/login?error=invalid_state');
   });
 
   it('maps state_missing and state_invalid to their own distinct canonical reasons', async () => {
@@ -157,7 +155,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
       message: 'Missing state parameter',
     });
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_missing' }));
-    expect(missingRes._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(missingRes._getRedirectUrl()).toBe('/login?error=callback_error');
 
     vi.clearAllMocks();
 
@@ -166,7 +164,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
       message: 'Invalid authorization state.',
     });
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_invalid' }));
-    expect(invalidRes._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(invalidRes._getRedirectUrl()).toBe('/login?error=callback_error');
   });
 
   it('default-denies an unrecognized or absent code to internal - raw info.message never substitutes for reason', async () => {
@@ -180,7 +178,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
 
     const withNoInfo = await runCallback(null, undefined, undefined);
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'internal' }));
-    expect(withNoInfo._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(withNoInfo._getRedirectUrl()).toBe('/login?error=callback_error');
     void withUnknownCode;
   });
 
@@ -191,7 +189,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'forbidden_system_user' }));
-    expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
   });
 });
 
@@ -226,7 +224,7 @@ describe('[strategy]/callback - !user branch log level', () => {
     expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', info);
     expect(errorSpy).not.toHaveBeenCalled();
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'access_denied' }));
-    expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
     errorSpy.mockRestore();
     warnSpy.mockRestore();
   });
@@ -273,13 +271,11 @@ describe('[strategy]/callback - banned user gate', () => {
 });
 
 describe('[strategy]/callback - invite gate', () => {
-  it('surfaces registration_closed with an invite-only message', async () => {
+  it('surfaces registration_closed as a login error code', async () => {
     const res = await runCallback(null, undefined, { code: 'registration_closed' });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'registration_closed' }));
-    expect(res._getRedirectUrl()).toBe(
-      `/login?error=${encodeURIComponent('This instance is invite-only. Ask an administrator for an invite.')}`
-    );
+    expect(res._getRedirectUrl()).toBe('/login?error=registration_closed');
   });
 });
 

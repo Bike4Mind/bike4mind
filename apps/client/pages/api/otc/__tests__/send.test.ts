@@ -69,6 +69,7 @@ const cache = vi.hoisted(() => {
 });
 const mockTryIncrement = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: { findAll: async () => [], findBySettingNames: async () => [] },
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: (...a: any[]) => mockTryIncrement(...a),
     tryAddWithinLimitFixedWindow: (key: string) => cache.peek(key),
