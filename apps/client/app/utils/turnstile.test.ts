@@ -182,10 +182,13 @@ describe('getTurnstileToken', () => {
     expect(laterPortal.hasAttribute('inert')).toBe(false);
   });
 
-  it('wraps focus leaving either side of the challenge iframe', async () => {
+  it('lets Tab reach the widget inside its closed shadow root and wraps at the card edges', async () => {
     let options: RenderOptions | undefined;
     render.mockImplementation((element: HTMLElement, renderOptions: RenderOptions) => {
-      element.append(document.createElement('iframe'));
+      // Real Turnstile mounts its iframe in a closed shadow root, so the page cannot query it.
+      const host = document.createElement('div');
+      host.attachShadow({ mode: 'closed' }).append(document.createElement('iframe'));
+      element.append(host);
       options = renderOptions;
       return 'widget-1';
     });
@@ -194,11 +197,36 @@ describe('getTurnstileToken', () => {
     options!['before-interactive-callback']();
     const card = document.querySelector<HTMLElement>('[data-testid="turnstile-challenge-card"]')!;
     const cancel = document.querySelector<HTMLButtonElement>('[data-testid="turnstile-challenge-cancel"]')!;
-    const iframe = card.querySelector('iframe')!;
-    (card.firstElementChild as HTMLElement).focus();
+    const startSentinel = card.firstElementChild as HTMLElement;
+    const endSentinel = card.lastElementChild as HTMLElement;
+    const pressTab = (shiftKey = false) => {
+      const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, cancelable: true });
+      document.dispatchEvent(event);
+      return event;
+    };
+
+    // Shift+Tab leaving the widget lands on the start sentinel and wraps to Cancel.
+    startSentinel.focus();
     expect(document.activeElement).toBe(cancel);
-    (card.lastElementChild as HTMLElement).focus();
-    expect(document.activeElement).toBe(iframe);
+
+    // Tab on Cancel moves to just before the widget and lets the native Tab step into it.
+    expect(pressTab().defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(startSentinel);
+
+    // Shift+Tab from before the widget, or from the card itself, wraps to Cancel.
+    expect(pressTab(true).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(cancel);
+    card.focus();
+    expect(pressTab(true).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(cancel);
+
+    // Shift+Tab on Cancel is left to the browser, which steps back into the widget.
+    expect(pressTab(true).defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(cancel);
+
+    endSentinel.focus();
+    expect(document.activeElement).toBe(startSentinel);
+
     options!.callback('tok-1');
     await pending;
   });

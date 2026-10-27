@@ -90,8 +90,18 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
     sentinel.tabIndex = -1;
     sentinel.setAttribute('aria-hidden', 'true');
   }
-  startSentinel.onfocus = () => cancel.focus();
-  endSentinel.onfocus = () => (container.querySelector('iframe') ?? cancel).focus();
+  // Turnstile renders into a closed shadow root, so its iframe can't be queried or focused directly.
+  // Parking focus on startSentinel instead lets the browser's own Tab step into the widget next.
+  let parkingFocus = false;
+  const focusBeforeWidget = () => {
+    parkingFocus = true;
+    startSentinel.focus();
+    parkingFocus = false;
+  };
+  startSentinel.onfocus = () => {
+    if (!parkingFocus) cancel.focus();
+  };
+  endSentinel.onfocus = focusBeforeWidget;
   card.append(startSentinel, message, container, cancel, endSentinel);
   overlay.appendChild(card);
   document.body.appendChild(overlay);
@@ -125,14 +135,13 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
       return;
     }
     if (event.key !== 'Tab') return;
-    // The iframe owns its internal tab order; only wrap at the card's outer boundary.
-    const firstControl = container.querySelector('iframe') ?? cancel;
-    if (event.shiftKey && (document.activeElement === firstControl || document.activeElement === card)) {
+    // The widget owns its internal tab order; only wrap at the card's outer boundary.
+    if (event.shiftKey && (document.activeElement === startSentinel || document.activeElement === card)) {
       event.preventDefault();
       cancel.focus();
     } else if (!event.shiftKey && document.activeElement === cancel) {
-      event.preventDefault();
-      firstControl.focus();
+      // No preventDefault: the default Tab action advances from startSentinel into the widget.
+      focusBeforeWidget();
     }
   };
   const showChrome = () => {
