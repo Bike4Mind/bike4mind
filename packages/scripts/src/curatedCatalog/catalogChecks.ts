@@ -1,5 +1,3 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import {
   CuratedCatalogSchema,
   MIN_CHAT_CONTEXT,
@@ -12,12 +10,17 @@ import {
   CURATED_MAX_SIGNATURE_BYTES,
   isAbliteratedModel,
   parseCuratedKey,
+  readCapped,
   verifyCurated,
   type CuratedKey,
 } from '@bike4mind/local-models';
-import { curatedDevKey } from './devKey';
+import { curatedDevKeys } from './devKey';
 
 export const KEYRING_PATH = 'apps/desktop/src/main/models/curated/keys.json';
+export const CANONICAL_KEYRING_URL = `https://raw.githubusercontent.com/Bike4Mind/bike4mind/main/${KEYRING_PATH}`;
+/** The largest step a publish may take over the live sequence; a first publish counts from 0. */
+export const MAX_SEQUENCE_STEP = 1000;
+const MAX_KEYRING_BYTES = 64 * 1024;
 
 export interface CuratedCandidate {
   manifest: Uint8Array;
@@ -28,15 +31,31 @@ export interface CuratedCandidate {
 
 export type Checked<T> = { ok: true; value: T } | { ok: false; error: string };
 
-/** The keyring as `main` has it, so a branch cannot trust a key it added itself; malformed entries are an error. */
+/** A GET over HTTPS with a 15 s timeout and no redirects; anything but a 200 under the size cap throws. */
+export async function fetchKeyringText(url: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+  if (new URL(url).protocol !== 'https:') throw new Error(`${url} is not https`);
+  const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(15_000) });
+  if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+  return new TextDecoder('utf-8', { fatal: true }).decode(await readCapped(response, MAX_KEYRING_BYTES));
+}
+
+/**
+ * The keyring on the canonical repo's `main`, never a local ref or the working tree, so a branch or a stale clone
+ * cannot pick the keys. Anything unreadable or malformed throws, which stops the run.
+ */
 export async function readMainKeyring(
-  git: (args: string[]) => Promise<string> = async args => (await promisify(execFile)('git', args)).stdout
+  read: (url: string) => Promise<string> = url => fetchKeyringText(url)
 ): Promise<CuratedKey[]> {
-  const raw: unknown = JSON.parse(await git(['show', `origin/main:${KEYRING_PATH}`]));
-  if (!Array.isArray(raw)) throw new Error(`${KEYRING_PATH} on origin/main is not an array`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await read(CANONICAL_KEYRING_URL));
+  } catch (error) {
+    throw new Error(`could not read the keyring from ${CANONICAL_KEYRING_URL}: ${(error as Error).message}`);
+  }
+  if (!Array.isArray(raw)) throw new Error(`${KEYRING_PATH} on main is not an array`);
   return raw.map((entry, i) => {
     const key = parseCuratedKey(entry);
-    if (!key) throw new Error(`${KEYRING_PATH} on origin/main has an invalid entry at index ${i}`);
+    if (!key) throw new Error(`${KEYRING_PATH} on main has an invalid entry at index ${i}`);
     return key;
   });
 }
@@ -76,12 +95,12 @@ export function verifyCandidate(
     return { ok: false, error: `the list is over ${CURATED_MAX_MANIFEST_BYTES} bytes` };
   if (sig.byteLength > CURATED_MAX_SIGNATURE_BYTES)
     return { ok: false, error: `the signature file is over ${CURATED_MAX_SIGNATURE_BYTES} bytes` };
-  const dev = curatedDevKey();
-  const keys = keyring.filter(key => key.keyId !== dev.keyId);
-  if (keys.length === 0) return { ok: false, error: `${KEYRING_PATH} on origin/main holds no production key` };
+  const dev = curatedDevKeys().map(({ keyId, spki, role }): CuratedKey => ({ keyId, spki, role }));
+  const keys = keyring.filter(key => !dev.some(devKey => devKey.keyId === key.keyId));
+  if (keys.length === 0) return { ok: false, error: `${KEYRING_PATH} on main holds no production key` };
   const verified = verifyCurated(manifest, sig, keys, revoked);
   if (!verified.ok) {
-    if (verifyCurated(manifest, sig, [{ keyId: dev.keyId, spki: dev.spki, role: 'signing' }]).ok)
+    if (verifyCurated(manifest, sig, dev).ok)
       return { ok: false, error: 'the list is signed only by the public test key' };
     return { ok: false, error: `${verified.reason}: ${verified.detail}` };
   }
@@ -101,6 +120,10 @@ export function verifyCandidate(
       error: `clients would drop part of the list: ${dropped.map(drop => `${drop.path} (${drop.reason})`).join('; ')}`,
     };
   const catalog = strict.data as HubManifest & { sequence: number };
+  const isRecovery = (id: string) => keyring.some(key => key.keyId === id && key.role === 'recovery');
+  const recoveryIds = catalog.revokedKeyIds.filter(isRecovery);
+  if (recoveryIds.length > 0)
+    return { ok: false, error: `revokedKeyIds names recovery key ${recoveryIds.join(', ')}, which cannot be revoked` };
   for (const tier of catalog.tiers)
     for (const pick of tier.picks) {
       const entry = catalog.entries.find(candidate => candidate.id === pick.entry);
@@ -121,20 +144,30 @@ const sameBytes = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(Buffer
 
 /**
  * Compares a verified candidate with the verified live list. Lower or equal-but-different is `behind-live`, which the
- * workflow reports as a sync lag. A rewritten changelog, a dropped revocation or an earlier `updatedAt` is refused.
+ * workflow reports as a sync lag. Refused: a step over MAX_SEQUENCE_STEP, a new revocation without a recovery
+ * signature, a rewritten changelog, a dropped revocation or an earlier `updatedAt`.
  */
 export function planPublish(candidate: CuratedCandidate, live: CuratedCandidate | null): PublishPlan {
-  if (!live) return { kind: 'first-publish' };
   const next = candidate.catalog;
-  const current = live.catalog;
-  if (next.sequence === current.sequence && sameBytes(candidate.manifest, live.manifest))
-    return { kind: 'already-live', liveSequence: current.sequence };
-  if (next.sequence <= current.sequence)
+  const liveSequence = live?.catalog.sequence ?? 0;
+  if (live && next.sequence === liveSequence && sameBytes(candidate.manifest, live.manifest))
+    return { kind: 'already-live', liveSequence };
+  if (live && next.sequence <= liveSequence)
     return {
       kind: 'behind-live',
-      liveSequence: current.sequence,
-      reason: `sequence ${next.sequence} is not above live sequence ${current.sequence}`,
+      liveSequence,
+      reason: `sequence ${next.sequence} is not above live sequence ${liveSequence}`,
     };
+  if (next.sequence - liveSequence > MAX_SEQUENCE_STEP)
+    return {
+      kind: 'refused',
+      reason: `sequence ${next.sequence} is more than ${MAX_SEQUENCE_STEP} above live sequence ${liveSequence}`,
+    };
+  const added = next.revokedKeyIds.filter(id => !live?.catalog.revokedKeyIds.includes(id));
+  if (added.length > 0 && !candidate.signers.some(key => key.role === 'recovery'))
+    return { kind: 'refused', reason: `revokedKeyIds adds ${added.join(', ')} without a recovery-key signature` };
+  if (!live) return { kind: 'first-publish' };
+  const current = live.catalog;
   if (Date.parse(next.updatedAt) < Date.parse(current.updatedAt))
     return { kind: 'refused', reason: `updatedAt ${next.updatedAt} is earlier than live ${current.updatedAt}` };
   const kept = next.changelog.filter(item => item.sequence <= current.sequence);
