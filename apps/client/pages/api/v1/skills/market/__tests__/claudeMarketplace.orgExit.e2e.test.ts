@@ -98,7 +98,9 @@ async function call(handler: typeof feedHandler | typeof zipHandler, userId: str
   try {
     await handler(req, res);
   } catch (err) {
-    return (err as { statusCode?: number }).statusCode;
+    const { statusCode } = err as { statusCode?: number };
+    if (statusCode === undefined) throw err;
+    return statusCode;
   }
   return res._getStatusCode();
 }
