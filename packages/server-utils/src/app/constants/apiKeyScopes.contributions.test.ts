@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PremiumApiKeyScope } from '@client/app/premiumContract';
+import type { PremiumApiKeyScope } from '@bike4mind/common';
 import type { ApiKeyScopeAccess, ApiKeyScopeOption } from './apiKeyScopes';
 
-const GENERATED = '@client/app/premium-generated/premiumApiKeyScopes.generated';
+const GENERATED = '../../premium-generated/premiumApiKeyScopes.generated';
 
 async function loadCatalog(premiumApiKeyScopes: unknown) {
   vi.resetModules();

@@ -3,7 +3,10 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MAX_CONTRIBUTED_SIGNUP_CREDITS, isReservedContributionKey } from '@client/lib/entitlements/registry';
+import {
+  MAX_CONTRIBUTED_SIGNUP_CREDITS,
+  isReservedContributionKey,
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 
 /**
  * Guard for the entitlement grant contribution (see `PremiumEntitlementGrants`): the registry trusts

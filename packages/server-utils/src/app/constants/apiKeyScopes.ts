@@ -5,8 +5,8 @@ import {
   isBuiltInApiKeyScope,
   isWellFormedApiKeyScope,
 } from '@bike4mind/common';
-import type { PremiumApiKeyScope } from '@client/app/premiumContract';
-import { premiumApiKeyScopes } from '@client/app/premium-generated/premiumApiKeyScopes.generated';
+import type { PremiumApiKeyScope } from '@bike4mind/common';
+import { premiumApiKeyScopes } from '../../premium-generated/premiumApiKeyScopes.generated';
 
 export interface ApiKeyScopeOption {
   value: ApiKeyScopeValue;

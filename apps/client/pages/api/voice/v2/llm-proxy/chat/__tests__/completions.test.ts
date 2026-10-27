@@ -58,7 +58,7 @@ vi.mock('@server/voice/voiceSessionToken', () => ({
   verifyVoiceSessionToken: (...args: unknown[]) => mockVerifyVoiceSessionToken(...args),
 }));
 
-vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({ premiumLlmTools: {} }));
+vi.mock('@bike4mind/server-utils/premium-generated/premiumLlmTools.generated', () => ({ premiumLlmTools: {} }));
 
 // The wiring module reads infra Resources at load; the resolver is the unit under test, not the job engine.
 const mockBuildVideoToolConfig = vi.fn();

@@ -161,17 +161,17 @@ vi.mock('@bike4mind/services/llm', async () => {
 vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
 
 const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
-vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
   },
 }));
 
-vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumLlmTools.generated', () => ({
   premiumLlmTools: { fixture_tool: { name: 'fixture_tool' } },
 }));
 
-vi.mock('@server/premium-generated/premiumAgentExtensions.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumAgentExtensions.generated', () => ({
   premiumAgentExtensions: [
     {
       surfaceProfiles: [

@@ -27,7 +27,7 @@ import {
   updateFileContract,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { decideScopeGate } from '@server/middlewares/apiKeyScopeGate';
+import { decideScopeGate } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { encodeCursor } from '@server/utils/cursorPagination';
 
 const {

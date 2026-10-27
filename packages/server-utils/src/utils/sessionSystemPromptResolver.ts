@@ -1,8 +1,8 @@
-import '@client/lib/settings/registerContributedSettings';
+import '../lib/settings/registerContributedSettings';
 import { applyWorkspaceSessionSettings, type SurfaceSettingsSession } from '@bike4mind/common';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
-import { loadSystemPromptContent } from '@server/utils/systemPrompts/loader';
-import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';
+import { premiumWorkspaceSessionSettings } from '../premium-generated/premiumWorkspaceSessionSettings.generated';
+import { loadSystemPromptContent } from './systemPrompts/loader';
+import { isSessionActivatablePromptId } from './sessionActivatablePrompts';
 
 /**
  * The ONE implementation of `IChatCompletionServiceOptions.loadSystemPromptById`.

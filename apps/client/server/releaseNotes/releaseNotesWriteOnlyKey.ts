@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
-import { holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
+import { holdsApiKeyScope, type ScopedRequest } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
 /**
  * True for an API key that reached a release-note route through release-notes:write rather than

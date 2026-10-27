@@ -1,4 +1,4 @@
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { CreditHolderType } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { creditService, organizationService } from '@bike4mind/services';
-import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
+import { entitlementsForEmail, signupCreditsForKeys } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
 import { runPartnerSignupHooks, type PartnerSignupRuleMatch } from '@server/entitlements/partnerSignupHooks';

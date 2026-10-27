@@ -116,7 +116,7 @@ const childDoc = {
 const baseSession = { id: 'session-1', userId: 'user-1', disableUserIntegrations: true };
 
 const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
-vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
   },

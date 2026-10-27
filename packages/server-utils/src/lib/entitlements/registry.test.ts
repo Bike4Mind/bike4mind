@@ -7,7 +7,7 @@ vi.hoisted(() => {
 });
 
 // Hermetic against whatever overlay is mounted: this suite pins the built-in rows on their own.
-vi.mock('@client/app/premium-generated/premiumEntitlementGrants.generated', () => ({ premiumEntitlementGrants: {} }));
+vi.mock('../../premium-generated/premiumEntitlementGrants.generated', () => ({ premiumEntitlementGrants: {} }));
 
 import {
   __registryRows,
@@ -691,8 +691,8 @@ describe('built-in rows with no contribution', () => {
 describe('the contribution this build generated', () => {
   it('merges with nothing dropped and keeps the registry invariants', async () => {
     const { premiumEntitlementGrants } = await vi.importActual<
-      typeof import('@client/app/premium-generated/premiumEntitlementGrants.generated')
-    >('@client/app/premium-generated/premiumEntitlementGrants.generated');
+      typeof import('../../premium-generated/premiumEntitlementGrants.generated')
+    >('../../premium-generated/premiumEntitlementGrants.generated');
     const rejected: string[] = [];
     const merged = mergeContributedRows(builtIn, premiumEntitlementGrants, {
       otherCoreKeys: __registryRows.otherCoreKeys,

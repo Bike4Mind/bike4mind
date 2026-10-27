@@ -16,7 +16,11 @@
  * comparison rule shared with the registry so domain/key matching is identical.
  */
 import { partnerSignupRuleRepository } from '@bike4mind/database';
-import { normalizeTag, KNOWN_ENTITLEMENT_KEYS, unknownEntitlementKeys } from '@client/lib/entitlements/registry';
+import {
+  normalizeTag,
+  KNOWN_ENTITLEMENT_KEYS,
+  unknownEntitlementKeys,
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';

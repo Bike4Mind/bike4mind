@@ -7,7 +7,11 @@ import * as agentScopes from '@server/agents/agentScopes';
 import * as dataLakeScopes from '@server/dataLakes/dataLakeScopes';
 import * as fileScopes from '@server/files/fileScopes';
 import * as projectScopes from '@server/projects/projectScopes';
-import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPES, type ApiKeyScopeOption } from './apiKeyScopes';
+import {
+  ADMIN_ONLY_API_KEY_SCOPES,
+  USER_API_KEY_SCOPES,
+  type ApiKeyScopeOption,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 
 // Only the gate lists are needed; keep dataLakeScopes from loading the services graph.
 vi.mock('@bike4mind/services', () => ({}));
