@@ -1285,7 +1285,7 @@ export interface paths {
     };
     /**
      * List Skill Market versions awaiting review
-     * @description Lists the held versions you can review, oldest first, each with its listing and the approved version it would replace. Under an API key this is the Organization listings of the organizations you administer. Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: keep passing `next_cursor` back as `cursor` until it is `null`.
+     * @description Lists the held versions you can review, oldest first, each with its listing and the approved version it would replace. Under an API key without `admin:*` this is the Organization listings of the organizations you administer. Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: keep passing `next_cursor` back as `cursor` until it is `null`. A version that finishes scanning after you paged past its creation time shows up on the next pass that starts without a cursor.
      */
     get: operations['listSkillMarketReviewQueue'];
     put?: never;

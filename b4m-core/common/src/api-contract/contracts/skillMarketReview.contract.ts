@@ -13,8 +13,8 @@ import {
  * Skill Market review over an API key: the `/api/v1` twins of GET /api/skills/market/review-queue
  * (pending filter only) and POST /api/skills/market/versions/[vid]/review (approve and reject only).
  * Both share their logic with the SPA routes (server/skillMarket/reviewQueue.ts, submitVersion.ts).
- * A key never carries the platform-admin role, so under a key only org admins can review, and only
- * their organizations' Organization listings.
+ * A key without `admin:*` never carries the platform-admin role, so under one only org admins can
+ * review, and only their organizations' Organization listings.
  */
 
 const SCOPES = [ApiKeyScope.SKILLS_REVIEW];
@@ -27,9 +27,11 @@ export const listSkillMarketReviewQueueContract = defineEndpoint({
   summary: 'List Skill Market versions awaiting review',
   description:
     'Lists the held versions you can review, oldest first, each with its listing and the approved version it ' +
-    'would replace. Under an API key this is the Organization listings of the organizations you administer. ' +
+    'would replace. Under an API key without `admin:*` this is the Organization listings of the organizations ' +
+    'you administer. ' +
     'Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: ' +
-    'keep passing `next_cursor` back as `cursor` until it is `null`.',
+    'keep passing `next_cursor` back as `cursor` until it is `null`. A version that finishes scanning after ' +
+    'you paged past its creation time shows up on the next pass that starts without a cursor.',
   tags: ['Skills'],
   auth: 'apiKeyOrJwt',
   scopes: SCOPES,

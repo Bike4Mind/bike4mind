@@ -164,7 +164,7 @@ function withScopes(scopes: ApiKeyScope[]) {
 type Caller = 'key' | 'jwt' | 'none';
 
 // any: the handlers' Express-typed params vs node-mocks-http mocks.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 async function fire(
   handler: any,
   init: { method: 'GET' | 'POST'; url: string; query?: object; body?: object },
@@ -364,7 +364,7 @@ describe('/api/v1/skills/market/versions/{vid}/review', () => {
     ['reject without a note', { action: 'reject' }],
     ['reject with a blank note', { action: 'reject', note: '   ' }],
     ['audit, which v1 does not expose', { action: 'audit' }],
-    ["the SPA route's camelCase ack", { action: 'approve', ackHighRisk: true, ack_high_risk: 'yes' }],
+    ["the SPA route's camelCase ack", { action: 'approve', ackHighRisk: true }],
   ])('refuses %s (422) before the domain call', async (_name, body) => {
     expect((await review(body))._getStatusCode()).toBe(422);
     expect(h.decide).not.toHaveBeenCalled();

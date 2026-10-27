@@ -151,8 +151,8 @@ export enum ApiKeyScope {
   /**
    * Review held Skill Market versions (`/api/v1/skills/market/review-queue`,
    * `/api/v1/skills/market/versions/{vid}/review`): list the pending queue, approve or reject. Org
-   * admins only, since isAdmin is withheld under a key: it reaches the Organization listings of the
-   * orgs the key's owner administers, never Public or unlisted ones. Not confined.
+   * admins only, since isAdmin is withheld under a key without `admin:*`: it reaches the Organization
+   * listings of the orgs the key's owner administers, never Public or unlisted ones. Not confined.
    */
   SKILLS_REVIEW = 'skills:review',
   /**
