@@ -195,6 +195,9 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
               slotProps={{
                 input: {
                   step: 50,
+                  'data-testid': 'admin-user-credits-input',
+                  'data-admin-credits-input': true,
+                  'aria-label': 'Credit balance',
                 },
               }}
             />

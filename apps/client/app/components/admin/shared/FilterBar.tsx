@@ -21,9 +21,15 @@ export function FilterBar({
       {search && (
         <Input
           value={state.query}
-          placeholder={searchLabel}
+          placeholder={`${searchLabel} (/)`}
           slotProps={{
-            input: { 'aria-label': searchLabel, 'data-testid': 'admin-filter-search-input', maxLength: 500 },
+            input: {
+              'aria-label': searchLabel,
+              'data-admin-search': true,
+              'aria-keyshortcuts': '/',
+              'data-testid': 'admin-filter-search-input',
+              maxLength: 500,
+            },
           }}
           sx={{ ...adminFocus, flex: '1 1 12rem' }}
           onChange={event => onChange({ query: event.target.value, view: '' })}

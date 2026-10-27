@@ -150,8 +150,8 @@ jobs:
             // Three states, not two: a run that could not start is neither. Checked first,
             // because a skip exits 0 and would otherwise report as a green "Passed" on a PR
             // where zero tests ran.
-            const skipped = '${{ steps.e2e.outputs.preview_skipped }}' === 'true';
-            const passed = '${{ steps.e2e.outcome }}' === 'success';
+            const skipped = process.env.E2E_PREVIEW_SKIPPED === 'true';
+            const passed = process.env.E2E_OUTCOME === 'success';
             const icon = skipped ? '⏭️' : passed ? '✅' : '❌';
             const status = skipped ? 'Skipped' : passed ? 'Passed' : 'Failed';
             const summary = skipped
@@ -197,3 +197,5 @@ jobs:
             }
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
+          E2E_PREVIEW_SKIPPED: ${{ steps.e2e.outputs.preview_skipped }}
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}

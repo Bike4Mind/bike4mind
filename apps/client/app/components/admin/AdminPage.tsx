@@ -35,6 +35,8 @@ import RapidReplyTab from './RapidReplyTab';
 import VoiceSettingsTab from './VoiceSettingsTab';
 import DocumentationTab from './DocumentationTab';
 import KnowledgeModal from '../Knowledge/KnowledgeModal';
+import { AdminCommandPalette } from './shared/AdminCommandPalette';
+import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import ToolDefinitionsTab from './ToolDefinitionsTab';
 import EmailMarketingTab from './EmailMarketingTab';
 import SystemSecretsTab from './SystemSecretsTab';
@@ -161,166 +163,183 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
 
   return (
     <UndoToastProvider>
-      <Tabs
-        aria-label="Admin tabs"
-        value={activeTab}
-        onChange={(_, tab) => setActiveTab(tab)}
-        orientation="vertical"
-        sx={{ height: '100%', '& [role="tabpanel"]': { height: '100%', overflow: 'auto' } }}
-      >
-        <TabPanel value={AdminTab.Dashboard}>
-          {activeTab === AdminTab.Dashboard && <AdminDashboardTab onNavigate={setActiveTab} />}
-        </TabPanel>
-        <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
-        <TabPanel value={AdminTab.EmailVerification}>
-          {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.GrowthPricing} sx={{ padding: 0 }}>
-          {activeTab === AdminTab.GrowthPricing && <AdminGrowthPricingTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.AdminSettings} sx={{ padding: 0 }}>
-          {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
-        <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
-        <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
-        <TabPanel value={AdminTab.RegistrationInvites} sx={{ padding: 0 }}>
-          {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
-        </TabPanel>
-        {enableUserMigration && (
-          <TabPanel value={AdminTab.Migrate}>{activeTab === AdminTab.Migrate && <MigrateUsersTab />}</TabPanel>
-        )}
-        <TabPanel value={AdminTab.Modals}>{activeTab === AdminTab.Modals && <ModalsAdminTab />}</TabPanel>
-        <TabPanel value={AdminTab.WhatsNewModals} sx={{ padding: { xs: 0, sm: 2 } }}>
-          {activeTab === AdminTab.WhatsNewModals && <AdminWhatsNewModalsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.ReleaseNotes}>
-          {activeTab === AdminTab.ReleaseNotes && <AdminReleaseNotesTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.Files}>{activeTab === AdminTab.Files && <AdminFilesTab />}</TabPanel>
-        <TabPanel value={AdminTab.Documentation} sx={{ padding: 0 }}>
-          {activeTab === AdminTab.Documentation && <DocumentationTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.ApiReference}>{activeTab === AdminTab.ApiReference && <ApiReferenceTab />}</TabPanel>
-        <TabPanel value={AdminTab.ArchitectureDiagrams}>
-          {activeTab === AdminTab.ArchitectureDiagrams && <ArchitectureDiagramsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.Dependencies}>{activeTab === AdminTab.Dependencies && <DependenciesTab />}</TabPanel>
-        <TabPanel value={AdminTab.ApiCookbook}>{activeTab === AdminTab.ApiCookbook && <ApiCookbookTab />}</TabPanel>
-        <TabPanel value={AdminTab.Subscribers}>{activeTab === AdminTab.Subscribers && <SubscribersTab />}</TabPanel>
-        <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
-          {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.Subscriptions}>
-          {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
-        </TabPanel>
-        <TabPanel value={AdminTab.Organizations}>
-          {activeTab === AdminTab.Organizations && <OrganizationsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.CreditAnalytics}>
-          {activeTab === AdminTab.CreditAnalytics && <CreditAnalyticsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.SecretsRotation}>
-          {activeTab === AdminTab.SecretsRotation && <SecretsRotationTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.SystemSecrets}>
-          {activeTab === AdminTab.SystemSecrets && <SystemSecretsTab />}
-        </TabPanel>
-        {showLiveOpsTriageTab && (
-          <TabPanel value={AdminTab.LiveOpsTriage}>
-            {activeTab === AdminTab.LiveOpsTriage && <AdminLiveOpsTriageMultiConfigTab />}
+      <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <AdminCommandPalette onNavigate={setActiveTab} onOpenHelp={openHelpPanel} />
+        <Tabs
+          aria-label="Admin tabs"
+          value={activeTab}
+          onChange={(_, tab) => setActiveTab(tab)}
+          orientation="vertical"
+          sx={{ flex: 1, minHeight: 0, '& [role="tabpanel"]': { height: '100%', overflow: 'auto' } }}
+        >
+          <TabPanel value={AdminTab.Dashboard}>
+            {activeTab === AdminTab.Dashboard && <AdminDashboardTab onNavigate={setActiveTab} />}
           </TabPanel>
-        )}
-        <TabPanel value={AdminTab.ModelLogs}>{activeTab === AdminTab.ModelLogs && <ModelLogsTab />}</TabPanel>
-        <TabPanel value={AdminTab.ModelMetrics}>{activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}</TabPanel>
-        <TabPanel value={AdminTab.ModelLifecycle}>
-          {activeTab === AdminTab.ModelLifecycle && <ModelLifecycleTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.ContextInspector}>
-          {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.RetrievalRate}>
-          {activeTab === AdminTab.RetrievalRate && <RetrievalRateTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.EventMetrics}>{activeTab === AdminTab.EventMetrics && <EventMetricsTab />}</TabPanel>
-        <TabPanel value={AdminTab.SlackMetrics}>{activeTab === AdminTab.SlackMetrics && <SlackMetricsPage />}</TabPanel>
-        <TabPanel value={AdminTab.ManageGears}>{activeTab === AdminTab.ManageGears && <ManageGearsTab />}</TabPanel>
-        <TabPanel value={AdminTab.SystemPrompts}>
-          {activeTab === AdminTab.SystemPrompts && <SystemPromptsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.IdentityProviders}>
-          {activeTab === AdminTab.IdentityProviders && <IdentityProvidersTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.OAuthClients} sx={{ padding: 0 }}>
-          {activeTab === AdminTab.OAuthClients && <OAuthClientsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.AgentOps}>{activeTab === AdminTab.AgentOps && <AgentOpsTab />}</TabPanel>
-        <TabPanel value={AdminTab.AgentExecutions}>
-          {activeTab === AdminTab.AgentExecutions && <AgentExecutionsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.LLMDashboard}>{activeTab === AdminTab.LLMDashboard && <LLMDashboardTab />}</TabPanel>
-        <TabPanel value={AdminTab.RapidReply}>{activeTab === AdminTab.RapidReply && <RapidReplyTab />}</TabPanel>
-        <TabPanel value={AdminTab.VoiceSettings}>
-          {activeTab === AdminTab.VoiceSettings && <VoiceSettingsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.SecurityDashboard}>
-          {activeTab === AdminTab.SecurityDashboard && <SecurityDashboardMock />}
-        </TabPanel>
-        <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
-        <TabPanel value={AdminTab.SystemHealth}>
-          {activeTab === AdminTab.SystemHealth && <AdminSystemHealthTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.SlackWorkspaces}>
-          {activeTab === AdminTab.SlackWorkspaces && <SlackWorkspacesTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.EmbedKeys}>{activeTab === AdminTab.EmbedKeys && <EmbedKeysTab />}</TabPanel>
-        <TabPanel value={AdminTab.ToolDefinitions}>
-          {activeTab === AdminTab.ToolDefinitions && <ToolDefinitionsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.EmailMarketing} sx={{ padding: 0 }}>
-          {activeTab === AdminTab.EmailMarketing && <EmailMarketingTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.WebhookAuditLogs}>
-          {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
-        <TabPanel value={AdminTab.GitHubConnection}>
-          {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.HelpAnalytics}>
-          {activeTab === AdminTab.HelpAnalytics && <HelpAnalyticsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.RateLimits}>{activeTab === AdminTab.RateLimits && <RateLimitsTab />}</TabPanel>
-        <TabPanel value={AdminTab.DlqReplay}>{activeTab === AdminTab.DlqReplay && <DlqReplayTab />}</TabPanel>
-        <TabPanel value={AdminTab.ApiKeyScopePreflight}>
-          {activeTab === AdminTab.ApiKeyScopePreflight && <ApiKeyScopePreflightTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.IntegrationHealth}>
-          {activeTab === AdminTab.IntegrationHealth && <IntegrationHealthTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.IntegrationDemand}>
-          {activeTab === AdminTab.IntegrationDemand && <IntegrationDemandTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.SreAgent}>{activeTab === AdminTab.SreAgent && <SreAgentTab />}</TabPanel>
-        <TabPanel value={AdminTab.SecOpsTriage}>{activeTab === AdminTab.SecOpsTriage && <SecopsTriageTab />}</TabPanel>
-        <TabPanel value={AdminTab.PublishedPages}>
-          {activeTab === AdminTab.PublishedPages && <PublishedArtifactsTab />}
-        </TabPanel>
-        <TabPanel value={AdminTab.PrReport}>{activeTab === AdminTab.PrReport && <PrReportTab />}</TabPanel>
-      </Tabs>
-      <KnowledgeModal />
+          <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
+          <TabPanel value={AdminTab.EmailVerification}>
+            {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.GrowthPricing} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.GrowthPricing && <AdminGrowthPricingTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.AdminSettings} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
+          <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
+          <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
+          <TabPanel value={AdminTab.RegistrationInvites} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
+          </TabPanel>
+          {enableUserMigration && (
+            <TabPanel value={AdminTab.Migrate}>{activeTab === AdminTab.Migrate && <MigrateUsersTab />}</TabPanel>
+          )}
+          <TabPanel value={AdminTab.Modals}>{activeTab === AdminTab.Modals && <ModalsAdminTab />}</TabPanel>
+          <TabPanel value={AdminTab.WhatsNewModals} sx={{ padding: { xs: 0, sm: 2 } }}>
+            {activeTab === AdminTab.WhatsNewModals && <AdminWhatsNewModalsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.ReleaseNotes}>
+            {activeTab === AdminTab.ReleaseNotes && <AdminReleaseNotesTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.Files}>{activeTab === AdminTab.Files && <AdminFilesTab />}</TabPanel>
+          <TabPanel value={AdminTab.Documentation} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.Documentation && <DocumentationTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.ApiReference}>
+            {activeTab === AdminTab.ApiReference && <ApiReferenceTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.ArchitectureDiagrams}>
+            {activeTab === AdminTab.ArchitectureDiagrams && <ArchitectureDiagramsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.Dependencies}>
+            {activeTab === AdminTab.Dependencies && <DependenciesTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.ApiCookbook}>{activeTab === AdminTab.ApiCookbook && <ApiCookbookTab />}</TabPanel>
+          <TabPanel value={AdminTab.Subscribers}>{activeTab === AdminTab.Subscribers && <SubscribersTab />}</TabPanel>
+          <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.Subscriptions}>
+            {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
+          </TabPanel>
+          <TabPanel value={AdminTab.Organizations}>
+            {activeTab === AdminTab.Organizations && <OrganizationsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.CreditAnalytics}>
+            {activeTab === AdminTab.CreditAnalytics && <CreditAnalyticsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SecretsRotation}>
+            {activeTab === AdminTab.SecretsRotation && <SecretsRotationTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SystemSecrets}>
+            {activeTab === AdminTab.SystemSecrets && <SystemSecretsTab />}
+          </TabPanel>
+          {showLiveOpsTriageTab && (
+            <TabPanel value={AdminTab.LiveOpsTriage}>
+              {activeTab === AdminTab.LiveOpsTriage && <AdminLiveOpsTriageMultiConfigTab />}
+            </TabPanel>
+          )}
+          <TabPanel value={AdminTab.ModelLogs}>{activeTab === AdminTab.ModelLogs && <ModelLogsTab />}</TabPanel>
+          <TabPanel value={AdminTab.ModelMetrics}>
+            {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.ModelLifecycle}>
+            {activeTab === AdminTab.ModelLifecycle && <ModelLifecycleTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.ContextInspector}>
+            {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.RetrievalRate}>
+            {activeTab === AdminTab.RetrievalRate && <RetrievalRateTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.EventMetrics}>
+            {activeTab === AdminTab.EventMetrics && <EventMetricsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SlackMetrics}>
+            {activeTab === AdminTab.SlackMetrics && <SlackMetricsPage />}
+          </TabPanel>
+          <TabPanel value={AdminTab.ManageGears}>{activeTab === AdminTab.ManageGears && <ManageGearsTab />}</TabPanel>
+          <TabPanel value={AdminTab.SystemPrompts}>
+            {activeTab === AdminTab.SystemPrompts && <SystemPromptsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.IdentityProviders}>
+            {activeTab === AdminTab.IdentityProviders && <IdentityProvidersTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.OAuthClients} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.OAuthClients && <OAuthClientsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.AgentOps}>{activeTab === AdminTab.AgentOps && <AgentOpsTab />}</TabPanel>
+          <TabPanel value={AdminTab.AgentExecutions}>
+            {activeTab === AdminTab.AgentExecutions && <AgentExecutionsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.LLMDashboard}>
+            {activeTab === AdminTab.LLMDashboard && <LLMDashboardTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.RapidReply}>{activeTab === AdminTab.RapidReply && <RapidReplyTab />}</TabPanel>
+          <TabPanel value={AdminTab.VoiceSettings}>
+            {activeTab === AdminTab.VoiceSettings && <VoiceSettingsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SecurityDashboard}>
+            {activeTab === AdminTab.SecurityDashboard && <SecurityDashboardMock />}
+          </TabPanel>
+          <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
+          <TabPanel value={AdminTab.SystemHealth}>
+            {activeTab === AdminTab.SystemHealth && <AdminSystemHealthTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SlackWorkspaces}>
+            {activeTab === AdminTab.SlackWorkspaces && <SlackWorkspacesTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.EmbedKeys}>{activeTab === AdminTab.EmbedKeys && <EmbedKeysTab />}</TabPanel>
+          <TabPanel value={AdminTab.ToolDefinitions}>
+            {activeTab === AdminTab.ToolDefinitions && <ToolDefinitionsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.EmailMarketing} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.EmailMarketing && <EmailMarketingTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.WebhookAuditLogs}>
+            {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
+          <TabPanel value={AdminTab.GitHubConnection}>
+            {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.HelpAnalytics}>
+            {activeTab === AdminTab.HelpAnalytics && <HelpAnalyticsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.RateLimits}>{activeTab === AdminTab.RateLimits && <RateLimitsTab />}</TabPanel>
+          <TabPanel value={AdminTab.DlqReplay}>{activeTab === AdminTab.DlqReplay && <DlqReplayTab />}</TabPanel>
+          <TabPanel value={AdminTab.ApiKeyScopePreflight}>
+            {activeTab === AdminTab.ApiKeyScopePreflight && <ApiKeyScopePreflightTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.IntegrationHealth}>
+            {activeTab === AdminTab.IntegrationHealth && <IntegrationHealthTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.IntegrationDemand}>
+            {activeTab === AdminTab.IntegrationDemand && <IntegrationDemandTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SreAgent}>{activeTab === AdminTab.SreAgent && <SreAgentTab />}</TabPanel>
+          <TabPanel value={AdminTab.SecOpsTriage}>
+            {activeTab === AdminTab.SecOpsTriage && <SecopsTriageTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.PublishedPages}>
+            {activeTab === AdminTab.PublishedPages && <PublishedArtifactsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.PrReport}>{activeTab === AdminTab.PrReport && <PrReportTab />}</TabPanel>
+        </Tabs>
+        <KnowledgeModal />
 
-      {/* Admin Floating Chat - docked-session floating chat pattern */}
-      <NotebookFilepondProvider>
-        <Box sx={{ position: 'absolute', top: 0, left: 0, width: 0, height: 0, overflow: 'hidden' }}>
-          <SessionContainer
-            currentSessionId={adminSessionId ?? undefined}
-            isLoading={!adminSessionId || adminSession.isPending}
-            autoHideOnEmpty={false}
-            floatingChatCloseToPill
-          />
-        </Box>
-      </NotebookFilepondProvider>
+        {/* Admin Floating Chat - docked-session floating chat pattern */}
+        <NotebookFilepondProvider>
+          <Box sx={{ position: 'absolute', top: 0, left: 0, width: 0, height: 0, overflow: 'hidden' }}>
+            <SessionContainer
+              currentSessionId={adminSessionId ?? undefined}
+              isLoading={!adminSessionId || adminSession.isPending}
+              autoHideOnEmpty={false}
+              floatingChatCloseToPill
+            />
+          </Box>
+        </NotebookFilepondProvider>
+      </Box>
     </UndoToastProvider>
   );
 };

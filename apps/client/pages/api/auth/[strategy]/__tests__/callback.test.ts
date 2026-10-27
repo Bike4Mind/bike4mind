@@ -245,6 +245,42 @@ describe('[strategy]/callback - guards', () => {
   });
 });
 
+describe('[strategy]/callback - err branch log level', () => {
+  /** Shaped like passport-oauth2's TokenError, which carries the provider's OAuth error code. */
+  function tokenError(code: string) {
+    return Object.assign(new Error('Bad Request'), { name: 'TokenError', code });
+  }
+
+  it('logs a replayed or expired authorization code (invalid_grant) at warn', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const err = tokenError('invalid_grant');
+
+    const res = await runCallback(err, undefined, undefined);
+
+    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate Error:', undefined, err);
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it.each([
+    ['another TokenError code', tokenError('invalid_client')],
+    ['a non-token error', new Error('boom')],
+  ])('keeps %s at error', async (_label, err) => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runCallback(err, undefined, undefined);
+
+    expect(errorSpy).toHaveBeenCalledWith('Passport Authenticate Error:', undefined, err);
+    expect(warnSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+});
+
 describe('[strategy]/callback - banned user gate', () => {
   it('refuses to issue a session for a banned user and records the refusal', async () => {
     const res = await runCallback(null, { id: 'u-banned', email: 'banned@example.com', isBanned: true }, undefined);

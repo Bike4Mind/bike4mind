@@ -102,8 +102,75 @@ const resolvePreviewWith = (value: BulkAbusePreview) =>
   );
 
 describe('BulkAbuseResponseModal', () => {
+  it.each(['suspend', 'revoke'] as const)(
+    'previews and executes only the requested %s profile action without credit clawback',
+    recordAction => {
+      const actions = {
+        ban: recordAction === 'suspend',
+        revokeApiKeys: true,
+        revokeSessions: recordAction === 'suspend',
+        clawbackFreeCredits: false,
+      };
+      resolvePreviewWith(preview({ blocksDomain: null }));
+      render(
+        <TestWrapper>
+          <BulkAbuseResponseModal
+            selectedUserIds={[USER_ID]}
+            recordAction={recordAction}
+            onClose={vi.fn()}
+            onExecuted={vi.fn()}
+          />
+        </TestWrapper>
+      );
+      expect(screen.getByTestId('bulk-abuse-target-domain-radio')).toBeDisabled();
+      expect(screen.getByTestId('bulk-abuse-action-ban-checkbox')).toBeDisabled();
+      fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
+      expect(previewMutate).toHaveBeenCalledWith(
+        { target: { kind: 'users', userIds: [USER_ID] }, actions },
+        expect.anything()
+      );
+      expect(executeMutate).not.toHaveBeenCalled();
+      expect(screen.getByTestId('bulk-abuse-preview-summary')).toHaveTextContent('No credits will be clawed back.');
+      expect(screen.getByTestId('bulk-abuse-preview-summary')).not.toHaveTextContent('50 credits to claw back');
+      expect(screen.getByTestId('bulk-abuse-execute-btn')).toBeDisabled();
+      applyWithReason();
+      expect(executeMutate).toHaveBeenCalledExactlyOnceWith(
+        { target: { kind: 'users', userIds: [USER_ID] }, actions, previewToken: 'token-1', reason: REASON },
+        expect.anything()
+      );
+    }
+  );
+
+  it('previews a suspension as ban plus sessions with locked controls and no credit clawback', () => {
+    render(
+      <TestWrapper>
+        <BulkAbuseResponseModal
+          selectedUserIds={[USER_ID]}
+          recordAction="suspend"
+          onClose={vi.fn()}
+          onExecuted={vi.fn()}
+        />
+      </TestWrapper>
+    );
+    expect(screen.getByText('Suspend account')).toBeInTheDocument();
+    expect(screen.getByTestId('bulk-abuse-target-domain-radio')).toBeDisabled();
+    for (const action of ['ban', 'revokeApiKeys', 'revokeSessions', 'clawbackFreeCredits']) {
+      expect(screen.getByTestId(`bulk-abuse-action-${action}-checkbox`)).toBeDisabled();
+    }
+    fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
+    expect(previewMutate).toHaveBeenCalledWith(
+      {
+        target: { kind: 'users', userIds: [USER_ID] },
+        actions: { ban: true, revokeApiKeys: true, revokeSessions: true, clawbackFreeCredits: false },
+      },
+      expect.anything()
+    );
+    expect(executeMutate).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    previewMutate.mockReset();
+    executeMutate.mockReset();
     mutationState.previewError = null;
     mutationState.executeError = null;
     mutationState.executePending = false;

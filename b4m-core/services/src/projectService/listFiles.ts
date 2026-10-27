@@ -2,7 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { IFabFileRepository, IProjectRepository, IUserRepository, isImageServeable } from '@bike4mind/common';
 import { NotFoundError, secureParameters, BaseStorage } from '@bike4mind/utils';
 import { z } from 'zod';
-import { hasUsableCachedUrl } from '../fabFileService/get';
+import { hasUsableCachedUrl, signedUrlExpiresAt } from '../fabFileService/get';
 
 const listProjectFilesSchema = z.object({
   projectId: z.string(),
@@ -54,7 +54,7 @@ export const listFiles = async (
           try {
             const expiresIn = 3600; // 1 hour
             file.fileUrl = await adapters.storage!.getSignedUrl(file.filePath, 'get', { expiresIn });
-            file.fileUrlExpireAt = new Date(Date.now() + expiresIn * 1000);
+            file.fileUrlExpireAt = signedUrlExpiresAt(file.fileUrl, expiresIn);
 
             await adapters.db.files.update({
               id: file.id,

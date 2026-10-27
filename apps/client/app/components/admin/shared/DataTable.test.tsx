@@ -65,6 +65,20 @@ describe('DataTable', () => {
     expect(onPageChange).toHaveBeenCalledWith(2);
   });
 
+  it('toggles the focused row with x, not inputs or modified keys', () => {
+    render(<StatefulTable />);
+    const row = screen.getByTestId('admin-table-row-1');
+    expect(row).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(row, { key: 'x', ctrlKey: true });
+    expect(row).toHaveAttribute('aria-selected', 'false');
+    fireEvent.keyDown(row, { key: 'x' });
+    expect(row).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(within(screen.getByTestId('admin-table-select-1')).getByRole('checkbox'), { key: 'x' });
+    expect(row).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(row, { key: 'x' });
+    expect(row).toHaveAttribute('aria-selected', 'false');
+  });
+
   it('paginates the complete result at 25, 50 and 100 rows', () => {
     renderTable();
     expect(tableRows()).toHaveLength(25);

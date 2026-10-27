@@ -44,6 +44,7 @@ type BulkAbuseResponseModalProps = {
   onClose: () => void;
   /** Called after an execute, so the caller can drop its selection. */
   onExecuted: () => void;
+  recordAction?: 'suspend' | 'revoke';
 };
 
 type Stage =
@@ -80,12 +81,26 @@ const ALL_ACTIONS: BulkAbuseActions = {
  * Execute only acts on what the last preview showed; changing the target or actions discards it.
  * A domain past MAX_BULK_ABUSE_BATCH continues batch by batch from each result's cursor.
  */
-const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selectedUserIds, onClose, onExecuted }) => {
+const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({
+  selectedUserIds,
+  onClose,
+  onExecuted,
+  recordAction,
+}) => {
   const [targetKind, setTargetKind] = useState<BulkAbuseTarget['kind']>(selectedUserIds.length ? 'users' : 'domain');
   const [domain, setDomain] = useState('');
   // Domain continuation cursor; kept across action edits so "Preview again" stays on the same batch.
   const [afterUserId, setAfterUserId] = useState<string | undefined>();
-  const [actions, setActions] = useState<BulkAbuseActions>(ALL_ACTIONS);
+  const [actions, setActions] = useState<BulkAbuseActions>(
+    recordAction
+      ? {
+          ban: recordAction === 'suspend',
+          revokeApiKeys: true,
+          revokeSessions: recordAction === 'suspend',
+          clawbackFreeCredits: false,
+        }
+      : ALL_ACTIONS
+  );
   const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   const [stage, setStage] = useState<Stage>({ kind: 'edit' });
   const previewMutation = useBulkAbusePreview();
@@ -167,10 +182,23 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
     <Modal open onClose={handleClose}>
       <ModalDialog
         data-testid="bulk-abuse-modal"
+        aria-labelledby="bulk-abuse-title"
         sx={{ minWidth: { xs: '90%', sm: 600 }, maxWidth: 720, maxHeight: '90vh', overflow: 'auto' }}
       >
         <ModalClose disabled={executeMutation.isPending} />
-        <Typography level="h4">Bulk abuse response</Typography>
+        <Typography id="bulk-abuse-title" level="h4">
+          {recordAction === 'suspend'
+            ? 'Suspend account'
+            : recordAction === 'revoke'
+              ? 'Revoke API keys'
+              : 'Bulk abuse response'}
+        </Typography>
+        {recordAction && (
+          <Typography level="body-sm">
+            This audited flow excludes paid, admin, system and organization accounts. Preview checks eligibility before
+            any change. Suspension also revokes API keys and signs the user out.
+          </Typography>
+        )}
 
         {stage.kind !== 'executed' && (
           <>
@@ -194,7 +222,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
                 <Radio
                   value="domain"
                   label="Email domain"
-                  disabled={executeMutation.isPending}
+                  disabled={executeMutation.isPending || !!recordAction}
                   slotProps={{ input: { 'data-testid': 'bulk-abuse-target-domain-radio' } }}
                 />
               </RadioGroup>
@@ -234,7 +262,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
                   key={action}
                   label={ACTION_LABELS[action]}
                   checked={effectiveActions[action]}
-                  disabled={executeMutation.isPending || (action === 'revokeApiKeys' && actions.ban)}
+                  disabled={executeMutation.isPending || !!recordAction || (action === 'revokeApiKeys' && actions.ban)}
                   onChange={event => {
                     setActions(current => ({ ...current, [action]: event.target.checked }));
                     resetPreview();
@@ -257,7 +285,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
           </Alert>
         )}
 
-        {stage.kind === 'previewed' && <PreviewSummary preview={stage.preview} />}
+        {stage.kind === 'previewed' && <PreviewSummary preview={stage.preview} actions={stage.request.actions} />}
         {stage.kind === 'executed' && <ExecuteSummary result={stage.result} />}
 
         {hasWork && (
@@ -315,7 +343,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
   );
 };
 
-const PreviewSummary: React.FC<{ preview: BulkAbusePreview }> = ({ preview }) => (
+const PreviewSummary: React.FC<{ preview: BulkAbusePreview; actions: BulkAbuseActions }> = ({ preview, actions }) => (
   <Stack spacing={1} data-testid="bulk-abuse-preview-summary">
     <Typography level="title-md" data-testid="bulk-abuse-included-count">
       {preview.includedCount} users will be actioned
@@ -323,7 +351,9 @@ const PreviewSummary: React.FC<{ preview: BulkAbusePreview }> = ({ preview }) =>
     </Typography>
     <Typography level="body-sm">
       {preview.alreadyBannedCount} already banned, {preview.activeApiKeyCount} active API keys,{' '}
-      {preview.clawbackCredits} credits to claw back.
+      {actions.clawbackFreeCredits
+        ? `${preview.clawbackCredits} credits to claw back.`
+        : 'No credits will be clawed back.'}
     </Typography>
     {preview.blocksDomain && (
       <Alert color="warning" data-testid="bulk-abuse-blocks-domain">
