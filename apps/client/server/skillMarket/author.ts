@@ -220,17 +220,19 @@ export async function listMyListings(
     .sort({ createdAt: -1, _id: -1 })
     .limit(limit + 1);
   const listings = rows.slice(0, limit);
-  const versions = await SkillListingVersion.find({ listingId: { $in: listings.map(l => String(l._id)) } })
-    .sort({ version: -1 })
-    .select('-snapshot.body')
-    .limit(500);
-
-  const byListing = new Map<string, ISkillListingVersion[]>();
-  for (const v of versions) {
-    const list = byListing.get(v.listingId) ?? [];
-    if (list.length < 5) list.push(v.toJSON() as unknown as ISkillListingVersion);
-    byListing.set(v.listingId, list);
-  }
+  // One bounded query per listing: a shared sort+limit would let a listing with many versions
+  // crowd the others out of the page.
+  const perListing = await Promise.all(
+    listings.map(l =>
+      SkillListingVersion.find({ listingId: String(l._id) })
+        .sort({ version: -1 })
+        .select('-snapshot.body')
+        .limit(5)
+    )
+  );
+  const byListing = new Map(
+    listings.map((l, i) => [String(l._id), perListing[i].map(v => v.toJSON() as unknown as ISkillListingVersion)])
+  );
 
   const last = listings.at(-1);
   return {
