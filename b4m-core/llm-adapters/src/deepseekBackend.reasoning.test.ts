@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Stream } from 'openai/streaming';
 import { DeepSeekBackend } from './deepseekBackend';
 import type { CompletionInfo } from './backend';
+import { isOutputBudgetExhaustedError, isStreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
 
 /**
  * The non-streaming reasoning path. Every case here is silent when it breaks:
@@ -483,6 +484,47 @@ describe('DeepSeekBackend streaming reasoning', () => {
     ]);
 
     await expect(runStream(backend, ChatModels.DEEPSEEK_FLASH)).rejects.toThrow(/output budget was exhausted/);
+  });
+
+  it('types a budget-exhausted turn so callers can classify it', async () => {
+    const { backend } = backendReturning([{ index: 0, message: { content: '' }, finish_reason: 'length' }]);
+
+    const err = await runTurn(backend, ChatModels.DEEPSEEK_FLASH).catch((e: unknown) => e);
+    expect(isOutputBudgetExhaustedError(err)).toBe(true);
+  });
+
+  it('types a budget-exhausted stream so callers can classify it', async () => {
+    const { backend } = streamingBackend([
+      [
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'length' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH).catch((e: unknown) => e);
+    expect(isOutputBudgetExhaustedError(err)).toBe(true);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+  });
+
+  it('types a stream that ends with no finish reason as retryable', async () => {
+    const { backend } = streamingBackend([[{ choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] }]]);
+
+    const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH).catch((e: unknown) => e);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(true);
+    expect(isOutputBudgetExhaustedError(err)).toBe(false);
+    expect((err as Error).message).not.toMatch(/abort|overload|timeout/i);
+  });
+
+  it('does not type an aborted stream as retryable', async () => {
+    const { backend } = streamingBackend([[{ choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] }]]);
+    const abortSignal = AbortSignal.abort();
+
+    const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH, { abortSignal }).catch((e: unknown) => e);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/returned no content/);
   });
 
   it('throws when a stream spent the whole output budget reasoning and never produced prose', async () => {

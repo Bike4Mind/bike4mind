@@ -6,7 +6,7 @@ import {
   TooManyRequestsError,
   spendCapExceededError,
 } from '@bike4mind/common';
-import { ResponsesStreamTruncatedError } from '@bike4mind/llm-adapters';
+import { OutputBudgetExhaustedError, ResponsesStreamTruncatedError } from '@bike4mind/llm-adapters';
 import { InsufficientCreditsError, isOperatorFault } from './ChatCompletionProcess';
 
 describe('isOperatorFault', () => {
@@ -28,6 +28,7 @@ describe('isOperatorFault', () => {
     ['a request timeout', new Error('request timeout after 60000ms')],
     ['a stream idle timeout', new Error('stream timeout')],
     ['a truncated Responses stream', new ResponsesStreamTruncatedError('gpt-5')],
+    ['an exhausted output budget', new OutputBudgetExhaustedError('DeepSeek', 'deepseek-flash')],
     ['a tool pairing error', new Error('tool_use ids must have a matching tool_result')],
     ['a context overflow', new Error('Your request is too large for this model')],
     ['a caller-input 4xx', new BadRequestError('Failed to create LLM backend for model: nope')],

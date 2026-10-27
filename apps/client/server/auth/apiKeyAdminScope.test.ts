@@ -1,14 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, hasAdminPermission } from '@bike4mind/common';
 import { ownerWithheldUsers, persistedIsAdmin, requesterScopedUsers, withholdAdminRole } from './apiKeyAdminScope';
 
 const TestUser = mongoose.model(
   'ApiKeyAdminScopeTestUser',
-  new mongoose.Schema({ name: String, isAdmin: { type: Boolean, default: false } })
+  new mongoose.Schema({ name: String, isAdmin: { type: Boolean, default: false }, adminPermissions: [String] })
 );
 
-const loaded = () => TestUser.hydrate({ _id: new mongoose.Types.ObjectId(), name: 'a', isAdmin: true });
+const loaded = () =>
+  TestUser.hydrate({ _id: new mongoose.Types.ObjectId(), name: 'a', isAdmin: true, adminPermissions: [] });
 
 describe('withholdAdminRole', () => {
   it('reads false on a document without changing what it would persist', () => {
@@ -53,6 +54,15 @@ describe('withholdAdminRole', () => {
     expect(doc.isAdmin).toBe(false);
     expect(doc.get('isAdmin')).toBe(true);
     expect(persistedIsAdmin(doc)).toBe(true);
+  });
+
+  it('withholds granular permissions without changing persistence or inventing a full admin', () => {
+    const doc = TestUser.hydrate({ isAdmin: false, adminPermissions: ['settings:manage'] });
+    withholdAdminRole(doc);
+    expect(hasAdminPermission(doc, 'settings:manage')).toBe(false);
+    expect(doc.get('adminPermissions')).toEqual(['settings:manage']);
+    expect(doc.isModified('adminPermissions')).toBe(false);
+    expect(persistedIsAdmin(doc)).toBe(false);
   });
 
   it('leaves a regular user untouched', () => {
