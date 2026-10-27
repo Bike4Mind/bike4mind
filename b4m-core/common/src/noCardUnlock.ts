@@ -33,7 +33,7 @@ export interface NoCardUnlockSettings {
   probeInconclusiveAllows: boolean;
 }
 
-function parseNonNegativeInt(raw: unknown): number {
+function parsePositiveInt(raw: unknown): number {
   const n = typeof raw === 'string' ? (raw.trim() === '' ? NaN : Number(raw)) : raw;
   return typeof n === 'number' && Number.isSafeInteger(n) && n > 0 ? n : 0;
 }
@@ -46,12 +46,12 @@ function parseFlag(raw: unknown): boolean {
 export function resolveNoCardUnlockSettings(adminSettings: Record<string, unknown>): NoCardUnlockSettings {
   return {
     enabled: parseFlag(adminSettings.noCardUnlockEnabled),
-    githubCredits: parseNonNegativeInt(adminSettings.noCardUnlockGithubCredits),
-    workEmailCredits: parseNonNegativeInt(adminSettings.noCardUnlockWorkEmailCredits),
-    maxCredits: parseNonNegativeInt(adminSettings.noCardUnlockMaxCredits),
-    githubMinAgeDays: parseNonNegativeInt(adminSettings.noCardUnlockGithubMinAgeDays),
-    githubMinRepos: parseNonNegativeInt(adminSettings.noCardUnlockGithubMinRepos),
-    workEmailDomainDailyCap: parseNonNegativeInt(adminSettings.noCardUnlockWorkEmailDomainDailyCap),
+    githubCredits: parsePositiveInt(adminSettings.noCardUnlockGithubCredits),
+    workEmailCredits: parsePositiveInt(adminSettings.noCardUnlockWorkEmailCredits),
+    maxCredits: parsePositiveInt(adminSettings.noCardUnlockMaxCredits),
+    githubMinAgeDays: parsePositiveInt(adminSettings.noCardUnlockGithubMinAgeDays),
+    githubMinRepos: parsePositiveInt(adminSettings.noCardUnlockGithubMinRepos),
+    workEmailDomainDailyCap: parsePositiveInt(adminSettings.noCardUnlockWorkEmailDomainDailyCap),
     probeInconclusiveAllows: parseFlag(adminSettings.noCardUnlockProbeInconclusiveAllows),
   };
 }

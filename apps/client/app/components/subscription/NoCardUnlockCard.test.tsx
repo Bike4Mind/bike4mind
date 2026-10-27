@@ -4,7 +4,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { NoCardUnlockCard } from './NoCardUnlockCard';
 
-const state = vi.hoisted(() => ({ enabled: true, mutate: vi.fn() }));
+const state = vi.hoisted(() => ({ enabled: true, probeAllows: true, mutate: vi.fn() }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -19,7 +19,9 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
-  useAdminSettingsCache: () => ({ getSettingBoolean: () => state.enabled }),
+  useAdminSettingsCache: () => ({
+    getSettingBoolean: (key: string) => (key === 'noCardUnlockEnabled' ? state.enabled : state.probeAllows),
+  }),
 }));
 vi.mock('@client/app/hooks/data/noCardUnlock', () => ({
   useNoCardUnlock: () => ({ mutate: state.mutate }),
@@ -42,6 +44,7 @@ const respondWith = (result: { creditsGranted: number; currentCredits: number; r
 describe('NoCardUnlockCard', () => {
   beforeEach(() => {
     state.enabled = true;
+    state.probeAllows = true;
     state.mutate.mockReset();
   });
 
@@ -80,5 +83,22 @@ describe('NoCardUnlockCard', () => {
     renderCard();
     fireEvent.click(screen.getByTestId('no-card-unlock-work-email-btn'));
     expect(state.mutate.mock.calls[0][0]).toBe('work_email_verified');
+  });
+
+  it('hides the work email button while inconclusive probe results are not allowed', () => {
+    state.probeAllows = false;
+    renderCard();
+    expect(screen.getByTestId('no-card-unlock-github-btn')).toBeTruthy();
+    expect(screen.queryByTestId('no-card-unlock-work-email-btn')).toBeNull();
+  });
+
+  it('shows the error alert when the request fails', async () => {
+    state.mutate.mockImplementation((_reason, opts) => {
+      opts.onError(new Error('network'));
+      opts.onSettled();
+    });
+    renderCard();
+    fireEvent.click(screen.getByTestId('no-card-unlock-github-btn'));
+    await waitFor(() => expect(screen.getByTestId('no-card-unlock-error')).toBeTruthy());
   });
 });
