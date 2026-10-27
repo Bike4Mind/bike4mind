@@ -149,6 +149,7 @@ const E4B = curatedBuild({
 function curatedList(): CuratedList {
   return {
     updatedAt: '2026-10-27T00:00:00Z',
+    source: { origin: 'bundled', sequence: 1, check: 'off', checkedAt: null, stale: false },
     machine: { memoryKind: 'cpu', totalMemoryBytes: 62 * 1024 ** 3, gpuMemoryBytes: null, gpuName: null },
     picks: [
       { slot: 'best', entryId: 'qwen3-8-27b-gsq', buildId: 'iq3-s', recommended: false },
@@ -228,6 +229,7 @@ let bridge: Bridge;
 let pushToken: ((status: HfTokenStatus) => void) | null = null;
 let pushPulls: (pulls: ModelPull[]) => void = () => {};
 let pushInstalledChanged: () => void = () => {};
+let pushCuratedChanged: () => void = () => {};
 const calls = {
   pull: vi.fn(),
   cancelPull: vi.fn(),
@@ -242,6 +244,7 @@ const calls = {
   getHfToken: vi.fn(),
   setHfToken: vi.fn(),
   clearHfToken: vi.fn(),
+  checkCuratedList: vi.fn(),
 };
 
 beforeEach(() => {
@@ -300,6 +303,13 @@ beforeEach(() => {
         return bridge.curatedPull;
       },
       checkCurated: calls.checkCurated,
+      checkCuratedList: async () => {
+        calls.checkCuratedList();
+      },
+      onCuratedChanged: (listener: () => void) => {
+        pushCuratedChanged = listener;
+        return () => {};
+      },
       pull: calls.pull,
       cancelPull: calls.cancelPull,
       dismissPull: calls.dismissPull,
@@ -405,6 +415,38 @@ describe('ModelsScreen curated', () => {
     expect(q('models-curated-tab')?.getAttribute('aria-selected')).toBe('true');
     freshAct(() => freshMount.unmount());
     fresh.remove();
+  });
+
+  it('says the bundled list is shown and offers no Check now when this build cannot check', async () => {
+    await mount(undefined, 'curated');
+    expect(q('curated-header-status')?.textContent).toBe('Bundled with this app.');
+    expect(q('curated-check-now-btn')).toBeNull();
+  });
+
+  it('shows where an updated list came from, runs Check now, and re-lists when main reports a change', async () => {
+    const checkedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    bridge.curated = {
+      ...curatedList(),
+      source: { origin: 'updated', sequence: 3, check: 'up-to-date', checkedAt, stale: false },
+    };
+    await mount(undefined, 'curated');
+    expect(q('curated-header-status')?.textContent).toBe('Updated online. Checked 2 h ago.');
+
+    await click(q('curated-check-now-btn'));
+    expect(calls.checkCuratedList).toHaveBeenCalledTimes(1);
+
+    bridge.curated = {
+      ...curatedList(),
+      updatedAt: '2026-01-02T00:00:00Z',
+      source: { origin: 'updated', sequence: 4, check: 'failed', checkedAt, stale: true },
+    };
+    act(() => pushCuratedChanged());
+    await flush();
+    expect(q('models-curated-date')?.textContent).toBe('Curated list from January 2, 2026.');
+    expect(q('curated-header-status')?.textContent).toBe(
+      'Updated online. Could not check for updates. This list may be out of date.'
+    );
+    expect(q('curated-header-status')?.dataset.check).toBe('failed');
   });
 
   it("shows the list's date, then this computer's picks by role, with Recommended on one", async () => {
