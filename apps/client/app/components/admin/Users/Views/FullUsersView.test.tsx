@@ -11,7 +11,14 @@ const mutations = vi.hoisted(() => ({ updateMutate: vi.fn(), loginAsMutate: vi.f
 // Only the Roles column is exercised here (it owns the Custom Tags control that #2441 is
 // about), so the card's other sections are stubbed to keep their data hooks out of it.
 vi.mock('../../AdminProfile', () => ({ default: () => null }));
-vi.mock('../Details/Bike4MindUserDetails', () => ({ default: () => null }));
+vi.mock('../Details/Bike4MindUserDetails', () => ({
+  default: () => <input data-testid="admin-user-credits-input" data-admin-credits-input />,
+}));
+vi.mock('../BulkAbuseResponseModal', () => ({
+  default: ({ selectedUserIds, recordAction }: { selectedUserIds: string[]; recordAction: string }) => (
+    <div data-testid="profile-action-preview" data-user={selectedUserIds[0]} data-action={recordAction} />
+  ),
+}));
 vi.mock('../Details/LoginDetails', () => ({ default: () => null }));
 vi.mock('../Details/UserDetails', () => ({ default: () => null }));
 vi.mock('../Details/UserSubscriptionStatus', () => ({ default: () => null }));
@@ -82,6 +89,48 @@ const addCustomTag = (tag: string) => {
 };
 
 describe('FullUsersView - Overview and Activity tabs', () => {
+  it('focuses credits with c and opens a current-user suspension preview with s without writing', () => {
+    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('user-profile-tab-activity'));
+    fireEvent.keyDown(document.body, { key: 'c' });
+    expect(screen.getByTestId('admin-user-credits-input')).toHaveFocus();
+    fireEvent.keyDown(screen.getByTestId('admin-user-credits-input'), { key: 's' });
+    expect(screen.queryByTestId('profile-action-preview')).not.toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 's' });
+    expect(screen.getByTestId('profile-action-preview')).toHaveAttribute('data-user', 'u1');
+    expect(screen.getByTestId('profile-action-preview')).toHaveAttribute('data-action', 'suspend');
+    expect(mutations.updateMutate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { action: 'suspend', label: 'Suspend account' },
+    { action: 'revoke', label: 'Revoke API keys' },
+  ])('protects staged edits from the $action command until they are undone', ({ action, label }) => {
+    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+    addCustomTag('unsaved-record-action');
+
+    expect(screen.getByTestId(`admin-command-${action}-btn`)).toBeDisabled();
+    expect(screen.getByTestId('profile-action-unsaved-hint')).toHaveTextContent('Update or undo your changes');
+    fireEvent.click(screen.getByTestId(`admin-command-${action}-btn`));
+    fireEvent.keyDown(document.body, { key: 's' });
+    expect(screen.queryByTestId('profile-action-preview')).not.toBeInTheDocument();
+    expect(screen.getByTestId('remove-tag-unsaved-record-action')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('admin-command-open-btn'));
+    const search = screen.getByTestId('admin-search-input');
+    fireEvent.change(search, { target: { value: label } });
+    expect(screen.getByTestId('admin-search-result')).toBeDisabled();
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(screen.queryByTestId('profile-action-preview')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-command-close-btn'));
+
+    fireEvent.click(screen.getByTestId('remove-tag-unsaved-record-action'));
+    expect(screen.getByTestId(`admin-command-${action}-btn`)).toBeEnabled();
+    expect(screen.queryByTestId('profile-action-unsaved-hint')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`admin-command-${action}-btn`));
+    expect(screen.getByTestId('profile-action-preview')).toHaveAttribute('data-action', action);
+  });
+
   it('keeps staged Overview edits when switching to Activity and back', async () => {
     render(<FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={vi.fn()} />, {
       wrapper: TestWrapper,

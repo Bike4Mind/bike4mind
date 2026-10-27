@@ -57,7 +57,7 @@ const EnvironmentBanner = () => {
         {environmentName}
       </Typography>
       <Box sx={{ display: 'flex', gap: '4px' }}>
-        <Tooltip title="Help Center (Shift+?)" placement="bottom">
+        <Tooltip title="Help Center" placement="bottom">
           <IconButton
             onClick={() => openHelpPanel()}
             sx={bannerButtonSx}

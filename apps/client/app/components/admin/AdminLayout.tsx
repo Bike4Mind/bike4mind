@@ -8,7 +8,6 @@ import { ProviderBundle } from '@client/app/contexts/ProviderBundle';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
-import { useHelpKeyboardShortcut } from '@client/app/hooks/useHelpKeyboardShortcut';
 import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 import { SidebarNav } from './AdminSidebarNav';
@@ -52,8 +51,6 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: isAdmin });
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
-
-  useHelpKeyboardShortcut();
 
   const activeTab = isAdminUserProfilePath(pathname) ? AdminTab.Users : storedActiveTab;
 
