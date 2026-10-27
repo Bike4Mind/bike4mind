@@ -372,8 +372,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     const key = `${sessionKey}:${sessionModel}:${catalog.models[0]?.id}`;
     if (settledFor.current === key) return;
     settledFor.current = key;
-    // Forget the key on failure so the next render retries instead of leaving the picker on "Selecting model".
-    settleLocalModel().catch(() => {
+    // Forget the key on failure so the next change to the effect's inputs retries rather than never.
+    settleLocalModel().catch(error => {
+      console.warn('Settling the local model failed', error);
       settledFor.current = null;
     });
   }, [localMode, listed, sessionKey, sessionModel, modelListed, catalog.models, settleLocalModel]);
