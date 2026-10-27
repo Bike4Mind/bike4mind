@@ -9,7 +9,7 @@ import { TIMEOUTS } from '../constants';
 // switching users on a page already marked cleared.)
 const consentClearedByPage = new WeakMap<Page, boolean>();
 
-// Pages that already carry the gears discovery locator handler; registering twice would throw.
+// Pages that already carry the gears discovery locator handler; Playwright stacks duplicate handlers.
 const gearsDiscoveryHandledPages = new WeakSet<Page>();
 
 export class BasePage {
