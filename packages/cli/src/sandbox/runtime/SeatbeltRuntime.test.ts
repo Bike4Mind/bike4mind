@@ -175,6 +175,26 @@ describe('SeatbeltRuntime', () => {
       }
     });
 
+    it('allows writes to the resolved working directory when cwd is a symlink', () => {
+      const link = '/Users/test/link';
+      const real = '/Users/test/real';
+      const actualRealpath = vi.mocked(realpathSync).getMockImplementation()!;
+      vi.mocked(realpathSync).mockImplementation(((p: string) =>
+        p === link ? real : actualRealpath(p)) as typeof realpathSync);
+      try {
+        const profile = runtime.generateProfile({
+          command: 'touch x',
+          cwd: link,
+          filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+          networkEnabled: false,
+        });
+        expect(profile).toContain(`(allow file-write* (subpath "${link}"))`);
+        expect(profile).toContain(`(allow file-write* (subpath "${real}"))`);
+      } finally {
+        vi.mocked(realpathSync).mockImplementation(actualRealpath);
+      }
+    });
+
     it('denies network when network is disabled (fail-closed)', () => {
       const profile = runtime.generateProfile({
         command: 'curl https://example.com',
