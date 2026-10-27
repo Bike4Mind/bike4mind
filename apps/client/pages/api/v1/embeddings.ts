@@ -16,6 +16,7 @@ import {
   hasPublishedEmbeddingRate,
   MAX_EMBEDDING_REQUEST_TOKENS,
   MAX_EMBEDDING_RESPONSE_VALUES,
+  planEmbeddingDimensions,
   usdToCredits,
   usdToCreditsStochastic,
   type EmbeddingsResponse,
@@ -37,7 +38,6 @@ import {
 } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { embedTexts, encodeEmbeddingBase64 } from '@server/embeddings/embedTexts';
-import { planEmbeddingDimensions } from '@server/embeddings/planEmbeddingDimensions';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 

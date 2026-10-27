@@ -30,7 +30,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 
 const mockVerifyOrgAccess = vi.fn();
-vi.mock('@server/utils/orgAccess', () => ({
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
   verifyOrgAccess: (...a: unknown[]) => mockVerifyOrgAccess(...a),
 }));
 

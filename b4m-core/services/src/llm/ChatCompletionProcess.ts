@@ -58,7 +58,12 @@ import {
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
+  createReasoningWithholder,
+  reasoningChannelOf,
+  withholdsReasoning,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
+import { fallbackThinkingVisibility } from '../thinkingVisibility';
 import {
   BadRequestError,
   buildAndSortMessages,
@@ -163,7 +168,12 @@ import {
 // Re-exported so the resolver below and the type it returns stay reachable from one import, while
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
-import { createModelAdmission, loadModelConfigurations, type ModelAdmission } from './modelAdmission';
+import {
+  createModelAdmission,
+  loadFreeTierAllowedModels,
+  loadModelConfigurations,
+  type ModelAdmission,
+} from './modelAdmission';
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
@@ -1038,6 +1048,10 @@ export class ChatCompletionProcess {
   public priorUserPrompts?: string[];
 
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
+  private getThinkingVisibility: IChatCompletionServiceOptions['getThinkingVisibility'];
+  private thinkingVisibilityPromise?: Promise<ThinkingVisibility>;
+  /** Reasoning characters kept out of the current attempt's replies, still billed on an abort. */
+  private withheldReasoningChars = 0;
   /** Set once the turn's model resolves; gates the deprecated remap and every fallback hop. */
   private modelAdmission?: ModelAdmission;
   private entitlementsResolved = false;
@@ -1181,6 +1195,7 @@ export class ChatCompletionProcess {
     this.workspaceSessionSettings = options.workspaceSessionSettings;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
+    this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
@@ -1241,6 +1256,20 @@ export class ChatCompletionProcess {
       })();
     }
     return this.entitlementKeysPromise;
+  }
+
+  /** The caller's thinking visibility, resolved once per process. */
+  public resolveThinkingVisibility(): Promise<ThinkingVisibility> {
+    this.thinkingVisibilityPromise ??= (async (): Promise<ThinkingVisibility> => {
+      if (!this.getThinkingVisibility) return 'raw';
+      try {
+        return await this.getThinkingVisibility(this.user);
+      } catch (err) {
+        this.logger.warn(`Thinking visibility resolution failed; using the free level: ${(err as Error)?.message}`);
+        return fallbackThinkingVisibility({ adminSettings: this.db.adminSettings });
+      }
+    })();
+    return this.thinkingVisibilityPromise;
   }
 
   private entitlementResolution(): EntitlementResolution {
@@ -1936,6 +1965,8 @@ export class ChatCompletionProcess {
       return;
     }
 
+    // Started now so its reads overlap context assembly instead of delaying the first token.
+    void this.resolveThinkingVisibility();
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
     const {
       parsedBody,
@@ -2519,9 +2550,14 @@ export class ChatCompletionProcess {
       this.modelAdmission = createModelAdmission({
         user: this.user,
         configs: await loadModelConfigurations(this.db.adminSettings),
-        getEntitlements: async () => (await this.resolveEntitlementKeys()).keys,
+        getEntitlements: async () => {
+          const { keys, resolved } = await this.resolveEntitlementKeys();
+          if (!resolved) throw new Error('entitlement resolution failed');
+          return keys;
+        },
         models,
         enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
+        freeTierAllowedModels: await loadFreeTierAllowedModels(this.db.adminSettings),
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
@@ -3480,6 +3516,7 @@ export class ChatCompletionProcess {
         apiKeyTable,
         getAbortSignal: () => abortSignalHolder.signal,
         thinking: thinking ? { enabled: thinking.enabled, budget_tokens: thinking.budget_tokens ?? 16000 } : undefined,
+        thinkingVisibility: await this.resolveThinkingVisibility(),
         agentStore,
         externalTools,
         toolAvailability,
@@ -4877,7 +4914,8 @@ export class ChatCompletionProcess {
             // Handle streaming for each configuration
             this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);
           },
-          abortController.signal
+          abortController.signal,
+          await this.resolveThinkingVisibility()
         );
 
         // Update quest with Research Mode results. A Stop makes the cancellation watcher
@@ -5165,6 +5203,13 @@ export class ChatCompletionProcess {
               );
             }
 
+            // Per attempt: a fallback hop restarts the stream and can change the answering model.
+            const reasoningWithholder = withholdsReasoning(await this.resolveThinkingVisibility(), currentModel.id)
+              ? createReasoningWithholder(reasoningChannelOf(currentModel))
+              : null;
+            this.withheldReasoningChars = 0;
+            let lastStreamIndex = 0;
+
             await currentLlm.complete(
               currentModel.id,
               outboundMessages,
@@ -5303,8 +5348,14 @@ export class ChatCompletionProcess {
                   visibleCharsAtLastToolCall = countVisibleChars(quest.replies);
                 }
 
-                streamedTexts.forEach((text, index) => {
+                streamedTexts.forEach((streamedText, index) => {
+                  if (!streamedText) return;
+                  const text = reasoningWithholder
+                    ? reasoningWithholder.visible(streamedText, completionInfo?.channel)
+                    : streamedText;
+                  this.withheldReasoningChars += streamedText.length - text.length;
                   if (!text) return;
+                  lastStreamIndex = index;
                   appendStreamedChunk(replies, text, index, transitionMode);
                   quest.replies = Object.values(replies);
                   // Send message to the client for each received streamed message
@@ -5360,6 +5411,13 @@ export class ChatCompletionProcess {
                 if (completionInfo?.stopReason != null) actualTokenUsage.stopReason = completionInfo.stopReason;
               }
             );
+            const heldText = reasoningWithholder?.flush();
+            if (heldText) {
+              this.withheldReasoningChars -= heldText.length;
+              appendStreamedChunk(replies, heldText, lastStreamIndex, transitionMode);
+              quest.replies = Object.values(replies);
+              smartSend();
+            }
             // Completion succeeded
             completionSuccess = true;
             logger.info(
@@ -7249,10 +7307,12 @@ export class ChatCompletionProcess {
   ): Promise<void> {
     const basis = this.reservationBasis;
     if (!basis) return;
-    const streamedChars = (quest.replies?.length ? quest.replies : [quest.reply ?? '']).reduce(
-      (sum, reply) => sum + (reply?.length ?? 0),
-      0
-    );
+    const streamedChars =
+      this.withheldReasoningChars +
+      (quest.replies?.length ? quest.replies : [quest.reply ?? '']).reduce(
+        (sum, reply) => sum + (reply?.length ?? 0),
+        0
+      );
     const reported = basis.reported ?? {};
     const cacheReadInputTokens = reported.cacheReadInputTokens ?? 0;
     const cacheCreationInputTokens = reported.cacheCreationInputTokens ?? 0;

@@ -7,6 +7,12 @@ import { CreditHolderType } from '@bike4mind/common';
  * ignored for up to the cache TTL (5 min). Here the real settings accessors run against a fake repo,
  * so the read path under test is the production one - no `getSettingsMap`/`getSettingsValue` stub.
  */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),

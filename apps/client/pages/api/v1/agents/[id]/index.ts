@@ -10,7 +10,7 @@ import { deleteAgentContract, getAgentContract, IAgent, updateAgentContract } fr
 import { agentRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validateAgentUpdate } from '@server/utils/agentValidation';
@@ -66,7 +66,7 @@ const updateRoute = nextRouteForContract(updateAgentContract, {
   const reset = (['preferredModel', 'temperature', 'maxTokens'] as const).filter(field => fields[field] === null);
   const changes: Partial<IAgent> = Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null));
   try {
-    validateAgentUpdate(changes, v1FieldLabel);
+    await validateAgentUpdate(changes, req.user, v1FieldLabel, req.logger);
   } catch (error) {
     throw toV1AgentError(error);
   }

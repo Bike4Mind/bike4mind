@@ -1,6 +1,6 @@
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { deleteSubscriber, fetchSubscribers } from '@client/app/utils/subscriberAPICalls';
-import { ISubscriberDocument } from '@bike4mind/common';
+import { ISubscriberDocument, SubscriberSource } from '@bike4mind/common';
 import { APP_NAME } from '@client/config/general'; // brand externalized
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
 import {
@@ -41,6 +41,20 @@ import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useAdminNotifications } from './AdminPage';
 import { useShallow } from 'zustand/react/shallow';
+
+const SOURCE_LABELS: Record<SubscriberSource, string> = {
+  subscribe_page: 'Waitlist page',
+  login_signup_closed: 'Blocked sign-in',
+  register_signup_closed: 'Blocked sign-up',
+  oauth_signup_closed: 'Blocked Google/GitHub',
+};
+
+// Entries from before the source field existed all came through the waitlist page.
+const SubscriberSourceChip = ({ source = 'subscribe_page' }: { source?: SubscriberSource }) => (
+  <Chip size="sm" variant="outlined" color={source === 'subscribe_page' ? 'neutral' : 'warning'}>
+    {SOURCE_LABELS[source]}
+  </Chip>
+);
 
 const useGetSubscribers = (params: { page?: number; limit?: number; search?: string }) => {
   return useQuery({
@@ -89,6 +103,7 @@ const GenerateInviteModal = ({ open, onClose, subscriber }: GenerateInviteModalP
   const [startingStorage, setStartingStorage] = useState(1000);
   const [emailBody, setEmailBody] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [inviteIssued, setInviteIssued] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -116,7 +131,7 @@ Welcome aboard!
 
 The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
 
-      await generateInvite.mutateAsync({
+      const result = await generateInvite.mutateAsync({
         subscriberId: subscriber.id,
         email: subscriber.email,
         firstName: subscriber.firstName,
@@ -125,6 +140,13 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
         startingStorage,
         emailBody: emailBody || defaultEmailBody,
       });
+
+      // Leave the modal open so the admin can copy the code from the message.
+      if (result?.emailSent === false) {
+        setInviteIssued(true);
+        setError(result.message);
+        return;
+      }
 
       setSuccess(`Invite code generated and sent to ${subscriber.email}!`);
 
@@ -143,6 +165,7 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
 
   const handleClose = () => {
     onClose();
+    setInviteIssued(false);
     setError(null);
     setSuccess(null);
     setEmailBody('');
@@ -219,7 +242,12 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
             <Button variant="outlined" onClick={handleClose} disabled={isGenerating}>
               Cancel
             </Button>
-            <Button onClick={handleSubmit} loading={isGenerating} startDecorator={<SendIcon />} disabled={isGenerating}>
+            <Button
+              onClick={handleSubmit}
+              loading={isGenerating}
+              startDecorator={<SendIcon />}
+              disabled={isGenerating || inviteIssued}
+            >
               Generate & Send Invite
             </Button>
           </Box>
@@ -434,9 +462,12 @@ const SubscribersTab = () => {
                     <Typography level="body-sm" sx={{ wordBreak: 'break-word', color: 'text.secondary' }}>
                       {subscriber.email}
                     </Typography>
-                    <Typography level="body-xs" color="neutral">
-                      {new Date(subscriber.createdAt).toLocaleDateString()}
-                    </Typography>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Typography level="body-xs" color="neutral">
+                        {new Date(subscriber.createdAt).toLocaleDateString()}
+                      </Typography>
+                      <SubscriberSourceChip source={subscriber.source} />
+                    </Stack>
                     <Divider />
                     <Stack direction="row" spacing={1}>
                       <Button
@@ -467,6 +498,7 @@ const SubscribersTab = () => {
                   <th>Name</th>
                   <th>Email</th>
                   <th>Date</th>
+                  <th>Source</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
@@ -477,6 +509,9 @@ const SubscribersTab = () => {
                     <td>{`${subscriber.firstName} ${subscriber.lastName}`}</td>
                     <td>{subscriber.email}</td>
                     <td>{new Date(subscriber.createdAt).toLocaleDateString()}</td>
+                    <td>
+                      <SubscriberSourceChip source={subscriber.source} />
+                    </td>
                     <td>
                       <Chip size="sm" color={subscriber.inviteGenerated ? 'success' : 'neutral'}>
                         {subscriber.inviteGenerated ? 'Invite Sent' : 'Waiting'}

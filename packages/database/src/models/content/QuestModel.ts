@@ -562,6 +562,11 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
 export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
   {
     sessionId: { type: String, required: true },
+    signupActivity: {
+      type: new Schema({ userId: String, turnId: String, startedAt: Date }, { _id: false }),
+      default: undefined,
+      select: false,
+    },
     conversationItemId: { type: String, required: false },
     openaiMessageId: { type: String, required: false },
     claudeMessageId: { type: String, required: false },
@@ -1685,6 +1690,16 @@ function initializeQuestModel() {
 
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
+    // Built in production by migration 20260921235966_ensure-quest-signup-activity-index; keep the
+    // name and key in sync with it. Partial so the build and its entries cover only turns carrying
+    // provenance, not every quest; the activity aggregate's equality on userId implies the filter.
+    ChatHistoryItemSchema.index(
+      { 'signupActivity.userId': 1, status: 1, 'signupActivity.startedAt': 1 },
+      {
+        name: 'signupActivity_user_status_startedAt',
+        partialFilterExpression: { 'signupActivity.userId': { $exists: true } },
+      }
+    );
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });
@@ -1696,6 +1711,10 @@ function initializeQuestModel() {
 
     // Index for deletedAt and timestamp queries
     ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1 }, { name: 'deletedAt_timestamp_desc' });
+
+    // Model Logs pages need an _id tie-break when timestamps match. Keep the full sort in the
+    // index so even the first page does not fetch and sort every log in the selected date range.
+    ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1, _id: -1 }, { name: 'deletedAt_timestamp_id_desc' });
 
     // Index for finding messages without embeddings (for Zen Garden grooming)
     ChatHistoryItemSchema.index(

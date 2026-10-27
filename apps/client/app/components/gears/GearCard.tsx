@@ -2,7 +2,7 @@ import { Box, Card, Divider, Stack, Typography } from '@mui/joy';
 import type { GearStatus } from '@client/app/hooks/useGearsStatus';
 import { gray } from '@client/app/utils/themes/colors';
 import { GearIcon } from './gearIcons';
-import { ClaimButton, creditText, RewardChip, rewardState } from './gearReward';
+import { ClaimButton, PendingRewardNote, RewardChip, rewardState } from './gearReward';
 
 interface GearCardProps {
   gear: GearStatus;
@@ -84,18 +84,9 @@ export const GearCard = ({ gear, ctaLabel, onActivate, onClaim, cardRef }: GearC
       </Typography>
       {/* The deferred payout gets a full line rather than chip text: it is the
         one state a glance at a colour cannot explain, and there is room here.
-        Worded for Published, the only gear that declares a rewardCheck - a
-        second one would need this copy to come from the gear instead. */}
-      {reward === 'pending' && (
-        <Typography
-          level="body-xs"
-          data-testid={`gear-pending-note-${gear.key}`}
-          // The same token the soft chip paints its own text with.
-          sx={{ mt: '16px', fontSize: '13px', color: 'warning.softColor' }}
-        >
-          Once someone else opens your artifact link while signed in, you can claim {creditText(gear)}.
-        </Typography>
-      )}
+        Copy is reason-specific: unverified and too-new accounts see a different
+        message from the published rewardCheck case. */}
+      {reward === 'pending' && <PendingRewardNote gear={gear} />}
       {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}
       <Typography
         level="body-sm"

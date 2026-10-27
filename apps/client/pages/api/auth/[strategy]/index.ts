@@ -5,9 +5,10 @@ import passport from '@server/auth/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { issueStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { OAUTH_NONCE_HASH_REQ_KEY } from '@server/auth/passportOAuthStateStore';
+import { requireOAuthStartTurnstile } from '@server/utils/auth/oauthStartTurnstile';
 import { isLocalAppUrl } from '@server/utils/validators';
 
 const SERVICES: { [service: string]: { scope: string[] | string } } = {
@@ -41,6 +42,8 @@ const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
   // One bucket for every provider, so the cap is per client IP rather than per provider.
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-start' }))
+  // After the rate limit so an unsolved challenge cannot drive unbounded siteverify calls.
+  .use(requireOAuthStartTurnstile())
   .get(
     asyncHandler<{}, unknown, unknown, { strategy: string }>(async (req, res, next) => {
       const { strategy } = req.query;

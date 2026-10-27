@@ -13,6 +13,7 @@ import { resolveExternalWafAssociation, resolveWafLogDestination } from './wafAs
 import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { buildDlqAgeMetricQueries } from '@bike4mind/infra';
 import { parseAlarmThreshold, SIGNUP_EDGE_SIGNAL_DEFAULT } from './signupAlarmThreshold';
 
 // WAF is disabled by default. Enable via ENABLE_WAF=true environment variable.
@@ -288,7 +289,7 @@ export const wafOobAlarmTopic = productionAlerts
 export const wafAlarmSlackHandler = productionAlerts
   ? new sst.aws.Function('WafAlarmSlackHandler', {
       handler: 'apps/workers/src/events/wafAlarmToSlack.handler',
-      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
+      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       logging: { retention: '1 month' },
     })
@@ -383,7 +384,7 @@ if (productionAlerts && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic && wafAl
     {
       name: `${$app.name}-${$app.stage}-waf-alarm-slack-handler-dlq-messages`,
       alarmDescription:
-        'WafAlarmSlackHandlerDlq has messages -- WAF rate-limit alert delivery to Slack is failing; check SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
+        'WafAlarmSlackHandlerDlq has messages -- WAF rate-limit alert delivery to Slack is failing; check SLACK_ALARMS_WEBHOOK_URL, SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
       comparisonOperator: 'GreaterThanThreshold',
       evaluationPeriods: 1,
       metricName: 'ApproximateNumberOfMessagesVisible',
@@ -391,7 +392,7 @@ if (productionAlerts && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic && wafAl
       period: 60,
       statistic: 'Maximum',
       threshold: 0,
-      treatMissingData: 'notBreaching',
+      treatMissingData: 'ignore',
       dimensions: { QueueName: wafAlarmDlq.name },
       alarmActions: [wafOobAlarmTopic.arn],
       tags: { Application: 'WAF', Severity: 'Critical', MonitoringType: 'DLQ' },
@@ -409,13 +410,11 @@ if (productionAlerts && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic && wafAl
         'WafAlarmSlackHandlerDlq oldest message exceeds 1 hour -- WAF alert delivery to Slack has been failing for an extended period.',
       comparisonOperator: 'GreaterThanThreshold',
       evaluationPeriods: 1,
-      metricName: 'ApproximateAgeOfOldestMessage',
-      namespace: 'AWS/SQS',
-      period: 60,
-      statistic: 'Maximum',
       threshold: 3600,
-      treatMissingData: 'notBreaching',
-      dimensions: { QueueName: wafAlarmDlq.name },
+      treatMissingData: 'ignore',
+      // Same IF(visible > 0, age, 0) metric math as the fleet age alarms; see
+      // b4m-core/infra/src/dlqAlarmSpecs.ts for why and its residuals.
+      metricQueries: buildDlqAgeMetricQueries(60, { QueueName: wafAlarmDlq.name }),
       alarmActions: [wafOobAlarmTopic.arn],
       tags: { Application: 'WAF', Severity: 'High', MonitoringType: 'DLQ' },
     },

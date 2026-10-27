@@ -1,14 +1,9 @@
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_PROBE_HOSTS, detectRuntimes } from './detect';
 import type { FetchLike } from './types';
-import { closedPort, hang, json, startFakeServer, type FakeServer, type Handler } from './__test__/fakeServer';
+import { hang, json, startFakeServer, type FakeServer, type Handler } from './__test__/fakeServer';
 
 const servers: FakeServer[] = [];
-let deadPort: number;
-
-beforeAll(async () => {
-  deadPort = await closedPort();
-});
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => server.close()));
@@ -20,16 +15,26 @@ async function serve(routes: Parameters<typeof startFakeServer>[0]): Promise<Fak
   return server;
 }
 
-/** Sends each default port to a fake (or to a dead port), so no test touches a real local runtime. */
+/** The error Node's fetch throws when nothing listens on the port. */
+function connectionRefused(): TypeError {
+  return new TypeError('fetch failed', {
+    cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+  });
+}
+
+/**
+ * Sends each default port to a fake, or refuses it, so no test touches a real local runtime. The
+ * refusal is synthetic: forwarding to a released port races the fakes, which can be handed that port.
+ */
 function routedFetch(targets: Record<string, FakeServer>): FetchLike {
   return (url, init) => {
     const match = /^http:\/\/127\.0\.0\.1:(\d+)(\/.*)$/.exec(url);
     if (!match) return fetch(url, init);
     const [, port, path] = match;
-    const isDefault = DEFAULT_PROBE_HOSTS.includes(`127.0.0.1:${port}`);
     const target = targets[port ?? ''];
-    const finalPort = target ? target.port : isDefault ? deadPort : port;
-    return fetch(`http://127.0.0.1:${finalPort}${path}`, init);
+    if (target) return fetch(`http://127.0.0.1:${target.port}${path}`, init);
+    if (DEFAULT_PROBE_HOSTS.includes(`127.0.0.1:${port}`)) return Promise.reject(connectionRefused());
+    return fetch(url, init);
   };
 }
 
@@ -114,6 +119,30 @@ describe('detectRuntimes', () => {
     expect(found).toHaveLength(1);
     expect(found[0]?.runtime.id).toBe('ollama');
     expect(found[0]?.configured).toBe(true);
+  });
+
+  it.each([401, 403])('counts a FastAPI-style %i on a default port as a keyed runtime', async status => {
+    const guarded = await serve({ 'GET /v1/models': json({ detail: 'Invalid API key' }, status) });
+    const found = await detectRuntimes({
+      defaultHosts: [guarded.baseUrl],
+      fetch: routedFetch({}),
+    });
+    expect(found.map(entry => [entry.runtime.kind, entry.configured, entry.health])).toEqual([
+      ['openai-compatible', false, { ok: false, version: null, error: 'Requires an API key' }],
+    ]);
+  });
+
+  it.each([undefined, null, 0, false, {}, [{ msg: 'x' }]])(
+    'ignores a default-port auth error whose detail is %j',
+    async detail => {
+      const other = await serve({ 'GET /v1/models': json({ detail }, 401) });
+      expect(await detectRuntimes({ defaultHosts: [other.baseUrl], fetch: routedFetch({}) })).toEqual([]);
+    }
+  );
+
+  it.each([400, 404, 500])('does not count a FastAPI-style %i as a keyed runtime', async status => {
+    const other = await serve({ 'GET /v1/models': json({ detail: 'Not available' }, status) });
+    expect(await detectRuntimes({ defaultHosts: [other.baseUrl], fetch: routedFetch({}) })).toEqual([]);
   });
 
   it('sends a configured API key and keeps a server that refuses without one', async () => {

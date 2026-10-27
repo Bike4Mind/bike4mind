@@ -30,7 +30,7 @@ import {
   IOrgGitHubConnectionResponse,
   IOrgGitHubConnectionHealth,
 } from '@bike4mind/common';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const logger = new Logger({ metadata: { component: 'admin-github-connection' } });

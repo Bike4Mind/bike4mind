@@ -3,6 +3,7 @@ import {
   PartialExcept,
   StreamedChatCompletionAction,
   StreamedRapidReplyAction,
+  CHAT_MESSAGE_WITHHELD_FIELDS,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { ClientMessageSender } from '@bike4mind/utils';
@@ -192,9 +193,14 @@ export class StatusManager {
       this.logger.error('Quest payload validation failed but continuing with fallback values');
     }
 
+    // New quests can still carry select:false fields in memory. The full-payload
+    // completion/recovery path must enforce the same boundary as REST and subscriptions.
+    const publicQuestPayload = { ...questPayload };
+    for (const field of CHAT_MESSAGE_WITHHELD_FIELDS) delete publicQuestPayload[field];
+
     return {
       action: 'streamed_chat_completion',
-      quest: questPayload,
+      quest: publicQuestPayload,
       statusMessage: status ?? '',
     };
   }

@@ -4,7 +4,8 @@
 // scope — it would be undefined at that point.
 import { wafWebAcl } from './waf';
 import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/usercontentRequest';
-import { minifyRouterFunction } from './routerFunctionCode';
+import { minifyRouterFunction, noindexResponseInjection } from './routerFunctionCode';
+import { CLOUDFRONT_VIEWER_JA4_HEADER } from '../packages/server-utils/src/utils/trustedClientIpHeaders';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -152,6 +153,9 @@ export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
 export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
 const originVerifyInjection = $interpolate`
+  // Drops a viewer-forged copy. AWS docs show computed cloudfront-viewer-* headers already present here,
+  // so this may also drop the real JA4: remove it before adding JA4 to the origin request policy.
+  delete event.request.headers["${CLOUDFRONT_VIEWER_JA4_HEADER}"];
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
 
@@ -236,14 +240,14 @@ const routerInstance = shouldUseSharedRouter
       // Attach both edge functions on every stage that owns its router (deployed +
       // shared-dev). The viewer-request function stamps the origin-verify secret and the
       // user-file marker BEFORE SST's URI rewrite; the viewer-response function reads the
-      // marker to apply the CSP backstop, and additionally injects permissive CORS on personal
-      // `sst dev` stages.
+      // marker to apply the CSP backstop, adds x-robots-tag noindex on every non-production
+      // stage, and additionally injects permissive CORS on personal `sst dev` stages.
       edge: {
         viewerRequest: {
           injection: $interpolate`${usercontentGateInjection}${originVerifyInjection}${userFileMarkerInjection}`,
         },
         viewerResponse: {
-          injection: userFileCspInjection + ($dev ? devCorsInjection : ''),
+          injection: userFileCspInjection + noindexResponseInjection($app.stage) + ($dev ? devCorsInjection : ''),
         },
       },
       transform: {

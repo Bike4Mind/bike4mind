@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { persistRateLimitEvents } from '@server/utils/mcpRateLimitSnapshots';
+import { persistRateLimitEvents } from '@bike4mind/server-utils/utils/mcpRateLimitSnapshots';
 import { Resource } from 'sst';
 import { safeCompareTokens } from '@bike4mind/auth/crypto';
 import type { Request } from 'express';

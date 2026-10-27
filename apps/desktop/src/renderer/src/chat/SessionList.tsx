@@ -49,6 +49,7 @@ import {
   ArtifactIcon,
   CheckIcon,
   ChevronIcon,
+  ModelsIcon,
   MoreIcon,
   PanelLeftIcon,
   PlusIcon,
@@ -752,6 +753,7 @@ export function SessionList({
   userSections,
   sectionActions,
   customize,
+  onOpenModels,
   footer,
 }: {
   sessions: ChatSessionSummary[];
@@ -785,6 +787,7 @@ export function SessionList({
   sectionActions: SidebarSectionActions;
   /** The Customize nav row, which carries its own attention badge. */
   customize?: ReactNode;
+  onOpenModels?: () => void;
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
@@ -1136,6 +1139,9 @@ export function SessionList({
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
         {customize}
+        {onOpenModels && (
+          <NavItem icon={<ModelsIcon />} label="Models" onClick={onOpenModels} testId="chat-models-btn" />
+        )}
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
             size="sm"

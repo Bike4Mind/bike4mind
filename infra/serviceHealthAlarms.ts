@@ -103,7 +103,7 @@ if (isMonitoredStage) {
   serviceHealthAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/serviceHealthAlarmToSlack.handler',
-      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
+      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
     },
     {

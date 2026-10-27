@@ -78,6 +78,7 @@ import {
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
 import {
   getDynamicDataLakeAccess,
@@ -499,6 +500,11 @@ export interface IChatCompletionServiceOptions {
    * entitlement-scoped data lakes in retrieval. Omitted -> no keys -> tag-only matching.
    */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
+  /**
+   * How much model reasoning the caller may see (services/thinkingVisibility.ts), injected by the
+   * app tier like getEntitlements. Omitted -> `raw`; a failed resolution withholds.
+   */
+  getThinkingVisibility?: (user: IUserDocument) => Promise<ThinkingVisibility>;
   /**
    * Perform any cleanup or additional processing after the quest is completed.
    */

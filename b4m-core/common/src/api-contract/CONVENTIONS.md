@@ -161,6 +161,7 @@ re-deciding per endpoint:
 | The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
+| Free-tier daily credit allowance used up (`Retry-After` is the next UTC midnight) | `429` | `daily_free_limit_reached` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Per-tier agent cap reached | `400` | `agent_limit_reached` |
 | User storage quota exceeded | `400` | `storage_limit_exceeded` |
@@ -174,6 +175,7 @@ re-deciding per endpoint:
 | Referenced resource does not exist | `404` | - |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
+| Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
 | Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
 | Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
@@ -333,6 +335,16 @@ for the whole window. Removing an alias is a major-version change.
   `scripts/check-contract-gate.sh` enforces this for every handler outside `pages/api/v1`
   (these roots included): it must declare `auth: 'jwtOnly'` or be listed in
   `scripts/contract-gate-api-key-allowlist.txt`.
+- **A Lambda exposed through a Function URL needs a contract too.** An `sst.aws.Function` in
+  `infra/` with `url:` serves requests with none of the Next.js middleware chain, so the
+  handler must be built on `defineLambdaRoute(contract, ...)`: the gate accepts a call in the
+  handler file or in a module up to three imports away, reached by a relative or `@workers/*`
+  import (the transport is `apps/workers/src/cli/defineLambdaRoute.ts`; a thin entry that
+  imports the routed module is fine, see `CliToolHandler`). `scripts/check-contract-gate.sh`
+  fails otherwise. Handlers under `premium-generated/` are skipped, since they are re-exported
+  from an overlay. The other escape is `scripts/contract-gate-function-url-allowlist.txt`,
+  which is frozen debt: entries are only ever removed (the gate prints an already-ported entry
+  as INFO but does not fail), and every entry needs a trailing `# reason`.
 - `LEGACY_PUBLIC_PATHS` in `assertContractConventions.ts` is the baseline: the seven paths
   already shipped in `apps/client/public/openapi.json` when this rule landed. **The list is
   frozen - entries are only ever removed.** Adding to it is the thing this convention

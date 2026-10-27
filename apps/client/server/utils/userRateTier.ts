@@ -8,7 +8,7 @@ import {
   type ActiveSubscription,
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
-import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
+import { getEntitlingPlanByPriceId, getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
 import { UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 
@@ -53,11 +53,17 @@ const TIER_SETTING_KEY = {
  * call these routes make. Pass the request to resolve through its per-request
  * memo, so the handler's entitlement gate reuses these reads instead of repeating them.
  */
-export async function resolveUserRateTier(user: RateTierUser, req?: ActiveSubscriptionsRequest): Promise<UserRateTier> {
+export async function resolveUserRateTier(
+  user: RateTierUser,
+  req?: ActiveSubscriptionsRequest,
+  options?: { strict?: boolean }
+): Promise<UserRateTier> {
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return 'bypass';
 
   const activeSubscriptions =
-    req?.user?.id === user.id ? await getRequestActiveSubscriptions(req) : await getActiveSubscriptionsForUser(user.id);
+    req?.user?.id === user.id
+      ? await getRequestActiveSubscriptions(req, options)
+      : await getActiveSubscriptionsForUser(user.id, options);
 
   return ladderRateTier(activeSubscriptions);
 }
@@ -78,13 +84,8 @@ export function hasPaidSubscription(activeSubscriptions: readonly Pick<ActiveSub
 export function ladderRateTier(
   activeSubscriptions: readonly Pick<ActiveSubscription, 'priceId'>[]
 ): Exclude<UserRateTier, 'bypass'> {
-  let highestTier: UserSubscriptionTier | undefined;
-  for (const subscription of activeSubscriptions) {
-    const planTier = getEntitlingPlanByPriceId(subscription.priceId)?.tier;
-    if (planTier !== undefined && (highestTier === undefined || planTier > highestTier)) {
-      highestTier = planTier;
-    }
-  }
+  // Same ladder read as the `plan:paid` entitlement (@server/entitlements), so the two never disagree.
+  const highestTier = getHighestLadderTier(activeSubscriptions);
 
   if (highestTier === UserSubscriptionTier.Pro) return 'pro';
   if (highestTier === UserSubscriptionTier.Basic) return 'basic';

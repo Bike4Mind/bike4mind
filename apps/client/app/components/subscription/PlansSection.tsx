@@ -1,5 +1,6 @@
 import { useCreateTeamModal } from '@client/app/components/organizations/CreateTeamModal';
-import { useGetSettingsValue, useConfig } from '@client/app/hooks/data/settings';
+import { useConfig } from '@client/app/hooks/data/settings';
+import { useSignupGrantCredits } from '@client/app/hooks/useSignupGrantCredits';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
@@ -9,7 +10,7 @@ import {
   pickSubscriptionByPrice,
   resolveSubscriptionSource,
   SubscriptionSource,
-} from '@client/lib/subscriptions/types';
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
   TEAM_PLAN_UNAVAILABLE_MESSAGE,
@@ -58,7 +59,7 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
   const { t } = useTranslation();
   const [audience, setAudience] = useState<PlanAudience>(PlanAudience.Personal);
   // The starter-credits line is only true while sign-ups are actually granted something.
-  const hasStarterCredits = Number(useGetSettingsValue('defaultFreeCredits')) > 0;
+  const hasStarterCredits = useSignupGrantCredits() > 0;
   const { data: config } = useConfig();
   const seedStageName = config?.seedStageName || process.env.NEXT_PUBLIC_SEED_STAGE_NAME || '';
   const isTestMode = seedStageName !== 'production';

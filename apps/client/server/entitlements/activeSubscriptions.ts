@@ -2,7 +2,7 @@ import type { IMongoDocument } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import type { ActivePlanResolver } from '@bike4mind/services';
-import { SubscriptionOwnerType, type ISubscription } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import type { MembershipRequest } from '@bike4mind/server-utils/dataLakes/requestMembership';
 
@@ -75,8 +75,17 @@ export interface ActiveSubscriptionsRequest extends MembershipRequest {
  * not memoized. Plan-holder orgs are resolved separately and never written to `req.membershipOrgIds`:
  * managers/admins get the plan, not data access.
  */
-export async function getRequestActiveSubscriptions(req: ActiveSubscriptionsRequest): Promise<ActiveSubscription[]> {
+export async function getRequestActiveSubscriptions(
+  req: ActiveSubscriptionsRequest,
+  options?: { strict?: boolean }
+): Promise<ActiveSubscription[]> {
   if (!req.user) return [];
   const user = req.user;
-  return (req.activeSubscriptions ??= await getActiveSubscriptionsForUser(user.id));
+  if (req.activeSubscriptions && (!options?.strict || req.activeSubscriptionsStrict)) {
+    return req.activeSubscriptions;
+  }
+  const subscriptions = await getActiveSubscriptionsForUser(user.id, options);
+  req.activeSubscriptions = subscriptions;
+  req.activeSubscriptionsStrict = options?.strict === true;
+  return subscriptions;
 }

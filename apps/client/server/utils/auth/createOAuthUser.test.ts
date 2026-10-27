@@ -3,8 +3,10 @@ import { isReservedUsername, PENDING_FREE_CREDITS_TAG, usernameSchema, USERNAME_
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 
 const mockCreate = vi.fn();
+const mockFindSetting = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: { create: (...args: unknown[]) => mockCreate(...args) },
+  adminSettingsRepository: { findBySettingName: (...args: unknown[]) => mockFindSetting(...args) },
 }));
 
 const oauthCredentials = { strategy: 'google', id: 'sub-1' };
@@ -12,6 +14,7 @@ const oauthCredentials = { strategy: 'google', id: 'sub-1' };
 describe('createUniqueOAuthUser', () => {
   beforeEach(() => {
     mockCreate.mockReset();
+    mockFindSetting.mockReset().mockResolvedValue(null);
     mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
   });
 
@@ -30,6 +33,30 @@ describe('createUniqueOAuthUser', () => {
     expect(doc).not.toHaveProperty('email');
     expect(doc).not.toHaveProperty('emailVerified');
     expect(doc).not.toHaveProperty('emailVerifiedAt');
+  });
+
+  it('snapshots staging only for a newly created credit-eligible account', async () => {
+    mockFindSetting.mockImplementation(async (name: string) => ({
+      settingValue: {
+        stagedSignupGrantEnabled: 'true',
+        signupGrantCredits: '12',
+        verifiedUnlockCredits: '28',
+      }[name],
+    }));
+    await createUniqueOAuthUser({
+      name: 'Pat',
+      baseUsername: 'pat',
+      email: 'pat@example.test',
+      oauthCredentials,
+      pendingFreeCredits: true,
+    });
+    expect(mockCreate.mock.calls[0][0].signupGrant).toMatchObject({
+      stage: 'pending_email',
+      signupCredits: 12,
+      unlockCredits: 28,
+    });
+    await createUniqueOAuthUser({ name: 'Pat', baseUsername: 'pat', email: null, oauthCredentials });
+    expect(mockCreate.mock.calls[1][0]).not.toHaveProperty('signupGrant');
   });
 
   it('tags the account pending-free-credits only when asked', async () => {

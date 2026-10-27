@@ -14,7 +14,7 @@ import {
   usdToCreditsStochastic,
   type UsagePriceStamp,
 } from '@bike4mind/common';
-import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
+import type { SoundGenerationVendor, ThinkingVisibility, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -463,6 +463,8 @@ export interface BuildToolsArgs {
   apiKeyTable?: ApiKeyTable;
   getAbortSignal?: () => AbortSignal | undefined;
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller, applied by every subagent this run spawns. */
+  thinkingVisibility?: ThinkingVisibility;
   agentStore?: ServerAgentStore;
   externalTools?: Record<string, ToolDefinition>;
   toolAvailability?: ToolAvailability;
@@ -989,6 +991,7 @@ export class ToolBuilder {
     apiKeyTable,
     getAbortSignal,
     thinking,
+    thinkingVisibility,
     agentStore,
     externalTools,
     toolAvailability,
@@ -1026,6 +1029,7 @@ export class ToolBuilder {
         subagentModels,
         apiKeyTable,
         thinking,
+        thinkingVisibility,
         agentStore,
         modelAdmission: this.deps.modelAdmission,
       },

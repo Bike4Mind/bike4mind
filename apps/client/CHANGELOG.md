@@ -25,6 +25,8 @@
 
 ## Unreleased
 
+- Load Model Logs one page at a time, fetch details on demand, and offer retry controls when requests fail.
+
 - Show typical answers remaining alongside the credit balance, with plans and top-ups available directly from the balance.
 - Offer lower-cost models only when their estimated context and credit requirements fit; accepting an offer keeps the saved default model unchanged.
 

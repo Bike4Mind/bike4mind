@@ -8,7 +8,7 @@ import {
 } from '@bike4mind/database';
 import { FeedbackRollupQuerySchema, parseFeedbackRollupBound } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 /**
  * GET /api/feedback/rollup

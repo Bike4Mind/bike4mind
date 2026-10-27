@@ -899,6 +899,59 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'error' });
     });
 
+    describe('free-tier gate on the direct (quest/Slack) path', () => {
+      const turn = () => {
+        mockSession.userId = 'user1';
+        const body = wireMinimalTurn();
+        const complete = vi.fn();
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn(),
+          currentModel: ChatModels.GPT4_1,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+        return { body, complete };
+      };
+      const gateOn = async () => {
+        const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+        mockedGetAvailableModels.mockResolvedValue([requested, gatedSuccessor] as never);
+        vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+        mockedGetSettingsValue.mockImplementation(((key: string) =>
+          key === 'freeTierModelGateEnabled'
+            ? true
+            : key === 'freeTierAllowedModels'
+              ? ['some-free-model']
+              : undefined) as typeof getSettingsValue);
+        onTestFinished(() => mockedGetSettingsValue.mockReset());
+      };
+
+      it('refuses a paid-only model for a free account before any provider call', async () => {
+        const { body, complete } = turn();
+        await gateOn();
+        (service as any).getEntitlements = vi.fn().mockResolvedValue(['base']);
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(complete).not.toHaveBeenCalled();
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({
+          type: 'error',
+          reply: expect.stringContaining('requires a paid plan'),
+        });
+      });
+
+      it('answers a failed entitlement read with a retryable error, not the upgrade prompt', async () => {
+        const { body, complete } = turn();
+        await gateOn();
+        (service as any).getEntitlements = vi.fn().mockRejectedValue(new Error('subscription DB down'));
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(complete).not.toHaveBeenCalled();
+        const reply = mockDb.quests.update.mock.calls.at(-1)?.[0].reply;
+        expect(reply).toContain('Could not verify your plan');
+        expect(reply).not.toContain('requires a paid plan');
+      });
+    });
+
     it('refuses an unadmitted primary model with no remap before any provider call', async () => {
       mockSession.userId = 'user1';
       const body = wireMinimalTurn();
@@ -2547,6 +2600,83 @@ describe('ChatCompletionProcess', () => {
         expect(typeof telemetry.performance.firstChunkTimeMs).toBe('number');
         // A short turn sits under the elapsed bound; the builder tests pin the firing case.
         expect(telemetry.anomalies.slowFirstToken).toBe(false);
+      });
+    });
+
+    describe('thinking visibility', () => {
+      // An inline-reasoning model row, so the answer is parsed for the markers its adapter wraps around reasoning.
+      const streamReasoningTurn = () => {
+        const body = wireMinimalTurn();
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'Inline reasoner',
+            backend: ModelBackend.DeepSeek,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ] as any); // any: minimal model shape, as elsewhere in this file
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['<think>'], { channel: 'reasoning' });
+            await cb(['tagged trace'], { channel: 'reasoning' });
+            await cb(['</think>'], { channel: 'reasoning' });
+            await cb(['<think>inline trace</think>Visible answer.']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+        return body;
+      };
+      const storedText = () => `${(mockQuest.replies ?? []).join('')}|${mockQuest.reply ?? ''}`;
+      const capturePushes = () => {
+        const pushed: string[] = [];
+        vi.spyOn(service, 'sendStatusUpdate').mockImplementation(async quest => {
+          pushed.push((quest.replies ?? []).join(''));
+        });
+        return pushed;
+      };
+      const runAs = async (resolve: () => Promise<string>) => {
+        (service as any).getThinkingVisibility = vi.fn(resolve);
+        const pushed = capturePushes();
+        await service.process({ body: streamReasoningTurn(), logger: mockLogger });
+        return pushed;
+      };
+
+      it('keeps raw reasoning out of the push and stored reply of a free caller at the default summary level', async () => {
+        const pushed = await runAs(async () => 'summary');
+
+        expect(storedText()).toContain('Visible answer.');
+        expect(storedText()).not.toMatch(/trace|<think>/);
+        expect(pushed.join('')).toContain('Visible answer.');
+        expect(pushed.join('')).not.toMatch(/trace|<think>/);
+      });
+
+      it('withholds everything at none', async () => {
+        const pushed = await runAs(async () => 'none');
+
+        expect(storedText()).not.toMatch(/trace|<think>/);
+        expect(pushed.join('')).not.toMatch(/trace/);
+      });
+
+      it('leaves a paid caller at raw unchanged', async () => {
+        const pushed = await runAs(async () => 'raw');
+
+        expect(storedText()).toContain('<think>tagged trace</think>');
+        expect(storedText()).toContain('Visible answer.');
+        expect(pushed.join('')).toContain('tagged trace');
+      });
+
+      it('falls back to the free level when the resolution fails', async () => {
+        await runAs(async () => {
+          throw new Error('subscription read failed');
+        });
+
+        expect(storedText()).not.toMatch(/trace/);
       });
     });
 

@@ -10,6 +10,7 @@ export * from './CcBridgePairingTokenModel';
 export * from './DeviceAuthorizationModel';
 export * from './IdentityProviderModel';
 export * from './networkMetaFields';
+export * from './signupFingerprintClusters';
 export * from './OAuthAuthorizationCodeModel';
 export * from './OAuthClientModel';
 export * from './oauthClientAdmin';
@@ -31,3 +32,5 @@ export * from './UserAuthAuditLogModel';
 export * from './UserModel';
 export * from './VoiceIdModel';
 export * from './WsConnectTicketModel';
+
+export * from './SignupProtectionModel';

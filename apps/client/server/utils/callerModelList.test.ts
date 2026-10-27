@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ModelBackend, type ModelInfo } from '@bike4mind/common';
+import { ModelBackend, type IUserDocument, type ModelInfo, type SupersededModelInfo } from '@bike4mind/common';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
     getAvailableModels: vi.fn(),
     getSupersededModels: vi.fn(),
     getSettingsMap: vi.fn(),
+    loadFreeTierAllowedModels: vi.fn(),
+    getUserEntitlements: vi.fn(),
   },
 }));
 
@@ -18,6 +20,15 @@ vi.mock('@bike4mind/llm-adapters', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
 }));
+// The real predicates, so the gate rule is exercised as production applies it; only the settings read is faked.
+vi.mock('@bike4mind/services/llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: (...a: unknown[]) => mocks.loadFreeTierAllowedModels(...a),
+}));
+vi.mock('@server/entitlements', () => ({
+  getUserEntitlements: (...a: unknown[]) => mocks.getUserEntitlements(...a),
+  toEntitlementUser: (user: unknown) => user,
+}));
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: {},
@@ -29,6 +40,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: (...a: unknown[]) => mocks.getSettingsMap(...a),
 }));
 
+import { Logger } from '@bike4mind/observability';
 import { getCallerModelList } from './callerModelList';
 
 const textModel = (id: string, overrides: Partial<ModelInfo> = {}): ModelInfo =>
@@ -48,12 +60,20 @@ const priced = textModel('priced');
 const unpriced = textModel('unpriced', { pricing: {} });
 const free = textModel('free', { freeToRun: true, pricing: { 128_000: { input: 0, output: 0 } } });
 
-const listedIds = async () => (await getCallerModelList('user-1', { log: vi.fn() })).models.map(model => model.id);
+const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
+  ({ id: 'user-1', isAdmin: false, tags: [], ...overrides }) as unknown as IUserDocument;
+
+const callerList = (user: IUserDocument | null) => getCallerModelList(user, { log: vi.fn() });
+const listedIds = async (user: IUserDocument | null = makeUser()) =>
+  (await callerList(user)).models.map(model => model.id);
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getAvailableModels.mockResolvedValue([priced, unpriced, free]);
   mocks.getSupersededModels.mockReturnValue([]);
+  mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
+  mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined);
+  mocks.getUserEntitlements.mockResolvedValue(['base']);
 });
 
 describe('getCallerModelList unpriced text models', () => {
@@ -74,5 +94,72 @@ describe('getCallerModelList unpriced text models', () => {
     mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
 
     expect(await listedIds()).toEqual(['priced', 'unpriced', 'free']);
+  });
+});
+
+describe('getCallerModelList free-tier gate', () => {
+  const image = textModel('image-model', { type: 'image' });
+  const allowed = new Set(['priced']);
+  // What the caller sees with the gate removing nothing: hosted credit enforcement still drops
+  // 'unpriced' on its own, so it is absent here regardless of the gate.
+  const ungated = ['priced', 'free', 'image-model'];
+
+  beforeEach(() => {
+    mocks.getAvailableModels.mockResolvedValue([priced, unpriced, free, image]);
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(allowed);
+  });
+
+  it('keeps only allowlisted text models and non-text models for a free user', async () => {
+    expect(await listedIds()).toEqual(['priced', 'image-model']);
+  });
+
+  it('lists everything for a user holding plan:paid', async () => {
+    mocks.getUserEntitlements.mockResolvedValue(['base', 'plan:paid']);
+
+    expect(await listedIds()).toEqual(ungated);
+  });
+
+  it.each([
+    ['an admin', { isAdmin: true }],
+    ['a developer-tagged user', { tags: ['Developer'] }],
+  ])('lists everything for %s', async (_label, overrides) => {
+    expect(await listedIds(makeUser(overrides))).toEqual(ungated);
+  });
+
+  it('lists everything when the gate is off', async () => {
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined);
+
+    expect(await listedIds()).toEqual(ungated);
+  });
+
+  it('never filters an anonymous caller', async () => {
+    expect(await listedIds(null)).toEqual(ungated);
+    expect(mocks.loadFreeTierAllowedModels).not.toHaveBeenCalled();
+  });
+
+  it('drops upgrade offers whose replacement was filtered out', async () => {
+    const toPaid = { id: 'old-a', replacementId: 'free' } as unknown as SupersededModelInfo;
+    const toAllowed = { id: 'old-b', replacementId: 'priced' } as unknown as SupersededModelInfo;
+    mocks.getSupersededModels.mockReturnValue([toPaid, toAllowed]);
+
+    expect((await callerList(makeUser())).supersededModels).toEqual([toAllowed]);
+  });
+
+  it('fails closed to the free-tier models, and warns, when the entitlement read rejects', async () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    mocks.getUserEntitlements.mockRejectedValue(new Error('subscription db down'));
+
+    expect(await listedIds()).toEqual(['priced', 'image-model']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('entitlement read failed'), expect.anything());
+    warn.mockRestore();
+  });
+
+  it('lists unfiltered, and warns, when the allowlist read rejects', async () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    mocks.loadFreeTierAllowedModels.mockRejectedValue(new Error('settings db down'));
+
+    expect(await listedIds()).toEqual(ungated);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('allowlist read failed'), expect.anything());
+    warn.mockRestore();
   });
 });

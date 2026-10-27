@@ -17,6 +17,7 @@ import type { ILogger } from '@bike4mind/observability';
 import { FunctionQueueRunner } from '@bike4mind/utils';
 import type { CreateFabFileAdapters } from '../fabFileService/create';
 import { assertRewriteFits, commitContentRewrite } from '../fabFileService/rewriteStorage';
+import { signedUrlExpiresAt } from '../fabFileService/get';
 import * as tagService from '../tagService';
 
 /**
@@ -130,7 +131,7 @@ export async function findOrUpdateExistingResearchData(
           DEFAULT_EXPIRE_IN_SECONDS,
           'get'
         );
-        existingFile.fileUrlExpireAt = new Date(Date.now() + DEFAULT_EXPIRE_IN_SECONDS * 1000);
+        existingFile.fileUrlExpireAt = signedUrlExpiresAt(existingFile.fileUrl, DEFAULT_EXPIRE_IN_SECONDS);
         existingFile.updatedAt = new Date();
         await adapters.db.fabFiles.update({
           id: existingFile.id,

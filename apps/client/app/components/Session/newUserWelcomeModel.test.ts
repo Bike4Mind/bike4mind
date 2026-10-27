@@ -45,6 +45,17 @@ describe('welcomeCreditsLine', () => {
       'Verify your email to unlock your free credits.'
     );
   });
+
+  it('describes a risk-assessed staged tranche as a maximum rather than a guaranteed grant', () => {
+    expect(
+      welcomeCreditsLine({
+        ...base,
+        awaitingVerification: true,
+        pendingGrant: 10000,
+        pendingGrantIsMaximum: true,
+      })
+    ).toBe('Verify your email to unlock up to 10,000 credits, subject to eligibility checks.');
+  });
 });
 
 describe('STARTER_PROMPTS', () => {

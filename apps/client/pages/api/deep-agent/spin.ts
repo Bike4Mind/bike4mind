@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel): the barrel's subtree
 // pulls in wakeHandler -> queueHandlers/utils -> the Lambda-runtime import graph,
 // which deadlocks module init under the Next dev server. Every other deep-agent
@@ -19,6 +19,7 @@ import { createDeepAgentToolMaterializer } from '@server/deepAgent/toolMateriali
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { loadLinkedAgentContext } from '@server/deepAgent/missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
+import { resolveThinkingVisibilityForUserId } from '@server/utils/thinkingVisibility';
 
 /**
  * POST /api/deep-agent/spin  (admin/dev only)
@@ -100,6 +101,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
             logger,
             buildTools: createDeepAgentToolMaterializer({ llm: resolved.llm, model: resolved.modelId, logger }),
             loadLinkedAgent: loadLinkedAgentContext,
+            resolveThinkingVisibility: resolveThinkingVisibilityForUserId,
           })
         : noopRunAct;
       const deps: WakeDeps = {

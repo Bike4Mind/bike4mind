@@ -1,4 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
@@ -43,6 +44,7 @@ import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 /**
  * CLI completions with WebSocket response streaming (`/api/ai/v1/ws-completions`), served by
@@ -221,9 +223,19 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             }
           }
 
+          // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+          await checkFreeTierDailySpendCap({
+            userId,
+            userRepository,
+            billingOrganizationId: apiKeyInfo?.organizationId,
+            usageEventRepository,
+            logger,
+          });
+
           // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
           await executeCompletion({
             getEntitlements: getUserEntitlements,
+            getThinkingVisibility: resolveThinkingVisibility,
             creditHolds: createCompletionCreditHolds(logger),
             userId,
             model,

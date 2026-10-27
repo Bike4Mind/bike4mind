@@ -43,8 +43,10 @@ import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { geminiThinkingOutputCap } from './thinkingParams';
 import { withAbortListener } from './withAbortListener';
+import { retryTransportErrors } from './transportRetry';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 
 // Matches gemini-3-pro-preview, gemini-3.1-pro-preview, gemini-3.5-flash, but not a future gemini-30 family.
 const isGemini3 = (modelId: string) => /^gemini-3(\D|$)/.test(modelId);
@@ -664,7 +666,12 @@ export class GeminiBackend implements ICompletionBackend {
     const bestEffortFormat = isBestEffortJsonSchema(options.responseFormat);
 
     const systemMessages = messagesWithFormat.filter(message => message.role === 'system');
-    const systemInstruction = systemMessages.map(message => message.content).join('\n');
+    const callerSystemText = systemMessages.map(message => message.content).join('\n');
+    // Without the identity tool, the line tells the model which model it is.
+    // Empty text plus no reminder still leaves `systemInstruction: undefined` below.
+    const systemInstruction = shouldOmitIdentityReminder(options)
+      ? callerSystemText
+      : appendIdentityReminder(callerSystemText, buildIdentityReminder(modelName, options.modelDisplayName));
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
     const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
@@ -740,10 +747,14 @@ export class GeminiBackend implements ICompletionBackend {
       try {
         // @google/genai ignores a signal that is already aborted, so the request would still go out.
         if (options.abortSignal?.aborted) throw new Error('Request aborted');
-        const result = await this._api.models.generateContentStream({
-          ...request,
-          config: { ...request.config, abortSignal: options.abortSignal },
-        });
+        const result = await retryTransportErrors(
+          () =>
+            this._api.models.generateContentStream({
+              ...request,
+              config: { ...request.config, abortSignal: options.abortSignal },
+            }),
+          { logger: this.logger, label: 'GeminiBackend', abortSignal: options.abortSignal }
+        );
 
         let lastChunk: any = null;
         for await (const chunk of result) {
@@ -1096,7 +1107,11 @@ export class GeminiBackend implements ICompletionBackend {
         // request throws - removing it only on the success path leaked one
         // listener per failed call on a reused signal.
         const result = await withAbortListener(options.abortSignal, abortListener, () =>
-          this._api.models.generateContent(request)
+          retryTransportErrors(() => this._api.models.generateContent(request), {
+            logger: this.logger,
+            label: 'GeminiBackend',
+            abortSignal: options.abortSignal,
+          })
         );
         const r = result;
 

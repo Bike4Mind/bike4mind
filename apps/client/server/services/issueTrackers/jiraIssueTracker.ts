@@ -267,7 +267,7 @@ export class JiraIssueTracker implements IssueTrackerService {
             : issue.fields.description?.content?.[0]?.content?.[0]?.text
         ),
         createdAt: issue.fields.created,
-        closedAt: issue.fields.resolutiondate,
+        closedAt: issue.fields.resolutiondate ?? undefined,
         url: `${this.getConfig().webBaseUrl}/browse/${issue.key}`,
       }));
     } catch (error) {

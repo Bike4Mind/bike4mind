@@ -10,11 +10,11 @@ import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
-import { loadFabFileAttachment, resolvePendingActionTarget } from '@server/utils/pendingActionTarget';
+import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
 import { assertCustomMcpEnabled } from '@server/mcpConnections/customMcpAccess';
 import { customMcpToolHost, isCustomToolStillOffered } from '@server/mcpConnections/customMcpToolHost';
 import { describeCustomCallFailure } from '@server/mcpConnections/describeRemoteMcpError';
-import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
+import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 

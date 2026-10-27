@@ -1,4 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import {
   CliCompletionRequestAction,
@@ -32,6 +33,7 @@ import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { cliCompletionErrorFields } from '@server/utils/errorSanitization';
 import { ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
@@ -162,10 +164,20 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   }
 
   try {
+    // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+    await checkFreeTierDailySpendCap({
+      userId,
+      userRepository,
+      billingOrganizationId: apiKeyInfo?.organizationId,
+      usageEventRepository,
+      logger,
+    });
+
     // Execute completion - same function as SSE handler
     // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays
     await executeCompletion({
       getEntitlements: getUserEntitlements,
+      getThinkingVisibility: resolveThinkingVisibility,
       creditHolds: createCompletionCreditHolds(logger),
       userId,
       model,

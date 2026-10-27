@@ -7,7 +7,7 @@ import { sendToClient } from '@server/websocket/utils';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { resolveSubscriptionSource, setSeats } from '@server/services/organizationService';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { z } from 'zod';
 import { Resource } from 'sst';
 

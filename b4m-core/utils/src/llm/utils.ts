@@ -2,7 +2,6 @@ import { stripToolOutputMarker } from '../artifactParser';
 import { assemblyTokenBuffer, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION } from './contextBudget';
 import {
   type AttachmentLakeAccess,
-  dayjs,
   extractSnippetMeta,
   FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
@@ -45,6 +44,7 @@ import { Logger } from '@bike4mind/observability';
 import { ensureToolPairingIntegrity, isConverseBedrockModel } from '@bike4mind/llm-adapters';
 import { getFileContent } from '../fabfile';
 import { escapeRegex } from '../escapeRegex';
+import { signedUrlExpiresAt } from '../signedUrlExpiry';
 import { BadRequestError, CorruptedFileError } from '../errors';
 import { isAxiosError } from 'axios';
 import { ITokenizer } from '../tokenCounting';
@@ -1048,14 +1048,12 @@ export async function getCachedSignedUrl(
 
   const cachedSignedUrl = await db.caches.findByKey(key);
   if (cachedSignedUrl) {
-    return cachedSignedUrl.result;
+    return cachedSignedUrl.result as string;
   }
 
   const expiryInSeconds = 3600; // 1 hour
   const signedUrl = await storage.getSignedUrl(filePath, 'get', { expiresIn: expiryInSeconds });
-  const expiresAt = dayjs()
-    .add(expiryInSeconds * 1000, 'milliseconds')
-    .toDate();
+  const expiresAt = signedUrlExpiresAt(signedUrl, expiryInSeconds);
   await db.caches.createOrUpdate({ key, result: signedUrl, expiresAt });
   return signedUrl;
 }

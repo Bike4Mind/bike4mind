@@ -3,6 +3,12 @@ import { NotFoundError } from '@bike4mind/utils';
 
 // Only the two collaborators that reach out of process need mocking; the error classes and
 // helpers from @bike4mind/utils stay real so the code under test behaves normally.
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('../apiKeyService', () => ({
   getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}),
 }));
@@ -64,21 +70,25 @@ describe('ChatCompletionInvoke retry path session binding', () => {
 
     // Guard throws (not a silent no-op) before the retry overwrite; the foreign quest is untouched.
     // A generic NotFound keeps the refusal from leaking that the quest exists.
-    await expect(invoke.invoke({ body: body as never, userId: 'user-A' })).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      invoke.invoke({ body: body as never, userId: 'user-A', authOrigin: 'session' })
+    ).rejects.toBeInstanceOf(NotFoundError);
     expect(questsUpdate).not.toHaveBeenCalled();
   });
 
   it('surfaces a NotFound when the retried quest no longer exists (same error, no enumeration)', async () => {
     const { invoke, questsUpdate } = makeHarness(null);
 
-    await expect(invoke.invoke({ body: body as never, userId: 'user-A' })).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      invoke.invoke({ body: body as never, userId: 'user-A', authOrigin: 'session' })
+    ).rejects.toBeInstanceOf(NotFoundError);
     expect(questsUpdate).not.toHaveBeenCalled();
   });
 
   it('proceeds with a legitimate same-session retry', async () => {
     const { invoke, questsUpdate } = makeHarness({ id: 'quest-1', sessionId: SESSION });
 
-    const result = await invoke.invoke({ body: body as never, userId: 'user-A' });
+    const result = await invoke.invoke({ body: body as never, userId: 'user-A', authOrigin: 'session' });
 
     expect(result).toBeDefined();
     // guard let it through: the retry overwrite ran (status flipped to running)
@@ -100,7 +110,7 @@ describe('ChatCompletionInvoke retry path session binding', () => {
       },
     });
 
-    const quest = await invoke.invoke({ body: body as never, userId: 'user-A' });
+    const quest = await invoke.invoke({ body: body as never, userId: 'user-A', authOrigin: 'session' });
 
     // Without this, a retry that succeeds (or fails for an unrelated, uncoded reason) would
     // still report the credit-exhaustion code from the attempt being retried.
@@ -152,7 +162,7 @@ describe('ChatCompletionInvoke retry path session binding', () => {
       },
     });
 
-    await invoke.invoke({ body: body as never, userId: 'user-A' });
+    await invoke.invoke({ body: body as never, userId: 'user-A', authOrigin: 'session' });
 
     // Without this, a retry that answers with the same model it originally requested would
     // still show the prior attempt's "answered by <fallback>" note.

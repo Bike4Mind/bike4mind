@@ -146,7 +146,7 @@ export const HYBRID_27B_ARCH = {
   contextMax: 262144,
   blockCount: 64,
   full: { layers: 16, kvHeads: 4, keyLength: 256, valueLength: 256 },
-  recurrent: { layers: 48, stateBytesPerSeq: 150 * MIB },
+  recurrent: { layers: 48, stateBytesPerSeq: 150 * MIB, kind: 'gated-delta-net' as const },
 };
 
 // 35B-A3B hybrid MoE: 20 KiB/token f16, 40 MoE layers.
@@ -154,7 +154,7 @@ export const MOE_35B_ARCH = {
   contextMax: 262144,
   blockCount: 40,
   full: { layers: 10, kvHeads: 2, keyLength: 256, valueLength: 256 },
-  recurrent: { layers: 30, stateBytesPerSeq: 60 * MIB },
+  recurrent: { layers: 30, stateBytesPerSeq: 60 * MIB, kind: 'gated-delta-net' as const },
   moe: { experts: 256, used: 8, moeLayers: 40 },
 };
 

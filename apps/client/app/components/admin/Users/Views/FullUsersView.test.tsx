@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
@@ -11,7 +11,14 @@ const mutations = vi.hoisted(() => ({ updateMutate: vi.fn(), loginAsMutate: vi.f
 // Only the Roles column is exercised here (it owns the Custom Tags control that #2441 is
 // about), so the card's other sections are stubbed to keep their data hooks out of it.
 vi.mock('../../AdminProfile', () => ({ default: () => null }));
-vi.mock('../Details/Bike4MindUserDetails', () => ({ default: () => null }));
+vi.mock('../Details/Bike4MindUserDetails', () => ({
+  default: () => <input data-testid="admin-user-credits-input" data-admin-credits-input />,
+}));
+vi.mock('../BulkAbuseResponseModal', () => ({
+  default: ({ selectedUserIds, recordAction }: { selectedUserIds: string[]; recordAction: string }) => (
+    <div data-testid="profile-action-preview" data-user={selectedUserIds[0]} data-action={recordAction} />
+  ),
+}));
 vi.mock('../Details/LoginDetails', () => ({ default: () => null }));
 vi.mock('../Details/UserDetails', () => ({ default: () => null }));
 vi.mock('../Details/UserSubscriptionStatus', () => ({ default: () => null }));
@@ -82,6 +89,48 @@ const addCustomTag = (tag: string) => {
 };
 
 describe('FullUsersView - Overview and Activity tabs', () => {
+  it('focuses credits with c and opens a current-user suspension preview with s without writing', () => {
+    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('user-profile-tab-activity'));
+    fireEvent.keyDown(document.body, { key: 'c' });
+    expect(screen.getByTestId('admin-user-credits-input')).toHaveFocus();
+    fireEvent.keyDown(screen.getByTestId('admin-user-credits-input'), { key: 's' });
+    expect(screen.queryByTestId('profile-action-preview')).not.toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 's' });
+    expect(screen.getByTestId('profile-action-preview')).toHaveAttribute('data-user', 'u1');
+    expect(screen.getByTestId('profile-action-preview')).toHaveAttribute('data-action', 'suspend');
+    expect(mutations.updateMutate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { action: 'suspend', label: 'Suspend account' },
+    { action: 'revoke', label: 'Revoke API keys' },
+  ])('protects staged edits from the $action command until they are undone', ({ action, label }) => {
+    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+    addCustomTag('unsaved-record-action');
+
+    expect(screen.getByTestId(`admin-command-${action}-btn`)).toBeDisabled();
+    expect(screen.getByTestId('profile-action-unsaved-hint')).toHaveTextContent('Update or undo your changes');
+    fireEvent.click(screen.getByTestId(`admin-command-${action}-btn`));
+    fireEvent.keyDown(document.body, { key: 's' });
+    expect(screen.queryByTestId('profile-action-preview')).not.toBeInTheDocument();
+    expect(screen.getByTestId('remove-tag-unsaved-record-action')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('admin-command-open-btn'));
+    const search = screen.getByTestId('admin-search-input');
+    fireEvent.change(search, { target: { value: label } });
+    expect(screen.getByTestId('admin-search-result')).toBeDisabled();
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(screen.queryByTestId('profile-action-preview')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-command-close-btn'));
+
+    fireEvent.click(screen.getByTestId('remove-tag-unsaved-record-action'));
+    expect(screen.getByTestId(`admin-command-${action}-btn`)).toBeEnabled();
+    expect(screen.queryByTestId('profile-action-unsaved-hint')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`admin-command-${action}-btn`));
+    expect(screen.getByTestId('profile-action-preview')).toHaveAttribute('data-action', action);
+  });
+
   it('keeps staged Overview edits when switching to Activity and back', async () => {
     render(<FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={vi.fn()} />, {
       wrapper: TestWrapper,
@@ -204,7 +253,7 @@ describe('FullUsersView - reason-required admin actions', () => {
   const typeReason = (testId: string, value: string) =>
     fireEvent.change(screen.getByTestId(testId), { target: { value } });
 
-  it('requires a reason before a role change is saved, then sends roleChangeReason', () => {
+  it('requires a reason before a role change is saved, then sends roleChangeReason', async () => {
     render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByTestId('role-radio-super-admin').querySelector('input') as HTMLInputElement);
@@ -222,7 +271,7 @@ describe('FullUsersView - reason-required admin actions', () => {
     expect(confirmButton).toBeEnabled();
     fireEvent.click(confirmButton);
 
-    expect(mutations.updateMutate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mutations.updateMutate).toHaveBeenCalledTimes(1));
     expect(mutations.updateMutate.mock.calls[0][0]).toMatchObject({
       id: 'u1',
       data: { isAdmin: true, roleChangeReason: 'Promoted to cover on-call' },
@@ -240,7 +289,7 @@ describe('FullUsersView - reason-required admin actions', () => {
     expect(mutations.updateMutate.mock.calls[0][0].data).not.toHaveProperty('roleChangeReason');
   });
 
-  it('login-as sends the reason with the MFA token and blocks confirm until it is valid', () => {
+  it('login-as sends the reason with the MFA token and blocks confirm until it is valid', async () => {
     render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByTestId('login-as-user-btn'));
@@ -254,11 +303,13 @@ describe('FullUsersView - reason-required admin actions', () => {
     expect(confirmButton).toBeEnabled();
     fireEvent.click(confirmButton);
 
-    expect(mutations.loginAsMutate).toHaveBeenCalledWith({
-      id: 'u1',
-      mfaToken: '123456',
-      reason: 'Reproduce billing bug',
-    });
+    await waitFor(() =>
+      expect(mutations.loginAsMutate).toHaveBeenCalledWith({
+        id: 'u1',
+        mfaToken: '123456',
+        reason: 'Reproduce billing bug',
+      })
+    );
   });
 });
 

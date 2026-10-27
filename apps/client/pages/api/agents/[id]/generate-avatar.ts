@@ -15,10 +15,10 @@ import {
 } from '@bike4mind/utils';
 import { RekognitionImageModerationService, ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, fabFilesService } from '@bike4mind/services';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 
 import { KnowledgeType } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
@@ -402,7 +402,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
         fileName,
         filePath: uploadedPath, // This is just the filename
         fileUrl: uploadedUrl, // This is the full signed URL
-        fileUrlExpireAt: new Date(Date.now() + 3600 * 1000), // 1 hour from now
+        fileUrlExpireAt: fabFilesService.signedUrlExpiresAt(uploadedUrl, 3600),
         mimeType: 'image/png',
         fileSize: imageBuffer.length,
         type: KnowledgeType.FILE, // Images are stored as FILE type

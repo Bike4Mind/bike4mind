@@ -43,7 +43,7 @@ vi.mock('@bike4mind/database', async orig => {
   };
 });
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (...a: unknown[]) => mockDecrypt(...a),
   encryptToken: (v: unknown) => v,
 }));

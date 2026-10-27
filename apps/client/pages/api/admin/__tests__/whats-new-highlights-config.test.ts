@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@bike4mind/database', () => ({
   AdminSettings: { findOne: h.findOne, findOneAndUpdate: h.findOneAndUpdate },
 }));

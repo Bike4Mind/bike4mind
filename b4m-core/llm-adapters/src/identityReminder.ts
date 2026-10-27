@@ -1,6 +1,11 @@
+import type { IMessage } from '@bike4mind/common';
+
 /**
- * Model-identity line the Anthropic-family adapters (anthropicBackend, bedrockBackend/anthropic)
- * close every system parameter with, and openaiBackend closes its lead system message with.
+ * Model-identity line appended to the final system prompt layer, so a model without a
+ * `current_model_details` tool can still answer which model it is.
+ *
+ * String-shaped system parameters use `appendIdentityReminder`; OpenAI-shaped message arrays use
+ * `appendIdentityReminderToMessages`.
  *
  * The model is named by its registry display name when one is supplied, with the id as detail.
  *
@@ -34,4 +39,22 @@ export function shouldOmitIdentityReminder(options: {
 /** Joins the identity reminder onto an already-joined system string. */
 export function appendIdentityReminder(systemText: string, identityReminder: string): string {
   return systemText ? `${systemText}\n\n${identityReminder}` : identityReminder;
+}
+
+/**
+ * Joins the identity reminder onto the last system message of an OpenAI-shaped
+ * message array, or prepends a system message when the array has none (or its
+ * last system message is not plain text).
+ *
+ * Returns a new array. Tool-round recursion re-sends the caller's `messages`, so
+ * mutating in place would stack one reminder per round.
+ */
+export function appendIdentityReminderToMessages(messages: IMessage[], identityReminder: string): IMessage[] {
+  const lastSystemIndex = messages.findLastIndex(message => message.role === 'system');
+  const lastSystem = lastSystemIndex === -1 ? undefined : messages[lastSystemIndex];
+  if (lastSystem && typeof lastSystem.content === 'string') {
+    const content = appendIdentityReminder(lastSystem.content, identityReminder);
+    return messages.map((message, index) => (index === lastSystemIndex ? { ...message, content } : message));
+  }
+  return [{ role: 'system', content: identityReminder }, ...messages];
 }

@@ -1,10 +1,11 @@
 import type { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
-import { handler as runWafScan } from '@server/security/wafScan';
+import { handler as runWafScan } from '@bike4mind/server-utils/security/wafScan';
 import { ApiKeyScope } from '@bike4mind/common';
 
 const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
@@ -43,6 +44,13 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
       // Run the WAF scan inline (synchronous). Reuses the scheduled WafSecurityScan Cron
       // implementation so admins can trigger a scan on demand without extra infrastructure.
       await runWafScan();
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.security_scan.triggered',
+        target: { kind: 'system', id: 'security-scan:waf', displayName: 'waf security scan' },
+        summary: 'triggered a manual waf scan',
+        details: { scanType: 'waf', stage },
+      });
 
       // Return 200 (not 202) since the scan completed synchronously, not queued.
       return res.status(200).json({ canRun: true, completed: true });

@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   findBySid: vi.fn(),
   verifyRefreshToken: vi.fn(),
   assertAccess: vi.fn(),
+  logger: { warn: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -28,7 +29,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   ACCESS_TOKEN_TTL_SECONDS: 1800,
   authTokenGenerator: { signAccessToken: vi.fn(() => 'a.jwt'), verifyRefreshToken: h.verifyRefreshToken },
@@ -88,7 +89,7 @@ const call = (clientId: unknown) => {
   const res = mockRes();
   const req = {
     body: { grant_type: 'refresh_token', refresh_token: 'opaque', client_id: clientId },
-    logger: { error: vi.fn() },
+    logger: h.logger,
   };
   return (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)(req, res).then(() => res);
 };
@@ -224,5 +225,31 @@ describe('POST /api/oauth/refresh API access policy', () => {
     expect(res.body?.error).toBe('temporarily_unavailable');
     expect(res.body?.access_token).toBeUndefined();
     expect(h.rotateSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/refresh error logging', () => {
+  it('logs a subscription_required refusal as a warning, not an error', async () => {
+    h.assertAccess.mockRejectedValueOnce(new ForbiddenError('API keys require an active paid subscription'));
+    const res = await call('b4m-cli');
+    expect(res.statusCode).toBe(403);
+    expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining('403'));
+    expect(h.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs an invalid refresh token as a warning', async () => {
+    h.findBySid.mockResolvedValueOnce(null);
+    const res = await call('b4m-cli');
+    expect(res.statusCode).toBe(401);
+    expect(h.logger.warn).toHaveBeenCalled();
+    expect(h.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still logs a server-side failure as an error', async () => {
+    h.assertAccess.mockRejectedValueOnce(new Error('subscription database down'));
+    const res = await call('b4m-cli');
+    expect(res.statusCode).toBe(500);
+    expect(h.logger.error).toHaveBeenCalled();
+    expect(h.logger.warn).not.toHaveBeenCalled();
   });
 });

@@ -19,6 +19,9 @@ const { mockListAccessibleAfterId, mockCreate, mockCountByUserId, mockFindUser, 
   })
 );
 
+const { mockGetCallerModelList } = vi.hoisted(() => ({ mockGetCallerModelList: vi.fn() }));
+vi.mock('@server/utils/callerModelList', () => ({ getCallerModelList: mockGetCallerModelList }));
+
 vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
     res.status(405).end(),
@@ -48,7 +51,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
@@ -133,6 +136,7 @@ const SENSITIVE_MARKERS = ['someone-else', 'g1', 'isGlobalRead', 'deletedAt', 'u
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetCallerModelList.mockResolvedValue({ models: [{ id: 'catalog-model', type: 'text' }], supersededModels: [] });
   mockFindUser.mockResolvedValue({ id: 'u1', level: 'PaidUser', currentCredits: 100 });
   mockCountByUserId.mockResolvedValue(0);
   mockCreate.mockImplementation(async (data: Record<string, unknown>) => agentDoc('65a0000000000000000000ff', data));
@@ -216,6 +220,26 @@ describe('GET /api/v1/agents', () => {
 });
 
 describe('POST /api/v1/agents', () => {
+  it('accepts a catalog-only preferred_model and forwards the caller and logger to the lookup', async () => {
+    const res = await call({ method: 'POST', body: { name: 'Researcher', preferred_model: 'catalog-model' } });
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ preferredModel: 'catalog-model' }));
+    expect(mockGetCallerModelList).toHaveBeenCalledWith(USER, logger);
+  });
+
+  it.each([
+    [503, 'an empty catalog', () => mockGetCallerModelList.mockResolvedValueOnce({ models: [], supersededModels: [] })],
+    [500, 'a failing catalog', () => mockGetCallerModelList.mockRejectedValueOnce(new Error('catalog down'))],
+  ])('answers %i, not 422, and creates nothing when the model lookup hits %s', async (expected, _, arrange) => {
+    arrange();
+
+    const error = await errorOf({ method: 'POST', body: { name: 'Researcher', preferred_model: 'gpt-9-nope' } });
+
+    expect(error.statusCode ?? 500).toBe(expected);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
   const body = {
     name: 'Researcher',
     description: 'Finds sources',

@@ -3,11 +3,11 @@ import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
 import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { HTTPError, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { refuseBlockedRotatedSession } from '@server/auth/refreshAccountGate';
 import { API_KEY_ACCESS_DENIED_MESSAGE, assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
@@ -121,7 +121,13 @@ const handler = baseApi({ auth: false })
         expires_in: ACCESS_TOKEN_TTL_SECONDS,
       });
     } catch (error) {
-      console.error('Token refresh error:', error);
+      // A 4xx is a verdict on the caller's credential or plan (e.g. a free account refused with
+      // subscription_required), routine traffic that must not page the error alert.
+      if (error instanceof HTTPError && error.statusCode < 500) {
+        req.logger.warn(`Token refresh refused: ${error.statusCode} ${error.message}`);
+      } else {
+        req.logger.error('Token refresh error:', error);
+      }
 
       // Let a typed HTTP error keep its own status. The blanket 401 below exists to turn any
       // rotation failure into invalid_grant, but not every failure means "your credential is

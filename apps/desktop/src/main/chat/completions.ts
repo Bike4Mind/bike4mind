@@ -21,6 +21,11 @@ export interface CompletionMessage {
   content: string | unknown[];
   /** Asks the provider to cache the request up to and including this message. Anthropic only. */
   cache?: boolean;
+  /**
+   * A user message that belongs to the turn before it (tool screenshots), so local history
+   * trimming never starts a turn here. Never sent: streamCompletion and OllamaLocal drop it.
+   */
+  continuesTurn?: boolean;
 }
 
 /**
@@ -112,7 +117,7 @@ export async function streamCompletion(
       endpoint,
       {
         model: request.model,
-        messages: request.messages,
+        messages: request.messages.map(({ continuesTurn: _continuesTurn, ...message }) => message),
         ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
         // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
         // this client executes it locally, then sends the result back as another turn.

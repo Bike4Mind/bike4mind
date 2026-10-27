@@ -3,6 +3,7 @@ import {
   creditTransactionRepository,
   organizationRepository,
   pendingCreditHoldRepository,
+  usageEventRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -14,6 +15,7 @@ import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMember
 
 import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { checkFreeTierDailySpendCap } from './freeTierDailyCapGate';
 
 export { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
 export type { CreditLedgerEntry };
@@ -110,6 +112,15 @@ export async function reserveRequestCredits({
   const billingOrganizationId = resolveRequestBillingOrgId(req, explicitBillingOrgId);
   const ownerId = billingOrganizationId ?? userId;
   const ownerType = billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
+
+  // Daily cap check for free-tier accounts (no-op when enforceCredits is off).
+  await checkFreeTierDailySpendCap({
+    user: req.user,
+    req,
+    billingOrganizationId,
+    usageEventRepository,
+    logger: req.logger,
+  });
 
   if (!enforceCredits || requiredCredits <= 0) {
     return { ownerId, ownerType, reservedCredits: 0, hold: null, refund: async () => {}, settle: async () => 0 };

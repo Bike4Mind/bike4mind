@@ -17,7 +17,11 @@ vi.mock('@bike4mind/database', () => ({ organizationRepository: { findPlanHolder
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn } } }));
 
-import { activePlanResolver, getActiveSubscriptionsForUser, getRequestActiveSubscriptions } from './activeSubscriptions';
+import {
+  activePlanResolver,
+  getActiveSubscriptionsForUser,
+  getRequestActiveSubscriptions,
+} from './activeSubscriptions';
 
 const own = { priceId: 'price_pro', ownerType: 'User', ownerId: 'u1' };
 const seat = { priceId: 'price_team', ownerType: 'Organization', ownerId: 'org1' };
@@ -174,6 +178,28 @@ describe('getRequestActiveSubscriptions', () => {
 
     await expect(getRequestActiveSubscriptions({ user })).resolves.toEqual([{ ...seat, ownerId: 'adminOrg' }]);
     expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['adminOrg']);
+  });
+
+  it('refreshes a degraded request memo before a strict lookup', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockRejectedValueOnce(new Error('membership down'));
+    const req = { user };
+
+    await expect(getRequestActiveSubscriptions(req)).resolves.toEqual([]);
+    await expect(getRequestActiveSubscriptions(req, { strict: true })).resolves.toEqual([seat]);
+    await expect(getRequestActiveSubscriptions(req, { strict: true })).resolves.toEqual([seat]);
+    expect(findPlanHolderOrgIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a degraded memo when the strict retry also fails', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([]);
+    const error = new Error('membership down');
+    findPlanHolderOrgIds.mockRejectedValue(error);
+    const req = { user };
+
+    await expect(getRequestActiveSubscriptions(req)).resolves.toEqual([]);
+    await expect(getRequestActiveSubscriptions(req, { strict: true })).rejects.toBe(error);
+    expect(findPlanHolderOrgIds).toHaveBeenCalledTimes(2);
   });
 
   it('manager and admin orgs do not widen request membership', async () => {

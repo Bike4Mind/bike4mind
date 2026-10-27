@@ -25,12 +25,13 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { create: h.fabFileCreate },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: h.getOperationsModel },
 }));
 
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
+  fabFilesService: { signedUrlExpiresAt: (_url: string, seconds: number) => new Date(Date.now() + seconds * 1000) },
 }));
 
 vi.mock('axios', () => ({ default: { get: h.axiosGet } }));

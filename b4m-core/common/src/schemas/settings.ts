@@ -38,6 +38,7 @@ import {
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
+import { THINKING_VISIBILITY_LEVELS } from '../utils/streamVisibility';
 import {
   ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
   ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
@@ -356,6 +357,12 @@ export const SettingKeySchema = z.enum([
   'EnableReferralToSlack',
   'EnableReferralToEmail',
   'ReferralCreditsAmount',
+  'ReferralFirstAnswerCredits',
+  'ReferralFirstPaymentCredits',
+  'ReferralSecondPaymentCredits',
+  'ReferralHoldDays',
+  'ReferralInvitesPerUser',
+  'ReferralAlertRewardsPerDay',
   'registrationLink',
   'FeedbackReceiveEmail',
   'FeedbackReceiveEmailNonProd',
@@ -433,7 +440,33 @@ export const SettingKeySchema = z.enum([
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
+  'thinkingVisibilityFree',
+  'thinkingVisibilityPaid',
+  'otcLimitSendPerEmailPerIp',
+  'otcLimitSendPerEmailPerIpDaily',
+  'otcLimitSendPerEmail',
+  'otcLimitRegisterPerDomainHourly',
+  'otcLimitRegisterPerDomainDaily',
+  'otcLimitSendPerIpDistinctEmails',
+  'otcLimitSendPerIpTotal',
+  'otcLimitSendPerIpDaily',
+  'otcLimitVerifyPerEmailPerIp',
+  'otcLimitVerifyPerIp',
+  'signupBurstThreshold',
+  'signupBurstWindowHours',
+  'signupBurstAutoHold',
   'defaultFreeCredits',
+  'freeTierDailySpendCapCredits',
+  'freeTierDay1SpendCapCredits',
+  'freeTierDays2To7SpendCapCredits',
+  'stagedSignupGrantEnabled',
+  'signupGrantCredits',
+  'verifiedUnlockCredits',
+  'signupGrantRiskPolicy',
+  'signupGrantActivityEnabled',
+  'signupGrantOrgInviteEnabled',
+  'signupGrantActivityMinMessages',
+  'signupGrantActivityMinDays',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
@@ -443,6 +476,7 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
+  'signupAnomaly',
 
   // WEATHER SERVICE SETTINGS
   'EnableWeatherService',
@@ -599,6 +633,10 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
   'apiKeyAccess',
+
+  // FREE-TIER MODEL ALLOWLIST
+  'freeTierModelGateEnabled',
+  'freeTierAllowedModels',
 
   // OVERWATCH ROLLUP CRON SETTINGS
   'overwatchRollupSync',
@@ -943,8 +981,7 @@ export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting,
   key: K;
   dependsOn?: [K] extends [SettingKey] ? SettingKey : string;
   type: 'string' | 'number' | 'boolean' | 'array' | 'object';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  schema: z.ZodType<any, any, any>;
+  schema: z.ZodType;
   defaultValue?: string | number | boolean | object | undefined;
   options?: string[];
 };
@@ -2047,11 +2084,26 @@ export const API_SERVICE_GROUPS = {
       { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
-      { key: 'syntheticUserEmailDomains', order: 4 },
-      { key: 'turnstileEnabled', order: 5 },
-      { key: 'turnstileFailClosed', order: 6 },
-      { key: 'turnstileSiteKey', order: 7 },
-      { key: 'signupRiskScoring', order: 8 },
+      { key: 'stagedSignupGrantEnabled', order: 4 },
+      { key: 'signupGrantCredits', order: 5 },
+      { key: 'verifiedUnlockCredits', order: 6 },
+      { key: 'signupGrantRiskPolicy', order: 7 },
+      { key: 'signupGrantActivityEnabled', order: 8 },
+      { key: 'signupGrantOrgInviteEnabled', order: 9 },
+      { key: 'signupGrantActivityMinMessages', order: 10 },
+      { key: 'signupGrantActivityMinDays', order: 11 },
+      { key: 'freeTierDailySpendCapCredits', order: 12 },
+      { key: 'freeTierDay1SpendCapCredits', order: 13 },
+      { key: 'freeTierDays2To7SpendCapCredits', order: 14 },
+      { key: 'syntheticUserEmailDomains', order: 15 },
+      { key: 'turnstileEnabled', order: 16 },
+      { key: 'turnstileFailClosed', order: 17 },
+      { key: 'turnstileSiteKey', order: 18 },
+      { key: 'signupBurstThreshold', order: 19 },
+      { key: 'signupBurstWindowHours', order: 20 },
+      { key: 'signupBurstAutoHold', order: 21 },
+      { key: 'signupRiskScoring', order: 22 },
+      { key: 'signupAnomaly', order: 23 },
     ],
   },
   KNOWLEDGE: {
@@ -2168,6 +2220,45 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiKeyMinAccountAgeDays', order: 2 },
       { key: 'maxActiveKeysUntrusted', order: 3 },
       { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
+    ],
+  },
+  FREE_TIER_MODELS: {
+    id: 'freeTierModelsService',
+    name: 'Free-Tier Models',
+    description: 'Which text models accounts without a paid plan may call, on every surface',
+    icon: 'Security',
+    settings: [
+      { key: 'freeTierModelGateEnabled', order: 1 },
+      { key: 'freeTierAllowedModels', order: 2 },
+    ],
+  },
+  THINKING_VISIBILITY: {
+    id: 'thinkingVisibilityService',
+    name: 'Model Thinking Visibility',
+    description: 'How much model reasoning each account tier is shown, on every chat, API, CLI and agent surface',
+    icon: 'Psychology',
+    settings: [
+      { key: 'thinkingVisibilityFree', order: 1 },
+      { key: 'thinkingVisibilityPaid', order: 2 },
+    ],
+  },
+  SIGN_IN_CODE_LIMITS: {
+    id: 'signInCodeLimitsService',
+    name: 'Sign-in Code Limits',
+    description:
+      'Tightens the email sign-in code rate limits during an incident. Each value can only lower its built-in limit; 0 keeps the built-in. Changes take up to 5 minutes to apply.',
+    icon: 'Security',
+    settings: [
+      { key: 'otcLimitSendPerEmailPerIp', order: 1 },
+      { key: 'otcLimitSendPerEmailPerIpDaily', order: 2 },
+      { key: 'otcLimitSendPerEmail', order: 3 },
+      { key: 'otcLimitRegisterPerDomainHourly', order: 4 },
+      { key: 'otcLimitRegisterPerDomainDaily', order: 5 },
+      { key: 'otcLimitSendPerIpDistinctEmails', order: 6 },
+      { key: 'otcLimitSendPerIpTotal', order: 7 },
+      { key: 'otcLimitSendPerIpDaily', order: 8 },
+      { key: 'otcLimitVerifyPerEmailPerIp', order: 9 },
+      { key: 'otcLimitVerifyPerIp', order: 10 },
     ],
   },
   DATA_LAKE_AUDIT: {
@@ -3113,6 +3204,71 @@ export const settingsMap = {
     // displayed in the "invited person gets N credits" line.
     userReadable: true,
   }),
+  ReferralFirstAnswerCredits: makeNumberSetting({
+    key: 'ReferralFirstAnswerCredits',
+    name: 'Referral Reward: First Answer',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Credits the inviter earns when an invited friend, with a verified email, gets their first answer. Paid once per friend and usable at once. 0 turns this reward off.',
+    category: 'Referrals',
+  }),
+  ReferralFirstPaymentCredits: makeNumberSetting({
+    key: 'ReferralFirstPaymentCredits',
+    name: 'Referral Reward: First Payment',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+    category: 'Referrals',
+  }),
+  ReferralSecondPaymentCredits: makeNumberSetting({
+    key: 'ReferralSecondPaymentCredits',
+    name: 'Referral Reward: Second Payment',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+    category: 'Referrals',
+  }),
+  ReferralHoldDays: makeNumberSetting({
+    key: 'ReferralHoldDays',
+    name: 'Referral Reward Hold (days)',
+    defaultValue: 14,
+    int: true,
+    min: 0,
+    max: 365,
+    description:
+      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward. Not active yet: takes effect once inviter rewards ship.',
+    category: 'Referrals',
+  }),
+  ReferralInvitesPerUser: makeNumberSetting({
+    key: 'ReferralInvitesPerUser',
+    name: 'Referral Invites Per User',
+    defaultValue: 3,
+    int: true,
+    min: 0,
+    max: 1000,
+    description:
+      'Invites a user starts with when they register by email code. Existing users keep theirs; OAuth sign-ups start with 0 and admin-created accounts with 3.',
+    category: 'Referrals',
+  }),
+  ReferralAlertRewardsPerDay: makeNumberSetting({
+    key: 'ReferralAlertRewardsPerDay',
+    name: 'Referral Reward Alert Threshold',
+    defaultValue: 50,
+    int: true,
+    min: 1,
+    max: 1_000_000,
+    description: 'Alert admins when more than this many referral rewards are created within 24 hours.',
+    category: 'Referrals',
+  }),
   EnableReferralToEmail: makeBooleanSetting({
     key: 'EnableReferralToEmail',
     name: 'Enable Referral to Email',
@@ -3512,6 +3668,196 @@ export const settingsMap = {
     order: 4,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
+  // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
+  // the model picker (apps/client/server/utils/callerModelList.ts).
+  freeTierModelGateEnabled: makeBooleanSetting({
+    key: 'freeTierModelGateEnabled',
+    name: 'Free-Tier Model Gate',
+    // Self-host has no billing stack, so every account would read as free; the gate is hosted-only by default.
+    defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
+    description:
+      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) to the free-tier text models, on web chat, CLI, API keys, agents and fallbacks. Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
+    order: 1,
+  }),
+  freeTierAllowedModels: makeObjectSetting<string[]>({
+    key: 'freeTierAllowedModels',
+    name: 'Free-Tier Allowed Models',
+    defaultValue: [
+      ChatModels.CLAUDE_5_5_HAIKU,
+      ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+      ChatModels.CLAUDE_4_5_HAIKU,
+      ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
+      ChatModels.GPT5_4_MINI,
+      ChatModels.GPT5_4_NANO,
+      ChatModels.GEMINI_3_1_FLASH_LITE,
+      ChatModels.GEMINI_2_5_FLASH_LITE,
+    ],
+    description:
+      'Text model IDs free accounts may call while the Free-Tier Model Gate is on, one per line. The Default API Model is always allowed so a free account can still chat. A model missing here, including a newly added one, is paid-only.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
+    order: 2,
+    dependsOn: 'freeTierModelGateEnabled',
+    schema: z.array(z.string()),
+  }),
+  // Tiers resolve in b4m-core/services/src/thinkingVisibility.ts. Multi-turn tool replay is
+  // unaffected: provider thinking blocks still go back to the provider whatever the level.
+  thinkingVisibilityFree: makeStringSetting({
+    key: 'thinkingVisibilityFree',
+    name: 'Thinking Visibility: Free Accounts',
+    defaultValue: 'summary',
+    description:
+      'Model reasoning shown to accounts with no purchase, active plan or admin approval. "raw" shows it as the provider sent it. "summary" shows it only from models whose provider returns a summary instead of the raw trace (Claude 4 and later) and hides the rest; for other models the completions API does not request reasoning at all. "none" hides all reasoning text, but completions API callers that run tools themselves still receive the provider\'s summarized thinking blocks on Claude 4 and later, because those blocks must be echoed back on the next turn. Changes reach running servers within about 5 minutes (settings cache).',
+    options: [...THINKING_VISIBILITY_LEVELS],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
+    order: 1,
+  }),
+  thinkingVisibilityPaid: makeStringSetting({
+    key: 'thinkingVisibilityPaid',
+    name: 'Thinking Visibility: Paid Accounts',
+    defaultValue: 'raw',
+    description:
+      'Model reasoning shown to admins and to accounts with a credit purchase, admin approval, or an active plan (own or org seat; only subscriptions in the active status count, so trialing, past-due and canceled plans do not). Same levels as the free-account setting.',
+    options: [...THINKING_VISIBILITY_LEVELS],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
+    order: 2,
+  }),
+  otcLimitSendPerEmailPerIp: makeNumberSetting({
+    key: 'otcLimitSendPerEmailPerIp',
+    name: 'Sign-in Codes: Send: Per Inbox per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 5,
+    int: true,
+    description: 'Codes one IP may have sent to one inbox in 15 minutes. Built-in: 5. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 1,
+  }),
+  otcLimitSendPerEmailPerIpDaily: makeNumberSetting({
+    key: 'otcLimitSendPerEmailPerIpDaily',
+    name: 'Sign-in Codes: Send: Per Inbox per IP (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 15,
+    int: true,
+    description: 'Codes one IP may have sent to one inbox in a day. Built-in: 15. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 2,
+  }),
+  otcLimitSendPerEmail: makeNumberSetting({
+    key: 'otcLimitSendPerEmail',
+    name: 'Sign-in Codes: Send: Per Inbox (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 15,
+    int: true,
+    description: 'Codes one inbox may receive from all IPs combined in 15 minutes. Built-in: 15. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 3,
+  }),
+  otcLimitRegisterPerDomainHourly: makeNumberSetting({
+    key: 'otcLimitRegisterPerDomainHourly',
+    name: 'Sign-in Codes: New Accounts per Domain (per hour)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 5,
+    int: true,
+    description:
+      'Accounts that may be created by sign-in code on one email domain in an hour. Personal mail providers, partner domains, self-host installs and domains with an account verified over a week ago are exempt. Built-in: 5. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 4,
+  }),
+  otcLimitRegisterPerDomainDaily: makeNumberSetting({
+    key: 'otcLimitRegisterPerDomainDaily',
+    name: 'Sign-in Codes: New Accounts per Domain (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 20,
+    int: true,
+    description:
+      'Accounts that may be created by sign-in code on one email domain in a day. Personal mail providers, partner domains, self-host installs and domains with an account verified over a week ago are exempt. Built-in: 20. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 5,
+  }),
+  otcLimitSendPerIpDistinctEmails: makeNumberSetting({
+    key: 'otcLimitSendPerIpDistinctEmails',
+    name: 'Sign-in Codes: Send: Distinct Inboxes per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 15,
+    int: true,
+    description: 'Distinct inboxes one IP may request codes for in 15 minutes. Built-in: 15. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 6,
+  }),
+  otcLimitSendPerIpTotal: makeNumberSetting({
+    key: 'otcLimitSendPerIpTotal',
+    name: 'Sign-in Codes: Send: Per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 40,
+    int: true,
+    description: 'Code requests one IP may make in 15 minutes. Built-in: 40. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 7,
+  }),
+  otcLimitSendPerIpDaily: makeNumberSetting({
+    key: 'otcLimitSendPerIpDaily',
+    name: 'Sign-in Codes: Send: Per IP (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 200,
+    int: true,
+    description: 'Code requests one IP may make in a day. Built-in: 200. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 8,
+  }),
+  otcLimitVerifyPerEmailPerIp: makeNumberSetting({
+    key: 'otcLimitVerifyPerEmailPerIp',
+    name: 'Sign-in Codes: Verify: Wrong Guesses per Address per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 10,
+    int: true,
+    description: 'Wrong codes one IP may enter for one address in 15 minutes. Built-in: 10. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 9,
+  }),
+  otcLimitVerifyPerIp: makeNumberSetting({
+    key: 'otcLimitVerifyPerIp',
+    name: 'Sign-in Codes: Verify: Per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 60,
+    int: true,
+    description: 'Code checks one IP may make in 15 minutes. Built-in: 60. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 10,
+  }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',
     name: 'Block Disposable Emails',
@@ -3533,6 +3879,92 @@ export const settingsMap = {
     // refuses invalid entries and readers filter with partitionDomainList.
     schema: z.array(z.string()),
   }),
+  stagedSignupGrantEnabled: makeBooleanSetting({
+    key: 'stagedSignupGrantEnabled',
+    name: 'Staged Signup Grants',
+    defaultValue: false,
+    userReadable: true,
+    description:
+      'Enroll new self-serve accounts in staged grants. Existing accounts and explicit invite grants are unchanged.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantCredits: makeNumberSetting({
+    key: 'signupGrantCredits',
+    name: 'Signup Grant Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    userReadable: true,
+    description:
+      'Credits released after email verification for newly enrolled staged accounts. Migrated from the installed default grant without increasing it.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  verifiedUnlockCredits: makeNumberSetting({
+    key: 'verifiedUnlockCredits',
+    name: 'Verified Unlock Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    userReadable: true,
+    description:
+      'Maximum additional credits available after server-validated unlocks. Stronger evidence pays only the cumulative difference. Does not enable a verification flow.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantRiskPolicy: makeObjectSetting<Record<string, unknown>>({
+    key: 'signupGrantRiskPolicy',
+    name: 'Signup Grant Assessment Policy',
+    defaultValue: { enabled: false },
+    schema: z.record(z.string(), z.unknown()),
+    description:
+      'Private server assessment policy for new staged signup tranches. Invalid or unavailable enabled policies hold the tranche.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantActivityEnabled: makeBooleanSetting({
+    key: 'signupGrantActivityEnabled',
+    name: 'Signup Grant Activity Unlock',
+    defaultValue: false,
+    userReadable: true,
+    description: 'Allow enrolled accounts to request an unlock based on server-completed first-party chat activity.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantOrgInviteEnabled: makeBooleanSetting({
+    key: 'signupGrantOrgInviteEnabled',
+    name: 'Signup Grant Organization Invite Unlock',
+    defaultValue: false,
+    userReadable: true,
+    description:
+      'Allow staged grant unlocks after organization invitation acceptance. Off by default; enable only by operator decision until a replenishing organization grant budget is implemented.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantActivityMinMessages: makeNumberSetting({
+    key: 'signupGrantActivityMinMessages',
+    name: 'Signup Activity Minimum Messages',
+    defaultValue: 0,
+    min: 0,
+    max: 10000,
+    int: true,
+    description: 'Private minimum completed chat turns for activity unlock. Zero disables eligibility.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantActivityMinDays: makeNumberSetting({
+    key: 'signupGrantActivityMinDays',
+    name: 'Signup Activity Minimum Days',
+    defaultValue: 0,
+    min: 0,
+    max: 365,
+    int: true,
+    description:
+      'Private minimum distinct UTC activity days and elapsed whole days between first and last activity. Zero disables eligibility.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
     // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
@@ -3541,6 +3973,39 @@ export const settingsMap = {
     defaultValue: 0,
     description:
       'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
+    category: 'Users',
+  }),
+  freeTierDailySpendCapCredits: makeNumberSetting({
+    key: 'freeTierDailySpendCapCredits',
+    name: 'Free Tier Daily Spend Cap',
+    defaultValue: 200,
+    int: true,
+    min: 0,
+    description:
+      'Daily credit allowance for a free-tier account older than 7 days, counted per UTC calendar day. Once spend for the day reaches this cap, new requests are refused with a 429 until the next UTC midnight; the request that crosses the cap is not cut off, so a day can end slightly over it. Set to 0 to disable the cap for every free-tier account, including the day-1 and days 2-7 tiers.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  freeTierDay1SpendCapCredits: makeNumberSetting({
+    key: 'freeTierDay1SpendCapCredits',
+    name: 'Free Tier Day-1 Spend Cap',
+    defaultValue: 500,
+    int: true,
+    min: 0,
+    description:
+      'Daily spend cap for a free-tier account during its first 24 hours (by account age; spend still resets at UTC midnight). Higher than the steady-state cap to let genuine new users explore. Set to 0 to fall back to the steady-state cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  freeTierDays2To7SpendCapCredits: makeNumberSetting({
+    key: 'freeTierDays2To7SpendCapCredits',
+    name: 'Free Tier Days 2-7 Spend Cap',
+    defaultValue: 300,
+    int: true,
+    min: 0,
+    description:
+      'Daily spend cap for a free-tier account aged 24 hours to 7 days. Intermediate ramp between the day-1 allowance and the steady-state cap. Set to 0 to fall back to the steady-state cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanMinSeats: makeNumberSetting({
@@ -3632,6 +4097,37 @@ export const settingsMap = {
     category: 'Users',
     dependsOn: 'turnstileEnabled',
   }),
+  signupBurstThreshold: makeNumberSetting({
+    key: 'signupBurstThreshold',
+    name: 'Signup Burst Threshold',
+    defaultValue: 5,
+    int: true,
+    min: 3,
+    max: 1000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Minimum verified signups with generated email patterns before a domain is held for review.',
+  }),
+  signupBurstWindowHours: makeNumberSetting({
+    key: 'signupBurstWindowHours',
+    name: 'Signup Burst Window (hours)',
+    defaultValue: 6,
+    int: true,
+    min: 1,
+    max: 168,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Rolling window for verified signup pattern detection.',
+  }),
+  signupBurstAutoHold: makeBooleanSetting({
+    key: 'signupBurstAutoHold',
+    name: 'Auto-hold Signup Bursts',
+    defaultValue: false,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Hold patterned signup domains for admin review and defer their pending free credits. Granted balances are never changed. Review in Signup Domain Holds.',
+  }),
   signupRiskScoring: makeObjectSetting({
     key: 'signupRiskScoring',
     name: 'Signup Risk Scoring',
@@ -3643,6 +4139,24 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     schema: SignupRiskScoringSchema,
+  }),
+  signupAnomaly: makeObjectSetting({
+    key: 'signupAnomaly',
+    name: 'Signup anomaly detection',
+    defaultValue: { signupBaseline: 0, apiKeyBaseline: 0, thresholdMultiplier: 2, minimumCount: 10 },
+    description:
+      'Expected hourly signups and API keys, multiplier above baseline, and minimum event count. ' +
+      'Generic defaults only; tune these for your deployment. Domain hints are review signals, not proof of abuse.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    schema: z
+      .object({
+        signupBaseline: z.number().int().min(0).max(1000000),
+        apiKeyBaseline: z.number().int().min(0).max(1000000),
+        thresholdMultiplier: z.number().min(1).max(100),
+        minimumCount: z.number().int().min(1).max(1000000),
+      })
+      .strict(),
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',
