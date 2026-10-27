@@ -67,8 +67,19 @@ describe.runIf(BINARY && GGUF)('live llama-server', () => {
     expect(await runtime.running()).toEqual([]);
   }, 60_000);
 
-  it('refuses extra flags that would expose the server', async () => {
-    await expect(runtime.start(model, { extraArgs: ['--tools', 'all'] })).rejects.toThrow('may not pass --tools');
-    await expect(runtime.start(model, { extraArgs: ['-ag'] })).rejects.toThrow('may not pass -ag');
-  });
+  it.skipIf(process.platform === 'win32')(
+    'stops a server behind a launcher that drops its key',
+    async () => {
+      const launched = new LlamaServerRuntime({
+        binaryPath: '/usr/bin/env',
+        binaryArgs: ['-i', BINARY as string],
+        modelsDir: dir,
+        contextSize: 2048,
+      });
+      const error = await launched.start(model).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ name: 'LlamaServerStartError', reason: 'unauthenticated' });
+      expect(await launched.running()).toEqual([]);
+    },
+    120_000
+  );
 });

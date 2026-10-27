@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { open, rename, rm } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { DownloadVerificationError, LocalRuntimeError, RuntimeConnectionError, RuntimeProtocolError } from './errors';
-import { lockFile, onDisk, storageError } from './fileLock';
+import { type FileLock, lockFile, onDisk, storageError } from './fileLock';
 import type { FetchLike, PullProgress } from './types';
 
 export const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
@@ -51,11 +51,8 @@ class ProgressCallbackError {
 }
 
 /**
- * Downloads `target` to `destination` through `<destination>.partial`, resuming that file with a Range request,
- * and renames it into place only after its size and sha256 match. `<destination>.lock` keeps a second download
- * or copy of the same file, in any process, out (`ModelFileBusyError`). Cancelling rejects with the signal's
- * reason and keeps the partial file; a mismatch deletes it. Without a published sha256 the bytes already on
- * disk cannot be checked, so the download starts over. File errors reject with `RuntimeStorageError`.
+ * Downloads `target` to `destination` through a resumable `<destination>.partial` under `<destination>.lock`,
+ * renaming it into place only after its size and sha256 match. Without a published sha256 it starts over.
  */
 export async function downloadFile(
   transport: DownloadTransport,
@@ -66,17 +63,26 @@ export async function downloadFile(
   options.signal?.throwIfAborted();
   const lock = await lockFile(destination, transport.runtimeId);
   try {
-    return await downloadLocked(transport, target, destination, options);
+    return await downloadLocked(transport, target, destination, options, lock);
   } finally {
     await lock.release();
   }
+}
+
+async function openPartial(path: string) {
+  // Not 'a': Windows refuses to truncate a handle opened for appending.
+  return open(path, 'r+').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return open(path, 'w+');
+    throw error;
+  });
 }
 
 async function downloadLocked(
   transport: DownloadTransport,
   target: DownloadTarget,
   destination: string,
-  options: DownloadOptions
+  options: DownloadOptions,
+  lock: FileLock
 ): Promise<DownloadResult> {
   const { runtimeId } = transport;
   const name = basename(destination);
@@ -97,7 +103,7 @@ async function downloadLocked(
       timer = setTimeout(() => idle.abort(idleError), Math.min(idleTimeoutMs, MAX_TIMER_MS));
   };
   const signal = options.signal ? AbortSignal.any([options.signal, idle.signal]) : idle.signal;
-  const handle = await disk(() => open(partial, 'a'));
+  const handle = await disk(() => openPartial(partial));
   let lastReport = 0;
   const report = (status: string, completedBytes: number, force = false) => {
     const now = Date.now();
@@ -140,7 +146,7 @@ async function downloadLocked(
         }
       } catch (error) {
         if (error instanceof ProgressCallbackError || signal.aborted) throw error;
-        throw storageError(runtimeId, partial, error);
+        throw storageError(runtimeId, partial, error, 'read');
       }
     }
 
@@ -177,7 +183,9 @@ async function downloadLocked(
           if (done) break;
           arm();
           if (offset + value.length > total) throw await mismatch('size', String(total), `more than ${total}`);
-          await disk(() => handle.write(value));
+          lock.assertHeld();
+          const at = offset;
+          await disk(() => handle.write(value, 0, value.length, at));
           hash?.update(value);
           offset += value.length;
           report('downloading', offset);
@@ -198,6 +206,7 @@ async function downloadLocked(
     const actualSha = hash?.digest('hex') ?? null;
     if (expectedSha && actualSha !== expectedSha) throw await mismatch('sha256', expectedSha, actualSha ?? '');
     await disk(() => handle.close());
+    await lock.verify();
     await onDisk(runtimeId, destination, () => rename(partial, destination));
     report('success', offset, true);
     return { path: destination, sizeBytes: offset, sha256: actualSha, resumedBytes };

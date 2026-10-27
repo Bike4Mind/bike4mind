@@ -1,27 +1,45 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { access, constants, stat } from 'node:fs/promises';
-import { createServer, type AddressInfo } from 'node:net';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
 import {
+  LlamaServerBinaryError,
   LlamaServerExitError,
+  LlamaServerStartError,
   LlamaServerVersionError,
   LocalRuntimeError,
   ModelNotFoundError,
-  RuntimeProtocolError,
 } from './errors';
 import { storageError } from './fileLock';
 import { requestJson, type HttpClient } from './http';
 import { OpenAICompatibleRuntime } from './openaiCompatible';
 import type { FetchLike } from './types';
 
-export const DEFAULT_LLAMA_SERVER_CONTEXT_SIZE = 4096;
+/** Used when the caller passes no `contextSize`; callers such as Desktop pass one sized to the hardware. */
+export const DEFAULT_LLAMA_SERVER_CONTEXT_SIZE = 16384;
+/** How long a starting server may print nothing before it is given up on (ms). */
 export const DEFAULT_LLAMA_SERVER_START_TIMEOUT_MS = 120_000;
 export const DEFAULT_LLAMA_SERVER_STOP_TIMEOUT_MS = 5_000;
-/** First llama.cpp release with `--offline`; `--jinja`, `--no-webui` and `LLAMA_API_KEY` are older. */
+/** First llama.cpp release with `--offline`; `--jinja`, `--no-webui`, `--port 0` and `LLAMA_API_KEY` are older. */
 export const MIN_LLAMA_SERVER_BUILD = 5501;
+
+/**
+ * The only flags `extraArgs` may pass, each accepted by both `MIN_LLAMA_SERVER_BUILD` and current builds. Anything
+ * else could expose the server, fetch over the network, write files, or override a flag this module sets.
+ */
+export const LLAMA_SERVER_TUNING_FLAGS: readonly string[] = [
+  '-b --batch-size -ub --ubatch-size -tb --threads-batch -fa --flash-attn',
+  '-ctk --cache-type-k -ctv --cache-type-v -np --parallel -cb --cont-batching -nocb --no-cont-batching',
+  '-nkvo --no-kv-offload -sm --split-mode -ts --tensor-split -mg --main-gpu -dev --device',
+  '--rope-scaling --rope-scale --rope-freq-base --rope-freq-scale --yarn-orig-ctx --yarn-ext-factor',
+  '--yarn-attn-factor --yarn-beta-slow --yarn-beta-fast',
+  '--temp --top-k --top-p --min-p --repeat-last-n --repeat-penalty --presence-penalty --frequency-penalty',
+  '-n --predict --n-predict --reasoning-format --reasoning-budget --chat-template --chat-template-file',
+  '--mmproj --no-mmproj --no-mmproj-offload --cache-reuse --no-warmup --swa-full --no-context-shift',
+  '--embedding --embeddings --pooling --no-slots',
+].flatMap(line => line.split(' '));
 
 const RUNTIME_ID = 'llama-server';
 const LOOPBACK = '127.0.0.1';
@@ -29,33 +47,12 @@ const VERSION_TIMEOUT_MS = 10_000;
 const HEALTH_POLL_MS = 200;
 const HEALTH_REQUEST_TIMEOUT_MS = 1_000;
 const LOG_LINES = 200;
-const PORT_ATTEMPTS = 3;
 const MAX_MESSAGE_LINE = 300;
 const FLAG_RE = /^--?[a-zA-Z]/;
-
-/**
- * Flags `extraArgs` may pass: performance, memory, sampling defaults and chat-template tuning. Anything else could
- * expose the server (host, port, key, TLS, UI, MCP proxy, API prefix, static paths), fetch over the network, write
- * files, or override a flag this module sets, so it is refused. Context size, threads and GPU layers have options.
- */
-const TUNING_FLAGS = new Set(
-  [
-    '-b --batch-size -ub --ubatch-size -tb --threads-batch -fa --flash-attn',
-    '-ctk --cache-type-k -ctv --cache-type-v --mlock --mmap --no-mmap -lm --load-mode',
-    '-np --parallel -cb --cont-batching -nocb --no-cont-batching -kvu --kv-unified -no-kvu --no-kv-unified',
-    '-kvo --kv-offload -nkvo --no-kv-offload -sm --split-mode -ts --tensor-split -mg --main-gpu -dev --device',
-    '-fit --fit -fitt --fit-target -fitc --fit-ctx -cmoe --cpu-moe -ncmoe --n-cpu-moe',
-    '--rope-scaling --rope-scale --rope-freq-base --rope-freq-scale --yarn-orig-ctx --yarn-ext-factor',
-    '--yarn-attn-factor --yarn-beta-slow --yarn-beta-fast',
-    '--temp --temperature --top-k --top-p --min-p --repeat-last-n --repeat-penalty --presence-penalty',
-    '--frequency-penalty -n --predict --n-predict',
-    '-rea --reasoning --reasoning-format --reasoning-budget',
-    '--chat-template --chat-template-file --chat-template-kwargs',
-    '-mm --mmproj --no-mmproj --mmproj-offload --no-mmproj-offload',
-    '--cache-reuse -cram --cache-ram --warmup --no-warmup --swa-full --context-shift --no-context-shift',
-    '--embedding --embeddings --pooling --no-slots',
-  ].flatMap(line => line.split(' '))
-);
+const TUNING_FLAGS = new Set(LLAMA_SERVER_TUNING_FLAGS);
+/** b5501 logs `HTTP server is listening, hostname: H, port: P`; current builds `listening on http://H:P`. */
+const LISTENING_RE = /listening.*?(?:port: |https?:\/\/[^\s/]+:)(\d+)/;
+const BATCH_FILE_RE = /\.(bat|cmd)$/i;
 
 const healthSchema = z.object({ status: z.string() });
 
@@ -77,16 +74,20 @@ export interface FindLlamaServerOptions {
   timeoutMs?: number;
 }
 
+function assertBinaryPath(path: string): void {
+  // Node refuses to spawn batch files without a shell, and a shell would parse the arguments.
+  if (BATCH_FILE_RE.test(path)) throw new LlamaServerBinaryError(`${path} is a batch file, not llama-server`, path);
+}
+
 /**
- * Finds a llama-server binary that runs and is at least `MIN_LLAMA_SERVER_BUILD`: `options.path` if given, else
- * the first such `llama-server` on PATH. Never downloads one. A binary that is too old, or whose version names no
- * build, throws `LlamaServerVersionError`; on PATH that happens only when no entry qualifies. Null when PATH has
- * no llama-server at all.
+ * Finds a llama-server of at least `MIN_LLAMA_SERVER_BUILD`: `options.path`, else the first on PATH (null when PATH
+ * has none). Never downloads one; a build too old throws `LlamaServerVersionError`.
  */
 export async function findLlamaServer(options: FindLlamaServerOptions = {}): Promise<LlamaServerBinary | null> {
   const timeoutMs = options.timeoutMs ?? VERSION_TIMEOUT_MS;
   const env = options.env ?? process.env;
   if (options.path !== undefined) {
+    assertBinaryPath(options.path);
     const found = await probeBinary(resolve(options.path), env, timeoutMs, true, options.binaryArgs);
     return checkBuild(found as NonNullable<typeof found>);
   }
@@ -152,30 +153,29 @@ function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 export interface LlamaServerTuning {
-  /** Context size in tokens; default `DEFAULT_LLAMA_SERVER_CONTEXT_SIZE`. 0 takes the model's full training context. */
+  /** Context size in tokens; 0 takes the model's training context. Default `DEFAULT_LLAMA_SERVER_CONTEXT_SIZE`. */
   contextSize?: number;
   /** Generation threads; llama.cpp picks the physical core count when unset. */
   threads?: number;
   /** Layers offloaded to the GPU; llama.cpp's default when unset. */
   gpuLayers?: number;
-  /**
-   * Appended last. Only tuning flags are accepted (batch sizes, flash attention, KV cache types, memory mapping,
-   * parallel slots, GPU split and fit, MoE offload, RoPE and YaRN, sampling defaults, reasoning, chat template,
-   * projector, cache reuse, warmup, embeddings), short or long, each value as its own argument (llama-server does
-   * not parse `--flag=value`). Any other flag throws, as does a `--flag=value` token.
-   */
+  /** Appended last: flags from `LLAMA_SERVER_TUNING_FLAGS` only, each value as its own argument. */
   extraArgs?: readonly string[];
 }
 
 export interface StartLlamaServerOptions extends LlamaServerTuning {
   binaryPath: string;
-  /** Placed before llama-server's own arguments, for a `binaryPath` that is a launcher. */
+  /**
+   * Placed before llama-server's own arguments, for a `binaryPath` that is a launcher. The launcher must pass the
+   * environment through (the key travels in it) and should `exec` llama-server.
+   */
   binaryArgs?: readonly string[];
   modelPath: string;
   /** Model id the server answers to on `/v1`; default the file name. No commas: llama-server splits on them. */
   alias?: string;
-  /** A fixed loopback port. Default: a free port, replaced with another when something takes it first. */
+  /** A fixed loopback port; default a port the server picks itself. */
   port?: number;
+  /** Gives up when the process prints nothing for this long (ms); loading output resets it. */
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
   signal?: AbortSignal;
@@ -210,16 +210,33 @@ export interface LlamaServerProcess {
   readonly running: boolean;
   /** The last lines the process printed. */
   log(): string[];
-  /** Sends SIGTERM, then SIGKILL after `stopTimeoutMs`; resolves once the process is gone. */
+  /** Ends the process and its children (SIGTERM, then SIGKILL after `stopTimeoutMs`) and resolves once it is gone. */
   stop(): Promise<LlamaServerExit>;
 }
 
 const liveChildren = new Set<ChildProcess>();
 let exitHookInstalled = false;
 
-// An 'exit' listener may only do synchronous work; kill() is synchronous.
+/** Signals the process and everything it started: its process group on POSIX, its tree on Windows. */
+function signalTree(child: ChildProcess, signal: 'SIGTERM' | 'SIGKILL', sync = false): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === 'win32') {
+    const args = ['/PID', String(pid), '/T', '/F'];
+    if (sync) spawnSync('taskkill', args, { windowsHide: true, stdio: 'ignore' });
+    else spawn('taskkill', args, { windowsHide: true, stdio: 'ignore' }).on('error', () => child.kill(signal));
+    return;
+  }
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    child.kill(signal);
+  }
+}
+
+// An 'exit' listener may only do synchronous work.
 function killLiveChildren(): void {
-  for (const child of liveChildren) child.kill('SIGKILL');
+  for (const child of liveChildren) signalTree(child, 'SIGKILL', true);
 }
 
 function track(child: ChildProcess): void {
@@ -240,53 +257,42 @@ export function trackedLlamaServerCount(): number {
   return liveChildren.size;
 }
 
-async function freePort(): Promise<number> {
-  return new Promise((done, fail) => {
-    const server = createServer();
-    server.unref();
-    server.once('error', fail);
-    server.listen(0, LOOPBACK, () => {
-      const { port } = server.address() as AddressInfo;
-      server.close(() => done(port));
-    });
-  });
-}
-
 class ManagedLlamaServer implements LlamaServerProcess {
-  readonly baseUrl: string;
-  readonly #runtime: OpenAICompatibleRuntime;
   readonly exited: Promise<LlamaServerExit>;
-  readonly client: HttpClient;
+  /** Resolves with the port once the process itself logs that it is listening. */
+  readonly listening: Promise<number>;
   exit: LlamaServerExit | null = null;
   spawnError: Error | null = null;
   onExit: ((exit: LlamaServerExit) => void) | undefined;
+  lastOutputAt = Date.now();
+  #port = 0;
+  #runtime: OpenAICompatibleRuntime | null = null;
   readonly #lines: string[] = [];
   #stopping = false;
 
   constructor(
     readonly child: ChildProcess,
-    readonly port: number,
     readonly apiKey: string,
     readonly model: string,
     readonly modelPath: string,
     readonly contextSize: number,
     private readonly stopTimeoutMs: number,
-    fetchImpl: FetchLike,
+    private readonly fetchImpl: FetchLike,
     onLog: ((line: string) => void) | undefined
   ) {
-    this.baseUrl = `http://${LOOPBACK}:${port}`;
-    this.#runtime = new OpenAICompatibleRuntime({
-      baseUrl: this.baseUrl,
-      apiKey,
-      product: 'llama-server',
-      fetch: fetchImpl,
-    });
-    this.client = { runtimeId: this.#runtime.id, baseUrl: this.baseUrl, fetch: fetchImpl };
+    let heard: (port: number) => void = () => undefined;
+    this.listening = new Promise(done => (heard = done));
     for (const stream of [child.stdout, child.stderr]) {
       if (!stream) continue;
+      stream.on('data', () => (this.lastOutputAt = Date.now()));
       createInterface({ input: stream, crlfDelay: Infinity }).on('line', line => {
         this.#lines.push(line);
         if (this.#lines.length > LOG_LINES) this.#lines.shift();
+        const port = Number(LISTENING_RE.exec(line)?.[1] ?? 0);
+        if (port > 0 && this.#port === 0) {
+          this.#port = port;
+          heard(port);
+        }
         try {
           onLog?.(line);
         } catch {
@@ -319,6 +325,18 @@ class ManagedLlamaServer implements LlamaServerProcess {
     return this.child.pid ?? -1;
   }
 
+  get port(): number {
+    return this.#port;
+  }
+
+  get baseUrl(): string {
+    return `http://${LOOPBACK}:${this.#port}`;
+  }
+
+  get client(): HttpClient {
+    return { runtimeId: RUNTIME_ID, baseUrl: this.baseUrl, fetch: this.fetchImpl };
+  }
+
   get running(): boolean {
     return this.exit === null;
   }
@@ -327,8 +345,27 @@ class ManagedLlamaServer implements LlamaServerProcess {
     return [...this.#lines];
   }
 
+  /** Status of `path` asked without the key. */
+  async statusWithoutKey(path: string): Promise<number | null> {
+    try {
+      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS),
+      });
+      await response.body?.cancel().catch(() => undefined);
+      return response.status;
+    } catch {
+      return null;
+    }
+  }
+
   /** Whether `/v1/models`, asked with this server's key, lists its alias. */
   async serves(): Promise<boolean> {
+    this.#runtime ??= new OpenAICompatibleRuntime({
+      baseUrl: this.baseUrl,
+      apiKey: this.apiKey,
+      product: 'llama-server',
+      fetch: this.fetchImpl,
+    });
     const served = await this.#runtime.list().catch(() => []);
     return served.some(entry => entry.name === this.model);
   }
@@ -336,8 +373,8 @@ class ManagedLlamaServer implements LlamaServerProcess {
   async stop(): Promise<LlamaServerExit> {
     if (this.exit) return this.exit;
     this.#stopping = true;
-    this.child.kill('SIGTERM');
-    const timer = setTimeout(() => this.child.kill('SIGKILL'), this.stopTimeoutMs);
+    signalTree(this.child, 'SIGTERM');
+    const timer = setTimeout(() => signalTree(this.child, 'SIGKILL'), this.stopTimeoutMs);
     try {
       return await this.exited;
     } finally {
@@ -345,21 +382,20 @@ class ManagedLlamaServer implements LlamaServerProcess {
     }
   }
 
-  exitError(binaryPath: string): LlamaServerExitError {
+  startError(reason: LlamaServerStartError['reason'], message: string): LlamaServerStartError {
+    return new LlamaServerStartError(message, reason, this.log());
+  }
+
+  exitError(binaryPath: string, port: number | undefined): LlamaServerExitError {
     const lines = this.log();
     if (this.spawnError) {
-      return new LlamaServerExitError(
-        `could not run ${binaryPath}: ${this.spawnError.message}`,
-        null,
-        null,
-        false,
-        lines
-      );
+      const message = `could not run ${binaryPath}: ${this.spawnError.message}`;
+      return new LlamaServerExitError(message, null, null, false, lines);
     }
     const { code, signal } = this.exit ?? { code: null, signal: null };
     const portInUse = lines.some(line => /couldn't bind|address already in use/i.test(line));
     const reason = portInUse
-      ? `port ${this.port} is in use`
+      ? `port ${port ?? this.#port} is in use`
       : (lines.filter(line => /\b(E|error|failed)\b/i.test(line)).at(-1) ?? lines.at(-1) ?? 'no output');
     const how = signal ? `signal ${signal}` : `code ${code}`;
     return new LlamaServerExitError(
@@ -392,7 +428,7 @@ export function assertTuning(options: LlamaServerTuning): void {
     throw new LocalRuntimeError('gpuLayers must be a non-negative integer', RUNTIME_ID);
 }
 
-function serverArgs(options: StartLlamaServerOptions, alias: string, port: number, contextSize: number): string[] {
+function serverArgs(options: StartLlamaServerOptions, alias: string, contextSize: number): string[] {
   return [
     ...(options.binaryArgs ?? []),
     '--model',
@@ -402,7 +438,7 @@ function serverArgs(options: StartLlamaServerOptions, alias: string, port: numbe
     '--host',
     LOOPBACK,
     '--port',
-    String(port),
+    String(options.port ?? 0),
     '--ctx-size',
     String(contextSize),
     ...(options.threads === undefined ? [] : ['--threads', String(options.threads)]),
@@ -431,47 +467,44 @@ function untilAborted(signal: AbortSignal | undefined): { promise: Promise<void>
 const delay = (ms: number) => new Promise<void>(done => setTimeout(done, ms).unref());
 
 /**
- * Starts llama-server for one GGUF file on a loopback port with a fresh API key, and resolves once `/health`
- * answers and `/v1/models` serves this model with that key. The key travels in the environment, not argv, so
- * other local users cannot read it from the process list. A process still running when this one exits is killed.
- * Aborting `signal` stops a server that is still loading and rejects with the signal's reason.
+ * Starts llama-server on loopback with a fresh API key in its environment. Resolves once it has logged its port,
+ * `/health` answers, `/props` refuses a request without the key and `/v1/models` serves the model with it.
  */
 export async function startLlamaServer(options: StartLlamaServerOptions): Promise<LlamaServerProcess> {
   options.signal?.throwIfAborted();
+  assertBinaryPath(options.binaryPath);
   assertTuning(options);
+  if (options.port !== undefined && !(Number.isInteger(options.port) && options.port > 0 && options.port < 65536))
+    throw new LocalRuntimeError('port must be an integer from 1 to 65535', RUNTIME_ID);
   const alias = options.alias ?? basename(options.modelPath);
   if (!alias || alias.includes(','))
     throw new LocalRuntimeError(`${JSON.stringify(alias)} cannot be a llama-server alias`, RUNTIME_ID);
   const file = await stat(options.modelPath).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return null;
-    throw storageError(RUNTIME_ID, options.modelPath, error);
+    throw storageError(RUNTIME_ID, options.modelPath, error, 'read');
   });
   if (!file?.isFile()) throw new ModelNotFoundError(RUNTIME_ID, options.modelPath);
-  for (let attempt = 1; ; attempt++) {
-    const port = options.port ?? (await freePort());
-    options.signal?.throwIfAborted();
-    try {
-      return await launch(options, alias, port);
-    } catch (error) {
-      const retry = error instanceof LlamaServerExitError && error.portInUse && options.port === undefined;
-      if (retry && attempt < PORT_ATTEMPTS) continue;
-      throw error;
-    }
-  }
-}
 
-async function launch(options: StartLlamaServerOptions, alias: string, port: number): Promise<LlamaServerProcess> {
   const apiKey = randomBytes(32).toString('base64url');
   const contextSize = options.contextSize ?? DEFAULT_LLAMA_SERVER_CONTEXT_SIZE;
-  const child = spawn(options.binaryPath, serverArgs(options, alias, port, contextSize), {
-    env: { ...childEnv(options.env ?? process.env), LLAMA_API_KEY: apiKey },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
+  let child: ChildProcess;
+  try {
+    child = spawn(options.binaryPath, serverArgs(options, alias, contextSize), {
+      env: { ...childEnv(options.env ?? process.env), LLAMA_API_KEY: apiKey },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      // Its own process group, so stop() reaches whatever a launcher started.
+      detached: process.platform !== 'win32',
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new LlamaServerExitError(`could not run ${options.binaryPath}: ${reason}`, null, null, false, [], {
+      cause: error,
+    });
+  }
   track(child);
   const server = new ManagedLlamaServer(
     child,
-    port,
     apiKey,
     alias,
     options.modelPath,
@@ -480,32 +513,9 @@ async function launch(options: StartLlamaServerOptions, alias: string, port: num
     options.fetch ?? fetch,
     options.onLog
   );
-  const timeoutMs = options.startTimeoutMs ?? DEFAULT_LLAMA_SERVER_START_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
   const aborted = untilAborted(options.signal);
   try {
-    while (true) {
-      options.signal?.throwIfAborted();
-      if (!server.running) throw server.exitError(options.binaryPath);
-      if (Date.now() > deadline)
-        throw new LocalRuntimeError(`llama-server did not become ready within ${timeoutMs}ms`, RUNTIME_ID);
-      const healthy = await requestJson(server.client, '/health', healthSchema, {
-        timeoutMs: HEALTH_REQUEST_TIMEOUT_MS,
-        signal: options.signal,
-      }).then(
-        () => true,
-        () => false
-      );
-      if (healthy) break;
-      // 503 while the model loads, or refused before the socket is bound.
-      await Promise.race([delay(HEALTH_POLL_MS), server.exited, aborted.promise]);
-    }
-    if (!(await server.serves())) {
-      // Another server answered on this port; ours fails to bind and exits within moments.
-      await Promise.race([delay(1_000), server.exited]);
-      if (!server.running) throw server.exitError(options.binaryPath);
-      throw new RuntimeProtocolError(`port ${port} answered, but not as the llama-server just started`, RUNTIME_ID);
-    }
+    await waitUntilReady(server, options, aborted.promise);
     options.signal?.throwIfAborted();
     server.onExit = options.onExit;
     return server;
@@ -516,4 +526,48 @@ async function launch(options: StartLlamaServerOptions, alias: string, port: num
   } finally {
     aborted.dispose();
   }
+}
+
+async function waitUntilReady(
+  server: ManagedLlamaServer,
+  options: StartLlamaServerOptions,
+  aborted: Promise<void>
+): Promise<void> {
+  const timeoutMs = options.startTimeoutMs ?? DEFAULT_LLAMA_SERVER_START_TIMEOUT_MS;
+  const check = () => {
+    options.signal?.throwIfAborted();
+    if (!server.running) throw server.exitError(options.binaryPath, options.port);
+    if (Date.now() - server.lastOutputAt > timeoutMs)
+      throw server.startError('timeout', `llama-server printed nothing for ${timeoutMs}ms while starting`);
+  };
+  const pause = () => Promise.race([delay(HEALTH_POLL_MS), server.exited, aborted]);
+  // Until the process names its port, whatever answers on a port is not known to be it.
+  while (server.port === 0) {
+    check();
+    await Promise.race([server.listening, pause()]);
+  }
+  if (options.port !== undefined && server.port !== options.port)
+    throw server.startError('wrong-server', `llama-server reported port ${server.port}, not ${options.port}`);
+  while (true) {
+    check();
+    const healthy = await requestJson(server.client, '/health', healthSchema, {
+      timeoutMs: HEALTH_REQUEST_TIMEOUT_MS,
+      signal: options.signal,
+    }).then(
+      () => true,
+      () => false
+    );
+    if (healthy) break;
+    await pause();
+  }
+  const status = await server.statusWithoutKey('/props');
+  if (status !== 401) {
+    throw server.startError(
+      'unauthenticated',
+      `llama-server answered /props without its API key (${status ?? 'no answer'}); a launcher must pass LLAMA_API_KEY through`
+    );
+  }
+  if (!(await server.serves()))
+    throw server.startError('wrong-server', `port ${server.port} answered, but not as the llama-server just started`);
+  check();
 }

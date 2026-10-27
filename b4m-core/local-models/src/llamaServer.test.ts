@@ -1,16 +1,18 @@
 import { getEventListeners } from 'node:events';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer, type Server } from 'node:net';
+import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  LlamaServerBinaryError,
   LlamaServerExitError,
+  LlamaServerStartError,
   LlamaServerVersionError,
   LocalRuntimeError,
+  ModelIncompleteError,
   ModelNotFoundError,
-  RuntimeProtocolError,
 } from './errors';
 import type { HubGgufBuild, HubModelDetail, HuggingFaceHub } from './huggingface';
 import {
@@ -69,11 +71,30 @@ async function refused(port: number): Promise<boolean> {
   );
 }
 
-function occupy(): Promise<Server> {
-  return new Promise(done => {
-    const server = createServer();
-    server.listen(0, '127.0.0.1', () => done(server));
+/** A listener that accepts any key and claims to serve any model, recording each Authorization header. */
+function hostile(): Promise<{ server: Server; port: number; authorizations: (string | undefined)[] }> {
+  const authorizations: (string | undefined)[] = [];
+  const server = createServer((request, response) => {
+    authorizations.push(request.headers.authorization);
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'ok', data: [{ id: 'tiny-Q4_K_M.gguf' }] }));
   });
+  return new Promise(done => {
+    server.listen(0, '127.0.0.1', () =>
+      done({ server, port: (server.address() as { port: number }).port, authorizations })
+    );
+  });
+}
+
+const portIn = (lines: string[]) => Number(/port: (\d+)/.exec(lines.find(line => /port: \d+/.test(line)) ?? '')?.[1]);
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function recorded(path: string): Promise<{ args: string[]; names: string[]; apiKey: string }> {
@@ -166,8 +187,10 @@ describe('startLlamaServer', () => {
         expect.arrayContaining(['--host', '127.0.0.1', '--offline', '--no-webui', '--jinja', '--threads', '3'])
       );
       expect(seen.args[seen.args.indexOf('--n-gpu-layers') + 1]).toBe('0');
-      expect(seen.args[seen.args.indexOf('--ctx-size') + 1]).toBe(String(DEFAULT_LLAMA_SERVER_CONTEXT_SIZE));
+      expect(seen.args[seen.args.indexOf('--port') + 1]).toBe('0');
+      expect(seen.args[seen.args.indexOf('--ctx-size') + 1]).toBe('16384');
       expect(server.contextSize).toBe(DEFAULT_LLAMA_SERVER_CONTEXT_SIZE);
+      expect(server.port).toBeGreaterThan(0);
       expect(server.baseUrl).toBe(`http://127.0.0.1:${server.port}`);
       expect(server.model).toBe('tiny-Q4_K_M.gguf');
       expect(server.running).toBe(true);
@@ -183,29 +206,26 @@ describe('startLlamaServer', () => {
     expect(await refused(server.port)).toBe(true);
   });
 
-  it('picks another port when the free one is taken before the server binds it', async () => {
-    const counter = join(root, 'bind-fails');
-    await writeFile(counter, '2');
-    const lines: string[] = [];
-    const server = await start({ onLog: line => lines.push(line) }, { FAKE_LLAMA_BIND_FAILS: counter });
+  it('reads the port from the line b5501 logs on binding, before the model loads', async () => {
+    const server = await start({}, { FAKE_LLAMA_LOG: 'b5501', FAKE_LLAMA_LOAD_MS: '300' });
+    expect(server.port).toBe(portIn(server.log()));
+    expect((await client(server).list()).map(model => model.name)).toEqual(['tiny-Q4_K_M.gguf']);
     await server.stop();
-    expect(lines.filter(line => line.includes("couldn't bind"))).toHaveLength(2);
-    expect(await readFile(counter, 'utf8')).toBe('0');
   });
 
-  it('reports a fixed port in use without retrying', async () => {
-    const taken = await occupy();
-    const port = (taken.address() as { port: number }).port;
+  it('fails on a fixed port another listener holds, without sending it the key', async () => {
+    const taken = await hostile();
     try {
-      const error = await start({ port }).catch((caught: unknown) => caught);
+      const error = await start({ port: taken.port }).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(LlamaServerExitError);
       expect(error).toMatchObject({
         portInUse: true,
         code: 1,
-        message: expect.stringContaining(`port ${port} is in use`),
+        message: expect.stringContaining(`port ${taken.port} is in use`),
       });
+      expect(taken.authorizations).toEqual([]);
     } finally {
-      taken.close();
+      taken.server.close();
     }
   });
 
@@ -216,8 +236,54 @@ describe('startLlamaServer', () => {
     expect((error as Error).message).toMatch(/exited before it was ready \(code 1\): .*error loading model/);
   });
 
-  it('refuses a port that answers for a different server', async () => {
-    await expect(start({}, { FAKE_LLAMA_MODE: 'wrong-model' })).rejects.toBeInstanceOf(RuntimeProtocolError);
+  it('refuses a server that answers for a different model', async () => {
+    await expect(start({}, { FAKE_LLAMA_MODE: 'wrong-model' })).rejects.toMatchObject({
+      name: 'LlamaServerStartError',
+      reason: 'wrong-server',
+    });
+  });
+
+  it('accepts a public /v1/models as old builds have, since /props still needs the key', async () => {
+    const server = await start({}, { FAKE_LLAMA_PUBLIC_MODELS: '1' });
+    expect((await fetch(`${server.baseUrl}/v1/models`)).status).toBe(200);
+    expect((await fetch(`${server.baseUrl}/props`)).status).toBe(401);
+    await server.stop();
+  });
+
+  it('stops a server that answers without its key and fails closed', async () => {
+    const lines: string[] = [];
+    const error = await start(
+      { onLog: line => lines.push(line) },
+      { FAKE_LLAMA_NO_KEY: '1', FAKE_LLAMA_LOG: 'b5501' }
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(LlamaServerStartError);
+    expect(error).toMatchObject({ reason: 'unauthenticated', message: expect.stringContaining('(200)') });
+    expect(await refused(portIn(lines))).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('fails closed behind a launcher that drops the environment', async () => {
+    const error = await start({ binaryPath: '/usr/bin/env', binaryArgs: ['-i', process.execPath, FIXTURE] }).catch(
+      (caught: unknown) => caught
+    );
+    expect(error).toMatchObject({ name: 'LlamaServerStartError', reason: 'unauthenticated' });
+  });
+
+  it.skipIf(process.platform === 'win32')('stops the processes a launcher started along with it', async () => {
+    const pidFile = join(root, 'grandchild.pid');
+    const server = await start({}, { FAKE_LLAMA_GRANDCHILD: pidFile });
+    const grandchild = Number(await readFile(pidFile, 'utf8'));
+    expect(alive(grandchild)).toBe(true);
+    await server.stop();
+    for (let i = 0; i < 50 && alive(grandchild); i++) await new Promise(done => setTimeout(done, 20));
+    expect(alive(grandchild)).toBe(false);
+  });
+
+  it('refuses a batch file and wraps a spawn that throws', async () => {
+    await expect(start({ binaryPath: 'C:\\llama\\llama-server.CMD' })).rejects.toBeInstanceOf(LlamaServerBinaryError);
+    await expect(findLlamaServer({ path: 'run.bat' })).rejects.toBeInstanceOf(LlamaServerBinaryError);
+    const error = await start({ binaryPath: `${process.execPath}\0` }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(LlamaServerExitError);
+    expect((error as Error).message).toMatch(/could not run/);
   });
 
   it('reports a crash after start through exited and onExit', async () => {
@@ -242,12 +308,11 @@ describe('startLlamaServer', () => {
     const lines: string[] = [];
     const pending = start(
       { signal: controller.signal, onLog: line => lines.push(line) },
-      { FAKE_LLAMA_LOAD_MS: '60000' }
+      { FAKE_LLAMA_LOAD_MS: '60000', FAKE_LLAMA_LOG: 'b5501' }
     );
     setTimeout(() => controller.abort(reason), 300);
     await expect(pending).rejects.toBe(reason);
-    const port = Number(/:(\d+)$/.exec(lines.find(line => line.includes('listening on')) ?? '')?.[1]);
-    expect(await refused(port)).toBe(true);
+    expect(await refused(portIn(lines))).toBe(true);
   });
 
   it('leaves no abort listener on a long-lived signal after it starts', async () => {
@@ -257,10 +322,15 @@ describe('startLlamaServer', () => {
     expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
   });
 
-  it('gives up after the start timeout', async () => {
-    await expect(start({ startTimeoutMs: 400 }, { FAKE_LLAMA_MODE: 'hang' })).rejects.toThrow(
-      'llama-server did not become ready within 400ms'
-    );
+  it('gives up on a process that prints nothing for the start timeout, and waits for one still loading', async () => {
+    await expect(start({ startTimeoutMs: 400 }, { FAKE_LLAMA_MODE: 'hang' })).rejects.toMatchObject({
+      name: 'LlamaServerStartError',
+      reason: 'timeout',
+      message: 'llama-server printed nothing for 400ms while starting',
+    });
+    const server = await start({ startTimeoutMs: 400 }, { FAKE_LLAMA_LOAD_MS: '1500', FAKE_LLAMA_CHATTY: '1' });
+    expect(server.running).toBe(true);
+    await server.stop();
   });
 
   it('validates the model, alias and tuning before spawning', async () => {
@@ -291,6 +361,9 @@ describe('startLlamaServer', () => {
       ['--temp', '0.2', '--connect-code', 'x'],
       ['-hf', 'org/repo'],
       ['--mmproj-url', 'https://example.com/x.gguf'],
+      // Current builds reject these, so they are not tuning flags here either.
+      ['--no-mmap'],
+      ['--mlock'],
     ];
     for (const extraArgs of refusedFlags) {
       await expect(start({ extraArgs })).rejects.toThrow(/extraArgs may not pass -/);
@@ -299,7 +372,7 @@ describe('startLlamaServer', () => {
       'llama-server takes the value of --temp as a separate argument'
     );
     const record = join(root, 'record-tuning.json');
-    const extraArgs = ['-fa', 'on', '--temp', '0.2', '-ctk', 'q8_0', '--n-predict', '-1', '--no-mmap', '-np', '2'];
+    const extraArgs = ['-fa', 'on', '--temp', '0.2', '-ctk', 'q8_0', '--n-predict', '-1', '--no-warmup', '-np', '2'];
     const server = await start({ extraArgs }, { FAKE_LLAMA_RECORD: record });
     await server.stop();
     expect((await recorded(record)).args.slice(-extraArgs.length)).toEqual(extraArgs);
@@ -330,7 +403,7 @@ function build(quant: string, path: string): HubGgufBuild {
 function fakeHub(builds: HubGgufBuild[]) {
   const downloads: string[] = [];
   const hub: Pick<HuggingFaceHub, 'getModel' | 'download'> = {
-    getModel: async repo => ({ id: repo, builds }) as unknown as HubModelDetail,
+    getModel: async repo => ({ id: repo, revision: 'abc', builds }) as unknown as HubModelDetail,
     download: async (file, destination) => {
       downloads.push(file.path);
       await writeFile(destination, GGUF_BYTES);
@@ -390,22 +463,73 @@ describe('LlamaServerRuntime', () => {
     const runtime = runtimeIn(
       'models-pending',
       { onLog: (_, line) => lines.push(line) },
-      { FAKE_LLAMA_LOAD_MS: '60000' }
+      { FAKE_LLAMA_LOAD_MS: '60000', FAKE_LLAMA_LOG: 'b5501' }
     );
     await runtime.store.add(modelPath, { name: 'slow.gguf' });
     const pending = runtime.start('slow.gguf');
     const outcome = pending.catch((caught: unknown) => caught);
-    while (!lines.some(line => line.includes('listening on'))) await new Promise(done => setTimeout(done, 20));
+    while (!portIn(lines)) await new Promise(done => setTimeout(done, 20));
     const startedAt = Date.now();
     expect(await runtime.running()).toEqual([]);
     expect(await runtime.loaded()).toEqual([]);
     await runtime.stop('slow.gguf');
     expect(Date.now() - startedAt).toBeLessThan(5_000);
     expect(await outcome).toMatchObject({ message: 'slow.gguf was stopped before it was ready' });
-    const port = Number(/:(\d+)$/.exec(lines.find(line => line.includes('listening on')) ?? '')?.[1]);
-    expect(await refused(port)).toBe(true);
+    expect(await refused(portIn(lines))).toBe(true);
     const fresh = await runtimeIn('models-pending').start('slow.gguf');
     await fresh.stop();
+  });
+
+  it('lets each caller of a shared start abort alone, and cancels it once all have', async () => {
+    const lines: string[] = [];
+    const runtime = runtimeIn(
+      'models-shared',
+      { onLog: (_, line) => lines.push(line) },
+      { FAKE_LLAMA_LOAD_MS: '800', FAKE_LLAMA_LOG: 'b5501' }
+    );
+    await runtime.store.add(modelPath, { name: 'shared.gguf' });
+    const first = new AbortController();
+    const exits: string[] = [];
+    const leaving = runtime.start('shared.gguf', { signal: first.signal, onExit: () => exits.push('first') });
+    const staying = runtime.start('shared.gguf', { onExit: () => exits.push('second') });
+    const reason = new Error('first caller left');
+    first.abort(reason);
+    await expect(leaving).rejects.toBe(reason);
+    const server = await staying;
+    expect(server.running).toBe(true);
+    await runtime.stop('shared.gguf');
+    expect(exits).toEqual(['second']);
+
+    lines.length = 0;
+    const a = new AbortController();
+    const b = new AbortController();
+    const both = [a, b].map(controller =>
+      runtime.start('shared.gguf', { signal: controller.signal }).catch((caught: unknown) => caught)
+    );
+    while (!portIn(lines)) await new Promise(done => setTimeout(done, 20));
+    a.abort(new Error('a'));
+    expect(await runtime.running()).toEqual([]);
+    b.abort(new Error('b'));
+    expect(await Promise.all(both)).toEqual([new Error('a'), new Error('b')]);
+    for (let i = 0; i < 50 && !(await refused(portIn(lines))); i++) await new Promise(done => setTimeout(done, 20));
+    expect(await refused(portIn(lines))).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('keeps a healthy answer until the binary file changes', async () => {
+    const binary = join(root, 'versioned-llama-server');
+    const versionFile = join(root, 'version.txt');
+    await writeFile(versionFile, '6000 (one)');
+    await writeExecutable(
+      binary,
+      `process.stderr.write('version: ' + require('fs').readFileSync(${JSON.stringify(versionFile)}, 'utf8') + '\\n');`
+    );
+    const runtime = runtimeIn('models-health', { binaryPath: binary, binaryArgs: [] });
+    expect((await runtime.health()).version).toBe('6000 (one)');
+    await writeFile(versionFile, '6001 (two)');
+    expect((await runtime.health()).version).toBe('6000 (one)');
+    const later = new Date(Date.now() + 5_000);
+    await utimes(binary, later, later);
+    expect((await runtime.health()).version).toBe('6001 (two)');
   });
 
   it('is a LocalRuntime over the models directory', async () => {
@@ -435,6 +559,9 @@ describe('LlamaServerRuntime', () => {
       tensorStats: null,
     });
     await expect(runtime.inspect('mmproj-chat-F16.gguf')).rejects.toBeInstanceOf(ModelNotFoundError);
+    const incomplete = await runtime.start('big-00001-of-00002.gguf').catch((caught: unknown) => caught);
+    expect(incomplete).toBeInstanceOf(ModelIncompleteError);
+    expect(incomplete).toMatchObject({ missing: ['big-00002-of-00002.gguf'] });
   });
 
   it('pulls the Hugging Face build whose quant matches the ref', async () => {
@@ -444,7 +571,13 @@ describe('LlamaServerRuntime', () => {
     expect(downloads).toEqual(['m-Q4_K_M.gguf']);
     await runtime.pull('org/repo');
     expect(downloads).toEqual(['m-Q4_K_M.gguf']);
-    expect((await runtime.list()).map(model => model.name)).toEqual(['m-Q4_K_M.gguf']);
+    expect((await runtime.list()).map(model => model.name)).toEqual(['org/repo/m-Q4_K_M.gguf']);
+    expect((await runtime.store.get('org/repo/m-Q4_K_M.gguf')).source).toEqual({
+      repo: 'org/repo',
+      revision: 'abc',
+      sha256: null,
+      sizeBytes: GGUF_BYTES.length,
+    });
     const missing = await runtime.pull('hf.co/org/repo:Q8_0').catch((caught: unknown) => caught);
     expect(missing).toBeInstanceOf(ModelNotFoundError);
     expect((missing as Error).cause).toMatchObject({ message: 'org/repo offers Q2_K, Q4_K_M' });

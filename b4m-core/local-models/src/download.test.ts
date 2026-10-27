@@ -234,13 +234,14 @@ describe('HuggingFaceHub.download', () => {
     const pending = client.download(file, target).catch((caught: unknown) => caught);
     while (((await stat(`${target}.partial`).catch(() => null))?.size ?? 0) < half)
       await new Promise(r => setTimeout(r, 10));
-    await appendFile(`${target}.partial`, 'rogue');
+    // Past the end, where the download's own positioned writes will not cover it.
+    await appendFile(`${target}.partial`, Buffer.alloc(BYTES.length));
     release();
     expect(await pending).toMatchObject({
       name: 'DownloadVerificationError',
       check: 'size',
       expected: String(BYTES.length),
-      actual: String(BYTES.length + 5),
+      actual: String(half + BYTES.length),
     });
     await expect(stat(target)).rejects.toThrow();
   });

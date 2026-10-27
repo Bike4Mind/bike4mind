@@ -21,10 +21,15 @@ export {
   type GgufFormatErrorReason,
   HubAccessError,
   HubRateLimitError,
+  InvalidModelNameError,
+  LlamaServerBinaryError,
   LlamaServerExitError,
+  LlamaServerStartError,
   LlamaServerVersionError,
   LocalRuntimeError,
   ModelFileBusyError,
+  ModelFileConflictError,
+  ModelIncompleteError,
   ModelNotFoundError,
   RuntimeConnectionError,
   RuntimeHttpError,
@@ -94,11 +99,19 @@ export {
   type DownloadResult,
   type DownloadTarget,
 } from './download';
-export { GgufModelStore, type GgufModelStoreOptions, type PartialGgufFile, type StoredGgufModel } from './ggufStore';
+export {
+  GgufModelStore,
+  type GgufDownloadSource,
+  type GgufFileSource,
+  type GgufModelStoreOptions,
+  type PartialGgufFile,
+  type StoredGgufModel,
+} from './ggufStore';
 export {
   DEFAULT_LLAMA_SERVER_CONTEXT_SIZE,
   DEFAULT_LLAMA_SERVER_START_TIMEOUT_MS,
   DEFAULT_LLAMA_SERVER_STOP_TIMEOUT_MS,
+  LLAMA_SERVER_TUNING_FLAGS,
   MIN_LLAMA_SERVER_BUILD,
   findLlamaServer,
   startLlamaServer,

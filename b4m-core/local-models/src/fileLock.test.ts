@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
-import { hostname, tmpdir } from 'node:os';
+import { hostname, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ModelFileBusyError, RuntimeStorageError } from './errors';
-import { lockFile, onDisk } from './fileLock';
+import { LOCK_STALE_MS, lockFile, onDisk } from './fileLock';
 
 let dir: string;
 let count = 0;
@@ -18,62 +18,105 @@ afterAll(async () => {
 });
 
 const target = () => join(dir, `model-${++count}.gguf`);
+const wait = (ms: number) => new Promise(done => setTimeout(done, ms));
 
 function deadPid(): number {
   const child = spawnSync(process.execPath, ['-e', '']);
   return child.pid as number;
 }
 
+async function age(path: string, ms: number): Promise<void> {
+  const then = new Date(Date.now() - ms);
+  await utimes(path, then, then);
+}
+
 describe('lockFile', () => {
-  it('writes the holder into <path>.lock, refuses a second holder, and removes the lock on release', async () => {
+  it('writes the holder with a nonce, refuses a second holder, and removes the lock on release', async () => {
     const path = target();
     const lock = await lockFile(path, 'test');
-    expect(JSON.parse(await readFile(`${path}.lock`, 'utf8'))).toEqual({ pid: process.pid, host: hostname() });
+    expect(JSON.parse(await readFile(`${path}.lock`, 'utf8'))).toEqual({
+      pid: process.pid,
+      host: hostname(),
+      nonce: expect.stringMatching(/^[0-9a-f]{24}$/),
+    });
     const busy = await lockFile(path, 'test').catch((caught: unknown) => caught);
     expect(busy).toBeInstanceOf(ModelFileBusyError);
     expect(busy).toMatchObject({ path, pid: process.pid, runtimeId: 'test' });
+    await lock.verify();
     await lock.release();
     await lock.release();
     await expect(stat(`${path}.lock`)).rejects.toThrow();
     await (await lockFile(path, 'test')).release();
   });
 
-  it('takes over a lock left by a process on this host that has died', async () => {
+  it('judges a lock by its refresh time, whatever pid or host it names', async () => {
     const path = target();
     await writeFile(`${path}.lock`, JSON.stringify({ pid: deadPid(), host: hostname() }));
+    await expect(lockFile(path, 'test')).rejects.toBeInstanceOf(ModelFileBusyError);
+    await age(`${path}.lock`, LOCK_STALE_MS + 5_000);
     const lock = await lockFile(path, 'test');
     expect(JSON.parse(await readFile(`${path}.lock`, 'utf8'))).toMatchObject({ pid: process.pid });
     await lock.release();
+
+    const other = target();
+    await writeFile(`${other}.lock`, JSON.stringify({ pid: process.pid, host: 'elsewhere', nonce: 'x' }));
+    await age(`${other}.lock`, LOCK_STALE_MS + 5_000);
+    await (await lockFile(other, 'test')).release();
   });
 
-  it('treats a lock from another host as live', async () => {
-    const path = target();
-    await writeFile(`${path}.lock`, JSON.stringify({ pid: deadPid(), host: `${hostname()}-elsewhere` }));
-    await expect(lockFile(path, 'test')).rejects.toBeInstanceOf(ModelFileBusyError);
-  });
-
-  it('takes over an unreadable lock only once it is a minute old', async () => {
+  it('takes over a lock last refreshed before the machine booted', async () => {
     const path = target();
     await writeFile(`${path}.lock`, '');
-    await expect(lockFile(path, 'test')).rejects.toMatchObject({ name: 'ModelFileBusyError', pid: null });
-    const old = new Date(Date.now() - 120_000);
-    await utimes(`${path}.lock`, old, old);
+    await expect(lockFile(path, 'test', { staleMs: Infinity })).rejects.toMatchObject({ pid: null });
+    await age(`${path}.lock`, uptime() * 1000 + 60_000);
+    await (await lockFile(path, 'test', { staleMs: Infinity })).release();
+  });
+
+  it('refreshes a held lock, notices a takeover, and leaves the new holder alone on release', async () => {
+    const path = target();
+    const first = await lockFile(path, 'test', { refreshMs: 40 });
+    await age(`${path}.lock`, 60_000);
+    await wait(150);
+    expect(Date.now() - (await stat(`${path}.lock`)).mtimeMs).toBeLessThan(5_000);
+    first.assertHeld();
+
+    const second = await lockFile(path, 'test', { force: true });
+    await expect(first.verify()).rejects.toBeInstanceOf(ModelFileBusyError);
+    await wait(150);
+    expect(() => first.assertHeld()).toThrow(ModelFileBusyError);
+    await first.release();
+    await expect(lockFile(path, 'test')).rejects.toBeInstanceOf(ModelFileBusyError);
+    await second.release();
+    await expect(stat(`${path}.lock`)).rejects.toThrow();
+  });
+
+  it('clears a takeover guard left by a process that died during a takeover', async () => {
+    const path = target();
+    await writeFile(`${path}.lock`, '{}');
+    await writeFile(`${path}.lock.takeover`, '');
+    await age(`${path}.lock`, LOCK_STALE_MS + 5_000);
+    await expect(lockFile(path, 'test')).rejects.toBeInstanceOf(ModelFileBusyError);
+    await age(`${path}.lock.takeover`, LOCK_STALE_MS + 5_000);
     await (await lockFile(path, 'test')).release();
+    await expect(stat(`${path}.lock.takeover`)).rejects.toThrow();
   });
 
   it('reports a directory that does not exist as a storage error', async () => {
     const error = await lockFile(join(dir, 'missing', 'x.gguf'), 'test').catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(RuntimeStorageError);
-    expect(error).toMatchObject({ code: 'ENOENT' });
+    expect(error).toMatchObject({ code: 'ENOENT', operation: 'write' });
   });
 });
 
 describe('onDisk', () => {
-  it('wraps errno failures and passes other errors through', async () => {
-    await expect(onDisk('test', '/x', () => readFile(join(dir, 'absent')))).rejects.toMatchObject({
+  it('wraps errno failures with the failing path and operation, and passes other errors through', async () => {
+    const absent = join(dir, 'absent');
+    await expect(onDisk('test', '/x', () => readFile(absent), 'read')).rejects.toMatchObject({
       name: 'RuntimeStorageError',
       code: 'ENOENT',
-      path: '/x',
+      path: absent,
+      operation: 'read',
+      message: expect.stringMatching(/^test could not read /),
     });
     const plain = new Error('plain');
     await expect(

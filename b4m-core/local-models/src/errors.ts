@@ -115,17 +115,45 @@ export class DownloadVerificationError extends LocalRuntimeError {
   }
 }
 
-/** A managed llama-server process that exited before it was ready. `log` holds its last output lines. */
+/** A managed llama-server process that exited, or could not be spawned, before it was ready. */
 export class LlamaServerExitError extends LocalRuntimeError {
   constructor(
     message: string,
     readonly code: number | null,
     readonly signal: string | null,
     readonly portInUse: boolean,
+    /** The last lines it printed. */
+    readonly log: readonly string[],
+    options?: { cause?: unknown }
+  ) {
+    super(message, 'llama-server', options);
+    this.name = 'LlamaServerExitError';
+  }
+}
+
+/**
+ * A started llama-server stopped as unusable: it printed nothing for the start timeout, answered without its API
+ * key (a launcher dropped the environment), or its port served another model.
+ */
+export class LlamaServerStartError extends LocalRuntimeError {
+  constructor(
+    message: string,
+    readonly reason: 'timeout' | 'unauthenticated' | 'wrong-server',
     readonly log: readonly string[]
   ) {
     super(message, 'llama-server');
-    this.name = 'LlamaServerExitError';
+    this.name = 'LlamaServerStartError';
+  }
+}
+
+/** A binary path this package will not run, such as a Windows batch file. */
+export class LlamaServerBinaryError extends LocalRuntimeError {
+  constructor(
+    message: string,
+    readonly path: string
+  ) {
+    super(message, 'llama-server');
+    this.name = 'LlamaServerBinaryError';
   }
 }
 
@@ -152,6 +180,7 @@ export class RuntimeStorageError extends LocalRuntimeError {
     runtimeId: string,
     readonly path: string,
     readonly code: string | null,
+    readonly operation: 'read' | 'write',
     options: { cause: unknown }
   ) {
     super(message, runtimeId, options);
@@ -159,7 +188,10 @@ export class RuntimeStorageError extends LocalRuntimeError {
   }
 }
 
-/** Another download or copy, in this process or another, is writing the same model file. */
+/**
+ * Another download, copy or removal, in this process or another, holds the model file's lock, or took it over
+ * from this one. `force` on `remove` and `discardPartial` overrides it.
+ */
 export class ModelFileBusyError extends LocalRuntimeError {
   constructor(
     runtimeId: string,
@@ -169,5 +201,49 @@ export class ModelFileBusyError extends LocalRuntimeError {
   ) {
     super(`${path} is being written by another download or copy${pid ? ` (pid ${pid})` : ''}`, runtimeId);
     this.name = 'ModelFileBusyError';
+  }
+}
+
+/** A model name that is not a usable relative path of portable GGUF file names. */
+export class InvalidModelNameError extends LocalRuntimeError {
+  constructor(
+    runtimeId: string,
+    readonly modelName: string
+  ) {
+    super(`${JSON.stringify(modelName)} is not a usable GGUF file name`, runtimeId);
+    this.name = 'InvalidModelNameError';
+  }
+}
+
+/**
+ * A file already in the models directory that the operation will not replace: `'exists'` for a copy, `'size'` or
+ * `'sha256'` for a download whose file is present with other bytes.
+ */
+export class ModelFileConflictError extends LocalRuntimeError {
+  constructor(
+    runtimeId: string,
+    readonly path: string,
+    readonly reason: 'exists' | 'size' | 'sha256'
+  ) {
+    super(
+      reason === 'exists'
+        ? `${path} already exists in the models directory`
+        : `${path} already exists with a different ${reason === 'size' ? 'size' : 'sha256'}`,
+      runtimeId
+    );
+    this.name = 'ModelFileConflictError';
+  }
+}
+
+/** A split model with shards missing, so it cannot be copied or served. */
+export class ModelIncompleteError extends LocalRuntimeError {
+  constructor(
+    runtimeId: string,
+    readonly model: string,
+    /** The missing shard file names. */
+    readonly missing: readonly string[]
+  ) {
+    super(`${model} is missing shards: ${missing.join(', ')}`, runtimeId);
+    this.name = 'ModelIncompleteError';
   }
 }

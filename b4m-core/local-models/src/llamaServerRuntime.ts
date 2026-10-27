@@ -1,5 +1,6 @@
+import { stat } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { LocalRuntimeError, ModelNotFoundError } from './errors';
+import { LocalRuntimeError, ModelIncompleteError, ModelNotFoundError } from './errors';
 import { GgufModelStore, type StoredGgufModel } from './ggufStore';
 import { HuggingFaceHub, isHubRepoId } from './huggingface';
 import {
@@ -41,16 +42,23 @@ export interface LlamaServerRuntimeOptions extends LlamaServerTuning {
 }
 
 export interface StartModelOptions extends LlamaServerTuning {
+  /** Rejects this call; the shared start is cancelled only once every caller waiting on it has aborted. */
   signal?: AbortSignal;
   onExit?: (exit: LlamaServerExit) => void;
 }
 
-interface ServerEntry {
-  pending: Promise<LlamaServerProcess>;
+interface StartingEntry {
   controller: AbortController;
   /** Set once the server is ready. */
   server: LlamaServerProcess | null;
   sizeBytes: number | null;
+  /** Callers still waiting for the start. */
+  waiting: number;
+  exitListeners: ((exit: LlamaServerExit) => void)[];
+}
+
+interface ServerEntry extends StartingEntry {
+  pending: Promise<LlamaServerProcess>;
 }
 
 function installed(stored: StoredGgufModel): InstalledModel {
@@ -76,10 +84,8 @@ export function parseLlamaServerPullRef(ref: string): { repo: string; quant: str
 }
 
 /**
- * llama-server as a managed runtime: a binary, a models directory, and at most one server per model. Chat goes to
- * each server's OpenAI-compatible `baseUrl` with its `apiKey`. As a `LocalRuntime`, `list` shows the complete,
- * servable models, `pull` downloads a Hugging Face build, `remove` stops and deletes one, and `loaded` lists the
- * running servers.
+ * llama-server as a `LocalRuntime`: a binary, a models directory, and at most one server per model, each reached at
+ * its own `baseUrl` with its `apiKey`.
  */
 export class LlamaServerRuntime implements LocalRuntime {
   readonly id = LLAMA_SERVER_RUNTIME_ID;
@@ -92,6 +98,7 @@ export class LlamaServerRuntime implements LocalRuntime {
   readonly #options: LlamaServerRuntimeOptions;
   readonly #servers = new Map<string, ServerEntry>();
   #hub: Pick<HuggingFaceHub, 'getModel' | 'download'> | undefined;
+  #health: { key: string; health: RuntimeHealth } | null = null;
 
   constructor(options: LlamaServerRuntimeOptions) {
     this.binaryPath = options.binaryPath;
@@ -101,15 +108,22 @@ export class LlamaServerRuntime implements LocalRuntime {
     this.#hub = options.hub;
   }
 
-  /** Whether the binary runs and is new enough. Never throws. */
+  /** Whether the binary runs and is new enough; a healthy answer is kept until the binary file changes. Never throws. */
   async health(): Promise<RuntimeHealth> {
+    const key = await stat(this.binaryPath).then(
+      info => `${info.mtimeMs}:${info.size}`,
+      () => null
+    );
+    if (key !== null && this.#health?.key === key) return this.#health.health;
     try {
       const found = await findLlamaServer({
         path: this.binaryPath,
         binaryArgs: this.#options.binaryArgs,
         env: this.#options.env,
       });
-      return { ok: true, version: found?.version ?? null, error: null };
+      const health = { ok: true, version: found?.version ?? null, error: null };
+      this.#health = key === null ? null : { key, health };
+      return health;
     } catch (error) {
       return { ok: false, version: null, error: error instanceof Error ? error.message : String(error) };
     }
@@ -126,8 +140,8 @@ export class LlamaServerRuntime implements LocalRuntime {
   }
 
   /**
-   * Downloads the build of `ref` (see `parseLlamaServerPullRef`) whose quant label matches, ignoring case, into the
-   * models directory. Only this explicit call downloads. The model then lists under its file name.
+   * Downloads the build of `ref` (see `parseLlamaServerPullRef`) whose quant label matches, ignoring case. Only this
+   * explicit call downloads. The model then lists as `<repo>/<path in repo>`.
    */
   async pull(ref: string, opts: PullOptions = {}): Promise<void> {
     const { repo, quant } = parseLlamaServerPullRef(ref);
@@ -140,8 +154,8 @@ export class LlamaServerRuntime implements LocalRuntime {
         cause: new Error(`${repo} offers ${quants.length > 0 ? quants.join(', ') : 'no labelled quants'}`),
       });
     }
-    if (!build.complete) throw new LocalRuntimeError(`${ref} is missing shards on the Hub`, this.id);
-    await this.store.download(this.#hub, { files: build.files }, opts);
+    if (!build.complete) throw new ModelIncompleteError(this.id, ref, []);
+    await this.store.download(this.#hub, { repo: detail.id, revision: detail.revision, files: build.files }, opts);
   }
 
   /** Stops the model's server, if any, then deletes its files or its partial download. */
@@ -168,23 +182,63 @@ export class LlamaServerRuntime implements LocalRuntime {
   }
 
   /**
-   * Starts a server for `model` (a name from `list()`), or returns the one already running or starting it.
-   * Tuning is per call over the runtime defaults and applies only to a new server.
+   * Starts a server for `model` (a name from `list()`), or joins the one already running or starting. Tuning is
+   * per call over the runtime defaults, and the first caller's applies.
    */
   start(model: string, options: StartModelOptions = {}): Promise<LlamaServerProcess> {
-    const existing = this.#servers.get(model);
-    if (existing) return existing.pending;
-    const controller = new AbortController();
-    const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
-    // `pending` is assigned on the next line; #start fills in `server` and `sizeBytes`.
-    const entry = { controller, server: null, sizeBytes: null } as Partial<ServerEntry> as ServerEntry;
-    entry.pending = this.#start(model, options, signal, entry);
-    this.#servers.set(model, entry);
-    const forget = () => {
-      if (this.#servers.get(model) === entry) this.#servers.delete(model);
+    let entry = this.#servers.get(model);
+    if (!entry || (!entry.server && entry.controller.signal.aborted)) {
+      const starting: StartingEntry = {
+        controller: new AbortController(),
+        server: null,
+        sizeBytes: null,
+        waiting: 0,
+        exitListeners: [],
+      };
+      const created: ServerEntry = Object.assign(starting, { pending: this.#start(model, options, starting) });
+      this.#servers.set(model, created);
+      const forget = () => {
+        if (this.#servers.get(model) === created) this.#servers.delete(model);
+      };
+      created.pending.then(server => server.exited.then(forget), forget);
+      entry = created;
+    }
+    return this.#join(entry, options);
+  }
+
+  #join(entry: ServerEntry, { signal, onExit }: StartModelOptions): Promise<LlamaServerProcess> {
+    if (onExit) entry.exitListeners.push(onExit);
+    const leave = () => {
+      const index = onExit ? entry.exitListeners.indexOf(onExit) : -1;
+      if (index >= 0) entry.exitListeners.splice(index, 1);
     };
-    entry.pending.then(server => server.exited.then(forget), forget);
-    return entry.pending;
+    if (entry.server) return entry.pending;
+    if (signal?.aborted) {
+      leave();
+      return Promise.reject(signal.reason);
+    }
+    entry.waiting++;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = () => {
+        if (settled) return false;
+        settled = true;
+        entry.waiting--;
+        signal?.removeEventListener('abort', onAbort);
+        return true;
+      };
+      const onAbort = () => {
+        if (!settle()) return;
+        leave();
+        if (entry.waiting === 0 && !entry.server) entry.controller.abort(signal?.reason);
+        reject(signal?.reason);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      entry.pending.then(
+        server => settle() && resolve(server),
+        (error: unknown) => settle() && reject(error)
+      );
+    });
   }
 
   /** Servers that finished starting and are still running; one still loading is not listed. */
@@ -203,22 +257,17 @@ export class LlamaServerRuntime implements LocalRuntime {
   }
 
   /**
-   * Stops every server. Call it from the host's own SIGINT and SIGTERM handlers: only a normal `exit` kills the
-   * servers on its own, so a host killed by a signal it does not handle leaves them running.
+   * Stops every server. Servers run in their own process group, so Ctrl-C does not reach them: call this from the
+   * host's SIGINT and SIGTERM handlers. Only a normal `exit` kills them otherwise.
    */
   async stopAll(): Promise<void> {
     await Promise.all([...this.#servers.keys()].map(model => this.stop(model)));
   }
 
-  async #start(
-    model: string,
-    options: StartModelOptions,
-    signal: AbortSignal,
-    entry: ServerEntry
-  ): Promise<LlamaServerProcess> {
+  async #start(model: string, options: StartModelOptions, entry: StartingEntry): Promise<LlamaServerProcess> {
     const stored = await this.store.get(model);
     if (stored.projector) throw new LocalRuntimeError(`${model} is a vision projector, not a model`, this.id);
-    if (!stored.complete) throw new LocalRuntimeError(`${model} is missing shards`, this.id);
+    if (!stored.complete) throw new ModelIncompleteError(this.id, model, stored.missingShards);
     entry.sizeBytes = stored.sizeBytes;
     const defaults = this.#options;
     const onLog = defaults.onLog;
@@ -235,8 +284,16 @@ export class LlamaServerRuntime implements LocalRuntime {
       stopTimeoutMs: defaults.stopTimeoutMs,
       fetch: defaults.fetch,
       env: defaults.env,
-      signal,
-      onExit: options.onExit,
+      signal: entry.controller.signal,
+      onExit: exit => {
+        for (const listener of [...entry.exitListeners]) {
+          try {
+            listener(exit);
+          } catch {
+            // One caller's callback must not keep the others from hearing of the exit.
+          }
+        }
+      },
       onLog: onLog && (line => onLog(model, line)),
     });
     entry.server = server;
