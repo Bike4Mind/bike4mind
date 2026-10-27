@@ -278,6 +278,23 @@ describe('CuratedSource', () => {
     expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3, check: 'updated' });
   });
 
+  it('saves the floor before the copy, so a crash between the two cannot lose it', async () => {
+    class OrderStore extends CuratedStore {
+      floorsAtCopy: Record<string, number> | null = null;
+      override async writeCopy(...args: Parameters<CuratedStore['writeCopy']>) {
+        this.floorsAtCopy = (await this.readState(args[0])).floors;
+        return super.writeCopy(...args);
+      }
+    }
+    const store = new OrderStore(dir);
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
+    const s = source({ store });
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ origin: 'updated', sequence: 3 });
+    expect(store.floorsAtCopy).toEqual({ [signing.key.keyId]: 3 });
+  });
+
   it('checks at once, without a stale checked time, when the list accepted before is missing at startup', async () => {
     const three = listText(3);
     server.publish(3, three, sigText(three, [signing], 3));

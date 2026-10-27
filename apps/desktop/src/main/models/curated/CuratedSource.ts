@@ -374,13 +374,18 @@ export class CuratedSource {
     const floors = { ...this.#state.floors };
     for (const key of verdict.signedBy) floors[key.keyId] = Math.max(floors[key.keyId] ?? 0, verdict.sequence);
     this.#state = { ...this.#state, floors };
-    const cachedOk = await this.#deps.store.writeCopy(this.#source as string, { manifest: bytes, signature }).then(
-      () => true,
-      (error: unknown) => {
-        this.#log(`could not cache the curated list: ${String(error)}`);
-        return false;
-      }
-    );
+    const source = this.#source as string;
+    // The floor goes to disk before the copy, so a crash between the two never leaves a copy without its floor.
+    const cachedOk = await this.#deps.store
+      .writeState(source, this.#state)
+      .then(() => this.#deps.store.writeCopy(source, { manifest: bytes, signature }))
+      .then(
+        () => true,
+        (error: unknown) => {
+          this.#log(`could not cache the curated list: ${String(error)}`);
+          return false;
+        }
+      );
     const keyIds = verdict.signedBy.map(key => key.keyId).join(', ');
     this.#log(`accepted curated list ${verdict.sequence}, signed by ${keyIds}`);
     // A cached recovery-signed list re-applies its revocations at the next start.

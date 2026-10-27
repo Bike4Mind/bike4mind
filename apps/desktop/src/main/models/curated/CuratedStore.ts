@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, open, readdir, readFile, rename, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 /** When this source was last checked, and how far back a fetched list may go; times are ms since the epoch. */
 export interface CuratedCheckState {
@@ -43,15 +43,47 @@ async function readJson(path: string): Promise<unknown> {
   }
 }
 
+async function writeSynced(path: string, data: string | Uint8Array): Promise<void> {
+  const handle = await open(path, 'w', 0o600);
+  try {
+    await handle.writeFile(data);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncDir(dir: string): Promise<void> {
+  // Windows cannot open a directory to flush it; NTFS journals the rename itself.
+  if (process.platform === 'win32') return;
+  const handle = await open(dir, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/** mkdir -p, then flushes the parent of every directory it created so the new entries survive a crash. */
+async function makeDir(dir: string): Promise<void> {
+  const created = await mkdir(dir, { recursive: true });
+  if (!created) return;
+  for (let current = dir; ; current = dirname(current)) {
+    await syncDir(dirname(current));
+    if (current === created || dirname(current) === current) return;
+  }
+}
+
 async function writeAtomic(path: string, data: string | Uint8Array): Promise<void> {
   const temporary = `${path}.${unique()}.tmp`;
   try {
-    await writeFile(temporary, data, { mode: 0o600 });
+    await writeSynced(temporary, data);
     await rename(temporary, path);
   } catch (error) {
     await rm(temporary, { force: true });
     throw error;
   }
+  await syncDir(dirname(path));
 }
 
 function floors(raw: unknown): Record<string, number> {
@@ -110,10 +142,11 @@ export class CuratedStore {
   async writeCopy(source: string, copy: CuratedCopy): Promise<void> {
     const pair = `pair-${unique()}`;
     const dir = join(this.#dir(source), pair);
-    await mkdir(dir, { recursive: true });
+    await makeDir(dir);
     try {
-      await writeFile(join(dir, MANIFEST), copy.manifest, { mode: 0o600 });
-      await writeFile(join(dir, SIGNATURE), copy.signature, { mode: 0o600 });
+      await writeSynced(join(dir, MANIFEST), copy.manifest);
+      await writeSynced(join(dir, SIGNATURE), copy.signature);
+      await syncDir(dir);
       await writeAtomic(join(this.#dir(source), POINTER), JSON.stringify({ dir: pair }));
     } catch (error) {
       await rm(dir, { recursive: true, force: true });
@@ -140,7 +173,7 @@ export class CuratedStore {
   }
 
   async writeState(source: string, state: CuratedCheckState): Promise<void> {
-    await mkdir(this.#dir(source), { recursive: true });
+    await makeDir(this.#dir(source));
     await writeAtomic(join(this.#dir(source), 'state.json'), JSON.stringify(state));
   }
 
@@ -169,7 +202,7 @@ export class CuratedStore {
     const before = revoked.size;
     for (const id of ids) if (revoked.size < MAX_REVOKED && KEY_ID.test(id)) revoked.add(id);
     if (revoked.size !== before || !intact) {
-      await mkdir(this.root, { recursive: true });
+      await makeDir(this.root);
       await writeAtomic(join(this.root, 'revoked-keys.json'), JSON.stringify([...revoked]));
     }
     return revoked;
@@ -182,7 +215,7 @@ export class CuratedStore {
   }
 
   async writeEnabled(enabled: boolean): Promise<void> {
-    await mkdir(this.root, { recursive: true });
+    await makeDir(this.root);
     await writeAtomic(join(this.root, 'settings.json'), JSON.stringify({ enabled }));
   }
 }
