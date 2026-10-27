@@ -45,9 +45,8 @@ describe('createSignupRiskCollector', () => {
     const signals = await createSignupRiskCollector(network)(user());
 
     expect(signals).toEqual({ datacenter: true, ipSignups: 2, prefixSignups: 5, asnSignups: 9 });
-    expect(mockRecentDistinctSignups).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u1', ip: network.ip, asn: network.asn })
-    );
+    expect(mockRecentDistinctSignups).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', ip: network.ip }));
+    expect(mockRecentDistinctSignups).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', asn: network.asn }));
   });
 
   it('falls back to the recorded signupMeta, anchored at its capture time', async () => {
@@ -60,14 +59,26 @@ describe('createSignupRiskCollector', () => {
     for (const [call] of mockRecentDistinctSignups.mock.calls) expect(call.until).toEqual(capturedAt);
   });
 
-  it('keeps an old signup inside the AuthEvent retention window', async () => {
-    counts({ ipSignups: 0, prefixSignups: 0 }, 0);
+  it('leaves the counts missing for a signup older than AuthEvent retention', async () => {
     const capturedAt = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000);
 
-    await createSignupRiskCollector()(user({ ...network, capturedAt }));
+    expect(await createSignupRiskCollector()(user({ ...network, capturedAt }))).toEqual({ datacenter: true });
+    expect(mockRecentDistinctSignups).not.toHaveBeenCalled();
+  });
 
-    for (const [call] of mockRecentDistinctSignups.mock.calls)
-      expect(call.since.getTime()).toBeGreaterThan(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  it('leaves the counts missing when the recorded signupMeta has no capture time', async () => {
+    expect(await createSignupRiskCollector()(user(network))).toEqual({ datacenter: true });
+    expect(mockRecentDistinctSignups).not.toHaveBeenCalled();
+  });
+
+  it('scans the 24h window for ip only and the 1h window for ASN only', async () => {
+    counts({ ipSignups: 0, prefixSignups: 0 }, 0);
+
+    await createSignupRiskCollector(network)(user());
+
+    expect(mockRecentDistinctSignups).toHaveBeenCalledTimes(2);
+    expect(mockRecentDistinctSignups).toHaveBeenCalledWith(expect.objectContaining({ ip: network.ip, asn: null }));
+    expect(mockRecentDistinctSignups).toHaveBeenCalledWith(expect.objectContaining({ ip: null, asn: network.asn }));
   });
 
   it('leaves every signal missing when no network is known', async () => {
@@ -87,6 +98,14 @@ describe('isSignupNetworkOverLimit', () => {
     settings({ maxSignupsPerIpPerDay: '3' });
     counts({ ipSignups: 3, prefixSignups: 3 }, 0);
     expect(await isSignupNetworkOverLimit(network, logger)).toBe(true);
+  });
+
+  it('skips the window of a cap that is off', async () => {
+    settings({ maxSignupsPerIpPerDay: '3' });
+    counts({ ipSignups: 0, prefixSignups: 0 }, 0);
+    await isSignupNetworkOverLimit(network, logger);
+    expect(mockRecentDistinctSignups).toHaveBeenCalledTimes(1);
+    expect(mockRecentDistinctSignups).toHaveBeenCalledWith(expect.objectContaining({ ip: network.ip, asn: null }));
   });
 
   it('refuses once the ASN reached its hourly cap, and counts every account', async () => {

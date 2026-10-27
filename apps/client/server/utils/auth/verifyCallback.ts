@@ -228,8 +228,8 @@ const authenticateUser = async (
       // a partner-domain rule is an admin's authorization and skips the caps, as on the OTC path.
       if (
         signupNetwork &&
-        (await isSignupNetworkOverLimit(signupNetwork, Logger.globalInstance)) &&
-        !(await isPartnerDomainSignupAllowed(email, isProviderEmailVerified(profile)))
+        !(await isPartnerDomainSignupAllowed(email, isProviderEmailVerified(profile))) &&
+        (await isSignupNetworkOverLimit(signupNetwork, Logger.globalInstance))
       ) {
         done(null, undefined, { code: 'signup_limited' });
         return;

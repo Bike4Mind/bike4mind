@@ -1483,6 +1483,28 @@ describe('selfServeVerifyCallback - signup network limits', () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
+  it('admits a partner-domain first login without running the network cap check', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'p-id', id: 'p-id' }));
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      ruleId: 'rule-1',
+      domain: 'example.com',
+      entitlements: new Set(),
+      signupCredits: 0,
+      organizationId: null,
+      tags: [],
+      subscription: null,
+    });
+
+    const { user, info } = await runSelfServe(AuthStrategy.Google);
+
+    expect(user).toBeTruthy();
+    expect(info).toBeUndefined();
+    expect(mockIsSignupNetworkOverLimit).not.toHaveBeenCalled();
+  });
+
   it("assesses the new account's staged grant against the request network", async () => {
     mockFindOne.mockResolvedValue(null);
     mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'new-id', id: 'new-id' }));
