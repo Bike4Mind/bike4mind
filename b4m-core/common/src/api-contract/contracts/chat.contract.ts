@@ -69,8 +69,7 @@ export const chatContract = defineEndpoint({
         'schema). With `wait: true` the body is instead the completed turn: the ACK fields plus the ' +
         'reply (`response`/`responses`), `toolPayloads`, `createdAt`, `performance` timings and, ' +
         'when requested, `promptDetails`/`promptText`. A turn that FAILS still resolves with `200`, never a 4xx, on ' +
-        'both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`), except the ' +
-        'output-budget case, which a `wait: true` request answers with a 422 or 502 - the prose ' +
+        'both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose ' +
         'explaining why lands in `reply`/`response` like any other answer, so the reply text alone ' +
         'cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it ' +
         'unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a ' +
@@ -79,7 +78,8 @@ export const chatContract = defineEndpoint({
         'states do NOT set `type: "error"`: a user-cancelled turn resolves as `status: "stopped"` ' +
         'with `type` left at `"message"`, and a recovered stuck quest that still has renderable ' +
         'content resolves as a success (`status: "done"`, no error) by design, to avoid destroying ' +
-        'content to report a failure. ' +
+        'content to report a failure. The one exception is output-budget exhaustion: a `wait: true` ' +
+        'request answers it with the 422 or 502 error envelope (plus `quest_id`) instead of this body. ' +
         '`errorCode` then names the failure reason, but only for the billing failures that have one - ' +
         '`"insufficient_credits"` today; it is absent on every other `type: "error"` turn, so never use ' +
         'its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` ' +
