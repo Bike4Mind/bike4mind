@@ -26,12 +26,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // The server answers an unenrolled session with a 403 instead of this tab's settings query
   // seeing the toggle. That refusal is authoritative even if the status query then errors.
   const [enrollmentRefused, setEnrollmentRefused] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
 
   // Get MFA enforcement setting from admin settings
   const enforceMFA = adminSettings?.enforceMFA === 'true';
-
-  // Check if user already has MFA configured (from user object)
-  const userHasMFA = !!(currentUser?.mfa && currentUser.mfa.totpEnabled);
 
   // Only call MFA status API if enforcement is enabled
   const shouldCheckMFA = !!enforceMFA;
@@ -87,12 +85,6 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     [queryClient]
   );
 
-  useEffect(() => {
-    if (showMFASetup) {
-      // Modal opened; no side effects required.
-    }
-  }, [showMFASetup, setupMFA.data, enforceMFA, shouldCheckMFA]);
-
   // Check if user needs to be forced to setup MFA
   useEffect(() => {
     // Must be first: setupMFA.mutate() writes to DB and must not fire during impersonation
@@ -145,7 +137,6 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     isImpersonating,
     currentUser,
     enforceMFA,
-    userHasMFA,
     shouldCheckMFA,
     mfaStatus,
     mfaStatusQuery.isLoading,
@@ -162,10 +153,11 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   ]);
 
   const handleMFAVerification = (token: string) => {
+    setVerifyError(null);
     verifyMFASetup.mutate(
       { token },
       {
-        onSuccess: data => {
+        onSuccess: () => {
           setShowMFASetup(false);
           toast.success('MFA setup completed successfully');
 
@@ -176,10 +168,6 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
 
           // Force re-evaluation by triggering useEffect
           setIsLoading(true);
-
-          if (data?.user) {
-            // Updated user returned; the query invalidations above handle the refresh.
-          }
         },
         onError: (error: any) => {
           const errorData = error.response?.data;
@@ -208,6 +196,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
             ? ` (${errorData.attemptsRemaining} attempts remaining)`
             : '';
 
+          setVerifyError(baseError + attemptsInfo);
           toast.error(baseError + attemptsInfo);
         },
       }
@@ -303,6 +292,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
             open={showMFASetup}
             onClose={() => {}} // Don't allow closing when enforced
             onCancel={() => {}} // Don't allow cancel when enforced
+            mode="setup"
             title="Set Up Multi-Factor Authentication (Enforced)"
             description="Scan the QR code with your authenticator app, then enter the verification code."
             qrCodeUrl={setupMFAData.qrCodeUrl}
@@ -310,6 +300,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
             backupCodes={setupMFAData.backupCodes}
             onVerify={handleMFAVerification}
             loading={verifyMFASetup.isPending}
+            error={verifyError}
             showVerify={true}
             isEnforced={true} // This will hide the close button
           />
