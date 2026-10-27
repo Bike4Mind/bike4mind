@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ModelArchSchema, type ModelArch } from '../schemas/modelHub';
-import { machine } from './__fixtures__/hubManifest';
+import { MOE_35B_ARCH, machine } from './__fixtures__/hubManifest';
 import {
   FIT_CONSTANTS,
   KV_BYTES_PER_ELEMENT,
@@ -318,6 +318,14 @@ describe('estimateFit', () => {
     expect(r.memory.totalBytes - r.memory.offloadedBytes + r.memory.marginBytes).toBeLessThanOrEqual(24 * GIB);
   });
 
+  it('counts the same copy in the Metal compute buffer when a preset leaves experts on the CPU', () => {
+    const model = { arch: arch(MOE_35B_ARCH), weightsBytes: 21.71e9, expertBytesPerLayer: 492_750_000 };
+    const r = estimateFit({ model, hardware: mac(32), mode: 'chat', runtime: { ...LS, nCpuMoe: 10 } });
+    expect(r).toMatchObject({ placement: 'expert-offload', nCpuMoe: 10 });
+    const graph = computeBufferBytes(model, r.context, r.ubatch, { memoryKind: 'unified' });
+    expect(r.memory.computeBytes).toBeGreaterThanOrEqual(graph + model.expertBytesPerLayer / 3);
+  });
+
   it('keeps an f16 cache on Ollama when flash attention is off, whatever the daemon KV type', () => {
     expect(fit({ runtime: { kind: 'ollama', kv: Q8, flashAttn: 'off' } }).kv).toEqual(F16);
   });
@@ -481,8 +489,25 @@ describe('estimateFit', () => {
     expect(perToken({ ...narrow, recurrent: { ...recurrent, kind: 'mamba2' } })).toBeGreaterThan(perToken(narrow));
     // The flat 1 GiB per 512-token ubatch this estimator charged before it was measured.
     expect(perToken({ ...narrow, recurrent })).toBeGreaterThanOrEqual(GIB / 512);
+    expect(perToken({ ...narrow, recurrent: { ...recurrent, kind: 'future-kind' } })).toBeGreaterThanOrEqual(GIB / 512);
     const { embeddingLength: _e, activeFeedForwardLength: _f, ...noWidths } = narrow;
     expect(perToken({ ...noWidths, recurrent })).toBeGreaterThanOrEqual(GIB / 512);
+  });
+
+  it('sizes absorbed MLA attention past the FFN on 128-head DeepSeek-class models', () => {
+    const v3 = arch({
+      ...DEEPSEEK_V31,
+      headCount: 128,
+      embeddingLength: 7168,
+      activeFeedForwardLength: 8 * 2048 + 2048,
+      moe: { experts: 256, used: 8, moeLayers: 58 },
+    });
+    // q_nope absorbed, q_pe and their concat are live together: about 154.6k floats per token with the residual.
+    expect(activationBytesPerToken({ arch: v3, weightsBytes: 400 * GIB })).toBeGreaterThanOrEqual(4 * 154_600);
+    const { headCount: _h, ...ffnOnly } = v3;
+    expect(activationBytesPerToken({ arch: v3, weightsBytes: 400 * GIB })).toBeGreaterThan(
+      activationBytesPerToken({ arch: arch(ffnOnly), weightsBytes: 400 * GIB })
+    );
   });
 
   it('counts the down projection output of narrow-expert MoE layers', () => {

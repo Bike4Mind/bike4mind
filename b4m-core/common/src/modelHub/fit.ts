@@ -1,4 +1,4 @@
-import type { HubRuntime, KvCacheType, ModelArch } from '../schemas/modelHub';
+import { RECURRENT_KINDS, type HubRuntime, type KvCacheType, type ModelArch } from '../schemas/modelHub';
 
 /** Source of truth for the machine description; `@bike4mind/local-models` probes the same fields. */
 export interface HardwareProfile {
@@ -232,7 +232,9 @@ export function activationBytesPerToken(model: FitModel): number {
     const ff = arch.activeFeedForwardLength;
     // MoE: the down projection writes used x n_embd while its input is still live.
     const ffn = arch.moe ? Math.max(3 * ff, ff + arch.moe.used * arch.embeddingLength) : 3 * ff;
-    const transformer = ffn + 5 * arch.embeddingLength + extra;
+    // Absorbed MLA holds the latent query, its roped part and their concat per head; past the FFN at 128 heads.
+    const mla = arch.mla && arch.headCount ? arch.headCount * 2 * (arch.mla.kvLoraRank + arch.mla.ropeDim) : 0;
+    const transformer = Math.max(ffn, mla) + 5 * arch.embeddingLength + extra;
     const recurrent = arch.recurrent ? FIT_CONSTANTS.recurrentActivationWidths * arch.embeddingLength : 0;
     bytes = 4 * Math.max(transformer, recurrent);
   } else {
@@ -245,7 +247,8 @@ export function activationBytesPerToken(model: FitModel): number {
     }
     bytes = Math.ceil((arch.recurrent ? 60 : 44) * Math.sqrt(active / arch.blockCount)) + 4 * extra;
   }
-  if (arch.recurrent && !arch.recurrent.kind) return Math.max(bytes, FIT_CONSTANTS.uncalibratedRecurrentBytesPerToken);
+  const calibrated = (RECURRENT_KINDS as readonly string[]).includes(arch.recurrent?.kind ?? '');
+  if (arch.recurrent && !calibrated) return Math.max(bytes, FIT_CONSTANTS.uncalibratedRecurrentBytesPerToken);
   return bytes;
 }
 
@@ -421,11 +424,11 @@ class Planner {
   }
 
   /**
-   * ggml-backend.cpp runs a batch of 32+ tokens on CUDA even when the weight sits in RAM, copying it into the compute
-   * buffer. Bounded at 2/3 of a layer, a fused gate_up tensor.
+   * ggml-backend.cpp runs a batch of 32+ tokens on CUDA or Metal even when the weight sits in a host buffer, copying
+   * it into the compute buffer. Bounded at 2/3 of a layer, a fused gate_up tensor.
    */
   private hostWeightCopyBytes(placement: FitPlacement, nCpuMoe: number, ubatch: number): number {
-    if (this.input.hardware.memoryKind !== 'discrete' || ubatch < 32) return 0;
+    if (this.budgets.cpuOnly || this.input.hardware.memoryKind === 'cpu' || ubatch < 32) return 0;
     const { model } = this.input;
     if (placement === 'expert-offload' && nCpuMoe > 0) return Math.ceil(((model.expertBytesPerLayer ?? 0) * 2) / 3);
     if (placement === 'layer-offload') return Math.ceil((model.weightsBytes * 2) / 3 / model.arch.blockCount);

@@ -134,12 +134,13 @@ export const ModelArchSchema = z.object({
       ropeDim: z.number().int().positive().max(4096),
     })
     .optional(),
-  // State is F32 and independent of context. Without a calibrated `kind`, compute is planned at a flat high rate.
+  // State is F32 and independent of context. A `kind` outside RECURRENT_KINDS parses, so older clients keep the
+  // entry, and plans compute at the flat uncalibrated rate.
   recurrent: z
     .object({
       layers: LayerCountSchema.positive(),
       stateBytesPerSeq: ByteCountSchema,
-      kind: z.enum(RECURRENT_KINDS).optional(),
+      kind: z.string().min(1).max(32).optional(),
     })
     .optional(),
   mtpLayers: LayerCountSchema.default(0),

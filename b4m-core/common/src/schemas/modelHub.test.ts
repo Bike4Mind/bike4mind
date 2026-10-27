@@ -257,6 +257,15 @@ describe('parseHubManifest', () => {
     expect(dropped).toEqual([{ path: 'rankings.audio', reason: 'unknown role' }]);
   });
 
+  it('keeps an entry whose recurrent kind this client has not calibrated', () => {
+    const m = fixtureManifest();
+    const recurrent = m.entries[0].arch.recurrent!;
+    Object.assign(recurrent, { kind: 'future-kind' });
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(dropped).toEqual([]);
+    expect(manifest.entries[0].arch.recurrent?.kind).toBe('future-kind');
+  });
+
   it('drops an unreadable evidence item without dropping its build', () => {
     const m = fixtureManifest();
     const iq4 = m.entries[0].builds[1];
