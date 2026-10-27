@@ -866,3 +866,27 @@ describe('UsageEventRepository', () => {
     });
   });
 });
+
+describe('UsageEventRepository.creditsSpentByUser', () => {
+  const from = new Date('2026-10-20T10:00:00Z');
+  const to = new Date('2026-10-21T10:00:00Z');
+  const at = async (createdAt: Date, overrides: Partial<IUsageEventInput> = {}) => {
+    const event = await record(overrides);
+    // Raw driver update: mongoose timestamps make createdAt immutable via the model.
+    await UsageEvent.collection.updateOne({ _id: event!._id }, { $set: { createdAt } });
+  };
+
+  it('sums charged and written-off credits inside [from, to) for that user only', async () => {
+    await at(from, { creditsCharged: 30 });
+    await at(new Date('2026-10-21T09:59:59Z'), { creditsCharged: 20, writtenOffCredits: 5 });
+    await at(to, { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T09:59:59Z'), { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T12:00:00Z'), { userId: 'someone-else', creditsCharged: 1000 });
+
+    await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(55);
+  });
+
+  it('returns 0 when the user spent nothing in the window', async () => {
+    await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(0);
+  });
+});

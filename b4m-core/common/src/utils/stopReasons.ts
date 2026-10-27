@@ -35,6 +35,19 @@ export const DEGENERATE_FINISH_REASON = 'degenerate_repetition';
 export const REFUSAL_FINISH_REASON = 'refusal';
 
 /**
+ * The provider blocked the completion via its own content policy and settled the turn with
+ * finish_reason 'content_filter' (OpenAI, DeepSeek, etc.) rather than throwing. Treated as
+ * a refusal for billing and moderation purposes: the user sent content that triggered the
+ * provider's safety classifier.
+ */
+export const CONTENT_FILTER_FINISH_REASON = 'content_filter';
+
+/** A settled stop reason meaning the provider declined or blocked the request. */
+export function isProviderRefusalStopReason(stopReason: string | undefined | null): boolean {
+  return stopReason === REFUSAL_FINISH_REASON || stopReason === CONTENT_FILTER_FINISH_REASON;
+}
+
+/**
  * Stamped on `promptMeta.finishReason` when recovery settles a quest whose run died without
  * finishing: the liveness timeout (the process was hard-killed, e.g. at the server Lambda's
  * execution limit) or the abandoned-run sweep. No provider ever reports these; they exist so

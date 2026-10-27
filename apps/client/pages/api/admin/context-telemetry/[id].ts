@@ -7,6 +7,7 @@ import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/err
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const paramsSchema = z.object({
   id: z.string().min(1),
@@ -63,6 +64,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         throw new NotFoundError(`No telemetry data for quest: ${id}`);
       }
 
+      let deletedAt: string;
       try {
         // Remove telemetry but keep the quest (GDPR right to erasure).
         const result = await Quest.updateOne({ _id: id }, { $unset: { 'promptMeta.contextTelemetry': 1 } });
@@ -79,7 +81,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         }
 
         const durationMs = Date.now() - startTime;
-        const deletedAt = new Date().toISOString();
+        deletedAt = new Date().toISOString();
 
         // Log successful deletion for GDPR audit trail (fire-and-forget)
         telemetryAuditLogRepository
@@ -97,12 +99,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           .catch(() => {
             // Silent failure - audit logging should not block the response
           });
-
-        res.json({
-          success: true,
-          message: `Telemetry data deleted for quest: ${id}`,
-          deletedAt,
-        });
       } catch (error) {
         const durationMs = Date.now() - startTime;
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -126,6 +122,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
         throw error;
       }
+
+      // Outside the try: the deletion already succeeded, so an audit error must not log a GDPR failure.
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.context_telemetry.deleted',
+        target: { kind: 'system', id, displayName: `Context telemetry for quest ${id}` },
+        summary: `deleted context telemetry for quest ${id}`,
+        details: { questId: id },
+      });
+
+      res.json({
+        success: true,
+        message: `Telemetry data deleted for quest: ${id}`,
+        deletedAt,
+      });
     })
   );
 

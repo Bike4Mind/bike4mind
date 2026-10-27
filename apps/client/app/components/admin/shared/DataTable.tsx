@@ -104,8 +104,10 @@ export function DataTable<Row>({
   const bodyRef = useRef<HTMLTableSectionElement>(null);
 
   const sortControlled = onSortChange !== undefined;
+  // A server page is an incomplete result, so sorting it locally would mislead: only a controlled sort applies.
+  const localSortable = !sortControlled && !paginationProp;
   const sort = sortControlled ? controlledSort : localSort;
-  const sortedColumn = sortControlled ? undefined : columns.find(column => column.id === sort?.columnId);
+  const sortedColumn = localSortable ? columns.find(column => column.id === sort?.columnId) : undefined;
   const sorted = sortedColumn?.sortValue
     ? [...rows].sort((left, right) => {
         const leftValue = sortedColumn.sortValue!(left);
@@ -161,7 +163,8 @@ export function DataTable<Row>({
     else setLocalSort(next);
     goToPage(0);
   };
-  const isSortable = (column: DataColumn<Row>) => (sortControlled ? column.sortable === true : !!column.sortValue);
+  const isSortable = (column: DataColumn<Row>) =>
+    sortControlled ? column.sortable === true : localSortable && !!column.sortValue;
 
   const focusSiblingRow = (row: HTMLElement, step: 1 | -1) => {
     const all = Array.from(bodyRef.current?.querySelectorAll<HTMLElement>('tr[data-row-id]') ?? []);
@@ -195,7 +198,23 @@ export function DataTable<Row>({
 
   const columnCount = columns.length + (selectable ? 1 : 0) + (rowActions ? 1 : 0);
   if (error) return <ErrorState message={error} onRetry={onRetry} />;
-  if (!loading && rows.length === 0)
+  if (!loading && rows.length === 0) {
+    // An empty server page past the last record (e.g. after rows were removed) needs a way back.
+    if (pagination && pagination.total > 0 && pagination.page > 1)
+      return (
+        <EmptyState
+          title="No records on this page"
+          action={
+            <Button
+              variant="outlined"
+              onClick={() => pagination.onPageChange(1)}
+              data-testid="admin-table-first-page-btn"
+            >
+              Back to the first page
+            </Button>
+          }
+        />
+      );
     return (
       empty ?? (
         <EmptyState
@@ -208,6 +227,7 @@ export function DataTable<Row>({
         />
       )
     );
+  }
 
   const firstShown = total === 0 ? 0 : currentPage * pageSize + 1;
   const lastShown = pagination

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI gate over apps/client/pages/api, three scans:
+# CI gate over apps/client/pages/api and infra/, four scans:
 #   1. every file under pages/api/v1/** must use nextRouteForContract.
 #      "Public" = API-key-callable and OpenAPI-registered (CONVENTIONS.md).
 #   2. every file OUTSIDE pages/api/v1 must declare `auth: 'jwtOnly'` (the api-key chain is
@@ -7,6 +7,10 @@
 #      baseline. A new handler that accepts API keys must go through a v1 contract instead.
 #   3. every file that accepts API keys (no `auth: 'jwtOnly'`) and calls an LLM must name a
 #      credit-billing seam (server/billing/meterPlatformCompletion.ts), or be on the baseline.
+#   4. every `sst.aws.Function` in infra/ that exposes a Function URL (`url:`) must have a
+#      handler built on defineLambdaRoute, or be on the function-url baseline. A Function URL
+#      skips the Next.js middleware chain, so the contract has to be wired at the handler;
+#      the pages/api scans cannot see a Lambda declared in infra/.
 # Exits 1 on any unacknowledged violation.
 #
 # ALLOWLISTS
@@ -17,16 +21,23 @@
 #     Frozen baseline of handlers that predate the ratchet. It only shrinks.
 #   scripts/unmetered-llm-route-allowlist.txt (scan 3)
 #     Key-accepting LLM handlers not yet credit-metered. It only shrinks.
+#   scripts/contract-gate-function-url-allowlist.txt (scan 4)
+#     Frozen baseline of Function URL handlers that predate the ratchet. Entries are only ever
+#     removed, and every entry must carry a trailing `# reason` (the gate rejects one without).
 
 set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 ALLOWLIST="scripts/contract-gate-allowlist.txt"
 ALLOWLIST_API_KEY="scripts/contract-gate-api-key-allowlist.txt"
 ALLOWLIST_UNMETERED="scripts/unmetered-llm-route-allowlist.txt"
+ALLOWLIST_FUNCTION_URL="scripts/contract-gate-function-url-allowlist.txt"
 API_ROOT="apps/client/pages/api"
 API_DIR="$API_ROOT/v1"
+INFRA_DIR="infra"
 
-for f in "$ALLOWLIST" "$ALLOWLIST_API_KEY" "$ALLOWLIST_UNMETERED"; do
+for f in "$ALLOWLIST" "$ALLOWLIST_API_KEY" "$ALLOWLIST_UNMETERED" "$ALLOWLIST_FUNCTION_URL"; do
   if [ ! -f "$f" ]; then
     echo "ERROR: Allowlist not found at $f"
     exit 1
@@ -35,6 +46,11 @@ done
 
 if [ ! -d "$API_DIR" ]; then
   echo "ERROR: API directory not found at $API_DIR"
+  exit 1
+fi
+
+if [ ! -d "$INFRA_DIR" ]; then
+  echo "ERROR: Infra directory not found at $INFRA_DIR"
   exit 1
 fi
 
@@ -189,6 +205,41 @@ report "$ALLOWLIST_UNMETERED" "$unmetered_violators" \
   "Fix: meter the call (meterCompletionBackend + createRequestCompletionMeter, or
 reserveCompletionCredits + settleCompletion; see apps/client/server/billing/meterPlatformCompletion.ts),
 or, for an SPA-only helper, add auth: 'jwtOnly'. Do NOT add to $ALLOWLIST_UNMETERED." || failed=1
+
+# Scan 4: Functions in infra/ with a Function URL whose handler is not built on
+# defineLambdaRoute. The helper is a dependency-free node script (repo-guards installs
+# nothing); it exits 2 when it cannot read a declaration, which must fail the gate.
+# Every entry in this baseline needs a reason: the file starts empty, so it is not the
+# place for an undocumented exemption.
+reasonless=$(
+  grep -v '^[[:space:]]*#' "$ALLOWLIST_FUNCTION_URL" | grep -v '^[[:space:]]*$' |
+    grep -v '#[[:space:]]*[^[:space:]]' || true
+)
+if [ -n "$reasonless" ]; then
+  echo "::error::allowlist entries in $ALLOWLIST_FUNCTION_URL are missing a '# reason' -- see job log"
+  echo ""
+  echo "ERROR: every entry in $ALLOWLIST_FUNCTION_URL needs a trailing '# reason':"
+  echo "$reasonless" | sed 's/^/  /'
+  echo ""
+  exit 1
+fi
+
+url_status=0
+url_violators=$(node "$SCRIPT_DIR/check-function-url-contracts.mjs" "$PWD") || url_status=$?
+# A real exit 1 always printed a path; node also exits 1 for a throw or a load error, with no stdout.
+if [ "$url_status" -gt 1 ] || { [ "$url_status" -eq 1 ] && [ -z "$url_violators" ]; }; then
+  echo "::error::Function URL contract scan failed (exit ${url_status})"
+  echo "ERROR: Could not scan $INFRA_DIR for Function URLs; refusing to report a clean result."
+  exit 1
+fi
+
+report "$ALLOWLIST_FUNCTION_URL" "$url_violators" \
+  "have an infra/ Function URL handler that is not built on defineLambdaRoute" \
+  "Fix: build the handler on defineLambdaRoute(contract, handler) so it validates the request and
+authenticates; then add the contract to contracts/index.ts and regenerate the spec, which is
+what registers it in the OpenAPI spec (see b4m-core/common/src/api-contract/README.md).
+Do NOT add to $ALLOWLIST_FUNCTION_URL for new code: entries there are frozen debt, and each
+needs a trailing '# reason'." || failed=1
 
 if [ "$failed" -eq 0 ]; then
   echo "OK: No contract-gate violations."
