@@ -94,6 +94,8 @@ const GROWTH_HINTS: Record<Exclude<ContextGrowth, { tokens: number }>['reason'],
 const SLOWER_HINT = ' Part of the model now runs from system memory, so replies will be slower.';
 
 export class OllamaLocal {
+  private listed: ChatModelOption[] = [];
+
   /**
    * Main passes Electron's net.fetch: Node's fetch gives up after five minutes without response
    * headers, and Ollama sends none until prefill ends, which takes that long for a CPU-only model.
@@ -106,11 +108,18 @@ export class OllamaLocal {
   ) {}
 
   async models(): Promise<ChatModelOption[]> {
-    const rows = await this.tags().catch(() => null);
-    if (!rows) return [];
-    return (await Promise.all(rows.map(row => this.model(row.name)))).filter(
+    let rows: TagRow[];
+    try {
+      rows = await this.tags();
+    } catch (err) {
+      // A daemon that is not running has no models; a slow or failing one keeps its last list.
+      if (refused(err)) this.listed = [];
+      return this.listed;
+    }
+    this.listed = (await Promise.all(rows.map(row => this.model(row.name)))).filter(
       (model): model is ChatModelOption => model !== null
     );
+    return this.listed;
   }
 
   /**
@@ -625,6 +634,13 @@ const tagFacts = new Map<string, { sizeBytes?: number; digest?: string }>();
 /** The last /api/show answer per model, kept so a slow daemon does not drop the model or its tools. */
 const knownInspections = new Map<string, Inspection>();
 const inspectRetries = new Map<string, { at: number; delay: number }>();
+
+/** Nothing listening on Ollama's port: the daemon is not running. */
+function refused(err: unknown): boolean {
+  if (!(err instanceof TypeError)) return false;
+  const cause = err.cause as { code?: unknown; errors?: { code?: unknown }[] } | undefined;
+  return cause?.code === 'ECONNREFUSED' || !!cause?.errors?.some(inner => inner.code === 'ECONNREFUSED');
+}
 
 /** A timeout or a daemon that did not answer, as opposed to an answer saying the model is unusable. */
 function unanswered(err: unknown): boolean {

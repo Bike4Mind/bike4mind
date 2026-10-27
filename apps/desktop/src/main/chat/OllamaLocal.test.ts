@@ -1000,12 +1000,16 @@ describe('OllamaLocal context sizing', () => {
   };
   /** Ollama serving one 4 GiB qwen2 model, with `/api/tags` and `/api/show` failing while told to. */
   const flakyOllama = () => {
-    const state = { showFails: false, tagsFails: false, sent: [] as number[] };
+    const state = { showFails: false, tagsFails: false, stopped: false, sent: [] as number[] };
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: unknown, init?: RequestInit) => {
         const url = String(input);
         if (url.endsWith('/api/tags')) {
+          if (state.stopped)
+            throw new TypeError('fetch failed', {
+              cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }),
+            });
           if (state.tagsFails) return new Response('', { status: 500 });
           return Response.json({ models: [{ name: 'qwen', size: 4 * GIB, digest: 'one' }] });
         }
@@ -1042,6 +1046,16 @@ describe('OllamaLocal context sizing', () => {
     await local.stream(qwenTurn, () => undefined);
     await local.stream(qwenTurn, () => undefined);
     expect(ollamaState.sent).toEqual([16384, 32768, 32768]);
+  });
+
+  it('keeps the last model list while /api/tags fails, and lists none once Ollama is not running', async () => {
+    const ollamaState = flakyOllama();
+    const local = new OllamaLocal();
+    expect((await local.models()).map(model => model.name)).toEqual(['qwen']);
+    ollamaState.tagsFails = true;
+    expect((await local.models()).map(model => model.name)).toEqual(['qwen']);
+    ollamaState.stopped = true;
+    expect(await local.models()).toEqual([]);
   });
 
   it('lets a Settings change made while a model is being sized win', async () => {
