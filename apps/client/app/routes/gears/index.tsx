@@ -15,7 +15,13 @@ import { useMobileHeader } from '@client/app/hooks/useMobileHeader';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { GearCard } from '@client/app/components/gears/GearCard';
-import { ClaimButton, creditText, RewardChip, rewardState } from '@client/app/components/gears/gearReward';
+import {
+  ClaimButton,
+  creditText,
+  PendingRewardNote,
+  RewardChip,
+  rewardState,
+} from '@client/app/components/gears/gearReward';
 
 /**
  * Gears - the feature tour, where each feature's one-time reward is claimed.
@@ -152,7 +158,9 @@ const GearsPage = () => {
         // A phone's header has room for the chip alone, and the copy below is long,
         // so the claim goes right under the header rather than after it.
         banner={
-          isMobile && rewardState(open) === 'claimable' ? (
+          rewardState(open) === 'pending' ? (
+            <PendingRewardNote gear={open} />
+          ) : isMobile && rewardState(open) === 'claimable' ? (
             <ClaimButton gear={open} onClaim={() => claim(open)} mt="0px" testId={`gear-detail-claim-${open.key}`} />
           ) : undefined
         }
