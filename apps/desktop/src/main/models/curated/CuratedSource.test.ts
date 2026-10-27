@@ -268,6 +268,20 @@ describe('CuratedSource', () => {
     expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3, check: 'updated' });
   });
 
+  it('checks at once, without a stale checked time, when the list accepted before is missing at startup', async () => {
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
+    await source().checkNow();
+    await rm(join(dir, CuratedStore.sourceKey(LATEST), 'pair.json'));
+    clock += CURATED_CHECK_INTERVAL_MS / 2;
+
+    const restarted = source();
+    await restarted.loaded();
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, checkedAt: null });
+    await restarted.checkIfDue();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3, check: 'updated' });
+  });
+
   it.each([
     ['no sequence', listText(3, list => delete list.sequence)],
     ['schemaVersion 3', listText(3, list => (list.schemaVersion = 3))],
