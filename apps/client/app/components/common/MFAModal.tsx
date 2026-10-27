@@ -96,9 +96,9 @@ const MFAModal: React.FC<MFAModalProps> = ({
   const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     e.preventDefault();
     const rawText = e.clipboardData.getData('text');
-    // Only space-grouped digits ("123 456") are stripped: stripping before the backup match would
+    // Only space- or hyphen-grouped digits ("123 456", "123-456") are stripped: stripping before the backup match would
     // turn "hello world" into a base32-shaped code. The 6-digit code wins over a 10-letter label word.
-    const spacedDigits = rawText.replace(/\s/g, '').match(/^\d{6}$/);
+    const spacedDigits = rawText.replace(/[\s-]/g, '').match(/^\d{6}$/);
     const embedded =
       spacedDigits ??
       rawText.match(/(?<![A-Za-z0-9])\d{6}(?![A-Za-z0-9])/) ??
@@ -284,11 +284,13 @@ const MFAModal: React.FC<MFAModalProps> = ({
                 }}
                 onPaste={handlePaste}
               />
-              {pasteHint && (
-                <Typography data-testid="mfa-modal-paste-hint" level="body-sm" sx={{ mb: 1 }}>
-                  {pasteHint}
-                </Typography>
-              )}
+              <Box aria-live="polite">
+                {pasteHint && (
+                  <Typography data-testid="mfa-modal-paste-hint" level="body-sm" sx={{ mb: 1 }}>
+                    {pasteHint}
+                  </Typography>
+                )}
+              </Box>
               {error && (
                 <Typography color="danger" sx={{ mb: 1 }}>
                   {error}

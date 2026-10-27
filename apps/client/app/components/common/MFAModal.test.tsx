@@ -136,12 +136,13 @@ describe('MFAModal paste', () => {
   });
 
   it('shows the verify hint when no code is in the paste', () => {
-    renderModal();
+    const { onVerify } = renderModal();
     paste('nothing useful here!');
     expect(codeInput().value).toBe('');
     expect(screen.getByTestId('mfa-modal-paste-hint').textContent).toBe(
       'Paste or enter a 6-digit code or 10-character backup code.'
     );
+    expect(onVerify).not.toHaveBeenCalled();
   });
 
   it('prefers an embedded 6-digit code over a 10-letter label word in verify mode', () => {
@@ -173,6 +174,8 @@ describe('MFAModal paste', () => {
     expect(codeInput().value).toBe('654321');
     paste('123 456');
     expect(codeInput().value).toBe('123456');
+    paste('123-456');
+    expect(codeInput().value).toBe('123456');
     paste('987\t654\n');
     expect(codeInput().value).toBe('987654');
   });
@@ -194,11 +197,12 @@ describe('MFAModal paste', () => {
   });
 
   it('rejects a short non-code paste in verify mode', () => {
-    renderModal();
+    const { onVerify } = renderModal();
     paste('hello world');
     expect(codeInput().value).toBe('');
     expect(screen.getByTestId('mfa-modal-paste-hint').textContent).toBe(
       'Paste or enter a 6-digit code or 10-character backup code.'
     );
+    expect(onVerify).not.toHaveBeenCalled();
   });
 });
