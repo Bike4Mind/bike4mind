@@ -11,6 +11,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import { OutputBudgetExhaustedError, StreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
@@ -557,11 +558,8 @@ export class KimiBackend implements ICompletionBackend {
       // bedrockBackend/base.ts; the direct path needs its own.
       if (!sawProse && toolsUsed.length === 0) {
         const finish = response.choices[0]?.finish_reason;
-        throw new Error(
-          finish === 'length'
-            ? `Moonshot returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
-            : `Moonshot returned no content for ${model} (finish_reason: ${finish ?? 'unknown'}).`
-        );
+        if (finish === 'length') throw new OutputBudgetExhaustedError('Moonshot', model);
+        throw new Error(`Moonshot returned no content for ${model} (finish_reason: ${finish ?? 'unknown'}).`);
       }
 
       let cacheStats: CacheUsageStats | undefined;
@@ -688,11 +686,9 @@ export class KimiBackend implements ICompletionBackend {
     // cause is a reasoning model that spent its whole budget thinking; without this
     // the stream returns silently with zero callbacks and the chat hangs.
     if (!sawProse && func.length === 0 && toolsUsed.length === 0) {
-      throw new Error(
-        streamFinishReason === 'length'
-          ? `Moonshot returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
-          : `Moonshot returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`
-      );
+      if (streamFinishReason === 'length') throw new OutputBudgetExhaustedError('Moonshot', model);
+      if (streamFinishReason === undefined) throw new StreamEndedWithoutFinishError('Moonshot', model);
+      throw new Error(`Moonshot returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`);
     }
 
     let cacheStats: CacheUsageStats | undefined;

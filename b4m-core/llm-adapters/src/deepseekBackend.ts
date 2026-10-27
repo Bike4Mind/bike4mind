@@ -11,6 +11,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import { OutputBudgetExhaustedError, StreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
@@ -496,11 +497,8 @@ export class DeepSeekBackend implements ICompletionBackend {
       // blank reply.
       if (!sawProse && toolsUsed.length === 0) {
         const finish = response.choices[0]?.finish_reason;
-        throw new Error(
-          finish === 'length'
-            ? `DeepSeek returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
-            : `DeepSeek returned no content for ${model} (finish_reason: ${finish ?? 'unknown'}).`
-        );
+        if (finish === 'length') throw new OutputBudgetExhaustedError('DeepSeek', model);
+        throw new Error(`DeepSeek returned no content for ${model} (finish_reason: ${finish ?? 'unknown'}).`);
       }
 
       let cacheStats: CacheUsageStats | undefined;
@@ -627,11 +625,9 @@ export class DeepSeekBackend implements ICompletionBackend {
     // prose and has no tool call to make produced nothing usable. Without this the
     // stream returns silently with zero callbacks and the chat hangs.
     if (!sawProse && func.length === 0 && toolsUsed.length === 0) {
-      throw new Error(
-        streamFinishReason === 'length'
-          ? `DeepSeek returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
-          : `DeepSeek returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`
-      );
+      if (streamFinishReason === 'length') throw new OutputBudgetExhaustedError('DeepSeek', model);
+      if (streamFinishReason === undefined) throw new StreamEndedWithoutFinishError('DeepSeek', model);
+      throw new Error(`DeepSeek returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`);
     }
 
     let cacheStats: CacheUsageStats | undefined;
