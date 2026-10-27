@@ -156,13 +156,13 @@ function federatedOpenAIClient(): OpenAI {
   return client;
 }
 
+/** Silently raises a tiny budget to OpenAI's minimum on purpose; an unset (or 0) budget stays unset. */
+const floorOutputBudget = (maxTokens?: number) => (maxTokens ? Math.max(maxTokens, MIN_OUTPUT_TOKENS) : undefined);
+
 /**
  * A Responses stream closed with no terminal event and no abort (upstream cut the connection).
  * ChatCompletionProcess maps it to the interrupted reply; partial text already reached the client.
  */
-/** Silently raises a tiny budget to OpenAI's minimum on purpose; an unset (or 0) budget stays unset. */
-const floorOutputBudget = (maxTokens?: number) => (maxTokens ? Math.max(maxTokens, MIN_OUTPUT_TOKENS) : undefined);
-
 export class ResponsesStreamTruncatedError extends Error {
   constructor(model: string) {
     super(`OpenAI Responses stream for ${model} ended without a terminal response event`);
