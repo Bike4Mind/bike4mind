@@ -78,7 +78,8 @@ export const getSkillMarketListingContract = defineEndpoint({
   summary: 'Get a Skill Market listing',
   description:
     'Returns a listing with its current approved version, recent ratings and your import of it. The ' +
-    'author also sees a listing that is not live. `token` unlocks an unlisted listing.',
+    'author also sees a listing that is not live. `token` unlocks an unlisted listing. Author-only fields ' +
+    '(`share_token`, `source_skill_id`, `pending_version`) need `skills:write` or a signed-in session.',
   tags: ['Skills'],
   auth: 'apiKeyOrJwt',
   scopes: READ_SCOPES,
@@ -234,7 +235,8 @@ export const importSkillMarketListingContract = defineEndpoint({
     409: {
       description:
         '`version_changed`: a newer version was approved since `expected_version_id`. `local_changes`: you ' +
-        'edited the target copy; retry with `overwrite: true`. `name_taken`: retry with `name`.',
+        'edited the target copy; retry with `overwrite: true`. `name_taken`: retry with `name`. With no ' +
+        '`errorCode`: a concurrent write raced the import; retry it.',
       schema: SkillMarketImportConflictSchema,
     },
     429: {

@@ -115,8 +115,16 @@ export async function publishListing(
   } catch (error) {
     // Don't leave an empty listing holding a slot. Soft delete by hand: the plugin's deleteOne
     // would leave `activeSlot` set, so the unique index would still block a retry.
-    if (!(await SkillListingVersion.exists({ listingId: listing.id }))) {
-      await SkillListing.updateOne({ _id: listing.id }, { $set: { deletedAt: new Date() }, $unset: { activeSlot: 1 } });
+    try {
+      if (!(await SkillListingVersion.exists({ listingId: listing.id }))) {
+        await SkillListing.updateOne(
+          { _id: listing.id },
+          { $set: { deletedAt: new Date() }, $unset: { activeSlot: 1 } }
+        );
+      }
+    } catch (cleanupError) {
+      // Surface the submit failure, not the cleanup's.
+      logger.error(`[SKILL_MARKET] publish cleanup failed listing=${listing.id}`, cleanupError);
     }
     throw error;
   }

@@ -90,6 +90,7 @@ vi.mock('@server/skillMarket/importListing', () => ({ importListing: (...a: unkn
 import {
   ApiKeyScope,
   BrowseSkillListingsResponseSchema,
+  ConcurrencyConflictError,
   ConflictError,
   ImportSkillListingResponseSchema,
   MySkillListingsResponseSchema,
@@ -100,6 +101,7 @@ import {
   type ISkillListingVersion,
 } from '@bike4mind/common';
 import { serializeListing } from '@server/skillMarket/market';
+import { encodeCursor } from '@server/utils/cursorPagination';
 import listingsHandler from '../listings/index';
 import mineHandler from '../listings/mine';
 import byIdHandler from '../listings/[id]/index';
@@ -473,6 +475,41 @@ describe('/api/v1/skills/market wire shapes', () => {
     expect(body.my_import).toBeNull();
   });
 
+  it.each([
+    ['a skills:write key', 'key', [ApiKeyScope.SKILLS_WRITE], true],
+    ['a JWT', 'jwt', [], true],
+    ['a skills:read key', 'key', [ApiKeyScope.SKILLS_READ], false],
+  ] as const)("detail gives the author's share token to %s: %s", async (_label, caller, scopes, shown) => {
+    withScopes([...scopes]);
+    h.detail.mockResolvedValue({
+      ...(await h.detail()),
+      listing: serializeListing(LISTING, { privileged: true }),
+      viewer: {
+        isAuthor: true,
+        canReview: false,
+        canDelist: false,
+        canRestore: false,
+        canImport: true,
+        canRate: false,
+      },
+    });
+    const body = SkillListingDetailSchema.parse((await ROUTES.detail(caller))._getJSONData());
+    expect(body.listing.share_token === 'secret-share-token').toBe(shown);
+    expect('source_skill_id' in body.listing).toBe(shown);
+  });
+
+  it('browse rejects a well-formed cursor for an out-of-range page (422)', async () => {
+    for (const page of ['1', 'abc', '1e300', '1001']) {
+      const res = await fire(listingsHandler, {
+        method: 'GET',
+        url: '/api/v1/skills/market/listings',
+        query: { cursor: encodeCursor('v1.skills.market.listings', page) },
+      });
+      expect(res._getStatusCode()).toBe(422);
+    }
+    expect(h.search).not.toHaveBeenCalled();
+  });
+
   it('detail answers 404 for an unknown listing', async () => {
     h.findListing.mockResolvedValue(null);
     expect((await ROUTES.detail())._getStatusCode()).toBe(404);
@@ -525,6 +562,13 @@ describe('/api/v1/skills/market wire shapes', () => {
     expect(res._getStatusCode()).toBe(409);
     expect(res._getJSONData()).toMatchObject({ errorCode: 'name_taken', suggested_name: 'review-pr-2' });
     expect(res._getJSONData()).not.toHaveProperty('code');
+  });
+
+  it('import turns a lost write race into a plain 409 without its internals', async () => {
+    h.importListing.mockRejectedValue(new ConcurrencyConflictError('Skill', { filter: { _id: 'x' }, reason: 'r' }));
+    const res = await ROUTES.import();
+    expect(res._getStatusCode()).toBe(409);
+    expect(JSON.stringify(res._getJSONData())).not.toMatch(/filter|reason/);
   });
 
   it('withdraw passes the listing id to the shared logic', async () => {

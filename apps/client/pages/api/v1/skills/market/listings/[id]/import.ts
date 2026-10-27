@@ -1,5 +1,5 @@
 /** POST /api/v1/skills/market/listings/{id}/import - the public twin of POST /api/skills/market/[id]/import. */
-import { ConflictError, importSkillMarketListingContract } from '@bike4mind/common';
+import { ConflictError, importSkillMarketListingContract, isConcurrencyConflictError } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { importRateLimit } from '@server/skillMarket/market';
 import { importListing } from '@server/skillMarket/importListing';
@@ -17,6 +17,8 @@ const handler = nextRouteForContract(importSkillMarketListingContract, { rateLim
         expectedVersionId: body.expected_version_id,
       });
     } catch (error) {
+      // A lost race with a concurrent write: retryable, and its filter/reason details are internal.
+      if (isConcurrencyConflictError(error)) throw new ConflictError('The skill changed while importing; try again.');
       // The shared logic's 409 classifier is `code` (the SPA's spelling); v1 publishes it as `errorCode`.
       if (error instanceof ConflictError && typeof error.additionalInfo?.code === 'string') {
         const { code, suggestedName } = error.additionalInfo;

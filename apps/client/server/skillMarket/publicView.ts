@@ -108,10 +108,14 @@ export function toPublicVersion(
   };
 }
 
-export function toPublicDetail(detail: Awaited<ReturnType<typeof buildListingDetail>>): SkillListingDetail {
+/** `allowPrivileged: false` keeps author-only fields off even for the author (a read-only key). */
+export function toPublicDetail(
+  detail: Awaited<ReturnType<typeof buildListingDetail>>,
+  { allowPrivileged = true }: { allowPrivileged?: boolean } = {}
+): SkillListingDetail {
   const { listing, version, ratings, myImport, viewer } = detail;
   return {
-    listing: toPublicListing(listing, { privileged: viewer.isAuthor || viewer.canDelist }),
+    listing: toPublicListing(listing, { privileged: allowPrivileged && (viewer.isAuthor || viewer.canDelist) }),
     version: version ? toPublicVersion(version) : null,
     ratings: ratings.map(r => ({
       stars: r.stars ?? 0,

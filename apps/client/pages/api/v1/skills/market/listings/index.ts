@@ -16,6 +16,8 @@ import { publishListing } from '@server/skillMarket/author';
 import { toPublicListing, toPublicVersion } from '@server/skillMarket/publicView';
 
 const CURSOR_SCOPE = 'v1.skills.market.listings';
+// Bounds the skip a hand-made cursor can ask for (the cursor is unsigned).
+const MAX_PAGE = 1000;
 
 // ponytail: the cursor wraps a page number, because the ranked sorts (relevance, top) have no stable
 // keyset; rows can skip or repeat if rankings shift mid-iteration. Keyset per sort if that bites.
@@ -23,7 +25,7 @@ const browseRoute = nextRouteForContract(listSkillMarketListingsContract).get(as
   const { limit, cursor, q, scope, tags, tools, min_rating, sort } = req.validatedQuery;
   const page = cursor === undefined ? 1 : Number(decodeCursor(cursor, CURSOR_SCOPE));
   // A cursor is only ever minted for page 2 onwards.
-  if (cursor !== undefined && !(Number.isInteger(page) && page >= 2)) {
+  if (cursor !== undefined && !(Number.isSafeInteger(page) && page >= 2 && page <= MAX_PAGE)) {
     throw new UnprocessableEntityError('Invalid cursor');
   }
 
@@ -44,7 +46,7 @@ const browseRoute = nextRouteForContract(listSkillMarketListingsContract).get(as
 
   return res.json({
     data: result.data.map(listing => toPublicListing(listing)),
-    next_cursor: result.hasMore ? encodeCursor(CURSOR_SCOPE, String(page + 1)) : null,
+    next_cursor: result.hasMore && page < MAX_PAGE ? encodeCursor(CURSOR_SCOPE, String(page + 1)) : null,
   });
 });
 

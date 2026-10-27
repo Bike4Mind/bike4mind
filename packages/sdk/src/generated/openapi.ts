@@ -1181,7 +1181,7 @@ export interface paths {
     };
     /**
      * Get a Skill Market listing
-     * @description Returns a listing with its current approved version, recent ratings and your import of it. The author also sees a listing that is not live. `token` unlocks an unlisted listing.
+     * @description Returns a listing with its current approved version, recent ratings and your import of it. The author also sees a listing that is not live. `token` unlocks an unlisted listing. Author-only fields (`share_token`, `source_skill_id`, `pending_version`) need `skills:write` or a signed-in session.
      */
     get: operations['getSkillMarketListing'];
     put?: never;
@@ -18481,7 +18481,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description `version_changed`: a newer version was approved since `expected_version_id`. `local_changes`: you edited the target copy; retry with `overwrite: true`. `name_taken`: retry with `name`. */
+      /** @description `version_changed`: a newer version was approved since `expected_version_id`. `local_changes`: you edited the target copy; retry with `overwrite: true`. `name_taken`: retry with `name`. With no `errorCode`: a concurrent write raced the import; retry it. */
       409: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
