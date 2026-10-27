@@ -48,7 +48,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   usageEventRepository: { record: (...a: unknown[]) => recordUsage(...a) },
@@ -60,7 +60,7 @@ vi.mock('@bike4mind/utils', async importActual => ({
 }));
 vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: (...a: unknown[]) => reserve(...a) }));
 // The real TestDecisionProvider behind a spy, so the route runs the real retry policy and normalizer.
-vi.mock('@server/decisions/providers', async () => {
+vi.mock('@bike4mind/server-utils/decisions/providers', async () => {
   const { TestDecisionProvider } = await import('@bike4mind/utils/decisionProviders');
   const real = new TestDecisionProvider();
   const provider = {

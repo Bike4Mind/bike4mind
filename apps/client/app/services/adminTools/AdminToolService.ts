@@ -6,6 +6,7 @@ import {
   AdminToolResult,
   AdminToolRegistry,
   AdminActionLog,
+  AuditMetadata,
 } from '@bike4mind/common';
 
 export class AdminToolService implements AdminToolRegistry {
@@ -104,7 +105,7 @@ export class AdminToolService implements AdminToolRegistry {
         params,
         result: 'success',
         timestamp: new Date(),
-        metadata: result.data,
+        metadata: result.data as AuditMetadata | undefined,
       });
 
       return result;

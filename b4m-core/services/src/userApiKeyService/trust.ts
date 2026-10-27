@@ -121,6 +121,18 @@ export const assessApiKeyTrust = async (
   };
 };
 
+export type PaidStandingSubject = Pick<IUser, 'isAdmin' | 'apiKeyTrustApproved' | 'lastCreditsPurchasedAt'>;
+
+/**
+ * The signals assessApiKeyTrust accepts other than account age: platform admin, admin approval,
+ * a purchase, or an active plan. Also the paid tier for thinking visibility (thinkingVisibility.ts).
+ */
+export const hasPaidStanding = async (
+  user: PaidStandingSubject,
+  hasActivePlan: () => Promise<boolean>
+): Promise<boolean> =>
+  Boolean(user.isAdmin || user.apiKeyTrustApproved || user.lastCreditsPurchasedAt) || (await hasActivePlan());
+
 /**
  * Whether an untrusted owner already holding `activePersonalKeys` user-billed keys may mint one
  * more. The single rule behind both the mint (create.ts) and the eligibility route the UI reads.

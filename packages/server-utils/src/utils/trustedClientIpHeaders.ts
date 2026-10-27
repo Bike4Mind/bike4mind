@@ -64,6 +64,9 @@ export function getTrustedHeaderClientIp(readHeader: HeaderReader): string | nul
   return getCloudFrontViewerIp(readHeader);
 }
 
+/** CloudFront's JA4 TLS fingerprint of the viewer. Trusted only behind origin verification. */
+export const CLOUDFRONT_VIEWER_JA4_HEADER = 'cloudfront-viewer-ja4-fingerprint';
+
 export type CloudFrontViewerNetwork = {
   /** Autonomous system number of the viewer's network, or null when CloudFront did not send it. */
   asn: number | null;

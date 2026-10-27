@@ -2,7 +2,7 @@ import { categorizeEvent } from '@server/admin/categorizeEvent';
 import { Request } from 'express';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { z } from 'zod';
 import { CounterLog, cacheRepository } from '@bike4mind/database';
 import { cacheService } from '@bike4mind/services';

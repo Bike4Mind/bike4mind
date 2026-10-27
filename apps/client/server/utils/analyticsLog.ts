@@ -3,7 +3,11 @@ import { mongoose, Ability, User, UserActivityCounter, CounterLog } from '@bike4
 import { counterService } from '@bike4mind/services';
 import { isValidEnumValue } from '@bike4mind/utils';
 import type { ILogger } from '@bike4mind/observability';
-import { ANALYTICS_EVENTS, AnalyticsEventPayloads, AnalyticsEvents } from '@server/types/analytics';
+import {
+  ANALYTICS_EVENTS,
+  AnalyticsEventPayloads,
+  AnalyticsEvents,
+} from '@bike4mind/server-utils/types/analytics/index';
 
 interface LogEventOptions {
   session?: mongoose.ClientSession;

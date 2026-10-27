@@ -1,4 +1,4 @@
-import { rateLimit } from './rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 /**
  * Hourly per-user budget shared by the /api/tools/* routes (weather, web-fetch, web-search).

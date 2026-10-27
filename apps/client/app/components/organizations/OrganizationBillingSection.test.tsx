@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument } from '@bike4mind/common';
-import { isDelinquentSubscriptionStatus, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { isDelinquentSubscriptionStatus, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
   TEAM_PLAN_UNAVAILABLE_MESSAGE,

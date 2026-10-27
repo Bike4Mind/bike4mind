@@ -5,6 +5,7 @@ import express from 'express';
 import type { z } from 'zod';
 import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
@@ -25,6 +26,7 @@ vi.mock('@server/utils/apiKeyAccessGate', async () => {
   };
 });
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -275,6 +277,13 @@ describe('JWT rate limiting', () => {
     expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(200);
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop', userId: 'u1' }));
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
+  });
+
+  it('resolves thinking visibility for the caller', async () => {
+    expect((await postAs({})).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ getThinkingVisibility: resolveThinkingVisibility })
+    );
   });
 
   /**

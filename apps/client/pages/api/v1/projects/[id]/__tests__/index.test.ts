@@ -46,7 +46,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return { get: compose, patch: compose, delete: compose };
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     mockRateLimitOptions(options);
     return (_req: unknown, _res: unknown, next: () => void) => next();

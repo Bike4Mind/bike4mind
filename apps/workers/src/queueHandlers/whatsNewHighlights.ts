@@ -23,7 +23,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { ChatModels, CHAT_MODELS } from '@bike4mind/common';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 const SETTING_NAME = 'whatsNewHighlightsConfig';
 

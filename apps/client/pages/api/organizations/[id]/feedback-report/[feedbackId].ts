@@ -6,10 +6,10 @@ import { OrgFeedbackItem } from '@bike4mind/common';
 import { orgFeedbackItem } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { Request, Response } from 'express';
 
 // Bucketed explicitly: the pathname embeds the feedback id, so the default would give every row

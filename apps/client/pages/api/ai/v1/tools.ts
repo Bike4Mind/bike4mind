@@ -1,6 +1,6 @@
 import type { Logger } from '@bike4mind/observability';
 import type { ServerToolExecutors } from '@bike4mind/services';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { buildDecideExecutor } from '@server/decisions/cliDecideExecutor';
 import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { executeToolContract } from '@bike4mind/common';

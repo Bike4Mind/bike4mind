@@ -10,7 +10,7 @@ import { createDecisionContract } from '@bike4mind/common';
 import { sendDecisionError } from '@server/decisions/decisionErrors';
 import { runDecision } from '@server/decisions/runDecision';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 

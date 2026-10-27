@@ -17,6 +17,12 @@ import {
   type WebhookAuditLogsSearch,
 } from './WebhookAuditLogs/webhookAuditLogsTabSearch';
 import { MODEL_LOGS_SEARCH_PARSERS, MODEL_LOGS_TAB_PARAMS, type ModelLogsSearch } from './modelLogsTabSearch';
+import {
+  ADMIN_ORGANIZATIONS_TAB_SLUG,
+  ORGS_SEARCH_PARSERS,
+  ORGS_TAB_PARAMS,
+  type OrganizationsSearch,
+} from './organizationsTabSearch';
 
 /**
  * Which `/admin` search params belong to which tab, read by both `validateSearch` (router.tsx) and
@@ -31,6 +37,7 @@ export const ADMIN_SETTINGS_SEARCH_PARAM = 'q';
 export const ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG = 'webhook-audit-logs';
 export const ADMIN_MODEL_LOGS_TAB_SLUG = 'model-logs';
 export const ADMIN_INTEGRATION_DEMAND_TAB_SLUG = 'integration-demand';
+export { ADMIN_ORGANIZATIONS_TAB_SLUG };
 
 const EMERGENCY_ACCESS_PARAM = 'emergency_access';
 
@@ -43,7 +50,7 @@ export const ADMIN_GLOBAL_PARAMS = [EMERGENCY_ACCESS_PARAM, ADMIN_TAB_PARAM] as 
  * Tab slug -> the params that tab owns; each key has exactly one owner (tested). These URLs get
  * shared and copied into login redirects, so never register tokens, form fields, setting values, or
  * a search over user records. Admin Settings' `q` is fine: it searches config, not people; the Users,
- * Feedback and Model Logs tabs' free-text searches are left out for exactly that reason.
+ * Feedback, Model Logs and Organizations tabs' free-text searches are left out for exactly that reason.
  */
 export const ADMIN_TAB_PARAMS = {
   [ADMIN_USERS_TAB_SLUG]: USERS_TAB_PARAMS,
@@ -53,28 +60,30 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG]: WEBHOOK_AUDIT_LOGS_TAB_PARAMS,
   [ADMIN_MODEL_LOGS_TAB_SLUG]: MODEL_LOGS_TAB_PARAMS,
   [ADMIN_INTEGRATION_DEMAND_TAB_SLUG]: INTEGRATION_DEMAND_TAB_PARAMS,
+  [ADMIN_ORGANIZATIONS_TAB_SLUG]: ORGS_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];
 type AdminSearchParam = (typeof ADMIN_GLOBAL_PARAMS)[number] | AdminTabParam;
 
-type TypedAdminSearch = UsersSearch & FeedbackSearch & WebhookAuditLogsSearch & ModelLogsSearch;
+type TypedAdminSearch = UsersSearch & FeedbackSearch & WebhookAuditLogsSearch & ModelLogsSearch & OrganizationsSearch;
 
 /** Params with a typed parser; every other registered param is an optional string. */
 export type AdminSearch = Partial<Record<Exclude<AdminSearchParam, keyof TypedAdminSearch>, string>> & TypedAdminSearch;
 
 // A Map so a key read from the registry can never resolve to an inherited object member.
-const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown) => unknown> = new Map(
+const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown, search: Record<string, unknown>) => unknown> = new Map(
   Object.entries({
     ...USERS_SEARCH_PARSERS,
     ...FEEDBACK_SEARCH_PARSERS,
     ...WEBHOOK_AUDIT_LOGS_SEARCH_PARSERS,
     ...MODEL_LOGS_SEARCH_PARSERS,
+    ...ORGS_SEARCH_PARSERS,
   })
 );
 
-const parseAdminSearchValue = (key: AdminSearchParam, value: unknown): unknown =>
-  (TYPED_PARAM_PARSERS.get(key) ?? optionalStringSearchValue)(value);
+const parseAdminSearchValue = (key: AdminSearchParam, search: Record<string, unknown>): unknown =>
+  (TYPED_PARAM_PARSERS.get(key) ?? optionalStringSearchValue)(search[key], search);
 
 // A Map for the same reason as adminTabSlugs.ts: the slug comes from the query string, and an
 // object lookup would resolve `?tab=constructor` to an inherited member.
@@ -91,7 +100,7 @@ const ALL_ADMIN_SEARCH_PARAMS: readonly AdminSearchParam[] = [
  */
 export function parseAdminSearch(search: Record<string, unknown>): AdminSearch {
   return Object.fromEntries(
-    ALL_ADMIN_SEARCH_PARAMS.map(key => [key, parseAdminSearchValue(key, search[key])])
+    ALL_ADMIN_SEARCH_PARAMS.map(key => [key, parseAdminSearchValue(key, search)])
   ) as AdminSearch;
 }
 
@@ -103,7 +112,7 @@ export function parseAdminSearch(search: Record<string, unknown>): AdminSearch {
 export function adminSearchForTab(previous: Record<string, unknown>, slug: string): AdminSearch {
   const kept = new Set<string>([...ADMIN_GLOBAL_PARAMS, ...(PARAMS_BY_TAB_SLUG.get(slug) ?? [])]);
   const search = Object.fromEntries(
-    ALL_ADMIN_SEARCH_PARAMS.map(key => [key, kept.has(key) ? parseAdminSearchValue(key, previous[key]) : undefined])
+    ALL_ADMIN_SEARCH_PARAMS.map(key => [key, kept.has(key) ? parseAdminSearchValue(key, previous) : undefined])
   ) as AdminSearch;
   return { ...search, [ADMIN_TAB_PARAM]: slug };
 }

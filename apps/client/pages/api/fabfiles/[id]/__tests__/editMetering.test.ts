@@ -58,7 +58,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: async () => [{ id: 'model-a', backend: 'anthropic' }],
   getLlmByModel: () => ({ complete: m.complete }),
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModelConfig: async () => null },
 }));
 vi.mock('@server/billing/meterPlatformCompletion', async () => ({

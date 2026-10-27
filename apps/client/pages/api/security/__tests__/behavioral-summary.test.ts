@@ -25,7 +25,9 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: any, _res: any, next: any) => next(),
+}));
 
 const repos = vi.hoisted(() => ({
   authFailLogRepository: {
@@ -44,7 +46,7 @@ vi.mock('@bike4mind/services', () => ({
   cacheService: { getCachedData: vi.fn(async (_key: string, factory: () => unknown) => factory()) },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: vi.fn().mockResolvedValue({ modelInfo: { id: 'test-model', backend: 'anthropic' } }),
   },

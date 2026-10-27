@@ -49,6 +49,7 @@ import {
   NO_COMPLETION_QUOTA,
   type CompletionQuotaGrant,
 } from '@server/utils/untrustedCompletionQuota';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 /**
  * CLI completions with WebSocket response streaming (`/api/ai/v1/ws-completions`), served by
@@ -252,6 +253,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
           await executeCompletion({
             getEntitlements: getUserEntitlements,
+            getThinkingVisibility: resolveThinkingVisibility,
             creditHolds: createCompletionCreditHolds(logger),
             userId,
             model,
