@@ -253,7 +253,7 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
         'echo stderr > /dev/stderr',
         'echo fd > /dev/fd/2',
         'rm "$(mktemp)"',
-        `git -C "${repo}" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m t`,
+        `GIT_CONFIG_GLOBAL=/dev/null git -C "${repo}" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m t`,
         'echo ok',
       ].join(' && '),
       cwd: TEST_DIR,
@@ -281,9 +281,10 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
     });
 
     try {
+      // "Permission denied" (EACCES), not "Bad file descriptor": the fd did reach the sandbox.
       expect(() =>
         execSync(`exec 4< "${target}"; ${wrapped.commandString}`, { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' })
-      ).toThrow();
+      ).toThrow(/Permission denied/);
       expect(readFileSync(target, 'utf-8')).toBe('original');
     } finally {
       rmSync(target, { force: true });

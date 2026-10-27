@@ -36,11 +36,13 @@ function escapeSeatbeltPath(p: string): string {
 
 const MDNS_RESPONDER_SOCKET = '/private/var/run/mDNSResponder';
 
+// Data writes only, so no unlink or chmod. /dev/tty stays denied: the child shares the CLI's
+// terminal, and writing to it would bypass the output the CLI sanitizes.
 const DEVICE_WRITE_ALLOWS = [
-  '(allow file-write* (literal "/dev/null"))',
-  '(allow file-write* (literal "/dev/zero"))',
-  '(allow file-write* (literal "/dev/dtracehelper"))',
-  '(allow file-write* (subpath "/dev/fd"))',
+  '(allow file-write-data (literal "/dev/null"))',
+  '(allow file-write-data (literal "/dev/zero"))',
+  '(allow file-write-data (literal "/dev/dtracehelper"))',
+  '(allow file-write-data (subpath "/dev/fd"))',
 ];
 
 function assertPort(port: number): void {

@@ -142,14 +142,37 @@ describe('SeatbeltRuntime', () => {
 
       const deny = profile.indexOf('(deny file-write*)');
       for (const allow of [
-        '(allow file-write* (literal "/dev/null"))',
-        '(allow file-write* (literal "/dev/zero"))',
-        '(allow file-write* (literal "/dev/dtracehelper"))',
-        '(allow file-write* (subpath "/dev/fd"))',
+        '(allow file-write-data (literal "/dev/null"))',
+        '(allow file-write-data (literal "/dev/zero"))',
+        '(allow file-write-data (literal "/dev/dtracehelper"))',
+        '(allow file-write-data (subpath "/dev/fd"))',
       ]) {
         expect(profile.indexOf(allow)).toBeGreaterThan(deny);
       }
       expect(profile).not.toContain('(subpath "/dev")');
+      expect(profile).not.toContain('/dev/tty');
+    });
+
+    it('allows writes to the resolved temp dir when os.tmpdir() is a symlink', () => {
+      const link = '/var/folders/xx/T';
+      const real = '/private/var/folders/xx/T';
+      const tmpdir = vi.spyOn(os, 'tmpdir').mockReturnValue(link);
+      const actualRealpath = vi.mocked(realpathSync).getMockImplementation()!;
+      vi.mocked(realpathSync).mockImplementation(((p: string) =>
+        p === link ? real : actualRealpath(p)) as typeof realpathSync);
+      try {
+        const profile = runtime.generateProfile({
+          command: 'mktemp',
+          cwd: '/Users/test/project',
+          filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+          networkEnabled: false,
+        });
+        expect(profile).toContain(`(allow file-write* (subpath "${link}"))`);
+        expect(profile).toContain(`(allow file-write* (subpath "${real}"))`);
+      } finally {
+        tmpdir.mockRestore();
+        vi.mocked(realpathSync).mockImplementation(actualRealpath);
+      }
     });
 
     it('denies network when network is disabled (fail-closed)', () => {
