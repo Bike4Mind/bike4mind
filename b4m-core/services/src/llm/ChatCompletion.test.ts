@@ -12789,7 +12789,7 @@ describe('prompt moderation', () => {
       timestamp: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
-      promptMeta: { context: {}, performance: {} },
+      promptMeta: { context: {}, performance: {}, model: { name: 'gpt-4', backend: 'openai' } },
       replies: [],
       type: 'message',
     };
