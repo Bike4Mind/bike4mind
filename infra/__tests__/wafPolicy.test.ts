@@ -563,9 +563,10 @@ describe('wafPolicy', () => {
       expect(emergency).toBeDefined();
       expect(emergency!.Action).toEqual({ Block: {} });
 
-      // Bot Control is the one group that counts wholesale; the 'bot control in count' suite pins it.
+      // Bot Control and ACFP are the groups that count wholesale; their own suites pin them.
+      const countWholesale = [BOT_CONTROL_RULE, 'AWS-AWSManagedRulesACFPRuleSet'];
       const enforcing = rules.filter(
-        r => (r.Statement as any).ManagedRuleGroupStatement && r.Name !== BOT_CONTROL_RULE
+        r => (r.Statement as any).ManagedRuleGroupStatement && !countWholesale.includes(r.Name)
       );
       for (const rule of enforcing) {
         expect(rule.OverrideAction, `${rule.Name} must not be overridden to Count wholesale`).toEqual({
@@ -897,10 +898,10 @@ describe('wafPolicy', () => {
 
   describe('ip reputation in count mode', () => {
     const IP_REP_RULE = 'AWS-AWSManagedRulesAmazonIpReputationList';
-    const IP_REP_RULE_NAMES = ['AWSManagedIPReputationList', 'AWSManagedReconnaissanceList', 'EC2InstanceEndpoint'];
+    const IP_REP_RULE_NAMES = ['AWSManagedIPReputationList', 'AWSManagedReconnaissanceList'];
 
     for (const stage of ['dev']) {
-      it(`puts all three ${stage} ip reputation rules in Count via RuleActionOverrides`, () => {
+      it(`puts both ${stage} ip reputation rules in Count via RuleActionOverrides`, () => {
         const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
         const rule = rules.find(r => r.Name === IP_REP_RULE);
         expect(rule).toBeDefined();
@@ -921,17 +922,6 @@ describe('wafPolicy', () => {
 
   describe('acfp account creation fraud prevention', () => {
     const ACFP_RULE = 'AWS-AWSManagedRulesACFPRuleSet';
-    const ACFP_RULE_NAMES = [
-      'AllRequests',
-      'SignalMissingCredential',
-      'SignalNonBrowserUserAgent',
-      'SignalAnonymousProxy',
-      'SignalAutomatedBrowser',
-      'SignalKnownBotUA',
-      'VolumetricIpHigh',
-      'VolumetricIpMedium',
-      'VolumetricSessionHigh',
-    ];
 
     for (const stage of ['dev']) {
       it(`is present on ${stage} at a priority between Bot Control and the rate limits`, () => {
@@ -942,18 +932,12 @@ describe('wafPolicy', () => {
         expect(rule!.Priority).toBeLessThan(30);
       });
 
-      it(`puts all nine ${stage} ACFP rules in Count via RuleActionOverrides`, () => {
+      it(`counts the ${stage} ACFP group wholesale, with no per-rule overrides to drift from AWS`, () => {
         const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
         const rule = rules.find(r => r.Name === ACFP_RULE)!;
         // any: ManagedRuleGroupStatement shape is deeply nested
-        const mgs = (rule.Statement as any).ManagedRuleGroupStatement;
-        const overrides: { Name: string; ActionToUse: unknown }[] = mgs.RuleActionOverrides;
-        expect(overrides).toBeDefined();
-        expect(overrides.map(o => o.Name).sort()).toEqual([...ACFP_RULE_NAMES].sort());
-        for (const override of overrides) {
-          expect(override.ActionToUse).toEqual({ Count: {} });
-        }
-        expect(rule.OverrideAction).toEqual({ None: {} });
+        expect((rule.Statement as any).ManagedRuleGroupStatement.RuleActionOverrides).toBeUndefined();
+        expect(rule.OverrideAction).toEqual({ Count: {} });
       });
 
       it(`scopes the ${stage} ACFP group to /api/otc/ with decode+normalize+lowercase`, () => {

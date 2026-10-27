@@ -875,8 +875,7 @@
           "Name": "AWSManagedRulesAmazonIpReputationList",
           "RuleActionOverrides": [
             { "Name": "AWSManagedIPReputationList",   "ActionToUse": { "Count": {} } },
-            { "Name": "AWSManagedReconnaissanceList", "ActionToUse": { "Count": {} } },
-            { "Name": "EC2InstanceEndpoint",          "ActionToUse": { "Count": {} } }
+            { "Name": "AWSManagedReconnaissanceList", "ActionToUse": { "Count": {} } }
           ]
         }
       },
@@ -2084,17 +2083,6 @@
               }
             }
           ],
-          "RuleActionOverrides": [
-            { "Name": "AllRequests",              "ActionToUse": { "Count": {} } },
-            { "Name": "SignalMissingCredential",   "ActionToUse": { "Count": {} } },
-            { "Name": "SignalNonBrowserUserAgent", "ActionToUse": { "Count": {} } },
-            { "Name": "SignalAnonymousProxy",      "ActionToUse": { "Count": {} } },
-            { "Name": "SignalAutomatedBrowser",    "ActionToUse": { "Count": {} } },
-            { "Name": "SignalKnownBotUA",          "ActionToUse": { "Count": {} } },
-            { "Name": "VolumetricIpHigh",         "ActionToUse": { "Count": {} } },
-            { "Name": "VolumetricIpMedium",       "ActionToUse": { "Count": {} } },
-            { "Name": "VolumetricSessionHigh",    "ActionToUse": { "Count": {} } }
-          ],
           "ScopeDownStatement": {
             "ByteMatchStatement": {
               "SearchString": "/api/otc/",
@@ -2109,7 +2097,7 @@
           }
         }
       },
-      "OverrideAction": { "None": {} },
+      "OverrideAction": { "Count": {} },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
