@@ -4,7 +4,6 @@ import * as creditService from '../creditService';
 import * as stagedSignupGrant from './stagedSignupGrant';
 import { grantFreeCredits, releasePendingFreeCredits, resolveFreeCreditAmount } from './freeCredits';
 import * as signupProtection from './signupProtection';
-import * as stagedSignupGrant from './stagedSignupGrant';
 
 const buildAdapters = (defaultFreeCredits: string | null = '100') => {
   const logger = { error: vi.fn() };
