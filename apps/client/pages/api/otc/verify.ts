@@ -504,8 +504,8 @@ const handler = baseApi({ auth: false })
           id: newUser.id,
           riskSignals: signals.map(type => ({ type, at: new Date() })),
         });
-        // A missing form token alone is record-only: the token fetch can be in flight, fail or be rate-limited for real humans.
-        const actionable = signals.filter(s => s !== 'signup_token_missing');
+        // Missing or expired form tokens are record-only: the token fetch can be in flight, fail, be rate-limited, or the tab left open.
+        const actionable = signals.filter(s => s !== 'signup_token_missing' && s !== 'signup_token_expired');
         if (actionable.length) {
           step = 'set throttle tier';
           const tierChange = await userService.setThrottleTier(

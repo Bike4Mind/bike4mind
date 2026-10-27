@@ -94,6 +94,8 @@ export interface ToolBuilderDeps {
   onToolLlmUsage?: ToolContext['onToolLlmUsage'];
   /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
   decide?: ToolContext['decide'];
+  /** Maps a restricted-tier substitute id to the id recorded in usage events (see ToolContext.toLedgerModel). */
+  toLedgerModel?: ToolContext['toLedgerModel'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
   imageProcessorLambdaName?: string;
@@ -438,6 +440,7 @@ export function buildSharedTools(
       slackDestination: callbacks.slackDestination,
       numberCitables: callbacks.numberCitables,
       decide: deps.decide,
+      toLedgerModel: deps.toLedgerModel,
       getAbortSignal,
     },
     storage,

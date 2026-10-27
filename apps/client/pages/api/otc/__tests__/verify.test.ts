@@ -1613,6 +1613,31 @@ describe('/api/otc/verify - signup bot-check signals', () => {
     expect(mockRecordAdminActionForActor).not.toHaveBeenCalled();
   });
 
+  it('records a lone expired form token without shadowing the account', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(['signup_token_expired']);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserUpdate).toHaveBeenCalledWith({
+      id: 'user-1',
+      riskSignals: [{ type: 'signup_token_expired', at: expect.any(Date) }],
+    });
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
+    expect(mockRecordAdminActionForActor).not.toHaveBeenCalled();
+  });
+
+  it('shadows an expired token plus honeypot with the honeypot source', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(['signup_token_expired', 'signup_honeypot']);
+    await handler(req, res);
+    expect(mockSetThrottleTier).toHaveBeenCalledWith(
+      'user-1',
+      'shadow',
+      { reason: 'signup checks: signup_token_expired,signup_honeypot', source: 'signup_honeypot' },
+      expect.anything()
+    );
+  });
+
   it('shadows with the source of the first non-missing signal', async () => {
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     withSignals(['signup_token_missing', 'signup_honeypot']);

@@ -219,7 +219,8 @@ export class ResearchModeService {
 
       this.logger.info(`🔬 [Research Mode] Configuration ${config.id} completed successfully`);
 
-      // Pricing deliberately uses the requested model on substituted runs: overcharging is less revealing than undercharging.
+      // Prices at the requested model on substituted runs (overcharging reveals less than undercharging).
+      // Chat and agent settlement still bill the model that ran; keep these in step when that changes.
       return {
         configurationId: config.id,
         model: config.model,

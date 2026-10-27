@@ -3,11 +3,15 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 
 const PURPOSE = 'signup_form';
-const EXPIRED_TOKEN_GRACE_MS = 60 * 60 * 1000;
+const AUDIENCE = 'signup-form';
 
 // issuedAtMs rather than iat: iat is whole seconds, too coarse for a sub-2s timing check.
 export const signSignupFormToken = (nowMs = Date.now()): string =>
-  jwt.sign({ purpose: PURPOSE, issuedAtMs: nowMs }, Config.JWT_SECRET, { algorithm: 'HS256', expiresIn: '1h' });
+  jwt.sign({ purpose: PURPOSE, issuedAtMs: nowMs }, Config.JWT_SECRET, {
+    algorithm: 'HS256',
+    expiresIn: '1h',
+    audience: AUDIENCE,
+  });
 
 export function evaluateSignupSignals(input: {
   formToken?: unknown;
@@ -26,7 +30,10 @@ export function evaluateSignupSignals(input: {
   }
 
   try {
-    const payload = jwt.verify(input.formToken, Config.JWT_SECRET, { algorithms: ['HS256'] }) as {
+    const payload = jwt.verify(input.formToken, Config.JWT_SECRET, {
+      algorithms: ['HS256'],
+      audience: AUDIENCE,
+    }) as {
       purpose?: unknown;
       issuedAtMs?: unknown;
     };
@@ -36,14 +43,13 @@ export function evaluateSignupSignals(input: {
       signals.push('signup_too_fast');
     }
   } catch (err) {
-    // Recently expired means the tab was left open, not automation. Past the grace window the token
-    // is treated as replayed, or one fetched token would pass every signup forever.
+    // The signature is checked before expiry, so decode is trustworthy. A genuine expired token is a tab left
+    // open, recorded but not actionable; expiry is checked before audience, so audience is re-checked here.
     if (err instanceof jwt.TokenExpiredError) {
-      // The signature is checked before expiry, so decode is trustworthy; other expired JWTs are invalid.
-      const decoded = jwt.decode(input.formToken) as { purpose?: unknown } | null;
-      if (decoded?.purpose !== PURPOSE || input.nowMs - err.expiredAt.getTime() > EXPIRED_TOKEN_GRACE_MS) {
-        signals.push('signup_token_invalid');
-      }
+      const decoded = jwt.decode(input.formToken) as { purpose?: unknown; aud?: unknown } | null;
+      signals.push(
+        decoded?.purpose === PURPOSE && decoded.aud === AUDIENCE ? 'signup_token_expired' : 'signup_token_invalid'
+      );
       return signals;
     }
     if (err instanceof jwt.JsonWebTokenError) signals.push('signup_token_invalid');

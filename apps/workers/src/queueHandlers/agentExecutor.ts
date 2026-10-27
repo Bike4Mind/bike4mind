@@ -1208,6 +1208,7 @@ async function processExecution(
     const availableCredits = organization ? orgCredits : userCredits;
     const gateIterations = enforceCredits && Boolean(modelInfo);
     // Gated at the requested model's price even on substituted runs: refusing early beats a credit cost that reveals the substitute.
+    // Per-iteration billing below still charges the model that ran, so the gate can be stricter than the bill.
     const requiredCredits =
       gateIterations && modelInfo && !isAggregationOnlyWake ? nextIterationCredits(modelInfo, lastInputTokens) : 0;
     if (availableCredits <= 0 || availableCredits < requiredCredits) {

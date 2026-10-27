@@ -54,6 +54,7 @@ export const generateTools = (
     slackDestination,
     numberCitables,
     decide,
+    toLedgerModel,
     getAbortSignal,
   }: {
     db: ToolContext['db'];
@@ -77,6 +78,7 @@ export const generateTools = (
     slackDestination?: ToolContext['slackDestination'];
     numberCitables?: ToolContext['numberCitables'];
     decide?: ToolContext['decide'];
+    toLedgerModel?: ToolContext['toLedgerModel'];
     getAbortSignal?: ToolContext['getAbortSignal'];
   },
   storage: BaseStorage,
@@ -142,6 +144,7 @@ export const generateTools = (
       ? memoizeOperationalBillingCheck({ adminSettings: db.adminSettings }, logger)
       : undefined,
     decide,
+    toLedgerModel,
     getAbortSignal,
     numberCitables,
     servingModel,

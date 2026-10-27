@@ -983,6 +983,7 @@ export class ToolBuilder {
         authOrigin: this.deps.authOrigin,
         apiKeyId: this.deps.apiKeyId,
         decide: this.deps.decide,
+        toLedgerModel: this.deps.toLedgerModel ? id => this.deps.toLedgerModel?.(id)?.id ?? id : undefined,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,

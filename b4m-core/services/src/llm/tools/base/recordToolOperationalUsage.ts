@@ -11,6 +11,8 @@ export type RecordToolOperationalUsageArgs = {
   completionInfo?: CompletionInfo;
   /** Set just before the llm.complete call so latency reflects the model call, not setup. */
   startTime: number;
+  /** Id to record instead of `model` when the tool ran a fixed model on a restricted-tier turn; wins over context.toLedgerModel. */
+  ledgerModel?: string;
 };
 
 /**
@@ -30,6 +32,7 @@ export async function recordToolOperationalUsage(
   args: RecordToolOperationalUsageArgs
 ): Promise<void> {
   const { model, completionInfo, startTime } = args;
+  const recordedModel = args.ledgerModel ?? context.toLedgerModel?.(model) ?? model;
 
   const inputTokens = completionInfo?.inputTokens ?? 0;
   const outputTokens = completionInfo?.outputTokens ?? 0;
@@ -92,8 +95,8 @@ export async function recordToolOperationalUsage(
         organization,
         sessionId: context.sessionId,
         feature: 'operations',
-        provider: modelInfo?.backend ?? 'unknown',
-        model,
+        provider: context.availableModels?.find(m => m.id === recordedModel)?.backend ?? 'unknown',
+        model: recordedModel,
         inputTokens,
         outputTokens,
         cachedInputTokens,

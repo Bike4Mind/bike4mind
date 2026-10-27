@@ -21,6 +21,7 @@ const SOURCE_BY_SIGNAL: Record<UserRiskSignalType, ThrottleSource> = {
   signup_too_fast: 'signup_timing',
   signup_token_missing: 'signup_timing',
   signup_token_invalid: 'signup_timing',
+  signup_token_expired: 'signup_timing',
 };
 
 export function throttleSourceForSignal(type: UserRiskSignalType): ThrottleSource {

@@ -24,7 +24,10 @@ describe('evaluateSignupSignals', () => {
   });
 
   it('flags garbage, wrong-secret and wrong-purpose tokens as invalid', () => {
-    const wrongSecret = jwt.sign({ purpose: 'signup_form', issuedAtMs: NOW }, 'other', { algorithm: 'HS256' });
+    const wrongSecret = jwt.sign({ purpose: 'signup_form', issuedAtMs: NOW }, 'other', {
+      algorithm: 'HS256',
+      audience: 'signup-form',
+    });
     const pendingOtc = jwt.sign({ email: 'a@b.co', attempts: 0, jti: 'j' }, 'test-secret', { algorithm: 'HS256' });
     for (const formToken of ['garbage', wrongSecret, pendingOtc, 123]) {
       expect(evaluate({ formToken })).toEqual(['signup_token_invalid']);
@@ -36,31 +39,40 @@ describe('evaluateSignupSignals', () => {
     expect(evaluate({ formToken: signSignupFormToken(NOW), nowMs: NOW + MIN })).toEqual([]);
   });
 
-  it('gives no signal for a recently expired token', () => {
-    const expired = jwt.sign({ purpose: 'signup_form', issuedAtMs: NOW }, 'test-secret', {
-      algorithm: 'HS256',
-      expiresIn: -10,
-    });
-    expect(evaluate({ formToken: expired })).toEqual([]);
+  it('flags a genuine expired token as expired regardless of age', () => {
+    for (const ageS of [7200, 25 * 3600]) {
+      const expired = jwt.sign({ purpose: 'signup_form', issuedAtMs: NOW }, 'test-secret', {
+        algorithm: 'HS256',
+        audience: 'signup-form',
+        expiresIn: -ageS,
+      });
+      expect(evaluate({ formToken: expired })).toEqual(['signup_token_expired']);
+    }
   });
 
-  it('flags an expired token signed with the secret but a different purpose', () => {
-    const expired = jwt.sign({ sub: 'user-1' }, 'test-secret', { algorithm: 'HS256', expiresIn: -3600 });
+  it('flags an expired token signed with the secret but a different purpose as invalid', () => {
+    const expired = jwt.sign({ sub: 'user-1' }, 'test-secret', {
+      algorithm: 'HS256',
+      audience: 'signup-form',
+      expiresIn: -3600,
+    });
     expect(evaluate({ formToken: expired })).toEqual(['signup_token_invalid']);
   });
 
-  it('flags a token expired longer than the grace window as invalid', () => {
-    const exp = Math.floor(NOW / 1000) - 3600;
-    const stale = jwt.sign({ purpose: 'signup_form', issuedAtMs: NOW - 7_200_000, exp }, 'test-secret', {
-      algorithm: 'HS256',
-    });
-    expect(evaluate({ formToken: stale, nowMs: exp * 1000 + 3_600_000 })).toEqual([]);
-    expect(evaluate({ formToken: stale, nowMs: exp * 1000 + 3_600_000 + 1 })).toEqual(['signup_token_invalid']);
+  it('flags tokens without the signup-form audience as invalid, expired or not', () => {
+    const claims = { purpose: 'signup_form', issuedAtMs: NOW };
+    const live = jwt.sign(claims, 'test-secret', { algorithm: 'HS256' });
+    const wrongAud = jwt.sign(claims, 'test-secret', { algorithm: 'HS256', audience: 'other' });
+    const expired = jwt.sign(claims, 'test-secret', { algorithm: 'HS256', expiresIn: -3600 });
+    for (const formToken of [live, wrongAud, expired]) {
+      expect(evaluate({ formToken })).toEqual(['signup_token_invalid']);
+    }
   });
 
   it('flags a not-yet-valid token as invalid', () => {
     const early = jwt.sign({ purpose: 'signup_form', issuedAtMs: NOW }, 'test-secret', {
       algorithm: 'HS256',
+      audience: 'signup-form',
       notBefore: 3600,
     });
     expect(evaluate({ formToken: early })).toEqual(['signup_token_invalid']);

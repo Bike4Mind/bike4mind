@@ -7,6 +7,9 @@ import { isImageServeable, isUserInitiatedAbort } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { diffLines, type Change } from 'diff';
 
+// What a normal turn runs; also the id recorded when a restricted-tier turn substitutes another model.
+const DEFAULT_EDIT_MODEL = 'gpt-4';
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- consumed via z.infer<typeof editFileSchema> at the type level; schema name is API contract
 const editFileSchema = z.object({
   fileId: z.string().describe('The ID of the file to edit'),
@@ -204,7 +207,7 @@ Return only the edited content without any markdown code blocks or explanations.
         let completionInfo: CompletionInfo | undefined;
         // The backend uses whatever model id is passed here (the interface's `model` arg
         // is authoritative), so record this same id for the usage event.
-        const editModel = config?.model ?? 'gpt-4';
+        const editModel = config?.model ?? DEFAULT_EDIT_MODEL;
         const startTime = Date.now();
         await context.llm.complete(
           editModel,
@@ -221,7 +224,12 @@ Return only the edited content without any markdown code blocks or explanations.
           }
         );
 
-        await recordToolOperationalUsage(context, { model: editModel, completionInfo, startTime });
+        await recordToolOperationalUsage(context, {
+          model: editModel,
+          ledgerModel: DEFAULT_EDIT_MODEL,
+          completionInfo,
+          startTime,
+        });
 
         // Clean up the response (remove any markdown code blocks if present)
         let cleanedContent = (editedContent || '').trim();
