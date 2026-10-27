@@ -18,6 +18,7 @@ import { registerDriveLakeResyncPoll } from './driveLakeResyncPoll';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
 const HOUR = 60 * 60_000;
+let worker: SelfHostWorker;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -26,10 +27,14 @@ beforeEach(() => {
   h.findDueForPoll.mockReset().mockResolvedValue([{ id: 'conn1', lastFullWalkAt: new Date() }]);
   h.sendToQueue.mockReset().mockResolvedValue(undefined);
 });
-afterEach(() => vi.useRealTimers());
+// Stopped here, not at the end of each test, so a failed assertion cannot leave its interval running.
+afterEach(async () => {
+  await worker.stop();
+  vi.useRealTimers();
+});
 
 it('polls hourly, not at startup, enqueuing the due connection once per tick', async () => {
-  const worker = new SelfHostWorker(logger);
+  worker = new SelfHostWorker(logger);
   registerDriveLakeResyncPoll(worker);
   worker.start();
   await vi.advanceTimersByTimeAsync(HOUR - 1);
@@ -38,16 +43,14 @@ it('polls hourly, not at startup, enqueuing the due connection once per tick', a
   expect(h.sendToQueue).toHaveBeenCalledExactlyOnceWith('ingest-queue-url', { connectionId: 'conn1' });
   await vi.advanceTimersByTimeAsync(HOUR);
   expect(h.sendToQueue).toHaveBeenCalledTimes(2);
-  await worker.stop();
 });
 
 it.each(['EnableDataLakes', 'EnableDataLakeDrivePoll'])('does nothing when %s is off', async flag => {
   h.getSettingsValue.mockImplementation(async (key: string) => key !== flag);
-  const worker = new SelfHostWorker(logger);
+  worker = new SelfHostWorker(logger);
   registerDriveLakeResyncPoll(worker);
   worker.start();
   await vi.advanceTimersByTimeAsync(HOUR);
   expect(h.findDueForPoll).not.toHaveBeenCalled();
   expect(h.sendToQueue).not.toHaveBeenCalled();
-  await worker.stop();
 });
