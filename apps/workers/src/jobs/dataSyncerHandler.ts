@@ -162,8 +162,9 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
       const sourceFilter = syncSourceFilter(collectionName);
       if (Object.keys(sourceFilter).length > 0) {
         console.log(
-          `  - Excluding ${SENSITIVE_ADMIN_SETTING_NAMES.size} sensitive settings from the cross-stage sync ` +
-            `(encrypted under the source stage's key; a preview cannot decrypt them).`
+          `  - Excluding ${SENSITIVE_ADMIN_SETTING_NAMES.size} sensitive settings (encrypted under the source ` +
+            `stage's key; a preview cannot decrypt them) and ${PREVIEW_UNSYNCED_ADMIN_SETTING_NAMES.length} ` +
+            `stage-specific settings from the cross-stage sync.`
         );
       }
 
