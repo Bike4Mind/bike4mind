@@ -12,21 +12,24 @@
  *   app/premium-generated/premiumReplyAccessories.generated.ts - chat reply accessory slot
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
- *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
- *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
- *   server/premium-generated/premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
- *   app/premium-generated/premiumAdminSettings.generated.ts - contributed admin setting definitions
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
- *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
- *   server/premium-generated/premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
- *   app/premium-generated/premiumEntitlementGrants.generated.ts - entitlement registry rows
- *   app/premium-generated/premiumApiKeyScopes.generated.ts - contributed API-key scopes
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
+ *
+ * and, because apps/workers reaches them too, into packages/server-utils/src/premium-generated/:
+ *
+ *   premiumLlmTools.generated.ts - LLM tool contributions
+ *   premiumSystemPrompts.generated.ts - system prompt contributions
+ *   premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
+ *   premiumAdminSettings.generated.ts - contributed admin setting definitions
+ *   premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
+ *   premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
+ *   premiumEntitlementGrants.generated.ts - entitlement registry rows
+ *   premiumApiKeyScopes.generated.ts - contributed API-key scopes
  *
  * Two distinct "empty" forms when no premium packages are present:
  *   SPA/nav   -> emit the file with an empty exported array
@@ -37,7 +40,7 @@
  * real imports for an unlinked package fails typecheck/build repo-wide, which is
  * worse than the overlay's features being un-wired until it is linked.
  *
- * Relative-import glue (infra + migrations + contracts) is exempt: it imports overlay source by
+ * Relative-import glue (infra, migrations, contracts and the overlay-importing server-utils glue) is exempt: it imports overlay source by
  * relative path and needs no link. Note: infra glue itself is link-independent, but
  * the handler stubs it references (from generateServerHandlerStubs) are bare-specifier
  * and therefore omitted in the unlinked case. This is caught at deploy/bundle time
@@ -68,6 +71,9 @@ const REPO_ROOT = resolve(CLIENT_ROOT, '../..');
 const PREMIUM_DIR = join(REPO_ROOT, 'packages/premium');
 const GENERATED_DIR = join(CLIENT_ROOT, 'app/premium-generated');
 const INFRA_GENERATED_DIR = join(REPO_ROOT, 'infra/premium-generated');
+// Glue that apps/workers reaches as well as apps/client. No overlay is linked into this package, so
+// the generators that import an overlay emit relative imports (see relativeOverlayImport()).
+const SERVER_UTILS_GENERATED_DIR = join(REPO_ROOT, 'packages/server-utils/src/premium-generated');
 
 // --- Discover premium packages ---
 
@@ -625,7 +631,7 @@ function readWorkspaceKeyTable(pkg, field, { allowDisplay = false } = {}) {
 const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*(__[A-Za-z0-9_.:-]+)?$/;
 
 function generateWorkspaceDeniedTools(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts');
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumWorkspaceDeniedTools.generated.ts');
   const typeImport = `import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';`;
   const field = 'workspaceDeniedTools';
 
@@ -824,8 +830,8 @@ const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
 const ENTITLEMENT_GRANT_FIELDS = ['tagGrants', 'impliedEntitlements', 'signupCredits', 'internalStaffEntitlements'];
 
 function generateEntitlementGrants(packages) {
-  const outPath = join(GENERATED_DIR, 'premiumEntitlementGrants.generated.ts');
-  const typeImport = `import type { PremiumEntitlementGrants } from '../premiumContract';`;
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumEntitlementGrants.generated.ts');
+  const typeImport = `import type { PremiumEntitlementGrants } from '@bike4mind/common';`;
 
   const fail = (pkg, detail) => {
     throw new Error(`[codegen] invalid entitlementGrants from package "${pkg.name}": ${detail}`);
@@ -972,8 +978,8 @@ const API_KEY_SCOPE_ENDPOINT_RE = /^(GET|POST|PUT|PATCH|DELETE) \/[A-Za-z0-9._~:
 const API_KEY_SCOPE_ENDPOINT_MAX = 160;
 
 function generateApiKeyScopes(packages) {
-  const outPath = join(GENERATED_DIR, 'premiumApiKeyScopes.generated.ts');
-  const typeImport = `import type { PremiumApiKeyScope } from '../premiumContract';`;
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumApiKeyScopes.generated.ts');
+  const typeImport = `import type { PremiumApiKeyScope } from '@bike4mind/common';`;
 
   const fail = (pkg, detail) => {
     throw new Error(`[codegen] invalid apiKeyScopes from package "${pkg.name}": ${detail}`);
@@ -1151,6 +1157,24 @@ function resolveExportFromToSourceFile(pkg, exportFrom) {
   return resolved !== null && existsSync(resolved) ? resolved : null;
 }
 
+// The overlay's declared export of `exportFrom`, as an import specifier relative to `outPath`'s dir.
+// For glue generated outside apps/client, where pnpm links no overlay, so a bare specifier fails to
+// resolve; same declared-path reasoning as generateMigrations(). Throws when the export can't be
+// resolved, because silently dropping the import would un-wire the overlay.
+function relativeOverlayImport(pkg, exportFrom, field, outPath) {
+  const sourceFile = resolveExportToDeclaredPath(pkg, exportFrom);
+  if (!sourceFile) {
+    throw new Error(
+      `[codegen] cannot resolve ${field} ${JSON.stringify(exportFrom)} from package "${pkg.name}" ` +
+        `to a declared path - its package.json "exports" map has no plain-string entry for that ` +
+        `subpath. A bare specifier can't be used from ${relative(REPO_ROOT, dirname(outPath))}.`
+    );
+  }
+  let rel = relative(dirname(outPath), sourceFile).split(sep).join('/').replace(/\.tsx?$/, '');
+  if (!rel.startsWith('.')) rel = `./${rel}`;
+  return rel;
+}
+
 // Next.js's Pages Router requires `export const config = {...}` to be a literal,
 // statically-analyzable object declared DIRECTLY in the route file - a bare
 // `export { config } from 'source'` re-export is not reliably picked up by Next's
@@ -1313,10 +1337,8 @@ function generateServerHandlerStubs(packages) {
 // `externalTools`, so it must exist in BOTH forms (same annotate-both-forms
 // rule as routes/nav): present -> aggregated spread of each package's map;
 // absent -> empty object typed with the core-owned ToolDefinition contract.
-// Written after generateServerHandlerStubs, whose wipe clears the whole
-// server/premium-generated/ dir.
 function generateLlmTools(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumLlmTools.generated.ts');
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumLlmTools.generated.ts');
   const typeImport = `import type { ToolDefinition } from '@bike4mind/services/llm/tools';`;
 
   const contributors = packages.filter(p => p.contributions.llmToolsExport);
@@ -1332,7 +1354,10 @@ function generateLlmTools(packages) {
   contributors.forEach(p => assertModuleSpecifier(p.contributions.llmToolsExport, p.name, 'llmToolsExport'));
 
   const imports = contributors
-    .map((p, i) => `import { llmTools as tools${i} } from '${p.contributions.llmToolsExport}';`)
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.llmToolsExport, 'llmToolsExport', outPath);
+      return `import { llmTools as tools${i} } from '${spec}';`;
+    })
     .join('\n');
 
   const spreads = contributors.map((_, i) => `  ...tools${i}`).join(',\n');
@@ -1344,8 +1369,8 @@ function generateLlmTools(packages) {
 }
 
 function generateSystemPrompts(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumSystemPrompts.generated.ts');
-  const typeImport = `import type { DefaultSystemPrompt } from '@server/utils/systemPrompts/defaults';`;
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumSystemPrompts.generated.ts');
+  const typeImport = `import type { DefaultSystemPrompt } from '../utils/systemPrompts/defaults';`;
 
   const contributors = packages.filter(p => p.contributions.systemPromptsExport);
 
@@ -1360,7 +1385,10 @@ function generateSystemPrompts(packages) {
   contributors.forEach(p => assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport'));
 
   const imports = contributors
-    .map((p, i) => `import { systemPrompts as prompts${i} } from '${p.contributions.systemPromptsExport}';`)
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.systemPromptsExport, 'systemPromptsExport', outPath);
+      return `import { systemPrompts as prompts${i} } from '${spec}';`;
+    })
     .join('\n');
 
   const spreads = contributors.map((_, i) => `  ...prompts${i}`).join(',\n');
@@ -1410,7 +1438,7 @@ function generatePartnerSignupHooks(packages) {
 // profile and tool-map guards. The workers' executor registry imports this file statically, so like
 // the LLM tools it must exist in BOTH forms.
 function generateAgentExtensions(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumAgentExtensions.generated.ts');
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumAgentExtensions.generated.ts');
   const typeImport = `import type { AgentExtensionContribution } from '@bike4mind/agents';`;
 
   const contributors = packages.filter(p => p.contributions.agentExtensionsExport);
@@ -1428,7 +1456,10 @@ function generateAgentExtensions(packages) {
   );
 
   const imports = contributors
-    .map((p, i) => `import { agentExtensions as extensions${i} } from '${p.contributions.agentExtensionsExport}';`)
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.agentExtensionsExport, 'agentExtensionsExport', outPath);
+      return `import { agentExtensions as extensions${i} } from '${spec}';`;
+    })
     .join('\n');
 
   const items = contributors.map((_, i) => `  extensions${i}`).join(',\n');
@@ -1443,13 +1474,13 @@ function generateAgentExtensions(packages) {
 //
 // Premium packages can contribute admin setting definitions (b4mContributions.adminSettingsExport ->
 // a module exporting `adminSettings: SettingDefinition<string>[]`, built with core's make*Setting
-// factories). lib/settings/registerContributedSettings.ts imports this file for its side effect on
+// factories). server-utils' lib/settings/registerContributedSettings.ts imports this file for its side effect on
 // both the server and the client, so it must exist in BOTH forms and stay serializable data. Whatever the
 // export module imports reaches the client bundle: no server-only imports, and no secret defaults.
-const ADMIN_SETTINGS_REGISTER_MODULE = join(CLIENT_ROOT, 'lib/settings/registerContributedSettings');
+const ADMIN_SETTINGS_REGISTER_MODULE = join(REPO_ROOT, 'packages/server-utils/src/lib/settings/registerContributedSettings');
 
 function generateAdminSettings(packages) {
-  const outPath = join(GENERATED_DIR, 'premiumAdminSettings.generated.ts');
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumAdminSettings.generated.ts');
   const typeImport = `import type { SettingDefinition } from '@bike4mind/common';`;
 
   const contributors = packages.filter(p => p.contributions.adminSettingsExport);
@@ -1465,7 +1496,10 @@ function generateAdminSettings(packages) {
   contributors.forEach(p => assertModuleSpecifier(p.contributions.adminSettingsExport, p.name, 'adminSettingsExport'));
 
   const imports = contributors
-    .map((p, i) => `import { adminSettings as settings${i} } from '${p.contributions.adminSettingsExport}';`)
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.adminSettingsExport, 'adminSettingsExport', outPath);
+      return `import { adminSettings as settings${i} } from '${spec}';`;
+    })
     .join('\n');
 
   const items = contributors.map((_, i) => `  ...settings${i}`).join(',\n');
@@ -1482,7 +1516,7 @@ const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 // workspace or be registered by the same package via workspaceSurfaceIds. Both generated
 // forms must exist so builds without overlays never import an absent package.
 function generateWorkspaceSessionSettings(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts');
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumWorkspaceSessionSettings.generated.ts');
   const typeImport = `import type { WorkspaceSessionSettingsTable } from '@bike4mind/common';`;
   const field = 'workspaceSessionSettingsExport';
 
@@ -1531,11 +1565,11 @@ function generateWorkspaceSessionSettings(packages) {
       if (merged.has(workspaceId)) {
         throw new Error(
           `[codegen] duplicate ${field} workspace id "${workspaceId}": declared by both ` +
-            `"${merged.get(workspaceId).pkgName}" and "${pkg.name}"`
+            `"${merged.get(workspaceId).pkg.name}" and "${pkg.name}"`
         );
       }
       assertModuleSpecifier(specifier, pkg.name, field);
-      merged.set(workspaceId, { pkgName: pkg.name, specifier });
+      merged.set(workspaceId, { pkg, specifier });
     }
   }
 
@@ -1549,7 +1583,10 @@ function generateWorkspaceSessionSettings(packages) {
 
   const contributions = [...merged];
   const imports = contributions
-    .map(([, { specifier }], i) => `import { workspaceSessionSettings as settings${i} } from '${specifier}';`)
+    .map(([, { pkg, specifier }], i) => {
+      const spec = relativeOverlayImport(pkg, specifier, field, outPath);
+      return `import { workspaceSessionSettings as settings${i} } from '${spec}';`;
+    })
     .join('\n');
   const entries = contributions.map(([workspaceId], i) => `  ${JSON.stringify(workspaceId)}: settings${i},`).join('\n');
 
@@ -1998,6 +2035,12 @@ if (linkedPackages.length < packages.length && process.env.CI === 'true') {
 }
 
 ensureDir(GENERATED_DIR);
+ensureDir(SERVER_UTILS_GENERATED_DIR);
+// These used to be generated under apps/client; drop a stale copy so nothing resolves to it.
+// generateServerHandlerStubs' wipe already covers the server/premium-generated ones.
+for (const name of ['premiumAdminSettings', 'premiumEntitlementGrants', 'premiumApiKeyScopes']) {
+  rmSync(join(GENERATED_DIR, `${name}.generated.ts`), { force: true });
+}
 // Bare-specifier glue: linked packages only (an unresolvable import fails every build).
 generateSpaRoutes(linkedPackages);
 generateNavItems(linkedPackages);
@@ -2006,17 +2049,17 @@ generateNotebookSidenavs(linkedPackages);
 generateReplyAccessories(linkedPackages);
 generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
-generateLlmTools(linkedPackages);
-generateSystemPrompts(linkedPackages);
 generatePartnerSignupHooks(linkedPackages);
-generateAgentExtensions(linkedPackages);
-generateAdminSettings(linkedPackages);
-generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
 generateContracts(packages);
 generateInfraGlue(packages);
+generateLlmTools(packages);
+generateSystemPrompts(packages);
+generateAgentExtensions(packages);
+generateAdminSettings(packages);
+generateWorkspaceSessionSettings(packages);
 // No-import glue: pure data copied out of package.json, so it imports the overlay
 // not at all and is link-independent for an even simpler reason than the group above.
 generateLocalStorageKeyPrefixes(packages);
