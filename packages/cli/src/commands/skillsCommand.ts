@@ -277,7 +277,10 @@ export async function publishToMarket(
     });
     log(`Published listing "${listing.name}" (${listing.visibility}): ${describeVersion(version)}`);
   } catch (error) {
-    throw new Error(`Publishing to the Skill Market failed: ${serverMessage(error)}`);
+    const required = (error as { response?: { data?: { required_scopes?: string[] } } }).response?.data
+      ?.required_scopes;
+    const hint = required?.length ? ` (the API key needs ${required.join(' or ')})` : '';
+    throw new Error(`Publishing to the Skill Market failed: ${serverMessage(error)}${hint}`);
   }
 }
 

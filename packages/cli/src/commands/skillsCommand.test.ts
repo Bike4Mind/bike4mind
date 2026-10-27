@@ -543,6 +543,17 @@ describe('publishToMarket', () => {
       'Publishing to the Skill Market failed: The API key lacks skills:write'
     );
   });
+
+  it("names the scope a key's 403 asks for", async () => {
+    const a = api([]);
+    a.get.mockRejectedValue({
+      response: { status: 403, data: { error: 'Insufficient scope', required_scopes: ['skills:write'] } },
+    });
+    await expect(publishToMarket('s1', { visibility: 'public' }, a as never, () => {})).rejects.toThrow(
+      'Publishing to the Skill Market failed: Insufficient scope (the API key needs skills:write)'
+    );
+    expect(a.post).not.toHaveBeenCalled();
+  });
 });
 
 describe('handleSkillsCommand with an API key', () => {
