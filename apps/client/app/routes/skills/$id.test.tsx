@@ -90,6 +90,12 @@ describe('SkillDetailPage team marketplace', () => {
     );
     fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
     expect(screen.queryByTestId('claude-code-dialog-marketplace')).not.toBeInTheDocument();
+    expect(screen.getByTestId('skill-claude-code-btn')).toBeDisabled();
+  });
+
+  it('still offers the tab when the listing has no plugin name yet', () => {
+    h.listings = [{ ...approvedListing, claudePluginName: undefined }];
+    expect(openDialog()).toEqual({ org: ORG, skillName: 'Hello Team' });
   });
 
   it.each([

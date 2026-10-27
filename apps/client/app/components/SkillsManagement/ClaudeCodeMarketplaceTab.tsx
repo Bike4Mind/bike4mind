@@ -29,8 +29,7 @@ export const findMarketplaceListing = (
     if (
       listing.sourceSkillId !== skillId ||
       listing.visibility !== 'organization' ||
-      !listing.currentApprovedVersionId ||
-      !listing.claudePluginName
+      !listing.currentApprovedVersionId
     ) {
       continue;
     }

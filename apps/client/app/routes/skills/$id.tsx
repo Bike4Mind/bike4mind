@@ -133,6 +133,7 @@ const SkillDetailPage: FC = () => {
               variant="outlined"
               startDecorator={<TerminalIcon />}
               onClick={() => setClaudeCodeOpen(true)}
+              loading={marketplacePending}
               data-testid="skill-claude-code-btn"
             >
               Use in Claude Code

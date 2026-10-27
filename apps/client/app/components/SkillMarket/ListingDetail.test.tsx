@@ -15,6 +15,7 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 const hooks = vi.hoisted(() => ({
   detail: vi.fn(),
   mutation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  me: undefined as { organizations: Array<{ id: string; name: string }> } | undefined,
 }));
 
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
@@ -24,7 +25,10 @@ vi.mock('@client/app/hooks/data/skillMarket', () => ({
   useRateListing: hooks.mutation,
   useReportListing: hooks.mutation,
   useModerateListing: hooks.mutation,
-  useMarketMe: () => ({ data: undefined }),
+  useMarketMe: () => ({ data: hooks.me }),
+}));
+vi.mock('@client/app/components/SkillsManagement/ClaudeCodeMarketplaceTab', () => ({
+  default: (props: unknown) => <div data-testid="marketplace-tab-props">{JSON.stringify(props)}</div>,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -82,6 +86,7 @@ const renderListing = (data: ListingDetailData, token = 'secret') => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hooks.me = undefined;
   writeText.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
 });
@@ -133,5 +138,28 @@ describe('ListingDetail "Use in Claude Code"', () => {
     fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
     expect(screen.getByTestId('skill-claude-code-dialog')).toBeInTheDocument();
     expect(screen.queryByTestId('skill-claude-code-import-hint')).not.toBeInTheDocument();
+  });
+
+  it('passes the org listing name to the team marketplace tab', () => {
+    hooks.me = { organizations: [{ id: 'org1', name: 'Acme Labs' }] };
+    const data = makeData();
+    renderListing(
+      makeData({
+        listing: {
+          ...data.listing,
+          name: 'Hello Team',
+          visibility: 'organization',
+          organizationId: 'org1',
+          claudePluginName: 'hello-team-abc123',
+        },
+      })
+    );
+    fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+    expect(JSON.parse(screen.getByTestId('marketplace-tab-props').textContent ?? '')).toEqual({
+      org: { id: 'org1', name: 'Acme Labs' },
+      pluginName: 'hello-team-abc123',
+      skillName: 'Hello Team',
+    });
   });
 });
