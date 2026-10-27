@@ -1,6 +1,7 @@
 import { Checkbox, Chip, Stack, Typography } from '@mui/joy';
 import { MAX_BULK_ABUSE_BATCH } from '@bike4mind/common';
 import type { EmailDomainGroup } from '@client/app/utils/signupAnomaly';
+import { SIGNUP_SIGNAL_LABELS } from '@client/app/utils/signupSignals';
 import { DataTable } from '../shared/DataTable';
 import type { UserSelection } from './Views/SlimUsersView';
 
@@ -90,16 +91,21 @@ export function EmailDomainGroups({
             id: 'hint',
             label: 'Review signal',
             render: group =>
-              group.likelyAutomated ? (
-                <Chip
-                  color="warning"
-                  variant="soft"
-                  title="Domain signup count exceeds the configured hourly baseline. Review before taking action."
-                >
-                  Likely automated
-                </Chip>
+              group.signals.length > 0 ? (
+                <Stack direction="row" gap={0.5} flexWrap="wrap">
+                  {group.signals.map(signal => (
+                    <Chip
+                      key={signal}
+                      color="warning"
+                      variant="soft"
+                      title={`${SIGNUP_SIGNAL_LABELS[signal].description} Review before taking action.`}
+                    >
+                      {SIGNUP_SIGNAL_LABELS[signal].label}
+                    </Chip>
+                  ))}
+                </Stack>
               ) : (
-                'No burst signal'
+                'No domain signal'
               ),
           },
         ]}
