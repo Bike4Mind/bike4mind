@@ -17,6 +17,7 @@ import SkillUpdatePanel from '@client/app/components/SkillMarket/SkillUpdatePane
 import PublishDialog from '@client/app/components/SkillMarket/PublishDialog';
 import MarketStatusBadge from '@client/app/components/SkillMarket/MarketStatusBadge';
 import ClaudeCodeExportDialog from '@client/app/components/SkillsManagement/ClaudeCodeExportDialog';
+import { SupportingFiles } from '@client/app/components/SkillMarket/parts';
 
 const SkillDetailPage: FC = () => {
   const { id } = useParams({ strict: false }) as { id: string };
@@ -190,6 +191,8 @@ const SkillDetailPage: FC = () => {
             {skill.body}
           </Box>
         </Card>
+
+        <SupportingFiles files={skill.files} />
       </Stack>
 
       {canManageSharing && shareOpen ? <SkillShareDialog onClose={() => setShareOpen(false)} skill={skill} /> : null}
