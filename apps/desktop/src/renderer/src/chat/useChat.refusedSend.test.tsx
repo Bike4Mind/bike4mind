@@ -23,8 +23,8 @@ let root: Root;
 let host: HTMLElement;
 let conversation: ConversationController;
 
-function Harness() {
-  conversation = useConversation('s1', () => {});
+function Harness({ id = 's1' }: { id?: string }) {
+  conversation = useConversation(id, () => {});
   return null;
 }
 
@@ -76,6 +76,22 @@ describe('a refused send', () => {
       sent = await conversation.send('hello');
     });
     expect(sent).toBe(true);
+    expect(conversation.returned).toBeNull();
+  });
+
+  it('does not hand the text to another conversation opened before the refusal', async () => {
+    let refuse!: (value: { ok: false; error: string }) => void;
+    sendMessage.mockReturnValue(new Promise(done => (refuse = done)));
+    await act(async () => root.render(<Harness />));
+    let sent: Promise<boolean> | undefined;
+    await act(async () => {
+      sent = conversation.send('for the first one');
+    });
+    await act(async () => root.render(<Harness id="s2" />));
+    await act(async () => {
+      refuse({ ok: false, error: 'No local model is available.' });
+      await sent;
+    });
     expect(conversation.returned).toBeNull();
   });
 });

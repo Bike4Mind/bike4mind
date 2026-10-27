@@ -878,7 +878,7 @@ export function useConversation(
         discardOptimistic();
         setSendError(result.error);
         // The box was cleared on send; a refused turn must not cost the user what they typed.
-        if (prompt)
+        if (prompt && activeSessionId.current === sessionId)
           setReturned({
             id: ++returnBatch.current,
             messages: [{ id: 'refused', sessionId, text: prompt, queuedAt: new Date().toISOString() }],
