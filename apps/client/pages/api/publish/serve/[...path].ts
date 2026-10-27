@@ -261,7 +261,9 @@ const ASSET_CSP = [
   withAppHost("frame-ancestors 'self'"),
 ].join('; ');
 
-// Images that miss a gated render's inline budget fall back to a signed storage URL.
+// Images that miss a gated render's inline budget fall back to a signed storage URL. Without a
+// browser signing origin that fallback is gone and they are dropped instead, which still beats
+// losing the stylesheet.
 const isSignableImage = (path: string) => !!inlineTypeFor(path)?.startsWith('image/');
 
 // Share links are served same-origin, sandboxed, and must never be cached: no-store

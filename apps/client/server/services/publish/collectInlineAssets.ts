@@ -21,8 +21,8 @@ import type { SandboxAsset } from './renderSandboxedBundle';
  * Fetches run concurrently (bounded by CONCURRENCY) for latency, then the caps are
  * applied in a deterministic SECOND pass over the manifest order (no-fallback assets
  * first when `hasFallback` is given) - so which assets land in-budget never depends on
- * network race ordering. Skipped assets are reported
- * (never silently dropped) so the caller can surface a degraded-render notice.
+ * network race ordering. Skipped assets are reported (never silently dropped) so the
+ * caller can surface a degraded-render notice.
  * `index.html` is excluded - it is the document, not an inlined asset. I/O is injected
  * via `load` to keep this unit-testable.
  */

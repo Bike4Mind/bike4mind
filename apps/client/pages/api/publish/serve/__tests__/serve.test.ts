@@ -3852,6 +3852,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     expect(res._getData() as string).toContain('.slide{color:red}');
     const signedPngs = mockGetSignedUrl.mock.calls.filter(([key]) => String(key).endsWith('.png'));
     expect(signedPngs.length).toBeGreaterThan(0);
+    expect(mockGetSignedUrl.mock.calls.some(([key]) => String(key).endsWith('.css'))).toBe(false);
   });
 
   describe('a gated render where storage cannot sign for the browser', () => {
