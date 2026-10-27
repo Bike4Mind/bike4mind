@@ -8,6 +8,7 @@ import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
+import type { AdminPermissionId } from '../../adminPermissions';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -268,6 +269,7 @@ export interface IUser extends ICreditHolder {
   hasUsablePassword?: boolean;
   groups: Array<string> | null;
   isAdmin: boolean;
+  adminPermissions?: AdminPermissionId[];
   storageLimit: number /** Effective storage limit in decimal MB */;
   /** Manual or custom signup allocation; null means use plan/default. */
   storageLimitOverride?: number | null;
