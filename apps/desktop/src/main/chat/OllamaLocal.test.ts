@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { CompletionMessage } from './completions';
+import type { CompletionStreamEvent } from './streamEvents';
 import { OllamaLocal } from './OllamaLocal';
 
 describe('OllamaLocal', () => {
@@ -41,7 +43,7 @@ describe('OllamaLocal', () => {
         id: 'local:ollama:qwen3:8b',
         supportsTools: true,
         thinkingToggle: true,
-        contextWindow: 4096,
+        contextWindow: 16384,
       }),
     ]);
     expect(vi.mocked(fetch).mock.calls.every(([input]) => String(input).startsWith('http://127.0.0.1:11434/'))).toBe(
@@ -50,18 +52,19 @@ describe('OllamaLocal', () => {
   });
 
   it.each([
-    { info: {}, parameters: undefined, expected: 4096 },
-    { info: { 'llama.context_length': 32768 }, parameters: undefined, expected: 4096 },
+    { info: {}, parameters: undefined, expected: 16384 },
+    { info: { 'llama.context_length': 32768 }, parameters: undefined, expected: 16384 },
     { info: { 'llama.context_length': 2048 }, parameters: undefined, expected: 2048 },
-    { info: { 'llama.context_length': -1 }, parameters: undefined, expected: 4096 },
-    { info: { 'llama.context_length': '32768' }, parameters: undefined, expected: 4096 },
-    { info: { 'llama.context_length': 32768 }, parameters: 'num_ctx 8192', expected: 8192 },
+    { info: { 'llama.context_length': -1 }, parameters: undefined, expected: 16384 },
+    { info: { 'llama.context_length': '32768' }, parameters: undefined, expected: 16384 },
+    { info: { 'llama.context_length': 32768 }, parameters: 'num_ctx 8192', expected: 16384 },
+    { info: { 'llama.context_length': 131072 }, parameters: 'num_ctx 32768', expected: 32768 },
     { info: { 'llama.context_length': 2048 }, parameters: 'num_ctx 8192', expected: 2048 },
-    { info: {}, parameters: 'temperature 0.7\nnum_ctx 8192\n', expected: 8192 },
+    { info: {}, parameters: 'temperature 0.7\nnum_ctx 65536\n', expected: 65536 },
     ...['0', '-1', 'Infinity', 'NaN', '1.5', 'invalid'].map(value => ({
       info: {},
       parameters: `num_ctx ${value}`,
-      expected: 4096,
+      expected: 16384,
     })),
   ])('uses the same effective context for discovery and inference: %j', async ({ info, parameters, expected }) => {
     const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
@@ -132,6 +135,28 @@ describe('OllamaLocal', () => {
     ]);
   });
 
+  it('streams chat through the fetch it is given and keeps the short calls on global fetch', async () => {
+    const globalFetch = vi.fn(async (input: unknown, _init?: RequestInit) =>
+      String(input).endsWith('/api/tags')
+        ? Response.json({ models: [{ name: 'llama' }] })
+        : Response.json({ capabilities: ['completion'] })
+    );
+    vi.stubGlobal('fetch', globalFetch);
+    const given = vi.fn(
+      async (_url: string, _init: RequestInit) =>
+        new Response(`${JSON.stringify({ message: { content: 'hi' }, done: true })}\n`)
+    );
+    const local = new OllamaLocal(given);
+    await local.models();
+    await local.stream({ model: 'local:ollama:llama', messages: [{ role: 'user', content: 'hi' }] }, () => undefined);
+    expect(given.mock.calls.map(([url]) => url)).toEqual(['http://127.0.0.1:11434/api/chat']);
+    expect(globalFetch.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://127.0.0.1:11434/api/tags',
+      'http://127.0.0.1:11434/api/show',
+      'http://127.0.0.1:11434/api/show',
+    ]);
+  });
+
   const streamWith = async (body: string, request: Partial<Parameters<OllamaLocal['stream']>[0]> = {}) => {
     const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) =>
       String(input).endsWith('/api/show')
@@ -176,7 +201,9 @@ describe('OllamaLocal', () => {
     });
     expect(sent.model).toBe('llama');
     expect(sent.think).toBe(true);
-    expect(sent.options).toEqual({ num_ctx: 4096, num_predict: 256 });
+    expect(sent.options).toEqual({ num_ctx: 16384, num_predict: 256 });
+    expect(sent.truncate).toBe(false);
+    expect(sent.shift).toBe(false);
     expect(sent.messages).toEqual([
       { role: 'user', content: 'look' },
       {
@@ -289,6 +316,191 @@ describe('OllamaLocal', () => {
     await expect(streamWith(`${JSON.stringify({ error: 'model requires more memory' })}\n`)).rejects.toThrow(
       'model requires more memory'
     );
+  });
+
+  describe('context overflow', () => {
+    const overflow = (tokens: number) =>
+      Response.json(
+        { error: `request (${tokens} tokens) exceeds the available context size (2048 tokens), try increasing it` },
+        { status: 400 }
+      );
+    const chatWith = (...replies: (() => Response)[]) => {
+      const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) =>
+        String(input).endsWith('/api/show')
+          ? Response.json({ capabilities: ['completion'], model_info: { 'llama.context_length': 2048 } })
+          : (replies.shift() ?? (() => new Response(`${JSON.stringify({ done: true })}\n`)))()
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const sent = () =>
+        fetchMock.mock.calls
+          .filter(([input]) => String(input).endsWith('/api/chat'))
+          .map(([, init]) => (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages);
+      return { sent };
+    };
+    const conversation = (oldChars: number) => [
+      { role: 'system' as const, content: 'instructions' },
+      { role: 'user' as const, content: 'x'.repeat(oldChars) },
+      { role: 'assistant' as const, content: 'old answer' },
+      { role: 'user' as const, content: 'latest' },
+    ];
+
+    it('sends a conversation the estimate says is too long whole while Ollama accepts it', async () => {
+      const { sent } = chatWith();
+      const onTrimmed = vi.fn();
+      const messages: CompletionMessage[] = [{ role: 'system', content: 'instructions' }];
+      for (let turn = 0; turn < 30; turn++)
+        messages.push(
+          { role: 'user', content: `u${turn}${'x'.repeat(300)}` },
+          { role: 'assistant', content: `a${turn}${'x'.repeat(300)}` }
+        );
+      await new OllamaLocal().stream({ model: 'local:ollama:llama', messages }, () => undefined, undefined, onTrimmed);
+      expect(sent()).toHaveLength(1);
+      expect(sent()[0]).toHaveLength(61);
+      expect(onTrimmed).not.toHaveBeenCalled();
+    });
+
+    it('drops the oldest turns and retries once when Ollama measures the prompt as too long', async () => {
+      const { sent } = chatWith(
+        () => overflow(3000),
+        () => new Response(`${JSON.stringify({ done: true, prompt_eval_count: 1500, eval_count: 5 })}\n`)
+      );
+      const onTrimmed = vi.fn();
+      const events: CompletionStreamEvent[] = [];
+      await new OllamaLocal().stream(
+        { model: 'local:ollama:llama', messages: conversation(4_000) },
+        event => events.push(event),
+        undefined,
+        onTrimmed
+      );
+      expect(sent().map(messages => messages.map(message => message.content.slice(0, 12)))).toEqual([
+        ['instructions', 'xxxxxxxxxxxx', 'old answer', 'latest'],
+        ['instructions', 'latest'],
+      ]);
+      expect(onTrimmed).toHaveBeenCalledWith(2);
+      // The whole conversation's size, which is what the next turn's auto-compaction reads.
+      expect(events.at(-1)).toMatchObject({ usage: { inputTokens: 3000, outputTokens: 5 } });
+    });
+
+    it('records the whole size as soon as the trimmed retry is accepted, before any reply arrives', async () => {
+      chatWith(
+        () => overflow(3000),
+        () => new Response(`${JSON.stringify({ message: { content: 'Partial' } })}\n`)
+      );
+      const events: CompletionStreamEvent[] = [];
+      await expect(
+        new OllamaLocal().stream({ model: 'local:ollama:llama', messages: conversation(4_000) }, event =>
+          events.push(event)
+        )
+      ).rejects.toThrow('before the reply finished');
+      expect(events[0]).toEqual({ type: 'content', usage: { inputTokens: 3000 } });
+    });
+
+    it('fails with the measured size when the latest turn alone does not fit', async () => {
+      const { sent } = chatWith(() => overflow(6000));
+      const onTrimmed = vi.fn();
+      await expect(
+        new OllamaLocal().stream(
+          {
+            model: 'local:ollama:llama',
+            messages: [
+              { role: 'system', content: 'instructions' },
+              { role: 'user', content: 'x'.repeat(20_000) },
+            ],
+          },
+          () => undefined,
+          undefined,
+          onTrimmed
+        )
+      ).rejects.toThrow('take 6000 tokens, more than the 2048');
+      expect(sent()).toHaveLength(1);
+      expect(onTrimmed).not.toHaveBeenCalled();
+    });
+
+    it('fails with the measured size when the trimmed prompt still does not fit', async () => {
+      const { sent } = chatWith(
+        () => overflow(3000),
+        () => overflow(2100)
+      );
+      await expect(
+        new OllamaLocal().stream({ model: 'local:ollama:llama', messages: conversation(4_000) }, () => undefined)
+      ).rejects.toThrow('take 2100 tokens, more than the 2048');
+      expect(sent()).toHaveLength(2);
+    });
+
+    const turns = (count: number, chars: number): CompletionMessage[] => [
+      { role: 'system', content: 'instructions' },
+      ...Array.from({ length: count }, (_, turn): CompletionMessage[] => [
+        { role: 'user', content: `u${turn}${'x'.repeat(chars)}` },
+        { role: 'assistant', content: `a${turn}${'y'.repeat(chars / 5)}` },
+      ]).flat(),
+      { role: 'user', content: 'latest' },
+    ];
+
+    it('rescales from each refusal and retries until the prompt fits', async () => {
+      const { sent } = chatWith(
+        () => overflow(1900),
+        () => overflow(2000)
+      );
+      const onTrimmed = vi.fn();
+      await new OllamaLocal().stream(
+        { model: 'local:ollama:llama', messages: turns(3, 2000) },
+        () => undefined,
+        undefined,
+        onTrimmed
+      );
+      expect(sent().map(messages => messages.length)).toEqual([8, 6, 4]);
+      expect(sent()[2].map(message => message.content.slice(0, 2))).toEqual(['in', 'u2', 'a2', 'la']);
+      // Two prompts and their two replies, reported once the reply is under way.
+      expect(onTrimmed).toHaveBeenCalledTimes(1);
+      expect(onTrimmed).toHaveBeenCalledWith(4);
+    });
+
+    it('stops after a few retries even while older turns remain', async () => {
+      const { sent } = chatWith(...Array.from({ length: 6 }, () => () => overflow(2049)));
+      const onTrimmed = vi.fn();
+      await expect(
+        new OllamaLocal().stream(
+          { model: 'local:ollama:llama', messages: turns(20, 320) },
+          () => undefined,
+          undefined,
+          onTrimmed
+        )
+      ).rejects.toThrow('after leaving out its');
+      expect(sent()).toHaveLength(4);
+      expect(onTrimmed).not.toHaveBeenCalled();
+    });
+
+    it('sends screenshots without the marker that keeps them in their turn', async () => {
+      const { sent } = chatWith();
+      await new OllamaLocal().stream(
+        {
+          model: 'local:ollama:llama',
+          messages: [
+            { role: 'user', content: 'look' },
+            { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'shot', input: {} }] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Image from the shot call above.' },
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+              ],
+              continuesTurn: true,
+            },
+          ],
+        },
+        () => undefined
+      );
+      expect(JSON.stringify(sent())).not.toContain('continuesTurn');
+      expect(sent()[0].at(-1)).toEqual({ role: 'user', content: 'Image from the shot call above.', images: ['AAAA'] });
+    });
+
+    it("reports Ollama's error text for other refusals", async () => {
+      chatWith(() => Response.json({ error: 'model is busy' }, { status: 400 }));
+      await expect(
+        new OllamaLocal().stream({ model: 'local:ollama:llama', messages: conversation(10) }, () => undefined)
+      ).rejects.toThrow('Ollama returned HTTP 400: model is busy');
+    });
   });
 
   it('fails on an HTTP error or an invalid model id', async () => {

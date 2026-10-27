@@ -332,7 +332,7 @@ function firstStemEndingWith(stems: readonly string[]): (tag: string) => number 
   };
   return tag => {
     const key = reversed(tag.toUpperCase());
-    const [lo, hi] = [lowerBound(key), lowerBound(`${key}￿`)];
+    const [lo, hi] = [lowerBound(key), lowerBound(`${key}\uFFFF`)];
     if (lo >= hi) return Infinity;
     const level = 31 - Math.clz32(hi - lo);
     const row = levels[level] ?? [];

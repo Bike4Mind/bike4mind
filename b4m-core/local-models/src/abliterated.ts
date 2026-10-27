@@ -7,7 +7,8 @@ export function isAbliteratedModel(
   model: Pick<HubModelSummary, 'id'> & Partial<Pick<HubModelSummary, 'tags' | 'baseModels'>>
 ): boolean {
   return [model.id, ...(model.tags ?? []), ...(model.baseModels ?? [])].some(name => {
-    const lower = name.toLowerCase();
+    // A camelCase join (`QwenUncensored`) is a word boundary too, so split it before case is lost.
+    const lower = name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
     return lower.includes('abliterat') || WHOLE_WORD_MARKERS.test(lower);
   });
 }

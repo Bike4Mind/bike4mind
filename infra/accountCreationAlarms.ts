@@ -110,7 +110,7 @@ if (
     period: 300,
     evaluationPeriods: 1,
     statistic: 'Maximum',
-    treatMissingData: 'notBreaching',
+    treatMissingData: 'ignore',
     alarmActions: [dlqAlarmTopic.arn],
   });
 }

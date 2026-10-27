@@ -11,7 +11,7 @@ import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
 import { isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
-import { effectiveContextLimit } from '@shared/contextLimit';
+import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { SkillMarketPanel } from './SkillMarketPanel';
@@ -59,7 +59,7 @@ import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
 import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
-import { contextTokens, describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
+import { describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
 import { ImageMenuProvider } from './ImageContextMenu';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
@@ -417,8 +417,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
+    // The figure ChatService.autoCompact decides on, so red means the same thing on both sides.
+    const local = !!conversation.session?.model && isLocalModel(conversation.session.model);
     return {
-      contextTokens: contextTokens(reply),
+      contextTokens: occupiedTokens(conversation.messages, turnOpen, local),
       contextLimit: effectiveContextLimit(modelOption?.contextWindow),
       modelWindow: modelOption?.contextWindow ?? null,
       credits: credits.balance,
@@ -428,6 +430,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     };
   }, [
     conversation.messages,
+    conversation.session?.model,
     turnOpen,
     modelOption?.contextWindow,
     credits.balance,
