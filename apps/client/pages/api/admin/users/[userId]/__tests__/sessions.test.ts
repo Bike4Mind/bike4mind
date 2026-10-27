@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   revokeSession: vi.fn(),
   logAuthAudit: vi.fn(),
   record: vi.fn(),
+  csrfMiddleware: vi.fn(),
+  used: [] as unknown[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -17,7 +19,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
-        use: () => chain,
+        use: (mw: unknown) => (mocks.used.push(mw), chain),
         get: (fn: (req: unknown, res: unknown) => unknown) => ((h.GET = fn), chain),
         delete: (fn: (req: unknown, res: unknown) => unknown) => ((h.DELETE = fn), chain),
         _config: config,
@@ -26,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
+vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => mocks.csrfMiddleware }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
   authSessionRepository: { findBySid: (...a: unknown[]) => mocks.findBySid(...a) },
@@ -95,6 +97,10 @@ describe('/api/admin/users/[userId]/sessions', () => {
     ]);
   });
 
+  it('passes the csrf middleware to the chain', () => {
+    expect(mocks.used).toContain(mocks.csrfMiddleware);
+  });
+
   describe('GET', () => {
     it('rejects a non-admin with 403 before reading anything', async () => {
       await expect(call('GET', { user: { id: 'u2', isAdmin: false } }).promise).rejects.toMatchObject({
@@ -158,6 +164,14 @@ describe('/api/admin/users/[userId]/sessions', () => {
       mocks.findBySid.mockResolvedValue({ ...SESSION, userId: 'c'.repeat(24) });
       await expect(revoke().promise).rejects.toMatchObject({ statusCode: 404 });
       expect(mocks.revokeSession).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 for an already-revoked session and writes no audit rows', async () => {
+      mocks.findBySid.mockResolvedValue({ ...SESSION, revokedAt: new Date('2026-10-21T10:00:00.000Z') });
+      await expect(revoke().promise).rejects.toMatchObject({ statusCode: 404 });
+      expect(mocks.revokeSession).not.toHaveBeenCalled();
+      expect(mocks.logAuthAudit).not.toHaveBeenCalled();
+      expect(mocks.record).not.toHaveBeenCalled();
     });
 
     it('revokes the session and audits it with the reason', async () => {

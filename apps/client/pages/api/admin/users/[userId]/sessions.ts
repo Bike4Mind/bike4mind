@@ -54,9 +54,10 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
 
     const user = await userRepository.findById(userId);
     if (!user) throw new NotFoundError('User not found');
-    // A sid of another user is a 404, same as an unknown one, so this is no existence oracle.
+    // A sid of another user is a 404, same as an unknown one, so this is no existence oracle. An
+    // already-revoked session is a 404 too, so a double submit does not write a second audit row.
     const session = await authSessionRepository.findBySid(sid);
-    if (!session || session.userId !== user.id) throw new NotFoundError('Session not found');
+    if (!session || session.userId !== user.id || session.revokedAt) throw new NotFoundError('Session not found');
 
     await authSessionService.revokeSession(sid, {
       db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository },
