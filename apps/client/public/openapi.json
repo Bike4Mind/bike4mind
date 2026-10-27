@@ -761,16 +761,16 @@
             "maximum": 2
           },
           "max_tokens": {
-            "type": "number",
-            "exclusiveMinimum": 0
+            "type": "integer",
+            "minimum": 16
           },
           "maxTokens": {
-            "type": "number",
-            "exclusiveMinimum": 0
+            "type": "integer",
+            "minimum": 16
           },
           "maxOutputTokens": {
-            "type": "number",
-            "exclusiveMinimum": 0
+            "type": "integer",
+            "minimum": 16
           },
           "stream": {
             "type": "boolean",

@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import * as creditService from '../creditService';
 import { grantFreeCredits, releasePendingFreeCredits, resolveFreeCreditAmount } from './freeCredits';
+import * as signupProtection from './signupProtection';
+import * as stagedSignupGrant from './stagedSignupGrant';
 
 const buildAdapters = (defaultFreeCredits: string | null = '100') => {
   const logger = { error: vi.fn() };
@@ -67,6 +69,36 @@ describe('free credits service', () => {
       expect(adapters.db.users.findById).toHaveBeenCalledExactlyOnceWith('user-1');
       expect(adapters.db.adminSettings.findBySettingName).not.toHaveBeenCalled();
       expect(adapters.db.creditTransactions.findOne).not.toHaveBeenCalled();
+      expect(addCreditsSpy).not.toHaveBeenCalled();
+    });
+
+    it('withholds a staged signup tranche while the signup domain is held', async () => {
+      const adapters = buildAdapters('100');
+      adapters.db.users.findById.mockResolvedValue({
+        id: 'user-1',
+        emailVerified: true,
+        signupGrant: { stage: 'pending_email' },
+      });
+      adapters.db.signupProtection = {
+        repository: {
+          findReview: async () => null,
+          observe: async () => {},
+          recent: async () => [],
+          createHold: async () => false,
+          isOrganizationDomain: async () => false,
+        },
+      };
+      const addTags = vi.fn();
+      Object.assign(adapters.db.users, { addTagsToUser: addTags });
+      const protect = vi.spyOn(signupProtection, 'protectSignupCredits').mockResolvedValue(true);
+      const tranche = vi.spyOn(stagedSignupGrant, 'releaseSignupTranche');
+
+      const result = await grantFreeCredits({ id: 'user-1' }, adapters);
+
+      expect(result).toEqual({ creditsGranted: 0, currentCredits: null, withheld: true });
+      expect(tranche).toHaveBeenCalledExactlyOnceWith('user-1', expect.objectContaining({ db: adapters.db }));
+      expect(protect).toHaveBeenCalledExactlyOnceWith('user-1', adapters.db);
+      expect(addTags).toHaveBeenCalledExactlyOnceWith('user-1', [PENDING_FREE_CREDITS_TAG]);
       expect(addCreditsSpy).not.toHaveBeenCalled();
     });
 

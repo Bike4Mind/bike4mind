@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   setVerifiedSession: vi.fn(),
   sendOTC: vi.fn(),
   verifyOTC: vi.fn(),
+  startOAuthSignIn: vi.fn(),
   mutateAsync: vi.fn(),
   navigate: vi.fn(),
   allowOpenRegistration: true,
@@ -35,6 +36,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/auth', () => ({
   useSendOTC: () => ({ mutateAsync: mocks.sendOTC, isPending: false }),
   useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
+  useStartOAuthSignIn: () => mocks.startOAuthSignIn,
 }));
 vi.mock('@client/app/hooks/useMfaChallenge', () => ({
   useMfaChallenge: (options: MfaHookOptions) => {
@@ -100,6 +102,26 @@ const renderRegister = () =>
 describe('Register', () => {
   beforeEach(() => {
     mocks.allowOpenRegistration = true;
+  });
+
+  it.each([
+    ['register-google-btn', '/api/auth/google'],
+    ['register-github-btn', '/api/auth/github'],
+    ['register-okta-btn', '/api/auth/okta'],
+  ])('starts the provider sign-up through the challenge-aware hook from %s', async (testId, startUrl) => {
+    mocks.startOAuthSignIn.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderRegister();
+    await user.click(screen.getByTestId(testId));
+    expect(mocks.startOAuthSignIn).toHaveBeenCalledWith(startUrl);
+  });
+
+  it('shows the challenge error and stays on the page when the sign-up cannot start', async () => {
+    mocks.startOAuthSignIn.mockRejectedValue(new Error('Could not complete the verification check.'));
+    const user = userEvent.setup();
+    renderRegister();
+    await user.click(screen.getByTestId('register-google-btn'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Could not complete the verification check.'));
   });
 
   // Regression guard for #59: the ToS/AUP/Privacy links in the acceptance-checkbox label must

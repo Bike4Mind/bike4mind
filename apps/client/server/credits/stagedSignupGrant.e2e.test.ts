@@ -1,6 +1,7 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userService } from '@bike4mind/services';
 import { CURRENT_POLICY_VERSION, newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import type { SignupDomainReview, SignupProtection } from '@bike4mind/common';
 import {
   mongoose,
   User,
@@ -80,6 +81,116 @@ async function createUser(enrolled = true) {
     ...(enrolled ? { signupGrant: await newSignupGrant(adminSettings) } : {}),
   });
 }
+
+function heldAdapters() {
+  const review: SignupDomainReview = {
+    domain: 'example.test',
+    status: 'held_pending_review',
+    reason: 'Generated signup burst',
+    triggeredAt: new Date(),
+    cohortUserIds: [],
+    sampleEmails: [],
+    signupCount: 5,
+  };
+  const findReview = vi.fn<SignupProtection['repository']['findReview']>().mockResolvedValue(review);
+  const signupProtection: SignupProtection = {
+    repository: {
+      findReview,
+      observe: async () => {},
+      recent: async () => [],
+      createHold: async () => false,
+      isOrganizationDomain: async () => false,
+    },
+  };
+  return {
+    review,
+    findReview,
+    adapters: {
+      ...adapters,
+      db: { ...adapters.db, adminSettings: adminSettingsRepository, signupProtection },
+    },
+  };
+}
+
+describe('staged signup domain holds', () => {
+  it('does not observe an unverified account as a verified signup', async () => {
+    const user = await createUser();
+    await User.updateOne({ _id: user.id }, { $set: { emailVerified: false } });
+    const held = heldAdapters();
+    await expect(userService.releaseSignupTranche(user.id, held.adapters)).rejects.toThrow(
+      'Email verification required for signup grant'
+    );
+    expect(held.findReview).not.toHaveBeenCalled();
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+  });
+
+  it('retains a held signup tranche and releases it exactly once after domain review', async () => {
+    const user = await createUser();
+    await User.updateOne({ _id: user.id }, { $set: { tags: [PENDING_FREE_CREDITS_TAG] } });
+    const held = heldAdapters();
+    const logger = { error: vi.fn() };
+    const releaseAdapters = { ...held.adapters, logger };
+    const pendingUser = { id: user.id, tags: [PENDING_FREE_CREDITS_TAG] };
+    const release = await userService.releasePendingFreeCredits(pendingUser, releaseAdapters);
+    expect(release).toMatchObject({ released: false, creditsGranted: 0, patch: {} });
+    const persisted = await User.findById(user.id);
+    expect(persisted?.tags).toContain(PENDING_FREE_CREDITS_TAG);
+    expect(persisted?.signupGrant?.stage).toBe('pending_email');
+    expect(persisted?.signupGrantAssessment).toBeUndefined();
+    expect(persisted?.freeCreditClaimEmail).toBeUndefined();
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+
+    held.findReview.mockResolvedValue({ ...held.review, status: 'released' });
+    expect(await userService.releasePendingFreeCredits(pendingUser, releaseAdapters)).toMatchObject({
+      released: true,
+      creditsGranted: 12,
+    });
+    await userRepository.clearPendingFreeCreditGrant(user.id);
+    expect((await userService.releaseSignupTranche(user.id, held.adapters)).creditsGranted).toBe(0);
+    expect(await CreditTransaction.countDocuments({})).toBe(1);
+    expect((await User.findById(user.id))?.currentCredits).toBe(12);
+  });
+
+  it.each(['activity', 'org_invite', 'admin', 'phone_verified', 'card_verified'] as const)(
+    'blocks a held %s unlock before validators or audit side effects',
+    async reason => {
+      const user = await createUser();
+      await userService.releaseSignupTranche(user.id, adapters);
+      const held = heldAdapters();
+      const validate = vi.fn(async () => true);
+      const audit = vi.fn(async () => {});
+      expect(
+        await userService.unlockSignupGrant(user.id, reason, {
+          ...held.adapters,
+          validators: { [reason]: validate },
+          audit,
+        })
+      ).toEqual({ creditsGranted: 0, currentCredits: null, withheld: true });
+      expect(validate).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+      const persisted = await User.findById(user.id);
+      expect(persisted?.currentCredits).toBe(12);
+      expect(persisted?.signupGrant?.stage).toBe('signup');
+      expect(persisted?.tags ?? []).not.toContain(PENDING_FREE_CREDITS_TAG);
+      expect(await CreditTransaction.countDocuments({})).toBe(1);
+    }
+  );
+
+  it('keeps the pending tranche retryable when the hold lookup fails', async () => {
+    const user = await createUser();
+    const held = heldAdapters();
+    held.findReview.mockRejectedValue(new Error('Hold store unavailable'));
+    const logger = { error: vi.fn() };
+    const result = await userService.releasePendingFreeCredits(
+      { id: user.id, tags: [PENDING_FREE_CREDITS_TAG] },
+      { ...held.adapters, logger }
+    );
+    expect(result).toMatchObject({ released: false, creditsGranted: 0, patch: {} });
+    expect(logger.error).toHaveBeenCalled();
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+    expect((await User.findById(user.id))?.signupGrant?.stage).toBe('pending_email');
+  });
+});
 
 describe('staged signup ledger', () => {
   async function createAlias(email: string, signupCredits = 12) {

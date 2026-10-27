@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardFinding } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
@@ -93,6 +94,13 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
           }
         }
       }
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.security_scan.triggered',
+        target: { kind: 'system', id: 'security-scan:cloud', displayName: 'cloud security scan' },
+        summary: 'triggered a manual cloud scan',
+        details: { scanType: 'cloud', stage },
+      });
 
       // Align response shape with other scan endpoints (web, code, packages, secrets),
       // which all return { canRun: true, queued: true } on success.

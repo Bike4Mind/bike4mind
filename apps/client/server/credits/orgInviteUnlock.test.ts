@@ -11,7 +11,9 @@ const h = vi.hoisted(() => ({
   count: vi.fn(),
   unlock: vi.fn(),
   setting: vi.fn(),
+  protection: { repository: {} },
 }));
+vi.mock('@server/auth/signupProtection', () => ({ signupProtection: h.protection }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findBySettingName: h.setting },
   creditLotRepository: {},
@@ -49,6 +51,7 @@ describe('organization invite unlock evidence', () => {
   it('requires actual accepted recipients and authoritative membership', async () => {
     expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toEqual({ unlockedOrgId: 'org-1' });
     expect(h.unlock).toHaveBeenCalledWith('user-1', 'org_invite', expect.anything());
+    expect(h.unlock.mock.calls[0][2].db.signupProtection).toBe(h.protection);
     expect(h.count).toHaveBeenCalledExactlyOnceWith({ 'signupGrant.unlockedOrgId': 'org-1' });
     expect(h.reserve.mock.calls).toEqual([
       [{ _id: 'org-1', signupGrantUnlockCount: { $exists: false } }, { $set: { signupGrantUnlockCount: 2 } }],
