@@ -383,6 +383,57 @@ describe('curated sequence, changelog and tiers', () => {
     ]);
   });
 
+  it('allows best, fast and long-context on GPU tiers and best, fast and light on the CPU tier', () => {
+    const m = curated();
+    m.tiers[0].picks.push({ slot: 'long-context', entry: 'gemma-12b', build: 'q4' });
+    m.tiers[1].picks.push({ slot: 'light', entry: 'gemma-12b', build: 'q4' });
+    m.tiers.push({ memoryKind: 'unified', minGiB: 32, picks: [{ slot: 'light', entry: 'gemma-12b', build: 'q4' }] });
+    expect(issues(m)).toEqual([
+      'tiers.0.picks.2: no long-context slot in a cpu tier',
+      'tiers.1.picks.1: no light slot in a discrete tier',
+      'tiers.2.picks.0: no light slot in a unified tier',
+    ]);
+
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(manifest.tiers.map(tier => tier.picks.map(pick => pick.slot))).toEqual([['best', 'light'], ['fast'], []]);
+    expect(dropped.map(d => d.path)).toEqual(['tiers.0.picks.2', 'tiers.1.picks.1', 'tiers.2.picks.0']);
+  });
+
+  it('caps a tier at three picks: the strict schema rejects a fourth and the reader drops the tier', () => {
+    const m = curated();
+    m.tiers[1].picks = [
+      { slot: 'best', entry: 'gemma-12b', build: 'q4' },
+      { slot: 'fast', entry: 'gemma-12b', build: 'q4' },
+      { slot: 'long-context', entry: 'gemma-12b', build: 'q4' },
+    ];
+    expect(issues(m)).toEqual([]);
+    m.tiers[1].picks.push({ slot: 'best', entry: 'hybrid-27b', build: 'q6' });
+    expect(issues(m)).toEqual(['tiers.1.picks: Too big: expected array to have <=3 items']);
+
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(manifest.tiers.map(tier => tier.memoryKind)).toEqual(['cpu']);
+    expect(dropped).toEqual([{ path: 'tiers.1', reason: 'picks: Too big: expected array to have <=3 items' }]);
+  });
+
+  it('holds chat entries, and only chat entries, to a 16K trained context', () => {
+    const m = curated();
+    const short = (id: string) => {
+      const entry = m.entries.find(e => e.id === id)!;
+      entry.arch = { ...entry.arch, contextMax: 8192 };
+    };
+    short('gemma-12b');
+    short('embed-small');
+    expect(issues(m)).toEqual([
+      `entries.${index('gemma-12b')}.arch.contextMax: a chat model needs a context of at least 16384 tokens`,
+    ]);
+
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(manifest.entries.map(e => e.id)).not.toContain('gemma-12b');
+    expect(manifest.entries.map(e => e.id)).toContain('embed-small');
+    expect(manifest.tiers[0].picks.map(pick => pick.entry)).toEqual(['hybrid-27b']);
+    expect(dropped.map(d => d.path)).toContain(`entries.${index('gemma-12b')}`);
+  });
+
   it('leaves a slot empty when its entry was dropped, and drops unreadable picks and changelog items', () => {
     const m = curated();
     m.entries.find(e => e.id === 'hybrid-27b')!.license.class = 'research';
@@ -443,6 +494,12 @@ describe('HubEntrySchema cross-field rules', () => {
         e.toolUse = { rating: 'ok' };
       },
       'toolUse.rating: a tool-use rating needs capabilities.tools',
+    ],
+    [
+      'gemma-12b',
+      'a chat model trained on less than 16K',
+      e => (e.arch = { ...e.arch, contextMax: 16383 }),
+      'arch.contextMax: a chat model needs a context of at least 16384 tokens',
     ],
     [
       'hybrid-27b',
