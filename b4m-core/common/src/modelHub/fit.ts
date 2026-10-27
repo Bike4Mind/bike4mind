@@ -173,7 +173,8 @@ const onCuda = (hw: HardwareProfile) =>
 
 /**
  * Ollama's GPU batch step-down and CUDA flash-attention-off rule (server/sched.go). The budget stands in for live free
- * memory; a mismatch shifts one batch step only where Ollama's prediction leaves at least 20% free.
+ * memory, held to the RAM the OS sees on unified memory as Ollama holds an integrated GPU to free RAM; a mismatch
+ * shifts one batch step only where Ollama's prediction leaves at least 20% free.
  */
 function ollamaGpuUbatch(
   model: FitModel,
@@ -189,11 +190,13 @@ function ollamaGpuUbatch(
   const kvHeads = arch.recurrent ? 1 : Math.min(arch.full.kvHeads, arch.swa?.kvHeads ?? Infinity);
   const headDim = arch.embeddingLength && arch.headCount ? arch.embeddingLength / arch.headCount : arch.full.keyLength;
   const predicted = model.weightsBytes + 2 * arch.blockCount * kvHeads * headDim * total * 2;
-  const threshold = budget * 0.8;
+  const available =
+    hw.memoryKind === 'unified' && hw.totalMemoryBytes > 0 ? Math.min(budget, hw.totalMemoryBytes) : budget;
+  const threshold = available * 0.8;
   const fits = (batch: number) => {
     const extra = batch >= 2048 ? 2 * GIB : batch >= 1024 ? 768 * MIB : 0;
     const headroom = batch >= 2048 ? 0.6 : batch >= 1024 ? 0.75 : 1;
-    return predicted <= threshold && predicted <= budget * headroom && extra <= threshold - predicted;
+    return predicted <= threshold && predicted <= available * headroom && extra <= threshold - predicted;
   };
   let batch = ollamaUbatch(context, slots);
   while (batch > 512 && !fits(batch)) batch = batch > 1024 ? 1024 : 512;

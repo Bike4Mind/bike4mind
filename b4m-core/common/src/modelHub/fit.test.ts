@@ -386,6 +386,14 @@ describe('estimateFit', () => {
     expect(faOff(strix(31, 96))).toBe(2048);
   });
 
+  it("steps Ollama's batch down by the RAM the OS sees on unified memory, as Ollama holds an iGPU to free RAM", () => {
+    const ubatch = (hardware: HardwareProfile) =>
+      fit({ hardware, runtime: OLLAMA, weightsGiB: 20, context: 65536 }).requested!.ubatch;
+    // 20 GiB of weights plus a 4 GiB KV prediction is past 60% and 75% of 31 GiB, though not of the 96 GiB carve-out.
+    expect(ubatch(strix(31, 96))).toBe(512);
+    expect(ubatch(strix(125, 96))).toBe(2048);
+  });
+
   it('loads Ollama embedding models with one slot and a 2048 batch capped at the context', () => {
     const embed = (context: number) =>
       fit({ mode: 'embeddings', hardware: machine('cpu', 64), runtime: { kind: 'ollama', slots: 4 }, context })
