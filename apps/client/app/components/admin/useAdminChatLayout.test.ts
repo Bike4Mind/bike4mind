@@ -22,10 +22,15 @@ describe('useAdminChatLayout', () => {
     'pulls a %s layout back to the floating window',
     layout => {
       renderHook(() => useAdminChatLayout(true));
+      // Expanded, as it is once the admin opens the pill: landing back in the floating window
+      // must not also collapse it to the pill, or every artifact click would close the chat.
+      act(() => setSessionLayout({ floatingChatMinimized: false }));
 
       act(() => setSessionLayout({ layout }));
 
-      expect(useSessionLayout.getState().layout).toBe('floatingChat');
+      const state = useSessionLayout.getState();
+      expect(state.layout).toBe('floatingChat');
+      expect(state.floatingChatMinimized).toBe(false);
     }
   );
 
