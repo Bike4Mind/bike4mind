@@ -121,6 +121,8 @@ export interface ModelContents {
 export interface InspectOptions {
   /** false skips re-reading the installed list, for callers that already have it; `model` then carries no size. */
   tags?: boolean;
+  /** Aborts the read; it still ends at the runtime's own request deadline. */
+  signal?: AbortSignal;
 }
 
 /** The layers an Ollama registry (ollama.com or hf.co) serves for one tag; digests are hex with no `sha256:`. */

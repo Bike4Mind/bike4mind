@@ -262,6 +262,15 @@ describe('OllamaRuntime.inspect', () => {
     expect(result.model.sizeBytes).toBeNull();
   });
 
+  it('stops a hanging /api/show when the caller aborts', async () => {
+    server = await startFakeServer({ 'POST /api/show': hang });
+    const reading = runtimeFor(server).inspect(fixtureTags.gemma4.name, {
+      tags: false,
+      signal: AbortSignal.timeout(50),
+    });
+    await expect(reading).rejects.toMatchObject({ name: 'TimeoutError' });
+  });
+
   it.each([[[]], [null]])('re-reads /api/show verbosely when per-layer arrays come back as %j', async blank => {
     const info = {
       'general.architecture': 'hybrid',
