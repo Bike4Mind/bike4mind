@@ -34,7 +34,7 @@ const cached: CachedTelemetryAnalysis = {
   cachedAt: '2026-01-01T00:00:00.000Z',
 };
 
-const seedQuest = () => Quest.create({ sessionId: 'session1', prompt: 'hello', type: 'message' });
+const seedQuest = () => Quest.create({ sessionId: 'session1', prompt: 'hello', type: 'message', timestamp: new Date() });
 const readCached = async (id: unknown) =>
   (await Quest.findOne({ _id: id }).lean())?.promptMeta?.contextTelemetry?.cachedAnalysis;
 
