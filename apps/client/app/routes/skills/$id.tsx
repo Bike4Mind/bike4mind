@@ -52,8 +52,10 @@ const SkillDetailPage: FC = () => {
 
   // Only the author's own skill can have a listing; fetched on open so the page doesn't hit /mine on every load.
   const wantsMarketplace = claudeCodeOpen && isOwner && !skill?.importedFrom;
-  const { data: myListings } = useMyListings({ enabled: wantsMarketplace });
-  const { data: marketMe } = useMarketMe({ enabled: wantsMarketplace });
+  const { data: myListings, isPending: myListingsPending } = useMyListings({ enabled: wantsMarketplace });
+  const { data: marketMe, isPending: marketMePending } = useMarketMe({ enabled: wantsMarketplace });
+  // Hold the dialog until both load so it doesn't flash the single-skill view before switching to tabs.
+  const marketplacePending = wantsMarketplace && (myListingsPending || marketMePending);
 
   const handleDelete = async () => {
     if (!skill) return;
@@ -201,7 +203,7 @@ const SkillDetailPage: FC = () => {
 
       {canManageSharing && shareOpen ? <SkillShareDialog onClose={() => setShareOpen(false)} skill={skill} /> : null}
       {publishOpen ? <PublishDialog onClose={() => setPublishOpen(false)} skill={skill} /> : null}
-      {claudeCodeOpen ? (
+      {claudeCodeOpen && !marketplacePending ? (
         <ClaudeCodeExportDialog
           onClose={() => setClaudeCodeOpen(false)}
           skill={skill}

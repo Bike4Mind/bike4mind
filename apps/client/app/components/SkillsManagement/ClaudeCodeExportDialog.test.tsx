@@ -177,6 +177,12 @@ describe('ClaudeCodeExportDialog', () => {
     expect(update).toHaveTextContent('/reload-plugins');
   });
 
+  it('omits the invocation without a skill name', () => {
+    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, pluginName: 'hello-team-abc123' } });
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+    expect(screen.queryByTestId('skill-claude-code-marketplace-invoke')).not.toBeInTheDocument();
+  });
+
   it('omits the invocation without a stored plugin name', () => {
     renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, skillName: 'Hello Team' } });
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));

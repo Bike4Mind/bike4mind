@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   listings: [] as Array<Record<string, unknown>>,
   orgs: [] as Array<{ id: string; name: string }>,
   enabled: [] as Array<boolean | undefined>,
+  pending: false,
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn(), useParams: () => ({ id: 's1' }) }));
@@ -29,12 +30,13 @@ vi.mock('@client/app/hooks/data/skills', () => ({
   useGetSkill: () => ({ data: h.skill, isLoading: false }),
   useDeleteSkill: () => ({ mutateAsync: vi.fn() }),
 }));
+// Like React Query, the mocks return cached data even while disabled, so the page's own guard is what filters it.
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
   useMyListings: (opts: { enabled?: boolean }) => {
     h.enabled.push(opts.enabled);
-    return { data: opts.enabled ? h.listings : undefined };
+    return { data: h.listings, isPending: h.pending };
   },
-  useMarketMe: (opts: { enabled?: boolean }) => ({ data: opts.enabled ? { organizations: h.orgs } : undefined }),
+  useMarketMe: () => ({ data: { organizations: h.orgs }, isPending: h.pending }),
 }));
 vi.mock('@client/app/components/SkillsManagement/SkillShareDialog', () => ({ default: () => null }));
 vi.mock('@client/app/components/SkillMarket/SkillUpdatePanel', () => ({ default: () => null }));
@@ -66,6 +68,7 @@ describe('SkillDetailPage team marketplace', () => {
     h.listings = [approvedListing];
     h.orgs = [ORG];
     h.enabled = [];
+    h.pending = false;
   });
 
   it('passes the approved org listing to the dialog for the owner', () => {
@@ -76,6 +79,17 @@ describe('SkillDetailPage team marketplace', () => {
     openDialog();
     expect(h.enabled[0]).toBe(false);
     expect(h.enabled.at(-1)).toBe(true);
+  });
+
+  it('holds the dialog until the listings load', () => {
+    h.pending = true;
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillDetailPage />
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
+    expect(screen.queryByTestId('claude-code-dialog-marketplace')).not.toBeInTheDocument();
   });
 
   it.each([

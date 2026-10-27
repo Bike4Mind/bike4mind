@@ -141,7 +141,7 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
           <code>
             claude plugin update {pluginName ?? '<plugin>'}@{marketplace}
           </code>
-          , and restart Claude Code.
+          , then <code>/reload-plugins</code> or restart.
         </Typography>
       </Stack>
 
@@ -189,7 +189,7 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
             /{pluginName}:{claudeSkillNameFor(skillName)}
           </Typography>
           <Typography level="body-xs" textColor="text.tertiary">
-            Plugin skills are namespaced by their plugin, so the single-skill name does not apply here.
+            Plugin skills are namespaced by their plugin, so use this instead of the single-skill name.
           </Typography>
         </Stack>
       ) : null}
