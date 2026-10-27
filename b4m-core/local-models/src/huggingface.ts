@@ -524,7 +524,7 @@ function groupGgufFiles(
             : !repoOk
               ? 'unsupported-name'
               : !tag
-                ? REGISTRY_REJECTED_QUANTS.has(build.quant.replace(/^UD-/, ''))
+                ? [...REGISTRY_REJECTED_QUANTS].some(rejected => build.quant?.includes(rejected))
                   ? 'unsupported-quant'
                   : 'unsupported-name'
                 : pinned

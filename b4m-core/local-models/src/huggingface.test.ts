@@ -392,6 +392,7 @@ describe('HuggingFaceHub.getModel', () => {
         file('Model-UD-Q4_K_L.gguf', 1),
         file('Model-Q8_K_L.gguf', 2),
         file('Model-F16-Q4_K_L.gguf', 3),
+        file('Model-Q5_K_L_IMAT.gguf', 4),
       ])
     );
     const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
@@ -400,6 +401,7 @@ describe('HuggingFaceHub.getModel', () => {
       ['Q8_K_L', null, 'unsupported-quant'],
       // Another scheme in the name still gives the registry a tag it accepts.
       ['Q4_K_L', `hf.co/${repo}:F16-Q4_K_L`, null],
+      ['Q5_K_L_IMAT', null, 'unsupported-quant'],
       ['IQ4_XS', `hf.co/${repo}:IQ4_XS`, null],
       ['Q3_K_XL', `hf.co/${repo}:Q3_K_XL`, null],
       ['Q4_K_M', `hf.co/${repo}:Q4_K_M`, null],
