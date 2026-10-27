@@ -251,6 +251,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       setCurrentStep('otc');
       startResendCooldown();
     } catch (error) {
+      // A provider redirect that could not start must not leave the spinner up with no way back.
+      setCurrentStep('email');
       // useSendOTC rejects with a plain { message, code } object (not an Error instance),
       // so read .message off either shape - otherwise real server messages like the OTC
       // rate-limit's "try again in N seconds" collapse into "An unexpected error occurred".

@@ -537,9 +537,6 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
   );
 });
 
-// The "already logged in" bounce must gate on a LIVE session (currentUser + token), not on a
-// stale persisted currentUser alone - otherwise a broken session is trapped in a /login <->
-// /accept-policies loop (issue #386). See the isLoggedIn guard in MultiStepLogin.
 describe('MultiStepLogin - OAuth sign-in start', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -583,8 +580,29 @@ describe('MultiStepLogin - OAuth sign-in start', () => {
     await user.click(screen.getByTestId('login-google-btn'));
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Could not complete the verification check.'));
   });
+
+  it('returns to the email step when an email-strategy redirect cannot start', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ requiresRedirect: true, redirectUrl: '/api/auth/github' }),
+      })
+    );
+    mocks.startOAuthSignIn.mockRejectedValue(new Error('Could not complete the verification check.'));
+    renderLogin();
+    await user.type(textboxIn('login-email-input'), 'dev@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Could not complete the verification check.'));
+    expect(screen.getByTestId('login-continue-btn')).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
 });
 
+// The "already logged in" bounce must gate on a LIVE session (currentUser + token), not on a
+// stale persisted currentUser alone - otherwise a broken session is trapped in a /login <->
+// /accept-policies loop (issue #386). See the isLoggedIn guard in MultiStepLogin.
 describe('MultiStepLogin — already-logged-in redirect guard', () => {
   beforeEach(() => {
     localStorage.clear();
