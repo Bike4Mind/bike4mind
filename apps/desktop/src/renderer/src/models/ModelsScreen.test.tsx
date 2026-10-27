@@ -2,19 +2,20 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type {
-  CuratedBuildView,
-  CuratedEntryView,
-  CuratedList,
-  CuratedPullResult,
-  HubBuildView,
-  HubDetailResult,
-  HubModelView,
-  HubSearchResult,
-  InstalledModelsResult,
-  ModelFit,
-  ModelPull,
-  ModelRuntimeStatus,
+import {
+  pullKey,
+  type CuratedBuildView,
+  type CuratedEntryView,
+  type CuratedList,
+  type CuratedPullResult,
+  type HubBuildView,
+  type HubDetailResult,
+  type HubModelView,
+  type HubSearchResult,
+  type InstalledModelsResult,
+  type ModelFit,
+  type ModelPull,
+  type ModelRuntimeStatus,
 } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -888,7 +889,7 @@ describe('ModelsScreen explore', () => {
     act(() =>
       pushPulls([
         {
-          key: `${REPO}#qwen2.5-0.5b-instruct-q4_k_m`,
+          key: pullKey(REPO, 'qwen2.5-0.5b-instruct-q4_k_m'),
           repo: REPO,
           buildId: 'qwen2.5-0.5b-instruct-q4_k_m',
           quant: 'Q4_K_M',
@@ -903,7 +904,7 @@ describe('ModelsScreen explore', () => {
     );
     expect(q('models-pull-status')?.textContent).toContain('(50%)');
     await click(q('models-pull-cancel-btn'));
-    expect(calls.cancelPull).toHaveBeenCalledWith(`${REPO}#qwen2.5-0.5b-instruct-q4_k_m`);
+    expect(calls.cancelPull).toHaveBeenCalledWith(pullKey(REPO, 'qwen2.5-0.5b-instruct-q4_k_m'));
 
     await openExplore();
     await click(q('models-explore-result-row'));

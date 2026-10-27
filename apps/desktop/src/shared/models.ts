@@ -230,8 +230,9 @@ export type ModelPullResult = { ok: true; ref: string } | { ok: false; error: Mo
 
 export type ModelRemoveResult = { ok: true } | { ok: false; error: ModelHubError };
 
+/** Hugging Face repo ids are case-insensitive, so a curated row and a pull of the live repo share one key. */
 export function pullKey(repo: string, buildId: string): string {
-  return `${repo}#${buildId}`;
+  return `${repo.toLowerCase()}#${buildId}`;
 }
 
 const PERMISSIVE_LICENSES = new Set([
