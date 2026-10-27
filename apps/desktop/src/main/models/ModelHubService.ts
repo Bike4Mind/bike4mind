@@ -105,8 +105,8 @@ export interface ModelHubServiceDeps {
 }
 
 const DEFAULT_PROGRESS_INTERVAL_MS = 250;
-// Ollama answers /api/show in under 0.3 s even under heavy load, so these only ride out a brief stall.
-const CHECK_TIMEOUT_MS = 5_000;
+// Ollama 0.40 holds /api/show on a just-pulled model for about 15 s on a busy host, then answers in milliseconds.
+const CHECK_TIMEOUT_MS = 30_000;
 const DEFAULT_CHECK_BACKOFF_MS = [1_000, 3_000];
 const SEARCH_LIMIT = 30;
 const OLLAMA_LIBRARY_URL = 'https://ollama.com/library';
@@ -606,10 +606,7 @@ export class ModelHubService {
     for (let attempt = 0; ; attempt++) {
       const started = Date.now();
       try {
-        return await this.#deps.runtime.inspect(ref, {
-          tags: false,
-          signal: AbortSignal.any([signal, AbortSignal.timeout(CHECK_TIMEOUT_MS)]),
-        });
+        return await this.#deps.runtime.inspect(ref, { tags: false, signal, timeoutMs: CHECK_TIMEOUT_MS });
       } catch (error) {
         const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
         this.#deps.warn(
