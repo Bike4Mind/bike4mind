@@ -352,18 +352,6 @@ describe('ModelHubService pulls', () => {
     expect(runtime.pull).not.toHaveBeenCalled();
   });
 
-  it('blocks any build without an Ollama ref, whatever the issue', async () => {
-    const unknown = build({ ollamaRef: null, ollamaRefIssue: null });
-    const { service, hub, runtime } = harness({ detail: detail({ builds: [unknown] }) });
-
-    const view = await service.detail(REPO);
-    expect(view.ok && view.model.builds[0].blockedReason).toMatch(/no way to pull/);
-
-    expect(await service.pull(request)).toMatchObject({ ok: false, error: { kind: 'cannot-pull' } });
-    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
-    expect(runtime.pull).not.toHaveBeenCalled();
-  });
-
   it('aborts every pull on dispose', async () => {
     const { service, pulls } = harness();
     const result = service.pull(request);

@@ -142,7 +142,6 @@ function blockedReason(detail: HubModelDetail, build: HubGgufBuild): string | nu
     return detail.ollamaNeedsSshKey
       ? 'Needs access: Hugging Face hides this file until your account is granted access.'
       : 'Hugging Face lists no checksum for this file, so the download cannot be verified.';
-  if (!build.ollamaRef) return 'Ollama has no way to pull this build from Hugging Face.';
   return null;
 }
 
