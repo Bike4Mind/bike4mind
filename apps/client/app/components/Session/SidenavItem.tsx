@@ -80,15 +80,23 @@ import MoveSessionConfirmModal from '@client/app/components/Session/MoveSessionC
 
 const MENU_VIEWPORT_PADDING_PX = 8;
 
-// The actions menu can be taller than the space on either side of its button. altAxis
-// lets Popper slide it vertically back into the viewport (tether: false allows it to
-// cover the button), and the maxHeight/overflowY cap on the Menu scrolls the rest.
+// Shared by the sidebar (right-start) and header (bottom-start) actions menus, which can
+// be taller than the viewport. preventOverflow on both axes slides the menu back on screen
+// (the vertical axis is the main axis for right-start, the alt axis for bottom-start);
+// tether: false lets it cover its button, and MENU_SX scrolls whatever still doesn't fit.
 const MENU_MODIFIERS = [
   {
     name: 'preventOverflow',
     options: { altAxis: true, tether: false, padding: MENU_VIEWPORT_PADDING_PX },
   },
 ];
+
+const MENU_SX = {
+  zIndex: 1400,
+  borderRadius: '10px',
+  maxHeight: `calc(100vh - ${2 * MENU_VIEWPORT_PADDING_PX}px)`,
+  overflowY: 'auto',
+} as const;
 
 /**
  * Classify message count into two tiers:
@@ -569,12 +577,7 @@ const SessionSidenavItem: FC<{
             </Badge>
             <Menu
               className="menuSurface"
-              sx={{
-                zIndex: 1400,
-                borderRadius: '10px',
-                maxHeight: `calc(100vh - ${2 * MENU_VIEWPORT_PADDING_PX}px)`,
-                overflowY: 'auto',
-              }}
+              sx={MENU_SX}
               variant={'outlined'}
               placement="bottom-start"
               direction="ltr"
@@ -910,13 +913,11 @@ const SessionSidenavItem: FC<{
 
               <Menu
                 className="menuSurface"
-                sx={{
-                  zIndex: 1400,
-                  borderRadius: '10px',
-                }}
+                sx={MENU_SX}
                 variant={'outlined'}
                 placement="right-start"
                 direction="ltr"
+                modifiers={MENU_MODIFIERS}
               >
                 {canUpdate && (
                   <MenuItem onClick={handleToggleFavoriteSession} className="sidenav-item-menuitem-favorite">
