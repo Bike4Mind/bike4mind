@@ -241,9 +241,9 @@ export function activationBytesPerToken(model: FitModel): number {
     let active = model.weightsBytes;
     if (arch.moe) {
       const idle = 1 - arch.moe.used / arch.moe.experts;
-      active = model.expertBytesPerLayer
-        ? active - arch.moe.moeLayers * model.expertBytesPerLayer * idle
-        : active * Math.max(1 - idle, 0.25);
+      const expertBytes = arch.moe.moeLayers * (model.expertBytesPerLayer ?? 0);
+      // Tensor stats describe the hub build; a smaller library blob can hold less than they claim, so ignore them then.
+      active = expertBytes && expertBytes < active ? active - expertBytes * idle : active * Math.max(1 - idle, 0.25);
     }
     bytes = Math.ceil((arch.recurrent ? 60 : 44) * Math.sqrt(active / arch.blockCount)) + 4 * extra;
   }
@@ -276,7 +276,7 @@ function kvScratchBytes(arch: ModelArch, context: number, ubatch: number, slots:
 }
 
 export interface ComputeBufferOptions {
-  memoryKind: HardwareProfile['memoryKind'] | 'cpu';
+  memoryKind: HardwareProfile['memoryKind'];
   flashAttnOff?: boolean;
   slots?: number;
   /** GPUs sharing a layer split; each holds its own compute buffer. */
@@ -428,7 +428,7 @@ class Planner {
    * it into the compute buffer. Bounded at 2/3 of a layer, a fused gate_up tensor.
    */
   private hostWeightCopyBytes(placement: FitPlacement, nCpuMoe: number, ubatch: number): number {
-    if (this.budgets.cpuOnly || this.input.hardware.memoryKind === 'cpu' || ubatch < 32) return 0;
+    if (this.budgets.cpuOnly || ubatch < 32) return 0;
     const { model } = this.input;
     if (placement === 'expert-offload' && nCpuMoe > 0) return Math.ceil(((model.expertBytesPerLayer ?? 0) * 2) / 3);
     if (placement === 'layer-offload') return Math.ceil((model.weightsBytes * 2) / 3 / model.arch.blockCount);
@@ -445,7 +445,7 @@ class Planner {
         memoryKind: this.budgets.cpuOnly ? 'cpu' : hardware.memoryKind,
         flashAttnOff: runtime.flashAttn === 'off',
         slots: this.slots,
-        devices: this.budgets.cpuOnly ? 1 : splitDevices(hardware),
+        devices: splitDevices(hardware),
       }) + this.hostWeightCopyBytes(placement, nCpuMoe, ubatch);
     const mmprojBytes = model.mmprojBytes ?? 0;
     const draftBytes = model.draftBytes ?? 0;

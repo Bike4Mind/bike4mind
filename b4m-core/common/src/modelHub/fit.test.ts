@@ -455,6 +455,10 @@ describe('estimateFit', () => {
     const r = fit({ hardware: machine('discrete', 32, 8) });
     expect(r).toMatchObject({ verdict: 'slow', reason: 'layer-offload', context: 65536, kv: F16 });
     expect(r.memory.offloadedBytes).toBe(r.memory.totalBytes + r.memory.marginBytes - 8 * GIB);
+    const graph = computeBufferBytes({ arch: ARCH_64K, weightsBytes: 10 * GIB }, r.context, r.ubatch, {
+      memoryKind: 'discrete',
+    });
+    expect(r.memory.computeBytes).toBeGreaterThanOrEqual(graph + Math.ceil((10 * GIB * 2) / 3 / ARCH_64K.blockCount));
   });
 
   it('plans CPU-only machines, and discrete ones with unknown VRAM, against 0.75 of RAM', () => {
@@ -480,6 +484,19 @@ describe('estimateFit', () => {
       fit({ hardware: machine('cpu', 64), runtime: { ...LS, ubatch }, context: 8192 }).requested!.memory.computeBytes;
     expect(at(512)).toBeLessThan(at(1024));
     expect(at(1024)).toBeLessThan(at(2048));
+  });
+
+  it('keeps compute finite when the tensor stats describe a heavier build than the weights', () => {
+    const noWidths = { ...MOE_64K, embeddingLength: undefined, activeFeedForwardLength: undefined, blockCount: 48 };
+    const model = {
+      arch: arch({ ...noWidths, moe: { experts: 128, used: 8, moeLayers: 48 } }),
+      weightsBytes: 18 * GIB,
+    };
+    const heavy = { ...model, expertBytesPerLayer: 0.6 * GIB };
+    expect(Number.isFinite(activationBytesPerToken(heavy))).toBe(true);
+    const r = estimateFit({ model: heavy, hardware: mac(64), mode: 'chat', runtime: OLLAMA });
+    expect(Number.isFinite(r.memory.computeBytes)).toBe(true);
+    expect(r.verdict).toBe('fast');
   });
 
   it('keeps a calibrated recurrent model at or above its transformer layers, and any other at the old flat rate', () => {
