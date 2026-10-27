@@ -32,6 +32,7 @@ import {
   resolveBootstrapAdmin,
 } from '@server/utils/auth/bootstrapAdmin';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
@@ -509,6 +510,8 @@ const handler = baseApi({ auth: false })
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
     await recordSignupNetwork({ req, userId: newUser.id, method: 'otc' });
+    // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+    await refreshSignupRiskScore(newUser.id, req.logger);
     // Funnel floor (server/analytics/funnel.ts): keep the consented touches on the user so later
     // stages stay joinable to the door, then report the stages OTC completes in one step - the
     // code proved the email, and registerViaOTC plus the domain grant above seeded the credits.
