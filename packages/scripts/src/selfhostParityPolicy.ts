@@ -167,7 +167,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('function:infra/mcp.ts:mcpHandler', 'e3bfed090995364d360c725c2215d1295cff7f6e64722943495293d1899b6334'),
   hostedOnly(
     'function:infra/queues.ts:PublishThumbnailRenderer',
-    'e146492579f79a754d05fc7cc3c33d106832038ad0ee18126bcd1fec336f8314',
+    'a250460c0bc75a4ff9c0176e6dd4655883ec598578667051d5ae2de9c911d441',
     'Renders publish thumbnails for the hosted-only publishThumbnailQueue, invoked synchronously by its handler; it packages a Lambda-only headless Chromium the self-host worker image does not ship.'
   ),
   gap(
@@ -536,7 +536,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'queue:infra/queues.ts:publishThumbnailQueue',
-    'b0d6fe4ecd4ae79b88939db259082881e4b0f40a07f1e71036efb9aa6260cc23',
+    'b70f2897f9b9b6dfbda39722ac1d851792a4618118241a095e82fa004357f94d',
     'Owner-only publish thumbnails render in a Lambda-packaged headless Chromium; the self-host worker image ships no browser, so publish skips the enqueue and cards keep their generated cover.',
     ['lambda:InvokeFunction']
   ),
@@ -640,7 +640,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
-    '6af88e0b38f7d32e76ce431d2d0522fa769c6798393009adc43800356f6b4fd1'
+    '2cfe1879f740c9535d520227a2891ead024a1bcb51ac1438380286e10cc8d8ee'
   ),
   broker(
     'queue:infra/youngAccountSpendAlertDeadLetter.ts:youngAccountSpendAlertDlq',
@@ -933,7 +933,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'b8876cb56c17a96ea4fb175e3433b786fcfdce505861a08742e44c3eb24b4188',
+    'cfd07ab68a943c7e53f2c5608605c44c81464f341b7823e6ac163a83003aa1df',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),
@@ -947,7 +947,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    '72c73c3b941630cbb9ce8a14ce9cb58cfe634edb348042fe981bf64c1668e64c'
+    '0134b180dc4d296c9c16d225b728aa16db37828008a76c3fb71a946057fc7f3c'
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',
@@ -955,15 +955,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/serviceHealthAlarms.ts:ServiceHealthAlarmTopic',
-    '4a94d420bc77dfef23c15ac8f1525ed923d651749c86aae9fb7e52ad2c267b18'
+    'c99a32479bb9e43c1b583b6abbcc96ce355305de79bff143d0b276ffc8e90cc7'
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafAlarmSlackHandlerSubscription',
-    'f7db909f7015e0f23428c48e47bf42b4817a67504e7a4979f620a2ea46f06918',
+    'cc0b27017c70d79b8f89f6851f0949bd1b5a3158a78a1e518396d1abc2df847b',
     ['lambda:InvokeFunction']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafOobAlarmTopicEmailSub',
-    '4f280f3f3c787720225a94c5cca69c22a82a5b540db81e506415c50142b74cf3'
+    '4582eff167e27ee198757bdbe3f86d7191f3c5a922552e0df9f3b7822494d393'
   ),
 ];

@@ -50,6 +50,7 @@ import type {
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
+import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsState } from './skills';
@@ -129,7 +130,11 @@ export const IPC_CHANNELS = {
   fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
   chatListSuggestionModels: 'chat:list-suggestion-models',
+  chatGetLocalContext: 'chat:get-local-context',
+  chatSetLocalContext: 'chat:set-local-context',
+  chatGetLocalContextFit: 'chat:get-local-context-fit',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSettleLocalModel: 'chat:settle-local-model',
   chatSetSessionHistory: 'chat:set-session-history',
   chatSearchHistory: 'chat:search-history',
   chatClearHistory: 'chat:clear-history',
@@ -605,8 +610,15 @@ export interface DesktopApi {
     listModels(force?: boolean): Promise<ChatModelCatalog>;
     /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
     listSuggestionModels(): Promise<ChatModelCatalog>;
+    /** How local models size their context window; see @shared/localContextSetting. */
+    getLocalContext(): Promise<LocalContextSetting>;
+    setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
+    /** Which local models each fixed size may not fit, by the memory estimate. */
+    getLocalContextFit(): Promise<LocalContextFit>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    /** Device-local only: moves a conversation whose model is not installed to the pick a send would use. */
+    settleLocalModel(sessionId: string): Promise<{ session: ChatSessionSummary; notice?: string } | null>;
     setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null>;
     searchHistory(query: string): Promise<LocalHistoryResult[]>;
     clearHistory(): Promise<LocalHistoryState>;

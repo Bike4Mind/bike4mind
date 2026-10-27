@@ -47,7 +47,7 @@ Steps:
    ```
 3. Type the 8-digit code → **Verify Code** → you're in.
 
-`$E2E_CLEANUP_SECRET` is one shared value, the same on every preview and stable across redeploys — see
+`$E2E_CLEANUP_SECRET` is the preview-tier value: the same on every preview and stable across redeploys, but different from dev/staging and production — see
 [Environment Variables](#environment-variables) for what it is and how to get it.
 
 Notes: codes expire in 10 min and are single-use (use **Resend code** + re-fetch if needed);
@@ -89,7 +89,7 @@ Copy `.env.e2e.example` to `.env.e2e` and fill in the values:
 |----------|----------|-------------|
 | `API_URL` | Yes | Base URL of the app (default: `http://localhost:3000`) |
 | `E2E_TEST_ID` | No* | Prefix for test user isolation (e.g., `alice`). **Required in practice on any shared stage:** when empty, cleanup runs unscoped and hard-deletes every ephemeral `-e2e@test.com` user on the target stage, including the live users of anyone else's in-flight run. CI does not depend on this variable — `e2e-run.yml` always appends a per-run `gh<run_id>` scope. |
-| `E2E_CLEANUP_SECRET` | Yes* | Shared secret for the `/api/test/*` endpoints (create-user, cleanup, otc-code). **Same value on every stage** (previews, staging, production) — each deploy writes the deployer's `E2E_CLEANUP_SECRET` GitHub secret into that stage's SST secret, so it does not change between deploys. Required when running without SST context (staging/preview); falls back to the SST Resource if unset. Get the value from the team secret store, or read it per-stage: `./for-env bike4mind-previews npx sst secret list --stage pr<N> \| grep E2E_CLEANUP_SECRET`. Never commit the literal value. |
+| `E2E_CLEANUP_SECRET` | Yes* | Shared secret for the `/api/test/*` endpoints (create-user, cleanup, otc-code). **One value per tier** (previews, dev/staging, production each have their own) — each deploy writes its tier's value into that stage's SST secret, so it does not change between deploys, but a value from one tier is rejected by the others. Required when running without SST context (staging/preview); falls back to the SST Resource if unset. Get the value from the team secret store, or read it per-stage: `./for-env bike4mind-previews npx sst secret list --stage pr<N> \| grep E2E_CLEANUP_SECRET`. Never commit the literal value. |
 | `PW_WORKERS` | No | Number of parallel workers (default: 1) |
 
 ## Project Structure
@@ -392,18 +392,18 @@ Preview deploys are created on demand by maintainers via the internal deployer (
 3. Results are posted as a **comment on the PR** with pass/fail counts
 4. The **HTML report** is uploaded as a build artifact (`playwright-report-pr<N>-label`)
 
-In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is one stable value that every deploy writes into that stage's SST secret, so `pr{n}` previews, staging, and production all share it. Previews used to self-provision a fresh random per deploy; that was dropped because it made manual QA against a preview a chore and let a redeploy invalidate the secret mid-run.
+In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is a stable per-tier value that every deploy writes into that stage's SST secret: all `pr{n}` previews share one value, and dev/staging and production each have their own. Previews used to self-provision a fresh random per deploy; that was dropped because it made manual QA against a preview a chore and let a redeploy invalidate the secret mid-run.
 
 How the suite reads that value depends on the account it is running against:
 
 - **dev / staging (same account)** - the Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value`, the same value the cleanup/create-user API validates against.
-- **`pr<N>` previews (separate account)** - the dev role cannot `sst shell` into a preview stack, so the workflows inject the `E2E_CLEANUP_SECRET` **repo secret** on `Bike4Mind/bike4mind` directly into the step's environment instead.
+- **`pr<N>` previews (separate account)** - the dev role cannot `sst shell` into a preview stack, so the workflows inject the `E2E_CLEANUP_SECRET_PREVIEW` **repo secret** on `Bike4Mind/bike4mind` directly into the step's environment (as `E2E_CLEANUP_SECRET`) instead. Dev/staging runs leave that env var empty so the SST value wins.
 
-That repo secret is a mirror of the value the deployer seeds onto every stage, and it has to be set on this repo specifically - a copy living only on the deployer repo is not visible here. **When it is unset, preview-targeted runs cannot start at all.** Zero tests ran, so neither a pass nor a failure would be true, and each workflow reports it as a labeled skip instead:
+That repo secret is a mirror of the preview-tier value the deployer seeds onto preview stages, and it has to be set on this repo specifically - a copy living only on the deployer repo is not visible here. **When it is unset, preview-targeted runs cannot start at all.** Zero tests ran, so neither a pass nor a failure would be true, and each workflow reports it as a labeled skip instead:
 
 - `e2e-on-label.yml` - the PR comment reads `E2E Tests Skipped` and names the secret.
-- `e2e-run.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)`. The promotion commit status is left missing, which is not promotable.
-- `e2e-ai-latency.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)` and the table legend names the configuration gap instead of blaming Playwright. **One exception:** a *full-matrix* preview dispatch still fails red, because model discovery cannot run without the secret and the matrix cannot be built without discovered models. That run names the cause in an `::error::` rather than reporting an empty discovery result.
+- `e2e-run.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET_PREVIEW not configured)`. The promotion commit status is left missing, which is not promotable.
+- `e2e-ai-latency.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET_PREVIEW not configured)` and the table legend names the configuration gap instead of blaming Playwright. **One exception:** a *full-matrix* preview dispatch still fails red, because model discovery cannot run without the secret and the matrix cannot be built without discovered models. That run names the cause in an `::error::` rather than reporting an empty discovery result.
 
 If you see any of these, the fix is to set the repo secret, not to debug the suite.
 

@@ -2,6 +2,7 @@ import {
   IAdminSettingsRepository,
   ICreditLotRepository,
   ICreditTransactionRepository,
+  newSignupGrant,
   IUserDocument,
   IUserRepository,
 } from '@bike4mind/common';
@@ -313,6 +314,7 @@ export const registerUser = async (
     currentStorageSize: 0,
     currentCredits: 0,
     pendingCreditGrant: freeCredits > 0 ? freeCredits : null,
+    ...(!hasInviteCode ? { signupGrant: await newSignupGrant(db.adminSettings) } : {}),
     level: 'DemoUser',
     isBanned: false,
     isModerated: false,
@@ -426,6 +428,10 @@ export const registerViaOTC = async (
   const { db, logger } = adapters;
   const newUser = await registerUser(params, adapters);
 
+  if (newUser.signupGrant) {
+    await db.users.update({ id: newUser.id, emailVerified: true, emailVerifiedAt: new Date() });
+  }
+
   const taggedUser = { ...newUser, tags: [...new Set([...(newUser.tags ?? []), 'Customer'])] };
   const hasPendingCredits = taggedUser.tags.includes(PENDING_FREE_CREDITS_TAG);
 
@@ -464,6 +470,10 @@ export const registerViaOTC = async (
   // currentCredits is deliberately not written: addCredits already `$inc`ed it.
   await db.users.update({ id: newUser.id, ...verification });
 
+  if (newUser.signupGrant) {
+    const persisted = await db.users.findById(newUser.id);
+    if (persisted) return persisted;
+  }
   return { ...newUser, ...verification } as IUserDocument;
 };
 

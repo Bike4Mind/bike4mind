@@ -98,13 +98,14 @@ Every admin page renders inside the shared admin layout (sidebar navigation plus
 The sidebar is the frame of every admin page, so it sets the tone. Calm, scannable and never louder than the content.
 
 - **Size and surface.** 248 px wide on desktop, `canvas` background, 1 px `border` on its right edge, padding 20 px top and 14 px sides. No shadow, no colored background.
-- **Brand row.** 28 px ink tile with the product mark, "Admin" in 14 / 600, and a `Cmd K` key hint pushed to the right. 18 px below it before the first item.
+- **Brand row.** 28 px ink tile with the product mark, "Admin" in 14 / 600, a neutral environment chip (Local, Staging, Preview; hidden on production), and a `Cmd K` key hint pushed to the right. 18 px below it before the first item.
 - **Search.** A 32 px filter input under the brand row ("Filter pages", `/` to focus). Typing narrows items across all sections and hides empty sections.
 - **Sections.** A small number of groups (Overview, People, Money, Trust and safety, AI, Platform, Settings) with a 12 / 500 `inkMuted` label in sentence case, 20 px above each label. Labels are static text, not accordions; there are no section icons, no section colors and no dividers between sections.
 - **Items.** 36 px tall, 8 px radius, 10 px horizontal padding, 16 px stroke icon (2 px stroke, `inkMuted`) then the label in 14 / 500 `inkSecondary`. One line only: labels are short ("Credits", not "Credit Analytics") and truncate with a tooltip rather than wrap. Hover: `hover` fill and `ink` text.
 - **Active item.** `surface` fill, `ink` text and icon, and a 1 px `border` ring. Exactly one active item; on a detail page the item of its list is active (Users on a user profile).
-- **Long lists.** A section with more than 7 items shows the 5 most used and a "More" row that expands in place. The sidebar scrolls on its own with a hidden scrollbar until hover; the brand row and search stay pinned.
+- **Long lists.** A section with more than 7 items shows the 5 most used and a "More" row that expands in place. The sidebar scrolls on its own, and every admin scroll area uses a thin overlay scrollbar that shows on hover or focus; the brand row and search stay pinned.
 - **Footer.** Pinned at the bottom: the signed-in admin (24 px avatar, name, role in `inkMuted`) and a collapse button.
+- **App-wide chrome.** Anything that renders under the admin root but belongs to the whole app (the floating AI chat, the help panel) spreads `adminSurfaceExcludeProps` on its root so the admin skin stops there.
 - **Collapsed and mobile.** Collapsed is a 64 px icon rail with tooltips, remembered per admin. Under 900 px the sidebar becomes a drawer opened from a menu button in the page header.
 
 ### Page skeletons

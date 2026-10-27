@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -7,6 +7,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn() } }));
 
+import { api } from '@client/app/contexts/ApiContext';
 import Bike4MindUserDetails from './Bike4MindUserDetails';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -103,6 +104,87 @@ describe('Bike4MindUserDetails - storage usage', () => {
     const progress = screen.getByTestId('admin-user-storage-progress');
     expect(progress).toHaveAttribute('aria-valuenow', '100');
     expect(progress.className).toContain('MuiLinearProgress-colorDanger');
+  });
+});
+
+describe('Bike4MindUserDetails - signup grant support', () => {
+  it('leaves existing accounts outside staged grants', () => {
+    renderDetails({});
+    expect(screen.getByTestId('admin-user-signup-grant')).toHaveTextContent('not enrolled');
+    expect(screen.queryByTestId('admin-user-grant-unlock-btn')).toBeNull();
+  });
+  it('shows the released stage and requires a reason before unlock', () => {
+    renderDetails({
+      user: {
+        ...(user as object),
+        signupGrant: {
+          stage: 'signup',
+          signupCredits: 12,
+          unlockCredits: 28,
+          creditsReleased: 12,
+          nextCondition: 'verification',
+        },
+      },
+    });
+    expect(screen.getByTestId('admin-user-signup-grant')).toHaveTextContent('released 12; next: verification');
+    expect(screen.getByTestId('admin-user-grant-unlock-btn')).toBeDisabled();
+    fireEvent.change(screen.getByTestId('admin-user-grant-reason-input').querySelector('textarea')!, {
+      target: { value: 'Support approved' },
+    });
+    expect(screen.getByTestId('admin-user-grant-unlock-btn')).not.toBeDisabled();
+  });
+
+  describe('unlock click', () => {
+    const enrolled = {
+      ...(user as object),
+      signupGrant: {
+        stage: 'signup',
+        signupCredits: 12,
+        unlockCredits: 28,
+        creditsReleased: 12,
+        nextCondition: 'verification',
+      },
+    };
+    const submitReason = () => {
+      renderDetails({ user: enrolled });
+      fireEvent.change(screen.getByTestId('admin-user-grant-reason-input').querySelector('textarea')!, {
+        target: { value: ' Support approved ' },
+      });
+      fireEvent.click(screen.getByTestId('admin-user-grant-unlock-btn'));
+    };
+    beforeEach(() => vi.mocked(api.post).mockReset());
+
+    it('posts the trimmed reason and clears it on success', async () => {
+      vi.mocked(api.post).mockResolvedValue({ data: { creditsGranted: 28 } });
+      submitReason();
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith('/api/admin/users/u1/unlock-signup-grant', { reason: 'Support approved' })
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId('admin-user-grant-reason-input').querySelector('textarea')!).toHaveValue('')
+      );
+      expect(screen.queryByTestId('admin-user-grant-unlock-error')).toBeNull();
+      expect(await screen.findByTestId('admin-user-grant-unlock-result')).toHaveTextContent('28 credits released');
+    });
+
+    it('says so when the unlock releases nothing', async () => {
+      vi.mocked(api.post).mockResolvedValue({ data: { creditsGranted: 0 } });
+      submitReason();
+      expect(await screen.findByTestId('admin-user-grant-unlock-result')).toHaveTextContent('No credits released');
+      expect(screen.queryByTestId('admin-user-grant-unlock-error')).toBeNull();
+    });
+
+    it('shows the retry message when the release fails', async () => {
+      // Only the unlock call fails; the storage recalculation fired on mount must still resolve.
+      vi.mocked(api.post).mockImplementation(async url => {
+        if (String(url).endsWith('/unlock-signup-grant')) throw new Error('boom');
+        return { data: {} };
+      });
+      submitReason();
+      expect(await screen.findByTestId('admin-user-grant-unlock-error')).toHaveTextContent(
+        'remains available for retry'
+      );
+    });
   });
 });
 

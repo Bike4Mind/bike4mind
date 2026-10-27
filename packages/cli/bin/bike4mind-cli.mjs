@@ -93,7 +93,7 @@ const argv = await yargs(hideBin(process.argv))
   })
   .option('output-format', {
     type: 'string',
-    description: 'Output format when using -p: text (default), json, stream-json (NDJSON)',
+    description: 'Output format when using -p: text (default), json, stream-json (NDJSON); json also applies to b4m models ls/search/show',
     choices: ['text', 'json', 'stream-json'],
     default: 'text',
   })
@@ -108,7 +108,7 @@ const argv = await yargs(hideBin(process.argv))
   })
   .option('ollama-host', {
     type: 'string',
-    description: 'Add local Ollama models to the model picker (e.g. http://localhost:11434)',
+    description: 'Add local Ollama models to the model picker (e.g. http://localhost:11434); `b4m models` remembers it',
   })
   // claude-compatible flags (host drop-in masquerade). Declared so a host's
   // claude launch flags parse into named options instead of leaking into the
@@ -279,6 +279,67 @@ const argv = await yargs(hideBin(process.argv))
       })
       .demandCommand(1, 'You must provide a subcommand (push)');
   })
+  .command('models', 'Find, download and use local models (Ollama, Hugging Face GGUF)', (yargs) => {
+    return yargs
+      .command(['ls', 'list'], 'List models installed on the local runtime', {}, async () => {
+        // Handled by external command handler
+      })
+      .command('search <query..>', 'Search Hugging Face for GGUF models', (yargs) => {
+        return yargs
+          .positional('query', { type: 'string', describe: 'Search terms' })
+          .option('include-abliterated', {
+            type: 'boolean',
+            description: 'Also list abliterated and uncensored builds, labelled and last',
+            default: false,
+          });
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command('show <repo>', "Show a Hugging Face repo's GGUF builds, license and gating", (yargs) => {
+        return yargs.positional('repo', { type: 'string', describe: 'owner/repo' });
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command('pull <ref>', 'Download a model after showing its size and license', (yargs) => {
+        return yargs
+          .positional('ref', {
+            type: 'string',
+            describe: 'owner/repo[:quant] or hf.co/owner/repo:quant (Hugging Face), or an Ollama name like qwen2.5:0.5b',
+          })
+          .option('yes', {
+            type: 'boolean',
+            description: 'Download without asking for confirmation',
+            default: false,
+          })
+          .option('accept-license', {
+            type: 'boolean',
+            description: 'Accept a non-permissive model license without a prompt',
+            default: false,
+          })
+          .example('b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M', 'Pull a Hugging Face GGUF build')
+          .example('b4m models pull qwen2.5:0.5b', 'Pull from the Ollama library');
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command(['rm <name>', 'remove <name>'], 'Remove an installed model', (yargs) => {
+        return yargs
+          .positional('name', { type: 'string', describe: 'Installed model name' })
+          .option('yes', {
+            type: 'boolean',
+            description: 'Remove without asking for confirmation',
+            default: false,
+          });
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command('use <name>', 'Make an installed model the default the CLI chats with', (yargs) => {
+        return yargs.positional('name', { type: 'string', describe: 'Installed model name' });
+      }, async () => {
+        // Handled by external command handler
+      })
+      .example('b4m models ls --ollama-host http://127.0.0.1:11434', 'Use and remember an Ollama host')
+      .demandCommand(1, 'You must provide a subcommand (ls, search, show, pull, rm, use)');
+  })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')
   .command('acp', 'Run as an Agent Client Protocol (ACP) stdio server for editors like Zed')
@@ -342,7 +403,7 @@ if (argv.resume) {
 }
 // Positional task (claude `<prompt>` form): seeds AND submits turn 1, stays interactive.
 // Only when it's not a known subcommand and headless -p wasn't used.
-const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'update', 'doctor', 'acp']);
+const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'models', 'update', 'doctor', 'acp']);
 if (argv.prompt === undefined && argv._.length > 0 && !KNOWN_SUBCOMMANDS.has(String(argv._[0]))) {
   process.env.B4M_INITIAL_PROMPT = String(argv._[0]);
 }
@@ -529,6 +590,30 @@ if (argv._[0] === 'skills') {
 
     await handleSkillsCommand(skillsSubcommand, argv);
     process.exit(0);
+  } catch (error) {
+    console.error('Error:', error.message);
+    process.exit(1);
+  }
+}
+
+// Handle models subcommands (external commands)
+if (argv._[0] === 'models') {
+  const modelsSubcommand = argv._[1];
+
+  try {
+    let handleModelsCommand;
+
+    if (isDev) {
+      const { register } = require('tsx/esm/api');
+      register();
+      const module = await import('../src/commands/modelsCommand.ts');
+      handleModelsCommand = module.handleModelsCommand;
+    } else {
+      const module = await import('../dist/commands/modelsCommand.mjs');
+      handleModelsCommand = module.handleModelsCommand;
+    }
+
+    process.exit(await handleModelsCommand(modelsSubcommand, argv));
   } catch (error) {
     console.error('Error:', error.message);
     process.exit(1);

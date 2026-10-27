@@ -71,7 +71,7 @@ export function resolveFieldLimits(
   }: FieldLimitOptions
 ): Record<string, boolean> | undefined {
   if (collectionName === 'users') {
-    return { password: false, stripeCustomerId: false, resetPasswordToken: false };
+    return { password: false, stripeCustomerId: false, resetPasswordToken: false, signupGrantAssessment: false };
   }
   if (collectionName === questCollectionName) {
     const excluded = [...(isQuestOwner ? [] : OWNER_ONLY_PROMPT_META_PROJECTION_PATHS), ...QUEST_SERVER_ONLY_FIELDS];

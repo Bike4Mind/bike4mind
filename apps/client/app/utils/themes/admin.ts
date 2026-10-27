@@ -68,3 +68,21 @@ export const adminPalette = {
     },
   },
 } satisfies Record<'light' | 'dark', AdminPalette>;
+
+export type DeploymentEnvironment = 'local' | 'staging' | 'preview' | 'production' | 'unknown';
+
+/**
+ * The environment banner's fills, one per environment and the same in light and dark: the strip
+ * sits above the admin surface, on every color scheme. Muted on purpose, so it names the
+ * environment without being the loudest thing on screen; each passes 4.5:1 (contrast.test.ts).
+ */
+export const environmentBannerPalette = {
+  foreground: '#F4F4F5',
+  background: {
+    local: '#2F5E48',
+    staging: '#3B4472',
+    preview: '#56457A',
+    production: '#8B3A3A',
+    unknown: '#6B5A1E',
+  },
+} satisfies { foreground: string; background: Record<DeploymentEnvironment, string> };
