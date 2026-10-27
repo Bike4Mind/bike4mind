@@ -98,9 +98,23 @@ describe('archFromModelInfo', () => {
       contextMax: 40960,
       blockCount: 36,
       headCount: 32,
+      embeddingLength: 4096,
       full: dense(36, 8, 128),
       mtpLayers: 0,
     });
+  });
+
+  it('omits the active FFN width when an MoE header lacks an expert width', () => {
+    const moe = {
+      ...qwen3,
+      'qwen3.feed_forward_length': 12288,
+      'qwen3.expert_count': 128,
+      'qwen3.expert_used_count': 8,
+    };
+    expect(archFromModelInfo(moe)?.activeFeedForwardLength).toBeUndefined();
+    expect(archFromModelInfo({ ...moe, 'qwen3.expert_feed_forward_length': 768 })?.activeFeedForwardLength).toBe(
+      8 * 768
+    );
   });
 
   it('derives the head dim from embedding_length / head_count when key_length is absent', () => {
@@ -146,7 +160,14 @@ describe('archFromModelInfo', () => {
   it('keeps layers with zero KV heads out of the cache even without recurrent state keys', () => {
     expect(
       archFromModelInfo({ ...qwen3, 'qwen3.block_count': 4, 'qwen3.attention.head_count_kv': [0, 8, 0, 8] })
-    ).toEqual({ contextMax: 40960, blockCount: 4, headCount: 32, full: dense(2, 8, 128), mtpLayers: 0 });
+    ).toEqual({
+      contextMax: 40960,
+      blockCount: 4,
+      headCount: 32,
+      embeddingLength: 4096,
+      full: dense(2, 8, 128),
+      mtpLayers: 0,
+    });
   });
 
   it.each([[undefined], [null], [[]]])('falls back to full_attention_interval when recurrent_layers is %j', flags => {
@@ -309,6 +330,7 @@ describe('archFromModelInfo', () => {
         contextMax: 128000,
         blockCount: 4,
         headCount: 16,
+        embeddingLength: 1024,
         full: dense(0, 8, 64),
         swa: { ...dense(2, 8, 64), window: 4096 },
         recurrent: { layers: 2, stateBytesPerSeq: 2 * 1024 * 2 * 4 },
@@ -351,6 +373,13 @@ describe('archFromModelInfo', () => {
       'deepseek2.attention.head_count_kv': 128,
     };
     expect(archFromModelInfo(legacy)?.full).toEqual(dense(60, 128, 576, 512));
+    // DSA and MSA add an indexer key cache and an F32 score per layer that MLA pricing misses.
+    for (const dsa of ['deepseek32', 'glm-dsa', 'glm5-next', 'minimax-m3']) {
+      const info = Object.fromEntries(
+        Object.entries(deepseek).map(([key, value]) => [key.replace(/^deepseek2\b/, dsa), value])
+      );
+      expect(archFromModelInfo({ ...info, 'general.architecture': dsa })).toBeNull();
+    }
     expect(archFromModelInfo(legacy)?.mla).toBeUndefined();
   });
 
