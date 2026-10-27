@@ -259,7 +259,7 @@ describe('DataTable', () => {
     expect(onPageSizeChange).toHaveBeenCalledWith(100);
   });
 
-  it('renders group headers with their rows first and the rest after', () => {
+  it('renders group headers with their rows first, in page order, and the rest after', () => {
     renderTable({
       rows: rows.slice(0, 5),
       groups: [{ id: 'bots', header: <span>bots.example</span>, rowIds: ['4', '2'] }],
@@ -271,8 +271,8 @@ describe('DataTable', () => {
       .map(row => row.getAttribute('data-testid'));
     expect(order).toEqual([
       'admin-table-group-bots',
-      'admin-table-row-4',
       'admin-table-row-2',
+      'admin-table-row-4',
       'admin-table-row-1',
       'admin-table-row-3',
       'admin-table-row-5',

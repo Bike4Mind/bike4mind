@@ -150,6 +150,26 @@ describe('UsersTab', () => {
     expect(target).toMatchObject({ kind: 'filter', filter: { status: 'suspended' } });
   });
 
+  it('drops a row ticked while the previous filter rows are still showing once the new page lands', async () => {
+    let releaseFiltered: () => void = () => undefined;
+    apiGet.mockImplementation(async (url: string, config?: { params?: { status?: string } }) => {
+      if (url === '/api/admin/users' && config?.params?.status === 'suspended') {
+        await new Promise<void>(resolve => (releaseFiltered = resolve));
+      }
+      return { data: respond(url) };
+    });
+    renderTab();
+    await screen.findByTestId('admin-users-row-u1');
+
+    fireEvent.click(screen.getByTestId('admin-users-views-suspended-btn'));
+    await waitFor(() => expect(fakeAdminRouter.search).toMatchObject({ status: 'suspended' }));
+    fireEvent.click(within(screen.getByTestId('admin-table-select-u1')).getByRole('checkbox'));
+    expect(screen.getByTestId('admin-bulk-action-bar')).toBeTruthy();
+
+    await act(async () => releaseFiltered());
+    await waitFor(() => expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull());
+  });
+
   it('filters to a signup chart window, replacing the signed-up filter, and clears it from the chip', async () => {
     act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, signedUp: 'hour' }));
     renderTab();
