@@ -19,4 +19,6 @@ export const NETWORK_META_FIELDS = {
     maxlength: 36,
     validate: (value: string | null) => value === null || JA4_PATTERN.test(value),
   },
+  wafAnonIp: { type: Boolean, default: null },
+  wafBotSignal: { type: Boolean, default: null },
 } satisfies Record<keyof INetworkMeta, unknown>;

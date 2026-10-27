@@ -29,13 +29,22 @@ permissions:
 
 jobs:
   cla:
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ubuntu-latest
     # Only run in the canonical public repo; never in the private monorepo or forks.
     if: >
       github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind') &&
       (
-        (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
-        github.event_name == 'pull_request_target'
+        github.event_name == 'pull_request_target' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          # A cheap prefilter only: the action trims the body and does the exact match itself,
+          # so this must not be stricter (a pasted sign phrase often carries a trailing newline).
+          (
+            contains(github.event.comment.body, 'I hereby sign the CLA') ||
+            contains(github.event.comment.body, 'recheck')
+          )
+        )
       )
     steps:
       - name: Generate App token
@@ -44,9 +53,11 @@ jobs:
         with:
           client-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: CLA Assistant
-        uses: contributor-assistant/github-action@v2.6.1
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # App installation token with contents:write, used to persist

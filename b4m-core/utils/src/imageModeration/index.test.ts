@@ -1,6 +1,6 @@
 import { randomBytes, randomFillSync } from 'node:crypto';
 import { describe, it, expect, vi } from 'vitest';
-import imageSize from 'image-size';
+import { imageSize } from 'image-size';
 import {
   ImageTooLargeException,
   InvalidImageFormatException,

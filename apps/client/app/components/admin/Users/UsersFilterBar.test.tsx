@@ -1,6 +1,6 @@
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -29,6 +29,7 @@ vi.mock('@client/app/components/help/ContextHelpButton', () => ({
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
 import UsersFilterBar from './UsersFilterBar';
 import { DEFAULT_USERS_PARAMS, useUsersTab } from './useUsersTabParams';
+import { AdminCommandPalette } from '../shared/AdminCommandPalette';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -55,6 +56,19 @@ beforeEach(() => {
 });
 
 describe('UsersFilterBar', () => {
+  it.each([false, true])('focuses the real Users search with / on mobile=%s', mobile => {
+    mockIsMobile.mockReturnValue(mobile);
+    render(
+      <div data-admin-surface>
+        <AdminCommandPalette />
+        <UsersFilterBar {...baseProps} />
+      </div>,
+      { wrapper: TestWrapper }
+    );
+    fireEvent.keyDown(document.body, { key: '/' });
+    expect(screen.getByLabelText('Search users')).toHaveFocus();
+  });
+
   it('shows the filter and sort controls inline on desktop, with no mobile filter toggle', () => {
     render(<UsersFilterBar {...baseProps} />, { wrapper: TestWrapper });
 

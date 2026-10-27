@@ -7,6 +7,7 @@ import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
+import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -45,6 +46,14 @@ export interface INetworkMeta {
   /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
   isDatacenter: boolean | null;
   ja4?: string | null;
+  /**
+   * WAF anonymous-IP label matched; null on self-host and when ORIGIN_VERIFY_SECRET is absent (no WAF attached).
+   * Only set to true on /api/otc/ paths -- the AnonymousIpList rule is scoped there;
+   * false on other deployed paths means unchecked, not "not anonymous".
+   */
+  wafAnonIp?: boolean | null;
+  /** WAF bot-control bot label matched; null on self-host and when ORIGIN_VERIFY_SECRET is absent (no WAF attached). */
+  wafBotSignal?: boolean | null;
 }
 
 export interface ISignupMeta extends INetworkMeta {
@@ -201,8 +210,15 @@ export interface IUserPreferences {
   desktopPromoDismissed?: boolean;
 }
 
-/** Source of a moderation flag - which moderation backend produced the hit. */
-export type ModerationHitSource = 'openai' | 'bedrock';
+/**
+ * Which system produced a moderation hit.
+ * - 'openai': OpenAI Moderation API pre-send check.
+ * - 'bedrock': Bedrock Guardrails pre-send check.
+ * - 'provider': provider-side block (settled refusal/content_filter stop reason or a
+ *   classifier throw that no fallback model answered); no pre-call moderation service was involved and
+ *   no category labels are available from the provider.
+ */
+export type ModerationHitSource = 'openai' | 'bedrock' | 'provider';
 
 /**
  * Escalation state for a user's moderation record.
@@ -288,6 +304,9 @@ export interface IUser extends ICreditHolder {
    * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
    */
   freeCreditClaimEmail?: string | null;
+  /** Absent on accounts created before staged grants were enabled. */
+  signupGrant?: SignupGrant;
+  signupGrantAssessment?: SignupGrantAssessment;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;

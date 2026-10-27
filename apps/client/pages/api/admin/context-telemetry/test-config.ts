@@ -6,6 +6,7 @@ import { telemetryDryRunResultRepository, adminSettingsRepository, Quest } from 
 import { z } from 'zod';
 import { ApiKeyScope, ContextTelemetryAlertsSchema, type ContextTelemetry, ALERT_THRESHOLDS } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import {
   generateTelemetryFingerprint,
   generateSemanticTelemetryFingerprint,
@@ -305,6 +306,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       },
       fingerprint,
       semanticFingerprint,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.context_telemetry.test_run',
+      target: { kind: 'system', id: 'context-telemetry-test-config', displayName: 'Context telemetry alert test' },
+      summary: 'ran context telemetry alert config test',
+      details: {
+        source: body.telemetryEntryId ? 'entry' : 'sample',
+        telemetryEntryId: body.telemetryEntryId,
+        sampleType: body.telemetryEntryId ? undefined : (body.sampleType ?? 'high'),
+        wouldCreateIssue,
+        wouldSendSlackAlert,
+      },
     });
 
     // Transform to response format

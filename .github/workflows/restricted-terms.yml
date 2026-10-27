@@ -45,7 +45,7 @@ jobs:
     if: >-
       github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind') &&
       github.event_name != 'merge_group'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       # Under pull_request_target the default ref is the base branch, never the

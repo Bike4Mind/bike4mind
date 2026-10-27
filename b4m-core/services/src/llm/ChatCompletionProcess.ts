@@ -43,11 +43,13 @@ import {
   resolveHistoryFetchLimit,
   QuestErrorCode,
   getQuestErrorCode,
+  isProviderRefusalStopReason,
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   MAX_TOOL_CALLS_CEILING,
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
+  type ModerationHitSource,
   visibleReplyText,
   tokenEstimateMultiplier,
   pairDataLakeTools,
@@ -2744,7 +2746,7 @@ export class ChatCompletionProcess {
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
             // must never mask the block, so its own failure is swallowed with a warning.
             if (moderationError instanceof FlaggedContentError) {
-              await this.recordModerationHit('openai', moderationError, questId, logger);
+              await this.recordModerationHit('openai', moderationError.categories, questId, logger);
             }
             throw moderationError;
           }
@@ -2761,7 +2763,7 @@ export class ChatCompletionProcess {
               await this.getBedrockGuardrailsService(guardrailId, guardrailVersion, logger).checkPrompt(message);
             } catch (moderationError) {
               if (moderationError instanceof FlaggedContentError) {
-                await this.recordModerationHit('bedrock', moderationError, questId, logger);
+                await this.recordModerationHit('bedrock', moderationError.categories, questId, logger);
               }
               throw moderationError;
             }
@@ -6063,6 +6065,11 @@ export class ChatCompletionProcess {
         };
       } catch (error) {
         logger.debug(`Error during fallback-enabled model invocation (final model: ${currentModel.id}):`, error);
+        // Only a turn that ends refused counts: a refusal a fallback model answered may be a
+        // classifier false positive, and the hit drives throttling/suspension.
+        if (error instanceof Error && isSafetyRefusalError(error)) {
+          await this.recordModerationHit('provider', [], quest.id, logger);
+        }
         throw error; // Re-throw the error to be handled by the outer try-catch
       }
 
@@ -6307,6 +6314,12 @@ export class ChatCompletionProcess {
         const providerStopReason = actualTokenUsage?.stopReason;
         const wasTruncated = providerStopReason === TRUNCATED_FINISH_REASON;
         const wasDegenerate = providerStopReason === DEGENERATE_FINISH_REASON;
+
+        // Provider refusals that settle (HTTP 200) rather than throw; the catch above only sees throws.
+        // Not awaited so recording does not delay credit settlement.
+        if (isProviderRefusalStopReason(providerStopReason)) {
+          void this.recordModerationHit('provider', [], quest.id, logger);
+        }
         const earlyStopStamp = buildEarlyStopStamp(providerStopReason);
 
         // P6: Credits reconciliation - settle the pre-reserved credits against actual usage.
@@ -7973,8 +7986,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   }
 
   private async recordModerationHit(
-    source: 'openai' | 'bedrock',
-    error: FlaggedContentError,
+    source: ModerationHitSource,
+    categories: string[],
     questId: string,
     logger: Logger
   ): Promise<void> {
@@ -7982,14 +7995,15 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       const decision = await applyModerationHit({
         users: this.db.users,
         userId: this.user.id,
-        hit: { at: new Date(), categories: error.categories, source, questId },
+        hit: { at: new Date(), categories, source, questId },
       });
       logger.warn(
-        `🚦 [Moderation] User ${this.user.id} flagged by ${source} (${error.categories.join(', ')}); ` +
-          `${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
+        `[Moderation] User ${this.user.id} flagged by ${source}` +
+          (categories.length ? ` (${categories.join(', ')})` : '') +
+          `; ${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
       );
     } catch (recordError) {
-      logger.error(`🚦 [Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
+      logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
   }
 

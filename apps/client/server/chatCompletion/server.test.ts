@@ -121,6 +121,7 @@ vi.mock('@bike4mind/observability', () => ({
     debug = vi.fn();
     updateMetadata = vi.fn();
   },
+  describeErrorCause: () => undefined,
 }));
 
 vi.mock('@bike4mind/utils', async importOriginal => ({

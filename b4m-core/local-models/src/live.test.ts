@@ -350,8 +350,12 @@ describe.runIf(OLLAMA || OPENAI)('live host', () => {
       });
       if (hasSharedMemory) expect(profile.gpuMemoryBytes).toBeNull();
       else expect(profile.gpuMemoryBytes).toBeGreaterThan(0);
+    } else if (profile.memoryKind === 'cpu') {
+      expect(profile).toMatchObject({ gpuCount: 0, gpuMemoryBytes: null, gpuName: null });
     } else {
-      expect(profile).toMatchObject({ memoryKind: 'cpu', gpuCount: 0, gpuMemoryBytes: null, confidence: 'low' });
+      expect(profile.memoryKind).toBe('discrete');
+      expect(profile.gpuCount).toBeGreaterThan(0);
+      expect(profile.confidence).toBe(profile.gpuMemoryBytes === null ? 'low' : 'high');
     }
   });
 });

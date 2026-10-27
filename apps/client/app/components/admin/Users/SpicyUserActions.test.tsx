@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -13,7 +13,13 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const user = { id: 'u1', name: 'Ada', isBanned: false, isModerated: false } as AdminUserListItem;
+const user = {
+  id: 'u1',
+  name: 'Ada',
+  email: 'ada@example.com',
+  isBanned: false,
+  isModerated: false,
+} as AdminUserListItem;
 
 const openConfirmModal = (handleDeleteUser: (id: string, reason: string) => Promise<void>) => {
   render(
@@ -22,14 +28,11 @@ const openConfirmModal = (handleDeleteUser: (id: string, reason: string) => Prom
       wrapper: TestWrapper,
     }
   );
-  fireEvent.change(screen.getByTestId('delete-user-confirm-input').querySelector('input') as HTMLInputElement, {
-    target: { value: 'DELETE' },
-  });
   fireEvent.click(screen.getByTestId('delete-user-btn'));
 };
 
 describe('SpicyUserActions - delete reason', () => {
-  it('keeps Delete disabled until a valid reason is entered, then passes the trimmed reason', () => {
+  it('keeps Delete disabled until a valid reason and the typed email, then passes the trimmed reason', async () => {
     const handleDeleteUser = vi.fn().mockResolvedValue(undefined);
     openConfirmModal(handleDeleteUser);
 
@@ -40,10 +43,14 @@ describe('SpicyUserActions - delete reason', () => {
     expect(confirmButton).toBeDisabled();
 
     fireEvent.change(screen.getByTestId('user-delete-reason-input'), { target: { value: '  Account abuse report  ' } });
+    expect(confirmButton).toBeDisabled();
+    expect(screen.getByTestId('delete-user-dialog-hint')).toHaveTextContent('Type the email address exactly');
+
+    fireEvent.change(screen.getByTestId('delete-user-confirm-input'), { target: { value: 'ada@example.com' } });
     expect(confirmButton).toBeEnabled();
     fireEvent.click(confirmButton);
 
-    expect(handleDeleteUser).toHaveBeenCalledWith('u1', 'Account abuse report');
+    await waitFor(() => expect(handleDeleteUser).toHaveBeenCalledWith('u1', 'Account abuse report'));
   });
 });
 

@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { ApiKeyScope, isPlaceholderValue } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardSnapshotDocument } from '@bike4mind/database';
@@ -91,6 +92,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           },
         }
       );
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.security_scan.triggered',
+        target: { kind: 'system', id: 'security-scan:web', displayName: 'web security scan' },
+        summary: 'triggered a manual web scan',
+        details: { scanType: 'web', stage },
+      });
 
       return res.status(202).json({ canRun: true, queued: true });
     } catch (error) {

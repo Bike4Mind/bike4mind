@@ -8,13 +8,13 @@ import { ProviderBundle } from '@client/app/contexts/ProviderBundle';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
-import { useHelpKeyboardShortcut } from '@client/app/hooks/useHelpKeyboardShortcut';
 import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 import { SidebarNav } from './AdminSidebarNav';
 import { AdminTab } from './adminSidebarConfig';
+import { environmentChipLabel, resolveCurrentEnvironment } from './environmentBanner';
 import { adminTabToSlug } from './adminTabSlugs';
-import { adminFocus } from './shared/adminStyles';
+import { adminFocus, adminScrollGutter } from './shared/adminStyles';
 import { useAdminModal } from './useAdminModal';
 import { useAdminNotifications } from './useAdminNotifications';
 import { useAdminSidebarCollapsed } from './useAdminSidebarState';
@@ -36,8 +36,9 @@ type AdminLayoutProps = {
  *
  * `data-admin-surface` on the shell sheet is the contract with the admin skin: it scopes the
  * admin theme to everything under it, so this must stay the only element carrying it. The
- * environment banner sits above it, outside the skin (see AdminEnvironmentBanner); the phone
- * drawer is rendered in place (not portalled) to stay inside the scope.
+ * environment banner sits above it, outside the skin (see AdminEnvironmentBanner); app-wide chrome
+ * rendered inside it (the AI chat, the help panel) opts out with `data-admin-surface-exclude`. The
+ * phone drawer is rendered in place (not portalled) to stay inside the scope.
  */
 export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayoutProps) => {
   const pathname = useLocation({ select: location => location.pathname });
@@ -50,8 +51,6 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: isAdmin });
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
-
-  useHelpKeyboardShortcut();
 
   const activeTab = isAdminUserProfilePath(pathname) ? AdminTab.Users : storedActiveTab;
 
@@ -79,6 +78,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
     waitingSubscribersCount: waitingSubscribers.data?.count,
     hiddenNotifications,
     onTabSelect: selectTab,
+    environmentLabel: environmentChipLabel[resolveCurrentEnvironment().environment],
   };
 
   return (
@@ -87,22 +87,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
       <Sheet
         data-admin-surface=""
         data-testid="admin-layout"
-        sx={theme => ({
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          bgcolor: 'admin.canvas',
-          '& ::-webkit-scrollbar': { width: '6px', height: '6px' },
-          '& ::-webkit-scrollbar-track': { background: 'transparent' },
-          '& ::-webkit-scrollbar-thumb': {
-            background: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)',
-            borderRadius: '4px',
-          },
-          '& ::-webkit-scrollbar-thumb:hover': {
-            background: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.25)',
-          },
-        })}
+        sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', bgcolor: 'admin.canvas' }}
       >
         <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
           <Box sx={{ display: { xs: 'none', md: 'flex' }, flexShrink: 0 }}>
@@ -142,7 +127,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
                 Admin
               </Typography>
             </Box>
-            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>{children}</Box>
+            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', ...adminScrollGutter }}>{children}</Box>
           </Box>
         </Box>
         <Drawer

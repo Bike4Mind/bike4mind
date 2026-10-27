@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 
 export interface ModelLog {
@@ -68,40 +68,61 @@ export interface ModelLog {
   };
 }
 
+/** One row of the paginated list: only what a card renders. The full log is {@link ModelLog}. */
+export interface ModelLogSummary {
+  id: string;
+  timestamp: string;
+  modelName?: string;
+  totalResponseTime?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  attachedFileCount: number;
+  messageHistoryLength?: number;
+  completedStepCount: number;
+  failedStepCount: number;
+  artifacts: Array<{ type: string; preview: string }>;
+}
+
 interface UseModelLogsOptions {
   startDate?: string;
   endDate?: string;
   model?: string;
   search?: string;
+  page: number;
+  limit: number;
 }
 
-interface ModelLogsResponse {
-  logs: ModelLog[];
+export interface ModelLogsResponse {
+  logs: ModelLogSummary[];
   total: number;
+  page: number;
+  limit: number;
 }
 
-export function useModelLogs(options: UseModelLogsOptions = {}) {
+export function useModelLogs(options: UseModelLogsOptions) {
   return useQuery<ModelLogsResponse>({
     queryKey: ['modelLogs', options],
     queryFn: async () => {
-      try {
-        console.log('Fetching model logs with options:', options);
-        const params = new URLSearchParams();
-        if (options.startDate) params.append('startDate', options.startDate);
-        if (options.endDate) params.append('endDate', options.endDate);
-        if (options.model) params.append('model', options.model);
-        if (options.search) params.append('search', options.search);
+      const params = new URLSearchParams({ page: String(options.page), limit: String(options.limit) });
+      if (options.startDate) params.append('startDate', options.startDate);
+      if (options.endDate) params.append('endDate', options.endDate);
+      if (options.model) params.append('model', options.model);
+      if (options.search) params.append('search', options.search);
 
-        const url = `/api/admin/model-logs?${params.toString()}`;
-        console.log('Requesting URL:', url);
-
-        const response = await api.get(url);
-        console.log('Model logs response:', response.data);
-        return response.data;
-      } catch (error) {
-        console.error('Error fetching model logs:', error);
-        throw error;
-      }
+      const response = await api.get(`/api/admin/model-logs?${params.toString()}`);
+      return response.data;
     },
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useModelLogDetail(id: string, enabled: boolean) {
+  return useQuery<ModelLog>({
+    queryKey: ['modelLogDetail', id],
+    queryFn: async () => {
+      const response = await api.get(`/api/admin/model-logs/${encodeURIComponent(id)}`);
+      return response.data;
+    },
+    enabled,
   });
 }

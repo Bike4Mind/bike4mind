@@ -152,6 +152,25 @@ describe('toSafeUser', () => {
 });
 
 describe('redactUserSecretsForSelf', () => {
+  it('withholds private grant assessments from self and public views', () => {
+    const user = {
+      ...fullUser,
+      signupGrantAssessment: {
+        band: 'review',
+        credits: 0,
+        score: 8,
+        reasons: ['datacenter'],
+        missing: [],
+        policyVersion: 'private',
+        status: 'evaluated',
+      },
+    } as IUser;
+    expect(redactUserSecretsForSelf(user)).not.toHaveProperty('signupGrantAssessment');
+    expect(toSafeUser(user)).not.toHaveProperty('signupGrantAssessment');
+    expect(redactUserSecretsForSelf(user, { keepAdminOnly: ['signupGrantAssessment'] })).toHaveProperty(
+      'signupGrantAssessment'
+    );
+  });
   it('drops pure-secret fields entirely', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     // `authProviders` is NOT here: it moved to USER_SUBFIELD_REDACTED_FIELDS, since the
