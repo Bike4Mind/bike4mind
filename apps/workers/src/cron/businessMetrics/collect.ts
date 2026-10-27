@@ -1,4 +1,4 @@
-import { ApiKeyUsageLog, Organization, Quest, Session, UsageEvent, User, UserApiKey } from '@bike4mind/database';
+import { Agent, ApiKeyUsageLog, Organization, Quest, Session, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import { Subscription } from '@server/models/Subscription';
 import {
   buildExclusionRules,
@@ -22,6 +22,8 @@ type Account = UserRecord & {
   stripeCustomerId?: string;
 };
 type OrganizationRow = { _id: unknown; userId: string; stripeCustomerId?: string };
+type MetricOwner = { ownerType: string; ownerId: string };
+type AgentRow = { _id: unknown; userId?: string; organizationId?: string; isSystem?: boolean };
 type Usage = {
   userId: string;
   ownerId: string;
@@ -69,6 +71,10 @@ function createEligibility(rules: ReturnType<typeof buildExclusionRules>) {
   const users = new Set<string>();
   const loadedOrganizations = new Set<string>();
   const organizations = new Map<string, OrganizationRow>();
+  const loadedAgents = new Set<string>();
+  const agentOwners = new Map<string, MetricOwner>();
+  const resolveOwner = (type: string, id: string): MetricOwner | undefined =>
+    type === 'Agent' ? agentOwners.get(id) : { ownerType: type, ownerId: id };
   const rememberAccount = (account: Account) => {
     const id = String(account._id);
     loadedUsers.add(id);
@@ -85,9 +91,32 @@ function createEligibility(rules: ReturnType<typeof buildExclusionRules>) {
       accounts.forEach(rememberAccount);
     }
   };
-  const loadOwners = async (owners: ReadonlyArray<{ ownerType: string; ownerId: string }>) => {
+  const loadOwners = async (owners: ReadonlyArray<MetricOwner>) => {
+    const agentIds = [
+      ...new Set(owners.filter(owner => owner.ownerType === 'Agent').map(owner => owner.ownerId)),
+    ].filter(id => OBJECT_ID_RE.test(id) && !loadedAgents.has(id));
+    for (let offset = 0; offset < agentIds.length; offset += BATCH_SIZE) {
+      const batch = agentIds.slice(offset, offset + BATCH_SIZE);
+      const rows = await Agent.find({ _id: { $in: batch } }, { userId: 1, organizationId: 1, isSystem: 1 })
+        .read('secondaryPreferred')
+        .lean<AgentRow[]>();
+      batch.forEach(id => loadedAgents.add(id));
+      for (const agent of rows) {
+        if (agent.isSystem || Boolean(agent.userId) === Boolean(agent.organizationId)) continue;
+        const ownerId = agent.organizationId ?? agent.userId;
+        if (!ownerId) continue;
+        agentOwners.set(String(agent._id), {
+          ownerType: agent.organizationId ? 'Organization' : 'User',
+          ownerId,
+        });
+      }
+    }
+    const resolvedOwners = owners.flatMap(owner => {
+      const resolved = resolveOwner(owner.ownerType, owner.ownerId);
+      return resolved ? [resolved] : [];
+    });
     const organizationIds = [
-      ...new Set(owners.filter(owner => owner.ownerType === 'Organization').map(owner => owner.ownerId)),
+      ...new Set(resolvedOwners.filter(owner => owner.ownerType === 'Organization').map(owner => owner.ownerId)),
     ].filter(id => OBJECT_ID_RE.test(id) && !loadedOrganizations.has(id));
     for (let offset = 0; offset < organizationIds.length; offset += BATCH_SIZE) {
       const batch = organizationIds.slice(offset, offset + BATCH_SIZE);
@@ -98,7 +127,7 @@ function createEligibility(rules: ReturnType<typeof buildExclusionRules>) {
       rows.forEach(row => organizations.set(String(row._id), row));
     }
     await loadUsers(
-      owners.flatMap(owner => {
+      resolvedOwners.flatMap(owner => {
         if (owner.ownerType === 'User') return [owner.ownerId];
         const organization = owner.ownerType === 'Organization' ? organizations.get(owner.ownerId) : undefined;
         return organization ? [organization.userId] : [];
@@ -106,11 +135,13 @@ function createEligibility(rules: ReturnType<typeof buildExclusionRules>) {
     );
   };
   const allowedOwner = (type: string, id: string) => {
-    if (type === 'User') return users.has(id);
-    const organization = type === 'Organization' ? organizations.get(id) : undefined;
+    const owner = resolveOwner(type, id);
+    if (!owner) return false;
+    if (owner.ownerType === 'User') return users.has(owner.ownerId);
+    const organization = owner.ownerType === 'Organization' ? organizations.get(owner.ownerId) : undefined;
     return organization !== undefined && users.has(organization.userId);
   };
-  return { users, rememberAccount, loadUsers, loadOwners, allowedOwner };
+  return { users, rememberAccount, loadUsers, loadOwners, allowedOwner, resolveOwner };
 }
 
 export async function collectBusinessMetrics(window: ComparisonWindow) {
@@ -185,7 +216,8 @@ export async function collectBusinessMetrics(window: ComparisonWindow) {
       const index = periodIndex(row.createdAt, window);
       if (index === null) continue;
       const labels = [`user:${row.userId}`, `model:${row.model}`];
-      if (row.ownerType === 'Organization') labels.push(`org:${row.ownerId}`);
+      const owner = eligibility.resolveOwner(row.ownerType, row.ownerId);
+      if (owner?.ownerType === 'Organization') labels.push(`org:${owner.ownerId}`);
       metrics.add('spendUsd', index, row.costUsd, labels);
       metrics.add(`spendUsd:${row.provider}`, index, row.costUsd, labels);
       metrics.add('credits', index, row.creditsCharged, labels);

@@ -27,7 +27,17 @@ export async function handler(event: unknown) {
     { skipCache: true, names: ['SlackUserActivityWebhookUrl'] }
   );
   const webhook = getSettingsValue('SlackUserActivityWebhookUrl', settings, '').trim();
-  if (!webhook) throw new Error('Configure SlackUserActivityWebhookUrl for business metric alerts');
+  if (!webhook) {
+    console.info(
+      JSON.stringify({
+        report: 'business-metric-alerts',
+        status: 'skipped',
+        reason: 'missing-webhook',
+        setting: 'SlackUserActivityWebhookUrl',
+      })
+    );
+    return { status: 'skipped', reason: 'missing-webhook' };
+  }
   const result = await collectBusinessMetrics(window);
   const subscribers = await subscriberMetric(window, result.subscribers);
   const metrics = [...result.metrics, subscribers];

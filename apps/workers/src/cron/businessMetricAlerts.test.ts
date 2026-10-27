@@ -71,12 +71,31 @@ describe('scheduled business metric alert', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
-  it('fails loudly for a missing webhook and skips preview stages', async () => {
-    mocks.settings.mockResolvedValue({ webhook: '' });
-    await expect(handler({})).rejects.toThrow('Configure SlackUserActivityWebhookUrl');
+  it.each(['', '   '])('skips collection and delivery for a blank webhook (%j)', async webhook => {
+    mocks.settings.mockResolvedValue({ webhook });
+    const log = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      expect(await handler({})).toEqual({ status: 'skipped', reason: 'missing-webhook' });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('SlackUserActivityWebhookUrl'));
+    } finally {
+      log.mockRestore();
+    }
     expect(mocks.collect).not.toHaveBeenCalled();
+    expect(mocks.sample).not.toHaveBeenCalled();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('skips preview stages before querying settings', async () => {
     mocks.resource.App.stage = 'pr123';
     expect(await handler({})).toEqual({ status: 'skipped' });
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.settings).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failed settings read instead of treating it as a missing webhook', async () => {
+    mocks.settings.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(handler({})).rejects.toThrow('database unavailable');
+    expect(mocks.collect).not.toHaveBeenCalled();
   });
 
   it('fails the invocation on rejected Slack delivery', async () => {

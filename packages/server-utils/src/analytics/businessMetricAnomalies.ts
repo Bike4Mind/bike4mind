@@ -74,13 +74,16 @@ export function anomalyAlerts(
     const anomaly = compareMetric(metric, thresholds);
     if (!anomaly) return [];
     const change = anomaly.percent === null ? 'new activity (previously zero)' : `${anomaly.percent.toFixed(1)}%`;
-    const contributors = [...metric.contributors].sort((a, b) => b.value - a.value).slice(0, 5);
+    const contributors = metric.contributors
+      .filter(row => (anomaly.delta > 0 ? row.value > 0 : row.value < 0))
+      .sort((a, b) => (anomaly.delta > 0 ? b.value - a.value : a.value - b.value))
+      .slice(0, 5);
     const message =
       `Business metric anomaly: ${escapeSlack(metric.name)}\n` +
       `${window.mode}, UTC through ${window.end.toISOString()} (${window.duration / HOUR_MS}h)\n` +
       `Current ${anomaly.current.toFixed(2)}; previous ${anomaly.previous.toFixed(2)}; change ${change}; ` +
       `7-day median ${anomaly.median === null ? 'warming up' : anomaly.median.toFixed(2)}\n` +
-      `Top contributors: ${contributors.map(row => `${escapeSlack(row.label)}=${row.value.toFixed(2)}`).join(', ') || 'none'}`;
+      `Top contributors: ${contributors.map(row => `${escapeSlack(row.label)}=${row.value > 0 ? '+' : ''}${row.value.toFixed(2)}`).join(', ') || 'none'}`;
     return [{ metricName: metric.name, direction: anomaly.delta > 0 ? 'increase' : 'decrease', message }];
   });
 }
@@ -103,9 +106,10 @@ export function createMetricAccumulator() {
       if (!Number.isFinite(value)) throw new Error(`Non-finite metric: ${name}`);
       const metric = ensure(name);
       metric.values[index] = (metric.values[index] ?? 0) + value;
-      if (index !== 0) return;
+      if (index !== 0 && index !== 1) return;
       const totals = contributors.get(name) ?? new Map<string, number>();
-      for (const label of labels) totals.set(label, (totals.get(label) ?? 0) + value);
+      const signedValue = index === 0 ? value : -value;
+      for (const label of labels) totals.set(label, (totals.get(label) ?? 0) + signedValue);
       contributors.set(name, totals);
     },
     result() {

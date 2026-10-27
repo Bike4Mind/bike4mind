@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose, { Types } from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { ApiKeyUsageLog, Organization, Quest, Session, UsageEvent, User, UserApiKey } from '@bike4mind/database';
+import { Agent, ApiKeyUsageLog, Organization, Quest, Session, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
@@ -103,6 +103,77 @@ describe('business metric persisted behavior', () => {
     expect(values('activeUsers')).toEqual([1, 0]);
   });
 
+  it('resolves agent credit pools to eligible owners while preserving actor exclusions', async () => {
+    const at = new Date('2026-10-26T11:00:00Z');
+    const actor = new Types.ObjectId();
+    const externalOwner = new Types.ObjectId();
+    const excludedOwner = new Types.ObjectId();
+    await User.collection.insertMany([
+      { _id: actor, email: 'actor@example.org', createdAt: at },
+      { _id: externalOwner, email: 'owner@example.org', createdAt: at },
+      { _id: excludedOwner, email: 'synthetic@example.org', isSynthetic: true, createdAt: at },
+    ]);
+    const organization = new Types.ObjectId();
+    const excludedOrganization = new Types.ObjectId();
+    await Organization.collection.insertMany([
+      { _id: organization, userId: String(externalOwner) },
+      { _id: excludedOrganization, userId: String(excludedOwner) },
+    ]);
+    const userAgent = new Types.ObjectId();
+    const organizationAgent = new Types.ObjectId();
+    const excludedAgent = new Types.ObjectId();
+    const excludedOrganizationAgent = new Types.ObjectId();
+    const systemAgent = new Types.ObjectId();
+    const orphanAgent = new Types.ObjectId();
+    await Agent.collection.insertMany([
+      { _id: userAgent, userId: String(externalOwner) },
+      { _id: organizationAgent, organizationId: String(organization) },
+      { _id: excludedAgent, userId: String(excludedOwner) },
+      { _id: excludedOrganizationAgent, organizationId: String(excludedOrganization) },
+      { _id: systemAgent, isSystem: true },
+      { _id: orphanAgent, userId: String(new Types.ObjectId()) },
+    ]);
+    const base = {
+      userId: String(actor),
+      ownerType: 'Agent',
+      provider: 'example',
+      model: 'model',
+      feature: 'completion_api',
+      source: 'api',
+      apiKeyId: String(new Types.ObjectId()),
+      status: 'ok',
+      createdAt: at,
+      costUsd: 5,
+      creditsCharged: 100,
+    };
+    await UsageEvent.collection.insertMany([
+      ...[
+        userAgent,
+        organizationAgent,
+        excludedAgent,
+        excludedOrganizationAgent,
+        systemAgent,
+        orphanAgent,
+        new Types.ObjectId(),
+      ].map(ownerId => ({ ...base, ownerId: String(ownerId) })),
+      { ...base, ownerId: String(userAgent), userId: String(excludedOwner) },
+      { ...base, ownerId: String(externalOwner), ownerType: 'User' },
+      { ...base, ownerId: String(organization), ownerType: 'Organization' },
+      { ...base, ownerId: String(excludedOwner), ownerType: 'User' },
+      { ...base, ownerId: String(excludedOrganization), ownerType: 'Organization' },
+    ]);
+    const { metrics } = await collectBusinessMetrics(comparisonWindow(new Date('2026-10-26T12:05:00Z')));
+    expect(metrics.find(metric => metric.name === 'spendUsd')).toMatchObject({
+      values: [20, 0, 0, 0, 0, 0, 0, 0],
+      contributors: expect.arrayContaining([
+        { label: `user:${String(actor)}`, value: 20 },
+        { label: `org:${String(organization)}`, value: 10 },
+      ]),
+    });
+    expect(metrics.find(metric => metric.name === 'credits')?.values[0]).toBe(400);
+    expect(metrics.find(metric => metric.name === 'completions:user')?.values[0]).toBe(4);
+  });
+
   it('counts a signup only once its cohort has had equal time to verify', async () => {
     const window = comparisonWindow(new Date('2026-10-26T12:05:00Z'));
     const cutoff = window.end.getTime() - DAY_MS;
@@ -178,28 +249,26 @@ describe('business metric persisted behavior', () => {
       direction: 'increase' as const,
       message: 'failed metric\n120 vs 100',
     };
-    await Promise.allSettled(Array.from({ length: 5 }, () => deliverAnomalies(window, [sameMetric], post)));
+    await Promise.all(Array.from({ length: 5 }, () => deliverAnomalies(window, [sameMetric], post)));
     expect(post).toHaveBeenCalledTimes(1);
     expect(await deliverAnomalies(window, [sameMetric], post)).toBe(0);
     expect(post).toHaveBeenCalledTimes(1);
     await expect(deliverAnomalies(window, [failedMetric], async () => false)).rejects.toThrow();
     expect(await deliverAnomalies(window, [failedMetric], post)).toBe(1);
     expect(await deliverAnomalies(comparisonWindow(new Date('2026-10-26T14:05:00Z')), [sameMetric], post)).toBe(0);
-    expect(await deliverAnomalies(comparisonWindow(new Date('2026-10-27T00:05:00Z')), [sameMetric], post)).toBe(0);
+    expect(await deliverAnomalies(comparisonWindow(new Date('2026-10-27T00:05:00Z')), [sameMetric], post)).toBe(1);
     expect(await deliverAnomalies(window, [{ ...sameMetric, direction: 'decrease' }], post)).toBe(1);
     expect(await deliverAnomalies(comparisonWindow(new Date('2026-10-27T13:05:00Z')), [sameMetric], post)).toBe(1);
     await deliveryStore.claim('pending-delivery', 'crashed-worker', new Date());
-    await expect(deliveryStore.claim('pending-delivery', 'retry-worker', new Date())).rejects.toThrow('leased');
+    expect(await deliveryStore.claim('pending-delivery', 'retry-worker', new Date())).toBe(false);
     await deliveryStore.release('pending-delivery', 'crashed-worker');
     expect(await deliveryStore.claim('pending-delivery', 'retry-worker', new Date())).toBe(true);
   });
 
-  it('reclaims an expired lease and rejects a live one', async () => {
+  it('reclaims an expired lease and skips a live one', async () => {
     const now = new Date();
     await deliveryStore.claim('lease-check', 'first', now);
-    await expect(deliveryStore.claim('lease-check', 'second', new Date(now.getTime() + 14 * 60_000))).rejects.toThrow(
-      'leased'
-    );
+    expect(await deliveryStore.claim('lease-check', 'second', new Date(now.getTime() + 14 * 60_000))).toBe(false);
     expect(await deliveryStore.claim('lease-check', 'second', new Date(now.getTime() + 16 * 60_000))).toBe(true);
     const state = await BusinessMetricState.findById('lease-check').lean();
     expect(state?.leaseToken).toBe('second');

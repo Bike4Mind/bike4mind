@@ -45,7 +45,7 @@ describe('anomaly Slack delivery', () => {
     expect(store.complete).toHaveBeenCalledWith(firstId, expect.any(String), expect.any(Date));
   });
 
-  it('shares a receipt across intraday cutoffs and the midnight close of the same UTC day', async () => {
+  it('deduplicates intraday cutoffs but delivers and deduplicates the midnight close separately', async () => {
     const post = vi.fn().mockResolvedValue(true);
     const deliveredIds = new Set<string>();
     vi.mocked(store.claim).mockImplementation(async id => !deliveredIds.has(id));
@@ -53,10 +53,14 @@ describe('anomaly Slack delivery', () => {
       deliveredIds.add(id);
     });
     expect(await deliverAnomalies(window, [anomaly()], post, store)).toBe(1);
-    for (const at of ['2026-10-26T13:05:00Z', '2026-10-27T00:05:00Z']) {
-      expect(await deliverAnomalies(comparisonWindow(new Date(at)), [anomaly()], post, store)).toBe(0);
-    }
-    expect(post).toHaveBeenCalledTimes(1);
+    expect(await deliverAnomalies(comparisonWindow(new Date('2026-10-26T13:05:00Z')), [anomaly()], post, store)).toBe(
+      0
+    );
+    const close = comparisonWindow(new Date('2026-10-27T00:05:00Z'));
+    expect(await deliverAnomalies(close, [anomaly('metric\nvalue 300%')], post, store)).toBe(1);
+    expect(await deliverAnomalies(close, [anomaly('metric\nvalue 300%')], post, store)).toBe(0);
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(store.claim).mock.calls[2][0]).toContain('alert:2026-10-26:increase:daily:');
   });
 
   it('allows the opposite direction and the next UTC day independently', async () => {
@@ -105,10 +109,20 @@ describe('anomaly Slack delivery', () => {
     expect(store.release).toHaveBeenCalledTimes(1);
   });
 
-  it("does not post or release another invocation's active lease", async () => {
-    vi.mocked(store.claim).mockRejectedValue(new Error('leased'));
+  it("skips another invocation's lease and continues with other anomalies", async () => {
+    vi.mocked(store.claim).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const post = vi.fn().mockResolvedValue(true);
+    const nextAnomaly = { ...anomaly('another metric'), metricName: 'other' };
+    expect(await deliverAnomalies(window, [anomaly(), nextAnomaly], post, store)).toBe(1);
+    expect(post).toHaveBeenCalledExactlyOnceWith('another metric');
+    expect(store.release).not.toHaveBeenCalled();
+    expect(store.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates database claim failures instead of treating them as lease contention', async () => {
+    vi.mocked(store.claim).mockRejectedValue(new Error('database unavailable'));
     const post = vi.fn();
-    await expect(deliverAnomalies(window, [anomaly()], post, store)).rejects.toThrow('leased');
+    await expect(deliverAnomalies(window, [anomaly()], post, store)).rejects.toThrow('database unavailable');
     expect(post).not.toHaveBeenCalled();
     expect(store.release).not.toHaveBeenCalled();
   });

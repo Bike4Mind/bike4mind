@@ -54,10 +54,7 @@ export const deliveryStore: DeliveryStore = {
         $set: { leaseUntil: new Date(now.getTime() + 15 * 60_000), leaseToken: token },
       }
     );
-    if (result.modifiedCount === 1) return true;
-    const state = await BusinessMetricState.findById(id).lean();
-    if (state?.deliveredAt) return false;
-    throw new Error('Business metric delivery is leased by another invocation; retry after lease expiry');
+    return result.modifiedCount === 1;
   },
   async complete(id, token, now) {
     const result = await BusinessMetricState.updateOne(
@@ -78,11 +75,12 @@ export async function deliverAnomalies(
   store: DeliveryStore = deliveryStore
 ) {
   let delivered = 0;
-  // The midnight run closes the previous UTC day, so it shares that day's receipt.
+  // The midnight close has its own receipt so an early intraday alert cannot suppress it.
   const day = new Date(window.end.getTime() - (window.mode === 'daily' ? 1 : 0)).toISOString().slice(0, 10);
   for (const anomaly of anomalies) {
     const metricHash = createHash('sha256').update(anomaly.metricName).digest('hex');
-    const id = `alert:${day}:${anomaly.direction}:${metricHash}`;
+    // Keep existing intraday keys valid across deployment; only daily closes use a new namespace.
+    const id = `alert:${day}:${anomaly.direction}:${window.mode === 'daily' ? 'daily:' : ''}${metricHash}`;
     const token = randomUUID();
     if (!(await store.claim(id, token, new Date()))) continue;
     let posted = false;

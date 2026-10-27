@@ -3,13 +3,16 @@
 The scheduled worker reconciles the current UTC period against the same period yesterday at
 five minutes past each hour. The midnight run compares the last two complete days. Other runs
 compare midnight through the last completed hour on each day. Every alert includes the preceding
-seven comparable periods' median and, where attributable, the five largest current contributors.
+seven comparable periods' median and, where attributable, the five largest contributor changes
+in the anomaly's direction. Contributor values are signed current-minus-previous deltas,
+including previous contributors whose current value is zero.
 
 ## Configuration
 
 - Set the existing **User Activity Channel Webhook URL** (`SlackUserActivityWebhookUrl`) in
   Admin Settings > Feedback to the destination channel's incoming webhook. Configure it
-  separately in staging (`dev`) and production. There is no general-channel fallback.
+  separately in staging (`dev`) and production. There is no general-channel fallback. A missing
+  webhook logs the configuration gap and returns `status: 'skipped'` before collecting metrics.
 - Scheduled resources exist only on `dev` and `production`. Set
   `BUSINESS_METRIC_ALERTS_ENABLED=false` in the deployment environment to disable the schedule.
 - `BUSINESS_METRIC_THRESHOLDS` is a JSON object in the deployment environment. Each entry has
@@ -55,8 +58,8 @@ is applied when unset), and orphaned users. Organization owners must
 also be external. System usage and API keys tagged with a `productId` are excluded, including
 internal ingestion activity. Ordinary first-party CLI/desktop traffic remains in its named cut.
 Stripe customers must map to an eligible account in this stage's database.
-Usage billed to Agent owners is excluded from the spend, credits and completions metrics;
-only usage owned by an eligible user or organization is counted.
+Usage billed to Agent owners is included in spend, credits and completions when the agent
+resolves to an eligible user or organization owner; the same exclusions apply to that owner.
 
 Subscription rows contain only current state, so the worker persists one observed count per UTC
 hour instead of inventing history. Yesterday's comparison becomes available after 24 hours;
@@ -82,20 +85,24 @@ delivery receipts are retained for ten days.
    `{ "time": "<scheduled UTC ISO timestamp>" }`. Confirm the named alert in Slack. Repeat
    with a change under 5%, using a new period, and confirm no post. Never seed production data.
 4. Configure production's webhook and per-currency guards, deploy, and confirm the
-   `business-metric-alerts` success log plus actual channel delivery. Missing webhook, source
-   query, Stripe API, and Slack errors fail the invocation; inspect the Business Metric Alerts
-   DLQ and its shared DLQ alarms if retries exhaust.
+   `business-metric-alerts` success log plus actual channel delivery. A missing webhook logs a
+   skipped run. Source query, Stripe API, and Slack errors fail the invocation; inspect the
+   Business Metric Alerts DLQ and its shared DLQ alarms if retries exhaust.
 
 Delivery receipts are stored only after Slack accepts a post. A lease prevents simultaneous
-workers from sending the same metric/day/direction, and failed posts are retried. A pending lease
-fails a competing invocation so a crashed sender cannot make a retry silently succeed; replay
-from the DLQ after the 15-minute lease expires if retries exhaust. As with any incoming
-webhook, a crash after Slack accepts but before the receipt commits can cause a duplicate.
-Replaying after ten-day receipt expiry can also resend a historical alert. Each metric alerts only on its first threshold
-crossing in each direction per UTC day. Later hourly cutoffs in the same direction stay quiet;
-a reversal can alert once in the opposite direction. The midnight run closes the previous UTC
-day and shares its receipts, so it cannot repeat an intraday alert for that day. The next UTC
-day starts fresh. Failed posts do not consume the daily receipt and remain retryable.
+workers from sending the same metric/day/direction/run kind, and failed posts are retried.
+A contended lease skips that anomaly and continues delivering the others. A crashed sender's
+lease expires after 15 minutes, allowing a later invocation or replay to retry. An early retry
+that encounters the lease can succeed without sending that alert or reaching the DLQ. For a
+crashed daily-close sender, manually replay the original event after lease expiry; the next
+hourly run compares a new window rather than retrying that daily close. As with any
+incoming webhook, a crash after Slack accepts but before the receipt commits can cause a duplicate.
+Replaying after ten-day receipt expiry can also resend a historical alert. Each metric alerts
+only on its first intraday threshold crossing in each direction per UTC day. Later hourly
+cutoffs in the same direction stay quiet; a reversal can alert once in the opposite direction. The midnight run closes the previous UTC
+day with a separate receipt, so it can alert even after an intraday alert in the same direction.
+Repeated delivery of that closing alert is suppressed. The next UTC day starts fresh.
+Failed posts do not consume the receipt and remain retryable.
 
 On an alert, inspect the named user/org/model contributors, compare the 7-day median, and check
 the relevant source data before changing thresholds. A small-number guard prevents noise; it
