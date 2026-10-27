@@ -73,9 +73,9 @@ const api: DesktopApi = {
     cancelPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsCancelPull, key),
     dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
     remove: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name),
-    getHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetHfToken),
-    setHfToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsSetHfToken, token),
-    clearHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsClearHfToken),
+    getHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetHfAccess),
+    setHfToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsSaveHfAccess, token),
+    clearHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsClearHfAccess),
     onPullsChanged: listener => {
       const handler = (_event: unknown, pulls: ModelPull[]) => listener(pulls);
       ipcRenderer.on(IPC_CHANNELS.modelsPullsChanged, handler);

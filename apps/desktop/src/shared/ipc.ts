@@ -313,9 +313,10 @@ export const IPC_CHANNELS = {
   modelsCancelPull: 'models:cancel-pull',
   modelsDismissPull: 'models:dismiss-pull',
   modelsRemove: 'models:remove',
-  modelsGetHfToken: 'models:get-hf-token',
-  modelsSetHfToken: 'models:set-hf-token',
-  modelsClearHfToken: 'models:clear-hf-token',
+  /** Hugging Face sign-in: whether a token is saved, save one, forget it. None of them returns the token. */
+  modelsGetHfAccess: 'models:get-hf-access',
+  modelsSaveHfAccess: 'models:save-hf-access',
+  modelsClearHfAccess: 'models:clear-hf-access',
   /** main -> renderer push of every pull in flight or failed. */
   modelsPullsChanged: 'models:pulls-changed',
   /** main -> renderer push: a pull finished or a model was removed. */

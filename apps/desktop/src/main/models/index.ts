@@ -85,12 +85,12 @@ export function registerModels(): ModelHubService {
     const id = text(name);
     return id ? service.remove(id) : invalid;
   });
-  ipcMain.handle(IPC_CHANNELS.modelsGetHfToken, () => service.tokenStatus());
-  ipcMain.handle(IPC_CHANNELS.modelsSetHfToken, (_event, token: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.modelsGetHfAccess, () => service.tokenStatus());
+  ipcMain.handle(IPC_CHANNELS.modelsSaveHfAccess, (_event, token: unknown) => {
     const value = text(token);
     return value ? service.setToken(value) : invalid;
   });
-  ipcMain.handle(IPC_CHANNELS.modelsClearHfToken, () => service.clearToken());
+  ipcMain.handle(IPC_CHANNELS.modelsClearHfAccess, () => service.clearToken());
 
   return service;
 }
