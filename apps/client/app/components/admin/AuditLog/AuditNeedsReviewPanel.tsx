@@ -34,7 +34,7 @@ export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
   // The summary's `since` is stable while cached; a Date.now()-derived bound would re-key the list every render.
   const { data: summary } = useAuditSummary(windowDays);
   const filters: AuditLogFilters = { severity: 'critical', from: summary?.since };
-  const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } = useAuditLog(filters, {
+  const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } = useAuditLog(filters, {
     enabled: summary !== undefined,
     limit: PAGE_SIZE,
   });
@@ -73,12 +73,14 @@ export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
           <AuditEventTable
             testIdPrefix="audit-needs-review-table"
             entries={entries}
+            pageResetKey={JSON.stringify(filters)}
             isLoading={isLoading}
             errorMessage={isError ? LIST_ERROR_MESSAGE : undefined}
             emptyMessage={`No critical entries in the last ${windowDays} days`}
             hasMore={Boolean(hasNextPage)}
             isFetchingMore={isFetchingNextPage}
             onLoadMore={() => void fetchNextPage()}
+            onRetry={() => void refetch()}
             onSelectEntry={onSelectEntry}
           />
         </Box>

@@ -26,7 +26,6 @@ const componentsByFile = {
   'AuditLog/AuditNeedsReviewPanel.tsx': ['Card'],
   'AuditLog/AuditSummaryStrip.tsx': ['Card'],
   'AuditLog/shared/AuditEntryDrawerSections.tsx': ['Table'],
-  'AuditLog/shared/AuditEventTable.tsx': ['Table'],
   'ContextInspectorTab.tsx': ['Card', 'Table', 'Modal'],
   'CreateSlackAppModal.tsx': ['Modal'],
   'CreditAnalysis/components/CreditAdjustmentModal.tsx': ['Modal'],

@@ -27,7 +27,6 @@ export default {
   'AuditLog/AuditNeedsReviewPanel.tsx': [[2, '86abf000d2314758']],
   'AuditLog/AuditSummaryStrip.tsx': [[1, 'f293091e131ff0b7']],
   'AuditLog/shared/AuditEntryDrawerSections.tsx': [[2, 'dd96b859224410ff']],
-  'AuditLog/shared/AuditEventTable.tsx': [[1, '975989cb71010dae']],
   'ContextInspectorTab.tsx': [[3, '4efdcaa4a7756dc6']],
   'CreateSlackAppModal.tsx': [[2, '77f0833039f8ec69']],
   'CreditAnalysis/components/CreditAdjustmentModal.tsx': [[2, '598b2ccd03b60392']],
