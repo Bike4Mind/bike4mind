@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AuditEntry } from './AdminAuditLogTypes';
+import type { IActiveSessionDto } from './AuthSessionTypes';
 
 /**
  * The sources merged into a user's Activity timeline. Each is one store, paged on the same
@@ -104,3 +105,6 @@ export const authMethodLabel = (raw: string | null | undefined): string | undefi
   if (method === null) return undefined;
   return method === 'other' ? `Other (${raw?.trim()})` : AUTH_METHOD_LABELS[method];
 };
+
+/** A user's active session as an admin sees it: the self-service DTO without the caller-relative `current`. */
+export type AdminUserSession = Omit<IActiveSessionDto, 'current'>;

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({ get: vi.fn(), navigate: vi.fn() }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
+vi.mock('./ActiveSessions', () => ({ ActiveSessions: () => <div data-testid="stub-active-sessions" /> }));
 
 import { SignInsTab, signInDevice, signInResultLabel } from './SignInsTab';
 

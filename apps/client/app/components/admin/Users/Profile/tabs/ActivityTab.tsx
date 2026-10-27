@@ -72,14 +72,10 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
 
   return (
     <>
-      <SectionCard title="Timeline" body="custom" data-testid="user-profile-activity">
-        <Stack
-          direction="row"
-          flexWrap="wrap"
-          gap={1.5}
-          alignItems="center"
-          sx={{ px: 2, py: 1.5, borderBottom: '1px solid', borderColor: 'admin.border' }}
-        >
+      <SectionCard
+        title="Timeline"
+        body="custom"
+        action={
           <ToggleChipGroup
             options={TYPE_OPTIONS}
             value={filters.types}
@@ -87,41 +83,49 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
             aria-label="Show activity from"
             data-testid="user-timeline-filter-type"
           />
-          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-            <Typography component="label" level="body-xs" htmlFor="user-timeline-from" sx={{ color: 'admin.inkMuted' }}>
-              From
-            </Typography>
-            <Input
+        }
+        data-testid="user-profile-activity"
+      >
+        <Stack
+          direction="row"
+          flexWrap="wrap"
+          gap={1}
+          alignItems="center"
+          sx={{ px: 2, py: 1, borderBottom: '1px solid', borderColor: 'admin.border' }}
+        >
+          <Typography component="label" level="body-xs" htmlFor="user-timeline-from" sx={{ color: 'admin.inkMuted' }}>
+            From
+          </Typography>
+          <Input
+            size="sm"
+            type="date"
+            value={filters.from ?? ''}
+            onChange={event => onFiltersChange({ ...filters, from: event.target.value || undefined })}
+            slotProps={{ input: { id: 'user-timeline-from', max: filters.to } }}
+            data-testid="user-timeline-filter-from"
+          />
+          <Typography component="label" level="body-xs" htmlFor="user-timeline-to" sx={{ color: 'admin.inkMuted' }}>
+            To
+          </Typography>
+          <Input
+            size="sm"
+            type="date"
+            value={filters.to ?? ''}
+            onChange={event => onFiltersChange({ ...filters, to: event.target.value || undefined })}
+            slotProps={{ input: { id: 'user-timeline-to', min: filters.from } }}
+            data-testid="user-timeline-filter-to"
+          />
+          {(filters.from || filters.to) && (
+            <Button
               size="sm"
-              type="date"
-              value={filters.from ?? ''}
-              onChange={event => onFiltersChange({ ...filters, from: event.target.value || undefined })}
-              slotProps={{ input: { id: 'user-timeline-from', max: filters.to } }}
-              data-testid="user-timeline-filter-from"
-            />
-            <Typography component="label" level="body-xs" htmlFor="user-timeline-to" sx={{ color: 'admin.inkMuted' }}>
-              To
-            </Typography>
-            <Input
-              size="sm"
-              type="date"
-              value={filters.to ?? ''}
-              onChange={event => onFiltersChange({ ...filters, to: event.target.value || undefined })}
-              slotProps={{ input: { id: 'user-timeline-to', min: filters.from } }}
-              data-testid="user-timeline-filter-to"
-            />
-            {(filters.from || filters.to) && (
-              <Button
-                size="sm"
-                variant="plain"
-                color="neutral"
-                onClick={() => onFiltersChange({ types: filters.types })}
-                data-testid="user-timeline-clear-dates-btn"
-              >
-                Clear dates
-              </Button>
-            )}
-          </Stack>
+              variant="plain"
+              color="neutral"
+              onClick={() => onFiltersChange({ types: filters.types })}
+              data-testid="user-timeline-clear-dates-btn"
+            >
+              Clear dates
+            </Button>
+          )}
         </Stack>
         {body()}
         {timeline.hasNextPage && (

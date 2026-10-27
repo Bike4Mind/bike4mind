@@ -1,0 +1,118 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { buildProfile, ProfileTestWrapper } from '../profileTestUtils';
+
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn() }));
+
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { get: mocks.get, post: mocks.post, delete: mocks.delete },
+}));
+
+import { ActiveSessions, sessionDevice } from './ActiveSessions';
+
+const SESSIONS = [
+  {
+    sid: 'sid-1',
+    createdVia: 'oauth',
+    device: { browser: 'Chrome', os: 'macOS', ip: '198.51.100.4', location: 'Lisbon, PT' },
+    lastUsedAt: '2026-10-20T09:00:00.000Z',
+    createdAt: '2026-10-01T09:00:00.000Z',
+    expiresAt: '2026-11-01T09:00:00.000Z',
+    impersonated: false,
+  },
+  {
+    sid: 'sid-2',
+    createdVia: 'impersonation',
+    lastUsedAt: '2026-10-19T09:00:00.000Z',
+    createdAt: '2026-10-19T08:00:00.000Z',
+    expiresAt: '2026-10-20T08:00:00.000Z',
+    impersonated: true,
+  },
+];
+
+const renderSessions = () =>
+  render(<ActiveSessions user={buildProfile({ name: 'Ada Lovelace' })} />, { wrapper: ProfileTestWrapper });
+
+const pickReasonAndConfirm = () => {
+  fireEvent.click(screen.getByTestId('user-sessions-revoke-dialog-reason-input-preset-0'));
+  fireEvent.click(screen.getByTestId('user-sessions-revoke-dialog-confirm-btn'));
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.get.mockResolvedValue({ data: { items: SESSIONS } });
+  mocks.post.mockResolvedValue({ data: {} });
+  mocks.delete.mockResolvedValue({ data: {} });
+});
+
+describe('ActiveSessions', () => {
+  it('describes a device by browser and OS, or a dash', () => {
+    expect(sessionDevice(SESSIONS[0])).toBe('Chrome on macOS');
+    expect(sessionDevice({ device: undefined })).toBe('-');
+  });
+
+  it('lists each active session with method, device, IP and location', async () => {
+    renderSessions();
+
+    const rows = await screen.findAllByTestId('user-sessions-row');
+    expect(mocks.get).toHaveBeenCalledWith('/api/admin/users/test-user-1/sessions');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('Social sign-in');
+    expect(rows[0]).toHaveTextContent('Chrome on macOS');
+    expect(rows[0]).toHaveTextContent('198.51.100.4');
+    expect(rows[0]).toHaveTextContent('Lisbon, PT');
+    expect(rows[1]).toHaveTextContent('Admin sign-in as user');
+  });
+
+  it('signs out one session with the reason after confirming', async () => {
+    renderSessions();
+    const rows = await screen.findAllByTestId('user-sessions-row');
+
+    fireEvent.click(within(rows[0]).getByTestId('user-sessions-revoke-btn'));
+    expect(screen.getByTestId('user-sessions-revoke-dialog-confirm-btn')).toBeDisabled();
+    pickReasonAndConfirm();
+
+    await waitFor(() =>
+      expect(mocks.delete).toHaveBeenCalledWith('/api/admin/users/test-user-1/sessions', {
+        params: { sid: 'sid-1' },
+        data: { reason: 'Compromised account' },
+      })
+    );
+    expect(mocks.post).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId('user-sessions-revoke-dialog-confirm-btn')).toBeNull());
+  });
+
+  it('signs out everywhere through the force-logout route', async () => {
+    renderSessions();
+    await screen.findAllByTestId('user-sessions-row');
+
+    fireEvent.click(screen.getByTestId('user-sessions-revoke-all-btn'));
+    expect(screen.getByText('Sign Ada Lovelace out everywhere?')).toBeInTheDocument();
+    pickReasonAndConfirm();
+
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenCalledWith('/api/users/test-user-1/revoke-sessions', {
+        reason: 'Compromised account',
+      })
+    );
+    expect(mocks.delete).not.toHaveBeenCalled();
+  });
+
+  it('keeps the dialog open when the revoke fails', async () => {
+    mocks.delete.mockRejectedValue(new Error('boom'));
+    renderSessions();
+    const rows = await screen.findAllByTestId('user-sessions-row');
+
+    fireEvent.click(within(rows[0]).getByTestId('user-sessions-revoke-btn'));
+    pickReasonAndConfirm();
+
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalled());
+    expect(screen.getByTestId('user-sessions-revoke-dialog-confirm-btn')).toBeInTheDocument();
+  });
+
+  it('says so when there are no active sessions', async () => {
+    mocks.get.mockResolvedValue({ data: { items: [] } });
+    renderSessions();
+    expect(await screen.findByText('No active sessions.')).toBeInTheDocument();
+  });
+});

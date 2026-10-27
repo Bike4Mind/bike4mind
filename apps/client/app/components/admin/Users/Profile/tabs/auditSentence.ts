@@ -11,6 +11,7 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.impersonation.started': 'Started signing in as this user',
   'user.impersonation.ended': 'Stopped signing in as this user',
   'user.sessions.revoked': 'Signed this user out everywhere',
+  'user.session.revoked': 'Signed out one session',
   'user.email.verified': 'Marked email verified',
   'user.email.unverified': 'Marked email unverified',
   'user.email.verification_resent': 'Resent the verification email',

@@ -6,6 +6,7 @@ import { useUserSignIns, useUserSignupCluster } from '@client/app/hooks/data/adm
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { DataTable, Fact, RelativeTime, SectionCard, StatusChip, type DataColumn } from '../../../shared';
 import { useOpenUserProfile } from '../useOpenUserProfile';
+import { ActiveSessions } from './ActiveSessions';
 import type { AdminUserProfile } from '../userProfileModel';
 
 const Muted: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -48,6 +49,10 @@ export const signInDevice = (signIn: Pick<UserSignIn, 'browser' | 'operatingSyst
 
 const SIGN_IN_COLUMNS: readonly DataColumn<UserSignIn>[] = [
   { id: 'when', label: 'When', render: row => <RelativeTime at={row.at} /> },
+  { id: 'method', label: 'Method', render: row => authMethodLabel(row.method) ?? '-' },
+  { id: 'ip', label: 'IP address', render: row => <Mono value={row.ip} /> },
+  { id: 'location', label: 'Location', render: row => row.location || '-' },
+  { id: 'device', label: 'Device', render: signInDevice },
   {
     id: 'result',
     label: 'Result',
@@ -59,10 +64,6 @@ const SIGN_IN_COLUMNS: readonly DataColumn<UserSignIn>[] = [
       />
     ),
   },
-  { id: 'method', label: 'Method', render: row => authMethodLabel(row.method) ?? '-' },
-  { id: 'ip', label: 'IP address', render: row => <Mono value={row.ip} /> },
-  { id: 'location', label: 'Location', render: row => row.location || '-' },
-  { id: 'device', label: 'Device', render: signInDevice },
 ];
 
 const emailDomain = (email?: string | null) => email?.split('@')[1]?.toLowerCase();
@@ -154,7 +155,7 @@ const SignupRecord: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   );
 };
 
-/** Sign-in attempts from the auth audit (kept 12 months), newest first, then the signup record. */
+/** Sign-in attempts from the auth audit (kept 12 months), newest first, the live sessions, then the signup record. */
 export const SignInsTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const signIns = useUserSignIns(user.id);
   const rows = useMemo(() => signIns.data?.pages.flatMap(page => page.entries) ?? [], [signIns.data]);
@@ -206,6 +207,7 @@ export const SignInsTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
           )}
         </Stack>
       </SectionCard>
+      <ActiveSessions user={user} />
       <SignupRecord user={user} />
     </Stack>
   );

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Button, Stack } from '@mui/joy';
+import { Box, Button, Stack, Typography } from '@mui/joy';
 import type { AuditEntry } from '@bike4mind/common';
 import { useUserActivity } from '@client/app/hooks/data/adminUserActivity';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
@@ -8,7 +8,6 @@ import { useAdminUserUpdate, type AdminUserUpdate } from '../actions/useAdminUse
 import type { AdminUserProfile } from '../userProfileModel';
 import { auditUndo, describeAuditEntry, fieldLabel, formatAuditValue, type AuditUndo } from './auditSentence';
 import { TimelineList, TimelineSkeleton, type TimelineItem } from './TimelineList';
-import { adminMeta } from './timelineItems';
 
 // The sentence already carries the before/after for these, so the change list would repeat it.
 const SELF_DESCRIBING_FIELDS: ReadonlySet<string> = new Set([
@@ -68,11 +67,13 @@ export const AdminLogTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
       tile: { text: 'AD', tone: 'neutral' },
       summary: describeAuditEntry(entry),
       onOpen: () => setSelected(entry),
-      meta: adminMeta(entry),
+      meta: entry.reason ? `Reason: ${entry.reason}` : undefined,
       extra: <ChangeList entry={entry} />,
       aside: (
         <Stack alignItems="flex-end" gap={0.5}>
-          <RelativeTime at={entry.occurredAt} />
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="user-admin-log-actor">
+            {entry.actor.name} {'\u00b7'} <RelativeTime at={entry.occurredAt} />
+          </Typography>
           {reversal && (
             <Button
               size="sm"
