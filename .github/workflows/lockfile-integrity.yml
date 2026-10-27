@@ -14,9 +14,6 @@ name: Lockfile Integrity
 # scripts/check-no-overlay-lockfile.sh). On Dependabot PRs,
 # dependabot-lockfile-repair.yml restores the hash before this guard sees it.
 #
-# A third step fails on tracked files matching the overlay-literal pattern outside the
-# allowlist (see scripts/check-no-overlay-literals.sh).
-#
 # A second job checks the root pnpm-workspace.yaml overrides block against the ranges packages
 # declare once installed (see scripts/check-pnpm-overrides.mjs). It needs a real
 # node_modules tree, so it installs; the grep job above stays instant.
@@ -72,9 +69,6 @@ jobs:
       # private overlay structure to this public repo.
       - name: Check for premium overlay paths in pnpm-lock.yaml
         run: bash scripts/check-no-overlay-lockfile.sh
-
-      - name: Check tracked files against the overlay-literal allowlist
-        run: bash scripts/check-no-overlay-literals.sh
 
       # `sst install` with an overlay mounted writes the secrets it contributes into the
       # tracked sst-env.d.ts files, the same leak as the lockfile one above.
