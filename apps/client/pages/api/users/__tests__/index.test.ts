@@ -65,7 +65,7 @@ function mocks(user: unknown, query: Record<string, unknown>) {
 }
 
 describe('GET /api/users - publicView enumeration guards', () => {
-  it.each([{ groupBy: 'emailDomain' }, { recentSignups: 'hour' }])(
+  it.each([{ groupBy: 'emailDomain' }, { recentSignups: 'hour' }, { createdFrom: '2026-01-01T00:00:00.000Z' }])(
     'restricts signup review to admins: %j',
     async query => {
       const { req, res } = mocks({ id: 'u1', isAdmin: false }, { ...query, publicView: 'true', search: 'abc' });
@@ -80,6 +80,26 @@ describe('GET /api/users - publicView enumeration guards', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(JSON.stringify(mockRefs.pipeline[0])).toContain('createdAt');
     expect(mockRefs.pipeline[0]).toHaveProperty('$match');
+  });
+
+  it('filters on a created-at window with an exclusive end', async () => {
+    const { req, res } = mocks(
+      { id: 'admin1', isAdmin: true },
+      { createdFrom: '2026-01-01T00:00:00.000Z', createdTo: '2026-01-01T01:00:00.000Z' }
+    );
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.stringify(mockRefs.pipeline[0])).toContain(
+      JSON.stringify({
+        createdAt: { $gte: new Date('2026-01-01T00:00:00.000Z'), $lt: new Date('2026-01-01T01:00:00.000Z') },
+      })
+    );
+  });
+
+  it('rejects a created-at bound that is not an ISO instant', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, { createdFrom: 'yesterday' });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(400);
   });
 
   beforeEach(() => {
