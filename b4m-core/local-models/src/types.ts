@@ -108,6 +108,7 @@ export interface LocalRuntime {
    * `'ollama'` for the default daemon, otherwise `'<kind>:<host:port>'` for HTTP server roots.
    * HTTPS and reverse-proxy paths use `'<kind>:<canonical base URL>'` to keep distinct endpoints unique.
    * `'llama-server'` for the managed llama-server runtime, of which a process runs one.
+   * A caller-supplied `id` option replaces both.
    */
   readonly id: string;
   readonly kind: RuntimeKind;
