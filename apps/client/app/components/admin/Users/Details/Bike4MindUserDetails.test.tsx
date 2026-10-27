@@ -4,8 +4,10 @@ import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { UndoToastProvider } from '@client/app/components/admin/shared';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn() } }));
+vi.mock('../Profile/actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => vi.fn() }));
 
 import { api } from '@client/app/contexts/ApiContext';
 import Bike4MindUserDetails from './Bike4MindUserDetails';
@@ -25,42 +27,28 @@ const renderDetails = (props: Record<string, unknown>) => {
   return render(
     <QueryClientProvider client={client}>
       <CssVarsProvider theme={appTheme}>
-        <Bike4MindUserDetails
-          user={user}
-          userKey="u1"
-          editedFields={{}}
-          onFieldChange={vi.fn()}
-          onCreditReasonChange={vi.fn()}
-          creditReason=""
-          {...props}
-        />
+        <UndoToastProvider>
+          <Bike4MindUserDetails user={user} userKey="u1" editedFields={{}} onFieldChange={vi.fn()} {...props} />
+        </UndoToastProvider>
       </CssVarsProvider>
     </QueryClientProvider>
   );
 };
 
-describe('Bike4MindUserDetails — credit reason input', () => {
+describe('Bike4MindUserDetails - credits', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('hides the reason input until credits are edited', () => {
-    renderDetails({ editedFields: {} });
-    expect(screen.queryByTestId('admin-credit-reason-input')).not.toBeInTheDocument();
+  it('shows the balance read-only, with no credits input', () => {
+    renderDetails({ user: { ...(user as object), currentCredits: 12345 } as never });
+    expect(screen.getByTestId('user-card-credits-balance')).toHaveTextContent('12,345');
+    expect(screen.queryByRole('spinbutton', { name: /credits/i })).not.toBeInTheDocument();
   });
 
-  it('shows the reason input once currentCredits is edited', () => {
-    renderDetails({ editedFields: { currentCredits: true } });
-    expect(screen.getByTestId('admin-credit-reason-input')).toBeInTheDocument();
-  });
-
-  it('forwards typed reason via onCreditReasonChange', () => {
-    const onCreditReasonChange = vi.fn();
-    renderDetails({ editedFields: { currentCredits: true }, onCreditReasonChange });
-
-    fireEvent.change(screen.getByTestId('admin-credit-reason-input').querySelector('textarea')!, {
-      target: { value: 'Manual top-up' },
-    });
-
-    expect(onCreditReasonChange).toHaveBeenCalledWith('Manual top-up');
+  it('opens the adjust-credits dialog from the Adjust credits button', () => {
+    renderDetails({});
+    expect(screen.queryByTestId('adjust-credits-dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('user-card-adjust-credits-btn'));
+    expect(screen.getByTestId('adjust-credits-dialog')).toBeInTheDocument();
   });
 });
 

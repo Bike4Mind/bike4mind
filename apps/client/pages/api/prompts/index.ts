@@ -5,6 +5,8 @@ import { promptService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { respond } from '@server/utils/respond';
+import { promptListResponseSchema, promptResponseSchema } from '@bike4mind/common';
 import qs from 'qs';
 import { z } from 'zod';
 
@@ -45,24 +47,28 @@ const handler = baseApi()
       if (id) {
         // Get prompt by ID (throws NotFoundError -> 404 when absent)
         const prompt = await promptService.getPrompt({ id }, promptAdapters);
-        return res.json(prompt);
+        return respond(res, promptResponseSchema, prompt);
       } else if (tags) {
         // Get prompts by tags
         const tagArray = Array.isArray(tags) ? tags : [tags];
         const prompts = await promptService.listPromptByTags({ tags: tagArray }, promptAdapters);
-        return res.json(prompts);
+        return respond(res, promptListResponseSchema, prompts);
       } else if (type) {
         // Get prompts by type
         const prompts = await promptService.listPromptsByTypes({ type }, promptAdapters);
-        return res.json(prompts);
+        return respond(res, promptListResponseSchema, prompts);
       } else if (name) {
         // Get prompts by name
         const prompts = await promptService.listPromptByName({ name }, promptAdapters);
-        return res.json(prompts);
+        return respond(res, promptListResponseSchema, prompts);
       } else {
         // Get all prompts
         const prompts = await Prompt.find();
-        return res.json(prompts);
+        return respond(
+          res,
+          promptListResponseSchema,
+          prompts.map(prompt => prompt.toJSON())
+        );
       }
     })
   )
@@ -86,7 +92,7 @@ const handler = baseApi()
 
       const newPrompt = await promptService.createPrompt({ type, name, promptText, tags: tags ?? [] }, promptAdapters);
 
-      return res.status(201).send(newPrompt);
+      return respond(res, promptResponseSchema, newPrompt, 201);
     })
   );
 

@@ -21,6 +21,7 @@ import {
   isAdminReasonComplete,
 } from './adminReason';
 import { ReasonPicker } from './ReasonPicker';
+import { Kbd } from './Kbd';
 
 type TypedConfirm = {
   /** The exact text the admin must type, e.g. the account email. */
@@ -39,6 +40,8 @@ export type ActionDialogProps = {
   /** Before/after preview, a bulk dry-run summary, or extra inputs the command needs. */
   children?: React.ReactNode;
   reasonPresets: readonly string[];
+  /** False while the endpoint has no reason field; see ReasonPicker's `audited`. */
+  reasonAudited?: boolean;
   /** Repeats the consequence where it helps: "Set balance to 0". */
   confirmLabel: string;
   /**
@@ -88,6 +91,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   description,
   children,
   reasonPresets,
+  reasonAudited = true,
   confirmLabel,
   onConfirm,
   tone = 'neutral',
@@ -115,6 +119,8 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
     setSubmitting(true);
     try {
       await onConfirm(composeAdminReason(reason));
+    } catch {
+      // The caller reports its own failure (toast); a rejection only means the dialog stays open.
     } finally {
       setSubmitting(false);
     }
@@ -138,6 +144,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           presets={reasonPresets}
           value={reason}
           onChange={setReason}
+          audited={reasonAudited}
           data-testid={testIds.reason ?? `${testId}-reason-input`}
         />
         {typedConfirm && (
@@ -158,10 +165,21 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           </FormControl>
         )}
       </DialogContent>
-      <Stack direction="row" alignItems="center" justifyContent="flex-end" gap={1} flexWrap="wrap" sx={{ pt: 1 }}>
-        {hint && (
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="flex-end"
+        gap={1}
+        flexWrap="wrap"
+        sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+      >
+        {hint ? (
           <Typography id={hintId} level="body-sm" data-testid={`${testId}-hint`} sx={{ mr: 'auto' }}>
             {hint}
+          </Typography>
+        ) : (
+          <Typography level="body-xs" sx={{ mr: 'auto', fontWeight: 400 }}>
+            <Kbd>Enter</Kbd> to apply
           </Typography>
         )}
         <Button variant="plain" color="neutral" onClick={onClose} data-testid={`${testId}-cancel-btn`}>
