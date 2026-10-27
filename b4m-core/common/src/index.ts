@@ -187,6 +187,7 @@ export { default as dayjs } from './utils/dayjsConfig';
 export * from './slackManifestTemplate';
 export * from './surfaces';
 export * from './adminAssistant';
+export * from './premiumContributions';
 export * from './retry';
 export * from './memoryContext';
 export * from './zipEntry';
