@@ -1,7 +1,8 @@
 // Stand-in for the llama-server binary in tests: same flags, log lines, auth and exit codes.
 // FAKE_LLAMA_MODE: ok | crash | hang | ignore-term | wrong-model.
 // FAKE_LLAMA_LOG: new (silent load, then bind and log the port, as b11912) | b5501 (bind and log first, /health 503
-// while loading). The load lasts FAKE_LLAMA_LOAD_MS, or until the file FAKE_LLAMA_LOAD_UNTIL exists.
+// while loading) | other (as new, in a wording no build uses). FAKE_LLAMA_NO_BIND: load, then never listen.
+// The load lasts FAKE_LLAMA_LOAD_MS, or until the file FAKE_LLAMA_LOAD_UNTIL exists.
 // FAKE_LLAMA_FORGE_PORT: print a model string naming this port during the load; FAKE_LLAMA_FORGE_WHOLE: as a whole line.
 // FAKE_LLAMA_PUBLIC_MODELS: /v1/models answers without the key, as b5501 does. FAKE_LLAMA_NO_KEY: ignore the key.
 // FAKE_LLAMA_GRANDCHILD: start a child, write its pid here. FAKE_LLAMA_PID_FILE: write this process's pid here.
@@ -102,9 +103,18 @@ if (oldLog) {
   bind(bound =>
     process.stderr.write(`main: HTTP server is listening, hostname: ${host}, port: ${bound}, http threads: 4\n`)
   );
+  void loading.then(() => process.stderr.write('main: model loaded\n'));
 } else {
   void loading.then(() => {
-    log('srv    load_model: model loaded');
-    bind(bound => log(`srv  server_on_li: listening on http://${host}:${bound}`));
+    log('srv  server_run_i: model loaded');
+    if (process.env.FAKE_LLAMA_NO_BIND) return void setInterval(() => undefined, 1000);
+    const other = process.env.FAKE_LLAMA_LOG === 'other';
+    bind(bound =>
+      log(
+        other
+          ? `srv  http_serve: serving at ${host}:${bound}`
+          : `srv  server_on_li: listening on http://${host}:${bound}`
+      )
+    );
   });
 }

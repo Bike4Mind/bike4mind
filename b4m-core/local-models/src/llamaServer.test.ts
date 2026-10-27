@@ -17,11 +17,17 @@ import {
 import type { HubGgufBuild, HubModelDetail, HuggingFaceHub } from './huggingface';
 import {
   DEFAULT_LLAMA_SERVER_CONTEXT_SIZE,
+  LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD,
+  LLAMA_SERVER_PORT_GRACE_MS,
   MIN_LLAMA_SERVER_BUILD,
   findLlamaServer,
+  flashAttentionArgs,
+  listenerProblem,
   startLlamaServer,
   trackedLlamaServerCount,
+  type ListenerScan,
   type LlamaServerExit,
+  type LlamaServerFlashAttention,
   type LlamaServerProcess,
   type StartLlamaServerOptions,
 } from './llamaServer';
@@ -404,25 +410,122 @@ describe('startLlamaServer', () => {
   });
 
   it.runIf(process.platform === 'linux')(
-    'refuses a port whose listening socket belongs to another process, before sending the key',
+    'passes over a whole forged line naming a port another process holds, and never asks it anything',
     async () => {
       const decoy = await spoof();
       try {
-        const error = await start(
+        const server = await start(
           {},
           { FAKE_LLAMA_FORGE_PORT: String(decoy.port), FAKE_LLAMA_FORGE_WHOLE: '1', FAKE_LLAMA_LOAD_MS: '200' }
-        ).catch((caught: unknown) => caught);
-        expect(error).toMatchObject({
-          name: 'LlamaServerStartError',
-          reason: 'wrong-server',
-          message: `port ${decoy.port} is not held by the llama-server just started`,
-        });
-        expect(decoy.requests.every(request => request.authorization === undefined)).toBe(true);
+        );
+        expect(server.port).not.toBe(decoy.port);
+        expect(await client(server).list()).toHaveLength(1);
+        await server.stop();
+        expect(decoy.requests).toEqual([]);
       } finally {
         decoy.server.close();
       }
     }
   );
+
+  it('passes over a whole forged line naming a closed port and starts on the real one', async () => {
+    const closed = await spoof();
+    const port = closed.port;
+    await new Promise(done => closed.server.close(done));
+    const server = await start({}, { FAKE_LLAMA_FORGE_PORT: String(port), FAKE_LLAMA_FORGE_WHOLE: '1' });
+    expect(server.port).not.toBe(port);
+    expect(server.running).toBe(true);
+    await server.stop();
+  });
+
+  it.runIf(process.platform === 'linux')(
+    'finds the port of a build whose listening line it does not know, from the socket the server holds',
+    async () => {
+      const lines: string[] = [];
+      const server = await start({ onLog: line => lines.push(line) }, { FAKE_LLAMA_LOG: 'other' });
+      expect(lines.some(line => line.includes(`serving at 127.0.0.1:${server.port}`))).toBe(true);
+      await server.stop();
+    }
+  );
+
+  it('gives up with no-port when the model loaded but no port follows within the grace period', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const lines: string[] = [];
+      const pending = start(
+        { startTimeoutMs: undefined, onLog: line => lines.push(line) },
+        { FAKE_LLAMA_NO_BIND: '1' }
+      );
+      const settled = pending.catch((caught: unknown) => caught);
+      while (!lines.some(line => line.endsWith('model loaded'))) await new Promise(done => setTimeout(done, 20));
+      await vi.advanceTimersByTimeAsync(LLAMA_SERVER_PORT_GRACE_MS + 2_000);
+      expect(await settled).toMatchObject({ name: 'LlamaServerStartError', reason: 'no-port' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('names why a port could not be confirmed as the server own', () => {
+    const scan = (over: Partial<ListenerScan>): ListenerScan => ({
+      tableVisible: true,
+      listening: new Set([4000]),
+      owned: new Set(),
+      hidden: false,
+      ...over,
+    });
+    expect(listenerProblem(4000, scan({ tableVisible: false })).reason).toBe('socket-unreadable');
+    expect(listenerProblem(4000, scan({ hidden: true })).reason).toBe('socket-unreadable');
+    expect(listenerProblem(4001, scan({}))).toMatchObject({ reason: 'other-namespace' });
+    expect(listenerProblem(4000, scan({})).reason).toBe('wrong-server');
+  });
+
+  it('maps flashAttention to -fa for builds before and from b6325', () => {
+    const old = LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD - 1;
+    const now = LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD;
+    expect(flashAttentionArgs({}, old)).toEqual([]);
+    expect(flashAttentionArgs({ flashAttention: 'auto' }, old)).toEqual([]);
+    expect(flashAttentionArgs({ flashAttention: 'off' }, old)).toEqual([]);
+    expect(flashAttentionArgs({ flashAttention: 'on' }, old)).toEqual(['-fa']);
+    expect(flashAttentionArgs({}, now)).toEqual(['-fa', 'auto']);
+    expect(flashAttentionArgs({ flashAttention: 'off' }, now)).toEqual(['-fa', 'off']);
+    expect(flashAttentionArgs({ flashAttention: 'on' }, now)).toEqual(['-fa', 'on']);
+    // A quantized V cache needs flash attention; a quantized K cache and an f16 V cache do not.
+    expect(flashAttentionArgs({ extraArgs: ['-ctv', 'q8_0'] }, old)).toEqual(['-fa']);
+    expect(flashAttentionArgs({ extraArgs: ['--cache-type-v', 'q4_0'] }, now)).toEqual(['-fa', 'on']);
+    expect(flashAttentionArgs({ extraArgs: ['-ctk', 'q8_0'] }, old)).toEqual([]);
+    expect(flashAttentionArgs({ extraArgs: ['-ctv', 'q8_0', '-ctv', 'f16'] }, old)).toEqual([]);
+    expect(() => flashAttentionArgs({ flashAttention: 'off', extraArgs: ['-ctv', 'q8_0'] }, now)).toThrow(
+      "a quantized V cache (-ctv q8_0) needs flash attention, so flashAttention cannot be 'off'"
+    );
+  });
+
+  it('passes the flash attention flag for the build, probing it when not given', async () => {
+    const argsFor = async (overrides: Partial<StartLlamaServerOptions>, extra: Record<string, string> = {}) => {
+      const record = join(root, `record-fa-${Date.now()}-${Math.random()}.json`);
+      const server = await start(overrides, { FAKE_LLAMA_RECORD: record, ...extra });
+      await server.stop();
+      const { args } = await recorded(record);
+      const at = args.indexOf('-fa');
+      return at === -1 ? [] : args.slice(at, args[at + 1]?.startsWith('-') ? at + 1 : at + 2);
+    };
+    expect(await argsFor({})).toEqual([]);
+    expect(await argsFor({ build: 11912 })).toEqual(['-fa', 'auto']);
+    expect(await argsFor({ build: 5501, flashAttention: 'on' })).toEqual(['-fa']);
+    expect(await argsFor({ flashAttention: 'off' })).toEqual(['-fa', 'off']);
+    expect(await argsFor({ flashAttention: 'on' }, { FAKE_LLAMA_VERSION: '5501 (cdf94a18)' })).toEqual(['-fa']);
+    expect(await argsFor({ build: 5501, extraArgs: ['-ctv', 'q8_0'] })).toEqual(['-fa']);
+  });
+
+  it('refuses flashAttention off with a quantized V cache, and an unknown mode, before spawning', async () => {
+    const record = join(root, 'record-fa-refused.json');
+    await expect(
+      start({ flashAttention: 'off', extraArgs: ['-ctv', 'q8_0'] }, { FAKE_LLAMA_RECORD: record })
+    ).rejects.toThrow('needs flash attention');
+    await expect(
+      start({ flashAttention: 'yes' as LlamaServerFlashAttention }, { FAKE_LLAMA_RECORD: record })
+    ).rejects.toThrow('flashAttention must be one of auto, on, off');
+    await expect(readFile(record)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
   it.skipIf(process.platform === 'win32')('kills what a launcher started when the launcher exits first', async () => {
     const pidFile = join(root, `orphan-${Date.now()}.pid`);
@@ -561,6 +664,40 @@ describe('LlamaServerRuntime', () => {
     expect(fresh.running).toBe(true);
     expect(await runtime.running()).toEqual([fresh]);
     await runtime.stopAll();
+  });
+
+  it('still waits for the old server when a start during the stop was cancelled and another start follows', async () => {
+    const runtime = runtimeIn('models-restart-abort', { stopTimeoutMs: 1_000 }, { FAKE_LLAMA_MODE: 'ignore-term' });
+    await runtime.store.add(modelPath, { name: 'r.gguf' });
+    const old = await runtime.start('r.gguf');
+    const stopping = runtime.stop('r.gguf');
+    const controller = new AbortController();
+    const cancelled = runtime.start('r.gguf', { signal: controller.signal }).catch((caught: unknown) => caught);
+    controller.abort(new Error('changed my mind'));
+    expect(await cancelled).toMatchObject({ message: 'changed my mind' });
+    const fresh = await runtime.start('r.gguf');
+    expect(old.running).toBe(false);
+    expect(fresh).not.toBe(old);
+    await stopping;
+    expect(await runtime.running()).toEqual([fresh]);
+    await runtime.stopAll();
+  });
+
+  it('starts with the flash attention flag for the build it found, once per binary', async () => {
+    const record = join(root, 'record-runtime-fa.json');
+    const runtime = runtimeIn(
+      'models-fa',
+      { flashAttention: 'on' },
+      { FAKE_LLAMA_VERSION: '5501 (cdf94a18)', FAKE_LLAMA_RECORD: record }
+    );
+    await runtime.store.add(modelPath, { name: 'fa.gguf' });
+    const server = await runtime.start('fa.gguf');
+    expect((await recorded(record)).args).toContain('-fa');
+    expect((await recorded(record)).args).not.toContain('on');
+    await server.stop();
+    const off = await runtime.start('fa.gguf', { flashAttention: 'off' });
+    expect((await recorded(record)).args).not.toContain('-fa');
+    await off.stop();
   });
 
   it('starts a fresh server after a crash and stops everything on stopAll', async () => {

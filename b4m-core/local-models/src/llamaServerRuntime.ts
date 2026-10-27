@@ -6,6 +6,7 @@ import { HuggingFaceHub, isHubRepoId } from './huggingface';
 import {
   findLlamaServer,
   startLlamaServer,
+  type LlamaServerBinary,
   type LlamaServerExit,
   type LlamaServerProcess,
   type LlamaServerTuning,
@@ -24,6 +25,7 @@ export const LLAMA_SERVER_RUNTIME_ID = 'llama-server';
 /** The quant `pull` takes for a ref without one, as Ollama does for `hf.co/<repo>`. */
 export const DEFAULT_LLAMA_SERVER_PULL_QUANT = 'Q4_K_M';
 
+const noop = () => undefined;
 const HUB_REF_RE = /^(?:(?:hf|huggingface)\.co\/)?([^:]+)(?::([A-Za-z0-9_.-]+))?$/i;
 
 export interface LlamaServerRuntimeOptions extends LlamaServerTuning {
@@ -100,7 +102,7 @@ export class LlamaServerRuntime implements LocalRuntime {
   readonly #options: LlamaServerRuntimeOptions;
   readonly #servers = new Map<string, ServerEntry>();
   #hub: Pick<HuggingFaceHub, 'getModel' | 'download'> | undefined;
-  #health: { key: string; health: RuntimeHealth } | null = null;
+  #found: { key: string; binary: LlamaServerBinary } | null = null;
 
   constructor(options: LlamaServerRuntimeOptions) {
     this.binaryPath = options.binaryPath;
@@ -112,23 +114,29 @@ export class LlamaServerRuntime implements LocalRuntime {
 
   /** Whether the binary runs and is new enough; a healthy answer is kept until the binary file changes. Never throws. */
   async health(): Promise<RuntimeHealth> {
+    try {
+      const { version } = await this.#binary();
+      return { ok: true, version, error: null };
+    } catch (error) {
+      return { ok: false, version: null, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** The binary's version and build, probed once until the binary file changes; start needs the build for its flags. */
+  async #binary(): Promise<LlamaServerBinary> {
     const key = await stat(this.binaryPath).then(
       info => `${info.mtimeMs}:${info.size}`,
       () => null
     );
-    if (key !== null && this.#health?.key === key) return this.#health.health;
-    try {
-      const found = await findLlamaServer({
-        path: this.binaryPath,
-        binaryArgs: this.#options.binaryArgs,
-        env: this.#options.env,
-      });
-      const health = { ok: true, version: found?.version ?? null, error: null };
-      this.#health = key === null ? null : { key, health };
-      return health;
-    } catch (error) {
-      return { ok: false, version: null, error: error instanceof Error ? error.message : String(error) };
-    }
+    if (key !== null && this.#found?.key === key) return this.#found.binary;
+    const binary = await findLlamaServer({
+      path: this.binaryPath,
+      binaryArgs: this.#options.binaryArgs,
+      env: this.#options.env,
+    });
+    if (!binary) throw new LocalRuntimeError(`llama-server at ${this.binaryPath} could not be checked`, this.id);
+    this.#found = key === null ? null : { key, binary };
+    return binary;
   }
 
   async list(): Promise<InstalledModel[]> {
@@ -190,7 +198,8 @@ export class LlamaServerRuntime implements LocalRuntime {
   start(model: string, options: StartModelOptions = {}): Promise<LlamaServerProcess> {
     let entry = this.#servers.get(model);
     if (!entry || entry.stopping || (!entry.server && entry.controller.signal.aborted)) {
-      const stopping = entry?.stopping;
+      // The entry replaced may still be stopping its server, or a cancelled one; never run two for one model.
+      const before = entry && (entry.stopping ?? entry.pending.then(noop, noop));
       const starting: StartingEntry = {
         controller: new AbortController(),
         server: null,
@@ -199,8 +208,8 @@ export class LlamaServerRuntime implements LocalRuntime {
         exitListeners: [],
         stopping: null,
       };
-      const pending = stopping
-        ? stopping.then(() => this.#start(model, options, starting))
+      const pending = before
+        ? before.then(() => this.#start(model, options, starting))
         : this.#start(model, options, starting);
       const created: ServerEntry = Object.assign(starting, { pending });
       this.#servers.set(model, created);
@@ -279,11 +288,15 @@ export class LlamaServerRuntime implements LocalRuntime {
     if (stored.projector) throw new LocalRuntimeError(`${model} is a vision projector, not a model`, this.id);
     if (!stored.complete) throw new ModelIncompleteError(this.id, model, stored.missingShards);
     entry.sizeBytes = stored.sizeBytes;
+    const { build } = await this.#binary();
+    entry.controller.signal.throwIfAborted();
     const defaults = this.#options;
     const onLog = defaults.onLog;
     const server = await startLlamaServer({
       binaryPath: this.binaryPath,
       binaryArgs: defaults.binaryArgs,
+      build,
+      flashAttention: options.flashAttention ?? defaults.flashAttention,
       modelPath: stored.path,
       alias: model,
       contextSize: options.contextSize ?? defaults.contextSize,

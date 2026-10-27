@@ -138,7 +138,12 @@ export class LlamaServerExitError extends LocalRuntimeError {
 export class LlamaServerStartError extends LocalRuntimeError {
   constructor(
     message: string,
-    readonly reason: 'timeout' | 'unauthenticated' | 'wrong-server',
+    /**
+     * `socket-unreadable` and `other-namespace`: Linux could not confirm the port is the server's (no `/proc/net/tcp`,
+     * hidden file descriptors, or a server in another network namespace); `no-port`: it loaded but named no port.
+     */
+    readonly reason:
+      'timeout' | 'unauthenticated' | 'wrong-server' | 'socket-unreadable' | 'other-namespace' | 'no-port',
     readonly log: readonly string[]
   ) {
     super(message, 'llama-server');

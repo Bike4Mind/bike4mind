@@ -110,6 +110,8 @@ export {
 export {
   DEFAULT_LLAMA_SERVER_CONTEXT_SIZE,
   DEFAULT_LLAMA_SERVER_STOP_TIMEOUT_MS,
+  LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD,
+  LLAMA_SERVER_PORT_GRACE_MS,
   LLAMA_SERVER_TUNING_FLAGS,
   MIN_LLAMA_SERVER_BUILD,
   findLlamaServer,
@@ -117,6 +119,7 @@ export {
   type FindLlamaServerOptions,
   type LlamaServerBinary,
   type LlamaServerExit,
+  type LlamaServerFlashAttention,
   type LlamaServerProcess,
   type LlamaServerTuning,
   type StartLlamaServerOptions,
