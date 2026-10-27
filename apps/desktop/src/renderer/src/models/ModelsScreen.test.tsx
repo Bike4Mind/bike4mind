@@ -109,6 +109,7 @@ beforeEach(() => {
     token: { set: false, persisted: true },
   };
   for (const fn of Object.values(calls)) fn.mockReset();
+  window.localStorage.clear();
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.remove.mockResolvedValue({ ok: true });
   calls.setHfToken.mockImplementation(async () => {
@@ -366,6 +367,32 @@ describe('ModelsScreen explore', () => {
     expect(q('models-explore-abliterated-chip')).not.toBeNull();
     await click(q('models-explore-abliterated-switch'));
     expect(all('models-explore-result-row')).toHaveLength(1);
+  });
+
+  it('remembers the abliterated toggle across restarts, and keeps it off by default', async () => {
+    bridge.search = {
+      ok: true,
+      models: [card(REPO), card('someone/Qwen2.5-7B-abliterated-GGUF', { abliterated: true })],
+      nextCursor: null,
+    };
+    await mount();
+    await openExplore();
+    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBeNull();
+    expect(all('models-explore-result-row')).toHaveLength(1);
+    await click(q('models-explore-abliterated-switch'));
+    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBe('1');
+    await click(q('models-explore-abliterated-switch'));
+
+    act(() => root?.unmount());
+    host?.remove();
+    // Turned on in an earlier run; this run's module state never saw it.
+    window.localStorage.setItem('b4m.models.showAbliterated', '1');
+    await mount();
+    await openExplore();
+    expect(all('models-explore-result-row')).toHaveLength(2);
+    expect((q('models-explore-abliterated-switch') as HTMLInputElement).checked).toBe(true);
+    await click(q('models-explore-abliterated-switch'));
+    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBe('0');
   });
 
   it('shows the license before the download button and asks before pulling', async () => {

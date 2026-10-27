@@ -25,6 +25,7 @@ import {
 } from '@shared/models';
 import { ExternalLink } from '../chat/ExternalLink';
 import { SearchIcon } from '../chat/icons';
+import { readShowAbliterated, writeShowAbliterated } from './abliteratedSetting';
 import { AccessSteps } from './AccessSteps';
 import { HuggingFaceToken } from './HuggingFaceToken';
 import { PullDialog, type PullConsent } from './PullDialog';
@@ -39,7 +40,7 @@ type DetailState =
   { state: 'loading' } | { state: 'ready'; model: HubModelView } | { state: 'error'; error: ModelHubError };
 
 // Kept across visits so returning to the screen mid-pull shows the same search and repo.
-const remembered = { query: '', selected: null as string | null, showAbliterated: false };
+const remembered = { query: '', selected: null as string | null };
 
 export function hubErrorText(error: ModelHubError): string {
   if (error.kind === 'rate-limited') {
@@ -379,7 +380,7 @@ export function ExploreTab({
   const [query, setQuery] = useState(remembered.query);
   const [search, setSearch] = useState<SearchState>({ state: 'loading' });
   const [selected, setSelected] = useState<string | null>(remembered.selected);
-  const [showAbliterated, setShowAbliterated] = useState(remembered.showAbliterated);
+  const [showAbliterated, setShowAbliterated] = useState(readShowAbliterated);
   const [token, setToken] = useState<HfTokenStatus | null>(null);
   // Bumped when the token changes, so the open repo is read again with what the new token can see.
   const [tokenVersion, setTokenVersion] = useState(0);
@@ -438,7 +439,7 @@ export function ExploreTab({
     setSelected(repo);
   };
   const toggleAbliterated = (on: boolean) => {
-    remembered.showAbliterated = on;
+    writeShowAbliterated(on);
     setShowAbliterated(on);
   };
 
