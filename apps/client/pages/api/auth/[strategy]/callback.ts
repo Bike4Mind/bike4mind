@@ -27,6 +27,17 @@ import { isLocalAppUrl } from '@server/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
+/**
+ * True for the provider's `invalid_grant` on the code exchange: the authorization code was already
+ * redeemed or has expired (back button, double submit, slow return). An expected outcome, so it
+ * logs at warn rather than at error, the level the alert channel pages on.
+ */
+function isReplayedOrExpiredCode(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const { name, code } = err as { name?: unknown; code?: unknown };
+  return name === 'TokenError' && code === 'invalid_grant';
+}
+
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
     // Validate if the strategy is valid
@@ -62,7 +73,8 @@ const handler = baseApi({ auth: false })
         const email = (info as any)?.email || undefined;
 
         if (err) {
-          console.error('Passport Authenticate Error:', info, err);
+          const logError = isReplayedOrExpiredCode(err) ? console.warn : console.error;
+          logError('Passport Authenticate Error:', info, err);
           try {
             await authFailLogRepository.create({
               strategy,
