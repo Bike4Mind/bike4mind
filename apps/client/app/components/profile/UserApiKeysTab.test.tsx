@@ -551,6 +551,16 @@ describe('UserApiKeysTab - skills:write', () => {
   it('offers skills:write with Full access', () => {
     expect(mintScopes('full')).toContain(ApiKeyScope.SKILLS_WRITE);
   });
+
+  it('keeps skills:review out of the default Read-only selection', () => {
+    expect(mintScopes()).not.toContain(ApiKeyScope.SKILLS_REVIEW);
+  });
+
+  it('keeps skills:review out of Read & write', () => {
+    const readwrite = mintScopes('readwrite');
+    expect(readwrite).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(readwrite).not.toContain(ApiKeyScope.SKILLS_REVIEW);
+  });
 });
 
 describe('UserApiKeysTab - API key trust gate', () => {
