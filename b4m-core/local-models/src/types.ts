@@ -71,7 +71,7 @@ export interface PullProgress {
 export interface PullOptions {
   signal?: AbortSignal;
   onProgress?: (progress: PullProgress) => void;
-  /** Fails the pull when the runtime sends nothing for this long (ms). Infinity disables the check. */
+  /** Fails the pull when the runtime sends nothing for this long (ms). Must be positive; Infinity disables the check. */
   idleTimeoutMs?: number;
 }
 
