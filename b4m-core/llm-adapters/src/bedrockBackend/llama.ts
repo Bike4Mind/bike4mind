@@ -121,7 +121,7 @@ export default class LlamaBedrockBackend extends BaseBedrockBackend {
     // the pipeline can emit several. A call with no system message gets it as a leading block.
     const identityReminder = options.omitIdentityReminder
       ? null
-      : buildIdentityReminder(model, options.modelDisplayName);
+      : buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName);
     const lastSystemIndex = identityReminder ? messages.findLastIndex(message => message.role === 'system') : -1;
 
     for (const [index, message] of messages.entries()) {

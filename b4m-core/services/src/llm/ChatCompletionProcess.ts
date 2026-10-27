@@ -5279,6 +5279,9 @@ export class ChatCompletionProcess {
                       identityViaTool: false,
                     }
                   : {}),
+                // A substitute may answer from its own training instead of calling the tool, so the
+                // line naming the requested model is always sent.
+                ...(this.shadowSubstitution ? { identityViaTool: false } : {}),
                 // Per attempt: a fallback hop must name the model that actually serves it.
                 modelDisplayName: attemptLedgerModel.name,
                 modelIdentityId: attemptLedgerModel.id,

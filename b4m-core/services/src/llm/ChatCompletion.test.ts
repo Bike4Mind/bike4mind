@@ -1102,6 +1102,8 @@ describe('ChatCompletionProcess', () => {
 
       expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model']);
       expect(JSON.parse(reported ?? '{}').id).toBe(requested.id);
+      // The substitute may not call the tool, so the identity line is sent as well.
+      expect(complete.mock.calls[0][2].identityViaTool).toBe(false);
     });
 
     it('skips the fallback chain when the substitute fails', async () => {

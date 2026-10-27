@@ -57,6 +57,12 @@ describe('GeminiBackend identity reminder', () => {
     expect(request.config?.systemInstruction).toBe(REMINDER);
   });
 
+  it('names modelIdentityId in place of the serving model', async () => {
+    const request = await run([{ role: 'user', content: 'hi' }], { modelIdentityId: 'requested-model' });
+
+    expect(request.config?.systemInstruction).toBe(buildIdentityReminder('requested-model'));
+  });
+
   it('sends no system instruction when the reminder is omitted and the caller supplied none', async () => {
     const request = await run([{ role: 'user', content: 'hi' }], { omitIdentityReminder: true });
 

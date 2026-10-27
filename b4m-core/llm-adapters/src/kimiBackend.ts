@@ -895,7 +895,10 @@ export class KimiBackend implements ICompletionBackend {
     return convertMessagesToOpenAIFormat(
       shouldOmitIdentityReminder(options)
         ? messages
-        : appendIdentityReminderToMessages(messages, buildIdentityReminder(model, options.modelDisplayName))
+        : appendIdentityReminderToMessages(
+            messages,
+            buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+          )
     ) as OpenAI.ChatCompletionMessageParam[];
   }
 
