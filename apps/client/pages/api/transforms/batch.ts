@@ -1,3 +1,4 @@
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
@@ -72,6 +73,8 @@ const BATCH_CREDIT_HOLD_TTL_MS = 29 * 24 * 60 * 60_000;
 // Next bodyParser (below) and baseApi's own content-length guard must be raised.
 const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res) => {
   const body = BatchSubmitSchema.parse(req.body);
+  // The provider queues this work; its lifetime is independent of the HTTP request.
+  await admitRequestCompletion(req, { holdSlot: false });
 
   const apiKey = Config.ANTHROPIC_API_KEY;
   if (!apiKey || apiKey === 'not-configured') {

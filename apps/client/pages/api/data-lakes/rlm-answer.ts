@@ -429,8 +429,10 @@ async function handleRlmAnswer(req: Request, res: Response) {
             cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
             turnUsage: rootUsage.turnUsage,
           })) + replUsage.totalCostUsd,
-    inputTokens: rootUsage.totalInputTokens,
-    outputTokens: rootUsage.totalOutputTokens,
+    inputTokens: (rootUsage.totalInputTokens ?? 0) + replUsage.promptTokens,
+    outputTokens: (rootUsage.totalOutputTokens ?? 0) + replUsage.completionTokens,
+    cacheReadInputTokens: rootUsage.totalCacheReadTokens,
+    cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
   });
 
   const totalLatencyMs = Date.now() - t0;

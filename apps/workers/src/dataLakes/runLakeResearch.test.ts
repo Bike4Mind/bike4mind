@@ -299,6 +299,56 @@ describe('runLakeResearch', () => {
   });
 
   describe('judge-cost usage recording (the runs API reported spend the Spend tab never showed)', () => {
+    it.each(['complete', 'failure', 'free'] as const)('records every judgment token once after %s', async outcome => {
+      h.judge
+        .mockResolvedValueOnce({
+          outcome: 'judged',
+          relevance: 0.9,
+          inputTokens: 100,
+          outputTokens: 10,
+          cacheReadInputTokens: 20,
+          cacheCreationInputTokens: 5,
+        })
+        .mockResolvedValueOnce({
+          outcome: 'failed',
+          error: 'invalid JSON',
+          inputTokens: 40,
+          outputTokens: 4,
+          cacheReadInputTokens: 3,
+          cacheCreationInputTokens: 2,
+        });
+      h.executeResearchRun.mockImplementationOnce(
+        async (
+          _levers: unknown,
+          _runId: string,
+          ports: {
+            judge: (candidate: unknown) => Promise<unknown>;
+            onProgress: (cost: number, totals: unknown) => Promise<void>;
+          }
+        ) => {
+          const candidate = { title: 'T', url: 'https://example.com', snippet: 'S' };
+          await ports.judge(candidate);
+          await ports.judge(candidate);
+          const spentMicroUsd = outcome === 'free' ? 0 : 650;
+          await ports.onProgress(spentMicroUsd, emptyResearchRunTotals());
+          if (outcome === 'failure') throw new Error('run failed');
+          return { totals: emptyResearchRunTotals(), spentMicroUsd, stopReason: 'exhausted' };
+        }
+      );
+
+      const run = runLakeResearch('run-1', logger);
+      if (outcome === 'failure') await expect(run).rejects.toThrow('run failed');
+      else await run;
+
+      expect(h.recordOperationalUsage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ inputTokens: 140, outputTokens: 14, cachedInputTokens: 23, cacheWriteTokens: 7 }),
+        expect.anything()
+      );
+      h.claimForExecution.mockResolvedValueOnce(null);
+      await runLakeResearch('run-1', logger);
+      expect(h.recordOperationalUsage).toHaveBeenCalledOnce();
+    });
+
     it('records one UsageEvent for the run, attributed to the lake and the resolved judge model', async () => {
       h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers({ model: 'gpt-4.1-mini' }) }));
 

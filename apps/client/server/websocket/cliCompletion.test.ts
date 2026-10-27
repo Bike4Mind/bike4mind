@@ -391,6 +391,7 @@ describe('daily cap billing target', () => {
 describe('cliCompletion websocket handler - untrusted completion quotas', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(sendToConnection).mockResolvedValue(undefined);
     mockExecuteCompletion.mockResolvedValue(undefined);
     mockAdmitCompletion.mockResolvedValue({ release: mockQuotaRelease });
   });
@@ -459,7 +460,6 @@ describe('cliCompletion websocket handler - untrusted completion quotas', () => 
     settle();
     await expect(pending).rejects.toThrow('connection gone');
     expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
-    vi.mocked(sendToConnection).mockResolvedValue(undefined);
   });
 
   it('leaves JWT completions exempt', async () => {

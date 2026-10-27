@@ -235,6 +235,25 @@ describe('admitApiKeyCompletion', () => {
   });
 
   describe('concurrent completions', () => {
+    it('enforces concurrency independently when token metering is disabled', async () => {
+      mocks.loadSettings.mockResolvedValue(settings({ untrustedTokensPerMinute: 0, untrustedMaxConcurrent: 2 }));
+      mocks.tryAcquireLease.mockResolvedValueOnce(false);
+
+      const error = await rejectionOf(admitApiKeyCompletion({ owner, holdSlot: true }));
+      expect(error.additionalInfo).toMatchObject({ errorCode: CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE });
+      expect(mocks.userTokensSince).not.toHaveBeenCalled();
+      expect(mocks.tryAcquireLease).toHaveBeenCalledWith(
+        completionSlotsKey(owner.id),
+        expect.any(String),
+        2,
+        expect.any(Number)
+      );
+
+      const grant = await admitApiKeyCompletion({ owner, holdSlot: true });
+      await grant.release();
+      expect(mocks.releaseLease).toHaveBeenCalledOnce();
+    });
+
     it('takes a slot on the account lease and frees exactly that slot once', async () => {
       const grant = await admitApiKeyCompletion({ owner, holdSlot: true });
       const [key, holderId, limit] = mocks.tryAcquireLease.mock.calls[0];

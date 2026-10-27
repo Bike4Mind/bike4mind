@@ -54,19 +54,25 @@ describe('POST /api/v1/agent-executions - untrusted owner quotas', () => {
     mockStartAgentExecution.mockResolvedValue({ ok: true, executionId: 'exec-1' });
   });
 
-  it('checks the token quota for the queued run without holding a concurrency slot', async () => {
+  it('forwards the verified credential to the shared quota gate without checking twice', async () => {
     const req = request();
     const res = response();
     await captured.handler!(req, res);
-    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(req, { holdSlot: false });
+    expect(mockStartAgentExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKeyInfo: req.apiKeyInfo }),
+      req.logger
+    );
+    expect(mockAdmitRequestCompletion).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(202);
   });
 
-  it('refuses an over-quota run before starting it', async () => {
-    mockAdmitRequestCompletion.mockRejectedValue(
+  it('propagates shared quota refusal without accepting the run', async () => {
+    mockStartAgentExecution.mockRejectedValue(
       new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 3 })
     );
-    await expect(captured.handler!(request(), response())).rejects.toBeInstanceOf(TooManyRequestsError);
-    expect(mockStartAgentExecution).not.toHaveBeenCalled();
+    const res = response();
+    await expect(captured.handler!(request(), res)).rejects.toBeInstanceOf(TooManyRequestsError);
+    expect(res.status).not.toHaveBeenCalled();
+    expect(mockStartAgentExecution).toHaveBeenCalledOnce();
   });
 });

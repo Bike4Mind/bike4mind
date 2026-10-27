@@ -31,6 +31,8 @@ const {
     reserve: vi.fn(),
     settle: vi.fn(),
     replCostUsd: 0,
+    replPromptTokens: 0,
+    replCompletionTokens: 0,
     // The agent's running totals, read by the route when agent.run throws.
     checkpoint: { totalInputTokens: 0, totalOutputTokens: 0 },
   },
@@ -82,7 +84,13 @@ vi.mock('@bike4mind/agents', () => ({
       mockReplSessionCtor(opts);
     }
     setTools = vi.fn();
-    getUsage = () => ({ executions: 0, subLlmCalls: 0, totalCostUsd: meter.replCostUsd });
+    getUsage = () => ({
+      executions: 0,
+      subLlmCalls: 0,
+      totalCostUsd: meter.replCostUsd,
+      promptTokens: meter.replPromptTokens,
+      completionTokens: meter.replCompletionTokens,
+    });
     dispose = vi.fn();
   },
   BudgetExceededError: class extends Error {},
@@ -296,6 +304,8 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
     vi.clearAllMocks();
     meter.denied.clear();
     meter.replCostUsd = 0.25;
+    meter.replPromptTokens = 0;
+    meter.replCompletionTokens = 0;
     meter.checkpoint = { totalInputTokens: 0, totalOutputTokens: 0 };
     mockResolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'sk-test' });
@@ -433,7 +443,37 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
       usd: 1000 * 0.001 + 300 * 0.002 + 0.25,
       inputTokens: 1000,
       outputTokens: 300,
+      cacheReadInputTokens: undefined,
+      cacheCreationInputTokens: undefined,
     });
+  });
+
+  it.each(['success', 'failure'] as const)('records root cache and sub-LLM tokens after %s', async outcome => {
+    meter.replPromptTokens = 10_000;
+    meter.replCompletionTokens = 500;
+    const rootUsage = {
+      totalInputTokens: 1000,
+      totalOutputTokens: 300,
+      totalCacheReadTokens: 200,
+      totalCacheWriteTokens: 50,
+    };
+    if (outcome === 'failure') {
+      meter.checkpoint = rootUsage;
+      mockAgentRun.mockRejectedValueOnce(new Error('provider down'));
+    } else {
+      mockAgentRun.mockResolvedValueOnce({ finalAnswer: 'ok', steps: [], completionInfo: rootUsage });
+    }
+
+    await call({ 'x-api-key': 'personal-key' });
+
+    expect(meter.settle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputTokens: 11_000,
+        outputTokens: 800,
+        cacheReadInputTokens: 200,
+        cacheCreationInputTokens: 50,
+      })
+    );
   });
 
   it('settles the root turns that completed plus sub-LLM spend when the agent throws', async () => {
