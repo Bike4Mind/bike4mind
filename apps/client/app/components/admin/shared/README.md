@@ -56,6 +56,19 @@ See `IntegrationDemandTab.tsx` for a complete query-backed example.
 timestamps with exact UTC tooltips. `SectionCard` groups read-only definition-list
 facts; use separate settings components for forms.
 
+## Settings forms
+
+`SettingsSection` supplies a form surface without the definition-list semantics of
+`SectionCard`. `SaveBar` is sticky and accepts a dirty count, save/discard callbacks,
+pending state and validation/error text. It owns Cmd+S and Ctrl+S and removes its
+listener when unmounted. `UnsavedChangesGuard` protects router navigation and page
+unload; its caller defines which route changes leave the form.
+
+Admin Settings uses `SettingsDraftProvider` to retain drafts while filtering or
+switching sections. It saves through each editor's existing mutation, removes only
+successful changes and retains failed/unattempted changes for retry. File uploads
+and scoped override commands keep their existing explicit command flows.
+
 ## Audited writes
 
 Every write that changes money or access goes through `ActionDialog` (see section 4

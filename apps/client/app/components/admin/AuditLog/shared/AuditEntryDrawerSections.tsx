@@ -1,17 +1,13 @@
 import { useState } from 'react';
-import { Box, Button, IconButton, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { Box, Button, IconButton, Sheet, Stack, Typography } from '@mui/joy';
+import { DataTable, SectionCard } from '../../shared';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import type { AuditChange, AuditEntry } from '@bike4mind/common';
 import { activateOnKey } from './activateOnKey';
 import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 
 export const DrawerSection: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <Box>
-    <Typography level="title-sm" sx={{ mb: 0.5 }}>
-      {title}
-    </Typography>
-    {children}
-  </Box>
+  <SectionCard title={title}>{children}</SectionCard>
 );
 
 export const KeyValueRows: React.FC<{ rows: Array<[string, string | undefined]> }> = ({ rows }) => (
@@ -29,8 +25,6 @@ export const KeyValueRows: React.FC<{ rows: Array<[string, string | undefined]> 
   </Stack>
 );
 
-const WRAP_STYLE = { overflowWrap: 'anywhere' } as const;
-
 const formatValue = (value: unknown): string => {
   if (typeof value === 'string') return value;
   if (value === undefined) return '';
@@ -38,24 +32,30 @@ const formatValue = (value: unknown): string => {
 };
 
 export const ChangesTable: React.FC<{ changes: AuditChange[] }> = ({ changes }) => (
-  <Table size="sm" data-testid="audit-drawer-changes">
-    <thead>
-      <tr>
-        <th>Field</th>
-        <th>Before</th>
-        <th>After</th>
-      </tr>
-    </thead>
-    <tbody>
-      {changes.map((change, index) => (
-        <tr key={`${change.field}-${index}`}>
-          <td style={WRAP_STYLE}>{change.field}</td>
-          <td style={WRAP_STYLE}>{formatValue(change.before)}</td>
-          <td style={WRAP_STYLE}>{formatValue(change.after)}</td>
-        </tr>
-      ))}
-    </tbody>
-  </Table>
+  <DataTable
+    rows={changes.map((change, index) => ({ ...change, id: `${index}` }))}
+    getRowId={change => change.id}
+    label="Recorded changes"
+    testId="audit-drawer-changes"
+    onRetry={() => {}}
+    columns={[
+      {
+        id: 'field',
+        label: 'Field',
+        render: change => <Typography sx={{ overflowWrap: 'anywhere' }}>{change.field}</Typography>,
+      },
+      {
+        id: 'before',
+        label: 'Before',
+        render: change => <Typography sx={{ overflowWrap: 'anywhere' }}>{formatValue(change.before)}</Typography>,
+      },
+      {
+        id: 'after',
+        label: 'After',
+        render: change => <Typography sx={{ overflowWrap: 'anywhere' }}>{formatValue(change.after)}</Typography>,
+      },
+    ]}
+  />
 );
 
 export const CopyableId: React.FC<{ label: string; value: string }> = ({ label, value }) => (
