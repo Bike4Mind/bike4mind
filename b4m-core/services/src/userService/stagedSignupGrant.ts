@@ -7,7 +7,7 @@ import {
 import { withTransaction } from '@bike4mind/db-core';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService';
 import type { FreeCreditAdapters, GrantFreeCreditsResult } from './freeCredits';
-import { evaluateSignupRisk, type SignupRiskSignals } from './signupRisk';
+import { evaluateSignupRisk, signupRiskPolicySchema, type SignupRiskSignals } from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 
 type GrantAdapters = FreeCreditAdapters & {
@@ -65,10 +65,19 @@ async function releaseStage(
             if (setting)
               policy =
                 typeof setting.settingValue === 'string' ? JSON.parse(setting.settingValue) : setting.settingValue;
-            if (adapters.collectRiskSignals && (policy as { enabled?: unknown } | null)?.enabled === true)
-              signals = await adapters.collectRiskSignals(user);
           } catch {
             policy = undefined;
+          }
+          const parsedPolicy = signupRiskPolicySchema.safeParse(policy);
+          if (adapters.collectRiskSignals && parsedPolicy.success && parsedPolicy.data.enabled) {
+            try {
+              signals = await adapters.collectRiskSignals(user);
+            } catch {
+              // Infrastructure failures are retryable, unlike a completed review decision.
+              // Do not log collector contents: they can contain private signup observations.
+              console.warn('[signup-risk] Observation collection failed; signup grant remains pending for retry');
+              throw new Error('Signup risk observation collection unavailable; retry the signup grant');
+            }
           }
           assessment = evaluateSignupRisk(policy, signals, grant.signupCredits);
           if (assessment.status === 'unavailable') {

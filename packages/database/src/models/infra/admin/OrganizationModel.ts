@@ -183,6 +183,10 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
   }
 );
 
+// Server-owned lifetime grant budget. Kept outside the public organization shape;
+// no API accepts writes to it. Missing values are initialized from existing grants.
+OrganizationSchema.path('signupGrantUnlockCount', { type: Number, min: 0, select: false });
+
 OrganizationSchema.virtual('logo', {
   ref: 'AppFile',
   localField: 'logoFileId',

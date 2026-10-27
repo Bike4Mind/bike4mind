@@ -1,11 +1,12 @@
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { InviteType } from '@bike4mind/common';
+import { InviteType, signupGrantRemaining } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
   inviteRepository,
   organizationRepository,
+  Organization,
   userRepository,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
@@ -21,6 +22,9 @@ async function unlockFromOrgInvite(userId: string, inviteId?: string) {
     reason: 'Accepted organization invite',
     validators: {
       org_invite: async user => {
+        // Validation runs before the engine's zero-delta return. A replay must not
+        // reserve another organization slot when no payout remains.
+        if (!user.signupGrant || signupGrantRemaining(user.signupGrant) <= 0) return false;
         const enabled = await adminSettingsRepository.findBySettingName('signupGrantOrgInviteEnabled');
         if (enabled?.settingValue !== 'true' && (enabled?.settingValue as unknown) !== true) return false;
         const email = user.email;
@@ -29,24 +33,34 @@ async function unlockFromOrgInvite(userId: string, inviteId?: string) {
         if (!memberships.length) return false;
         // Recover an earlier failed release using persisted acceptance, even after the invite
         // leaves the pending inbox. Bound the lookup to organizations the caller still belongs to.
-        const invite = inviteId
-          ? await inviteRepository.findById(inviteId)
-          : await inviteRepository.findOne({
-              type: InviteType.Organization,
-              documentId: { $in: memberships },
-              'recipients.accepted': { $regex: `^${escapeRegex(email)}$`, $options: 'i' },
-            });
-        if (invite?.type !== InviteType.Organization) return false;
-        if (!invite.recipients?.accepted.some(recipient => recipient.toLowerCase() === email.toLowerCase()))
-          return false;
-        if (!memberships.includes(invite.documentId)) return false;
-        // Seat churn (invite, accept, remove, repeat) must not unlock unbounded accounts: an org
-        // vouches for at most `seats` accounts over its lifetime. Concurrent unlocks can overshoot
-        // by at most one batch of current members, since each must still hold a seat.
-        const organization = await organizationRepository.findById(invite.documentId);
-        if (!organization) return false;
-        const unlocked = await userRepository.count({ 'signupGrant.unlockedOrgId': invite.documentId });
-        return unlocked < organization.seats ? { unlockedOrgId: invite.documentId } : false;
+        for (const organizationId of memberships) {
+          const invite = inviteId
+            ? await inviteRepository.findById(inviteId)
+            : await inviteRepository.findOne({
+                type: InviteType.Organization,
+                documentId: organizationId,
+                'recipients.accepted': { $regex: `^${escapeRegex(email)}$`, $options: 'i' },
+              });
+          if (invite?.type !== InviteType.Organization) continue;
+          if (!invite.recipients?.accepted.some(recipient => recipient.toLowerCase() === email.toLowerCase())) continue;
+          if (invite.documentId !== organizationId) continue;
+          // All grants for one org write the same document inside the payout transaction.
+          // Mongo retries a conflicting transaction, rechecking its capacity. The durable
+          // counter survives member/account deletion and rolls back if the payout fails.
+          const organization = await organizationRepository.findById(organizationId);
+          if (!organization || !Number.isSafeInteger(organization.seats) || organization.seats <= 0) continue;
+          const missingCounter = { _id: organizationId, signupGrantUnlockCount: { $exists: false } };
+          if (await Organization.exists(missingCounter)) {
+            const unlocked = await userRepository.count({ 'signupGrant.unlockedOrgId': invite.documentId });
+            await Organization.updateOne(missingCounter, { $set: { signupGrantUnlockCount: unlocked } });
+          }
+          const reservation = await Organization.updateOne(
+            { _id: organizationId, $expr: { $lt: ['$signupGrantUnlockCount', '$seats'] } },
+            { $inc: { signupGrantUnlockCount: 1 } }
+          );
+          if (reservation.modifiedCount === 1) return { unlockedOrgId: organizationId };
+        }
+        return false;
       },
     },
   });

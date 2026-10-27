@@ -5,6 +5,8 @@ const h = vi.hoisted(() => ({
   invite: vi.fn(),
   acceptedInvite: vi.fn(),
   memberships: vi.fn(),
+  reserve: vi.fn(),
+  missingCounter: vi.fn(),
   org: vi.fn(),
   count: vi.fn(),
   unlock: vi.fn(),
@@ -17,6 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { count: h.count },
   inviteRepository: { findById: h.invite, findOne: h.acceptedInvite },
   organizationRepository: { findMembershipOrgIds: h.memberships, findById: h.org },
+  Organization: { updateOne: h.reserve, exists: h.missingCounter },
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { unlockSignupGrant: h.unlock } }));
 import { unlockSignupGrantFromOrgInvite, unlockSignupGrantFromAcceptedOrgInvite } from './orgInviteUnlock';
@@ -31,25 +34,62 @@ describe('organization invite unlock evidence', () => {
       recipients: { accepted: ['user@example.test'] },
     });
     h.memberships.mockResolvedValue(['org-1']);
+    h.reserve.mockResolvedValue({ modifiedCount: 1 });
+    h.missingCounter.mockResolvedValue({ _id: 'org-1' });
     h.org.mockResolvedValue({ seats: 3 });
     h.count.mockResolvedValue(2);
     h.unlock.mockImplementation(async (_id, _reason, adapters) =>
-      adapters.validators.org_invite({ id: 'user-1', email: 'USER@example.test' })
+      adapters.validators.org_invite({
+        id: 'user-1',
+        email: 'USER@example.test',
+        signupGrant: { signupCredits: 12, unlockCredits: 28, creditsReleased: 12 },
+      })
     );
   });
   it('requires actual accepted recipients and authoritative membership', async () => {
     expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toEqual({ unlockedOrgId: 'org-1' });
     expect(h.unlock).toHaveBeenCalledWith('user-1', 'org_invite', expect.anything());
     expect(h.count).toHaveBeenCalledExactlyOnceWith({ 'signupGrant.unlockedOrgId': 'org-1' });
+    expect(h.reserve.mock.calls).toEqual([
+      [{ _id: 'org-1', signupGrantUnlockCount: { $exists: false } }, { $set: { signupGrantUnlockCount: 2 } }],
+      [
+        { _id: 'org-1', $expr: { $lt: ['$signupGrantUnlockCount', '$seats'] } },
+        { $inc: { signupGrantUnlockCount: 1 } },
+      ],
+    ]);
+  });
+  it('does not reserve a slot for an already fully released grant', async () => {
+    h.unlock.mockImplementation(async (_id, _reason, adapters) =>
+      adapters.validators.org_invite({
+        id: 'user-1',
+        email: 'user@example.test',
+        signupGrant: { signupCredits: 12, unlockCredits: 28, creditsReleased: 40 },
+      })
+    );
+    expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toBe(false);
+    expect(h.reserve).not.toHaveBeenCalled();
+  });
+  it('uses the durable counter without recounting recipients after initialization', async () => {
+    h.missingCounter.mockResolvedValue(null);
+    expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toEqual({ unlockedOrgId: 'org-1' });
+    expect(h.count).not.toHaveBeenCalled();
+    expect(h.reserve).toHaveBeenCalledExactlyOnceWith(
+      { _id: 'org-1', $expr: { $lt: ['$signupGrantUnlockCount', '$seats'] } },
+      { $inc: { signupGrantUnlockCount: 1 } }
+    );
+  });
+  it.each([0, -1, 1.5, NaN, Infinity])('rejects an invalid seat budget %s', async seats => {
+    h.org.mockResolvedValue({ seats });
+    expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toBe(false);
+    expect(h.reserve).not.toHaveBeenCalled();
   });
   it('stops unlocking once the organization has vouched for as many accounts as it has seats', async () => {
-    h.count.mockResolvedValue(3);
+    h.reserve.mockResolvedValue({ modifiedCount: 0 });
     expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toBe(false);
   });
   it('rejects an invite whose organization no longer exists', async () => {
     h.org.mockResolvedValue(null);
     expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toBe(false);
-    expect(h.count).not.toHaveBeenCalled();
   });
   it('rejects pending invitations', async () => {
     h.invite.mockResolvedValue({
@@ -83,11 +123,17 @@ describe('accepted organization invite retries', () => {
     vi.clearAllMocks();
     h.setting.mockResolvedValue({ settingValue: 'true' });
     h.memberships.mockResolvedValue(['org-1']);
+    h.reserve.mockResolvedValue({ modifiedCount: 1 });
+    h.missingCounter.mockResolvedValue({ _id: 'org-1' });
     h.org.mockResolvedValue({ seats: 3 });
     h.count.mockResolvedValue(2);
     h.acceptedInvite.mockResolvedValue(acceptedInvite);
     h.unlock.mockImplementation(async (_id, _reason, adapters) =>
-      adapters.validators.org_invite({ id: 'user-1', email: 'NAME+TAG@example.test' })
+      adapters.validators.org_invite({
+        id: 'user-1',
+        email: 'NAME+TAG@example.test',
+        signupGrant: { signupCredits: 12, unlockCredits: 28, creditsReleased: 12 },
+      })
     );
   });
 
@@ -95,7 +141,7 @@ describe('accepted organization invite retries', () => {
     expect(await unlockSignupGrantFromAcceptedOrgInvite('user-1')).toEqual({ unlockedOrgId: 'org-1' });
     expect(h.acceptedInvite).toHaveBeenCalledExactlyOnceWith({
       type: InviteType.Organization,
-      documentId: { $in: ['org-1'] },
+      documentId: 'org-1',
       'recipients.accepted': { $regex: '^NAME\\+TAG@example\\.test$', $options: 'i' },
     });
     const filter = h.acceptedInvite.mock.calls[0][0] as {
@@ -126,7 +172,7 @@ describe('accepted organization invite retries', () => {
   });
 
   it('caps the durable retry path at the organization seat count too', async () => {
-    h.count.mockResolvedValue(3);
+    h.reserve.mockResolvedValue({ modifiedCount: 0 });
     expect(await unlockSignupGrantFromAcceptedOrgInvite('user-1')).toBe(false);
     expect(h.count).toHaveBeenCalledExactlyOnceWith({ 'signupGrant.unlockedOrgId': 'org-1' });
   });
@@ -144,6 +190,8 @@ describe.each([
   beforeEach(() => {
     vi.clearAllMocks();
     h.memberships.mockResolvedValue(['org-1']);
+    h.reserve.mockResolvedValue({ modifiedCount: 1 });
+    h.missingCounter.mockResolvedValue({ _id: 'org-1' });
     h.org.mockResolvedValue({ seats: 3 });
     h.count.mockResolvedValue(2);
     h.invite.mockResolvedValue({
@@ -157,7 +205,11 @@ describe.each([
       recipients: { accepted: ['user@example.test'] },
     });
     h.unlock.mockImplementation(async (_id, _reason, adapters) =>
-      adapters.validators.org_invite({ id: 'user-1', email: 'user@example.test' })
+      adapters.validators.org_invite({
+        id: 'user-1',
+        email: 'user@example.test',
+        signupGrant: { signupCredits: 12, unlockCredits: 28, creditsReleased: 12 },
+      })
     );
   });
 

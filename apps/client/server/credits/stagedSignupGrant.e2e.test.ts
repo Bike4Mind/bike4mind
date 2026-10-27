@@ -205,7 +205,7 @@ describe('staged signup ledger', () => {
     expect(await CreditTransaction.countDocuments({ transactionId: `unlock-grant:${user.id}` })).toBe(1);
   });
 
-  it.each(['malformed policy', 'invalid policy', 'collector failure'])(
+  it.each(['malformed policy', 'invalid policy', 'invalid enabled policy'])(
     'holds and diagnoses %s without minting credits or exposing private inputs',
     async failure => {
       const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -213,25 +213,9 @@ describe('staged signup ledger', () => {
       const policy =
         failure === 'malformed policy'
           ? '{invalid'
-          : failure === 'invalid policy'
-            ? JSON.stringify({ enabled: false, unexpected: true })
-            : JSON.stringify({
-                enabled: true,
-                version: 'collector-failure',
-                rules: [
-                  {
-                    signal: 'datacenter',
-                    comparison: 'eq',
-                    threshold: 1,
-                    weight: 2,
-                    missing: 'review',
-                    missingWeight: 0,
-                  },
-                ],
-                reducedAt: 1,
-                reviewAt: 3,
-                reducedFraction: 0.5,
-              });
+          : JSON.stringify(
+              failure === 'invalid enabled policy' ? { enabled: true } : { enabled: false, unexpected: true }
+            );
       const db = {
         ...adapters.db,
         adminSettings: {
@@ -248,7 +232,7 @@ describe('staged signup ledger', () => {
       expect(
         (await userService.releaseSignupTranche(user.id, { ...adapters, db, collectRiskSignals })).creditsGranted
       ).toBe(0);
-      expect(collectRiskSignals).toHaveBeenCalledTimes(failure === 'collector failure' ? 1 : 0);
+      expect(collectRiskSignals).not.toHaveBeenCalled();
       const persisted = await User.findById(user.id);
       expect(persisted?.signupGrantAssessment?.status).toBe('unavailable');
       expect(persisted?.signupGrant?.stage).toBe('signup');
@@ -258,6 +242,50 @@ describe('staged signup ledger', () => {
       expect((await userService.unlockSignupGrant(user.id, 'activity', adapters)).creditsGranted).toBe(40);
     }
   );
+
+  it('keeps a failed observation collection retryable and grants exactly once after recovery', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const user = await createUser();
+    const policy = JSON.stringify({
+      enabled: true,
+      version: 'retry-collector',
+      rules: [{ signal: 'datacenter', comparison: 'eq', threshold: 1, weight: 2, missing: 'review', missingWeight: 0 }],
+      reducedAt: 1,
+      reviewAt: 3,
+      reducedFraction: 0.5,
+    });
+    const db = {
+      ...adapters.db,
+      adminSettings: {
+        ...adminSettings,
+        findBySettingName: async (name: string) =>
+          name === 'signupGrantRiskPolicy'
+            ? ({ settingValue: policy } as never)
+            : adminSettings.findBySettingName(name),
+      },
+    };
+    const collectRiskSignals = vi
+      .fn<() => Promise<{ datacenter: boolean }>>()
+      .mockRejectedValueOnce(new Error('private collector failure'))
+      .mockResolvedValue({ datacenter: false });
+    const retryAdapters = { ...adapters, db, collectRiskSignals };
+    await expect(userService.releaseSignupTranche(user.id, retryAdapters)).rejects.toThrow(
+      'Signup risk observation collection unavailable; retry the signup grant'
+    );
+    const pending = await User.findById(user.id);
+    expect(pending?.signupGrant?.stage).toBe('pending_email');
+    expect(pending?.signupGrantAssessment).toBeUndefined();
+    expect(pending?.freeCreditClaimEmail).toBeUndefined();
+    expect(pending?.currentCredits).toBe(0);
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      '[signup-risk] Observation collection failed; signup grant remains pending for retry'
+    );
+    expect((await userService.releaseSignupTranche(user.id, retryAdapters)).creditsGranted).toBe(12);
+    expect((await userService.releaseSignupTranche(user.id, retryAdapters)).creditsGranted).toBe(0);
+    expect((await User.findById(user.id))?.signupGrantAssessment?.status).toBe('evaluated');
+    expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${user.id}` })).toBe(1);
+  });
 
   it('unlocks from persisted completed session turns on distinct elapsed days, not pending or copied turns', async () => {
     const user = await createUser();

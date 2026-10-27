@@ -99,6 +99,7 @@ describe('resolveFieldLimits', () => {
   it('excludes stripeCustomerId and billingContact for a non-admin organizations subscriber', () => {
     expect(resolveFieldLimits('organizations', opts())).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
       billingContact: false,
     });
   });
@@ -108,12 +109,14 @@ describe('resolveFieldLimits', () => {
     // is privileged. Owners are NOT privileged here - see the projection note in the source.
     expect(resolveFieldLimits('organizations', opts({ isPlatformAdmin: true }))).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
     });
   });
 
   it('uses the passed-in organization collection name rather than a hardcoded literal', () => {
     expect(resolveFieldLimits('orgs_v2', opts({ organizationCollectionName: 'orgs_v2' }))).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
       billingContact: false,
     });
   });

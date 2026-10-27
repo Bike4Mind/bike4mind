@@ -106,12 +106,16 @@ const NewUserWelcome = () => {
     balance,
     awaitingVerification,
     pendingGrant: currentUser?.signupGrant?.signupCredits ?? currentUser?.pendingCreditGrant ?? defaultFreeCredits,
+    pendingGrantIsMaximum: !!currentUser?.signupGrant,
   });
   // Same credits the line above quotes: the pending grant before verification, else the displayed balance.
   const estimateCredits = awaitingVerification
     ? (currentUser?.signupGrant?.signupCredits ?? currentUser?.pendingCreditGrant ?? defaultFreeCredits)
     : balance;
-  const answersEstimate = creditsLine ? formatAnswersEstimate(estimateCredits, answerCost) : null;
+  const answersEstimate =
+    creditsLine && !(awaitingVerification && currentUser?.signupGrant)
+      ? formatAnswersEstimate(estimateCredits, answerCost)
+      : null;
 
   return (
     <Sheet
