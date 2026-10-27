@@ -39,7 +39,14 @@ async function unlockFromOrgInvite(userId: string, inviteId?: string) {
         if (invite?.type !== InviteType.Organization) return false;
         if (!invite.recipients?.accepted.some(recipient => recipient.toLowerCase() === email.toLowerCase()))
           return false;
-        return memberships.includes(invite.documentId);
+        if (!memberships.includes(invite.documentId)) return false;
+        // Seat churn (invite, accept, remove, repeat) must not unlock unbounded accounts: an org
+        // vouches for at most `seats` accounts over its lifetime. Concurrent unlocks can overshoot
+        // by at most one batch of current members, since each must still hold a seat.
+        const organization = await organizationRepository.findById(invite.documentId);
+        if (!organization) return false;
+        const unlocked = await userRepository.count({ 'signupGrant.unlockedOrgId': invite.documentId });
+        return unlocked < organization.seats ? { unlockedOrgId: invite.documentId } : false;
       },
     },
   });

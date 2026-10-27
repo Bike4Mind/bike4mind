@@ -936,6 +936,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
           creditsReleased: { type: Number, min: 0, required: true },
           nextCondition: { type: String, enum: ['email_verification', 'verification', null], default: null },
           unlockedBy: { type: String, enum: SIGNUP_GRANT_UNLOCK_REASONS },
+          unlockedOrgId: { type: String },
         },
         { _id: false }
       ),
@@ -1294,6 +1295,10 @@ UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fin
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
+// Serves the per-organization org_invite unlock cap (apps/client/server/credits/orgInviteUnlock.ts).
+// Sparse: only accounts an org invite unlocked carry the field. Explicit name so the migration
+// 20260921235968 and autoIndex (mongo.ts) agree.
+UserSchema.index({ 'signupGrant.unlockedOrgId': 1 }, { sparse: true, name: 'signupGrant_unlockedOrgId' });
 UserSchema.index({ createdAt: 1 });
 // Serves the signupIpRetention cron's range scan for signups past the retention window. Sparse:
 // accounts created before signup network capture carry no signupMeta. Explicit name so migration

@@ -48,7 +48,10 @@ An invalid policy or missing required observation releases zero initial credits.
 to authorize the configured maximum, `false` to refuse, or
 `{ cumulativeCredits }` for an identity-specific cumulative entitlement bounded by
 the account's snapshotted signup plus unlock credits. The engine grants only
-`max(0, cumulativeCredits - creditsReleased)`. Replays, weaker evidence, and
+`max(0, cumulativeCredits - creditsReleased)`. A validator may also return
+`{ unlockedOrgId }` to authorize the maximum and record the vouching organization
+on the grant; the org invite validator caps each organization at `seats` such
+unlocks over its lifetime, so seat churn cannot farm grants. Replays, weaker evidence, and
 different reasons cannot stack grants. Stronger evidence can release the remaining
 delta. Grant stage records money released, not current identity trust or revocation.
 Identity consumers own verification, identity deduplication, and revocation.

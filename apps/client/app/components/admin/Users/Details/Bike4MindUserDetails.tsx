@@ -27,6 +27,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
     const [isRecalculating, setIsRecalculating] = useState(false);
     const [unlockReason, setUnlockReason] = useState('');
     const [unlockError, setUnlockError] = useState('');
+    const [unlockResult, setUnlockResult] = useState('');
     const [unlocking, setUnlocking] = useState(false);
     const queryClient = useQueryClient();
     const storage = resolveUserStorageLimit(user);
@@ -105,10 +106,23 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
               onClick={async () => {
                 setUnlocking(true);
                 setUnlockError('');
+                setUnlockResult('');
                 try {
-                  await api.post(`/api/admin/users/${user.id}/unlock-signup-grant`, { reason: unlockReason.trim() });
-                  await queryClient.invalidateQueries({ queryKey: ['users'] });
+                  const { data } = await api.post<{ creditsGranted?: number }>(
+                    `/api/admin/users/${user.id}/unlock-signup-grant`,
+                    { reason: unlockReason.trim() }
+                  );
+                  await Promise.all([
+                    queryClient.invalidateQueries({ queryKey: ['users'] }),
+                    queryClient.invalidateQueries({ queryKey: ['user', user.id] }),
+                  ]);
                   setUnlockReason('');
+                  const granted = data?.creditsGranted ?? 0;
+                  setUnlockResult(
+                    granted > 0
+                      ? `${granted.toLocaleString('en-US')} credits released.`
+                      : 'No credits released. The account may be unverified, blocked, or already fully released.'
+                  );
                 } catch {
                   setUnlockError('Signup grant unlock failed. The account remains available for retry.');
                 } finally {
@@ -118,6 +132,11 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
             >
               Unlock signup grant
             </Button>
+            {unlockResult && (
+              <Typography role="status" level="body-sm" data-testid="admin-user-grant-unlock-result">
+                {unlockResult}
+              </Typography>
+            )}
             {unlockError && (
               <Typography color="danger" level="body-sm" data-testid="admin-user-grant-unlock-error">
                 {unlockError}

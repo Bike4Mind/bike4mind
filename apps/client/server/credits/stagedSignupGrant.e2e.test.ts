@@ -468,6 +468,22 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.signupGrant?.stage).toBe('unlocked');
   });
 
+  it('records the vouching organization on an org invite unlock so the per-org cap can count it', async () => {
+    const user = await createUser();
+    await userService.releaseSignupTranche(user.id, adapters);
+    const result = await userService.unlockSignupGrant(user.id, 'org_invite', {
+      ...adapters,
+      validators: { org_invite: async () => ({ unlockedOrgId: 'org-1' }) },
+    });
+    expect(result.creditsGranted).toBe(28);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      stage: 'unlocked',
+      unlockedBy: 'org_invite',
+      unlockedOrgId: 'org-1',
+    });
+    expect(await userRepository.count({ 'signupGrant.unlockedOrgId': 'org-1' })).toBe(1);
+  });
+
   it('rolls back ledger, balance and stage on a partial failure, then recovers on retry', async () => {
     const user = await createUser();
     const update = vi.spyOn(userRepository, 'update').mockRejectedValueOnce(new Error('synthetic write failure'));

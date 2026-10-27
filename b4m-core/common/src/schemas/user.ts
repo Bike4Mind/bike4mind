@@ -240,6 +240,7 @@ export const selfUserResponseSchema = z.object({
       creditsReleased: z.number().int().nonnegative(),
       nextCondition: z.enum(['email_verification', 'verification']).nullable(),
       unlockedBy: z.enum(SIGNUP_GRANT_UNLOCK_REASONS).optional(),
+      unlockedOrgId: z.string().optional(),
     })
     .optional(),
   // Not on IUserDocument, but toJSON() emits it and admin tables key rows by it.

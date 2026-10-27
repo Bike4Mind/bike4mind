@@ -37,7 +37,8 @@ export default function SignupGrantStatus() {
             setMessage('');
             try {
               const { data } = await api.post<{ creditsGranted: number }>('/api/users/signup-grant-eligibility');
-              await refreshUser();
+              // The check already committed; a failed refresh only delays the new balance.
+              await refreshUser().catch((error: unknown) => console.warn('Failed to refresh user', error));
               setMessage(
                 data.creditsGranted > 0
                   ? `${data.creditsGranted.toLocaleString('en-US')} credits unlocked.`

@@ -96,7 +96,8 @@ const handler = baseApi().post(async (req, res) => {
     )
   );
 
-  if (invite.type === InviteType.Organization) {
+  // Unlocks are JWT-only; an API-key acceptance can recover later through the eligibility check.
+  if (invite.type === InviteType.Organization && !req.apiKeyInfo) {
     try {
       await unlockSignupGrantFromOrgInvite(req.user.id, invite.id);
     } catch (error) {

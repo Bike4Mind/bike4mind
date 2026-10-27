@@ -169,7 +169,7 @@ describe('POST /api/invites/[id]/accept - file tag transfer', () => {
  * the membership intact, and no other invite type may trigger the release.
  */
 describe('POST /api/invites/[id]/accept - signup grant unlock', () => {
-  const accept = (type: string) => {
+  const accept = (type: string, apiKeyInfo?: object) => {
     acceptInvite.mockResolvedValueOnce({
       id: 'inv1',
       type,
@@ -180,6 +180,7 @@ describe('POST /api/invites/[id]/accept - signup grant unlock', () => {
     (req as any).user = { id: 'u1', email: 'me@x.com' };
     (req as any).ability = {};
     (req as any).logger = { error: vi.fn() };
+    if (apiKeyInfo) (req as any).apiKeyInfo = apiKeyInfo;
     return { req, res, done: mockRefs.postHandler!(req, res) };
   };
 
@@ -188,6 +189,13 @@ describe('POST /api/invites/[id]/accept - signup grant unlock', () => {
   it('releases the grant for an Organization invite', async () => {
     await accept('Organization').done;
     expect(unlockFromOrgInvite).toHaveBeenCalledWith('u1', 'inv1');
+  });
+
+  it('does not release the grant when an API key accepts the invite', async () => {
+    const { res, done } = accept('Organization', { keyId: 'key1' });
+    await done;
+    expect(res._getStatusCode()).toBe(200);
+    expect(unlockFromOrgInvite).not.toHaveBeenCalled();
   });
 
   it('does not release the grant for a Session invite', async () => {

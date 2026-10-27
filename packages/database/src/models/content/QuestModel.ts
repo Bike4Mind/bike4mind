@@ -1681,10 +1681,14 @@ function initializeQuestModel() {
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
     // Built in production by migration 20260921235966_ensure-quest-signup-activity-index; keep the
-    // name and key in sync with it.
+    // name and key in sync with it. Partial so the build and its entries cover only turns carrying
+    // provenance, not every quest; the activity aggregate's equality on userId implies the filter.
     ChatHistoryItemSchema.index(
       { 'signupActivity.userId': 1, status: 1, 'signupActivity.startedAt': 1 },
-      { name: 'signupActivity_user_status_startedAt' }
+      {
+        name: 'signupActivity_user_status_startedAt',
+        partialFilterExpression: { 'signupActivity.userId': { $exists: true } },
+      }
     );
 
     // Index for status-based queries (used in cancellation watcher)

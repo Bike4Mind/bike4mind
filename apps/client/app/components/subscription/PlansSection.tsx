@@ -28,7 +28,6 @@ import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { useSelectedModelAnswerCost } from '@client/app/hooks/useSelectedModelAnswerCost';
 import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
-import SignupGrantStatus from './SignupGrantStatus';
 
 // Bullets, credits and copy come from the shared plan table so this section and the server-side plan
 // map cannot drift; only the price id is re-picked by runtime stage below.
@@ -132,7 +131,6 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
 
   return (
     <Box>
-      <SignupGrantStatus />
       <Box
         sx={{
           display: 'flex',

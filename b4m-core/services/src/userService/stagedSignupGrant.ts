@@ -15,7 +15,10 @@ type GrantAdapters = FreeCreditAdapters & {
   collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
 };
 
-export type SignupGrantValidator = (user: IUserDocument) => Promise<boolean | { cumulativeCredits: number }>;
+/** `unlockedOrgId` releases the full remainder and records the org that vouched for the account. */
+export type SignupGrantValidator = (
+  user: IUserDocument
+) => Promise<boolean | { cumulativeCredits: number } | { unlockedOrgId: string }>;
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
@@ -76,7 +79,7 @@ async function releaseStage(
         if (!Number.isSafeInteger(target) || target < 0 || target > grant.signupCredits)
           throw new Error('Invalid signup assessment entitlement');
       } else {
-        target = evidence === true ? maximum : evidence.cumulativeCredits;
+        target = evidence === true || 'unlockedOrgId' in evidence ? maximum : evidence.cumulativeCredits;
         if (!Number.isSafeInteger(target) || target < 0 || target > maximum)
           throw new Error('Invalid unlock entitlement');
       }
@@ -128,6 +131,9 @@ async function releaseStage(
           creditsReleased: released,
           nextCondition: unlocked ? null : 'verification',
           ...(reason ? { unlockedBy: reason } : {}),
+          ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
+            ? { unlockedOrgId: evidence.unlockedOrgId }
+            : {}),
         },
       });
       if (!updated) throw new Error('Staged grant account update failed');

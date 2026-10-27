@@ -55,6 +55,12 @@ describe('signup grant status', () => {
     expect(h.post).toHaveBeenCalledWith('/api/users/signup-grant-eligibility');
     expect(h.refresh).toHaveBeenCalled();
   });
+  it('still reports a committed unlock when the follow-up refresh fails', async () => {
+    h.refresh.mockRejectedValue(new Error('network'));
+    show();
+    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
+    await waitFor(() => expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('28 credits unlocked'));
+  });
   it('keeps accepted organization invites retryable when activity is disabled', () => {
     h.enabled = false;
     h.organizationInvites = true;

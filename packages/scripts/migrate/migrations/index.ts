@@ -14,6 +14,7 @@
 // Backdated below the fail-closed OAuth backfill; $setOnInsert makes an old-id rerun safe.
 import SeedStagedSignupSettings from './20260921235967_seed-staged-signup-settings';
 import EnsureQuestSignupActivityIndex from './20260921235966_ensure-quest-signup-activity-index';
+import EnsureUserSignupGrantOrgIndex from './20260921235968_ensure-user-signup-grant-org-index';
 import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
 import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';
@@ -412,6 +413,7 @@ const coreMigrations: MigrationFile[] = [
   BackfillStorageLimitOverrides,
   SeedStagedSignupSettings,
   EnsureQuestSignupActivityIndex,
+  EnsureUserSignupGrantOrgIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

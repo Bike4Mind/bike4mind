@@ -5,6 +5,8 @@ const h = vi.hoisted(() => ({
   invite: vi.fn(),
   acceptedInvite: vi.fn(),
   memberships: vi.fn(),
+  org: vi.fn(),
+  count: vi.fn(),
   unlock: vi.fn(),
   setting: vi.fn(),
 }));
@@ -12,9 +14,9 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findBySettingName: h.setting },
   creditLotRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { count: h.count },
   inviteRepository: { findById: h.invite, findOne: h.acceptedInvite },
-  organizationRepository: { findMembershipOrgIds: h.memberships },
+  organizationRepository: { findMembershipOrgIds: h.memberships, findById: h.org },
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { unlockSignupGrant: h.unlock } }));
 import { unlockSignupGrantFromOrgInvite, unlockSignupGrantFromAcceptedOrgInvite } from './orgInviteUnlock';
@@ -29,13 +31,25 @@ describe('organization invite unlock evidence', () => {
       recipients: { accepted: ['user@example.test'] },
     });
     h.memberships.mockResolvedValue(['org-1']);
+    h.org.mockResolvedValue({ seats: 3 });
+    h.count.mockResolvedValue(2);
     h.unlock.mockImplementation(async (_id, _reason, adapters) =>
       adapters.validators.org_invite({ id: 'user-1', email: 'USER@example.test' })
     );
   });
   it('requires actual accepted recipients and authoritative membership', async () => {
-    expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toBe(true);
+    expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toEqual({ unlockedOrgId: 'org-1' });
     expect(h.unlock).toHaveBeenCalledWith('user-1', 'org_invite', expect.anything());
+    expect(h.count).toHaveBeenCalledExactlyOnceWith({ 'signupGrant.unlockedOrgId': 'org-1' });
+  });
+  it('stops unlocking once the organization has vouched for as many accounts as it has seats', async () => {
+    h.count.mockResolvedValue(3);
+    expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toBe(false);
+  });
+  it('rejects an invite whose organization no longer exists', async () => {
+    h.org.mockResolvedValue(null);
+    expect(await unlockSignupGrantFromOrgInvite('user-1', 'invite-1')).toBe(false);
+    expect(h.count).not.toHaveBeenCalled();
   });
   it('rejects pending invitations', async () => {
     h.invite.mockResolvedValue({
@@ -69,6 +83,8 @@ describe('accepted organization invite retries', () => {
     vi.clearAllMocks();
     h.setting.mockResolvedValue({ settingValue: 'true' });
     h.memberships.mockResolvedValue(['org-1']);
+    h.org.mockResolvedValue({ seats: 3 });
+    h.count.mockResolvedValue(2);
     h.acceptedInvite.mockResolvedValue(acceptedInvite);
     h.unlock.mockImplementation(async (_id, _reason, adapters) =>
       adapters.validators.org_invite({ id: 'user-1', email: 'NAME+TAG@example.test' })
@@ -76,7 +92,7 @@ describe('accepted organization invite retries', () => {
   });
 
   it('finds a persisted acceptance after the pending inbox entry is gone, with literal case-insensitive email matching', async () => {
-    expect(await unlockSignupGrantFromAcceptedOrgInvite('user-1')).toBe(true);
+    expect(await unlockSignupGrantFromAcceptedOrgInvite('user-1')).toEqual({ unlockedOrgId: 'org-1' });
     expect(h.acceptedInvite).toHaveBeenCalledExactlyOnceWith({
       type: InviteType.Organization,
       documentId: { $in: ['org-1'] },
@@ -109,6 +125,12 @@ describe('accepted organization invite retries', () => {
     expect(await unlockSignupGrantFromAcceptedOrgInvite('user-1')).toBe(false);
   });
 
+  it('caps the durable retry path at the organization seat count too', async () => {
+    h.count.mockResolvedValue(3);
+    expect(await unlockSignupGrantFromAcceptedOrgInvite('user-1')).toBe(false);
+    expect(h.count).toHaveBeenCalledExactlyOnceWith({ 'signupGrant.unlockedOrgId': 'org-1' });
+  });
+
   it('propagates failed evidence reads instead of granting', async () => {
     h.acceptedInvite.mockRejectedValueOnce(new Error('store unavailable'));
     await expect(unlockSignupGrantFromAcceptedOrgInvite('user-1')).rejects.toThrow('store unavailable');
@@ -122,6 +144,8 @@ describe.each([
   beforeEach(() => {
     vi.clearAllMocks();
     h.memberships.mockResolvedValue(['org-1']);
+    h.org.mockResolvedValue({ seats: 3 });
+    h.count.mockResolvedValue(2);
     h.invite.mockResolvedValue({
       type: InviteType.Organization,
       documentId: 'org-1',
@@ -148,7 +172,7 @@ describe.each([
 
   it.each([true, 'true'])('allows authoritative evidence only when explicitly enabled as %j', async flag => {
     h.setting.mockResolvedValue({ settingValue: flag });
-    expect(await unlock()).toBe(true);
+    expect(await unlock()).toEqual({ unlockedOrgId: 'org-1' });
     expect(h.memberships).toHaveBeenCalledExactlyOnceWith('user-1');
   });
 });

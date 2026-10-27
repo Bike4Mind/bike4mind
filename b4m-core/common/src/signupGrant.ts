@@ -29,6 +29,8 @@ export interface SignupGrant {
   creditsReleased: number;
   nextCondition: 'email_verification' | 'verification' | null;
   unlockedBy?: SignupGrantUnlockReason;
+  /** Organization whose invite released the remainder; caps org_invite unlocks per org. */
+  unlockedOrgId?: string;
 }
 
 export function signupGrantRemaining(grant: SignupGrant): number {

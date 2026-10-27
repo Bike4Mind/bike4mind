@@ -155,7 +155,7 @@ describe('Bike4MindUserDetails - signup grant support', () => {
     beforeEach(() => vi.mocked(api.post).mockReset());
 
     it('posts the trimmed reason and clears it on success', async () => {
-      vi.mocked(api.post).mockResolvedValue({ data: {} });
+      vi.mocked(api.post).mockResolvedValue({ data: { creditsGranted: 28 } });
       submitReason();
       await waitFor(() =>
         expect(api.post).toHaveBeenCalledWith('/api/admin/users/u1/unlock-signup-grant', { reason: 'Support approved' })
@@ -163,6 +163,14 @@ describe('Bike4MindUserDetails - signup grant support', () => {
       await waitFor(() =>
         expect(screen.getByTestId('admin-user-grant-reason-input').querySelector('textarea')!).toHaveValue('')
       );
+      expect(screen.queryByTestId('admin-user-grant-unlock-error')).toBeNull();
+      expect(await screen.findByTestId('admin-user-grant-unlock-result')).toHaveTextContent('28 credits released');
+    });
+
+    it('says so when the unlock releases nothing', async () => {
+      vi.mocked(api.post).mockResolvedValue({ data: { creditsGranted: 0 } });
+      submitReason();
+      expect(await screen.findByTestId('admin-user-grant-unlock-result')).toHaveTextContent('No credits released');
       expect(screen.queryByTestId('admin-user-grant-unlock-error')).toBeNull();
     });
 
