@@ -1,13 +1,15 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { HardwareProfile } from '@bike4mind/common';
 import type { ChatMessage, ChatStreamEvent } from '@shared/chat';
 import { autoCompactThreshold, contextTokens, effectiveContextLimit, resentReplyTokens } from '@shared/contextLimit';
+import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { afterEach, expect, it, vi } from 'vitest';
 import { describeCompaction, formatTokens } from '../../renderer/src/chat/statusLine';
 import { ChatService } from './ChatService';
 import { COMPACT_MAX_TOKENS } from './compaction';
-import { discreteMachine, GIB, stubArch } from './fitStub.testHelper';
+import { cpuMachine, discreteMachine, GIB, lowConfidenceMachine, stubArch } from './fitStub.testHelper';
 import { localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { ModelCatalog } from './ModelCatalog';
 import { forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
@@ -200,6 +202,53 @@ it('trims a replayed history whose earlier replies used tools, and answers', asy
   const last = (await store.get(id))?.messages.at(-1);
   expect(last?.error).toBeUndefined();
   expect(last?.content).toContain('A useful summary');
+});
+
+const sizedOn = (setting: LocalContextSetting, hardware: HardwareProfile): LocalContextSizing => {
+  const footprint = { arch: stubArch(131_072), weightsBytes: 4 * GIB, hardware };
+  return { setting: async () => setting, footprint: async () => footprint, cachedFootprint: () => footprint };
+};
+
+it.each([
+  // The stub estimator: 72K is the largest context that stays in 13 GiB.
+  { label: 'the largest resident size', hardware: cpuMachine(13), first: 65_536, measured: 60_000, grown: 73_728 },
+  {
+    label: 'one Settings size on an unmeasured GPU',
+    hardware: lowConfidenceMachine(64),
+    first: 16_384,
+    measured: 15_000,
+    grown: 32_768,
+  },
+])(
+  'grows a local model to $label instead of compacting a conversation near its window',
+  async ({ hardware, first, measured, grown }) => {
+    const { events, requests, send } = await localService(
+      131_072,
+      () => answer(measured),
+      false,
+      undefined,
+      sizedOn(AUTO_LOCAL_CONTEXT, hardware)
+    );
+    await send('first prompt');
+    await send('second prompt');
+    expect(requests.map(request => request.options?.num_ctx)).toEqual([first, grown]);
+    expect(events.some(event => event.type === 'auto-compact')).toBe(false);
+  }
+);
+
+it('compacts at the threshold under a Fixed size, which never grows', async () => {
+  const { events, requests, send } = await localService(
+    131_072,
+    () => answer(15_000),
+    false,
+    undefined,
+    sizedOn({ mode: 'fixed', tokens: 16_384 }, cpuMachine(64))
+  );
+  await send('first prompt');
+  await send('second prompt');
+  expect(requests[1].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
+  expect(requests.every(request => request.options?.num_ctx === 16_384)).toBe(true);
+  expect(events).toContainEqual(expect.objectContaining({ type: 'auto-compact', running: true }));
 });
 
 it('tells the conversation when Auto grows the context past what fits on the GPU', async () => {
