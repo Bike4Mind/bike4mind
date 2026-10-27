@@ -160,7 +160,7 @@ jobs:
       - name: Check for API files missing baseApi()
         run: bash scripts/check-no-baseapi.sh
 
-      - name: Check v1 endpoints use the contract abstraction and non-v1 handlers are jwtOnly
+      - name: Check v1 endpoints use the contract abstraction, non-v1 handlers are jwtOnly, and Function URL handlers are contract-routed
         run: bash scripts/check-contract-gate.sh
 
       - name: Check user $lookup field projections

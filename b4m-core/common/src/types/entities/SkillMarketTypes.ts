@@ -57,6 +57,7 @@ export interface ISkillSnapshot {
   body: string;
   argumentHint?: string;
   allowedTools?: string[];
+  claudeCodeAllowedTools?: string[];
   disableModelInvocation?: boolean;
   /** Sorted by path; absent when the skill has none. */
   files?: ISkillFile[];

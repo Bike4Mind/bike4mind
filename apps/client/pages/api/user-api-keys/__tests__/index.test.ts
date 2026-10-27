@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+
 /**
  * Mint-route embed branching: the host-aware origin screen (validateEmbedKeyOrigins,
  * run for real here), the 400 on a bad origin, and the forward-when-present rule
@@ -148,6 +151,23 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
       }),
       expect.anything()
     );
+  });
+
+  it('rescores the minting user after a key is created, and not when creation is refused', async () => {
+    refreshSignupRiskScore.mockClear();
+    const created = post({
+      name: 'widget',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      allowedOrigins: ['https://example.com'],
+    });
+    await mockRefs.postHandler!(created.req, created.res);
+    expect(refreshSignupRiskScore).toHaveBeenCalledWith('u1', created.req.logger);
+
+    refreshSignupRiskScore.mockClear();
+    const refused = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', allowedOrigins: 'nope' });
+    await mockRefs.postHandler!(refused.req, refused.res).catch(() => undefined);
+    expect(refreshSignupRiskScore).not.toHaveBeenCalled();
   });
 
   it('(b) rejects a first-party (self) host origin with 400 and never calls the service', async () => {

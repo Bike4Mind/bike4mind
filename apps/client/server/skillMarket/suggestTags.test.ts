@@ -57,6 +57,12 @@ describe('suggestListingTags', () => {
     expect(await suggestListingTags(snapshot, llm)).toEqual([]);
   });
 
+  it('shows the model the declared Claude Code tools', async () => {
+    const llm = llmReturning('{"tags":[]}');
+    await suggestListingTags({ ...snapshot, claudeCodeAllowedTools: ['Bash(gh:*)'] }, llm);
+    expect(vi.mocked(llm.complete).mock.calls[0][1]).toContain('declared Claude Code tools: Bash(gh:*)');
+  });
+
   it('wraps the skill in nonce markers', async () => {
     const llm = llmReturning('{"tags":[]}');
     await suggestListingTags(snapshot, llm);

@@ -33,6 +33,7 @@ const SkillListingVersionSchema = new Schema<ISkillListingVersionDocument>(
       body: { type: String, required: true, maxlength: 50_000 },
       argumentHint: { type: String, maxlength: 200 },
       allowedTools: { type: [String], default: undefined },
+      claudeCodeAllowedTools: { type: [String], default: undefined },
       disableModelInvocation: { type: Boolean },
       files: {
         type: [

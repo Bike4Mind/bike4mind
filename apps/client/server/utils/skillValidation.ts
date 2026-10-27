@@ -7,6 +7,7 @@
 
 import { BadRequestError } from '@bike4mind/utils';
 import { checkSkillFiles, type ISkillFile } from '@bike4mind/common';
+import { splitAllowedTools } from '@bike4mind/common/utils/skillMd';
 import { validateToolList } from './agentValidation';
 
 const SKILL_NAME_MAX = 64;
@@ -77,4 +78,12 @@ export function validateSkillFiles(value: unknown): ISkillFile[] | undefined {
   const result = checkSkillFiles(value as ISkillFile[]);
   if (!result.ok) throw new BadRequestError(result.error);
   return result.files;
+}
+
+/**
+ * Same bounds as allowedTools, but no name check: these are Claude Code tool names, never run here.
+ * Entries are split to one tool each so the scan sees what the SKILL.md export will grant.
+ */
+export function validateSkillClaudeCodeAllowedTools(value: unknown): string[] | undefined {
+  return validateToolList(value, 'claudeCodeAllowedTools')?.flatMap(splitAllowedTools);
 }

@@ -7,6 +7,7 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import {
   BadRequestError,
   InboxType,
+  compareSkillFilePaths,
   SKILL_LISTING_MAX_TAGS as MAX_TAGS,
   SKILL_LISTING_TAG_PATTERN as TAG_PATTERN,
   type ISkill,
@@ -180,12 +181,11 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
   body: skill.body,
   ...(skill.argumentHint ? { argumentHint: skill.argumentHint } : {}),
   ...(skill.allowedTools?.length ? { allowedTools: [...skill.allowedTools] } : {}),
+  ...(skill.claudeCodeAllowedTools?.length ? { claudeCodeAllowedTools: [...skill.claudeCodeAllowedTools] } : {}),
   disableModelInvocation: Boolean(skill.disableModelInvocation),
   ...(skill.files?.length
     ? {
-        files: [...skill.files]
-          .sort((a, b) => (a.path < b.path ? -1 : 1))
-          .map(({ path, content }) => ({ path, content })),
+        files: [...skill.files].sort(compareSkillFilePaths).map(({ path, content }) => ({ path, content })),
       }
     : {}),
 });

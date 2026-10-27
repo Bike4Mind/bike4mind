@@ -153,6 +153,33 @@ describe('SkillMarket', () => {
     expect(detail?.update?.diff).toMatchObject({ added: 1, removed: 1 });
   });
 
+  it('counts a change to the Claude Code tools as a tool change', async () => {
+    get.mockImplementation(async (url: string) =>
+      url === '/api/skills/s1'
+        ? {
+            data: {
+              id: 's1',
+              body: 'line one\nline two',
+              claudeCodeAllowedTools: ['Read'],
+              importedFrom: { versionId: 'v1' },
+            },
+          }
+        : {
+            data: {
+              listing: listing(),
+              version: version({
+                snapshot: { name: 'x', description: 'd', body: 'line one\nline two', claudeCodeAllowedTools: ['Bash'] },
+              }),
+              myImport: { version: 1, skill: { id: 's1', name: 'x' } },
+            },
+          }
+    );
+
+    const { detail } = await market.listing({ id: 'l1' });
+    expect(detail?.version?.snapshot.claudeCodeAllowedTools).toEqual(['Bash']);
+    expect(detail?.update).toMatchObject({ toolsAdded: ['Bash'], toolsRemoved: ['Read'] });
+  });
+
   it('offers no update when the copy is already on the current version', async () => {
     get.mockImplementation(async (url: string) =>
       url === '/api/skills/s1'
@@ -356,12 +383,28 @@ describe('SkillMarket', () => {
       expect(Object.keys(body).sort()).toEqual([
         'argumentHint',
         'body',
+        'claudeCodeAllowedTools',
         'description',
         'disableModelInvocation',
         'files',
         'name',
       ]);
       expect(catalog.invalidateAccount).toHaveBeenCalled();
+    });
+
+    it('sends the SKILL.md allowed-tools as claudeCodeAllowedTools, on create and update', async () => {
+      get.mockResolvedValueOnce({ data: { data: [] } });
+      post.mockResolvedValueOnce({ data: { id: 's1' } });
+      const claudeCodeAllowedTools = ['Bash(git:*)', 'Read'];
+      await market.saveSkill({ fields: { ...FIELDS, claudeCodeAllowedTools }, mode: 'create' });
+      expect(post).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ claudeCodeAllowedTools }));
+      expect(post.mock.calls[0][1]).not.toHaveProperty('allowedTools');
+
+      get
+        .mockResolvedValueOnce({ data: { id: 's1', userId: 'me', claudeCodeAllowedTools } })
+        .mockResolvedValueOnce(mineBody([]));
+      await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 's1' });
+      expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ claudeCodeAllowedTools: [] }));
     });
 
     it.each([undefined, '', '<topic>'])('sends the argument hint on create: %s', async argumentHint => {

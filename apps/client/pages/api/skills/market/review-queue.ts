@@ -95,7 +95,10 @@ const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: 
 
   // The approved version each held one would replace, for the reviewer's diff.
   const previousIds = listings.flatMap(l => (l.currentApprovedVersionId ? [l.currentApprovedVersionId] : []));
-  const previous = await SkillListingVersion.find({ _id: { $in: previousIds } }).select('version snapshot');
+  // Not `snapshot`: its files can be large and only the body is diffed (inclusion and exclusion cannot mix).
+  const previous = await SkillListingVersion.find({ _id: { $in: previousIds } }).select(
+    'version snapshot.name snapshot.description snapshot.body snapshot.argumentHint snapshot.allowedTools snapshot.disableModelInvocation'
+  );
   const previousById = new Map(previous.map(p => [String(p._id), p.toJSON()]));
 
   const data = versions

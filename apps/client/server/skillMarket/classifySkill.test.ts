@@ -110,6 +110,18 @@ describe('classifySkill', () => {
     expect(result).toMatchObject({ ok: false, error: 'provider down' });
   });
 
+  it('shows the model the declared Claude Code tools, or (none)', async () => {
+    const seen: string[] = [];
+    const capture = llm(async (_system, user) => {
+      seen.push(user);
+      return JSON.stringify(valid);
+    });
+    await classifySkill({ ...snapshot, claudeCodeAllowedTools: ['Bash(git:*)', 'Read'] }, capture);
+    await classifySkill(snapshot, capture);
+    expect(seen[0]).toContain('declared Claude Code tools: Bash(git:*), Read');
+    expect(seen[1]).toContain('declared Claude Code tools: (none)');
+  });
+
   it('passes the skill as nonce-delimited data the body cannot predict', async () => {
     const seen: string[] = [];
     await classifySkill(
