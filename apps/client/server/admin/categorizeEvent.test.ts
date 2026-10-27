@@ -1,28 +1,17 @@
-import * as common from '@bike4mind/common';
 import { AuthEvents, FirstRunEvents, LLMEvents, UserApiKeyEvents } from '@bike4mind/common';
+import { ANALYTICS_EVENTS } from '@bike4mind/server-utils/types/analytics/index';
+import { EmailAuditEvents } from '@bike4mind/server-utils/utils/auditLogEvents';
 import { describe, expect, it } from 'vitest';
 import { categorizeEvent, EVENT_ENUM_CATEGORIES, OTHER_CATEGORY } from './categorizeEvent';
 
-// *Events enums that are not analytics counters, so they never reach the dashboard.
-const NON_ANALYTICS_EVENT_ENUMS = new Set(['SecretAuditEvents']);
-
 describe('categorizeEvent', () => {
-  it('categorizes every analytics event enum value as something other than Other', () => {
-    const uncategorized = EVENT_ENUM_CATEGORIES.flatMap(([events]) => Object.values(events)).filter(
+  // ANALYTICS_EVENTS is the logEvent allowlist, so it is every name that can reach CounterLog.
+  it('categorizes every loggable analytics event as something other than Other', () => {
+    const uncategorized = Object.values(ANALYTICS_EVENTS).filter(
       eventName => categorizeEvent(eventName) === OTHER_CATEGORY
     );
 
     expect(uncategorized).toEqual([]);
-  });
-
-  it('covers every *Events enum exported by @bike4mind/common', () => {
-    const mappedEnums = new Set<unknown>(EVENT_ENUM_CATEGORIES.map(([events]) => events));
-    const unmapped = Object.entries(common)
-      .filter(([name, value]) => name.endsWith('Events') && typeof value === 'object' && value !== null)
-      .filter(([name, value]) => !NON_ANALYTICS_EVENT_ENUMS.has(name) && !mappedEnums.has(value))
-      .map(([name]) => name);
-
-    expect(unmapped).toEqual([]);
   });
 
   it('never gives one event name two different categories', () => {
@@ -42,6 +31,7 @@ describe('categorizeEvent', () => {
     expect(categorizeEvent(AuthEvents.REGISTER)).toBe('Auth');
     expect(categorizeEvent(FirstRunEvents.WELCOME_CARD_SHOWN)).toBe('Onboarding');
     expect(categorizeEvent(UserApiKeyEvents.USED)).toBe('API Keys');
+    expect(categorizeEvent(EmailAuditEvents.EMAIL_VERIFICATION_SENT)).toBe('Audit');
   });
 
   it('falls back to Other for an unknown event name', () => {

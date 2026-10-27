@@ -28,15 +28,23 @@ import {
   UiNavigationEvents,
   UserApiKeyEvents,
 } from '@bike4mind/common';
+import {
+  AdminConfigAuditEvents,
+  AdminOrgAuditEvents,
+  DataLakeAuditEvents,
+  EmailAuditEvents,
+} from '@bike4mind/server-utils/utils/auditLogEvents';
 
 export const OTHER_CATEGORY = 'Other';
 
 /**
- * Dashboard category for each analytics event enum. A new event enum in
- * b4m-core/common/src/schemas/analytics/events must be added here, or its events
- * are reported as Other (categorizeEvent.test.ts guards the existing ones).
+ * Dashboard category for each enum spread into ANALYTICS_EVENTS
+ * (packages/server-utils/src/types/analytics/index.ts). A new enum there must be added here, or its
+ * events are reported as Other (categorizeEvent.test.ts fails until it is).
  */
 export const EVENT_ENUM_CATEGORIES: ReadonlyArray<readonly [Record<string, string>, string]> = [
+  [AdminConfigAuditEvents, 'Audit'],
+  [AdminOrgAuditEvents, 'Audit'],
   [AiEvents, 'AI'],
   [ApiKeyEvents, 'API Keys'],
   [AppFileEvents, 'File'],
@@ -44,7 +52,9 @@ export const EVENT_ENUM_CATEGORIES: ReadonlyArray<readonly [Record<string, strin
   [BriefcaseEvents, 'Briefcase'],
   [CreditPurchaseEvents, 'Credits'],
   [CurationEvents, 'Curation'],
+  [DataLakeAuditEvents, 'Audit'],
   [ElabsEvents, 'Voice'],
+  [EmailAuditEvents, 'Audit'],
   [FeedbackEvents, 'Feedback'],
   [FileEvents, 'File'],
   [FirstRunEvents, 'Onboarding'],
