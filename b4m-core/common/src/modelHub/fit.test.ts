@@ -302,11 +302,12 @@ describe('estimateFit', () => {
     expect(compute(mac(64))).toBeGreaterThan(compute(machine('discrete', 64, 24)));
   });
 
-  it("keeps Metal's host mask copy off unified memory that runs on ROCm", () => {
+  it('keeps the host mask copy on all unified memory, ROCm included', () => {
     const compute = (hardware: HardwareProfile) =>
       fit({ hardware, weightsGiB: 1, context: 32768 }).requested!.memory.computeBytes;
-    expect(compute(strix(31, 96))).toBe(compute(machine('discrete', 64, 24)));
-    expect(compute(strix(31, 96))).toBe(compute(mac(64)) - attentionMaskBytes(ARCH_64K, 32768, 512));
+    expect(compute(strix(31, 96))).toBe(compute(mac(64)));
+    const mask = attentionMaskBytes(ARCH_64K, 32768, 512);
+    expect(compute(strix(31, 96))).toBe(compute(machine('discrete', 64, 24)) + mask);
   });
 
   it('reserves at least one layer of F16 KV per extra slot on a GPU', () => {

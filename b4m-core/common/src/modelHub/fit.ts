@@ -290,8 +290,6 @@ function kvScratchBytes(arch: ModelArch, context: number, ubatch: number, slots:
 
 export interface ComputeBufferOptions {
   memoryKind: HardwareProfile['memoryKind'];
-  /** Metal keeps a host copy of the masks; defaults to true on unified memory. */
-  metal?: boolean;
   flashAttnOff?: boolean;
   slots?: number;
   /** GPUs sharing a layer split; each holds its own compute buffer. */
@@ -299,8 +297,8 @@ export interface ComputeBufferOptions {
 }
 
 /**
- * The runtime's compute buffers at this ubatch. CPU figures are measured; GPU additions (Metal's host mask copy, KV
- * scratch, pipeline input copies) come from llama.cpp source.
+ * The runtime's compute buffers at this ubatch. CPU figures are measured; GPU additions (host mask copy on unified
+ * memory, KV scratch, pipeline input copies) come from llama.cpp source.
  */
 export function computeBufferBytes(
   model: FitModel,
@@ -318,7 +316,7 @@ export function computeBufferBytes(
   let bytes = devices * (ubatch * activationBytesPerToken(model) + attention + scratch);
   // Flash attention off makes the mask F32.
   const maskCopy = options.flashAttnOff ? 2 * masks : masks;
-  if (options.memoryKind !== 'cpu' && (options.metal ?? options.memoryKind === 'unified')) bytes += maskCopy;
+  if (options.memoryKind === 'unified') bytes += maskCopy;
   if (devices > 1) {
     // Pipeline parallelism keeps 4 copies (GGML_SCHED_MAX_COPIES) of the masks and the layer input on every device.
     const input = ubatch * 4 * (arch.embeddingLength ?? FIT_CONSTANTS.assumedEmbeddingLength);
@@ -465,7 +463,6 @@ class Planner {
     const computeBytes =
       computeBufferBytes(model, context, ubatch, {
         memoryKind: this.budgets.cpuOnly ? 'cpu' : hardware.memoryKind,
-        metal: hardware.platform === 'darwin',
         flashAttnOff: runtime.flashAttn === 'off',
         slots: this.slots,
         devices: splitDevices(hardware),
