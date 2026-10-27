@@ -37,6 +37,7 @@ vi.mock('@bike4mind/observability', () => ({
     debug = vi.fn();
     updateMetadata = vi.fn();
   },
+  describeErrorCause: () => undefined,
 }));
 
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());

@@ -43,6 +43,7 @@ import { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { SEARCH_TERM_URL_DEBOUNCE_MS } from './shared/useAdminListUrlState';
+import { AdminCommandPalette } from './shared/AdminCommandPalette';
 
 /** The search the component's most recent navigate would produce from `previous`. */
 const lastWrittenSearch = (previous: SearchRecord) => {
@@ -94,6 +95,19 @@ beforeEach(() => {
 });
 
 describe('AdminSettingsTab URL state', () => {
+  it('focuses the real settings search with /', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <div data-admin-surface>
+          <AdminCommandPalette />
+          <AdminSettingsTab />
+        </div>
+      </CssVarsProvider>
+    );
+    fireEvent.keyDown(document.body, { key: '/' });
+    expect(screen.getByTestId('admin-settings-search-input')).toHaveFocus();
+  });
+
   const sections = Object.values(SETTING_TABS);
   const [firstSection, secondSection] = sections;
   const isSelected = (id: string) =>

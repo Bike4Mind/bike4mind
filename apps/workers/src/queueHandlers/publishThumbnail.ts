@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { buildThumbnailDocument } from '@server/services/publish/buildThumbnailDocument';
+import { buildThumbnailDocument, type DroppedAssets } from '@server/services/publish/buildThumbnailDocument';
 import { PublishedArtifact, recordPublishedArtifactThumbnail } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -84,9 +84,8 @@ export async function processPublishThumbnailJob(
     appOrigin: process.env.APP_URL || (PUBLISH_HOST ? `https://${PUBLISH_HOST}` : ''),
   });
   if (!document) return 'superseded';
-  if (document.droppedAssets.length) {
-    logger.info(`[publishThumbnail] ${job.publicId} rendering without ${document.droppedAssets.length} asset(s)`);
-  }
+  const dropped = describeDroppedAssets(document.droppedAssets);
+  if (dropped) logger.info(`[publishThumbnail] ${job.publicId} rendering without ${dropped}`);
 
   const documentBytes = Buffer.from(document.srcdoc, 'utf-8');
   if (documentBytes.length > MAX_THUMBNAIL_DOCUMENT_BYTES) {
@@ -136,6 +135,23 @@ export async function processPublishThumbnailJob(
     await deletePublishThumbnail(job.publicId, recorded.replacedKey, logger, () => storage);
   }
   return 'rendered';
+}
+
+/** Paths listed per reason in the log line; the count still covers all of them. */
+const LOGGED_PATHS_PER_REASON = 5;
+
+/**
+ * `N asset(s): missing 2 ["a.png","b.css"], oversized 1 ["big.png"]`, or undefined when nothing was
+ * dropped. Paths are author-chosen, so they are JSON-quoted to keep the log on one line.
+ */
+export function describeDroppedAssets(dropped: DroppedAssets): string | undefined {
+  const reasons = (['missing', 'oversized', 'failed'] as const).filter(reason => dropped[reason].length);
+  if (!reasons.length) return undefined;
+  const total = reasons.reduce((sum, reason) => sum + dropped[reason].length, 0);
+  const parts = reasons.map(
+    reason => `${reason} ${dropped[reason].length} ${JSON.stringify(dropped[reason].slice(0, LOGGED_PATHS_PER_REASON))}`
+  );
+  return `${total} asset(s): ${parts.join(', ')}`;
 }
 
 export const dispatch = dispatchWithLogger(async (event, _context, logger) => {

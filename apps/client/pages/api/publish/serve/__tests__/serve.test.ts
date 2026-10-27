@@ -1731,6 +1731,14 @@ describe('GET /api/publish/serve - comment pin bridge', () => {
 });
 
 describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
+  it.each([':path*', 'x'.repeat(65)])('404s the malformed token %j without a database lookup', async token => {
+    mockArtifactFindOne.mockClear();
+    const { res, promise } = run(['a', token]);
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockArtifactFindOne).not.toHaveBeenCalled();
+  });
+
   it('serves a public bundle via token: same-origin srcdoc + <base> at /a, noindex + no-store', async () => {
     mockArtifactFindOne.mockReturnValue(bundle());
     mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));

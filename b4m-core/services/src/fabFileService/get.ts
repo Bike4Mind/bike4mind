@@ -6,8 +6,11 @@ import {
   IAdminSettingsRepository,
   isImageServeable,
 } from '@bike4mind/common';
-import { NotFoundError, secureParameters, getSettingByName } from '@bike4mind/utils';
+import { NotFoundError, secureParameters, getSettingByName, signedUrlExpiresAt } from '@bike4mind/utils';
 import { z } from 'zod';
+
+// Re-exported for the FabFile cache writers that import it from here.
+export { signedUrlExpiresAt };
 
 const getFabFileSchema = z.object({
   id: z.string(),
@@ -128,7 +131,7 @@ export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, stora
   const fileUrl = await storage.generateSignedUrl(fabFile.filePath, EXPIRE_IN_SECONDS);
   if (!fileUrl) return fabFile; // Avoid updating if URL generation fails
 
-  const fileUrlExpireAt = new Date(Date.now() + 1000 * EXPIRE_IN_SECONDS);
+  const fileUrlExpireAt = signedUrlExpiresAt(fileUrl, EXPIRE_IN_SECONDS);
   fabFile.fileUrl = fileUrl;
   fabFile.fileUrlExpireAt = fileUrlExpireAt;
 

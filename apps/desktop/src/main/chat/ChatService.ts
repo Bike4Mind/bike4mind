@@ -57,7 +57,7 @@ import {
   pickLocalModel,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
-import { shouldAutoCompact } from '@shared/contextLimit';
+import { AUTO_COMPACT_PERCENT, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
@@ -2035,8 +2035,13 @@ export class ChatService {
    * message released from the queue, which has no caller to read a result, still reports it.
    */
   private async autoCompact(session: ChatSession): Promise<void> {
-    const window = await this.contextWindowOf(session.model);
+    let window = await this.contextWindowOf(session.model);
     const local = isLocalModel(session.model);
+    const occupied = occupiedTokens(session.messages, true, true);
+    if (local && occupied !== null && shouldAutoCompact(session.messages, window, true)) {
+      // Under Auto a local model grows first, so the conversation sits under the threshold of the larger window.
+      window = (await this.growLocal(session.model, Math.ceil((occupied * 100) / AUTO_COMPACT_PERCENT))) ?? window;
+    }
     if (!shouldAutoCompact(session.messages, window, local) && !importedHistoryNeedsCompaction(session)) return;
 
     const sessionId = session.id;
@@ -2049,6 +2054,15 @@ export class ChatService {
     } finally {
       this.compacting.delete(sessionId);
       this.emit({ type: 'auto-compact', sessionId, running: false, ...(error ? { error } : {}) });
+    }
+  }
+
+  /** The larger num_ctx Auto gave a local model so `tokens` fit; undefined under Fixed or when it cannot grow. */
+  private async growLocal(model: string, tokens: number): Promise<number | undefined> {
+    try {
+      return await (this.deps.local ?? new OllamaLocal()).growFor(model, tokens);
+    } catch {
+      return undefined;
     }
   }
 
@@ -2718,7 +2732,8 @@ export class ChatService {
               },
               onCompletionEvent,
               controller.signal,
-              dropped => this.emit({ type: 'context-trimmed', sessionId, dropped })
+              dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
+              message => this.emit({ type: 'context-notice', sessionId, message })
             )
           : await streamRound(
               api!.getAxiosInstance(),
@@ -5866,10 +5881,11 @@ async function streamLocalRound(
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
   signal?: AbortSignal,
-  onTrimmed?: (dropped: number) => void
+  onTrimmed?: (dropped: number) => void,
+  onNotice?: (message: string) => void
 ): Promise<Error | null> {
   try {
-    await local.stream(request, onEvent, signal, onTrimmed);
+    await local.stream(request, onEvent, signal, onTrimmed, onNotice);
     return null;
   } catch (err) {
     if (signal?.aborted) return null;

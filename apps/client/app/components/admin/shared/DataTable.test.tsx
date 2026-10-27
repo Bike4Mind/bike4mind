@@ -32,6 +32,20 @@ function StatefulTable({ children }: { children?: ReactNode }) {
 }
 
 describe('DataTable', () => {
+  it('toggles the focused row with x, not inputs or modified keys', () => {
+    render(<StatefulTable />);
+    const row = screen.getByTestId('admin-table-row-1');
+    expect(row).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(row, { key: 'x', ctrlKey: true });
+    expect(row).toHaveAttribute('aria-selected', 'false');
+    fireEvent.keyDown(row, { key: 'x' });
+    expect(row).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(within(screen.getByTestId('admin-table-select-1')).getByRole('checkbox'), { key: 'x' });
+    expect(row).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(row, { key: 'x' });
+    expect(row).toHaveAttribute('aria-selected', 'false');
+  });
+
   it('renders every supplied row without local pagination when the caller owns paging', () => {
     renderTable({ pagination: false });
     expect(tableRows()).toHaveLength(101);

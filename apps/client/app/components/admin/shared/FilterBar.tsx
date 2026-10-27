@@ -18,8 +18,16 @@ export function FilterBar({
     <Stack sx={adminFocusScope} direction="row" flexWrap="wrap" gap={1} data-testid="admin-filter-bar">
       <Input
         value={state.query}
-        placeholder={searchLabel}
-        slotProps={{ input: { 'aria-label': searchLabel, 'data-testid': 'admin-filter-search-input', maxLength: 500 } }}
+        placeholder={`${searchLabel} (/)`}
+        slotProps={{
+          input: {
+            'aria-label': searchLabel,
+            'data-admin-search': true,
+            'aria-keyshortcuts': '/',
+            'data-testid': 'admin-filter-search-input',
+            maxLength: 500,
+          },
+        }}
         sx={{ ...adminFocus, flex: '1 1 12rem' }}
         onChange={event => onChange({ query: event.target.value, view: '' })}
       />

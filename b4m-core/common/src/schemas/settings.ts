@@ -3218,7 +3218,7 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description:
-      'Credits the inviter earns when an invited friend, with a verified email, gets their first answer. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.',
+      'Credits the inviter earns when an invited friend, with a verified email, gets their first answer. Paid once per friend and usable at once. 0 turns this reward off.',
     category: 'Referrals',
   }),
   ReferralFirstPaymentCredits: makeNumberSetting({
@@ -3272,8 +3272,7 @@ export const settingsMap = {
     int: true,
     min: 1,
     max: 1_000_000,
-    description:
-      'Alert admins when more than this many referral rewards are created within 24 hours. Not active yet: takes effect once inviter rewards ship.',
+    description: 'Alert admins when more than this many referral rewards are created within 24 hours.',
     category: 'Referrals',
   }),
   EnableReferralToEmail: makeBooleanSetting({

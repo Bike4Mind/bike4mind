@@ -1,15 +1,19 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockEmit, mockGetSetting, mockLogEventSafe, mockUserUpdate, mockUpdateOne } = vi.hoisted(() => ({
-  mockEmit: vi.fn(),
-  mockGetSetting: vi.fn(),
-  mockLogEventSafe: vi.fn(),
-  mockUserUpdate: vi.fn(),
-  mockUpdateOne: vi.fn(),
-}));
+const { mockEmit, mockGetSetting, mockLogEventSafe, mockUserUpdate, mockUpdateOne, mockRewardInviter } = vi.hoisted(
+  () => ({
+    mockEmit: vi.fn(),
+    mockGetSetting: vi.fn(),
+    mockLogEventSafe: vi.fn(),
+    mockUserUpdate: vi.fn(),
+    mockUpdateOne: vi.fn(),
+    mockRewardInviter: vi.fn(),
+  })
+);
 vi.mock('./emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: mockEmit }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
+vi.mock('@server/referrals/firstAnswerReward', () => ({ rewardInviterForFirstAnswer: mockRewardInviter }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: mockGetSetting },
@@ -276,6 +280,17 @@ describe('emitEmailVerifiedFunnelEvents', () => {
     await emitEmailVerifiedFunnelEvents({ user: { id: 'u1' }, method: 'otc', creditsGranted: 70 });
 
     expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockRewardInviter).not.toHaveBeenCalled();
+  });
+
+  it('checks the inviter reward for a post-launch account', async () => {
+    await emitEmailVerifiedFunnelEvents({
+      user: { id: 'u1', createdAt: new Date('2026-10-11T00:00:00Z') },
+      method: 'otc',
+      creditsGranted: 70,
+    });
+
+    expect(mockRewardInviter).toHaveBeenCalledWith('u1');
   });
 });
 
@@ -310,6 +325,17 @@ describe('recordFirstValue', () => {
     mockUpdateOne.mockResolvedValue({ modifiedCount: 0 });
     expect(await recordFirstValue({ user, feature: 'chat', now })).toBe(false);
     expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockRewardInviter).not.toHaveBeenCalled();
+  });
+
+  it('checks the inviter reward only for the request that recorded it', async () => {
+    expect(await recordFirstValue({ user, feature: 'chat', now })).toBe(true);
+    expect(mockRewardInviter).toHaveBeenCalledWith('u1');
+  });
+
+  it('skips a pre-launch user without checking the inviter reward', async () => {
+    await recordFirstValue({ user: { id: 'u1', createdAt: new Date('2026-10-10T23:59:59Z') }, feature: 'chat', now });
+    expect(mockRewardInviter).not.toHaveBeenCalled();
   });
 
   it('records the stage and emits first_value marked with the synthetic lane for a synthetic user', async () => {
