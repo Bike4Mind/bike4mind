@@ -7,10 +7,14 @@ const isTestMode = process.env.NEXT_PUBLIC_SEED_STAGE_NAME !== 'production';
 // Account-tied Stripe price for the Professional plan; sourced per-stage from
 // NEXT_PUBLIC_* env vars with no brand fallback. Exported as the single
 // source of truth so the upsell modal (SubscriptionModal) doesn't re-type the ids.
-// Empty when unconfigured == Professional checkout inactive.
-export const PROFESSIONAL_PRICE_ID = isTestMode
-  ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
-  : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? '');
+// Empty when unconfigured == Professional checkout inactive. PlansSection picks the stage at runtime,
+// so it calls the resolver rather than reading the build-time constant.
+export const professionalPriceIdForStage = (testMode: boolean): string =>
+  testMode
+    ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
+    : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? '');
+
+export const PROFESSIONAL_PRICE_ID = professionalPriceIdForStage(isTestMode);
 
 export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
   {

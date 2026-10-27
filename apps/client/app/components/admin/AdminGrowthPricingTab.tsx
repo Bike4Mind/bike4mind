@@ -17,6 +17,7 @@ import {
 } from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import AdminSettingInputField from './AdminSettingInputField';
+import { CheckoutCatalogPanel } from './CheckoutCatalogPanel';
 import { AdminTab } from './adminSidebarConfig';
 import {
   ADMIN_SETTINGS_SEARCH_PARAM,
@@ -179,6 +180,16 @@ const AdminGrowthPricingTab = () => {
     return map;
   }, [data]);
 
+  const teamPlan = useMemo(
+    () =>
+      resolveTeamPlanSettings({
+        teamPlanMinSeats: storedByKey.get('teamPlanMinSeats'),
+        teamPlanMaxSeats: storedByKey.get('teamPlanMaxSeats'),
+        teamPlanCreditsPerSeat: storedByKey.get('teamPlanCreditsPerSeat'),
+      }),
+    [storedByKey]
+  );
+
   // Cross-field checks the per-setting schemas cannot express on their own.
   const warnings = useMemo(() => {
     const out: string[] = [];
@@ -279,6 +290,8 @@ const AdminGrowthPricingTab = () => {
           </CardContent>
         </Card>
       ))}
+
+      <CheckoutCatalogPanel teamPlan={teamPlan} />
 
       {GROWTH_PRICING_LINKS.map(section => (
         <Card key={section.id} variant="outlined" data-testid={`admin-growth-pricing-section-${section.id}`}>
