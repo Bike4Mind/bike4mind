@@ -147,6 +147,12 @@ export const SECRET_ROTATION_CONFIG: {
     isAutomatic: false,
     rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
   },
+  SLACK_ALARMS_WEBHOOK_URL: {
+    description: 'Slack webhook for CloudWatch alarm notifications',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
+  },
   SLACK_SIGNING_SECRET: {
     description: 'Slack app signing secret for request verification',
     rotationIntervalDays: 180,
