@@ -235,7 +235,11 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   }, [unsavedKeys]);
 
   const handleFormFieldChange = (key: AdminFieldKey, value: unknown) => {
-    setFormState(prev => ({ ...prev, [key]: value }));
+    setFormState(prev => ({
+      ...prev,
+      [key]: value,
+      ...(key === 'throttleTier' ? { throttleReason: '' } : {}),
+    }));
     setEditedFields(prev => {
       const next = stageFieldEdit(prev, key, value, user);
       // A reason is only meaningful while the tier change it explains is staged.

@@ -54,8 +54,8 @@ describe('evaluateSignupSignals', () => {
     const stale = jwt.sign({ purpose: 'signup_form', issuedAtMs: NOW - 7_200_000, exp }, 'test-secret', {
       algorithm: 'HS256',
     });
-    expect(evaluate({ formToken: stale, nowMs: exp * 1000 + 24 * 3_600_000 })).toEqual([]);
-    expect(evaluate({ formToken: stale, nowMs: exp * 1000 + 24 * 3_600_000 + 1 })).toEqual(['signup_token_invalid']);
+    expect(evaluate({ formToken: stale, nowMs: exp * 1000 + 3_600_000 })).toEqual([]);
+    expect(evaluate({ formToken: stale, nowMs: exp * 1000 + 3_600_000 + 1 })).toEqual(['signup_token_invalid']);
   });
 
   it('flags a not-yet-valid token as invalid', () => {

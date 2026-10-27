@@ -3,7 +3,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 
 const PURPOSE = 'signup_form';
-const EXPIRED_TOKEN_GRACE_MS = 24 * 60 * 60 * 1000;
+const EXPIRED_TOKEN_GRACE_MS = 60 * 60 * 1000;
 
 // issuedAtMs rather than iat: iat is whole seconds, too coarse for a sub-2s timing check.
 export const signSignupFormToken = (nowMs = Date.now()): string =>

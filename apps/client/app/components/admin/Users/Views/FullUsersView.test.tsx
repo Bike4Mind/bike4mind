@@ -25,13 +25,30 @@ vi.mock('../Details/UserSubscriptionStatus', () => ({ default: () => null }));
 // Stands in for the Ban checkbox and the confirmed Delete: the same calls the real controls make.
 vi.mock('../SpicyUserActions', () => ({
   default: ({
+    user,
+    editedFields,
     onFieldChange,
     handleDeleteUser,
   }: {
+    user: { throttleTier?: string; throttleReason?: string };
+    editedFields: Record<string, boolean>;
     onFieldChange: (key: string, value: unknown) => void;
     handleDeleteUser: (userId: string, reason: string) => Promise<void>;
   }) => (
     <>
+      <input
+        type="checkbox"
+        data-testid="admin-user-shadow-checkbox"
+        checked={user.throttleTier === 'shadow'}
+        onChange={e => onFieldChange('throttleTier', e.target.checked ? 'shadow' : 'none')}
+      />
+      {editedFields.throttleTier && (
+        <input
+          data-testid="admin-user-shadow-reason-input"
+          value={user.throttleReason ?? ''}
+          onChange={e => onFieldChange('throttleReason', e.target.value)}
+        />
+      )}
       <button data-testid="stub-ban-toggle" onClick={() => onFieldChange('isBanned', true)} />
       <button data-testid="stub-delete" onClick={() => handleDeleteUser('u1', 'Spam account')} />
     </>
@@ -276,6 +293,24 @@ describe('FullUsersView - reason-required admin actions', () => {
       id: 'u1',
       data: { isAdmin: true, roleChangeReason: 'Promoted to cover on-call' },
     });
+  });
+
+  it('drops a typed shadow reason when the tier edit is toggled off, so re-staging needs a new one', () => {
+    render(<FullUsersView index={0} user={savedUser()} variant="page" />, {
+      wrapper: TestWrapper,
+    });
+    const checkbox = () => screen.getByTestId('admin-user-shadow-checkbox');
+    const reasonInput = () => screen.getByTestId('admin-user-shadow-reason-input');
+
+    fireEvent.click(checkbox());
+    fireEvent.change(reasonInput() as HTMLInputElement, { target: { value: 'Abusing free credits' } });
+    expect(screen.getByTestId('user-update-btn')).toBeEnabled();
+
+    fireEvent.click(checkbox());
+    fireEvent.click(checkbox());
+
+    expect(reasonInput()).toHaveValue('');
+    expect(screen.getByTestId('user-update-btn')).toBeDisabled();
   });
 
   it('saves without a confirm dialog or roleChangeReason when the role is untouched', () => {

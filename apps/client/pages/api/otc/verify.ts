@@ -504,21 +504,25 @@ const handler = baseApi({ auth: false })
           id: newUser.id,
           riskSignals: signals.map(type => ({ type, at: new Date() })),
         });
-        step = 'set throttle tier';
-        const tierChange = await userService.setThrottleTier(
-          newUser.id,
-          'shadow',
-          { reason: `signup checks: ${signals.join(',')}`, source: throttleSourceForSignal(signals[0]) },
-          { db: { users: userRepository } }
-        );
-        if (tierChange.changed) {
-          step = 'record audit entry';
-          await recordAdminActionForActor(req, systemAuditActor('signup-checks'), {
-            action: 'user.throttle_tier.changed',
-            target: { kind: 'user', id: newUser.id, displayName: normalizedEmail },
-            summary: `set the restricted tier to ${tierChange.after} (source: signup checks, signals: ${signals.join(',')})`,
-            changes: [{ field: 'throttle.tier', before: tierChange.before, after: tierChange.after }],
-          });
+        // A missing form token alone is record-only: the token fetch can be in flight, fail or be rate-limited for real humans.
+        const actionable = signals.filter(s => s !== 'signup_token_missing');
+        if (actionable.length) {
+          step = 'set throttle tier';
+          const tierChange = await userService.setThrottleTier(
+            newUser.id,
+            'shadow',
+            { reason: `signup checks: ${signals.join(',')}`, source: throttleSourceForSignal(actionable[0]) },
+            { db: { users: userRepository } }
+          );
+          if (tierChange.changed) {
+            step = 'record audit entry';
+            await recordAdminActionForActor(req, systemAuditActor('signup-checks'), {
+              action: 'user.throttle_tier.changed',
+              target: { kind: 'user', id: newUser.id, displayName: normalizedEmail },
+              summary: `set the restricted tier to ${tierChange.after} (source: signup checks, signals: ${signals.join(',')})`,
+              changes: [{ field: 'throttle.tier', before: tierChange.before, after: tierChange.after }],
+            });
+          }
         }
       } catch (err) {
         req.logger.error(`OTC signup signal application failed: ${step}`, { ...signalLog, err });

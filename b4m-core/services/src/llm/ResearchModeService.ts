@@ -123,7 +123,7 @@ export class ResearchModeService {
         throw new Error(`Model ${config.model} not found`);
       }
       const modelInfo = this.runModelFor?.(requestedModelInfo) ?? requestedModelInfo;
-      const reasoningWithholder = withholdsReasoning(thinkingVisibility, config.model)
+      const reasoningWithholder = withholdsReasoning(thinkingVisibility, modelInfo.id)
         ? createReasoningWithholder(reasoningChannelOf(modelInfo))
         : null;
 
@@ -219,6 +219,7 @@ export class ResearchModeService {
 
       this.logger.info(`🔬 [Research Mode] Configuration ${config.id} completed successfully`);
 
+      // Pricing deliberately uses the requested model on substituted runs: overcharging is less revealing than undercharging.
       return {
         configurationId: config.id,
         model: config.model,
