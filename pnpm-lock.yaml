@@ -930,6 +930,9 @@ importers:
       '@bike4mind/cli':
         specifier: workspace:*
         version: link:../../packages/cli
+      '@bike4mind/local-models':
+        specifier: workspace:*
+        version: link:../../b4m-core/local-models
       '@bike4mind/typescript-config':
         specifier: workspace:*
         version: link:../../packages/typescript-config

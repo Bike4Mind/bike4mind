@@ -24,7 +24,7 @@ export class RuntimeHttpError extends LocalRuntimeError {
     message: string,
     runtimeId: string,
     readonly status: number,
-    /** The `error` message of an OpenAI/Ollama-style JSON body; null when the body was not that shape. */
+    /** The JSON `error` (OpenAI/Ollama) or string `detail` (FastAPI); null for unsupported bodies. */
     readonly detail: string | null = null
   ) {
     super(message, runtimeId);
@@ -58,6 +58,35 @@ export class GgufFormatError extends LocalRuntimeError {
   ) {
     super(message, 'gguf');
     this.name = 'GgufFormatError';
+  }
+}
+
+/**
+ * Hugging Face refused a repo: `'gated'` until the token holder accepts its terms, `'unauthorized'` for a missing
+ * or rejected token, or a private repo the token cannot read.
+ */
+export class HubAccessError extends RuntimeHttpError {
+  constructor(
+    message: string,
+    runtimeId: string,
+    status: number,
+    readonly repo: string,
+    readonly reason: 'gated' | 'unauthorized'
+  ) {
+    super(message, runtimeId, status);
+    this.name = 'HubAccessError';
+  }
+}
+
+export class HubRateLimitError extends RuntimeHttpError {
+  constructor(
+    message: string,
+    runtimeId: string,
+    /** From `Retry-After`, else the `RateLimit` reset; null when neither is sent. */
+    readonly retryAfterMs: number | null
+  ) {
+    super(message, runtimeId, 429);
+    this.name = 'HubRateLimitError';
   }
 }
 

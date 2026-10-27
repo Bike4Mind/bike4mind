@@ -113,6 +113,7 @@ export * from './utils/deepLinks';
 export * from './utils/skillMdSource';
 export * from './utils/claudeMarketplace';
 export * from './utils/emailList';
+export * from './utils/emailAlias';
 export * from './utils/emailDomain';
 export * from './utils/canonicalEmail';
 export * from './utils/requireEnv';

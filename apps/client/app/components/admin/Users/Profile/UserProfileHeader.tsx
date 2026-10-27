@@ -39,12 +39,12 @@ export const UserProfileHeader: React.FC<{ user: AdminUserProfile; actions: Reac
       spacing={2}
       justifyContent="space-between"
       alignItems={{ xs: 'stretch', md: 'flex-start' }}
-      sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}
+      sx={{ py: 2 }}
     >
       <Stack direction="row" spacing={2} sx={{ minWidth: 0 }}>
         <Avatar src={user.photoUrl || undefined} alt={user.name} size="lg" />
         <Stack spacing={0.75} sx={{ minWidth: 0 }}>
-          <Typography level="h3" sx={{ overflowWrap: 'anywhere' }}>
+          <Typography level="h1" sx={{ overflowWrap: 'anywhere' }}>
             {user.name}
           </Typography>
           <Typography level="body-sm" color="neutral" sx={{ overflowWrap: 'anywhere' }}>

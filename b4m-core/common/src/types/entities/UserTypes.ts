@@ -452,6 +452,8 @@ export interface IUser extends ICreditHolder {
 
   numReferralsAvailable: number;
   regInvites: Array<IRegInviteDocument['id']>;
+  /** Sender of the referral invite this account redeemed; unset for accounts that signed up without one. */
+  referredByUserId?: string | null;
 
   /**
    * This field is used to store the current selected organization ID.

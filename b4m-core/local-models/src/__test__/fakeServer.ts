@@ -17,7 +17,10 @@ export interface FakeServer {
   close(): Promise<void>;
 }
 
-/** Routes are keyed `'<METHOD> <path>'`; anything else gets Ollama's 404 shape. */
+/**
+ * Routes are keyed `'<METHOD> <path>'`, falling back to the path without its query string; anything else gets
+ * Ollama's 404 shape.
+ */
 export async function startFakeServer(routes: Record<string, Handler>): Promise<FakeServer> {
   const requests: RecordedRequest[] = [];
   const sockets = new Set<Socket>();
@@ -31,7 +34,8 @@ export async function startFakeServer(routes: Record<string, Handler>): Promise<
       headers: req.headers,
     };
     requests.push(request);
-    const handler = routes[`${request.method} ${request.path}`];
+    const handler =
+      routes[`${request.method} ${request.path}`] ?? routes[`${request.method} ${request.path.split('?')[0]}`];
     if (!handler) return sendJson(res, { error: 'not found' }, 404);
     try {
       await handler(request, res);
