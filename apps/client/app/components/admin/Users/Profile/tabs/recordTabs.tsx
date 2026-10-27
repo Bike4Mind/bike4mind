@@ -240,7 +240,15 @@ export const AdminLogTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const body = () => {
     if (activity.isLoading) return <Empty>Loading...</Empty>;
     if (activity.isError) return <Empty>The admin log could not be loaded.</Empty>;
-    if (entries.length === 0) return <Empty>No admin has changed this account yet.</Empty>;
+    // Filtering happens after paging, so an empty page proves nothing while older pages remain.
+    if (entries.length === 0)
+      return (
+        <Empty>
+          {activity.hasNextPage
+            ? 'No admin changes in the latest activity. Load more to check older entries.'
+            : 'No admin has changed this account yet.'}
+        </Empty>
+      );
     return <AuditTimeline entries={entries} onSelect={setSelected} data-testid="user-profile-admin-log-list" />;
   };
 
