@@ -125,6 +125,13 @@ describe('custom-mcp org routes', () => {
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
+  it('PUT policy treats a stored override missing defaulted fields as unchanged', async () => {
+    orgPolicy.readOrgCustomMcpPolicyOverride.mockResolvedValue('{"mode":"off"}');
+    await call('policy', 'put', { mode: 'off' });
+    expect(orgPolicy.setOrgCustomMcpPolicy).toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
   it.each([[{ mode: 'wide_open' }], [{ maxConnectionsPerUser: 500 }], [{ mode: 'off', unknownField: true }]])(
     'PUT policy refuses %j with a 400 and writes nothing',
     async body => {

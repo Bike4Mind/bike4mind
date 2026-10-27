@@ -36,6 +36,22 @@ const recordChange = (
     changes: [{ field: 'customMcpPolicy', before, after }],
   });
 
+/**
+ * The stored override as the schema reads it today, so a field added with a default later does not
+ * make re-saving the same policy look like a change. A row the schema refuses is returned as stored.
+ */
+const normalizeStored = (stored: string | null): string | null => {
+  if (stored === null) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stored);
+  } catch {
+    return stored;
+  }
+  const parsed = CustomMcpPolicySchema.safeParse(raw);
+  return parsed.success ? JSON.stringify(parsed.data) : stored;
+};
+
 // Session only: this is the org's kill switch for third-party tool servers, not something an
 // API key should be able to reopen.
 const handler = baseApi({ auth: 'jwtOnly' })
@@ -51,7 +67,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const policy = parseOrBadRequest(CustomMcpPolicySchema.strict(), req.body);
       const before = await readOrgCustomMcpPolicyOverride(org.id);
       const after = await setOrgCustomMcpPolicy(org.id, policy);
-      if (before !== after) {
+      if (normalizeStored(before) !== after) {
         await recordChange(req, org, before, after, 'updated the custom MCP connector policy');
       }
       return res.json(await getOrgCustomMcpPolicy(org.id));

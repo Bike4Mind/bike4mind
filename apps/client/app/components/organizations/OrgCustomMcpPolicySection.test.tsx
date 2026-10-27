@@ -104,6 +104,36 @@ describe('OrgCustomMcpPolicySection', () => {
     expect(screen.getByTestId('org-custom-mcp-invalid')).toBeTruthy();
   });
 
+  it('keeps unsaved edits when the policy changes elsewhere, and offers to load the latest', () => {
+    const { rerender } = renderSection();
+    toggle('org-custom-mcp-require-approval-switch');
+
+    state.view = viewOf({}, { mode: 'any' });
+    rerender(<OrgCustomMcpPolicySection organization={{ id: 'org-1' } as IOrganizationDocument} />);
+    expect(screen.getByTestId('org-custom-mcp-changed-elsewhere')).toBeTruthy();
+    fireEvent.click(saveButton());
+    expect(state.save).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'allowlist', requireApprovalForAll: true })
+    );
+
+    fireEvent.click(screen.getByText('Load latest'));
+    expect(screen.queryByTestId('org-custom-mcp-changed-elsewhere')).toBeNull();
+    expect(saveButton().disabled).toBe(true);
+  });
+
+  it('takes a newer policy as is when there are no unsaved edits, and after its own save', () => {
+    const { rerender } = renderSection();
+    state.view = viewOf({}, { mode: 'any' });
+    rerender(<OrgCustomMcpPolicySection organization={{ id: 'org-1' } as IOrganizationDocument} />);
+    expect(screen.queryByTestId('org-custom-mcp-changed-elsewhere')).toBeNull();
+
+    toggle('org-custom-mcp-require-approval-switch');
+    state.view = viewOf({}, { mode: 'any', requireApprovalForAll: true });
+    rerender(<OrgCustomMcpPolicySection organization={{ id: 'org-1' } as IOrganizationDocument} />);
+    expect(screen.queryByTestId('org-custom-mcp-changed-elsewhere')).toBeNull();
+    expect(saveButton().disabled).toBe(true);
+  });
+
   it('lists member connections by member name with their policy status', () => {
     state.connections = [
       { id: 'c1', displayName: 'Linear', urlHost: 'mcp.linear.app', userId: 'u1', status: 'blocked_by_policy' },

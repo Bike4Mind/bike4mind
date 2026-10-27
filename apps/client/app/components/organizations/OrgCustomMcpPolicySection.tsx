@@ -1,4 +1,4 @@
-import { FC, useEffect, useMemo, useState } from 'react';
+import { FC, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -24,6 +24,7 @@ import {
   type CustomMcpPolicy,
   type CustomMcpPolicyMode,
   type IOrganizationDocument,
+  type OrgCustomMcpPolicyView,
 } from '@bike4mind/common';
 import {
   useOrgCustomMcpConnections,
@@ -92,10 +93,26 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
   const save = useSaveOrgCustomMcpPolicy(organization.id);
   const reset = useResetOrgCustomMcpPolicy(organization.id);
   const [form, setForm] = useState<PolicyForm | null>(null);
+  // The policy the form was last loaded from, so a newer one saved elsewhere does not silently
+  // replace edits in progress.
+  const [loadedFrom, setLoadedFrom] = useState<CustomMcpPolicy | null>(null);
 
-  useEffect(() => {
-    if (view) setForm(toForm(view.policy));
-  }, [view]);
+  const [seenView, setSeenView] = useState<OrgCustomMcpPolicyView | undefined>(undefined);
+
+  const load = (next: CustomMcpPolicy) => {
+    setForm(toForm(next));
+    setLoadedFrom(next);
+  };
+
+  // Adjusted during render rather than in an effect (react.dev "adjusting state when a prop
+  // changes"), so the first paint after a refetch already shows the right form.
+  if (view && view !== seenView) {
+    setSeenView(view);
+    const unedited = !form || !loadedFrom || JSON.stringify(form) === JSON.stringify(toForm(loadedFrom));
+    // Our own save lands here too, with the form already matching what was stored.
+    const matchesForm = !!form && JSON.stringify(fromForm(form)) === JSON.stringify(view.policy);
+    if (unedited || matchesForm) load(view.policy);
+  }
 
   const memberNames = useMemo(
     () => new Map((members ?? []).map(member => [member.id, member.name || member.email || member.id])),
@@ -103,6 +120,7 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
   );
 
   const policy = useMemo(() => (form ? fromForm(form) : undefined), [form]);
+  const changedElsewhere = !!view && !!loadedFrom && JSON.stringify(view.policy) !== JSON.stringify(loadedFrom);
   const dirty = useMemo(
     () => !!view && !!policy && JSON.stringify(policy) !== JSON.stringify(view.policy),
     [policy, view]
@@ -129,6 +147,20 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
       {view.invalidOverride && (
         <Alert color="danger" data-testid="org-custom-mcp-invalid">
           The saved policy is no longer valid, so custom connectors are off for every member. Save or reset it.
+        </Alert>
+      )}
+
+      {changedElsewhere && (
+        <Alert
+          color="warning"
+          data-testid="org-custom-mcp-changed-elsewhere"
+          endDecorator={
+            <Button size="sm" variant="soft" color="warning" onClick={() => load(view.policy)}>
+              Load latest
+            </Button>
+          }
+        >
+          Someone else changed this policy while you were editing. Saving will replace their change.
         </Alert>
       )}
 
