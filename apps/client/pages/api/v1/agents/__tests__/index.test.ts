@@ -220,12 +220,12 @@ describe('GET /api/v1/agents', () => {
 });
 
 describe('POST /api/v1/agents', () => {
-  it('accepts a catalog-only preferred_model and forwards the caller id and logger to the lookup', async () => {
+  it('accepts a catalog-only preferred_model and forwards the caller and logger to the lookup', async () => {
     const res = await call({ method: 'POST', body: { name: 'Researcher', preferred_model: 'catalog-model' } });
 
     expect(res._getStatusCode()).toBe(201);
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ preferredModel: 'catalog-model' }));
-    expect(mockGetCallerModelList).toHaveBeenCalledWith(USER.id, logger);
+    expect(mockGetCallerModelList).toHaveBeenCalledWith(USER, logger);
   });
 
   it.each([
