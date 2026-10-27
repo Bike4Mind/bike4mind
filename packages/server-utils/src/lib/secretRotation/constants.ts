@@ -273,9 +273,9 @@ export const SECRET_ROTATION_CONFIG: {
     rotationProcess: 'Generate new random token and update SST Secret',
   },
   E2E_CLEANUP_SECRET: {
-    description: 'Shared secret for E2E test cleanup endpoints (/api/test/create-user, /api/test/cleanup)',
+    description: 'Header secret for the E2E test endpoints (/api/test/*)',
     rotationIntervalDays: 180,
     isAutomatic: false,
-    rotationProcess: 'Generate new random token and update SST Secret via set-sst-secrets workflow',
+    rotationProcess: 'Generate a new random token and update the per-tier deployer environment secret, then redeploy',
   },
 };
