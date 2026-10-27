@@ -169,8 +169,9 @@ function meetsListingBar(tier: ProducerTier, own: HubOwnEval | null): boolean {
   if (tier === 'B') return true;
   const parent = own.parentToolCall;
   if (!parent) return false;
-  const rate = own.toolCall.exact / own.toolCall.of;
-  return rate >= parent.exact / parent.of - TIER_C_TOOL_REGRESSION_TOLERANCE;
+  // Cross-multiplied in integers, so a drop of exactly the tolerance is not lost to float rounding.
+  const points = Math.round(TIER_C_TOOL_REGRESSION_TOLERANCE * 100);
+  return 100 * own.toolCall.exact * parent.of >= (100 * parent.exact - points * parent.of) * own.toolCall.of;
 }
 
 /** The first usable runtime that meets the listing bar, preferring one with a current own eval. */

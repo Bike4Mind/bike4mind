@@ -233,6 +233,9 @@ describe('pickForMachine policy', () => {
     expect(TIER_C_TOOL_REGRESSION_TOLERANCE).toBe(0.05);
     expect(listed(tierC(2, 18))).toBe(false);
     expect(listed(tierC(17, 18))).toBe(true);
+    // Exactly the tolerance below: 0.4 - 0.05 is 0.35000000000000003 in floating point.
+    expect(listed(tierC(7, 8))).toBe(true);
+    expect(listed(tierC(6, 8))).toBe(false);
   });
 
   it('lists a Tier B build on the runtime that carries its eval when an earlier runtime is also installed', () => {
