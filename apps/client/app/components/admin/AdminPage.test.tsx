@@ -3,11 +3,12 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
-import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 
 // AdminPage pulls in ~50 admin tabs that are irrelevant here. Replace each with a null stub,
-// whatever its export name, and keep the real chat wiring: SessionContainer's host is the
-// bug site, so it must sit inside AdminChatDock's slot and not in a clipped box.
+// whatever its export name (the next/dynamic ones too: dropping those stubs breaks the suite on a
+// zod resolution error), and keep the real chat wiring: the SessionContainer host is the bug site,
+// so it must sit inside AdminChatDock's slot and not in a clipped box.
 const STUBBED_MODULES = [
   '../Knowledge/KnowledgeModal',
   './AdminDashboardTab',
@@ -77,7 +78,6 @@ const STUBBED_MODULES = [
   './ManageGearsTab',
   './SystemPromptsTab',
   './WorldTime',
-  './useAdminNotifications',
 ];
 
 vi.mock('next/dynamic', () => ({ default: () => () => null }));
@@ -106,6 +106,8 @@ describe('AdminPage chat slot', () => {
   let AdminPage: React.ComponentType;
 
   beforeAll(async () => {
+    // __esModule makes the Proxy a valid ES module for interop; `then` must be undefined or
+    // await import() treats the Proxy as a thenable and never resolves.
     const stub = () =>
       new Proxy(
         {},
@@ -141,11 +143,22 @@ describe('AdminPage chat slot', () => {
     const slot = () => screen.getByTestId('admin-chat-slot');
     expect(slot().contains(screen.getByTestId('session-container-stub'))).toBe(true);
     expect(getComputedStyle(slot()).width).toBe('0px');
+    // the mount effect must have put the chat in the pill state
+    expect(useSessionLayout.getState().layout).toBe('floatingChat');
+    expect(useSessionLayout.getState().floatingChatMinimized).toBe(true);
 
     for (const layout of ['dockRight', 'dockBottom'] as const) {
       act(() => setSessionLayout({ layout }));
       expect(getComputedStyle(slot()).position).not.toBe('absolute');
       expect(slot().contains(screen.getByTestId('session-container-stub'))).toBe(true);
+      // no clipped (0px) ancestor may sit between the chat and the slot
+      for (
+        let el = screen.getByTestId('session-container-stub').parentElement;
+        el && el !== slot();
+        el = el.parentElement
+      ) {
+        expect(getComputedStyle(el).width).not.toBe('0px');
+      }
     }
   });
 });
