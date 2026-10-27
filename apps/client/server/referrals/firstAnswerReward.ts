@@ -80,6 +80,7 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
     if (!creditTransactionId) return;
 
     await alertIfRewardsSpike(
+      creditTransactionId,
       getSettingsValue(
         'ReferralAlertRewardsPerDay',
         settings,
@@ -91,17 +92,20 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
   }
 }
 
-// Fires once per spike: only the reward that crosses the threshold alerts, not every one after it.
-async function alertIfRewardsSpike(threshold: number): Promise<void> {
-  const rewardsLast24h = await CreditTransaction.countDocuments({
+// Only the reward that crosses the threshold alerts. Each reward ranks itself by _id order instead of
+// reading a shared total, so payouts committing together cannot both skip the crossing: a race can
+// duplicate the alert but never drop it.
+async function alertIfRewardsSpike(transactionId: string, threshold: number): Promise<void> {
+  const earlierRewards = await CreditTransaction.countDocuments({
     ownerType: CreditHolderType.User,
     type: 'generic_add',
     reason: REFERRAL_REWARD_REASON,
     createdAt: { $gte: new Date(Date.now() - DAY_MS) },
+    _id: { $lt: transactionId },
   });
-  if (rewardsLast24h !== threshold + 1) return;
+  if (earlierRewards !== threshold) return;
   await postMessageToSlack(
-    `Referral rewards: ${rewardsLast24h} created in the last 24 hours, above the alert threshold of ${threshold}. ` +
+    `Referral rewards: ${threshold + 1} created in the last 24 hours, above the alert threshold of ${threshold}. ` +
       'Set the referral reward amounts back to 0 in Growth & Pricing to stop them.'
   );
 }
