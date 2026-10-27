@@ -118,6 +118,7 @@ const api: DesktopApi = {
     listSuggestionModels: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSuggestionModels),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
+    settleLocalModel: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSettleLocalModel, sessionId),
     setSessionHistory: (sessionId: string, enabled: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionHistory, sessionId, enabled),
     searchHistory: (query: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSearchHistory, query),
