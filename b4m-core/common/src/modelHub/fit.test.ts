@@ -4,13 +4,15 @@ import { machine } from './__fixtures__/hubManifest';
 import {
   FIT_CONSTANTS,
   KV_BYTES_PER_ELEMENT,
+  activationBytesPerToken,
+  attentionMaskBytes,
   contextFloor,
   contextOptions,
   contextTarget,
   estimateFit,
+  fitMarginBytes,
   flashAttnOffBytes,
   kvCacheBytes,
-  ollamaUbatch,
   type FitInput,
   type HardwareProfile,
 } from './fit';
@@ -65,10 +67,13 @@ const DEEPSEEK_V31 = arch({
   mla: { layers: 61, kvLoraRank: 512, ropeDim: 64 },
 });
 
-// 64 KiB of f16 KV per token: 65536 tokens = 4 GiB, so overheads stay readable.
+// 64 KiB of f16 KV per token: 65536 tokens = 4 GiB, so overheads stay readable. On a 10 GiB model the plan at
+// -ub 512 needs 15.5 GiB at 65536 (13.63 with q8_0), 13.31 at 32768 (12.38) and 12.22 at 16384 on unified memory.
 const ARCH_64K = arch({
   contextMax: 262144,
   blockCount: 16,
+  embeddingLength: 2048,
+  activeFeedForwardLength: 18432,
   full: { layers: 16, kvHeads: 4, keyLength: 256, valueLength: 256 },
 });
 const MOE_64K = arch({ ...ARCH_64K, blockCount: 40, moe: { experts: 128, used: 8, moeLayers: 40 } });
@@ -152,7 +157,7 @@ describe('kvCacheBytes', () => {
   });
 });
 
-describe('estimator totals against published deltas', () => {
+describe('estimator KV growth against published deltas', () => {
   const span = (a: ModelArch) => {
     const options = contextOptions({
       model: { arch: a, weightsBytes: 12e9 },
@@ -160,15 +165,15 @@ describe('estimator totals against published deltas', () => {
       mode: 'code',
       runtime: LS,
     });
-    const at = (c: number) => options.find(o => o.context === c)!.memory.totalBytes;
+    const at = (c: number) => options.find(o => o.context === c)!.memory.kvBytes;
     return (at(131072) - at(8192)) / 1e9;
   };
 
-  it('grows gpt-oss-20b by about 3.0 GB from 8k to 131k', () => {
+  it('grows the gpt-oss-20b cache by about 3.0 GB from 8k to 131k', () => {
     expect(span(GPT_OSS_20B)).toBeCloseTo(3.0, 1);
   });
 
-  it('grows gpt-oss-120b by about 4.5 GB from 8k to 131k', () => {
+  it('grows the gpt-oss-120b cache by about 4.5 GB from 8k to 131k', () => {
     expect(span(GPT_OSS_120B)).toBeCloseTo(4.5, 1);
   });
 });
@@ -188,9 +193,25 @@ describe('contextTarget and contextFloor', () => {
 });
 
 describe('estimateFit', () => {
-  it('sums weights, KV, compute and margin', () => {
+  it('totals what the runtime allocates and keeps the margin beside it', () => {
     const { memory } = fit();
-    expect(memory).toMatchObject({ kvBytes: 4 * GIB, computeBytes: GIB, marginBytes: GIB, totalBytes: 16 * GIB });
+    expect(memory.kvBytes).toBe(4 * GIB);
+    expect(memory.totalBytes).toBe(memory.weightsBytes + memory.kvBytes + memory.computeBytes);
+    expect(memory.marginBytes).toBe(GIB);
+  });
+
+  it('fits only when the total and the margin together stay within the budget', () => {
+    const need = fit().memory.totalBytes + GIB;
+    const at = (budget: number) => fit({ hardware: { ...mac(16), gpuWorkingSetBytes: budget } });
+    expect(at(need)).toMatchObject({ verdict: 'fast', context: 65536, kv: F16 });
+    expect(at(need - 1)).toMatchObject({ context: 65536, kv: Q8 });
+  });
+
+  it('sizes the margin per backend', () => {
+    expect(fitMarginBytes(machine('cpu', 32))).toBe(256 * MIB);
+    expect(fitMarginBytes(machine('discrete', 32, null))).toBe(256 * MIB);
+    expect(fitMarginBytes(machine('unified', 32))).toBe(GIB);
+    expect(fitMarginBytes(machine('discrete', 32, 8))).toBe(1.5 * GIB);
   });
 
   it('is fast only when the target fits', () => {
@@ -222,35 +243,59 @@ describe('estimateFit', () => {
     expect(fit({ runtime: { kind: 'llama-server', kv: { k: 'q8_0', v: 'f16' } } }).kv).toEqual({ k: 'q8_0', v: 'f16' });
   });
 
-  it('adds the KQ matrix to the compute buffer when flash attention is off', () => {
-    const off = { kind: 'llama-server', flashAttn: 'off' } as const;
+  it('swaps the F16 mask for the KQ matrix and F32 mask when flash attention is off', () => {
     const kq = flashAttnOffBytes(8192, 512, 32);
     expect(kq).toBe(8192 * 512 * 4 * 33);
-    const r = estimateFit({
-      model: { arch: { ...ARCH_64K, headCount: 32 }, weightsBytes: GIB },
-      hardware: mac(64),
-      mode: 'chat',
-      runtime: off,
-      context: 8192,
-    });
-    expect(r.requested?.memory.computeBytes).toBe(GIB + kq);
-    const unknownHeads = fit({ hardware: mac(64), runtime: off, context: 8192 }).requested!;
-    expect(unknownHeads.memory.computeBytes).toBe(GIB + flashAttnOffBytes(8192, 512, FIT_CONSTANTS.faOffAssumedHeads));
+    const compute = (a: ModelArch, flashAttn: 'on' | 'off') =>
+      estimateFit({
+        model: { arch: a, weightsBytes: GIB },
+        hardware: machine('cpu', 64),
+        mode: 'chat',
+        runtime: { kind: 'llama-server', flashAttn },
+        context: 8192,
+      }).requested!.memory.computeBytes;
+    const mask = attentionMaskBytes(ARCH_64K, 8192, 512);
+    expect(mask).toBe(8192 * 512 * 2);
+    const heads = { ...ARCH_64K, headCount: 32 };
+    expect(compute(heads, 'off') - compute(heads, 'on')).toBe(kq - mask);
+    const assumed = flashAttnOffBytes(8192, 512, FIT_CONSTANTS.faOffAssumedHeads);
+    expect(compute(ARCH_64K, 'off') - compute(ARCH_64K, 'on')).toBe(assumed - mask);
+  });
+
+  it('adds the host mask copy and one layer of F16 KV scratch on a GPU', () => {
+    const compute = (hardware: HardwareProfile) =>
+      fit({ hardware, weightsGiB: 1, context: 32768 }).requested!.memory.computeBytes;
+    const cpu = compute(machine('cpu', 64));
+    const scratch = 32768 * 4 * (256 + 256) * 2;
+    expect(cpu).toBe(512 * activationBytesPerToken({ arch: ARCH_64K, weightsBytes: GIB }) + 32768 * 512 * 2);
+    expect(compute(machine('discrete', 64, 24)) - cpu).toBe(scratch);
+    expect(compute(mac(64)) - cpu).toBe(scratch + 32768 * 512 * 2);
   });
 
   it('keeps an f16 cache on Ollama when flash attention is off, whatever the daemon KV type', () => {
     expect(fit({ runtime: { kind: 'ollama', kv: Q8, flashAttn: 'off' } }).kv).toEqual(F16);
   });
 
-  it('keeps Ollama at its daemon KV type and its context-scaled ubatch', () => {
+  it('keeps Ollama at its daemon KV type', () => {
     const r = fit({ hardware: mac(15), runtime: OLLAMA });
-    expect(r).toMatchObject({ verdict: 'tight', reason: 'reduced-context', context: 32768, kv: F16, ubatch: 1024 });
-    expect(r.memory.computeBytes).toBe(2 * GIB);
+    expect(r).toMatchObject({ verdict: 'tight', reason: 'reduced-context', context: 32768, kv: F16 });
     expect(fit({ hardware: mac(15), runtime: { kind: 'ollama', kv: Q8 } }).kv).toEqual(Q8);
   });
 
+  it("plans Ollama's batch from context on a CPU and steps it down on a GPU as Ollama does", () => {
+    const ubatch = (hardware: HardwareProfile, runtime: FitInput['runtime'] = OLLAMA) =>
+      fit({ hardware, runtime, context: 65536 }).requested!.ubatch;
+    expect(ubatch(machine('cpu', 64))).toBe(2048);
+    expect(ubatch(machine('cpu', 16))).toBe(2048);
+    // 10 GiB of weights plus Ollama's 4 GiB f16 KV prediction: 2048 needs it within 60% of free memory, 1024 75%.
+    expect([16, 20, 40].map(budget => ubatch(mac(budget)))).toEqual([512, 1024, 2048]);
+    expect(ubatch(machine('discrete', 64, 48))).toBe(2048);
+    expect(ubatch(machine('discrete', 64, 48), { kind: 'ollama', flashAttn: 'off' })).toBe(512);
+    expect(ubatch(machine('discrete', 64, 8), { kind: 'ollama', flashAttn: 'off' })).toBe(256);
+  });
+
   it('reduces context down to the mode floor as tight', () => {
-    expect(fit({ hardware: mac(14.1) })).toMatchObject({
+    expect(fit({ hardware: mac(13.5) })).toMatchObject({
       verdict: 'tight',
       reason: 'reduced-context',
       context: 32768,
@@ -259,7 +304,7 @@ describe('estimateFit', () => {
   });
 
   it('goes below the floor only as slow', () => {
-    expect(fit({ hardware: mac(13) })).toMatchObject({ verdict: 'slow', reason: 'below-floor', context: 16384 });
+    expect(fit({ hardware: mac(12.3) })).toMatchObject({ verdict: 'slow', reason: 'below-floor', context: 16384 });
   });
 
   it('reports too-large at the smallest preset', () => {
@@ -328,15 +373,16 @@ describe('estimateFit', () => {
     const r = estimateFit({ model, hardware: machine('discrete', 1024, 24), mode: 'chat', runtime: LS });
     expect(r).toMatchObject({ reason: 'expert-offload', context: 65536, kv: Q8, nCpuMoe: 761 });
     expect(plans).toBeLessThan(64);
-    const gpuOnly = r.memory.totalBytes - r.memory.offloadedBytes;
+    const gpuOnly = r.memory.totalBytes - r.memory.offloadedBytes + r.memory.marginBytes;
     expect(gpuOnly).toBeLessThanOrEqual(24 * GIB);
     expect(gpuOnly + 0.5 * GIB).toBeGreaterThan(24 * GIB);
   });
 
   it('falls back to a slow dense layer split when the expert split runs out of RAM, or on Ollama', () => {
     const moe = { arch: MOE_64K, weightsBytes: 22 * GIB, expertBytesPerLayer: GIB / 2 };
-    const small = estimateFit({ model: moe, hardware: machine('discrete', 24, 8), mode: 'chat', runtime: LS });
-    expect(small).toMatchObject({ verdict: 'slow', reason: 'layer-offload', context: 16384 });
+    // At 32768 with q8_0 a dense split moves 16.84 GiB, which this RAM pool holds; whole expert layers need 17.
+    const small = estimateFit({ model: moe, hardware: machine('discrete', 24.2, 8), mode: 'chat', runtime: LS });
+    expect(small).toMatchObject({ verdict: 'slow', reason: 'layer-offload', context: 32768, kv: Q8 });
     const ollama = estimateFit({ model: moe, hardware: machine('discrete', 32, 8), mode: 'chat', runtime: OLLAMA });
     expect(ollama).toMatchObject({ verdict: 'slow', reason: 'layer-offload', nCpuMoe: 0 });
   });
@@ -344,7 +390,7 @@ describe('estimateFit', () => {
   it('splits a dense model across GPU and RAM at the target', () => {
     const r = fit({ hardware: machine('discrete', 32, 8) });
     expect(r).toMatchObject({ verdict: 'slow', reason: 'layer-offload', context: 65536, kv: F16 });
-    expect(r.memory.offloadedBytes).toBe(8 * GIB);
+    expect(r.memory.offloadedBytes).toBe(r.memory.totalBytes + r.memory.marginBytes - 8 * GIB);
   });
 
   it('plans CPU-only machines, and discrete ones with unknown VRAM, against 0.75 of RAM', () => {
@@ -365,10 +411,34 @@ describe('estimateFit', () => {
     );
   });
 
-  it('scales the compute buffer with ubatch', () => {
-    expect(fit({ runtime: { ...LS, ubatch: 2048 } }).memory.computeBytes).toBe(4 * GIB);
-    expect([4096, 8192, 32768, 65536, 262144].map(ollamaUbatch)).toEqual([512, 1024, 1024, 2048, 2048]);
-    expect(FIT_CONSTANTS.computeBytesPerUbatch512).toBe(GIB);
+  it('scales activations and masks with ubatch', () => {
+    const at = (ubatch: number) =>
+      fit({ hardware: machine('cpu', 64), runtime: { ...LS, ubatch }, context: 8192 }).requested!.memory.computeBytes;
+    const perToken = activationBytesPerToken({ arch: ARCH_64K, weightsBytes: 10 * GIB });
+    expect(perToken).toBe(4 * (3 * 18432 + 5 * 2048 + 32));
+    expect(at(2048)).toBe(2048 * perToken + 8192 * 2048 * 2);
+    expect(at(2048) - at(512)).toBe(1536 * (perToken + 8192 * 2));
+  });
+
+  it('bounds activations for hybrid recurrent models by embedding widths', () => {
+    const hybrid = arch({
+      ...ARCH_64K,
+      activeFeedForwardLength: 1024,
+      recurrent: { layers: 8, stateBytesPerSeq: MIB },
+    });
+    expect(activationBytesPerToken({ arch: hybrid, weightsBytes: GIB })).toBe(4 * 20 * 2048);
+  });
+
+  it('bounds activations from the weights per layer when the widths are unknown', () => {
+    const { embeddingLength: _e, activeFeedForwardLength: _f, ...shape } = ARCH_64K;
+    const dense = arch(shape);
+    expect(activationBytesPerToken({ arch: dense, weightsBytes: 16e6 * 16 })).toBe(44 * 4000 + 128);
+    const moe = arch({ ...shape, moe: { experts: 64, used: 4, moeLayers: 16 } });
+    const moeBytes = 4 * (2 * 64 + 32);
+    // Active weights: a quarter at least when the expert bytes are unknown, else the idle experts subtracted.
+    expect(activationBytesPerToken({ arch: moe, weightsBytes: 64e6 * 16 })).toBe(44 * 4000 + moeBytes);
+    const known = { arch: moe, weightsBytes: 64e6 * 16, expertBytesPerLayer: 51.2e6 };
+    expect(activationBytesPerToken(known)).toBe(44 * 4000 + moeBytes);
   });
 
   it('multiplies recurrent state by slots and by one snapshot per drafted token', () => {
@@ -388,13 +458,13 @@ describe('estimateFit', () => {
 
   describe('with an explicit context', () => {
     it('reports the requested context separately and keeps the verdict relative to the target', () => {
-      const r = fit({ hardware: mac(13), context: 8192 });
+      const r = fit({ hardware: mac(12.3), context: 8192 });
       expect(r).toMatchObject({ verdict: 'slow', context: 16384 });
       expect(r.requested).toMatchObject({ context: 8192, fits: true, placement: 'gpu' });
     });
 
     it('marks a requested context that does not fit', () => {
-      expect(fit({ hardware: mac(13), context: 65536 }).requested).toMatchObject({ context: 65536, fits: false });
+      expect(fit({ hardware: mac(12.3), context: 65536 }).requested).toMatchObject({ context: 65536, fits: false });
     });
 
     it.each([0, -1, 1.5, Number.NaN, 262145])('rejects %s', context => {
@@ -407,7 +477,7 @@ describe('contextOptions', () => {
   it('lists the target and every preset below it, smallest first, with fits flags', () => {
     const options = contextOptions({
       model: { arch: ARCH_64K, weightsBytes: 10 * GIB },
-      hardware: mac(13),
+      hardware: mac(12.3),
       mode: 'chat',
       runtime: LS,
     });

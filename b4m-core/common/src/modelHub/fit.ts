@@ -46,14 +46,17 @@ export const EMBEDDINGS_CONTEXT = 8192;
 // ggml block sizes: q8_0 stores 32 values in 34 bytes, q4_0 in 18.
 export const KV_BYTES_PER_ELEMENT: Record<KvCacheType, number> = { f16: 2, q8_0: 1.0625, q4_0: 0.5625 };
 
+const MIB = 1024 ** 2;
 const GIB = 1024 ** 3;
 
 export const FIT_CONSTANTS = {
-  // Linear scaling with ubatch is an assumption; llama-fit-params reserves logits for a full ubatch, which is
-  // most of this on large-vocab models.
-  computeBytesPerUbatch512: GIB,
-  // llama-server's --fit-target default.
-  marginBytes: GIB,
+  // Free memory kept beyond the planned total. GPU: llama-server's --fit-target default, which it leaves on every
+  // device (Metal included) before moving layers to RAM, plus an unmeasured CUDA context allowance on discrete.
+  // CPU: runner memory outside its buffers, at most 38 MiB measured on Ollama 0.40.11.
+  marginBytes: { cpu: 256 * MIB, unified: GIB, discrete: 1.5 * GIB },
+  // Recurrent layers peak above the FFN; this many embedding widths per token bounds the measured Mamba2 and gated
+  // delta net loads, allocator fragmentation included.
+  recurrentActivationWidths: 20,
   // llama.cpp pads every KV cache to a multiple of 256 cells.
   kvCellPadding: 256,
   unifiedLargeMinBytes: 36 * GIB,
@@ -117,9 +120,10 @@ export interface FitMemory {
   kvBytes: number;
   recurrentBytes: number;
   computeBytes: number;
-  marginBytes: number;
-  /** Everything above, wherever it is placed. */
+  /** Everything above, wherever it is placed: what the runtime allocates. */
   totalBytes: number;
+  /** Headroom kept free on top of `totalBytes`; a placement fits when both together stay within the budget. */
+  marginBytes: number;
   budgetBytes: number;
   ramPoolBytes: number;
 }
@@ -148,10 +152,40 @@ const Q4: KvPair = { k: 'q4_0', v: 'q4_0' };
 
 const padCells = (n: number) => Math.ceil(n / FIT_CONSTANTS.kvCellPadding) * FIT_CONSTANTS.kvCellPadding;
 
-// Observed on Ollama 0.40.11 (CPU backend): it passes -ub 512 below 8k context, 1024 below 64k, 2048 above.
-export function ollamaUbatch(context: number): number {
-  if (context < 8192) return 512;
-  return context < 65536 ? 1024 : 2048;
+/** Ollama 0.40.11's -b/-ub for a generation load, from its context across all slots (server/sched.go). */
+export function ollamaUbatch(context: number, slots = 1): number {
+  const total = context * slots;
+  if (total > 32768) return 2048;
+  return total > 4096 ? 1024 : 512;
+}
+
+/**
+ * On a GPU Ollama steps the batch down while its own weights + f16 KV prediction leaves too little of the free
+ * memory, and CUDA without flash attention keeps 512 (256 at 8 GiB or less). Mirrors server/sched.go.
+ */
+function ollamaGpuUbatch(
+  model: FitModel,
+  hw: HardwareProfile,
+  budget: number,
+  context: number,
+  slots: number,
+  faOff: boolean
+): number {
+  const total = context * slots;
+  if (faOff && hw.memoryKind === 'discrete') return total > 4096 && budget <= 8 * GIB ? 256 : 512;
+  const { arch } = model;
+  const kvHeads = arch.recurrent ? 1 : Math.min(arch.full.kvHeads, arch.swa?.kvHeads ?? Infinity);
+  const headDim = arch.embeddingLength && arch.headCount ? arch.embeddingLength / arch.headCount : arch.full.keyLength;
+  const predicted = model.weightsBytes + 2 * arch.blockCount * kvHeads * headDim * total * 2;
+  const threshold = budget * 0.8;
+  const fits = (batch: number) => {
+    const extra = batch >= 2048 ? 2 * GIB : batch >= 1024 ? 768 * MIB : 0;
+    const headroom = batch >= 2048 ? 0.6 : batch >= 1024 ? 0.75 : 1;
+    return predicted <= threshold && predicted <= budget * headroom && extra <= threshold - predicted;
+  };
+  let batch = ollamaUbatch(context, slots);
+  while (batch > 512 && !fits(batch)) batch = batch > 1024 ? 1024 : 512;
+  return batch;
 }
 
 /**
@@ -182,6 +216,81 @@ export function kvCacheBytes(arch: ModelArch, context: number, kv: KvPair, slots
  */
 export function flashAttnOffBytes(context: number, ubatch: number, headCount: number): number {
   return padCells(context) * ubatch * 4 * (headCount + 1);
+}
+
+/**
+ * F32 graph activations per ubatch token: 3 FFN widths, 5 embedding widths, 2 per expert for the router and 32 for
+ * small inputs, measured on Ollama 0.40.11's CPU backend for dense and MoE transformers. Without the widths, a bound
+ * from the weights: 12 n_ff + 20 n_embd stays under 44 sqrt(bytes per layer) at 2.4 bits per weight or more and
+ * n_ff <= 8 n_embd (60 for recurrent layers, whose in/out projections give n_embd <= 0.75 sqrt(bytes per layer)).
+ */
+export function activationBytesPerToken(model: FitModel): number {
+  const { arch } = model;
+  const extra = (arch.moe ? 2 * arch.moe.experts : 0) + 32;
+  if (arch.embeddingLength && arch.activeFeedForwardLength) {
+    const transformer = 3 * arch.activeFeedForwardLength + 5 * arch.embeddingLength + extra;
+    const recurrent = arch.recurrent ? FIT_CONSTANTS.recurrentActivationWidths * arch.embeddingLength : 0;
+    return 4 * Math.max(transformer, recurrent);
+  }
+  let active = model.weightsBytes;
+  if (arch.moe) {
+    const idle = 1 - arch.moe.used / arch.moe.experts;
+    active = model.expertBytesPerLayer
+      ? active - arch.moe.moeLayers * model.expertBytesPerLayer * idle
+      : active * Math.max(1 - idle, 0.25);
+  }
+  return Math.ceil((arch.recurrent ? 60 : 44) * Math.sqrt(active / arch.blockCount)) + 4 * extra;
+}
+
+/** F16 KQ masks under flash attention: one per attention kind, cache cells x ubatch. */
+export function attentionMaskBytes(arch: ModelArch, context: number, ubatch: number): number {
+  const cells = padCells(context);
+  const full = arch.full.layers > 0 || arch.mla || arch.kvProbe ? cells : 0;
+  const swa = arch.swa ? Math.min(cells, padCells(arch.swa.window + ubatch)) : 0;
+  return (full + swa) * ubatch * 2;
+}
+
+/**
+ * Metal reserves an F16 copy of one layer's K and V inside every flash attention op; CUDA converts a quantized
+ * cache the same way in its pool. From llama.cpp source, not measured.
+ */
+function kvScratchBytes(arch: ModelArch, context: number, ubatch: number): number {
+  const cells = padCells(context);
+  if (arch.kvProbe) return Math.ceil((arch.kvProbe.bytesPerToken * cells) / arch.blockCount);
+  const { full, swa, mla } = arch;
+  const fullBytes = full.layers > 0 ? cells * full.kvHeads * (full.keyLength + full.valueLength) : 0;
+  const swaCells = swa ? Math.min(cells, padCells(swa.window + ubatch)) : 0;
+  const swaBytes = swa ? swaCells * swa.kvHeads * (swa.keyLength + swa.valueLength) : 0;
+  const mlaBytes = mla ? cells * (mla.kvLoraRank + mla.ropeDim) : 0;
+  return Math.max(fullBytes, swaBytes, mlaBytes) * 2;
+}
+
+/**
+ * The runtime's compute buffers at this ubatch. CPU figures are measured; a unified-memory GPU also counts the
+ * host-side copy of the masks and the KV scratch, a discrete one the scratch.
+ */
+export function computeBufferBytes(
+  model: FitModel,
+  context: number,
+  ubatch: number,
+  options: { memoryKind: HardwareProfile['memoryKind'] | 'cpu'; flashAttnOff?: boolean }
+): number {
+  const { arch } = model;
+  const masks = attentionMaskBytes(arch, context, ubatch);
+  const attention = options.flashAttnOff
+    ? flashAttnOffBytes(context, ubatch, arch.headCount ?? FIT_CONSTANTS.faOffAssumedHeads)
+    : masks;
+  let bytes = ubatch * activationBytesPerToken(model) + attention;
+  if (options.memoryKind === 'unified') bytes += masks + kvScratchBytes(arch, context, ubatch);
+  if (options.memoryKind === 'discrete') bytes += kvScratchBytes(arch, context, ubatch);
+  return bytes;
+}
+
+/** The headroom a plan keeps free on this machine; see FIT_CONSTANTS.marginBytes. */
+export function fitMarginBytes(hw: HardwareProfile): number {
+  const { cpuOnly } = memoryBudgets(hw);
+  if (cpuOnly) return FIT_CONSTANTS.marginBytes.cpu;
+  return hw.memoryKind === 'unified' ? FIT_CONSTANTS.marginBytes.unified : FIT_CONSTANTS.marginBytes.discrete;
 }
 
 export function contextTarget(arch: ModelArch, mode: FitMode, contextCap?: number): number {
@@ -238,9 +347,11 @@ class Planner {
   private readonly moeLayers: number;
   /** A preset's fixed --n-cpu-moe, clamped to the MoE layers; undefined when the search picks it. */
   private readonly fixedMoe: number | undefined;
+  private readonly margin: number;
 
   constructor(private readonly input: FitInput) {
     this.budgets = memoryBudgets(input.hardware);
+    this.margin = fitMarginBytes(input.hardware);
     this.kvs = kvCandidates(input.runtime, input.model.arch);
     this.slots = input.runtime.slots ?? 1;
     const { arch, expertBytesPerLayer } = input.model;
@@ -265,28 +376,30 @@ class Planner {
     return this.plan(context, this.preferredKv, 'gpu');
   }
 
+  private ubatch(context: number): number {
+    const { model, runtime, hardware } = this.input;
+    if (runtime.ubatch) return runtime.ubatch;
+    if (runtime.kind !== 'ollama') return 512;
+    if (this.budgets.cpuOnly) return ollamaUbatch(context, this.slots);
+    const faOff = runtime.flashAttn === 'off';
+    return ollamaGpuUbatch(model, hardware, this.budgets.gpu, context, this.slots, faOff);
+  }
+
   plan(context: number, kv: KvPair, placement: FitPlacement, nCpuMoe = 0): FitPlan {
-    const { model, runtime } = this.input;
-    const ubatch = runtime.ubatch ?? (runtime.kind === 'ollama' ? ollamaUbatch(context) : 512);
+    const { model, runtime, hardware } = this.input;
+    const ubatch = this.ubatch(context);
     const kvBytes = kvCacheBytes(model.arch, context, kv, this.slots, ubatch);
     const recurrentBytes = (model.arch.recurrent?.stateBytesPerSeq ?? 0) * this.slots * (1 + (runtime.draftMax ?? 0));
-    const heads = model.arch.headCount ?? FIT_CONSTANTS.faOffAssumedHeads;
-    const computeBytes =
-      Math.ceil((FIT_CONSTANTS.computeBytesPerUbatch512 * ubatch) / 512) +
-      (runtime.flashAttn === 'off' ? flashAttnOffBytes(context, ubatch, heads) : 0);
+    const computeBytes = computeBufferBytes(model, context, ubatch, {
+      memoryKind: this.budgets.cpuOnly ? 'cpu' : hardware.memoryKind,
+      flashAttnOff: runtime.flashAttn === 'off',
+    });
     const mmprojBytes = model.mmprojBytes ?? 0;
     const draftBytes = model.draftBytes ?? 0;
-    const totalBytes =
-      model.weightsBytes +
-      mmprojBytes +
-      draftBytes +
-      kvBytes +
-      recurrentBytes +
-      computeBytes +
-      FIT_CONSTANTS.marginBytes;
+    const totalBytes = model.weightsBytes + mmprojBytes + draftBytes + kvBytes + recurrentBytes + computeBytes;
     let offloadedBytes = 0;
     if (placement === 'expert-offload') offloadedBytes = nCpuMoe * (model.expertBytesPerLayer ?? 0);
-    if (placement === 'layer-offload') offloadedBytes = Math.max(0, totalBytes - this.budgets.gpu);
+    if (placement === 'layer-offload') offloadedBytes = Math.max(0, totalBytes + this.margin - this.budgets.gpu);
     return {
       context,
       kv,
@@ -301,8 +414,8 @@ class Planner {
         kvBytes,
         recurrentBytes,
         computeBytes,
-        marginBytes: FIT_CONSTANTS.marginBytes,
         totalBytes,
+        marginBytes: this.margin,
         budgetBytes: this.budgets.gpu,
         ramPoolBytes: this.budgets.ramPool,
       },
@@ -316,13 +429,13 @@ class Planner {
     const placement = this.budgets.cpuOnly ? 'cpu' : 'gpu';
     for (const kv of this.kvs) {
       const p = this.plan(context, kv, placement);
-      if (p.memory.totalBytes <= this.budgets.gpu) return p;
+      if (p.memory.totalBytes + this.margin <= this.budgets.gpu) return p;
     }
     return null;
   }
 
   private fitsGpu(p: FitPlan): boolean {
-    return p.memory.totalBytes - p.memory.offloadedBytes <= this.budgets.gpu;
+    return p.memory.totalBytes - p.memory.offloadedBytes + this.margin <= this.budgets.gpu;
   }
 
   /** Binary search: GPU bytes only fall as more expert layers move to RAM. */
@@ -349,7 +462,7 @@ class Planner {
       // On unified memory the offloaded experts stay in the same pool.
       const fits =
         this.input.hardware.memoryKind === 'unified'
-          ? p.memory.totalBytes <= this.budgets.gpu
+          ? p.memory.totalBytes + this.margin <= this.budgets.gpu
           : this.fitsGpu(p) && p.memory.offloadedBytes <= this.budgets.ramPool;
       if (fits) best = p;
     }

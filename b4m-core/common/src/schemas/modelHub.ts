@@ -117,6 +117,10 @@ export const ModelArchSchema = z.object({
   blockCount: z.number().int().positive().max(MAX_LAYERS),
   // Query heads of the attention layers, the largest if they vary; only prices flash attention off.
   headCount: z.number().int().positive().max(4096).optional(),
+  // Compute buffer widths: n_embd, and the widest FFN one token passes through (n_ff, or used experts x expert
+  // width plus any shared expert). Without them the estimator bounds compute from the weights.
+  embeddingLength: z.number().int().positive().max(65536).optional(),
+  activeFeedForwardLength: z.number().int().positive().max(1048576).optional(),
   full: AttnGroupSchema,
   // llama.cpp reports n_swa 0 for some families (gemma2, gpt-oss, cohere2) and still keeps ubatch cells per layer.
   swa: AttnGroupSchema.extend({ window: z.number().int().nonnegative().max(MAX_CONTEXT) }).optional(),
