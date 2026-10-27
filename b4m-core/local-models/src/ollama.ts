@@ -18,6 +18,7 @@ import {
 } from './http';
 import type {
   FetchLike,
+  InspectOptions,
   InstalledModel,
   LoadedModel,
   LocalRuntime,
@@ -79,6 +80,10 @@ const showSchema = z.object({
   modified_at: z.string().optional(),
   model_info: z.record(z.string(), z.unknown()).nullable().optional(),
   tensors: z.array(z.unknown()).nullable().optional(),
+  parameters: z.string().nullable().optional().catch(null),
+  template: z.string().nullable().optional().catch(null),
+  license: z.string().nullable().optional().catch(null),
+  modelfile: z.string().nullable().optional().catch(null),
   ...remoteFields,
 });
 
@@ -146,6 +151,19 @@ const PER_LAYER_KEYS = [
   'attention.recurrent_layers',
   'attention.sliding_window_pattern',
 ];
+
+/** The first positive `*.context_length`, as Desktop's chat caps num_ctx (apps/desktop OllamaLocal). */
+function contextLengthOf(modelInfo: Record<string, unknown> | null | undefined): number | null {
+  for (const [key, value] of Object.entries(modelInfo ?? {}))
+    if (key.endsWith('.context_length') && positiveInt(value)) return value as number;
+  return null;
+}
+
+/** The weights blob a generated Modelfile's first `FROM .../sha256-<hex>` line names; a projector follows it. */
+function modelBlobOf(modelfile: string | null | undefined): string | null {
+  // Ollama prints the blob path unquoted, and it can contain spaces (a Windows profile name, a macOS volume).
+  return /^FROM\s+(?:.*[\\/])?sha256-([0-9a-f]{64})\s*$/m.exec(modelfile ?? '')?.[1] ?? null;
+}
 
 /**
  * Ollama 0.34.0 and older blank arrays longer than 5 entries in a non-verbose /api/show, to [] or null.
@@ -231,8 +249,11 @@ export class OllamaRuntime implements LocalRuntime {
     });
   }
 
-  async inspect(model: string): Promise<ModelInspection> {
-    const [shown, tags] = await Promise.all([this.show(model), this.tags().catch(() => [])]);
+  async inspect(model: string, options: InspectOptions = {}): Promise<ModelInspection> {
+    const [shown, tags] = await Promise.all([
+      this.show(model),
+      options.tags === false ? Promise.resolve([]) : this.tags().catch(() => []),
+    ]);
     if (isRemote(shown)) throw new LocalRuntimeError(`${model} is cloud-backed, not a local model`, this.id);
     const show = needsVerboseShow(shown.model_info) ? await this.show(model, true).catch(() => shown) : shown;
     const tagged = withDefaultTag(model);
@@ -246,6 +267,13 @@ export class OllamaRuntime implements LocalRuntime {
       }),
       arch: archFromModelInfo(show.model_info, show.tensors),
       tensorStats: tensorStatsFromTensors(show.tensors),
+      parameters: show.parameters ?? null,
+      contextLength: contextLengthOf(show.model_info),
+      contents: {
+        template: show.template ?? null,
+        license: show.license ?? null,
+        modelBlob: modelBlobOf(show.modelfile),
+      },
     };
   }
 
