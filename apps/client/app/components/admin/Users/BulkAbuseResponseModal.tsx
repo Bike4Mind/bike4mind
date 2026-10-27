@@ -285,7 +285,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({
           </Alert>
         )}
 
-        {stage.kind === 'previewed' && <PreviewSummary preview={stage.preview} />}
+        {stage.kind === 'previewed' && <PreviewSummary preview={stage.preview} actions={stage.request.actions} />}
         {stage.kind === 'executed' && <ExecuteSummary result={stage.result} />}
 
         {hasWork && (
@@ -343,7 +343,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({
   );
 };
 
-const PreviewSummary: React.FC<{ preview: BulkAbusePreview }> = ({ preview }) => (
+const PreviewSummary: React.FC<{ preview: BulkAbusePreview; actions: BulkAbuseActions }> = ({ preview, actions }) => (
   <Stack spacing={1} data-testid="bulk-abuse-preview-summary">
     <Typography level="title-md" data-testid="bulk-abuse-included-count">
       {preview.includedCount} users will be actioned
@@ -351,7 +351,9 @@ const PreviewSummary: React.FC<{ preview: BulkAbusePreview }> = ({ preview }) =>
     </Typography>
     <Typography level="body-sm">
       {preview.alreadyBannedCount} already banned, {preview.activeApiKeyCount} active API keys,{' '}
-      {preview.clawbackCredits} credits to claw back.
+      {actions.clawbackFreeCredits
+        ? `${preview.clawbackCredits} credits to claw back.`
+        : 'No credits will be clawed back.'}
     </Typography>
     {preview.blocksDomain && (
       <Alert color="warning" data-testid="bulk-abuse-blocks-domain">

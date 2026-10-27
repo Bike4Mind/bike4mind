@@ -1,9 +1,39 @@
 import { useRef } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { isAdminShortcutEvent, useAdminSaveShortcut } from './adminKeyboard';
+import { focusAdminSearch, isAdminShortcutEvent, useAdminSaveShortcut } from './adminKeyboard';
 
 describe('admin keyboard scoping', () => {
+  it('focuses only an enabled visible search within the current surface', () => {
+    render(
+      <>
+        <input data-admin-search data-testid="outside-search" />
+        <div data-testid="search-scope">
+          <input data-admin-search disabled />
+          <div hidden>
+            <input data-admin-search />
+          </div>
+          <div aria-hidden="true">
+            <input data-admin-search />
+          </div>
+          <div style={{ display: 'none' }}>
+            <input data-admin-search />
+          </div>
+          <div style={{ visibility: 'hidden' }}>
+            <input data-admin-search />
+          </div>
+          <input data-admin-search data-testid="visible-search" />
+        </div>
+      </>
+    );
+    const scope = screen.getByTestId('search-scope');
+    expect(focusAdminSearch(scope)).toBe(true);
+    expect(screen.getByTestId('visible-search')).toHaveFocus();
+    screen.getByTestId('visible-search').setAttribute('disabled', '');
+    expect(focusAdminSearch(scope)).toBe(false);
+    expect(screen.getByTestId('outside-search')).not.toHaveFocus();
+  });
+
   it.each(['input', 'textarea', 'select', 'div[contenteditable]', 'div[role=textbox]', 'div[role=combobox]'])(
     'ignores typing in %s, including descendants',
     selector => {

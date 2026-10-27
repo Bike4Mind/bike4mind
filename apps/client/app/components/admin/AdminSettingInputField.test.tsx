@@ -44,6 +44,35 @@ const input = () => screen.getByTestId('admin-setting-anthropicDemoKey-input') a
 // "multiple elements" error the moment another button lands in this card.
 const saveButton = () => screen.getByTestId('admin-setting-anthropicDemoKey-save-btn');
 
+describe('AdminSettingInputField save shortcut boundaries', () => {
+  beforeEach(() => {
+    mutate.mockReset();
+    updateError = undefined;
+    updatePending = false;
+  });
+
+  it('does not save the platform value from a scoped override control', () => {
+    render(
+      <TestWrapper>
+        <AdminSettingInputField setting={settingsMap.EnforceLakeAdmission} index={0} defaultValue={false} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('admin-setting-EnforceLakeAdmission-switch'));
+    fireEvent.change(screen.getByTestId('scoped-override-EnforceLakeAdmission-scope-id-input'), {
+      target: { value: 'organization-1' },
+    });
+    const platformSave = screen.getByTestId('admin-setting-EnforceLakeAdmission-save-btn');
+    expect(platformSave).toBeEnabled();
+    fireEvent.keyDown(screen.getByTestId('scoped-override-EnforceLakeAdmission-set-btn'), {
+      key: 's',
+      ctrlKey: true,
+    });
+    expect(mutate).not.toHaveBeenCalled();
+    fireEvent.keyDown(platformSave, { key: 's', ctrlKey: true });
+    expect(mutate).toHaveBeenCalledExactlyOnceWith({ key: 'EnforceLakeAdmission', value: true }, expect.anything());
+  });
+});
+
 describe('AdminSettingInputField sensitive setting', () => {
   beforeEach(() => {
     mutate.mockReset();
