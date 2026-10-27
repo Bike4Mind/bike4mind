@@ -3,6 +3,7 @@ import {
   CreditHolderType,
   IAdminSettingsRepository,
   ICacheRepository,
+  ICreditLotRepository,
   ICreditTransactionRepository,
   IUserRepository,
   NO_CARD_UNLOCK_REASONS,
@@ -205,6 +206,7 @@ export interface GrantNoCardUnlockAdapters {
   db: {
     adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>;
     creditTransactions: ICreditTransactionRepository;
+    creditLots: ICreditLotRepository;
     users: IUserRepository;
   };
   validators: Record<NoCardUnlockReason, NoCardUnlockValidator>;
@@ -260,7 +262,7 @@ export async function grantNoCardUnlock(
           reason: `no_card_unlock:${reason}`,
         },
         {
-          db: { creditTransactions: db.creditTransactions },
+          db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots },
           creditHolderMethods: db.users,
           duplicateTransactionId: 'throw',
         }

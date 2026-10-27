@@ -2,6 +2,7 @@ import { McpServerName, type NoCardUnlockReason } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   cacheRepository,
+  creditLotRepository,
   creditTransactionRepository,
   githubUnlockClaimRepository,
   mcpServerRepository,
@@ -87,6 +88,7 @@ export async function runNoCardUnlock(reason: NoCardUnlockReason, userId: string
     db: {
       adminSettings: adminSettingsRepository,
       creditTransactions: creditTransactionRepository,
+      creditLots: creditLotRepository,
       users: userRepository,
     },
     validators,

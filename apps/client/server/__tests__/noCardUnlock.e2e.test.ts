@@ -10,11 +10,13 @@ import { noCardUnlockTransactionId } from '@bike4mind/common';
 import {
   AdminSettings,
   Cache,
+  CreditLot,
   CreditTransaction,
   GithubUnlockClaim,
   User,
   adminSettingsRepository,
   cacheRepository,
+  creditLotRepository,
   creditTransactionRepository,
   githubUnlockClaimRepository,
   userRepository,
@@ -42,7 +44,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await mongoose.connection.dropDatabase();
   await Promise.all(
-    [User, CreditTransaction, AdminSettings, Cache, GithubUnlockClaim].map(model => model.createIndexes())
+    [User, CreditTransaction, CreditLot, AdminSettings, Cache, GithubUnlockClaim].map(model => model.createIndexes())
   );
 });
 
@@ -97,6 +99,7 @@ const build = async (githubId = 1, ageDays = 400) => {
     db: {
       adminSettings: adminSettingsRepository,
       creditTransactions: creditTransactionRepository,
+      creditLots: creditLotRepository,
       users: userRepository,
     },
     withTransaction: <T>(fn: () => Promise<T>) => withTransaction(fn),
@@ -129,6 +132,7 @@ describe('grantNoCardUnlock on a real replica set', () => {
     const adapters = await build();
 
     expect(await grantNoCardUnlock(id, 'github_verified', adapters)).toMatchObject({ granted: true, credits: GITHUB });
+    expect(await CreditLot.countDocuments({ ownerId: id, source: 'promo' })).toBe(1);
     expect(await grantNoCardUnlock(id, 'github_verified', adapters)).toEqual({
       granted: false,
       refusal: 'already_granted',
@@ -290,6 +294,22 @@ describe('grantNoCardUnlock on a real replica set', () => {
       granted: false,
       refusal: 'github_already_claimed',
     });
+  });
+
+  it('releases the claim and rethrows when the credit write fails', async () => {
+    await seedSettings();
+    const id = await seedUser();
+    const adapters = await build();
+    const failing = {
+      ...adapters,
+      withTransaction: async () => {
+        throw new Error('boom');
+      },
+    };
+    await expect(grantNoCardUnlock(id, 'github_verified', failing)).rejects.toThrow('boom');
+    expect(await GithubUnlockClaim.countDocuments({ githubId: 1 })).toBe(0);
+    expect(await balance(id)).toBe(0);
+    expect(await grantNoCardUnlock(id, 'github_verified', adapters)).toMatchObject({ granted: true });
   });
 
   it('enforces the per-domain daily cap across accounts', async () => {
