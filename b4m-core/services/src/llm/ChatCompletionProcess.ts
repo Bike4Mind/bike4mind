@@ -5423,7 +5423,7 @@ export class ChatCompletionProcess {
             // fallback then answers. Same enforceCredits gate as the settlement row. Not billed:
             // the user got no output, and the backend throws before reporting usage, so its
             // tokens and COGS are unknown and left at 0.
-            if (isSafetyRefusalError(lastError)) {
+            if (lastError && isSafetyRefusalError(lastError)) {
               if (adminSettingsEnforceCredits) {
                 this.db.usageEvents
                   ?.record({
