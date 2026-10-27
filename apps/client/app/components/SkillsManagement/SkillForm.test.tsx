@@ -102,8 +102,44 @@ describe('SkillForm SKILL.md import', () => {
     expect(value('skill-argument-hint-input')).toBe('[pr]');
     expect(value('skill-body-input')).toBe('Review $ARGUMENTS.');
     expect((screen.getByTestId('skill-disable-model-invocation') as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByTestId('skill-form-import-dropped')).toHaveTextContent('allowed-tools, hooks');
+    expect(screen.getByTestId('skill-form-import-dropped')).toHaveTextContent('hooks');
+    expect(screen.getByTestId('skill-form-import-dropped')).not.toHaveTextContent('allowed-tools');
+    expect(screen.getByTestId('skill-form-claude-code-tools')).toHaveTextContent('Claude Code tools: Bash.');
     expect(screen.queryByTestId('skill-form-import-from-b4m')).not.toBeInTheDocument();
+  });
+
+  it('submits allowed-tools as claudeCodeAllowedTools, leaving the B4M allowedTools alone', () => {
+    const onSubmit = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm submitLabel="Create" onSubmit={onSubmit} onCancel={vi.fn()} enableSkillMdImport />
+      </CssVarsProvider>
+    );
+    paste('---\nname: commit\ndescription: Commit\nallowed-tools: Bash(git:*), Read\n---\nCommit it.');
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ claudeCodeAllowedTools: ['Bash(git:*)', 'Read'] }));
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('allowedTools');
+  });
+
+  it.each([
+    ['a .zip upload', () => upload('PK\u0003\u0004\u0000\u0000\u0008\u0000skills/x/SKILL.md'), 'binary or .zip'],
+    ['pasted text with no frontmatter', () => paste('Just some instructions.'), 'No frontmatter found'],
+  ])('rejects %s and leaves the fields untouched', async (_label, importIt, message) => {
+    renderForm();
+    paste('---\nname: kept\ndescription: Kept\n---\nKept body');
+    importIt();
+    await waitFor(() => expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent(message));
+    expect(value('skill-name-input')).toBe('kept');
+    expect(value('skill-body-input')).toBe('Kept body');
+  });
+
+  it('warns about referenced supporting files even when no keys were dropped', () => {
+    renderForm();
+    paste('---\nname: lint\ndescription: Lint\n---\nRun `scripts/foo.sh` and read [the notes](reference.md).');
+    expect(screen.queryByTestId('skill-form-import-dropped')).not.toBeInTheDocument();
+    expect(screen.getByTestId('skill-form-import-supporting-files')).toHaveTextContent(
+      'files that were not imported: reference.md, scripts/foo.sh'
+    );
   });
 
   it.each([
