@@ -61,7 +61,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/businessMetricAlerts.ts:businessMetricAlerts',
-    'f5c13b99d4998a23c9b8f61166fce194ad31e87e612a453901c925c5a7e2f17a',
+    'c8f7a1da54367bdfacb6ccdf02843f4bca8200dfd493942452a3a402dab910c4',
     'Hosted business analytics and Stripe receipts; not applicable to a portable deployment.'
   ),
   gap('event:infra/eventBus.ts:email-send', '3e4a74324ec602608487f3d9f877681aebdf77d584cf02c00a89e2e759aa7d96'),
