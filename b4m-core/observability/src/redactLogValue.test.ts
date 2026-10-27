@@ -74,6 +74,14 @@ describe('redactLogValue', () => {
     expect(json({ error })).not.toContain('sk-canary');
   });
 
+  it('walks a directly assigned (enumerable) cause once, so a wide cause is not truncated', () => {
+    const err = new Error('outer');
+    err.cause = { items: Array.from({ length: 1200 }, () => 'a') };
+    const redacted = redactLogValue({ err }) as { err: { cause: { items: unknown[] } } };
+    expect(redacted.err.cause.items).toHaveLength(1200);
+    expect(redacted.err.cause.items.at(-1)).toBe('a');
+  });
+
   it('omits cause when the error has none', () => {
     expect(redactLogValue({ err: new Error('plain') })).not.toHaveProperty('err.cause');
   });
