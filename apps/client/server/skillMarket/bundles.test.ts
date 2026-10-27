@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   listingExists: vi.fn(),
   adminOrgs: vi.fn(),
   memberOrgs: vi.fn(),
+  orgFindById: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -27,7 +28,11 @@ vi.mock('@bike4mind/database', () => ({
   inboxRepository: {},
 }));
 vi.mock('@bike4mind/database/infra', () => ({
-  organizationRepository: { findIdsAdministeredBy: h.adminOrgs, findMembershipOrgIds: h.memberOrgs },
+  organizationRepository: {
+    findIdsAdministeredBy: h.adminOrgs,
+    findMembershipOrgIds: h.memberOrgs,
+    findById: h.orgFindById,
+  },
 }));
 
 import { createBundle, deleteBundle, listBundles, updateBundle } from './bundles';
@@ -54,6 +59,7 @@ beforeEach(() => {
   h.memberOrgs.mockImplementation(async (userId: string) => (userId === 'member' ? [ORG] : []));
   h.listingCount.mockImplementation(async ({ _id }: { _id: { $in: string[] } }) => _id.$in.length);
   h.listingExists.mockResolvedValue(null);
+  h.orgFindById.mockImplementation(async (id: string) => (id === ORG ? { id } : null));
   h.bundleCreate.mockImplementation(async (fields: object) => doc({ id: BUNDLE, ...fields }));
   h.bundleFindById.mockImplementation(async (id: string) => (id === BUNDLE ? doc(stored) : null));
   h.bundleUpdate.mockImplementation(async (_id: string, { $set }: { $set: object }) => doc({ ...stored, ...$set }));
@@ -76,6 +82,11 @@ describe('createBundle', () => {
 
   it('lets a super-admin manage any org, and refuses a non-admin member', async () => {
     await expect(createBundle({ id: 'root', isAdmin: true }, body)).resolves.toBeTruthy();
+    for (const organizationId of [OTHER_ORG, 'nope']) {
+      await expect(createBundle({ id: 'root', isAdmin: true }, { ...body, organizationId })).rejects.toMatchObject({
+        statusCode: 404,
+      });
+    }
     await expect(createBundle(member, body)).rejects.toMatchObject({ statusCode: 403 });
     await expect(createBundle(admin, { ...body, organizationId: OTHER_ORG })).rejects.toMatchObject({
       statusCode: 403,
@@ -110,6 +121,22 @@ describe('updateBundle / deleteBundle', () => {
     const bundle = await updateBundle(admin, BUNDLE, { name: 'Renamed', listingIds: [L2], pluginName: 'hijack' });
     expect(h.bundleUpdate).toHaveBeenCalledWith(BUNDLE, { $set: { name: 'Renamed', listingIds: [L2] } }, { new: true });
     expect(bundle.pluginName).toBe('team-starter-pack');
+  });
+
+  it("400s a member that isn't an approved Organization listing of the bundle's org", async () => {
+    h.listingCount.mockResolvedValueOnce(1);
+    await expect(updateBundle(admin, BUNDLE, { listingIds: [L1, L2] })).rejects.toMatchObject({ statusCode: 400 });
+    await expect(updateBundle(admin, BUNDLE, { listingIds: ['nope'] })).rejects.toMatchObject({ statusCode: 400 });
+    expect(h.listingCount).toHaveBeenCalledWith(expect.objectContaining({ organizationId: ORG }));
+    expect(h.bundleUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses an admin of another org', async () => {
+    h.adminOrgs.mockResolvedValue([OTHER_ORG]);
+    await expect(updateBundle(admin, BUNDLE, { name: 'x' })).rejects.toMatchObject({ statusCode: 403 });
+    await expect(deleteBundle(admin, BUNDLE)).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.bundleUpdate).not.toHaveBeenCalled();
+    expect(h.bundleDelete).not.toHaveBeenCalled();
   });
 
   it('refuses non-admins and 404s an unknown bundle', async () => {

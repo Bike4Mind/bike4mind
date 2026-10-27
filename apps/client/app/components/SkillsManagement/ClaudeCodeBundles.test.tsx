@@ -53,6 +53,12 @@ describe('ClaudeCodeBundles', () => {
     expect(screen.queryByTestId('skill-claude-code-bundle-delete')).not.toBeInTheDocument();
   });
 
+  it('counts only members still in the marketplace', () => {
+    h.view = { ...h.view, listings: [listings[0]] };
+    renderBundles();
+    expect(screen.getByTestId('skill-claude-code-bundle')).toHaveTextContent('1 skill');
+  });
+
   it('lets an admin edit members and delete a bundle', async () => {
     h.view = { ...h.view, canEdit: true };
     renderBundles();

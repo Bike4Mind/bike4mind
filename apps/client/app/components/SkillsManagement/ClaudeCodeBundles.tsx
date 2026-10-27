@@ -43,6 +43,9 @@ const ClaudeCodeBundles: FC<{ orgId: string; marketplace: string }> = ({ orgId, 
       </Typography>
     );
   if (!data.bundles.length && !data.canEdit) return null;
+  // A member that lost approval or left the org drops out of the zip, so leave it out of the count.
+  const memberCount = (bundle: ISkillBundle) =>
+    bundle.listingIds.filter(id => data.listings.some(l => l.id === id)).length;
 
   return (
     <Stack spacing={1} data-testid="skill-claude-code-bundles">
@@ -70,7 +73,7 @@ const ClaudeCodeBundles: FC<{ orgId: string; marketplace: string }> = ({ orgId, 
               <Typography level="title-sm" sx={{ flex: 1 }}>
                 {bundle.name}
                 <Typography level="body-xs" textColor="text.tertiary" sx={{ ml: 1 }}>
-                  {bundle.listingIds.length} {bundle.listingIds.length === 1 ? 'skill' : 'skills'}
+                  {memberCount(bundle)} {memberCount(bundle) === 1 ? 'skill' : 'skills'}
                 </Typography>
               </Typography>
               {data.canEdit ? (

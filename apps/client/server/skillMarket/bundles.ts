@@ -96,6 +96,13 @@ export async function listBundles(
 export async function createBundle(actor: BundleActor, body: unknown): Promise<ISkillBundle> {
   const { organizationId, ...rest } = parse(fieldsSchema.extend({ organizationId: z.string().min(1) }), body);
   await assertCanManage(actor, organizationId);
+  // A super-admin passes assertCanManage for any id, so confirm the org exists.
+  if (
+    actor.isAdmin &&
+    !(mongoose.isObjectIdOrHexString(organizationId) && (await organizationRepository.findById(organizationId)))
+  ) {
+    throw new NotFoundError('Organization not found');
+  }
   const pluginName = claudeNameSlug(rest.name);
   if (!pluginName) throw new BadRequestError('A bundle name needs letters or digits');
   // Bundles and listings share the feed's plugin names; assignClaudePluginName guards the other direction.
