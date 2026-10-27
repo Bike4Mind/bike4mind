@@ -1,12 +1,13 @@
 import { createHash } from 'crypto';
 import archiver from 'archiver';
-import { SkillListing, SkillListingVersion, assignClaudePluginName } from '@bike4mind/database';
+import { SkillBundle, SkillListing, SkillListingVersion, assignClaudePluginName } from '@bike4mind/database';
 import {
   claudeMarketplaceNameFor,
   claudeSkillNameFor,
   requireEnv,
   toAbsoluteUrl,
   type ClaudeMarketplace,
+  type ISkillBundle,
   type ISkillFile,
   type ISkillListing,
   type ISkillListingVersion,
@@ -15,8 +16,9 @@ import { toSkillMd } from '@bike4mind/common/utils/skillMd';
 import { marketVisibilityFilter } from './market';
 
 /**
- * Claude Code plugin feed for an org's Skill Market listings, served by
- * pages/api/v1/skills/market/claude-marketplace.json.ts and [id]/claude-plugin.zip.ts.
+ * Claude Code plugin feed for an org's Skill Market listings and bundles, served by
+ * pages/api/v1/skills/market/claude-marketplace.json.ts, [id]/claude-plugin.zip.ts and
+ * bundles/[id]/claude-plugin.zip.ts.
  *
  * The feed pins each zip by sha256, so a zip must be byte-identical on every build: no compression
  * (zlib output can change between Node versions), a fixed entry date, and a SKILL.md that depends
@@ -34,31 +36,44 @@ const pluginZipUrl = (listingId: string, version: number): string =>
     `/api/v1/skills/market/${encodeURIComponent(listingId)}/claude-plugin.zip?version=${version}`
   );
 
-/** Same stamp as the listing page's SKILL.md export (ListingDetail), minus the export date. */
-function skillMdFor(listing: ISkillListing, version: ISkillListingVersion): string {
-  return toSkillMd(version.snapshot, {
-    sourceUrl: toAbsoluteUrl(appUrl(), `/skills/market/${encodeURIComponent(String(listing.id))}`),
-    version: version.version,
-    thirdParty: true,
-  });
+const bundleZipUrl = (bundleId: string): string =>
+  toAbsoluteUrl(appUrl(), `/api/v1/skills/market/bundles/${encodeURIComponent(bundleId)}/claude-plugin.zip`);
+
+/**
+ * Same stamp as the listing page's SKILL.md export (ListingDetail), minus the export date. `name`
+ * overrides the frontmatter name, which Claude Code prefers over the directory name.
+ */
+function skillMdFor(listing: ISkillListing, version: ISkillListingVersion, name = version.snapshot.name): string {
+  return toSkillMd(
+    { ...version.snapshot, name },
+    {
+      sourceUrl: toAbsoluteUrl(appUrl(), `/skills/market/${encodeURIComponent(String(listing.id))}`),
+      version: version.version,
+      thirdParty: true,
+    }
+  );
 }
 
-// Files arrive sorted by path (checkSkillFiles / toSnapshot), which keeps the entry order stable.
-function buildPluginZip(skillName: string, skillMd: string, files: ISkillFile[] = []): Promise<Buffer> {
+type ZipSkill = { dir: string; skillMd: string; files?: ISkillFile[] };
+
+// Entries go in the given skill order, files sorted by path (checkSkillFiles / toSnapshot), so the bytes are stable.
+function buildPluginZip(skills: ZipSkill[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const archive = archiver('zip', { store: true });
     const chunks: Buffer[] = [];
     archive.on('data', (chunk: Buffer) => chunks.push(chunk));
     archive.on('end', () => resolve(Buffer.concat(chunks)));
     archive.on('error', reject);
-    archive.append(skillMd, { name: `skills/${skillName}/SKILL.md`, date: ZIP_ENTRY_DATE });
-    for (const file of files) {
-      // Executable in case the extractor keeps unix modes; SKILL.md should still call scripts via an interpreter.
-      archive.append(file.content, {
-        name: `skills/${skillName}/${file.path}`,
-        date: ZIP_ENTRY_DATE,
-        ...(file.path.startsWith('scripts/') ? { mode: 0o755 } : {}),
-      });
+    for (const { dir, skillMd, files = [] } of skills) {
+      archive.append(skillMd, { name: `skills/${dir}/SKILL.md`, date: ZIP_ENTRY_DATE });
+      for (const file of files) {
+        // Executable in case the extractor keeps unix modes; SKILL.md should still call scripts via an interpreter.
+        archive.append(file.content, {
+          name: `skills/${dir}/${file.path}`,
+          date: ZIP_ENTRY_DATE,
+          ...(file.path.startsWith('scripts/') ? { mode: 0o755 } : {}),
+        });
+      }
     }
     void archive.finalize();
   });
@@ -74,7 +89,41 @@ export async function pluginZipFor(listing: ISkillListing, versionNumber?: numbe
 
 // The one zip builder for both routes, so the feed's sha256 always matches what the zip route serves.
 const zipOf = (listing: ISkillListing, version: ISkillListingVersion) =>
-  buildPluginZip(skillDirName(version), skillMdFor(listing, version), version.snapshot.files);
+  buildPluginZip([
+    { dir: skillDirName(version), skillMd: skillMdFor(listing, version), files: version.snapshot.files },
+  ]);
+
+/**
+ * A bundle's plugin zip: each member's current approved version, or null when no member is servable.
+ * A member that is delisted, deleted, moved out of the org or unapproved simply drops out. Each skill
+ * sits under its listing's `claudePluginName`, unique in the org, so two same-named skills can't collide.
+ * Shared by the feed and the bundle zip route so the feed's sha256 matches what the route serves.
+ */
+export async function bundleZipFor(bundle: ISkillBundle): Promise<Buffer | null> {
+  const docs = await SkillListing.find({
+    ...marketVisibilityFilter([bundle.organizationId]),
+    _id: { $in: bundle.listingIds },
+    visibility: 'organization',
+    organizationId: bundle.organizationId,
+  });
+  const listings = docs.map(d => d.toJSON() as unknown as ISkillListing);
+  const versionDocs = await SkillListingVersion.find({
+    _id: { $in: listings.flatMap(l => (l.currentApprovedVersionId ? [l.currentApprovedVersionId] : [])) },
+  });
+  const versions = new Map(
+    versionDocs.map(d => {
+      const version = d.toJSON() as unknown as ISkillListingVersion;
+      return [String(version.id), version];
+    })
+  );
+  const skills = listings.flatMap(listing => {
+    const version = servable(versions.get(String(listing.currentApprovedVersionId)));
+    const dir = listing.claudePluginName;
+    return version && dir ? [{ dir, skillMd: skillMdFor(listing, version, dir), files: version.snapshot.files }] : [];
+  });
+  if (!skills.length) return null;
+  return buildPluginZip(skills.sort((a, b) => (a.dir < b.dir ? -1 : 1)));
+}
 
 /** A pinned version must belong to this listing and remain approved; unpinned requests use the current version. */
 async function approvedVersionOf(listing: ISkillListing, versionNumber?: number): Promise<ISkillListingVersion | null> {
@@ -129,7 +178,7 @@ export async function buildClaudeMarketplace(
     }
   }
 
-  // ponytail: builds every zip per fetch; cache the sha on the version doc if an org has hundreds of listings.
+  // ponytail: builds every listing and bundle zip per fetch; cache the sha on the version/bundle doc if an org has hundreds of listings.
   const plugins = await Promise.all(
     listings.map(async listing => {
       const version = servable(versions.get(String(listing.currentApprovedVersionId)));
@@ -148,10 +197,30 @@ export async function buildClaudeMarketplace(
     })
   );
 
+  // After the naming pass above, so a member approved before names were stored is not left out.
+  const bundles = (await SkillBundle.find({ organizationId: org.id }).sort({ _id: 1 })).map(
+    d => d.toJSON() as unknown as ISkillBundle
+  );
+  const bundlePlugins = await Promise.all(
+    bundles.map(async bundle => {
+      const zip = await bundleZipFor(bundle);
+      if (!zip) return null;
+      const sha = sha256(zip);
+      return {
+        name: bundle.pluginName,
+        description: bundle.description,
+        // Claude Code compares versions for equality only, so the content hash is a valid version that
+        // changes exactly when the bytes do (a member approval, a membership edit).
+        version: sha.slice(0, 12),
+        source: { source: 'archive' as const, url: bundleZipUrl(String(bundle.id)), sha256: sha },
+      };
+    })
+  );
+
   return {
     name: claudeMarketplaceNameFor(org.id),
     owner: { name: org.name || 'Bike4Mind' },
     forceRemoveDeletedPlugins: true,
-    plugins: plugins.filter(p => p !== null),
+    plugins: [...plugins, ...bundlePlugins].filter(p => p !== null),
   };
 }

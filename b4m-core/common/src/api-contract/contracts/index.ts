@@ -76,7 +76,11 @@ import {
   updateAgentContract,
   deleteAgentContract,
 } from './agents.contract';
-import { getClaudeMarketplaceContract, getClaudePluginZipContract } from './skillMarket.contract';
+import {
+  getClaudeBundleZipContract,
+  getClaudeMarketplaceContract,
+  getClaudePluginZipContract,
+} from './skillMarket.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -157,4 +161,5 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deleteAgentContract,
   getClaudeMarketplaceContract,
   getClaudePluginZipContract,
+  getClaudeBundleZipContract,
 ];

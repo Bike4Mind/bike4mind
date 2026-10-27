@@ -78,5 +78,9 @@ export {
   updateAgentContract,
   deleteAgentContract,
 } from './contracts/agents.contract';
-export { getClaudeMarketplaceContract, getClaudePluginZipContract } from './contracts/skillMarket.contract';
+export {
+  getClaudeBundleZipContract,
+  getClaudeMarketplaceContract,
+  getClaudePluginZipContract,
+} from './contracts/skillMarket.contract';
 export { CONTRACTS } from './contracts';

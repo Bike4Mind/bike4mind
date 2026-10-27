@@ -94,3 +94,32 @@ export const getClaudePluginZipContract = defineEndpoint({
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
 });
+
+export const getClaudeBundleZipContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
+  operationId: 'getClaudeBundleZip',
+  summary: 'Download a Skill Market bundle as a Claude Code plugin',
+  description:
+    "A zip holding the current approved version of each of an organization bundle's member listings, " +
+    'each as `skills/<plugin name>/SKILL.md` plus its supporting files. Members that are no longer ' +
+    `approved or visible are left out. ${AUTH_NOTE}`,
+  tags: ['Skills'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.SKILLS_READ],
+  pathParams: ClaudePluginZipParamSchema,
+  validationErrorStatus: 400,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The plugin archive.', contentType: 'application/zip' },
+    403: { description: 'The API key lacks `skills:read`.', schema: ScopeForbiddenErrorSchema },
+    404: {
+      description:
+        'No bundle with that id is visible to the caller, or none of its members is approved. A bundle in an ' +
+        'org you are not in and a malformed id are both reported as 404.',
+      schema: ApiErrorSchema,
+    },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
+});

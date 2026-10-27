@@ -133,6 +133,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions/{version}',
   },
+  getClaudeBundleZip: {
+    method: 'GET',
+    path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
+  },
   getClaudeMarketplace: {
     method: 'GET',
     path: '/api/v1/skills/market/claude-marketplace.json',

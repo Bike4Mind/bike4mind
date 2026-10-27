@@ -1,11 +1,12 @@
 import { FC, useState } from 'react';
-import { Button, Stack, Typography } from '@mui/joy';
+import { Alert, Button, Stack, Typography } from '@mui/joy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyIcon from '@mui/icons-material/Key';
 import { toast } from 'sonner';
 import { ApiKeyScope, claudeMarketplaceNameFor, toAbsoluteUrl } from '@bike4mind/common';
 import { usePublicConfig } from '@client/app/hooks/data/settings';
 import { useCreateUserApiKey } from '@client/app/hooks/data/userApiKeys';
+import ClaudeCodeBundles from './ClaudeCodeBundles';
 
 export interface ClaudeCodeMarketplaceTabProps {
   org: { id: string; name: string };
@@ -103,11 +104,20 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
         </Stack>
         <Typography level="body-xs" textColor="text.tertiary">
           The key can read Skill Market marketplace feeds and plugin archives for every organization you belong to. It
-          is stored in plain text in your settings file.
+          is stored in plain text in your settings file, and Claude Code also copies it into{' '}
+          <code>~/.claude/plugins/known_marketplaces.json</code>.
           {key
             ? ' It is shown only once; revoke it any time under API Keys.'
             : ' Each Create key mints a new key, so revoke any old marketplace keys under API Keys.'}
         </Typography>
+        <Alert color="warning" variant="soft" data-testid="skill-claude-code-key-warning">
+          <Typography level="body-xs">
+            Only add this to your own <code>~/.claude/settings.json</code>, never to a project&apos;s{' '}
+            <code>.claude/settings.json</code>: that file is usually committed, which would share your key. To keep the
+            key out of files, Claude Code v2.1.238+ can run a <code>headersHelper</code> command that prints the{' '}
+            <code>Authorization</code> header instead of storing <code>headers</code>.
+          </Typography>
+        </Alert>
         <Typography level="body-xs" textColor="text.tertiary">
           Claude Code does not auto-update third-party marketplaces by default; <code>autoUpdate: true</code> above
           turns it on. Without it, run <code>/plugin marketplace update {marketplace}</code> to pick up changes.
@@ -125,6 +135,8 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
           {pluginName ? 'Or run' : 'Run'} <code>/plugin</code> to browse every skill in the marketplace.
         </Typography>
       </Stack>
+
+      <ClaudeCodeBundles orgId={org.id} marketplace={marketplace} />
     </Stack>
   );
 };
