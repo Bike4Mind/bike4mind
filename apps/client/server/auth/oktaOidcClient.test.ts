@@ -708,7 +708,6 @@ describe('oktaOidcClient', () => {
       });
 
       it('logs a recoverable primary discovery failure at warn, not error', async () => {
-        vi.mocked(Logger.error).mockClear();
         vi.mocked(openidClient.discovery)
           .mockRejectedValueOnce(misconfigError(404))
           .mockResolvedValueOnce(mockConfig as any);
@@ -723,7 +722,6 @@ describe('oktaOidcClient', () => {
       });
 
       it('logs a primary discovery failure at error when no fallback is attempted', async () => {
-        vi.mocked(Logger.error).mockClear();
         vi.mocked(openidClient.discovery).mockRejectedValueOnce(misconfigError(503));
 
         await expect(getOidcConfiguration(customOnlyConfig)).rejects.toBeDefined();
