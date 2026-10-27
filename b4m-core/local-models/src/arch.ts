@@ -90,6 +90,17 @@ const DEFAULT_RECURRENT_INTERVAL: Record<string, number> = {
   clef: 4,
   'minimax-01': 8,
 };
+// Recurrent layer types the fit estimator has measured (Granite 4 H, Qwen3.5); qwen3next and clef build the same
+// delta net. Other recurrent architectures get no kind and are planned at a flat high compute rate.
+const RECURRENT_KIND: Record<string, NonNullable<ModelArch['recurrent']>['kind']> = {
+  granitehybrid: 'mamba2',
+  qwen35: 'gated-delta-net',
+  qwen35moe: 'gated-delta-net',
+  qwen3next: 'gated-delta-net',
+  clef: 'gated-delta-net',
+};
+// Their expert tensors are feed_forward_length wide; other MoE architectures need expert_feed_forward_length.
+const FFN_WIDE_EXPERTS = new Set(['llama', 'granitemoe', 'granitehybrid']);
 
 /** Reads `ModelArch` from GGUF metadata as llama.cpp b11889 sizes its caches; null if a key is missing or blanked.
  * Verbose `/api/show` tensors, when given, decide which layers hold experts. */
@@ -126,6 +137,7 @@ export function archFromModelInfo(modelInfo: ModelInfo | null | undefined, tenso
       contextMax,
       blockCount,
       ...headFields,
+      ...computeWidths(arch, field, blockCount, trunk, embedding, undefined),
       full: { layers: 0, kvHeads: 1, keyLength: 1, valueLength: 1 },
       recurrent: { layers: trunk, stateBytesPerSeq: trunk * stateBytesPerLayer },
       mtpLayers,
@@ -191,7 +203,12 @@ export function archFromModelInfo(modelInfo: ModelInfo | null | undefined, tenso
   if (isMla && kvLoraRank && ropeDim && mlaLayers > 0) result.mla = { layers: mlaLayers, kvLoraRank, ropeDim };
   const recurrentCount = recurrent.filter(Boolean).length;
   if (recurrentCount > 0 && stateBytesPerLayer) {
-    result.recurrent = { layers: recurrentCount, stateBytesPerSeq: recurrentCount * stateBytesPerLayer };
+    const kind = RECURRENT_KIND[arch];
+    result.recurrent = {
+      layers: recurrentCount,
+      stateBytesPerSeq: recurrentCount * stateBytesPerLayer,
+      ...(kind ? { kind } : {}),
+    };
   }
   const fromTensors = expertLayers(tensors);
   const knownMoeLayers = fromTensors
@@ -199,7 +216,35 @@ export function archFromModelInfo(modelInfo: ModelInfo | null | undefined, tenso
     : ffByLayer?.slice(0, trunk).filter(ff => ff > 0).length;
   const moe = moeLayout(field, trunk, knownMoeLayers);
   if (moe) result.moe = moe;
-  return result;
+  return { ...result, ...computeWidths(arch, field, blockCount, trunk, embedding, moe) };
+}
+
+/** n_embd and the widest FFN a token passes through; each omitted when its keys are missing. */
+function computeWidths(
+  arch: string,
+  field: (key: string) => unknown,
+  blockCount: number,
+  trunk: number,
+  embedding: number | undefined,
+  moe: ModelArch['moe']
+): Pick<ModelArch, 'embeddingLength' | 'activeFeedForwardLength'> {
+  if (!embedding) return {};
+  const widest = (key: string) => {
+    const values = perLayer(field(key), blockCount);
+    const max = values ? Math.max(0, ...values) : 0;
+    return max > 0 ? max : undefined;
+  };
+  const denseFf = widest('feed_forward_length');
+  if (!moe) return { embeddingLength: embedding, ...(denseFf && { activeFeedForwardLength: denseFf }) };
+  const expertFf = widest('expert_feed_forward_length') ?? (FFN_WIDE_EXPERTS.has(arch) ? denseFf : undefined);
+  if (!expertFf) return { embeddingLength: embedding };
+  const shared =
+    positiveInt(field('expert_shared_feed_forward_length')) ??
+    expertFf * (nonNegativeInt(field('expert_shared_count')) ?? 0);
+  let active = moe.used * expertFf + shared;
+  // Leading dense layers run the full FFN.
+  if (moe.moeLayers < trunk && denseFf && !FFN_WIDE_EXPERTS.has(arch)) active = Math.max(active, denseFf);
+  return { embeddingLength: embedding, activeFeedForwardLength: active };
 }
 
 /** Recurrent layers keep no KV cache. Same precedence as llama.cpp: explicit flags, then the interval rule. */

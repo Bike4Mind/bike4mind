@@ -182,6 +182,7 @@ describe('OllamaRuntime.inspect', () => {
       contextMax: 262144,
       blockCount: 30,
       headCount: 16,
+      embeddingLength: 2816,
       full: { layers: 30, kvHeads: 8, keyLength: 256, valueLength: 256 },
       mtpLayers: 0,
     });

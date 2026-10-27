@@ -38,12 +38,16 @@ export interface ModelArch {
   contextMax: number;
   blockCount: number;
   headCount?: number;
+  /** n_embd, for compute sizing. */
+  embeddingLength?: number;
+  /** The widest FFN one token passes through: n_ff, or used experts x expert width plus shared experts. */
+  activeFeedForwardLength?: number;
   /** Full (global) attention layers. */
   full: AttentionGroup;
   swa?: AttentionGroup & { window: number };
   mla?: { layers: number; kvLoraRank: number; ropeDim: number };
-  /** F32 state per sequence; does not grow with context. */
-  recurrent?: { layers: number; stateBytesPerSeq: number };
+  /** F32 state per sequence; does not grow with context. `kind` is set for layer types with measured compute. */
+  recurrent?: { layers: number; stateBytesPerSeq: number; kind?: 'mamba2' | 'gated-delta-net' };
   /** Multi-token-prediction layers, each with its own KV at full-attention cost. */
   mtpLayers: number;
   moe?: { experts: number; used: number; moeLayers: number };
