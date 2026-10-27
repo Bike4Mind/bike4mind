@@ -1,28 +1,9 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
-import { allKnownEntitlementKeys, grantTagForEntitlement } from '@client/lib/entitlements/registry';
-import { DEVELOPER_USER_TAGS, IUserDocument, hasDeveloperUserTag } from '@bike4mind/common';
+import { IUserDocument, hasDeveloperUserTag } from '@bike4mind/common';
+import { isManagedTag, tagsForRole } from './Profile/userProfileModel';
 import { Button, FormHelperText, FormLabel, Input, Radio, RadioGroup, Stack, Tooltip, IconButton } from '@mui/joy';
 import React, { useState } from 'react';
-
-/**
- * Comp tags that grant a product entitlement (e.g. `opti`) - these have their
- * own dedicated grant/revoke control in the Product Access section, so the
- * freeform "Custom Tags" list below hides them to avoid two controls editing
- * the same tag. Derived from the live registry, so a RETIRED tag (e.g. the
- * former `opti-compute`, #1237) is intentionally no longer hidden here.
- */
-const PRODUCT_GRANT_TAGS = allKnownEntitlementKeys()
-  .map(grantTagForEntitlement)
-  .filter((tag): tag is string => Boolean(tag));
-
-const isManagedTag = (tag: string): boolean => {
-  const normalized = tag.toLowerCase();
-  return (
-    (DEVELOPER_USER_TAGS as readonly string[]).some(t => t.toLowerCase() === normalized) ||
-    PRODUCT_GRANT_TAGS.some(t => t.toLowerCase() === normalized)
-  );
-};
 
 interface UserPermissionsProps {
   user: AdminUserListItem;
@@ -53,9 +34,6 @@ const ROLE_OPTIONS: { value: Role; label: string }[] = [
   { value: 'developer', label: 'Developer' },
   { value: 'super-admin', label: 'Super Admin' },
 ];
-
-const withoutDeveloperTags = (tags: readonly string[]): string[] =>
-  tags.filter(tag => !(DEVELOPER_USER_TAGS as readonly string[]).includes(tag));
 
 const userLevelColor = (user: AdminUserListItem) => {
   switch (user.level) {
@@ -111,12 +89,8 @@ const UserPermissions: React.FC<UserPermissionsProps> = React.memo(
     const lockSelfDemote = !!isSelf && user.isAdmin;
 
     const handleRoleChange = (newRole: Role) => {
-      const strippedTags = withoutDeveloperTags(currentTags);
-      const newIsAdmin = newRole === 'super-admin';
-      const newTags = newRole === 'developer' ? [...strippedTags, 'Developer'] : strippedTags;
-
-      onFieldChange('isAdmin', newIsAdmin);
-      onFieldChange('tags', newTags);
+      onFieldChange('isAdmin', newRole === 'super-admin');
+      onFieldChange('tags', tagsForRole(currentTags, newRole));
     };
 
     const handleCustomTagsInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -24,13 +24,15 @@ export function AdminSearchInput({
       placeholder={`${label} (/)`}
       size="sm"
       startDecorator={<SearchIcon sx={{ fontSize: 16, color: 'admin.inkMuted' }} />}
-      slotProps={{ input: {
+      slotProps={{
+        input: {
           'aria-label': label,
           'data-admin-search': true,
           'aria-keyshortcuts': '/',
           'data-testid': testId,
           maxLength: 500,
-        }, }}
+        },
+      }}
       sx={{ ...adminFocus, flex: '1 1 16rem', minWidth: '12rem', maxWidth: '26rem', minHeight: 34, fontSize: 13 }}
       onChange={event => onChange(event.target.value)}
     />
@@ -42,11 +44,13 @@ export function FilterBar({
   filters = [],
   onChange,
   searchLabel = 'Search records',
+  search = true,
 }: {
   state: AdminListState;
   filters?: readonly AdminFilter[];
   onChange: (patch: Partial<AdminListState>) => void;
   searchLabel?: string;
+  search?: boolean;
 }) {
   return (
     <Stack
@@ -57,7 +61,9 @@ export function FilterBar({
       gap={1}
       data-testid="admin-filter-bar"
     >
-      <AdminSearchInput value={state.query} label={searchLabel} onChange={query => onChange({ query, view: '' })} />
+      {search && (
+        <AdminSearchInput value={state.query} label={searchLabel} onChange={query => onChange({ query, view: '' })} />
+      )}
       {filters.map(filter => (
         <FilterChip
           key={filter.id}

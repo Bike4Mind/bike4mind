@@ -122,6 +122,10 @@ const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/auth/networkMeta', () => ({
   recordSignupNetwork: (...a: unknown[]) => mockRecordSignupNetwork(...a),
 }));
+const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/signupRiskScore', () => ({
+  refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
+}));
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
   emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
@@ -742,6 +746,10 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
     expect(mockRecordSignupNetwork).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'new-user', method: AuthStrategy.Okta })
     );
+    expect(mockRefreshSignupRiskScore).toHaveBeenCalledWith('new-user', expect.anything());
+    expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRefreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
   });
 
   it('never stamps an existing account that signs in through a client', async () => {
@@ -758,6 +766,7 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
     });
     expect(mockStampSourceTag).not.toHaveBeenCalled();
     expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
+    expect(mockRefreshSignupRiskScore).not.toHaveBeenCalled();
   });
 });
 

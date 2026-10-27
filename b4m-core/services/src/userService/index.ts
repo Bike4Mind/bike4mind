@@ -9,6 +9,7 @@ export * from './signupRisk';
 export * from './stagedSignupGrant';
 export * from './disposableEmail';
 export * from './signupRiskScore';
+export * from './refreshSignupRiskScore';
 export * from './sourceTag';
 export * from './recordPolicyAcceptance';
 export * from './adminDelete';

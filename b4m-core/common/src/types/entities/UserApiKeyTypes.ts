@@ -447,6 +447,8 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
   findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;
+  /** When the user's first key was created, deleted and revoked keys included; null when none. */
+  findFirstCreatedAtByUserId: (userId: string) => Promise<Date | null>;
   updateUsage: (id: string, usage: Partial<IUserApiKeyUsage>) => Promise<void>;
   /** Atomically adds settled credits to `usage.totalSpendCredits`. No-op for non-finite or <= 0 amounts. */
   incrementSpend: (id: string, credits: number) => Promise<void>;

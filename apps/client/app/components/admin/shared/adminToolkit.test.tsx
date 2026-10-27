@@ -6,6 +6,10 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import {
   AdminPageHeader,
   EntityHeader,
+  Fact,
+  Kbd,
+  RelativeTime,
+  formatUtc,
   StatStrip,
   StatTile,
   SectionCard,
@@ -63,6 +67,50 @@ describe('admin layout primitives', () => {
   it.each(['good', 'info', 'warn', 'bad', 'neutral'] as const)('gives %s status a text label', tone => {
     renderToolkit(<StatusChip tone={tone} label="Account status" />);
     expect(screen.getByTestId('admin-status-chip')).toHaveTextContent('Account status');
+    expect(screen.getByTestId('admin-status-chip')).toHaveAttribute('data-tone', tone);
+  });
+
+  it('lets a status chip take its own test id and show a dot', () => {
+    renderToolkit(<StatusChip tone="good" label="Active" dot data-testid="custom-chip" />);
+    expect(screen.getByTestId('custom-chip')).toHaveTextContent('Active');
+    expect(screen.queryByTestId('admin-status-chip')).not.toBeInTheDocument();
+  });
+
+  it('labels the stat strip and renders a custom aria-label', () => {
+    renderToolkit(
+      <StatStrip aria-label="Account at a glance">
+        <StatTile label="Credits" value="3" />
+      </StatStrip>
+    );
+    expect(screen.getByRole('region', { name: 'Account at a glance' })).toBeInTheDocument();
+  });
+
+  it('uses a custom test id on a section card and shows a dash for an empty fact', () => {
+    renderToolkit(
+      <SectionCard title="Identity" data-testid="identity-card">
+        <Fact label="Name" data-testid="fact-name">
+          Ada
+        </Fact>
+        <Fact label="Plan" data-testid="fact-plan" />
+      </SectionCard>
+    );
+    expect(screen.getByTestId('identity-card')).toHaveTextContent('Identity');
+    expect(screen.getByTestId('fact-name')).toHaveTextContent('Ada');
+    expect(screen.getByTestId('fact-plan')).toHaveTextContent('-');
+  });
+
+  it('hands a custom section body over without a definition list', () => {
+    renderToolkit(
+      <SectionCard title="Balance" body="custom">
+        <div data-testid="custom-body" />
+      </SectionCard>
+    );
+    expect(screen.getByTestId('custom-body').closest('dl')).toBeNull();
+  });
+
+  it('renders a keyboard hint as a kbd element', () => {
+    renderToolkit(<Kbd>C</Kbd>);
+    expect(screen.getByText('C').tagName).toBe('KBD');
   });
 
   it('shows an actionable empty state and a working error retry', () => {
@@ -88,6 +136,25 @@ describe('admin layout primitives', () => {
   });
 });
 
+describe('formatUtc and RelativeTime', () => {
+  it('formats an exact UTC time', () => {
+    expect(formatUtc(new Date('2026-03-14T09:12:00Z'))).toBe('14 Mar 2026, 09:12 UTC');
+  });
+
+  it('shows a prefixed relative time with a machine-readable datetime, and nothing for an invalid date', () => {
+    const at = new Date(Date.now() - 2 * 86_400_000);
+    renderToolkit(
+      <>
+        <RelativeTime prefix="Active" at={at} data-testid="rel-valid" />
+        <RelativeTime at="not-a-date" data-testid="rel-invalid" />
+      </>
+    );
+    expect(screen.getByTestId('rel-valid')).toHaveTextContent(/^Active 2 days ago$/);
+    expect(screen.getByTestId('rel-valid')).toHaveAttribute('datetime', at.toISOString());
+    expect(screen.queryByTestId('rel-invalid')).not.toBeInTheDocument();
+  });
+});
+
 describe('EntityHeader', () => {
   it('copies IDs and emails and exposes exact UTC on hover', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -106,9 +173,8 @@ describe('EntityHeader', () => {
     expect(writeText).toHaveBeenNthCalledWith(1, 'account-123');
     expect(screen.getByTestId('admin-entity-time')).toHaveTextContent('1 hour ago');
     fireEvent.mouseOver(screen.getByTestId('admin-entity-time'));
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(
-      screen.getByTestId('admin-entity-time').getAttribute('datetime') ?? 'missing'
-    );
+    const isoDatetime = screen.getByTestId('admin-entity-time').getAttribute('datetime') ?? '';
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(formatUtc(new Date(isoDatetime)));
   });
 
   it('reports clipboard failures and omits invalid dates', async () => {
@@ -136,6 +202,25 @@ function SelectionExample() {
     </BulkActionBar>
   );
 }
+it('renders several time lines, an avatar and status chips in an entity header', () => {
+  renderToolkit(
+    <EntityHeader
+      title="Ada"
+      id="u1"
+      avatar={<span data-testid="avatar" />}
+      status={<span data-testid="status" />}
+      times={[
+        { prefix: 'Joined', at: new Date(Date.now() - 86_400_000), 'data-testid': 'time-joined' },
+        { prefix: 'Active', at: new Date(Date.now() - 3_600_000), 'data-testid': 'time-active' },
+      ]}
+    />
+  );
+  expect(screen.getByTestId('avatar')).toBeInTheDocument();
+  expect(screen.getByTestId('status')).toBeInTheDocument();
+  expect(screen.getByTestId('time-joined')).toHaveTextContent('Joined yesterday');
+  expect(screen.getByTestId('time-active')).toHaveTextContent('Active 1 hour ago');
+});
+
 it('offers all matching selection, keeps actions and clears the floating bar', () => {
   renderToolkit(<SelectionExample />);
   expect(screen.getByTestId('admin-bulk-action-bar')).toHaveTextContent('2 selected');

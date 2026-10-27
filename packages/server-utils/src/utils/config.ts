@@ -146,3 +146,6 @@ const isE2EEnabled = () => {
 };
 
 export { Config, isProduction, isDevelopment, isE2EEnabled };
+
+// Overlay-declared secrets: read by name, never as a typed Resource.<x> field.
+export { readContributedSecret, registerContributedSecrets } from './contributedSecrets';

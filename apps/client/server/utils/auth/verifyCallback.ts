@@ -1,10 +1,12 @@
-import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
+import { AuthStrategy, IAuthProviders, type INetworkMeta } from '@bike4mind/common';
 import { User, authSessionRepository, realtimeConnectionRepository, type IUserObject } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { authSessionService } from '@bike4mind/services';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import omit from 'lodash/omit';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
+import { type NetworkRequest, readNetworkMeta } from '@server/auth/networkMeta';
+import { isSignupNetworkOverLimit } from '@server/auth/signupNetworkLimits';
 import {
   applyEmailVerifiedGrants,
   isEligibleForFreeCredits,
@@ -43,7 +45,8 @@ const authenticateUser = async (
   refreshToken: string,
   profile: any,
   done: any,
-  authProvider?: Partial<IAuthProviders>
+  authProvider?: Partial<IAuthProviders>,
+  signupNetwork?: INetworkMeta
 ) => {
   const selectedEmail = selectProviderEmail(profile)?.value;
   const email = typeof selectedEmail === 'string' ? selectedEmail : null;
@@ -221,6 +224,16 @@ const authenticateUser = async (
         done(null, undefined, { code: 'registration_closed' });
         return;
       }
+      // Only Google/GitHub pass a network (selfServeVerifyCallback), matching the invite gate's scope;
+      // a partner-domain rule is an admin's authorization and skips the caps, as on the OTC path.
+      if (
+        signupNetwork &&
+        !(await isPartnerDomainSignupAllowed(email, isProviderEmailVerified(profile))) &&
+        (await isSignupNetworkOverLimit(signupNetwork, Logger.globalInstance))
+      ) {
+        done(null, undefined, { code: 'signup_limited' });
+        return;
+      }
 
       const name = profile?.displayName ?? profile?.name ?? username ?? '';
       // Gate the provider-asserted email out of a brand-new account's login
@@ -252,7 +265,8 @@ const authenticateUser = async (
         const release = await releaseVerifiedPendingFreeCredits(
           { id: newUserId, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
           'OAuth signup (provider-verified email)',
-          Logger.globalInstance
+          Logger.globalInstance,
+          signupNetwork
         );
         creditsGranted += release.creditsGranted;
       }
@@ -313,3 +327,14 @@ export const verifyCallback = (strategy: AuthStrategy) => {
     }
   };
 };
+
+/**
+ * Google/GitHub verify, registered with `passReqToCallback: true` so a first login can be checked
+ * against its network. The declared arity (5) is what makes passport-oauth2 call it as
+ * (req, accessToken, refreshToken, profile, done); do not add or drop parameters.
+ */
+export const selfServeVerifyCallback =
+  (strategy: AuthStrategy) =>
+  // any: passport's untyped verify callback, as in verifyCallback above
+  (req: NetworkRequest, accessToken: string, refreshToken: string, profile: unknown, done: any) =>
+    authenticateUser(strategy, accessToken, refreshToken, profile, done, undefined, readNetworkMeta(req));
