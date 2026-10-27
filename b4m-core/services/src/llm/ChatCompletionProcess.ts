@@ -43,11 +43,13 @@ import {
   resolveHistoryFetchLimit,
   QuestErrorCode,
   getQuestErrorCode,
+  CONTENT_FILTER_FINISH_REASON,
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   MAX_TOOL_CALLS_CEILING,
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
+  type ModerationHitSource,
   visibleReplyText,
   tokenEstimateMultiplier,
   pairDataLakeTools,
@@ -2734,7 +2736,7 @@ export class ChatCompletionProcess {
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
             // must never mask the block, so its own failure is swallowed with a warning.
             if (moderationError instanceof FlaggedContentError) {
-              await this.recordModerationHit('openai', moderationError, questId, logger);
+              await this.recordModerationHit('openai', moderationError.categories, questId, logger);
             }
             throw moderationError;
           }
@@ -2751,7 +2753,7 @@ export class ChatCompletionProcess {
               await this.getBedrockGuardrailsService(guardrailId, guardrailVersion, logger).checkPrompt(message);
             } catch (moderationError) {
               if (moderationError instanceof FlaggedContentError) {
-                await this.recordModerationHit('bedrock', moderationError, questId, logger);
+                await this.recordModerationHit('bedrock', moderationError.categories, questId, logger);
               }
               throw moderationError;
             }
@@ -5421,29 +5423,36 @@ export class ChatCompletionProcess {
             // fallback then answers. Same enforceCredits gate as the settlement row. Not billed:
             // the user got no output, and the backend throws before reporting usage, so its
             // tokens and COGS are unknown and left at 0.
-            if (adminSettingsEnforceCredits && isSafetyRefusalError(lastError)) {
-              this.db.usageEvents
-                ?.record({
-                  requestId: quest.id,
-                  userId: this.user.id,
-                  ownerId: this.reservedCreditsOwnerId || this.user.id,
-                  ownerType: this.reservedCreditsOwnerType,
-                  sessionId: quest.sessionId,
-                  feature: 'chat',
-                  provider: currentModel.backend,
-                  model: currentModel.id,
-                  source: 'web',
-                  inputTokens: 0,
-                  outputTokens: 0,
-                  cachedInputTokens: 0,
-                  cacheWriteTokens: 0,
-                  costUsd: 0,
-                  creditsCharged: 0,
-                  status: 'refusal',
-                })
-                .catch((usageEventError: unknown) => {
-                  logger.warn('Failed to record refusal usage event', usageEventError);
-                });
+            if (isSafetyRefusalError(lastError)) {
+              if (adminSettingsEnforceCredits) {
+                this.db.usageEvents
+                  ?.record({
+                    requestId: quest.id,
+                    userId: this.user.id,
+                    ownerId: this.reservedCreditsOwnerId || this.user.id,
+                    ownerType: this.reservedCreditsOwnerType,
+                    sessionId: quest.sessionId,
+                    feature: 'chat',
+                    provider: currentModel.backend,
+                    model: currentModel.id,
+                    source: 'web',
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    cachedInputTokens: 0,
+                    cacheWriteTokens: 0,
+                    costUsd: 0,
+                    creditsCharged: 0,
+                    status: 'refusal',
+                  })
+                  .catch((usageEventError: unknown) => {
+                    logger.warn('Failed to record refusal usage event', usageEventError);
+                  });
+              }
+              // Record a moderation hit independent of billing enforcement: credits and
+              // moderation are separate concerns. Fire-and-forget so the throw/fallback
+              // path is not delayed. The credit rollback (if any) runs in the outer catch
+              // independently; both must happen regardless of the other.
+              void this.recordModerationHit('provider', [], quest.id, logger);
             }
 
             logger.warn(
@@ -6297,6 +6306,14 @@ export class ChatCompletionProcess {
         const providerStopReason = actualTokenUsage?.stopReason;
         const wasTruncated = providerStopReason === TRUNCATED_FINISH_REASON;
         const wasDegenerate = providerStopReason === DEGENERATE_FINISH_REASON;
+
+        // Record a moderation hit when the provider settled with a content-filter block.
+        // These never throw (HTTP 200 with a structured finish_reason), so the error-path
+        // hook does not catch them. No category labels are available at settlement time.
+        // Fire-and-forget: moderation recording must not delay the credit settlement path.
+        if (providerStopReason === CONTENT_FILTER_FINISH_REASON) {
+          void this.recordModerationHit('provider', [], quest.id, logger);
+        }
         const earlyStopStamp = buildEarlyStopStamp(providerStopReason);
 
         // P6: Credits reconciliation - settle the pre-reserved credits against actual usage.
@@ -7963,8 +7980,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   }
 
   private async recordModerationHit(
-    source: 'openai' | 'bedrock',
-    error: FlaggedContentError,
+    source: ModerationHitSource,
+    categories: string[],
     questId: string,
     logger: Logger
   ): Promise<void> {
@@ -7972,14 +7989,15 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       const decision = await applyModerationHit({
         users: this.db.users,
         userId: this.user.id,
-        hit: { at: new Date(), categories: error.categories, source, questId },
+        hit: { at: new Date(), categories, source, questId },
       });
       logger.warn(
-        `🚦 [Moderation] User ${this.user.id} flagged by ${source} (${error.categories.join(', ')}); ` +
-          `${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
+        `[Moderation] User ${this.user.id} flagged by ${source}` +
+          (categories.length ? ` (${categories.join(', ')})` : '') +
+          `; ${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
       );
     } catch (recordError) {
-      logger.error(`🚦 [Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
+      logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
   }
 

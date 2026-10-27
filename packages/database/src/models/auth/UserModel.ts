@@ -232,7 +232,7 @@ const ModerationHitSchema = new Schema(
   {
     at: { type: Date, required: true },
     categories: { type: [String], default: [] },
-    source: { type: String, enum: ['openai', 'bedrock'], required: true },
+    source: { type: String, enum: ['openai', 'bedrock', 'provider'], required: true },
     questId: { type: String, required: false },
   },
   { _id: false }
