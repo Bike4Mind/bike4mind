@@ -77,6 +77,12 @@ export const EVENT_ENUM_CATEGORIES: ReadonlyArray<readonly [Record<string, strin
   [UserApiKeyEvents, 'API Keys'],
 ];
 
+// Feeds the admin Event Category filter, so it offers exactly the categories categorizeEvent returns.
+export const EVENT_CATEGORIES: readonly string[] = [
+  ...[...new Set(EVENT_ENUM_CATEGORIES.map(([, category]) => category))].sort(),
+  OTHER_CATEGORY,
+];
+
 const CATEGORY_BY_EVENT_NAME: ReadonlyMap<string, string> = new Map(
   EVENT_ENUM_CATEGORIES.flatMap(([events, category]) =>
     Object.values(events).map(eventName => [eventName, category] as const)
