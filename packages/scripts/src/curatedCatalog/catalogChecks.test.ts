@@ -1,6 +1,15 @@
 import { signCurated } from '@bike4mind/local-models';
 import { describe, expect, it, vi } from 'vitest';
-import { KEYRING_PATH, planPublish, readMainKeyring, verifyCandidate, type CuratedCandidate } from './catalogChecks';
+import {
+  CANONICAL_KEYRING_URL,
+  fetchKeyringText,
+  KEYRING_PATH,
+  MAX_SEQUENCE_STEP,
+  planPublish,
+  readMainKeyring,
+  verifyCandidate,
+  type CuratedCandidate,
+} from './catalogChecks';
 import { curatedDevKey } from './devKey';
 import { catalogBytes, sigBytes, testSigner } from './testCatalog';
 
@@ -20,15 +29,33 @@ const error = (manifest: Uint8Array, sig = sigBytes(manifest, [signing]), keys =
 };
 
 describe('readMainKeyring', () => {
-  it('reads keys.json from origin/main, never the working tree', async () => {
-    const git = vi.fn(async () => JSON.stringify(keyring));
-    expect(await readMainKeyring(git)).toEqual(keyring);
-    expect(git).toHaveBeenCalledWith(['show', `origin/main:${KEYRING_PATH}`]);
+  it("reads keys.json from the canonical repo's main over HTTPS, never a local ref", async () => {
+    const read = vi.fn(async () => JSON.stringify(keyring));
+    expect(await readMainKeyring(read)).toEqual(keyring);
+    expect(read).toHaveBeenCalledWith(`https://raw.githubusercontent.com/Bike4Mind/bike4mind/main/${KEYRING_PATH}`);
+    expect(CANONICAL_KEYRING_URL).toBe(read.mock.calls[0][0]);
+  });
+
+  it('refuses to run when the keyring cannot be read', async () => {
+    const read = async () => {
+      throw new Error('HTTP 404');
+    };
+    await expect(readMainKeyring(read)).rejects.toThrow(/could not read the keyring from https:.*: HTTP 404/);
+    await expect(readMainKeyring(async () => '<html>')).rejects.toThrow(/could not read the keyring/);
   });
 
   it('fails on an entry it cannot trust rather than skipping it', async () => {
     const tampered = [{ ...signing.key, keyId: '0000000000000000' }];
     await expect(readMainKeyring(async () => JSON.stringify(tampered))).rejects.toThrow(/invalid entry at index 0/);
+  });
+
+  it('fetches with no redirects and refuses a non-200 or an http URL', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(keyring)));
+    expect(await fetchKeyringText(CANONICAL_KEYRING_URL, fetchImpl)).toBe(JSON.stringify(keyring));
+    expect(fetchImpl).toHaveBeenCalledWith(CANONICAL_KEYRING_URL, expect.objectContaining({ redirect: 'error' }));
+    const missing = vi.fn(async () => new Response('', { status: 404 }));
+    await expect(fetchKeyringText(CANONICAL_KEYRING_URL, missing)).rejects.toThrow('HTTP 404');
+    await expect(fetchKeyringText('http://example.com/keys.json', fetchImpl)).rejects.toThrow(/not https/);
   });
 });
 
@@ -48,14 +75,22 @@ describe('verifyCandidate', () => {
     expect(error(manifest, undefined, [])).toMatch(/holds no production key/);
   });
 
-  it('refuses a list only the public test key signed, even if main trusted that key', () => {
-    const dev = curatedDevKey();
-    const manifest = catalogBytes(2);
-    const sig = new TextEncoder().encode(
-      JSON.stringify({ signatures: [{ keyId: dev.keyId, sig: signCurated(manifest, dev.privateKey) }] })
+  it('refuses a list only the public test keys signed, even if main trusted them', () => {
+    for (const dev of [curatedDevKey('signing'), curatedDevKey('recovery')]) {
+      const manifest = catalogBytes(2);
+      const sig = new TextEncoder().encode(
+        JSON.stringify({ signatures: [{ keyId: dev.keyId, sig: signCurated(manifest, dev.privateKey) }] })
+      );
+      const withDev = [...keyring, { keyId: dev.keyId, spki: dev.spki, role: dev.role }];
+      expect(error(manifest, sig, withDev)).toBe('the list is signed only by the public test key');
+    }
+  });
+
+  it("refuses to revoke a recovery key in main's keyring", () => {
+    const manifest = catalogBytes(2, catalog => (catalog.revokedKeyIds = [recovery.key.keyId]));
+    expect(error(manifest, sigBytes(manifest, [recovery]))).toBe(
+      `revokedKeyIds names recovery key ${recovery.key.keyId}, which cannot be revoked`
     );
-    const withDev = [...keyring, { keyId: dev.keyId, spki: dev.spki, role: 'signing' as const }];
-    expect(error(manifest, sig, withDev)).toBe('the list is signed only by the public test key');
   });
 
   it('refuses a list without a sequence or with a changelog that does not lead with it', () => {
@@ -99,7 +134,47 @@ describe('planPublish', () => {
 
   it('publishes a higher sequence, and treats a missing live list as the first publish', () => {
     expect(planPublish(next(), live)).toEqual({ kind: 'publish', liveSequence: 3 });
-    expect(planPublish(next(), null)).toEqual({ kind: 'first-publish' });
+    const unrevoked = next(catalog => (catalog.revokedKeyIds = []));
+    expect(planPublish(unrevoked, null)).toEqual({ kind: 'first-publish' });
+  });
+
+  it('refuses a step of more than MAX_SEQUENCE_STEP over live, counting a first publish from 0', () => {
+    // catalogBytes writes one changelog item per sequence, so a jump prepends a single item instead.
+    const jump = (from: number, to: number) =>
+      candidate(
+        catalogBytes(from, catalog => {
+          if (from === 3) catalog.revokedKeyIds = [REVOKED];
+          catalog.sequence = to;
+          catalog.changelog.unshift({ ...catalog.changelog[0], sequence: to, notes: `Release ${to}.` });
+        })
+      );
+    const at = (sequence: number) => {
+      const plan = planPublish(jump(3, sequence), live);
+      return plan.kind === 'refused' ? plan.reason : plan.kind;
+    };
+    expect(MAX_SEQUENCE_STEP).toBe(1000);
+    expect(at(3 + MAX_SEQUENCE_STEP)).toBe('publish');
+    expect(at(4 + MAX_SEQUENCE_STEP)).toBe('sequence 1004 is more than 1000 above live sequence 3');
+    expect(planPublish(jump(1, MAX_SEQUENCE_STEP), null)).toEqual({ kind: 'first-publish' });
+    expect(planPublish(jump(1, MAX_SEQUENCE_STEP + 1), null)).toEqual({
+      kind: 'refused',
+      reason: 'sequence 1001 is more than 1000 above live sequence 0',
+    });
+  });
+
+  it('refuses a new revocation unless a recovery key signed the list', () => {
+    const NEW = '00000000000000bb';
+    const growing = (signers: (typeof signing)[]) =>
+      candidate(
+        catalogBytes(4, catalog => (catalog.revokedKeyIds = [REVOKED, NEW])),
+        signers
+      );
+    expect(planPublish(growing([signing]), live)).toEqual({
+      kind: 'refused',
+      reason: `revokedKeyIds adds ${NEW} without a recovery-key signature`,
+    });
+    expect(planPublish(growing([recovery, signing]), live)).toEqual({ kind: 'publish', liveSequence: 3 });
+    expect(planPublish(next(), null)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(REVOKED) });
   });
 
   it('is a no-op for the live bytes and behind live for a lower or a different equal sequence', () => {
