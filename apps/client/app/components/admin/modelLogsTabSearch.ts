@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
 import { oneOf, parsePage, toNumber } from './adminSearchValues';
 
 /**
@@ -79,6 +80,11 @@ const parseDate = (value: unknown): string | undefined => {
   return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value) ? value : undefined;
 };
 
+const parseModelLogsPage = (value: unknown): number | undefined => {
+  const page = parsePage(value);
+  return page !== undefined && page <= MODEL_LOGS_MAX_PAGE ? page : undefined;
+};
+
 const parseLimit = (value: unknown): ModelLogsPageSize | undefined => {
   const limit = toNumber(value);
   return MODEL_LOGS_PAGE_SIZE_OPTIONS.find(option => option === limit);
@@ -88,7 +94,7 @@ const parseLimit = (value: unknown): ModelLogsPageSize | undefined => {
 export const MODEL_LOGS_SEARCH_PARSERS: {
   readonly [K in keyof ModelLogsSearch]-?: (value: unknown) => ModelLogsSearch[K];
 } = {
-  [MODEL_LOGS_PAGE_PARAM]: parsePage,
+  [MODEL_LOGS_PAGE_PARAM]: parseModelLogsPage,
   [MODEL_LOGS_LIMIT_PARAM]: parseLimit,
   [MODEL_LOGS_FROM_PARAM]: parseDate,
   [MODEL_LOGS_TO_PARAM]: parseDate,
@@ -105,7 +111,7 @@ export function modelLogsViewFromSearch(search: Record<string, unknown>): ModelL
   const startDate = parseDate(search[MODEL_LOGS_FROM_PARAM]) ?? defaults.startDate;
   const endDate = parseDate(search[MODEL_LOGS_TO_PARAM]) ?? defaults.endDate;
   return {
-    page: parsePage(search[MODEL_LOGS_PAGE_PARAM]) ?? defaults.page,
+    page: parseModelLogsPage(search[MODEL_LOGS_PAGE_PARAM]) ?? defaults.page,
     limit: parseLimit(search[MODEL_LOGS_LIMIT_PARAM]) ?? defaults.limit,
     startDate,
     endDate,
@@ -124,7 +130,7 @@ export function modelLogsViewToSearch(view: ModelLogsView): {
   const defaults = defaultModelLogsView();
   const isDefaultRange = view.startDate === defaults.startDate && view.endDate === defaults.endDate;
   return {
-    [MODEL_LOGS_PAGE_PARAM]: view.page === defaults.page ? undefined : parsePage(view.page),
+    [MODEL_LOGS_PAGE_PARAM]: view.page === defaults.page ? undefined : parseModelLogsPage(view.page),
     [MODEL_LOGS_LIMIT_PARAM]: view.limit === defaults.limit ? undefined : parseLimit(view.limit),
     [MODEL_LOGS_FROM_PARAM]: isDefaultRange ? undefined : parseDate(view.startDate),
     [MODEL_LOGS_TO_PARAM]: isDefaultRange ? undefined : parseDate(view.endDate),

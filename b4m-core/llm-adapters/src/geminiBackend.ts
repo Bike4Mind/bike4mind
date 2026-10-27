@@ -43,6 +43,7 @@ import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { geminiThinkingOutputCap } from './thinkingParams';
 import { withAbortListener } from './withAbortListener';
+import { retryTransportErrors } from './transportRetry';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
@@ -746,10 +747,14 @@ export class GeminiBackend implements ICompletionBackend {
       try {
         // @google/genai ignores a signal that is already aborted, so the request would still go out.
         if (options.abortSignal?.aborted) throw new Error('Request aborted');
-        const result = await this._api.models.generateContentStream({
-          ...request,
-          config: { ...request.config, abortSignal: options.abortSignal },
-        });
+        const result = await retryTransportErrors(
+          () =>
+            this._api.models.generateContentStream({
+              ...request,
+              config: { ...request.config, abortSignal: options.abortSignal },
+            }),
+          { logger: this.logger, label: 'GeminiBackend', abortSignal: options.abortSignal }
+        );
 
         let lastChunk: any = null;
         for await (const chunk of result) {
@@ -1102,7 +1107,11 @@ export class GeminiBackend implements ICompletionBackend {
         // request throws - removing it only on the success path leaked one
         // listener per failed call on a reused signal.
         const result = await withAbortListener(options.abortSignal, abortListener, () =>
-          this._api.models.generateContent(request)
+          retryTransportErrors(() => this._api.models.generateContent(request), {
+            logger: this.logger,
+            label: 'GeminiBackend',
+            abortSignal: options.abortSignal,
+          })
         );
         const r = result;
 

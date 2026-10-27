@@ -26,7 +26,6 @@ vi.mock('@client/app/hooks/data/adminOrganizations', () => ({
 }));
 vi.mock('@client/app/hooks/data/user', () => ({ useGetPendingOrganizationUsers: () => ({ data: [] }) }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useTeamSeatLimits: () => ({ maxSeats: 100 }) }));
-vi.mock('@client/app/components/Session/SearchBar', () => ({ default: () => null }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/Member', () => ({ default: () => null }));
 vi.mock('@client/app/components/admin/Subscriptions/components/PaginationControls', () => ({ default: () => null }));
@@ -36,6 +35,7 @@ import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
 import OrganizationsTab from './OrganizationsTab';
 import { DEFAULT_ORGANIZATIONS_PARAMS } from './organizationsTabSearch';
 import { useOrganizationsTab } from './useOrganizationsTabParams';
+import { AdminCommandPalette } from './shared/AdminCommandPalette';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const ORG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -82,6 +82,19 @@ beforeEach(() => {
 });
 
 describe('OrganizationsTab', () => {
+  it('focuses the real Organizations search with /', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <div data-admin-surface>
+          <AdminCommandPalette />
+          <OrganizationsTab />
+        </div>
+      </CssVarsProvider>
+    );
+    fireEvent.keyDown(document.body, { key: '/' });
+    expect(screen.getByTestId('admin-organizations-search-input')).toHaveFocus();
+  });
+
   it('replace-navigates a page past the end back to the last page in a single navigate', () => {
     act(() => fakeAdminRouter.reset({ tab: 'organizations', orgsPage: 9 }));
     renderTab();

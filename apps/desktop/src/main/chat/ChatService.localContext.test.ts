@@ -1,17 +1,25 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { HardwareProfile } from '@bike4mind/common';
 import type { ChatMessage, ChatStreamEvent } from '@shared/chat';
 import { autoCompactThreshold, contextTokens, effectiveContextLimit, resentReplyTokens } from '@shared/contextLimit';
+import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { afterEach, expect, it, vi } from 'vitest';
 import { describeCompaction, formatTokens } from '../../renderer/src/chat/statusLine';
 import { ChatService } from './ChatService';
 import { COMPACT_MAX_TOKENS } from './compaction';
+import { cpuMachine, discreteMachine, GIB, lowConfidenceMachine, stubArch } from './fitStub.testHelper';
 import { localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { ModelCatalog } from './ModelCatalog';
-import { OllamaLocal } from './OllamaLocal';
+import { forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  estimateFit: (await import('./fitStub.testHelper')).stubEstimateFit,
+}));
 
 interface SentRequest {
   messages: { role: string; content: string }[];
@@ -22,6 +30,7 @@ const services: ChatService[] = [];
 afterEach(() => {
   for (const service of services.splice(0)) service.dispose();
   vi.unstubAllGlobals();
+  forgetLocalContexts();
 });
 
 const answer = (promptTokens: number) =>
@@ -68,7 +77,8 @@ async function localService(
   contextWindow: number,
   reply: (request: SentRequest, signal?: AbortSignal | null) => Response,
   catalogCached = true,
-  parameters?: string
+  parameters?: string,
+  sizing?: LocalContextSizing
 ) {
   const requests: SentRequest[] = [];
   vi.stubGlobal(
@@ -92,7 +102,7 @@ async function localService(
   const events: ChatStreamEvent[] = [];
   const service = new ChatService({
     store,
-    local: new OllamaLocal(),
+    local: new OllamaLocal(undefined, sizing),
     access: { list: async () => [] } as unknown as AccessStore,
     models: {
       cached: () => (catalogCached ? [option] : null),
@@ -123,6 +133,22 @@ it('uses measured Ollama input tokens to compact before the next local turn', as
   expect(requests[1].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
   expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, running: true });
   expect((await store.get(id))?.messages.some(message => message.boundary)).toBe(true);
+});
+
+it('compacts at the old window when growing the local model fails', async () => {
+  const grow = vi.spyOn(OllamaLocal.prototype, 'growFor').mockRejectedValue(new Error('show failed'));
+  try {
+    const { store, events, requests, id, send } = await localService(100, () => answer(90));
+    await send('first prompt');
+    await send('second prompt');
+    expect(grow).toHaveBeenCalled();
+    expect(requests).toHaveLength(3);
+    expect(requests[1].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
+    expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, running: true });
+    expect((await store.get(id))?.messages.some(message => message.boundary)).toBe(true);
+  } finally {
+    grow.mockRestore();
+  }
 });
 
 // Signed out, the catalog keeps local models for seconds only, so the turn usually finds nothing cached.
@@ -194,10 +220,82 @@ it('trims a replayed history whose earlier replies used tools, and answers', asy
   expect(last?.content).toContain('A useful summary');
 });
 
+const sizedOn = (setting: LocalContextSetting, hardware: HardwareProfile): LocalContextSizing => {
+  const footprint = { arch: stubArch(131_072), weightsBytes: 4 * GIB, hardware };
+  return { setting: async () => setting, footprint: async () => footprint, cachedFootprint: () => footprint };
+};
+
+it.each([
+  // The stub estimator: 72K is the largest context that stays in 13 GiB.
+  { label: 'the largest resident size', hardware: cpuMachine(13), first: 65_536, measured: 60_000, grown: 73_728 },
+  {
+    label: 'one Settings size on an unmeasured GPU',
+    hardware: lowConfidenceMachine(64),
+    first: 16_384,
+    measured: 15_000,
+    grown: 32_768,
+  },
+])(
+  'grows a local model to $label instead of compacting a conversation near its window',
+  async ({ hardware, first, measured, grown }) => {
+    const { events, requests, send } = await localService(
+      131_072,
+      () => answer(measured),
+      false,
+      undefined,
+      sizedOn(AUTO_LOCAL_CONTEXT, hardware)
+    );
+    await send('first prompt');
+    await send('second prompt');
+    expect(requests.map(request => request.options?.num_ctx)).toEqual([first, grown]);
+    expect(events.some(event => event.type === 'auto-compact')).toBe(false);
+  }
+);
+
+it('compacts at the threshold under a Fixed size, which never grows', async () => {
+  const { events, requests, send } = await localService(
+    131_072,
+    () => answer(15_000),
+    false,
+    undefined,
+    sizedOn({ mode: 'fixed', tokens: 16_384 }, cpuMachine(64))
+  );
+  await send('first prompt');
+  await send('second prompt');
+  expect(requests[1].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
+  expect(requests.every(request => request.options?.num_ctx === 16_384)).toBe(true);
+  expect(events).toContainEqual(expect.objectContaining({ type: 'auto-compact', running: true }));
+});
+
+it('tells the conversation when Auto grows the context past what fits on the GPU', async () => {
+  // The stub estimator: 16K fits a 7 GiB GPU, and nothing that holds a 25K prompt does.
+  const footprint = { arch: stubArch(), weightsBytes: 4 * GIB, hardware: discreteMachine(7, 32) };
+  let refuse = true;
+  const { events, requests, id, send } = await localService(
+    262_144,
+    () => {
+      if (!refuse) return answer(25_000);
+      refuse = false;
+      return overflow(25_000, 16_384);
+    },
+    false,
+    undefined,
+    { setting: async () => ({ mode: 'auto' }), footprint: async () => footprint, cachedFootprint: () => footprint }
+  );
+  await send('long prompt');
+  expect(requests.map(request => request.options?.num_ctx)).toEqual([16_384, 32_768]);
+  expect(events).toContainEqual({
+    type: 'context-notice',
+    sessionId: id,
+    message: expect.stringContaining('replies will be slower'),
+  });
+});
+
 // Signed out, so the window comes from Ollama, not the catalog.
 it.each([
   { label: '8k model', contextLength: 8192, parameters: undefined, numCtx: 8192 },
-  { label: 'Modelfile num_ctx 32768', contextLength: 131_072, parameters: 'num_ctx 32768', numCtx: 32_768 },
+  // Without a memory estimate Auto cannot show the Modelfile's size stays resident, so it keeps 16K.
+  { label: 'Modelfile num_ctx 32768', contextLength: 131_072, parameters: 'num_ctx 32768', numCtx: 16_384 },
 ])(
   'compacts a $label exactly at the threshold the ring shows, counting the re-sent reply',
   async ({ contextLength, parameters, numCtx }) => {
@@ -444,4 +542,53 @@ it('retries a refused summary with a transcript shrunk by what Ollama measured',
   const [first, second] = summaries.map(request => request.messages.at(-1)?.content ?? '');
   expect(second).toContain('omitted for length');
   expect(second.length).toBeLessThan(shrunkTranscriptChars(first.length, 30_000, 16_384, COMPACT_MAX_TOKENS) + 200);
+});
+
+it('keeps the model and its tools for a local turn whose catalog /api/show timed out', async () => {
+  let listing = false;
+  let timedOut = 0;
+  const requests: { tools?: unknown[] }[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: unknown, init?: RequestInit) => {
+      if (String(input).endsWith('/api/tags')) return Response.json({ models: [{ name: 'llama3.2' }] });
+      if (String(input).endsWith('/api/show')) {
+        if (listing && ++timedOut) throw new DOMException('timed out', 'TimeoutError');
+        return Response.json({ capabilities: ['completion', 'tools'] });
+      }
+      requests.push(JSON.parse(String(init?.body)) as { tools?: unknown[] });
+      return answer(50);
+    })
+  );
+  const local = new OllamaLocal();
+  const slowList = async () => {
+    listing = true;
+    try {
+      return await local.models();
+    } finally {
+      listing = false;
+    }
+  };
+  const model = 'local:ollama:llama3.2';
+  const service = new ChatService({
+    store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-local-context-')), model),
+    local,
+    access: { list: async () => [] } as unknown as AccessStore,
+    models: {
+      cached: () => null,
+      listLocal: slowList,
+      list: async () => ({ models: await slowList() }),
+    } as unknown as ModelCatalog,
+    getApiClient: () => null,
+    getEnvironmentUrl: () => '',
+    logger: { debug: vi.fn(), warn: vi.fn() },
+    emit: () => undefined,
+  });
+  services.push(service);
+  const { id } = await service.createSession();
+  await service.renameSession(id, 'Keep title');
+  expect(await service.send(id, 'hello')).toMatchObject({ ok: true });
+  await vi.waitUntil(() => !service.isSessionBusy(id));
+  expect(timedOut).toBeGreaterThan(0);
+  expect(requests[0].tools?.length).toBeGreaterThan(0);
 });

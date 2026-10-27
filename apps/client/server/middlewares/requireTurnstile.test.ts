@@ -100,6 +100,61 @@ describe('requireTurnstile', () => {
     expect(status).toHaveBeenCalledWith(403);
   });
 
+  describe('options', () => {
+    it('reads the token from a custom location', async () => {
+      verify.mockResolvedValue({ ok: true });
+      const next = vi.fn();
+      const req = {
+        query: { turnstileToken: 'from-query' },
+        headers: {},
+        logger: { warn: vi.fn() },
+      } as unknown as Request;
+      await requireTurnstile('oauth-start', { token: r => r.query?.turnstileToken })(req, {} as Response, next);
+      expect(next).toHaveBeenCalled();
+      expect(verify).toHaveBeenCalledWith(expect.objectContaining({ token: 'from-query' }));
+    });
+
+    it('skips an exempt request before reading the policy', async () => {
+      const next = vi.fn();
+      const req = { body: {}, headers: {} } as unknown as Request;
+      await requireTurnstile('otc-send', { exempt: () => true })(req, {} as Response, next);
+      expect(next).toHaveBeenCalled();
+      expect(getPolicy).not.toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
+    });
+
+    it('hands a failure to the custom handler instead of answering JSON', async () => {
+      verify.mockResolvedValue({ ok: false, reason: 'invalid' });
+      const onFailure = vi.fn();
+      const next = vi.fn();
+      const status = vi.fn();
+      const req = { body: { turnstileToken: 'tok' }, headers: {}, logger: { warn: vi.fn() } } as unknown as Request;
+      const res = { status } as unknown as Response;
+      await requireTurnstile('otc-send', { onFailure })(req, res, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(status).not.toHaveBeenCalled();
+      expect(onFailure).toHaveBeenCalledWith(
+        req,
+        res,
+        expect.objectContaining({ code: 'challenge_failed', status: 403 })
+      );
+    });
+
+    it('hands an unreadable policy to the custom handler as unavailable', async () => {
+      getPolicy.mockRejectedValue(new Error('database unavailable'));
+      const onFailure = vi.fn();
+      const next = vi.fn();
+      const req = { body: { turnstileToken: 'tok' }, headers: {}, logger: { warn: vi.fn() } } as unknown as Request;
+      await requireTurnstile('otc-send', { onFailure })(req, {} as Response, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(onFailure).toHaveBeenCalledWith(
+        req,
+        expect.anything(),
+        expect.objectContaining({ code: 'challenge_unavailable', status: 503 })
+      );
+    });
+  });
+
   describe('e2e bypass', () => {
     const e2eBody = { email: 'Login-123-E2E@test.com' };
     const e2eHeaders = { 'x-e2e-cleanup-secret': 'e2e-secret' };

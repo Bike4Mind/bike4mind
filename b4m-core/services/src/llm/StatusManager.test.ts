@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { IChatHistoryItemDocument, ITurnTiming } from '@bike4mind/common';
+import { CHAT_MESSAGE_WITHHELD_FIELDS, type IChatHistoryItemDocument, type ITurnTiming } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { ClientMessageSender } from '@bike4mind/utils';
 import { StatusManager } from './StatusManager';
@@ -23,6 +23,20 @@ const makeQuest = (overrides: Partial<IChatHistoryItemDocument> = {}) => ({
 });
 
 describe('StatusManager minimal payload', () => {
+  it.each([false, true])('withholds server-only fields with full payload mode %s', async skipPayloadOptimization => {
+    const { manager, sendToClient } = setup();
+    const quest = makeQuest({
+      reply: 'Visible answer',
+      ...Object.fromEntries(CHAT_MESSAGE_WITHHELD_FIELDS.map(field => [field, { privateValue: field }])),
+    });
+    await manager.sendStatusUpdate(quest, 'done', { skipPayloadOptimization });
+    const sentQuest = sendToClient.mock.calls[0][2].quest as Record<string, unknown>;
+    expect(sentQuest.reply).toBe('Visible answer');
+    for (const field of CHAT_MESSAGE_WITHHELD_FIELDS) {
+      expect(sentQuest).not.toHaveProperty(field);
+      expect(quest).toHaveProperty(field);
+    }
+  });
   it('carries videoJobIds so the client can render a card per job', async () => {
     const { manager, sendToClient } = setup();
     await manager.sendStatusUpdate(makeQuest({ videoJobIds: ['a'] }), 'working');

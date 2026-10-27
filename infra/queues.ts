@@ -800,6 +800,10 @@ const publishThumbnailRenderer = new sst.aws.Function('PublishThumbnailRenderer'
       external: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
     },
   },
+  // @sparticuz/chromium ships only Open Sans, which has no arrows or symbols. Its fonts.conf already
+  // scans /var/task/fonts, so these fallback faces need no code; /var/task also outlives the
+  // per-render /tmp wipe (apps/workers/src/media/renderEnvironment.ts).
+  copyFiles: [{ from: 'apps/workers/src/media/fonts', to: 'fonts' }],
 });
 const publishThumbnailQueueDLQ = new sst.aws.Queue('publishThumbnailQueueDLQ', {});
 const publishThumbnailQueue = new sst.aws.Queue('publishThumbnailQueue', {

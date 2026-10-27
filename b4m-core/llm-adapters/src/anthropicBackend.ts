@@ -93,6 +93,7 @@ import {
 } from './forcedToolChoice';
 import { buildJsonSchemaInstruction } from './responseFormatHelpers';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
+import { isTransportError } from './transportRetry';
 import {
   createDegenerateStreamGuard,
   DEGENERATE_STREAM_STOP_REASON,
@@ -247,8 +248,7 @@ export class AnthropicBackend implements ICompletionBackend {
           return response;
         } catch (err) {
           const msg = err instanceof Error ? err.message : '';
-          const isTransportError = err instanceof TypeError && (msg === 'terminated' || msg === 'fetch failed');
-          if (!isTransportError || attempt === MAX_TRANSPORT_RETRIES) throw err;
+          if (!isTransportError(err) || attempt === MAX_TRANSPORT_RETRIES) throw err;
           this.logger.warn(
             `[AnthropicBackend] Transport error "${msg}", retry ${attempt + 1}/${MAX_TRANSPORT_RETRIES}`
           );

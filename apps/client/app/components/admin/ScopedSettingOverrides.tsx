@@ -108,7 +108,7 @@ const ScopedSettingOverrides = ({ setting }: { setting: AdminSetting }) => {
   };
 
   return (
-    <Stack spacing={1} sx={{ mt: 1 }}>
+    <Stack data-admin-settings-editor spacing={1} sx={{ mt: 1 }}>
       <Typography level="title-sm" data-testid={`scoped-override-${setting.key}-header`}>
         Scoped overrides ({rows.length})
       </Typography>

@@ -2,8 +2,10 @@ import {
   IAdminSettingsRepository,
   ICreditLotRepository,
   ICreditTransactionRepository,
+  newSignupGrant,
   IUserDocument,
   IUserRepository,
+  type SignupProtection,
 } from '@bike4mind/common';
 import { IRegInviteDocument, RegInviteSource, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
 import { ISubscriberRepository } from '@bike4mind/common';
@@ -66,6 +68,7 @@ export type RegisterUserParameters = z.infer<typeof registerUserSchema>;
 interface RegisterUserAdapters {
   db: {
     users: IUserRepository;
+    signupProtection?: SignupProtection;
     adminSettings: IAdminSettingsRepository;
     registrationInvites: {
       findByCode: (code: string) => Promise<IRegInviteDocument | null>;
@@ -313,6 +316,7 @@ export const registerUser = async (
     currentStorageSize: 0,
     currentCredits: 0,
     pendingCreditGrant: freeCredits > 0 ? freeCredits : null,
+    ...(!hasInviteCode ? { signupGrant: await newSignupGrant(db.adminSettings) } : {}),
     level: 'DemoUser',
     isBanned: false,
     isModerated: false,
@@ -426,19 +430,23 @@ export const registerViaOTC = async (
   const { db, logger } = adapters;
   const newUser = await registerUser(params, adapters);
 
+  if (newUser.signupGrant) {
+    await db.users.update({ id: newUser.id, emailVerified: true, emailVerifiedAt: new Date() });
+  }
+
   const taggedUser = { ...newUser, tags: [...new Set([...(newUser.tags ?? []), 'Customer'])] };
-  const hasPendingCredits = taggedUser.tags.includes(PENDING_FREE_CREDITS_TAG);
 
   let finalTags = taggedUser.tags;
   let pendingCreditGrant = newUser.pendingCreditGrant ?? null;
 
-  if (hasPendingCredits && db.creditTransactions) {
+  if (db.creditTransactions) {
     const release = await releasePendingFreeCredits(taggedUser, {
       db: {
         adminSettings: db.adminSettings,
         creditTransactions: db.creditTransactions,
         creditLots: db.creditLots,
         users: db.users,
+        signupProtection: db.signupProtection,
       },
       reason: 'OTC registration (email verified)',
       logger,
@@ -464,6 +472,10 @@ export const registerViaOTC = async (
   // currentCredits is deliberately not written: addCredits already `$inc`ed it.
   await db.users.update({ id: newUser.id, ...verification });
 
+  if (newUser.signupGrant) {
+    const persisted = await db.users.findById(newUser.id);
+    if (persisted) return persisted;
+  }
   return { ...newUser, ...verification } as IUserDocument;
 };
 
