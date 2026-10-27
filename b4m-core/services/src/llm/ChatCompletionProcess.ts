@@ -1147,7 +1147,8 @@ export class ChatCompletionProcess {
   private tokenizer: ITokenizer;
   private cacheRepository?: IChatCompletionServiceOptions['cacheRepository'];
   // Set for a restricted-tier turn that runs a substitute; ledger rows the user can read name the requested model.
-  private shadowSubstitution: { requested: ModelInfo; actual: ModelInfo } | null = null;
+  // substituteIds: every id that served this turn as a substitute, so ledger rows stay mapped after a hop.
+  private shadowSubstitution: { requested: ModelInfo; actual: ModelInfo; substituteIds: Set<string> } | null = null;
   private publishTelemetryAlert?: IChatCompletionServiceOptions['publishTelemetryAlert'];
   private telemetryHmacSecret?: string;
   private gpcSignalDetected: boolean = false;
@@ -2571,7 +2572,9 @@ export class ChatCompletionProcess {
       if (!requestedModelInfo || !modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
-      this.shadowSubstitution = shadowModelInfo ? { requested: requestedModelInfo, actual: shadowModelInfo } : null;
+      this.shadowSubstitution = shadowModelInfo
+        ? { requested: requestedModelInfo, actual: shadowModelInfo, substituteIds: new Set([shadowModelInfo.id]) }
+        : null;
       if (shadowModelInfo) {
         logger.info('[ModelRouting] tier substitution', { requested: requestedModelInfo.id, actual: modelInfo.id });
       }
@@ -3383,8 +3386,7 @@ export class ChatCompletionProcess {
         onToolPreamble: this.onToolPreamble,
         modelAdmission: this.modelAdmission,
         decide: this.decide,
-        toLedgerModel: id =>
-          id === this.shadowSubstitution?.actual.id ? this.shadowSubstitution.requested : undefined,
+        toLedgerModel: id => (this.isSubstituteId(id) ? this.shadowSubstitution?.requested : undefined),
       });
 
       const { mcpToolsByServer, serverAgentConfig } = await toolBuilder.buildMcpTools({
@@ -5671,6 +5673,7 @@ export class ChatCompletionProcess {
               });
               turnTiming.recordRetry(lastError, 0, this.ledgerModel(currentModel).id);
               substitution.actual = next;
+              substitution.substituteIds.add(next.id);
               currentModel = next;
               currentLlm = nextLlm;
               if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;
@@ -7100,7 +7103,11 @@ export class ChatCompletionProcess {
         quest.replies = combined;
         quest.reply = combined.join('');
       };
-      setErrorReply((err as Error).message);
+      // Provider text on a restricted-tier turn can name the substitute. Credit errors keep their
+      // message; the categorized branches below overwrite this reply with fixed text anyway.
+      const masksMessage =
+        this.shadowSubstitution && !(err instanceof InsufficientCreditsError || resolveQuestErrorCode(err));
+      setErrorReply(masksMessage ? MODEL_UNAVAILABLE_ERROR_REPLY : (err as Error).message);
       quest.type = 'error';
       setTerminalQuestStatus(quest, 'done');
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
@@ -7261,7 +7268,11 @@ export class ChatCompletionProcess {
 
   private ledgerModel(modelInfo: ModelInfo): ModelInfo {
     const substitution = this.shadowSubstitution;
-    return substitution && modelInfo.id === substitution.actual.id ? substitution.requested : modelInfo;
+    return substitution && this.isSubstituteId(modelInfo.id) ? substitution.requested : modelInfo;
+  }
+
+  private isSubstituteId(id: string): boolean {
+    return this.shadowSubstitution?.substituteIds.has(id) ?? false;
   }
 
   /**

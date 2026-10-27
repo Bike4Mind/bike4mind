@@ -1199,6 +1199,53 @@ describe('ChatCompletionProcess', () => {
         expect(lastSave.fallbackInfo ?? null).toBeNull();
         expect(statusText()).not.toMatch(/cheap-model|Trying alternative model/);
       });
+
+      it('replaces a non-retryable provider error with the generic reply, only for restricted users', async () => {
+        const { body } = await wireFailingSubstitute(['cheap-model']);
+        mockedShouldTriggerFallback.mockReturnValue(false);
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+        expect(lastSave.type).toBe('error');
+        expect(lastSave.reply).toBe(MODEL_UNAVAILABLE_ERROR_REPLY);
+        expect(JSON.stringify(lastSave)).not.toContain('Incorrect API key');
+      });
+
+      it('keeps the provider error text for a non-restricted user', async () => {
+        const { body } = wireRestrictedTurn();
+        mockedShouldTriggerFallback.mockReturnValue(false);
+        mockedIsOverloadedError.mockReturnValue(false);
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockRejectedValue(new Error('401 Incorrect API key provided')),
+          getModelInfo: vi.fn(),
+          currentModel: '',
+        } as any); // any: minimal backend shape, as elsewhere in this file
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0].reply).toContain('Incorrect API key');
+      });
+
+      it('fails generically when the next allowlist entry is not in the model list', async () => {
+        const { body, complete } = await wireFailingSubstitute(['cheap-model']);
+        restrict({}, ['cheap-model', 'ghost-model']);
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model']);
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0].reply).toBe(MODEL_UNAVAILABLE_ERROR_REPLY);
+      });
+
+      it('keeps mapping the first substitute id to the requested model after a hop', async () => {
+        const { body, requested } = await wireFailingSubstitute(['cheap-model']);
+
+        await service.process({ body, logger: mockLogger });
+
+        const ledgerModel = (m: ModelInfo) => (service as any).ledgerModel(m); // any: private
+        expect(ledgerModel(cheapModel as ModelInfo).id).toBe(requested.id);
+        expect(ledgerModel(secondCheap as ModelInfo).id).toBe(requested.id);
+      });
     });
 
     it('runs the requested model when no allowlisted model is available', async () => {
