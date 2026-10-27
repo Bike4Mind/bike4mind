@@ -23,7 +23,9 @@ import {
   POWERSHELL_INTEL_ARC,
   POWERSHELL_INTEL_IGPU_ONLY,
   POWERSHELL_NVIDIA,
+  POWERSHELL_STRIX_HALO,
   rawLocation,
+  strixHalo,
   sysfsTree,
   type SysfsFixture,
 } from './__test__/hardwareFixtures';
@@ -52,21 +54,31 @@ function sysfs(fixture: SysfsFixture): string {
   return tree.root;
 }
 
-const linux = (fixture: SysfsFixture, exec: ExecLike = execFrom({}), env: Record<string, string> = {}) =>
-  probeHardware({ exec, os: os(64 * GiB), platform: 'linux', arch: 'x64', rootDir: sysfs(fixture), env });
+const linux = (
+  fixture: SysfsFixture,
+  exec: ExecLike = execFrom({}),
+  env: Record<string, string> = {},
+  ram = 64 * GiB
+) => probeHardware({ exec, os: os(ram), platform: 'linux', arch: 'x64', rootDir: sysfs(fixture), env });
 
 const POWERSHELL = windowsGpuCommand({})[0];
 
-const windows = (powershell: string | Error, extra: Record<string, string | Error> = {}) =>
+const windows = (
+  powershell: string | Error,
+  extra: Record<string, string | Error> = {},
+  env: Record<string, string> = {}
+) =>
   probeHardware({
     exec: execFrom({ [POWERSHELL]: powershell, ...extra }),
     os: os(32 * GiB),
     platform: 'win32',
     arch: 'x64',
-    env: {},
+    env,
   });
 
-const cpuOnly = { memoryKind: 'cpu', gpuMemoryBytes: null, gpuName: null, gpuCount: 0, chip: null };
+const cpuOnly = { memoryKind: 'cpu', gpuMemoryBytes: null, gpuName: null, gpuCount: 0, gpuVendor: null, chip: null };
+const RYZEN_AI_MAX = { PROCESSOR_IDENTIFIER: 'AMD64 Family 26 Model 112 Stepping 0, AuthenticAMD' };
+const RTX_4090_SMI = 'NVIDIA GeForce RTX 4090, 24564\n';
 const amdKfd = [KFD_CPU_NODE, KFD_RX7900XTX_NODE, KFD_RAPHAEL_NODE];
 
 describe('probeHardware', () => {
@@ -82,6 +94,7 @@ describe('probeHardware', () => {
       gpuMemoryBytes: null,
       gpuName: null,
       gpuCount: 1,
+      gpuVendor: 'apple',
       chip: 'Apple M3 Max',
       diskFreeBytes: null,
       confidence: 'high',
@@ -117,6 +130,7 @@ describe('probeHardware', () => {
       gpuMemoryBytes: 2 * 24564 * MiB,
       gpuName: 'NVIDIA GeForce RTX 4090',
       gpuCount: 2,
+      gpuVendor: 'nvidia',
       chip: null,
       diskFreeBytes: 4_096_000_000,
       confidence: 'high',
@@ -245,17 +259,52 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     expect(await linux({ devices: [raphael16], kfdNodes: amdKfd })).toMatchObject({ ...cpuOnly, confidence: 'high' });
   });
 
-  it('reports Strix Halo as unified memory whatever its firmware carve-out says', async () => {
-    for (const memory of [GiB, 64 * GiB]) {
-      const device = { ...amdStrixHalo, files: { mem_info_vram_total: String(memory) } };
-      expect(await linux({ devices: [device], kfdNodes: [KFD_STRIX_HALO_NODE] })).toMatchObject({
-        memoryKind: 'unified',
-        totalMemoryBytes: 64 * GiB,
-        gpuMemoryBytes: null,
-        gpuCount: 1,
-        confidence: 'high',
-      });
-    }
+  it('sizes Strix Halo from a firmware carve-out larger than GTT, which the RAM the OS sees leaves out', async () => {
+    // 128 GB with 96 GiB carved out: the OS sees about 31 GiB and ROCm 98304 MiB.
+    const device = strixHalo(96 * GiB, 16636528640);
+    expect(await linux({ devices: [device], kfdNodes: [KFD_STRIX_HALO_NODE] }, undefined, {}, 31 * GiB)).toMatchObject({
+      memoryKind: 'unified',
+      totalMemoryBytes: 31 * GiB,
+      gpuMemoryBytes: 96 * GiB,
+      gpuName: 'AMD GPU [1002:1586]',
+      gpuCount: 1,
+      gpuVendor: 'amd',
+      confidence: 'high',
+    });
+  });
+
+  it('sizes Strix Halo with a small carve-out from GTT, bounded by the TTM page limit and RAM', async () => {
+    const ram = 125 * GiB;
+    const ttm = (pages: number) => ({ 'sys/module/ttm/parameters/pages_limit': String(pages) });
+    const probe = (gtt: number, files: Record<string, string> = {}) =>
+      linux({ devices: [strixHalo(512 * MiB, gtt)], kfdNodes: [KFD_STRIX_HALO_NODE], files }, undefined, {}, ram);
+    // The kernel default: GTT and the TTM limit both at half of RAM, as AMD's amd-ttm prints it.
+    const half = 16469033 * 4096;
+    expect(await probe(half, ttm(16469033))).toMatchObject({ gpuMemoryBytes: half, confidence: 'high' });
+    // amdgpu.gttsize below the TTM limit, and GTT alone when the TTM parameter cannot be read.
+    expect(await probe(32 * GiB, ttm(16469033))).toMatchObject({ gpuMemoryBytes: 32 * GiB });
+    expect(await probe(48 * GiB)).toMatchObject({ gpuMemoryBytes: 48 * GiB });
+    // A TTM limit past what Ollama can take from free RAM.
+    expect(await probe(120 * GiB, ttm(120 * 262144))).toMatchObject({ gpuMemoryBytes: ram * 0.75 });
+    // A higher TTM limit than GTT still stops at GTT.
+    expect(await probe(40 * GiB, ttm(100 * 262144))).toMatchObject({ gpuMemoryBytes: 40 * GiB });
+  });
+
+  it('keeps Strix Halo unified at low confidence when its GTT size is missing', async () => {
+    const device = { ...amdStrixHalo, files: { mem_info_vram_total: String(64 * GiB) } };
+    expect(await linux({ devices: [device], kfdNodes: [KFD_STRIX_HALO_NODE] })).toMatchObject({
+      memoryKind: 'unified',
+      gpuMemoryBytes: null,
+      confidence: 'low',
+    });
+  });
+
+  it('recognises Strix Halo by its PCI device id when KFD is not mounted, as in a container', async () => {
+    expect(await linux({ devices: [amdStrixHalo], pciIds: PCI_IDS })).toMatchObject({
+      memoryKind: 'unified',
+      gpuMemoryBytes: 64 * GiB,
+      confidence: 'high',
+    });
   });
 
   it('keeps Strix Halo unified at low confidence when system RAM is unknown', async () => {
@@ -270,24 +319,50 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     expect(profile).toMatchObject({ memoryKind: 'unified', totalMemoryBytes: 0, confidence: 'low' });
   });
 
-  it('plans Strix Halo from system RAM and ignores a measured discrete GPU beside it', async () => {
-    const egpu = { ...amdRx7900xtx, address: '0000:03:00.0' };
+  it('reports the larger of Strix Halo and an AMD card beside it, never their sum', async () => {
     const kfdNodes = [KFD_STRIX_HALO_NODE, KFD_RX7900XTX_NODE];
-    expect(await linux({ devices: [amdStrixHalo, egpu], kfdNodes })).toMatchObject({
+    expect(await linux({ devices: [amdStrixHalo, amdRx7900xtx], kfdNodes })).toMatchObject({
       memoryKind: 'unified',
-      gpuMemoryBytes: null,
+      gpuMemoryBytes: 64 * GiB,
+      gpuCount: 1,
+      confidence: 'high',
+    });
+    const small = strixHalo(16 * GiB, 8 * GiB);
+    expect(await linux({ devices: [small, amdRx7900xtx], kfdNodes })).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: 25753026560,
       gpuCount: 1,
       confidence: 'high',
     });
   });
 
-  it('drops Strix Halo confidence when a discrete GPU beside it is unmeasured', async () => {
-    const egpu = { ...nvidiaRtx4090, address: '0000:03:00.0' };
-    expect(await linux({ devices: [amdStrixHalo, egpu], kfdNodes: [KFD_STRIX_HALO_NODE] })).toMatchObject({
+  it('weighs Strix Halo against an NVIDIA card that nvidia-smi measures', async () => {
+    const smi = execFrom({ 'nvidia-smi': RTX_4090_SMI });
+    const devices = (apu: typeof amdStrixHalo) => ({ devices: [nvidiaRtx4090, apu], kfdNodes: [KFD_STRIX_HALO_NODE] });
+    expect(await linux(devices(strixHalo(96 * GiB, 16 * GiB)), smi, {}, 31 * GiB)).toMatchObject({
       memoryKind: 'unified',
-      gpuCount: 1,
-      confidence: 'low',
+      gpuMemoryBytes: 96 * GiB,
+      gpuVendor: 'amd',
+      confidence: 'high',
     });
+    expect(await linux(devices(strixHalo(16 * GiB, 8 * GiB)), smi)).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: 24564 * MiB,
+      gpuName: 'NVIDIA GeForce RTX 4090',
+      gpuVendor: 'nvidia',
+      confidence: 'high',
+    });
+  });
+
+  it('keeps Strix Halo at high confidence beside a GPU whose memory it does not count', async () => {
+    for (const other of [intelArcB580Xe, { ...nvidiaRtx4090, driver: 'nouveau' }, nvidiaRtx4090]) {
+      expect(await linux({ devices: [amdStrixHalo, other], kfdNodes: [KFD_STRIX_HALO_NODE] })).toMatchObject({
+        memoryKind: 'unified',
+        gpuMemoryBytes: 64 * GiB,
+        gpuCount: 1,
+        confidence: 'high',
+      });
+    }
   });
 
   it('still skips an APU whose KFD node reports CPU cores, as ACPI CRAT topologies do', async () => {
@@ -304,7 +379,7 @@ describe('probeHardware on Linux without nvidia-smi', () => {
       device: '0x15bf',
       files: { mem_info_vram_total: String(16 * GiB) },
     };
-    for (const devices of [[amdStrixHalo], [phoenix16], [amdRx7900xtx]]) {
+    for (const devices of [[phoenix16], [amdRx7900xtx]]) {
       expect(await linux({ devices, pciIds: PCI_IDS })).toMatchObject({
         memoryKind: 'discrete',
         gpuMemoryBytes: null,
@@ -510,22 +585,45 @@ describe('probeHardware on Windows without nvidia-smi', () => {
     });
   });
 
-  it.each(['AMD Radeon 8050S Graphics', 'AMD Radeon 8060S Graphics'])(
-    'reports Windows %s as unified memory, ignoring a measured discrete GPU beside it',
-    async name => {
-      const rows = JSON.parse(POWERSHELL_AMD_DISCRETE_AND_APU).map((row: { name: string }) =>
-        row.name === 'AMD Radeon(TM) Graphics' ? { ...row, name } : row
-      );
-      expect(await windows(JSON.stringify(rows))).toMatchObject({
-        memoryKind: 'unified',
-        gpuMemoryBytes: null,
-        gpuName: name,
-        gpuCount: 1,
-        confidence: 'high',
-      });
-      expect(await windows(JSON.stringify(rows.slice(1)))).toMatchObject({ memoryKind: 'unified', confidence: 'high' });
-    }
-  );
+  it('sizes Windows Strix Halo from its Variable Graphics Memory, which the RAM Windows sees leaves out', async () => {
+    expect(await windows(POWERSHELL_STRIX_HALO)).toMatchObject({
+      memoryKind: 'unified',
+      totalMemoryBytes: 32 * GiB,
+      gpuMemoryBytes: 96 * GiB,
+      gpuName: 'AMD Radeon(TM) 8060S Graphics',
+      gpuCount: 1,
+      gpuVendor: 'amd',
+      confidence: 'high',
+    });
+  });
+
+  it('reports the larger of Windows Strix Halo and a discrete card beside it', async () => {
+    const strix = JSON.parse(POWERSHELL_STRIX_HALO)[0];
+    const xtx = JSON.parse(POWERSHELL_AMD_DISCRETE_AND_APU)[0];
+    expect(await windows(JSON.stringify([xtx, strix]))).toMatchObject({
+      memoryKind: 'unified',
+      gpuMemoryBytes: 96 * GiB,
+    });
+    const small = { ...strix, memoryBytes: 16 * GiB };
+    expect(await windows(JSON.stringify([xtx, small]))).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: 25753026560,
+      confidence: 'high',
+    });
+  });
+
+  it('looks for Strix Halo beside nvidia-smi on an AMD CPU only', async () => {
+    const smi = { 'nvidia-smi': RTX_4090_SMI };
+    expect(await windows(POWERSHELL_STRIX_HALO, smi, RYZEN_AI_MAX)).toMatchObject({
+      memoryKind: 'unified',
+      gpuMemoryBytes: 96 * GiB,
+    });
+    const intel = { PROCESSOR_IDENTIFIER: 'Intel64 Family 6 Model 183 Stepping 1, GenuineIntel' };
+    expect(await windows(POWERSHELL_STRIX_HALO, smi, intel)).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: 24564 * MiB,
+    });
+  });
 
   it('reports the largest single-vendor group instead of summing across vendors', async () => {
     const controllers = `[${POWERSHELL_AMD_DISCRETE_AND_APU.slice(1, -1)},${POWERSHELL_INTEL_ARC}]`;
@@ -608,14 +706,21 @@ describe('parseWindowsGpus', () => {
     expect(parseWindowsGpus(amd({ memoryBytes: GiB }))).toEqual([]);
   });
 
-  it.each(['AMD Radeon 8050S Graphics', 'AMD Radeon 8060S Graphics'])(
-    'marks Strix Halo graphics as shared memory: %s',
+  it.each(['AMD Radeon 8040S Graphics', 'AMD Radeon 8050S Graphics', 'AMD Radeon(TM) 8060S Graphics'])(
+    'marks Strix Halo graphics as a shared-memory carve-out: %s',
     name => {
       expect(parseWindowsGpus(amd({ name, memoryBytes: 64 * GiB }))).toEqual([
-        { vendor: 'amd', name, memoryBytes: null, sharedMemory: true },
+        { vendor: 'amd', name, memoryBytes: 64 * GiB, sharedMemory: 'carve-out' },
       ]);
     }
   );
+
+  it('recognises Strix Halo by its device id under a generic name', () => {
+    const pnpDeviceId = 'PCI\\VEN_1002&DEV_1586&SUBSYS_8D101462&REV_D5\\4&1';
+    expect(parseWindowsGpus(amd({ name: 'AMD Radeon(TM) Graphics', pnpDeviceId, memoryBytes: 512 * MiB }))).toEqual([
+      { vendor: 'amd', name: 'AMD Radeon(TM) Graphics', memoryBytes: 512 * MiB, sharedMemory: 'carve-out' },
+    ]);
+  });
 
   it.each(['AMD Radeon HD 5450', 'AMD Radeon HD 6450', 'AMD Radeon HD 7670'])(
     'skips pre-GCN graphics without a supported runtime: %s',

@@ -13,6 +13,10 @@ const ADAPTER_RAM_CAP = 0xfff00000;
 // gfx targets as KFD encodes them (gfxXYZ = X*10000 + Y*100 + Z), from the APU and dGPU cases in amdkfd's
 // kfd_device.c. A target in neither list (a newer part, or gfx942 shared by MI300A and MI300X) stays unmeasured.
 const STRIX_HALO_GFX_TARGET = 110501;
+// Every Strix Halo SKU shares one PCI device id (pci.ids, libdrm amdgpu.ids); checked when KFD is not mounted.
+const STRIX_HALO_DEVICE_ID = '1586';
+const STRIX_HALO_NAME = /\b(?:8040S|8050S|8060S)\b/i;
+const TTM_PAGE_BYTES = 4096;
 const AMD_APU_GFX_TARGETS = new Set([
   70000, // Kaveri
   80001, // Carrizo
@@ -62,10 +66,13 @@ export type GpuVendor = 'nvidia' | 'amd' | 'intel';
 export interface DetectedGpu {
   vendor: GpuVendor;
   name: string | null;
-  /** Dedicated VRAM; null when the OS does not expose it. */
+  /** Dedicated VRAM, or what ROCm can allocate on a shared-memory GPU; null when the OS does not expose it. */
   memoryBytes: number | null;
-  /** Integrated GPU that allocates from system RAM (Strix Halo); `memoryBytes` stays null. */
-  sharedMemory?: boolean;
+  /**
+   * Strix Halo, which ROCm serves from its firmware carve-out (memory the OS does not see) or, when GTT is larger,
+   * from GTT in the RAM the OS sees.
+   */
+  sharedMemory?: 'carve-out' | 'gtt';
 }
 
 interface PciGpu extends DetectedGpu {
@@ -148,6 +155,22 @@ async function reachable(root: string, dir: string, driver: string): Promise<boo
 
 type Classified = { gpu: PciGpu; reachable: boolean } | null | undefined;
 
+/**
+ * The device memory KFD gives ROCm on an APU: the carve-out, or the TTM page limit once GTT is larger than the
+ * carve-out (amdgpu_amdkfd_get_local_mem_info). GTT bounds the latter too, in case amdgpu.gttsize lowered it.
+ */
+async function strixHaloMemory(
+  root: string,
+  dir: string,
+  vram: number | null
+): Promise<{ bytes: number | null; kind: NonNullable<DetectedGpu['sharedMemory']> }> {
+  const gtt = positive(await readText(join(dir, 'mem_info_gtt_total')));
+  if (vram === null || gtt === null) return { bytes: null, kind: 'carve-out' };
+  if (vram >= gtt) return { bytes: vram, kind: 'carve-out' };
+  const pages = positive(await readText(join(root, 'sys/module/ttm/parameters/pages_limit')));
+  return { bytes: Math.min(gtt, pages === null ? gtt : pages * TTM_PAGE_BYTES), kind: 'gtt' };
+}
+
 async function linuxGpu(root: string, dir: string, address: string, kfd: Map<string, KfdNode>): Promise<Classified> {
   const pciClass = await readText(join(dir, 'class'));
   if (!pciClass || !/^0x[0-9a-f]{6}$/i.test(pciClass)) return undefined;
@@ -168,7 +191,10 @@ async function linuxGpu(root: string, dir: string, address: string, kfd: Map<str
   const vendor = VENDORS[vendorId];
   const driver = driverLink ? basename(driverLink) : null;
   if (!vendor || !driver) return null;
-  const classified = async (memoryBytes: number | null, sharedMemory = false): Promise<Classified> => ({
+  const classified = async (
+    memoryBytes: number | null,
+    sharedMemory?: DetectedGpu['sharedMemory']
+  ): Promise<Classified> => ({
     gpu: {
       vendor,
       name: await readText(join(dir, 'product_name')),
@@ -189,8 +215,10 @@ async function linuxGpu(root: string, dir: string, address: string, kfd: Map<str
     if (driver !== 'amdgpu') return null;
     const vram = positive(await readText(join(dir, 'mem_info_vram_total')));
     const node = kfd.get(address);
-    // Ollama enables Strix Halo by default, but its firmware carve-out is shared RAM, not dedicated VRAM.
-    if (node?.gfxTarget === STRIX_HALO_GFX_TARGET) return classified(null, true);
+    if (node ? node.gfxTarget === STRIX_HALO_GFX_TARGET : deviceId === STRIX_HALO_DEVICE_ID) {
+      const shared = await strixHaloMemory(root, dir, vram);
+      return classified(shared.bytes, shared.kind);
+    }
     if (vram !== null && vram <= INTEGRATED_MAX_VRAM_BYTES) return null;
     if (node && (AMD_APU_GFX_TARGETS.has(node.gfxTarget) || node.cpuCores > 0)) return null;
     // Unless the target is a known card, an APU's firmware carve-out could pass for VRAM, so leave it unmeasured.
@@ -343,7 +371,10 @@ export function parseWindowsGpus(stdout: string): DetectedGpu[] | null {
 
     if (vendor === 'nvidia') return parseInt(ids[2], 16) >= NVIDIA_FIRST_MAXWELL_DEVICE ? gpu : [];
     if (vendor === 'amd') {
-      if (name && /\b(?:8050S|8060S)\b/i.test(name)) return [{ vendor, name, memoryBytes: null, sharedMemory: true }];
+      // qwMemorySize is the Variable Graphics Memory carve-out; shared memory past it is not counted.
+      if ((name && STRIX_HALO_NAME.test(name)) || ids[2].toLowerCase() === STRIX_HALO_DEVICE_ID) {
+        return [{ vendor, name, memoryBytes, sharedMemory: 'carve-out' }];
+      }
       // Pre-GCN Radeon HD parts have neither a ROCm nor a Vulkan backend.
       if (name && /\bHD\s*(?:[2-6]\d{3}|7[0-6]\d{2})\b/i.test(name)) return [];
       return small || (name !== null && isAmdApuName(name)) ? [] : gpu;

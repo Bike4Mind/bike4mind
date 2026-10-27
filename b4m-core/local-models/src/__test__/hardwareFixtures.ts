@@ -138,15 +138,21 @@ export const KFD_RX7900XTX_NODE =
 export const KFD_RAPHAEL_NODE =
   'cpu_cores_count 0\nsimd_count 4\nmem_banks_count 1\narray_count 1\nsimd_per_cu 2\ngfx_target_version 100306\nvendor_id 4098\ndevice_id 5710\nlocation_id 5376\ndomain 0\ndrm_render_minor 129\nnum_xcc 1\n';
 
-/** Strix Halo with a 64 GiB carve-out set in firmware. */
+/** Strix Halo on 128 GB with a 64 GiB firmware carve-out, and GTT at its default half of the RAM the OS sees. */
 export const amdStrixHalo: PciDeviceFixture = {
   address: '0000:c5:00.0',
   pciClass: '0x038000',
   vendor: '0x1002',
   device: '0x1586',
   driver: 'amdgpu',
-  files: { mem_info_vram_total: '68719476736' },
+  files: { mem_info_vram_total: '68719476736', mem_info_gtt_total: '33285996544' },
 };
+
+/** Strix Halo with this carve-out and GTT size, in bytes. */
+export const strixHalo = (vram: number, gtt: number): PciDeviceFixture => ({
+  ...amdStrixHalo,
+  files: { mem_info_vram_total: String(vram), mem_info_gtt_total: String(gtt) },
+});
 
 // gfx_target_version, vendor_id, device_id, simd_count and drm_render_minor are from a public gfx1151 (Ryzen AI
 // Max+ 395) rocminfo bug report; location_id (bus 0xc5), domain and cpu_cores_count are filled in for this fixture.
@@ -245,6 +251,19 @@ export const POWERSHELL_INTEL_ARC = JSON.stringify({
   errorCode: 0,
   status: 'OK',
 });
+
+/** A Ryzen AI Max+ 395 with 96 GB of its 128 GB set as Variable Graphics Memory. */
+export const POWERSHELL_STRIX_HALO = JSON.stringify([
+  {
+    name: 'AMD Radeon(TM) 8060S Graphics',
+    pnpDeviceId: 'PCI\\VEN_1002&DEV_1586&SUBSYS_8D101462&REV_C1\\4&2A9E7E3B&0&0041',
+    adapterRam: 4293918720,
+    location: 'PCI bus 197, device 0, function 0',
+    memoryBytes: 103079215104,
+    errorCode: 0,
+    status: 'OK',
+  },
+]).replace(/&/g, '\\u0026');
 
 export const POWERSHELL_NVIDIA = JSON.stringify([
   {
