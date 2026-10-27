@@ -24,6 +24,8 @@ interface FloatingChatWindowProps {
   title?: React.ReactNode;
   /** Close collapses to the "AI Chat" pill instead of hiding the chat, for pages (e.g. /admin) with no other launcher to bring it back. */
   closeToPill?: boolean;
+  /** Offer the dock layouts in the Layout menu. */
+  dockable?: boolean;
 }
 
 // Animation for expand/collapse
@@ -91,6 +93,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({
   headerActions,
   title,
   closeToPill = false,
+  dockable = true,
 }) => {
   const nodeRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
@@ -459,7 +462,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({
             onPointerDown={e => e.stopPropagation()}
           >
             {headerActions}
-            <ChatPanelControls testIdPrefix="floating-chat" />
+            <ChatPanelControls testIdPrefix="floating-chat" dockable={dockable} />
             <Tooltip title="Minimize" disableInteractive>
               <IconButton
                 size="sm"

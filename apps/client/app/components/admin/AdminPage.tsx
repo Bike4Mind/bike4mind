@@ -340,6 +340,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               isLoading={!adminSessionId || adminSession.isPending}
               autoHideOnEmpty={false}
               floatingChatCloseToPill
+              floatingChatDockable={false}
             />
           </Box>
         </NotebookFilepondProvider>
