@@ -131,6 +131,7 @@ export enum AdminTab {
   IntegrationDemand = 65,
   AuditLog = 66,
   Dashboard = 67,
+  SignupDomainHolds = 68,
 }
 
 /**
@@ -194,6 +195,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: MessageSquare, tab: AdminTab.Feedback, label: 'Feedback' },
       { Icon: MailCheck, tab: AdminTab.EmailVerification, label: 'Email verification' },
       { Icon: Handshake, tab: AdminTab.PartnerSignupRules, label: 'Partner signups' },
+      { Icon: Handshake, tab: AdminTab.SignupDomainHolds, label: 'Signup domain holds' },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
     ],
   },

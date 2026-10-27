@@ -46,6 +46,14 @@ describe('DataTable', () => {
     expect(row).toHaveAttribute('aria-selected', 'false');
   });
 
+  it('renders every supplied row without local pagination when the caller owns paging', () => {
+    renderTable({ pagination: false });
+    expect(tableRows()).toHaveLength(101);
+    expect(screen.queryByTestId('admin-table-page-size')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('admin-table-previous-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('admin-table-next-btn')).not.toBeInTheDocument();
+  });
+
   it('paginates the complete result at 25, 50 and 100 rows', () => {
     renderTable();
     expect(tableRows()).toHaveLength(25);
