@@ -19,6 +19,10 @@ const { mockListAccessibleAfterId, mockCreate, mockCountByUserId, mockFindUser, 
   })
 );
 
+vi.mock('@server/utils/callerModelList', () => ({
+  getCallerModelList: async () => ({ models: [{ id: 'catalog-model' }], supersededModels: [] }),
+}));
+
 vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
     res.status(405).end(),
