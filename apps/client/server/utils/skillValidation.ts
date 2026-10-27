@@ -68,3 +68,8 @@ export function validateSkillAllowedTools(value: unknown): string[] | undefined 
   // Reuse the agent validator - same 100-entry / 256-char-per-entry bounds apply.
   return validateToolList(value, 'allowedTools');
 }
+
+/** Same bounds as allowedTools, but no name check: these are Claude Code tool names, never run here. */
+export function validateSkillClaudeCodeAllowedTools(value: unknown): string[] | undefined {
+  return validateToolList(value, 'claudeCodeAllowedTools');
+}

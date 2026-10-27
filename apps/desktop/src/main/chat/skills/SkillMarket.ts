@@ -470,6 +470,10 @@ function toFields(value: unknown): SkillUploadFields | null {
     description: fields.description,
     body: fields.body,
     argumentHint: typeof fields.argumentHint === 'string' ? fields.argumentHint : '',
+    // Always sent, like argumentHint, so an update clears tools the file no longer declares.
+    claudeCodeAllowedTools: Array.isArray(fields.claudeCodeAllowedTools)
+      ? fields.claudeCodeAllowedTools.filter((tool): tool is string => typeof tool === 'string')
+      : [],
     disableModelInvocation: fields.disableModelInvocation === true,
   };
 }
