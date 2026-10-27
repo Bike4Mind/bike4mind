@@ -196,6 +196,8 @@ describe('generate-premium-glue.mjs', () => {
       fs.rmSync(path.join(root, 'node_modules'), { recursive: true });
       expect(run(root).status).toBe(0);
       expect(exists(root, API_STUB)).toBe(false);
+      expect(read(root, LLM_TOOLS)).not.toContain('@fixture/fx/tools');
+      expect(read(root, LS_KEYS)).not.toContain("'fx:'");
       expect(read(root, ROUTES)).toContain('PremiumRouteDescriptor[] = [];');
     });
   });
