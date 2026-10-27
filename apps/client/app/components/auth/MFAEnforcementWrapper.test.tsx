@@ -131,35 +131,6 @@ describe('MFAEnforcementWrapper - auto-setup does not loop on persistent failure
   });
 });
 
-describe('MFAEnforcementWrapper - stale caches after enrolling at sign-in', () => {
-  beforeEach(() => {
-    post.mockReset();
-    get.mockReset();
-    // The status/user caches still say "not enrolled", but the server already has MFA on.
-    get.mockResolvedValue({ data: { enabled: false } });
-    post.mockRejectedValue(
-      Object.assign(new Error('Request failed with status code 409'), {
-        response: { status: 409, data: { error: 'MFA is already enabled for this account.' } },
-      })
-    );
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('lets the user in on a 409 from setup instead of showing the setup error', async () => {
-    renderWrapper();
-
-    await screen.findByTestId('app-content');
-    expect(mfaSetupCalls()).toBe(1);
-    expect(screen.queryByTestId('mfa-enforcement-retry-btn')).toBeNull();
-    expect(toastError).not.toHaveBeenCalled();
-    // The stale status cache is refreshed rather than trusted.
-    await waitFor(() => expect(get.mock.calls.filter(([url]) => url === '/api/auth/mfa/status').length).toBe(2));
-  });
-});
-
 describe('MFAEnforcementWrapper - dismissed verification prompt', () => {
   beforeEach(() => {
     post.mockReset();
@@ -281,5 +252,44 @@ describe('MFAEnforcementWrapper - failed setup verification', () => {
     post.mockImplementation(() => new Promise(() => {})); // the retry stays in flight
     fireEvent.click(screen.getByTestId('mfa-modal-stub-verify'));
     await waitFor(() => expect(screen.getByTestId('mfa-modal-stub-error').textContent).toBe(''));
+  });
+});
+
+describe('MFAEnforcementWrapper - an enrolled user is never sent into setup', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    get.mockResolvedValue({ data: { enabled: false } });
+    post.mockResolvedValue({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The mocked currentUser has no `mfa`, as after a reload rehydrates the persisted user store.
+  it('trusts the status query over a currentUser that lacks mfa', async () => {
+    get.mockResolvedValue({ data: { enabled: true } });
+
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(mfaSetupCalls()).toBe(0);
+  });
+
+  it('refreshes status instead of toasting when setup answers 409', async () => {
+    get.mockResolvedValueOnce({ data: { enabled: false } }).mockResolvedValue({ data: { enabled: true } });
+    post.mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        response: { status: 409, data: { error: 'MFA is already enabled for this account.' } },
+      })
+    );
+
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    expect(mfaSetupCalls()).toBe(1);
+    expect(toastError).not.toHaveBeenCalled();
   });
 });

@@ -183,6 +183,10 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
   }
 );
 
+// Server-owned lifetime grant budget. Kept outside the public organization shape;
+// no API accepts writes to it. Missing values are initialized from existing grants.
+OrganizationSchema.path('signupGrantUnlockCount', { type: Number, min: 0, select: false });
+
 OrganizationSchema.virtual('logo', {
   ref: 'AppFile',
   localField: 'logoFileId',
@@ -202,6 +206,7 @@ OrganizationSchema.plugin(softDeletePlugin);
 // data-lake request - Mongo index-unions an `$or` only when EVERY branch is index-supported, so
 // without both the org-admin resolution would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
+OrganizationSchema.index({ stripeCustomerId: 1 }, { name: 'organization_stripeCustomerId' });
 // Backs findMembershipOrgIds' reverse lookup (users[] ACL by member) - previously every
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.
 OrganizationSchema.index({ 'users.userId': 1 });

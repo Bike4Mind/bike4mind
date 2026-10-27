@@ -81,6 +81,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       body: snap.body,
       argumentHint: snap.argumentHint ?? '',
       allowedTools: snap.allowedTools ?? [],
+      claudeCodeAllowedTools: snap.claudeCodeAllowedTools ?? [],
       disableModelInvocation: Boolean(snap.disableModelInvocation),
       importedFrom,
     };

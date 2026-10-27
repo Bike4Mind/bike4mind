@@ -261,6 +261,11 @@ const ASSET_CSP = [
   withAppHost("frame-ancestors 'self'"),
 ].join('; ');
 
+// Images that miss a gated render's inline budget fall back to a signed storage URL. Without a
+// browser signing origin that fallback is gone and they are dropped instead, which still beats
+// losing the stylesheet.
+const isSignableImage = (path: string) => !!inlineTypeFor(path)?.startsWith('image/');
+
 // Share links are served same-origin, sandboxed, and must never be cached: no-store
 // is what makes a token rotation/revoke take effect immediately (no stale CDN/browser copy).
 const SHARE_CACHE_CONTROL = 'private, no-store, must-revalidate';
@@ -358,7 +363,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   let artifact: PublishedArtifactLean | null = null;
   if (resolved.kind === 'share') {
     // Shared filter, not a hand-rolled one: findByShareToken cannot be used here (it needs a
-    // lean read), but the rollout tolerance and revocation semantics must not diverge from it.
+    // lean read), but its index use and revocation semantics must not diverge from it.
     artifact = await PublishedArtifact.findOne({
       deletedAt: null,
       ...shareTokenFilter(resolved.shareToken),
@@ -962,9 +967,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
       // index.html ships inside a double-quoted srcdoc attribute: `&` and `"` grow (see renderBundleWrapper)
       reservedBytes: Buffer.byteLength(indexHtml.replace(/&/g, '&amp;').replace(/"/g, '&quot;')),
+      hasFallback: isSignableImage,
     });
     inlineAssets = collected.assets;
-    for (const path of collected.oversized.filter(p => inlineTypeFor(p)?.startsWith('image/'))) {
+    for (const path of collected.oversized.filter(isSignableImage)) {
       const url = await signFile(path, false, mediaTtl);
       if (url) signed.set(path, url);
     }

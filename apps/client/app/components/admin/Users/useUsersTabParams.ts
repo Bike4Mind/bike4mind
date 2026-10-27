@@ -35,7 +35,18 @@ export const useUsersTab = create<{
 
 type SearchRecord = Record<string, unknown>;
 
-const VIEW_KEYS = ['page', 'limit', 'sortField', 'sortOrder', 'orgSearch', 'tags', 'groupBy', 'recentSignups'] as const;
+const VIEW_KEYS = [
+  'page',
+  'limit',
+  'sortField',
+  'sortOrder',
+  'orgSearch',
+  'tags',
+  'groupBy',
+  'recentSignups',
+  'createdFrom',
+  'createdTo',
+] as const;
 
 const touchesView = (patch: Partial<IGetUsersParams>) => VIEW_KEYS.some(key => key in patch);
 
@@ -108,11 +119,14 @@ export const CLEARED_FILTER_PARAMS: Partial<IGetUsersParams> = {
   page: 1,
   groupBy: undefined,
   recentSignups: undefined,
+  createdFrom: undefined,
+  createdTo: undefined,
 };
 
 export const countActiveFilters = (params: IGetUsersParams): number => {
   let count = 0;
   if (params.recentSignups) count++;
+  if (params.createdFrom || params.createdTo) count++;
   if (params.orgSearch && !params.orgSearch.includes('all') && params.orgSearch.length > 0) count++;
   if (params.tags && params.tags.length > 0) count++;
   if (params.sortField !== DEFAULT_USERS_PARAMS.sortField || params.sortOrder !== DEFAULT_USERS_PARAMS.sortOrder) {

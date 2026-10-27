@@ -19,6 +19,7 @@ describe('resolveFieldLimits', () => {
       callback: false,
       embedding: false,
       slackNotification: false,
+      signupActivity: false,
     });
   });
 
@@ -56,7 +57,13 @@ describe('resolveFieldLimits', () => {
 
   it('excludes password/stripeCustomerId/resetPasswordToken for the users collection', () => {
     const limits = resolveFieldLimits('users', opts());
-    expect(limits).toEqual({ password: false, stripeCustomerId: false, resetPasswordToken: false });
+    expect(limits).toEqual({
+      password: false,
+      stripeCustomerId: false,
+      resetPasswordToken: false,
+      signupGrantAssessment: false,
+      riskScore: false,
+    });
   });
 
   it('returns undefined for a collection with no configured limits', () => {
@@ -86,12 +93,14 @@ describe('resolveFieldLimits', () => {
       callback: false,
       embedding: false,
       slackNotification: false,
+      signupActivity: false,
     });
   });
 
   it('excludes stripeCustomerId and billingContact for a non-admin organizations subscriber', () => {
     expect(resolveFieldLimits('organizations', opts())).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
       billingContact: false,
     });
   });
@@ -101,12 +110,14 @@ describe('resolveFieldLimits', () => {
     // is privileged. Owners are NOT privileged here - see the projection note in the source.
     expect(resolveFieldLimits('organizations', opts({ isPlatformAdmin: true }))).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
     });
   });
 
   it('uses the passed-in organization collection name rather than a hardcoded literal', () => {
     expect(resolveFieldLimits('orgs_v2', opts({ organizationCollectionName: 'orgs_v2' }))).toEqual({
       stripeCustomerId: false,
+      signupGrantUnlockCount: false,
       billingContact: false,
     });
   });

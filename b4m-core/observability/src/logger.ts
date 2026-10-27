@@ -35,6 +35,8 @@ export class Logger implements ILogger {
     error: 3,
   };
 
+  private static readonly MAX_CAUSE_DEPTH = 5;
+
   // ANSI color codes for pretty printing
   private static readonly COLORS = {
     debug: '\x1b[36m', // Cyan
@@ -90,11 +92,30 @@ export class Logger implements ILogger {
   // which silently loses the stack wherever an Error is nested inside metadata. Spread
   // first so own enumerable properties (HTTPError's statusCode/additionalInfo, axios's
   // code/response, ...) survive alongside them.
+  // `cause` is non-enumerable too and is where undici keeps the real network reason, so it is
+  // serialized explicitly, capped so a long or cyclic chain cannot blow up the line.
   private static errorReplacer(_key: string, value: unknown): unknown {
-    if (value instanceof Error) {
-      return { ...value, name: value.name, message: value.message, stack: value.stack };
+    return value instanceof Error ? Logger.serializeError(value, 0, new Set()) : value;
+  }
+
+  private static serializeError(error: Error, depth: number, seen: Set<Error>): Record<string, unknown> {
+    seen.add(error);
+    const serialized: Record<string, unknown> = {
+      ...error,
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+    const { cause } = error as Error & { cause?: unknown };
+    if (cause !== undefined) {
+      serialized.cause =
+        cause instanceof Error
+          ? depth + 1 >= Logger.MAX_CAUSE_DEPTH || seen.has(cause)
+            ? '[Truncated]'
+            : Logger.serializeError(cause, depth + 1, seen)
+          : cause;
     }
-    return value;
+    return serialized;
   }
 
   /**

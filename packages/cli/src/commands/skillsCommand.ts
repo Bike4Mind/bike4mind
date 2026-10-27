@@ -29,6 +29,7 @@ export interface SkillPayload {
   description: string;
   body: string;
   argumentHint?: string;
+  claudeCodeAllowedTools: string[];
   disableModelInvocation: boolean;
 }
 
@@ -73,9 +74,10 @@ function descriptionFor(fields: SkillMdFields): string {
 }
 
 /**
- * Built from an explicit field list (never a spread of parsed data) so
- * allowedTools can't reach the server: Claude Code tool names don't map to B4M.
- * disableModelInvocation is always sent so an update mirrors the file.
+ * Built from an explicit field list (never a spread of parsed data). The file's
+ * allowed-tools goes to claudeCodeAllowedTools, never allowedTools: Claude Code
+ * tool names don't map to B4M. claudeCodeAllowedTools and disableModelInvocation
+ * are always sent so an update mirrors the file.
  */
 export function buildSkillPayload(fields: SkillMdFields, fallbackName: string): SkillPayload {
   return {
@@ -83,6 +85,7 @@ export function buildSkillPayload(fields: SkillMdFields, fallbackName: string): 
     description: descriptionFor(fields),
     body: fields.body ?? '',
     ...(fields.argumentHint !== undefined && { argumentHint: fields.argumentHint }),
+    claudeCodeAllowedTools: fields.claudeCodeAllowedTools ?? [],
     disableModelInvocation: fields.disableModelInvocation ?? false,
   };
 }

@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import * as creditService from '../creditService';
+import * as stagedSignupGrant from './stagedSignupGrant';
 import { grantFreeCredits, releasePendingFreeCredits, resolveFreeCreditAmount } from './freeCredits';
+import * as signupProtection from './signupProtection';
 
 const buildAdapters = (defaultFreeCredits: string | null = '100') => {
   const logger = { error: vi.fn() };
@@ -14,7 +16,7 @@ const buildAdapters = (defaultFreeCredits: string | null = '100') => {
       },
       creditTransactions: { findOne: vi.fn().mockResolvedValue(null) },
       creditLots: {},
-      users: { claimFreeCreditGrant: vi.fn().mockResolvedValue(true) },
+      users: { claimFreeCreditGrant: vi.fn().mockResolvedValue(true), findById: vi.fn().mockResolvedValue(null) },
     },
     reason: 'test grant',
     logger,
@@ -57,6 +59,49 @@ describe('free credits service', () => {
   });
 
   describe('grantFreeCredits', () => {
+    it('propagates a failed enrollment read without falling back to a flat grant', async () => {
+      const adapters = buildAdapters('100');
+      const readFailure = new Error('user store unavailable');
+      adapters.db.users.findById.mockRejectedValueOnce(readFailure);
+
+      await expect(grantFreeCredits({ id: 'user-1' }, adapters)).rejects.toBe(readFailure);
+
+      expect(adapters.db.users.findById).toHaveBeenCalledExactlyOnceWith('user-1');
+      expect(adapters.db.adminSettings.findBySettingName).not.toHaveBeenCalled();
+      expect(adapters.db.creditTransactions.findOne).not.toHaveBeenCalled();
+      expect(addCreditsSpy).not.toHaveBeenCalled();
+    });
+
+    it('withholds a staged signup tranche while the signup domain is held', async () => {
+      const adapters = buildAdapters('100');
+      adapters.db.users.findById.mockResolvedValue({
+        id: 'user-1',
+        emailVerified: true,
+        signupGrant: { stage: 'pending_email' },
+      });
+      adapters.db.signupProtection = {
+        repository: {
+          findReview: async () => null,
+          observe: async () => {},
+          recent: async () => [],
+          createHold: async () => false,
+          isOrganizationDomain: async () => false,
+        },
+      };
+      const addTags = vi.fn();
+      Object.assign(adapters.db.users, { addTagsToUser: addTags });
+      const protect = vi.spyOn(signupProtection, 'protectSignupCredits').mockResolvedValue(true);
+      const tranche = vi.spyOn(stagedSignupGrant, 'releaseSignupTranche');
+
+      const result = await grantFreeCredits({ id: 'user-1' }, adapters);
+
+      expect(result).toEqual({ creditsGranted: 0, currentCredits: null, withheld: true });
+      expect(tranche).toHaveBeenCalledExactlyOnceWith('user-1', expect.objectContaining({ db: adapters.db }));
+      expect(protect).toHaveBeenCalledExactlyOnceWith('user-1', adapters.db);
+      expect(addTags).toHaveBeenCalledExactlyOnceWith('user-1', [PENDING_FREE_CREDITS_TAG]);
+      expect(addCreditsSpy).not.toHaveBeenCalled();
+    });
+
     it('grants nothing when the resolved amount is 0', async () => {
       const result = await grantFreeCredits({ id: 'user-1' }, buildAdapters('0'));
       expect(result).toEqual({ creditsGranted: 0, currentCredits: null });
@@ -108,6 +153,23 @@ describe('free credits service', () => {
     });
   });
 
+  describe('staged grant routing', () => {
+    it("forwards the risk collector to an enrolled account's tranche release", async () => {
+      const release = vi
+        .spyOn(stagedSignupGrant, 'releaseSignupTranche')
+        .mockResolvedValue({ creditsGranted: 40, currentCredits: 40 });
+      const adapters = buildAdapters('100');
+      adapters.db.users.findById.mockResolvedValue({ id: 'user-1', signupGrant: { stage: 'pending_email' } });
+      const collectRiskSignals = vi.fn();
+
+      const result = await grantFreeCredits({ id: 'user-1' }, { ...adapters, collectRiskSignals });
+
+      expect(result).toEqual({ creditsGranted: 40, currentCredits: 40 });
+      expect(release).toHaveBeenCalledWith('user-1', expect.objectContaining({ collectRiskSignals }));
+      expect(addCreditsSpy).not.toHaveBeenCalled();
+    });
+  });
+
   describe('legacy otc-register-grant transaction', () => {
     it('treats a grant committed under the legacy id as granted and still strips the tag', async () => {
       const adapters = buildAdapters('100');
@@ -129,6 +191,26 @@ describe('free credits service', () => {
   });
 
   describe('releasePendingFreeCredits', () => {
+    it('keeps the pending grant and logs when the enrollment read fails', async () => {
+      const adapters = buildAdapters('100');
+      const readFailure = new Error('user store unavailable');
+      adapters.db.users.findById.mockRejectedValueOnce(readFailure);
+      const user = { id: 'user-1', tags: ['Customer', PENDING_FREE_CREDITS_TAG], pendingCreditGrant: 250 };
+
+      const result = await releasePendingFreeCredits(user, adapters);
+
+      expect(result).toEqual({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+      expect(user.tags).toEqual(['Customer', PENDING_FREE_CREDITS_TAG]);
+      expect(user.pendingCreditGrant).toBe(250);
+      expect(adapters.logger.error).toHaveBeenCalledExactlyOnceWith(
+        `Free credit grant failed for user user-1; keeping ${PENDING_FREE_CREDITS_TAG} for retry`,
+        readFailure
+      );
+      expect(adapters.db.adminSettings.findBySettingName).not.toHaveBeenCalled();
+      expect(adapters.db.creditTransactions.findOne).not.toHaveBeenCalled();
+      expect(addCreditsSpy).not.toHaveBeenCalled();
+    });
+
     it('does nothing for a user without the pending tag', async () => {
       const result = await releasePendingFreeCredits({ id: 'user-1', tags: ['Customer'] }, buildAdapters());
       expect(result).toEqual({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });

@@ -11,6 +11,7 @@ import MinimizeIcon from '@mui/icons-material/Minimize';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ChatPanelControls from './ChatPanelControls';
+import { adminSurfaceExcludeProps } from '@client/app/utils/themes/customizations/adminSkin';
 
 // react-draggable v4.7 types DraggableProps to cover nodeRef/handle/position/
 // bounds/onDrag/onStop directly, so no cast is needed.
@@ -21,6 +22,10 @@ interface FloatingChatWindowProps {
   headerActions?: React.ReactNode;
   /** Overrides the default "AI Chat" title-bar label (e.g. /opti swaps in the Data Lakes toggle). */
   title?: React.ReactNode;
+  /** Close collapses to the "AI Chat" pill instead of hiding the chat, for pages (e.g. /admin) with no other launcher to bring it back. */
+  closeToPill?: boolean;
+  /** Offer the dock layouts in the Layout menu. */
+  dockable?: boolean;
 }
 
 // Animation for expand/collapse
@@ -83,7 +88,13 @@ const getCursorForHandle = (position: string): string => {
   return cursors[position] || 'default';
 };
 
-const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, headerActions, title }) => {
+const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({
+  children,
+  headerActions,
+  title,
+  closeToPill = false,
+  dockable = true,
+}) => {
   const nodeRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
 
@@ -307,11 +318,16 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
     }
   }, [isMinimized, hiddenFromLayout]);
 
-  // Handle close - dismiss the panel entirely. Re-docking is a separate action
-  // (the dock-right/dock-bottom controls in ChatPanelControls), not this button's job.
+  // Close hides the panel entirely, or collapses to the pill when closeToPill is set (pages with
+  // no other launcher). Re-docking is a separate action (the dock-right/dock-bottom controls in
+  // ChatPanelControls), not this button's job.
   const handleClose = useCallback(() => {
+    if (closeToPill) {
+      setSessionLayout({ floatingChatMinimized: true });
+      return;
+    }
     setSessionLayout({ layout: 'hide', floatingChatMinimized: false });
-  }, []);
+  }, [closeToPill]);
 
   const bounds = {
     left: 0,
@@ -347,6 +363,8 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
         })}
         onClick={handleMinimize}
         data-testid="floating-chat-minimized"
+        // App-wide chrome: the admin skin stops here (adminSkin.ts).
+        {...adminSurfaceExcludeProps}
       >
         <SmartToyIcon sx={{ fontSize: 16 }} />
         <Typography level="body-sm" fontWeight="md" sx={{ color: 'inherit' }}>
@@ -368,6 +386,8 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
       <Box
         ref={nodeRef}
         data-testid="floating-chat-window"
+        // App-wide chrome: the admin skin stops here (adminSkin.ts).
+        {...adminSurfaceExcludeProps}
         sx={theme => ({
           position: 'fixed',
           width: localSize.width,
@@ -442,7 +462,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
             onPointerDown={e => e.stopPropagation()}
           >
             {headerActions}
-            <ChatPanelControls testIdPrefix="floating-chat" />
+            <ChatPanelControls testIdPrefix="floating-chat" dockable={dockable} />
             <Tooltip title="Minimize" disableInteractive>
               <IconButton
                 size="sm"

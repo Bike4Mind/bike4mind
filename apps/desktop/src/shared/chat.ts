@@ -857,6 +857,18 @@ export function localBackend(runtimeId: string): string {
 }
 
 /**
+ * Held by a device-local conversation with no model to pick. Malformed on purpose: `isLocalModel`
+ * is true so it never goes hosted, `parseLocalModelId` is null so it names no model.
+ */
+export const NO_LOCAL_MODEL = 'local:';
+
+/** The device-local model a conversation moves to: the remembered pick if listed, else the first. */
+export function pickLocalModel(models: readonly { id: string }[], remembered?: string | null): string | null {
+  if (remembered && models.some(model => model.id === remembered)) return remembered;
+  return models[0]?.id ?? null;
+}
+
+/**
  * One model this deployment offers, as the picker renders it.
  *
  * Sourced from `GET /api/models`, which builds the list from the calling account's effective
@@ -893,6 +905,8 @@ export interface ChatModelOption {
    * THINKING_OFF_SETTING (off).
    */
   thinkingToggle?: boolean;
+  /** A `thinkingToggle` model whose template always thinks, so the switch shows Off as unavailable. */
+  thinkingAlwaysOn?: boolean;
   /** Local models can remain useful without tool-call support. */
   supportsTools?: boolean;
 }
@@ -1267,6 +1281,8 @@ export type ChatStreamEvent =
   | { type: 'auto-compact'; sessionId: string; running: boolean; error?: string }
   /** A local model's prompt overflowed its context, so the oldest `dropped` messages were left out. */
   | { type: 'context-trimmed'; sessionId: string; dropped: number }
+  /** Auto changed a local model's context mid-turn in a way that affects its replies (slower, or smaller). */
+  | { type: 'context-notice'; sessionId: string; message: string }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`

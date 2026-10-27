@@ -152,6 +152,25 @@ describe('toSafeUser', () => {
 });
 
 describe('redactUserSecretsForSelf', () => {
+  it('withholds private grant assessments from self and public views', () => {
+    const user = {
+      ...fullUser,
+      signupGrantAssessment: {
+        band: 'review',
+        credits: 0,
+        score: 8,
+        reasons: ['datacenter'],
+        missing: [],
+        policyVersion: 'private',
+        status: 'evaluated',
+      },
+    } as IUser;
+    expect(redactUserSecretsForSelf(user)).not.toHaveProperty('signupGrantAssessment');
+    expect(toSafeUser(user)).not.toHaveProperty('signupGrantAssessment');
+    expect(redactUserSecretsForSelf(user, { keepAdminOnly: ['signupGrantAssessment'] })).toHaveProperty(
+      'signupGrantAssessment'
+    );
+  });
   it('drops pure-secret fields entirely', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     // `authProviders` is NOT here: it moved to USER_SUBFIELD_REDACTED_FIELDS, since the
@@ -272,6 +291,17 @@ describe('redactUserSecretsForSelf', () => {
     for (const f of USER_SUBFIELD_REDACTED_FIELDS) {
       expect(secrets.has(f)).toBe(true);
     }
+  });
+
+  // The signals and reasons say how the score is built, so the scored user must never see them.
+  it('never shows a user their own risk score, in any view', () => {
+    const scored = {
+      ...fullUser,
+      riskScore: { score: 70, signals: [], computedAt: new Date(), reviewState: 'pending' },
+    } as unknown as IUser;
+
+    expect('riskScore' in redactUserSecretsForSelf(scored)!).toBe(false);
+    expect('riskScore' in toSafeUser(scored, 'self')!).toBe(false);
   });
 
   it('drops every non-rebuilt USER_SECRET_FIELDS entry present on the input', () => {

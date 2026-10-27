@@ -1,4 +1,4 @@
-import type { HubRuntime, KvCacheType, ModelArch } from '../schemas/modelHub';
+import { RECURRENT_KINDS, type HubRuntime, type KvCacheType, type ModelArch } from '../schemas/modelHub';
 
 /** Source of truth for the machine description; `@bike4mind/local-models` probes the same fields. */
 export interface HardwareProfile {
@@ -46,14 +46,19 @@ export const EMBEDDINGS_CONTEXT = 8192;
 // ggml block sizes: q8_0 stores 32 values in 34 bytes, q4_0 in 18.
 export const KV_BYTES_PER_ELEMENT: Record<KvCacheType, number> = { f16: 2, q8_0: 1.0625, q4_0: 0.5625 };
 
+const MIB = 1024 ** 2;
 const GIB = 1024 ** 3;
 
 export const FIT_CONSTANTS = {
-  // Linear scaling with ubatch is an assumption; llama-fit-params reserves logits for a full ubatch, which is
-  // most of this on large-vocab models.
-  computeBytesPerUbatch512: GIB,
-  // llama-server's --fit-target default.
-  marginBytes: GIB,
+  // Kept free per device: llama-server's 1 GiB --fit-target on a GPU, plus 1 GiB on discrete for the CUDA context,
+  // the display and other GPU clients (unmeasured); on a CPU, runner memory outside its buffers (38 MiB measured).
+  marginBytes: { cpu: 256 * MIB, unified: GIB, discrete: 2 * GIB },
+  // Embedding widths per token that bound the measured Mamba2 and gated delta net loads.
+  recurrentActivationWidths: 20,
+  // Other recurrent kinds keep the flat figure used before measuring; MiniMax's ub x ub decay matrices fit under it.
+  uncalibratedRecurrentBytesPerToken: 2 * MIB,
+  // n_embd assumed for split inputs when the arch has none; at or above current families.
+  assumedEmbeddingLength: 16384,
   // llama.cpp pads every KV cache to a multiple of 256 cells.
   kvCellPadding: 256,
   unifiedLargeMinBytes: 36 * GIB,
@@ -117,9 +122,10 @@ export interface FitMemory {
   kvBytes: number;
   recurrentBytes: number;
   computeBytes: number;
-  marginBytes: number;
-  /** Everything above, wherever it is placed. */
+  /** Everything above, wherever it is placed: what the runtime allocates. */
   totalBytes: number;
+  /** Headroom kept free on top of `totalBytes`; a placement fits when both together stay within the budget. */
+  marginBytes: number;
   budgetBytes: number;
   ramPoolBytes: number;
 }
@@ -148,10 +154,40 @@ const Q4: KvPair = { k: 'q4_0', v: 'q4_0' };
 
 const padCells = (n: number) => Math.ceil(n / FIT_CONSTANTS.kvCellPadding) * FIT_CONSTANTS.kvCellPadding;
 
-// Observed on Ollama 0.40.11 (CPU backend): it passes -ub 512 below 8k context, 1024 below 64k, 2048 above.
-export function ollamaUbatch(context: number): number {
-  if (context < 8192) return 512;
-  return context < 65536 ? 1024 : 2048;
+/** Ollama 0.40.11's -b/-ub for a generation load, from its context across all slots (server/sched.go). */
+export function ollamaUbatch(context: number, slots = 1): number {
+  const total = context * slots;
+  if (total > 32768) return 2048;
+  return total > 4096 ? 1024 : 512;
+}
+
+/**
+ * Ollama's GPU batch step-down and CUDA flash-attention-off rule (server/sched.go). The budget stands in for live free
+ * memory; a mismatch shifts one batch step only where Ollama's prediction leaves at least 20% free.
+ */
+function ollamaGpuUbatch(
+  model: FitModel,
+  hw: HardwareProfile,
+  budget: number,
+  context: number,
+  slots: number,
+  faOff: boolean
+): number {
+  const total = context * slots;
+  if (faOff && hw.memoryKind === 'discrete') return total > 4096 && budget <= 8 * GIB ? 256 : 512;
+  const { arch } = model;
+  const kvHeads = arch.recurrent ? 1 : Math.min(arch.full.kvHeads, arch.swa?.kvHeads ?? Infinity);
+  const headDim = arch.embeddingLength && arch.headCount ? arch.embeddingLength / arch.headCount : arch.full.keyLength;
+  const predicted = model.weightsBytes + 2 * arch.blockCount * kvHeads * headDim * total * 2;
+  const threshold = budget * 0.8;
+  const fits = (batch: number) => {
+    const extra = batch >= 2048 ? 2 * GIB : batch >= 1024 ? 768 * MIB : 0;
+    const headroom = batch >= 2048 ? 0.6 : batch >= 1024 ? 0.75 : 1;
+    return predicted <= threshold && predicted <= budget * headroom && extra <= threshold - predicted;
+  };
+  let batch = ollamaUbatch(context, slots);
+  while (batch > 512 && !fits(batch)) batch = batch > 1024 ? 1024 : 512;
+  return batch;
 }
 
 /**
@@ -182,6 +218,112 @@ export function kvCacheBytes(arch: ModelArch, context: number, kv: KvPair, slots
  */
 export function flashAttnOffBytes(context: number, ubatch: number, headCount: number): number {
   return padCells(context) * ubatch * 4 * (headCount + 1);
+}
+
+/**
+ * F32 graph activations per ubatch token, measured on Ollama 0.40.11's CPU backend; without the widths, a bound
+ * from the bytes per layer that holds at 2.4 bits per weight or more.
+ */
+export function activationBytesPerToken(model: FitModel): number {
+  const { arch } = model;
+  const extra = (arch.moe ? 2 * arch.moe.experts : 0) + 32;
+  let bytes: number;
+  if (arch.embeddingLength && arch.activeFeedForwardLength) {
+    const ff = arch.activeFeedForwardLength;
+    // MoE: the down projection writes used x n_embd while its input is still live.
+    const ffn = arch.moe ? Math.max(3 * ff, ff + arch.moe.used * arch.embeddingLength) : 3 * ff;
+    // Absorbed MLA holds the latent query, its roped part and their concat per head; past the FFN at 128 heads.
+    const mla = arch.mla && arch.headCount ? arch.headCount * 2 * (arch.mla.kvLoraRank + arch.mla.ropeDim) : 0;
+    const transformer = Math.max(ffn, mla) + 5 * arch.embeddingLength + extra;
+    const recurrent = arch.recurrent ? FIT_CONSTANTS.recurrentActivationWidths * arch.embeddingLength : 0;
+    bytes = 4 * Math.max(transformer, recurrent);
+  } else {
+    let active = model.weightsBytes;
+    if (arch.moe) {
+      const idle = 1 - arch.moe.used / arch.moe.experts;
+      const expertBytes = arch.moe.moeLayers * (model.expertBytesPerLayer ?? 0);
+      // Tensor stats describe the hub build; a smaller library blob can hold less than they claim, so ignore them then.
+      active = expertBytes && expertBytes < active ? active - expertBytes * idle : active * Math.max(1 - idle, 0.25);
+    }
+    bytes = Math.ceil((arch.recurrent ? 60 : 44) * Math.sqrt(active / arch.blockCount)) + 4 * extra;
+  }
+  const calibrated = (RECURRENT_KINDS as readonly string[]).includes(arch.recurrent?.kind ?? '');
+  if (arch.recurrent && !calibrated) return Math.max(bytes, FIT_CONSTANTS.uncalibratedRecurrentBytesPerToken);
+  return bytes;
+}
+
+/** F16 KQ masks under flash attention: one per attention kind, cache cells x ubatch. */
+export function attentionMaskBytes(arch: ModelArch, context: number, ubatch: number): number {
+  const cells = padCells(context);
+  const full = arch.full.layers > 0 || arch.mla || arch.kvProbe ? cells : 0;
+  const swa = arch.swa ? Math.min(cells, padCells(arch.swa.window + ubatch)) : 0;
+  return (full + swa) * ubatch * 2;
+}
+
+/**
+ * Metal reserves an F16 copy of one layer's K and V across all slots inside every flash attention op; CUDA converts
+ * a quantized cache the same way in its pool. From llama.cpp source, not measured.
+ */
+function kvScratchBytes(arch: ModelArch, context: number, ubatch: number, slots: number): number {
+  const cells = padCells(context);
+  if (arch.kvProbe) return Math.ceil((arch.kvProbe.bytesPerToken * cells * slots) / arch.blockCount);
+  const { full, swa, mla } = arch;
+  const fullBytes = full.layers > 0 ? cells * full.kvHeads * (full.keyLength + full.valueLength) : 0;
+  const swaCells = swa ? Math.min(cells, padCells(swa.window + ubatch)) : 0;
+  const swaBytes = swa ? swaCells * swa.kvHeads * (swa.keyLength + swa.valueLength) : 0;
+  const mlaBytes = mla ? cells * (mla.kvLoraRank + mla.ropeDim) : 0;
+  return Math.max(fullBytes, swaBytes, mlaBytes) * 2 * slots;
+}
+
+export interface ComputeBufferOptions {
+  memoryKind: HardwareProfile['memoryKind'];
+  flashAttnOff?: boolean;
+  slots?: number;
+  /** GPUs sharing a layer split; each holds its own compute buffer. */
+  devices?: number;
+}
+
+/**
+ * The runtime's compute buffers at this ubatch. CPU figures are measured; GPU additions (host mask copy on unified
+ * memory, KV scratch, pipeline input copies) come from llama.cpp source.
+ */
+export function computeBufferBytes(
+  model: FitModel,
+  context: number,
+  ubatch: number,
+  options: ComputeBufferOptions
+): number {
+  const { arch } = model;
+  const devices = options.devices ?? 1;
+  const masks = attentionMaskBytes(arch, context, ubatch);
+  const attention = options.flashAttnOff
+    ? flashAttnOffBytes(context, ubatch, arch.headCount ?? FIT_CONSTANTS.faOffAssumedHeads)
+    : masks;
+  const scratch = options.memoryKind === 'cpu' ? 0 : kvScratchBytes(arch, context, ubatch, options.slots ?? 1);
+  let bytes = devices * (ubatch * activationBytesPerToken(model) + attention + scratch);
+  // Flash attention off makes the mask F32.
+  const maskCopy = options.flashAttnOff ? 2 * masks : masks;
+  if (options.memoryKind === 'unified') bytes += maskCopy;
+  if (devices > 1) {
+    // Pipeline parallelism keeps 4 copies (GGML_SCHED_MAX_COPIES) of the masks and the layer input on every device.
+    const input = ubatch * 4 * (arch.embeddingLength ?? FIT_CONSTANTS.assumedEmbeddingLength);
+    bytes += devices * (3 * maskCopy + 4 * input);
+  }
+  return bytes;
+}
+
+/** GPUs a layer split spans; HardwareProfile only sums their VRAM. */
+function splitDevices(hw: HardwareProfile): number {
+  return hw.memoryKind === 'discrete' && hw.gpuMemoryBytes ? Math.max(1, hw.gpuCount) : 1;
+}
+
+/** The headroom a plan keeps free on this machine; see FIT_CONSTANTS.marginBytes. */
+export function fitMarginBytes(hw: HardwareProfile): number {
+  const { cpuOnly } = memoryBudgets(hw);
+  if (cpuOnly) return FIT_CONSTANTS.marginBytes.cpu;
+  if (hw.memoryKind === 'unified') return FIT_CONSTANTS.marginBytes.unified;
+  // Without per-device VRAM, several GPUs are planned as an even split, each keeping its own margin.
+  return FIT_CONSTANTS.marginBytes.discrete * splitDevices(hw);
 }
 
 export function contextTarget(arch: ModelArch, mode: FitMode, contextCap?: number): number {
@@ -238,11 +380,16 @@ class Planner {
   private readonly moeLayers: number;
   /** A preset's fixed --n-cpu-moe, clamped to the MoE layers; undefined when the search picks it. */
   private readonly fixedMoe: number | undefined;
+  private readonly margin: number;
+  private readonly ollamaEmbedding: boolean;
 
   constructor(private readonly input: FitInput) {
     this.budgets = memoryBudgets(input.hardware);
+    this.margin = fitMarginBytes(input.hardware);
     this.kvs = kvCandidates(input.runtime, input.model.arch);
-    this.slots = input.runtime.slots ?? 1;
+    this.ollamaEmbedding = input.runtime.kind === 'ollama' && input.mode === 'embeddings';
+    // Ollama loads embedding models with one slot.
+    this.slots = this.ollamaEmbedding ? 1 : (input.runtime.slots ?? 1);
     const { arch, expertBytesPerLayer } = input.model;
     const expertOffload = input.runtime.kind === 'llama-server' && expertBytesPerLayer && arch.moe;
     this.moeLayers = expertOffload && arch.moe ? arch.moe.moeLayers : 0;
@@ -265,28 +412,47 @@ class Planner {
     return this.plan(context, this.preferredKv, 'gpu');
   }
 
+  private ubatch(context: number): number {
+    const { model, runtime, hardware } = this.input;
+    if (runtime.ubatch) return runtime.ubatch;
+    if (runtime.kind !== 'ollama') return 512;
+    // Embedding loads skip the generation rule: a 2048 batch capped at the context.
+    if (this.ollamaEmbedding) return Math.min(2048, context);
+    if (this.budgets.cpuOnly) return ollamaUbatch(context, this.slots);
+    const faOff = runtime.flashAttn === 'off';
+    return ollamaGpuUbatch(model, hardware, this.budgets.gpu, context, this.slots, faOff);
+  }
+
+  /**
+   * ggml-backend.cpp runs a batch of 32+ tokens on CUDA or Metal even when the weight sits in a host buffer, copying
+   * it into the compute buffer. Bounded at 2/3 of a layer, a fused gate_up tensor.
+   */
+  private hostWeightCopyBytes(placement: FitPlacement, nCpuMoe: number, ubatch: number): number {
+    if (this.budgets.cpuOnly || ubatch < 32) return 0;
+    const { model } = this.input;
+    if (placement === 'expert-offload' && nCpuMoe > 0) return Math.ceil(((model.expertBytesPerLayer ?? 0) * 2) / 3);
+    if (placement === 'layer-offload') return Math.ceil((model.weightsBytes * 2) / 3 / model.arch.blockCount);
+    return 0;
+  }
+
   plan(context: number, kv: KvPair, placement: FitPlacement, nCpuMoe = 0): FitPlan {
-    const { model, runtime } = this.input;
-    const ubatch = runtime.ubatch ?? (runtime.kind === 'ollama' ? ollamaUbatch(context) : 512);
+    const { model, runtime, hardware } = this.input;
+    const ubatch = this.ubatch(context);
     const kvBytes = kvCacheBytes(model.arch, context, kv, this.slots, ubatch);
     const recurrentBytes = (model.arch.recurrent?.stateBytesPerSeq ?? 0) * this.slots * (1 + (runtime.draftMax ?? 0));
-    const heads = model.arch.headCount ?? FIT_CONSTANTS.faOffAssumedHeads;
     const computeBytes =
-      Math.ceil((FIT_CONSTANTS.computeBytesPerUbatch512 * ubatch) / 512) +
-      (runtime.flashAttn === 'off' ? flashAttnOffBytes(context, ubatch, heads) : 0);
+      computeBufferBytes(model, context, ubatch, {
+        memoryKind: this.budgets.cpuOnly ? 'cpu' : hardware.memoryKind,
+        flashAttnOff: runtime.flashAttn === 'off',
+        slots: this.slots,
+        devices: splitDevices(hardware),
+      }) + this.hostWeightCopyBytes(placement, nCpuMoe, ubatch);
     const mmprojBytes = model.mmprojBytes ?? 0;
     const draftBytes = model.draftBytes ?? 0;
-    const totalBytes =
-      model.weightsBytes +
-      mmprojBytes +
-      draftBytes +
-      kvBytes +
-      recurrentBytes +
-      computeBytes +
-      FIT_CONSTANTS.marginBytes;
+    const totalBytes = model.weightsBytes + mmprojBytes + draftBytes + kvBytes + recurrentBytes + computeBytes;
     let offloadedBytes = 0;
     if (placement === 'expert-offload') offloadedBytes = nCpuMoe * (model.expertBytesPerLayer ?? 0);
-    if (placement === 'layer-offload') offloadedBytes = Math.max(0, totalBytes - this.budgets.gpu);
+    if (placement === 'layer-offload') offloadedBytes = Math.max(0, totalBytes + this.margin - this.budgets.gpu);
     return {
       context,
       kv,
@@ -301,8 +467,8 @@ class Planner {
         kvBytes,
         recurrentBytes,
         computeBytes,
-        marginBytes: FIT_CONSTANTS.marginBytes,
         totalBytes,
+        marginBytes: this.margin,
         budgetBytes: this.budgets.gpu,
         ramPoolBytes: this.budgets.ramPool,
       },
@@ -316,13 +482,13 @@ class Planner {
     const placement = this.budgets.cpuOnly ? 'cpu' : 'gpu';
     for (const kv of this.kvs) {
       const p = this.plan(context, kv, placement);
-      if (p.memory.totalBytes <= this.budgets.gpu) return p;
+      if (p.memory.totalBytes + this.margin <= this.budgets.gpu) return p;
     }
     return null;
   }
 
   private fitsGpu(p: FitPlan): boolean {
-    return p.memory.totalBytes - p.memory.offloadedBytes <= this.budgets.gpu;
+    return p.memory.totalBytes - p.memory.offloadedBytes + this.margin <= this.budgets.gpu;
   }
 
   /** Binary search: GPU bytes only fall as more expert layers move to RAM. */
@@ -349,7 +515,7 @@ class Planner {
       // On unified memory the offloaded experts stay in the same pool.
       const fits =
         this.input.hardware.memoryKind === 'unified'
-          ? p.memory.totalBytes <= this.budgets.gpu
+          ? p.memory.totalBytes + this.margin <= this.budgets.gpu
           : this.fitsGpu(p) && p.memory.offloadedBytes <= this.budgets.ramPool;
       if (fits) best = p;
     }

@@ -20,6 +20,8 @@ import {
   FORCE_FALLBACK_TEST_MARKER,
   FORCE_STREAM_STALL_TEST_MARKER,
   SLOW_MODEL_ERROR_REPLY,
+  OUTPUT_BUDGET_EXHAUSTED_REPLY,
+  OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY,
 } from './ChatCompletionProcess';
 import {
   buildAndSortMessages,
@@ -51,6 +53,8 @@ import {
   MAX_FULL_TOOL_RESULT_CHARS,
   ResponsesStreamTruncatedError,
   createAnthropicStreamTimeoutError,
+  OutputBudgetExhaustedError,
+  StreamEndedWithoutFinishError,
   bedrockEmptyResponseMessage,
   type ICompletionBackend,
   federatedSharedKeyProviders,
@@ -11680,6 +11684,95 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    it('settles a budget-exhausted quest as terminal without retrying or rethrowing', async () => {
+      setupStreamIdleTimeoutMocks();
+      // Real shouldTriggerFallback does not match the budget error, so it is non-retryable.
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      const complete = vi.fn().mockRejectedValue(new OutputBudgetExhaustedError('DeepSeek', 'deepseek-flash'));
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(service.terminalError).toBeInstanceOf(OutputBudgetExhaustedError);
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({ reply: OUTPUT_BUDGET_EXHAUSTED_REPLY, type: 'error', status: 'done' })
+      );
+      // The inner fallback-loop catch must not dump it at error: that trips the operator Slack alert.
+      expect(mockLogger.error).not.toHaveBeenCalledWith(expect.any(OutputBudgetExhaustedError));
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.any(OutputBudgetExhaustedError));
+    });
+
+    it.each([undefined, 0, -1])('settles with the server reply when max_tokens is %s', async maxTokens => {
+      setupStreamIdleTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new OutputBudgetExhaustedError('DeepSeek', 'deepseek-flash')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = {
+        ...startQuestParams,
+        params: { ...startQuestParams.params, max_tokens: maxTokens },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({ reply: OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY, type: 'error', status: 'done' })
+      );
+      expect(OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY).not.toMatch(/max_tokens/);
+    });
+
+    it('retries a stream that ended without a finish reason only once on the same model', async () => {
+      setupStreamIdleTimeoutMocks();
+      const complete = vi.fn().mockRejectedValue(new StreamEndedWithoutFinishError('DeepSeek', 'deepseek-flash'));
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger })).catch(() => undefined);
+
+      expect(complete).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries a stream that ended without a finish reason once on the same model', async () => {
+      setupStreamIdleTimeoutMocks();
+      let callCount = 0;
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              callCount++;
+              if (callCount === 1) throw new StreamEndedWithoutFinishError('DeepSeek', 'deepseek-flash');
+              await cb(['Recovered']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(callCount).toBe(2);
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({ replies: ['Recovered'], status: 'done', type: 'message' })
+      );
+    });
+
     it('should succeed on stream idle timeout retry if second attempt works', async () => {
       setupStreamIdleTimeoutMocks();
 
@@ -12799,7 +12892,9 @@ describe('prompt moderation', () => {
         name: 'GPT-4',
         backend: 'openai',
         max_tokens: 100,
-        contextWindow: 1000,
+        // Must exceed CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, or the turn aborts on context overflow
+        // before the model is called and no completion-path assertion can run.
+        contextWindow: 200_000,
         can_stream: false,
         pricing: {},
         supportsImageVariation: false,
@@ -12842,7 +12937,7 @@ describe('prompt moderation', () => {
       timestamp: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
-      promptMeta: { context: {}, performance: {} },
+      promptMeta: { context: {}, performance: {}, model: { name: 'gpt-4', backend: 'openai' } },
       replies: [],
       type: 'message',
     };
@@ -13009,6 +13104,178 @@ describe('prompt moderation', () => {
       expect.objectContaining({
         hit: expect.objectContaining({ source: 'bedrock', categories: ['violence'] }),
       })
+    );
+  });
+
+  it('records a provider moderation hit (Hook A) when the Anthropic safety classifier throws', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    mockedShouldTriggerFallback.mockReturnValue(false);
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('Anthropic safety classifier refusal for gpt-4 - falling back to an alternative model')
+        ),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+
+    await service.process({ body: startParams, logger: mockLogger }).catch(() => undefined);
+
+    expect(applyModerationHit).toHaveBeenCalledTimes(1);
+    expect(applyModerationHit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hit: expect.objectContaining({ source: 'provider', categories: [] }),
+      })
+    );
+  });
+
+  it('records a provider moderation hit (Hook B) when the provider returns content_filter as finish_reason', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockImplementation(async (_m: unknown, _msgs: unknown, _o: unknown, cb: (...args: any[]) => Promise<void>) => {
+          await cb(['Hi!'], { inputTokens: 10, outputTokens: 5, stopReason: 'content_filter' });
+        }),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(applyModerationHit).toHaveBeenCalledTimes(1);
+    expect(applyModerationHit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hit: expect.objectContaining({ source: 'provider', categories: [] }),
+      })
+    );
+  });
+
+  it('records at most one provider hit per turn even when multiple fallback hops refuse (guard)', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    mockedShouldTriggerFallback.mockReturnValue(true);
+    mockedIsOverloadedError.mockReturnValue(false);
+    const safetyError = new Error(
+      'Anthropic safety classifier refusal for gpt-4 - falling back to an alternative model'
+    );
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi.fn().mockRejectedValue(safetyError),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+    const fallbackModel = {
+      id: 'claude-opus-4-8',
+      type: 'text' as const,
+      name: 'Claude Opus 4.8',
+      backend: ModelBackend.Anthropic,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      pricing: {},
+      supportsImageVariation: false,
+    };
+    mockedGetLlmWithFallback.mockResolvedValue({
+      model: fallbackModel,
+      backend: {
+        complete: vi.fn().mockRejectedValue(safetyError),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: fallbackModel.id,
+      },
+      attempt: 1,
+    } as any);
+
+    await service.process({ body: startParams, logger: mockLogger }).catch(() => undefined);
+
+    expect(mockedGetLlmWithFallback.mock.calls.length).toBeGreaterThan(1);
+    expect(applyModerationHit).toHaveBeenCalledTimes(1);
+  });
+
+  it('records no provider hit when a fallback model answers after a safety refusal', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    mockedShouldTriggerFallback.mockReturnValue(true);
+    mockedIsOverloadedError.mockReturnValue(false);
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('Anthropic safety classifier refusal for gpt-4 - falling back to an alternative model')
+        ),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+    const fallbackModel = {
+      id: 'claude-opus-4-8',
+      type: 'text' as const,
+      name: 'Claude Opus 4.8',
+      backend: ModelBackend.Anthropic,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      pricing: {},
+      supportsImageVariation: false,
+    };
+    mockedGetLlmWithFallback.mockResolvedValue({
+      model: fallbackModel,
+      backend: {
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_m: unknown, _msgs: unknown, _o: unknown, cb: (...args: any[]) => Promise<void>) => {
+              await cb(['Hi!'], { inputTokens: 10, outputTokens: 5, stopReason: 'end_turn' });
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: fallbackModel.id,
+      },
+      attempt: 1,
+    } as any);
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(applyModerationHit).not.toHaveBeenCalled();
+  });
+
+  it('records a provider moderation hit when the model settles with an Anthropic refusal stop reason', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockImplementation(async (_m: unknown, _msgs: unknown, _o: unknown, cb: (...args: any[]) => Promise<void>) => {
+          await cb(['No.'], { inputTokens: 10, outputTokens: 5, stopReason: 'refusal' });
+        }),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(applyModerationHit).toHaveBeenCalledTimes(1);
+    expect(applyModerationHit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hit: expect.objectContaining({ source: 'provider' }),
+      })
+    );
+  });
+
+  it('still completes the turn and logs when recording a provider hit fails', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    vi.mocked(applyModerationHit).mockRejectedValueOnce(new Error('db down'));
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockImplementation(async (_m: unknown, _msgs: unknown, _o: unknown, cb: (...args: any[]) => Promise<void>) => {
+          await cb(['Hi!'], { inputTokens: 10, outputTokens: 5, stopReason: 'content_filter' });
+        }),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+
+    await expect(service.process({ body: startParams, logger: mockLogger })).resolves.not.toThrow();
+
+    await vi.waitFor(() =>
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to record provider moderation hit'),
+        expect.any(Error)
+      )
     );
   });
 });

@@ -27,9 +27,6 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // seeing the toggle. That refusal is authoritative even if the status query then errors.
   const [enrollmentRefused, setEnrollmentRefused] = useState(false);
   const [verifyError, setVerifyError] = useState<string | null>(null);
-  // Setup answered 409: the server's own DB read says this account is enrolled, so this tab's
-  // status/user caches are stale (e.g. on /new right after enrolling during sign-in).
-  const [enrolledOnServer, setEnrolledOnServer] = useState(false);
 
   // Get MFA enforcement setting from admin settings
   const enforceMFA = adminSettings?.enforceMFA === 'true';
@@ -41,6 +38,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   const mfaStatusQuery = useMFAStatus(shouldCheckMFA);
   const mfaStatus = mfaStatusQuery.data;
   const mfaQueryFailed = mfaStatusQuery.isError;
+  // The status query is the authority, not currentUser.mfa: the persisted user store drops `mfa`,
+  // so a reload rehydrates without it until /api/identify lands, and reading it here fired a
+  // step-up-gated setup call at an enrolled user, which then 409'd.
+  const needsEnrollment = !mfaStatus?.enabled;
 
   const isImpersonating = useAccessToken(s => s.impersonating);
 
@@ -68,11 +69,9 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       },
       onError: (error: any) => {
         if (isStepUpCancelled(error)) return;
+        // Already enrolled: this tab's status was stale, so refresh it rather than report an error.
         if (error.response?.status === 409) {
-          setEnrolledOnServer(true);
-          void queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
-          void queryClient.invalidateQueries({ queryKey: ['user'] });
-          void queryClient.invalidateQueries({ queryKey: ['auth', 'identify'] });
+          void mfaStatusQuery.refetch();
           return;
         }
         // Extract the actual error message from axios response
@@ -80,7 +79,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
         toast.error(errorMessage);
       },
     });
-  }, [setupMFAMutate, queryClient]);
+  }, [setupMFAMutate, mfaStatusQuery.refetch]);
 
   // The server refuses a session that owes enrollment as soon as its own settings cache sees
   // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on the
@@ -133,7 +132,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
 
     // If MFA is enforced and user doesn't have it configured, force setup.
     // When enforced it applies to ALL users (no "internal" distinction).
-    if (enforceMFA && (!mfaStatus?.enabled || !currentUser.mfa?.totpEnabled)) {
+    if (enforceMFA && needsEnrollment) {
       // Auto-start MFA setup. The `!setupMFAIsError` guard is load-bearing: on a persistent
       // /api/mfa/setup failure onError only toasts, so setupMFAData stays undefined and
       // setupMFAIsPending cycles true->false - both are effect deps, so without this guard the
@@ -147,6 +146,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     isImpersonating,
     currentUser,
     enforceMFA,
+    needsEnrollment,
     shouldCheckMFA,
     mfaStatus,
     mfaStatusQuery.isLoading,
@@ -246,12 +246,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // If MFA is enforced and user hasn't configured it, block access.
   // A failed status query normally leaves the app alone, but an observed enrollment refusal is
   // the server telling us this session owes enrollment, so it blocks regardless.
-  if (
-    enforceMFA &&
-    !enrolledOnServer &&
-    (!mfaQueryFailed || enrollmentRefused) &&
-    (!mfaStatus?.enabled || !currentUser?.mfa?.totpEnabled)
-  ) {
+  if (enforceMFA && (!mfaQueryFailed || enrollmentRefused) && needsEnrollment) {
     return (
       <Box
         data-testid="mfa-enforcement-required-screen"

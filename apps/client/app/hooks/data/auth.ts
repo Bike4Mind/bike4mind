@@ -2,7 +2,10 @@ import {
   AuthStrategy,
   IUserDocument,
   clientIdFromAuthorizeRedirect,
+  isTurnstileOAuthProvider,
+  TURNSTILE_ACTION_OAUTH_START,
   TURNSTILE_ACTION_OTC_SEND,
+  TURNSTILE_OAUTH_TOKEN_PARAM,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -12,9 +15,10 @@ import { AxiosError } from 'axios';
 import { useRouter, useSearch } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { toast } from 'sonner';
-import { applyRedirect } from '@client/app/utils/authRedirect';
-import { getTurnstileToken } from '@client/app/utils/turnstile';
+import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
+import { getTurnstileToken, TurnstileError } from '@client/app/utils/turnstile';
 import type { ServerConfigPublic } from '@pages/api/settings/serverConfigPublic';
+import type { TurnstileClientFailure } from '@pages/api/turnstile/client-failure';
 
 interface LoginError {
   message: string;
@@ -84,7 +88,7 @@ export function useSendOTC() {
   return useMutation<SendOTCResponse, LoginError, SendOTCData>({
     mutationFn: async (data: SendOTCData) => {
       try {
-        const turnstileToken = await solveTurnstileIfRequired(queryClient);
+        const turnstileToken = await solveTurnstileIfRequired(queryClient, TURNSTILE_ACTION_OTC_SEND);
         const response = await api.post<SendOTCResponse>('/api/otc/send', { ...data, turnstileToken });
         return response.data;
       } catch (error) {
@@ -104,9 +108,14 @@ export function useSendOTC() {
   });
 }
 
-// Fresh token per send: Turnstile tokens are single-use, so resends solve again. Returns undefined
+// Fresh token per attempt: Turnstile tokens are single-use, so retries solve again. Returns undefined
 // when the stage does not enforce the challenge.
-async function solveTurnstileIfRequired(queryClient: QueryClient): Promise<string | undefined> {
+type TurnstileAction = TurnstileClientFailure['action'];
+
+async function solveTurnstileIfRequired(
+  queryClient: QueryClient,
+  action: TurnstileAction
+): Promise<string | undefined> {
   const config = await queryClient.fetchQuery({
     queryKey: ['server-config-public'],
     queryFn: async () => (await api.get<ServerConfigPublic>('/api/settings/serverConfigPublic')).data,
@@ -114,10 +123,57 @@ async function solveTurnstileIfRequired(queryClient: QueryClient): Promise<strin
   });
   if (!config?.turnstileSiteKey) return undefined;
   try {
-    return await getTurnstileToken(config.turnstileSiteKey, TURNSTILE_ACTION_OTC_SEND);
-  } catch {
+    return await getTurnstileToken(config.turnstileSiteKey, action);
+  } catch (error) {
+    reportTurnstileFailure(action, error);
     throw new Error('Could not complete the verification check. Please refresh and try again.');
   }
+}
+
+/**
+ * Tells the server a challenge failed in the browser, which it otherwise never sees. Fire-and-forget:
+ * the user already gets the sign-in error, and a failed report must not replace it.
+ */
+function reportTurnstileFailure(action: TurnstileAction, error: unknown): void {
+  const failure: TurnstileClientFailure =
+    error instanceof TurnstileError
+      ? { action, reason: error.reason, errorCode: error.errorCode, attempts: error.attempts }
+      : { action, reason: 'unavailable', attempts: 1 };
+  api.post('/api/turnstile/client-failure', failure).catch((reportError: unknown) => {
+    console.warn('Failed to report Turnstile client failure', reportError);
+  });
+}
+
+/** The `<strategy>` segment of an `/api/auth/<strategy>` start URL, or undefined for any other path. */
+export function oauthStartProvider(startUrl: string): string | undefined {
+  const match = new URL(startUrl, 'http://localhost').pathname.match(/^\/api\/auth\/([^/]+)\/?$/);
+  return match?.[1];
+}
+
+/**
+ * Builds the full-page navigation target for an OAuth start URL: `redirectTo` survives the provider
+ * round-trip through the state parameter and the solved challenge token, if any, rides in the query.
+ */
+export function oauthStartUrl(startUrl: string, redirectTo: string | null, turnstileToken?: string): string {
+  const url = new URL(appendRedirectTo(startUrl, redirectTo), 'http://localhost');
+  if (turnstileToken) url.searchParams.set(TURNSTILE_OAUTH_TOKEN_PARAM, turnstileToken);
+  return `${url.pathname}${url.search}`;
+}
+
+/**
+ * Navigates to an `/api/auth/<strategy>` start URL. Self-serve providers solve the Turnstile
+ * challenge first and carry the token along; enterprise SSO and a disabled policy navigate as is.
+ * Rejects without navigating when the challenge cannot be completed.
+ */
+export function useStartOAuthSignIn() {
+  const queryClient = useQueryClient();
+  return async (startUrl: string): Promise<void> => {
+    const turnstileToken = isTurnstileOAuthProvider(oauthStartProvider(startUrl))
+      ? await solveTurnstileIfRequired(queryClient, TURNSTILE_ACTION_OAUTH_START)
+      : undefined;
+    const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
+    window.location.href = oauthStartUrl(startUrl, redirectTo, turnstileToken);
+  };
 }
 
 // 0 is kept distinct from a missing header: the server sends it when a concurrent send superseded this one.

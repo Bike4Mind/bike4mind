@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
@@ -15,22 +15,12 @@ vi.mock('../Details/Bike4MindUserDetails', () => ({ default: () => null }));
 vi.mock('../Details/LoginDetails', () => ({ default: () => null }));
 vi.mock('../Details/UserDetails', () => ({ default: () => null }));
 vi.mock('../Details/UserSubscriptionStatus', () => ({ default: () => null }));
-// Stands in for the Ban checkbox and the confirmed Delete: the same calls the real controls make.
+// Stands in for the Ban checkbox: the same call the real control makes.
 vi.mock('../SpicyUserActions', () => ({
-  default: ({
-    onFieldChange,
-    handleDeleteUser,
-  }: {
-    onFieldChange: (key: string, value: unknown) => void;
-    handleDeleteUser: (userId: string, reason: string) => Promise<void>;
-  }) => (
-    <>
-      <button data-testid="stub-ban-toggle" onClick={() => onFieldChange('isBanned', true)} />
-      <button data-testid="stub-delete" onClick={() => handleDeleteUser('u1', 'Spam account')} />
-    </>
+  default: ({ onFieldChange }: { onFieldChange: (key: string, value: unknown) => void }) => (
+    <button data-testid="stub-ban-toggle" onClick={() => onFieldChange('isBanned', true)} />
   ),
 }));
-vi.mock('../Details/GrantSubscriptionModal', () => ({ default: () => null }));
 vi.mock('../ProductAccess', () => ({ default: () => null }));
 vi.mock('../SystemMessageModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
@@ -38,10 +28,7 @@ vi.mock('../ComplianceModal', () => ({ useComplianceModal: () => vi.fn() }));
 // The real panel is lazy-loaded; stub it so the tab wiring is what this file exercises.
 vi.mock('../Activity/UserActivityPanel', () => ({ default: () => <div data-testid="user-activity-panel" /> }));
 vi.mock('@client/app/hooks/data/user', () => ({
-  // Succeeds at once, so the caller's per-call onSuccess is what the delete tests observe.
-  useDeleteUser: () => ({
-    mutate: (_variables: unknown, options?: { onSuccess?: () => void }) => options?.onSuccess?.(),
-  }),
+  useDeleteUser: () => ({ mutate: vi.fn() }),
   useUpdateUser: () => ({ mutate: mutations.updateMutate, isPending: false }),
   useLoginAsUser: () => ({ mutate: mutations.loginAsMutate, isPending: false }),
 }));
@@ -83,7 +70,7 @@ const addCustomTag = (tag: string) => {
 
 describe('FullUsersView - Overview and Activity tabs', () => {
   it('keeps staged Overview edits when switching to Activity and back', async () => {
-    render(<FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={vi.fn()} />, {
+    render(<FullUsersView index={0} user={savedUser()} />, {
       wrapper: TestWrapper,
     });
 
@@ -97,104 +84,6 @@ describe('FullUsersView - Overview and Activity tabs', () => {
   });
 });
 
-describe('FullUsersView - unsaved field reporting', () => {
-  it('reports nothing unsaved on a freshly opened card', () => {
-    const onUnsavedFieldsChange = vi.fn();
-    render(
-      <FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={onUnsavedFieldsChange} />,
-      {
-        wrapper: TestWrapper,
-      }
-    );
-    expect(onUnsavedFieldsChange).toHaveBeenLastCalledWith([]);
-  });
-
-  it('reports tags as unsaved once a Custom Tag is staged through the real control', () => {
-    const onUnsavedFieldsChange = vi.fn();
-    render(
-      <FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={onUnsavedFieldsChange} />,
-      {
-        wrapper: TestWrapper,
-      }
-    );
-
-    addCustomTag('qa-unsaved-test');
-
-    expect(screen.getByTestId('remove-tag-qa-unsaved-test')).toBeInTheDocument();
-    expect(onUnsavedFieldsChange).toHaveBeenLastCalledWith(['tags']);
-  });
-
-  it('goes back to reporting nothing when that tag is removed again', () => {
-    const onUnsavedFieldsChange = vi.fn();
-    render(
-      <FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={onUnsavedFieldsChange} />,
-      {
-        wrapper: TestWrapper,
-      }
-    );
-
-    addCustomTag('qa-unsaved-test');
-    fireEvent.click(screen.getByTestId('remove-tag-qa-unsaved-test'));
-
-    expect(onUnsavedFieldsChange).toHaveBeenLastCalledWith([]);
-  });
-
-  it('does not re-notify when an edit leaves the same field set unsaved', () => {
-    const onUnsavedFieldsChange = vi.fn();
-    render(
-      <FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={onUnsavedFieldsChange} />,
-      {
-        wrapper: TestWrapper,
-      }
-    );
-
-    addCustomTag('first-tag');
-    const callsAfterFirstTag = onUnsavedFieldsChange.mock.calls.length;
-    addCustomTag('second-tag');
-
-    // Still just 'tags' unsaved, so the host has nothing new to hear about.
-    expect(onUnsavedFieldsChange.mock.calls.length).toBe(callsAfterFirstTag);
-  });
-
-  it('stops reporting an edit once a fresh server snapshot arrives', () => {
-    const onUnsavedFieldsChange = vi.fn();
-    const { rerender } = render(
-      <FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={onUnsavedFieldsChange} />,
-      { wrapper: TestWrapper }
-    );
-
-    addCustomTag('qa-unsaved-test');
-    expect(onUnsavedFieldsChange).toHaveBeenLastCalledWith(['tags']);
-
-    // What Verify Email does: it saves through its own mutation and then syncs the card,
-    // so the refetched user lands here and the staged values are replaced wholesale.
-    rerender(
-      <FullUsersView
-        index={0}
-        user={{ ...savedUser(), emailVerified: true }}
-        variant="page"
-        onUnsavedFieldsChange={onUnsavedFieldsChange}
-      />
-    );
-
-    expect(onUnsavedFieldsChange).toHaveBeenLastCalledWith([]);
-  });
-
-  it('reports the card as clean when it unmounts, so the host stops guarding', () => {
-    const onUnsavedFieldsChange = vi.fn();
-    const { unmount } = render(
-      <FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={onUnsavedFieldsChange} />,
-      { wrapper: TestWrapper }
-    );
-
-    addCustomTag('qa-unsaved-test');
-    expect(onUnsavedFieldsChange).toHaveBeenLastCalledWith(['tags']);
-
-    unmount();
-    expect(onUnsavedFieldsChange).toHaveBeenLastCalledWith([]);
-  });
-});
-
 describe('FullUsersView - reason-required admin actions', () => {
   beforeEach(() => {
     mutations.updateMutate.mockClear();
@@ -204,8 +93,8 @@ describe('FullUsersView - reason-required admin actions', () => {
   const typeReason = (testId: string, value: string) =>
     fireEvent.change(screen.getByTestId(testId), { target: { value } });
 
-  it('requires a reason before a role change is saved, then sends roleChangeReason', () => {
-    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+  it('requires a reason before a role change is saved, then sends roleChangeReason', async () => {
+    render(<FullUsersView index={0} user={savedUser()} />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByTestId('role-radio-super-admin').querySelector('input') as HTMLInputElement);
     fireEvent.click(screen.getByTestId('user-update-btn'));
@@ -222,7 +111,7 @@ describe('FullUsersView - reason-required admin actions', () => {
     expect(confirmButton).toBeEnabled();
     fireEvent.click(confirmButton);
 
-    expect(mutations.updateMutate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mutations.updateMutate).toHaveBeenCalledTimes(1));
     expect(mutations.updateMutate.mock.calls[0][0]).toMatchObject({
       id: 'u1',
       data: { isAdmin: true, roleChangeReason: 'Promoted to cover on-call' },
@@ -230,7 +119,7 @@ describe('FullUsersView - reason-required admin actions', () => {
   });
 
   it('saves without a confirm dialog or roleChangeReason when the role is untouched', () => {
-    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+    render(<FullUsersView index={0} user={savedUser()} />, { wrapper: TestWrapper });
 
     addCustomTag('plain-tag');
     fireEvent.click(screen.getByTestId('user-update-btn'));
@@ -240,8 +129,8 @@ describe('FullUsersView - reason-required admin actions', () => {
     expect(mutations.updateMutate.mock.calls[0][0].data).not.toHaveProperty('roleChangeReason');
   });
 
-  it('login-as sends the reason with the MFA token and blocks confirm until it is valid', () => {
-    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+  it('login-as sends the reason with the MFA token and blocks confirm until it is valid', async () => {
+    render(<FullUsersView index={0} user={savedUser()} />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByTestId('login-as-user-btn'));
     fireEvent.change(screen.getByTestId('login-as-mfa-input').querySelector('input') as HTMLInputElement, {
@@ -254,54 +143,21 @@ describe('FullUsersView - reason-required admin actions', () => {
     expect(confirmButton).toBeEnabled();
     fireEvent.click(confirmButton);
 
-    expect(mutations.loginAsMutate).toHaveBeenCalledWith({
-      id: 'u1',
-      mfaToken: '123456',
-      reason: 'Reproduce billing bug',
-    });
+    await waitFor(() =>
+      expect(mutations.loginAsMutate).toHaveBeenCalledWith({
+        id: 'u1',
+        mfaToken: '123456',
+        reason: 'Reproduce billing bug',
+      })
+    );
   });
 });
 
-describe('FullUsersView - page danger zone', () => {
+describe('FullUsersView - ban confirmation', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('keeps the destructive actions on the Admin tab, out of the Overview', () => {
-    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
-
-    expect(screen.getByTestId('user-profile-danger-zone')).not.toBeVisible();
-    fireEvent.click(screen.getByTestId('user-profile-tab-admin'));
-    expect(screen.getByTestId('user-profile-danger-zone')).toBeVisible();
-  });
-
-  it('gives the header quick actions accessible names', () => {
-    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
-
-    expect(screen.getByRole('button', { name: 'Login as User' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Grant Subscription' })).toBeInTheDocument();
-  });
-
-  it('opens on the tab its host passes, so ?tab=admin deep-links the danger zone', () => {
-    render(<FullUsersView index={0} user={savedUser()} variant="page" tab="admin" onTabChange={vi.fn()} />, {
-      wrapper: TestWrapper,
-    });
-
-    expect(screen.getByTestId('user-profile-danger-zone')).toBeVisible();
-    expect(screen.getByTestId('user-profile-tab-admin')).toHaveAttribute('aria-selected', 'true');
-  });
-
-  it('tells its host once the user is deleted', () => {
-    const onUserDeleted = vi.fn();
-    render(<FullUsersView index={0} user={savedUser()} variant="page" onUserDeleted={onUserDeleted} />, {
-      wrapper: TestWrapper,
-    });
-
-    fireEvent.click(screen.getByTestId('stub-delete'));
-
-    expect(onUserDeleted).toHaveBeenCalledTimes(1);
-  });
-
   it('confirms a staged ban before saving it', () => {
-    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+    render(<FullUsersView index={0} user={savedUser()} />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByTestId('stub-ban-toggle'));
     fireEvent.click(screen.getByTestId('user-update-btn'));

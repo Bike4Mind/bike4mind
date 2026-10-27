@@ -184,7 +184,13 @@ export class AdminPage extends BasePage {
     const row = this.getUserRow(name);
     await row.getByTestId('admin-user-admin-btn').click();
     // Navigates to the /admin/users/$userId profile page
-    await expect(this.page.getByTestId('user-profile-header')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(this.page.getByTestId('user-profile-view')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+  }
+
+  /** Pick an action from the profile header's More menu. */
+  private async clickProfileMenuItem(action: 'loginAs' | 'delete') {
+    await this.page.getByTestId('user-profile-more-btn').click();
+    await this.page.getByTestId(`user-profile-menu-${action}-item`).click();
   }
 
   async clickUserProfileButton(name: string) {
@@ -194,30 +200,33 @@ export class AdminPage extends BasePage {
     await expect(this.page.getByTestId('admin-profile-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
-  // --- Login as User (FullUsersView) ---
+  // --- Login as User (profile page) ---
 
-  /** Open the target user's full view, then click "Login as User". */
+  /** Open the target user's profile, then pick "Log in as user" from the More menu. */
   async clickLoginAs(name: string) {
     await this.clickUserAdminButton(name);
-    await this.page.getByTestId('login-as-user-btn').click();
+    await this.clickProfileMenuItem('loginAs');
   }
 
-  /** Assert the TOTP-token modal opened (proves the acting admin's mfa.totpEnabled was projected into currentUser). */
+  /**
+   * Assert the dialog asks for the admin's TOTP code. LoginAsDialog renders the code input only
+   * when the acting admin's mfa.totpEnabled was projected into currentUser.
+   */
   async expectLoginAsMfaModal() {
-    await expect(this.page.getByTestId('login-as-mfa-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(this.page.getByTestId('login-as-dialog-mfa-input')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
   async fillLoginAsMfa(code: string) {
-    await this.fillMuiInput(this.page.getByTestId('login-as-mfa-input').locator('input'), code);
+    await this.fillMuiInput(this.page.getByTestId('login-as-dialog-mfa-input'), code);
   }
 
   /** Confirm stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */
   async fillLoginAsReason(reason = 'E2E login-as regression guard') {
-    await this.page.getByTestId('login-as-reason-input').fill(reason);
+    await this.page.getByTestId('login-as-dialog-reason-input').fill(reason);
   }
 
   async confirmLoginAs() {
-    const confirmBtn = this.page.getByTestId('login-as-mfa-confirm-btn');
+    const confirmBtn = this.page.getByTestId('login-as-dialog-confirm-btn');
     await expect(confirmBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
     await confirmBtn.click();
   }
@@ -244,27 +253,27 @@ export class AdminPage extends BasePage {
     await expect(this.page.getByTestId('modal-close-btn')).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
   }
 
-  // --- Delete User (SpicyUserActions) ---
-
-  async typeDeleteConfirmation() {
-    // Delete lives on the profile page's Admin (danger zone) tab.
-    await this.page.getByTestId('user-profile-tab-admin').click();
-    await this.page.getByTestId('delete-user-confirm-input').getByRole('textbox').fill('DELETE');
-  }
+  // --- Delete User (profile More menu) ---
 
   async clickDeleteUserButton() {
-    await this.page.getByTestId('delete-user-btn').click();
+    await this.clickProfileMenuItem('delete');
+  }
+
+  /** The delete dialog asks for the account's email; read it from the dialog rather than the fixture. */
+  async typeDeleteConfirmation() {
+    const expected = await this.page.getByTestId('delete-user-dialog-typed-expected').innerText();
+    await this.page.getByTestId('delete-user-dialog-typed-input').fill(expected);
   }
 
   /** The confirm-delete button stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */
   async fillDeleteReason(reason = 'E2E user CRUD cleanup') {
-    await this.page.getByTestId('user-delete-reason-input').fill(reason);
+    await this.page.getByTestId('delete-user-dialog-reason-input').fill(reason);
   }
 
   async confirmDeleteUser() {
-    await this.page.getByTestId('confirm-delete-btn').click();
+    await this.page.getByTestId('delete-user-dialog-confirm-btn').click();
     // Wait for the confirm button itself to disappear (the delete modal closed)
-    await expect(this.page.getByTestId('confirm-delete-btn')).toBeHidden({ timeout: TIMEOUTS.ACTION });
+    await expect(this.page.getByTestId('delete-user-dialog-confirm-btn')).toBeHidden({ timeout: TIMEOUTS.ACTION });
     // Dismiss any follow-up modal (e.g. "User not found" error) if it appears
     const closeBtn = this.page.getByTestId('modal-close-btn');
     if (await closeBtn.isVisible().catch(() => false)) {

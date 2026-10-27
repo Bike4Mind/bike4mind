@@ -83,6 +83,9 @@ export type ProducerTier = (typeof PRODUCER_TIERS)[number];
 export const LICENSE_CLASSES = ['permissive', 'restricted-commercial', 'research', 'non-commercial'] as const;
 export const KV_CACHE_TYPES = ['f16', 'q8_0', 'q4_0'] as const;
 export type KvCacheType = (typeof KV_CACHE_TYPES)[number];
+// Recurrent layer types the fit estimator has measured: Mamba2 in Granite 4 H, gated delta net in Qwen3.5.
+export const RECURRENT_KINDS = ['mamba2', 'gated-delta-net'] as const;
+export type RecurrentKind = (typeof RECURRENT_KINDS)[number];
 export const REASONING_EFFORTS = ['off', 'low', 'medium', 'high'] as const;
 export const ROUTE_REASONS = [
   'library-tag',
@@ -117,6 +120,10 @@ export const ModelArchSchema = z.object({
   blockCount: z.number().int().positive().max(MAX_LAYERS),
   // Query heads of the attention layers, the largest if they vary; only prices flash attention off.
   headCount: z.number().int().positive().max(4096).optional(),
+  // Compute widths: n_embd, and the widest FFN a token passes through (n_ff, or used x expert width plus shared
+  // experts). Without them the estimator bounds compute from the weights.
+  embeddingLength: z.number().int().positive().max(65536).optional(),
+  activeFeedForwardLength: z.number().int().positive().max(1048576).optional(),
   full: AttnGroupSchema,
   // llama.cpp reports n_swa 0 for some families (gemma2, gpt-oss, cohere2) and still keeps ubatch cells per layer.
   swa: AttnGroupSchema.extend({ window: z.number().int().nonnegative().max(MAX_CONTEXT) }).optional(),
@@ -127,8 +134,15 @@ export const ModelArchSchema = z.object({
       ropeDim: z.number().int().positive().max(4096),
     })
     .optional(),
-  // F32 and independent of context.
-  recurrent: z.object({ layers: LayerCountSchema.positive(), stateBytesPerSeq: ByteCountSchema }).optional(),
+  // State is F32 and independent of context. A `kind` outside RECURRENT_KINDS parses, so older clients keep the
+  // entry, and plans compute at the flat uncalibrated rate.
+  recurrent: z
+    .object({
+      layers: LayerCountSchema.positive(),
+      stateBytesPerSeq: ByteCountSchema,
+      kind: z.string().min(1).max(32).optional(),
+    })
+    .optional(),
   mtpLayers: LayerCountSchema.default(0),
   moe: z
     .object({

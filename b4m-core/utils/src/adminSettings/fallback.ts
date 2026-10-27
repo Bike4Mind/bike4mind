@@ -1,7 +1,13 @@
 import { ModelInfo } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { isAxiosError } from 'axios';
-import { getLlmByModel, isLlmTimeoutError, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import {
+  getLlmByModel,
+  isLlmTimeoutError,
+  isStreamEndedWithoutFinishError,
+  type ApiKeyTable,
+  type ICompletionBackend,
+} from '@bike4mind/llm-adapters';
 
 /**
  * Fallback attempt result
@@ -94,6 +100,11 @@ export function shouldTriggerFallback(error: Error): boolean {
     return true;
   }
 
+  // A stream that closed with no finish reason and no output is a provider blip, not a bad request.
+  if (isStreamEndedWithoutFinishError(error)) {
+    return true;
+  }
+
   // Transient AWS SDK v3 service exceptions (recognized by name when no usable status).
   if (isTransientAwsSdkError(error)) {
     return true;
@@ -112,8 +123,8 @@ export function shouldTriggerFallback(error: Error): boolean {
     return true;
   }
 
-  // Check for TypeError: terminated (from undici/fetch)
-  if (error.name === 'TypeError' && message.includes('terminated')) {
+  // Check for TypeError: terminated / fetch failed (from undici/fetch)
+  if (error.name === 'TypeError' && (message.includes('terminated') || message === 'fetch failed')) {
     return true;
   }
 

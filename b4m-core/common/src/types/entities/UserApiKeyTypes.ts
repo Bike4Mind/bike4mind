@@ -135,6 +135,9 @@ export enum ApiKeyScope {
    * List and download the Claude Code plugin feed of an org's approved Skill Market listings
    * (`/api/v1/skills/market/*`). Confined: the key ends up in plaintext in `~/.claude/settings.json`,
    * so it must reach nothing else. Minted from the Skill Market's "Use in Claude Code" dialog.
+   * Not bound to an org: membership is re-checked on every request (`memberOrgIdsFor` in
+   * apps/client/server/skillMarket/market.ts), so a member who leaves or is removed loses that org's
+   * feed and zips while the key stays valid for their other orgs.
    */
   SKILLS_READ = 'skills:read',
   /**
@@ -445,6 +448,8 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
   findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;
+  /** When the user's first key was created, deleted and revoked keys included; null when none. */
+  findFirstCreatedAtByUserId: (userId: string) => Promise<Date | null>;
   updateUsage: (id: string, usage: Partial<IUserApiKeyUsage>) => Promise<void>;
   /** Atomically adds settled credits to `usage.totalSpendCredits`. No-op for non-finite or <= 0 amounts. */
   incrementSpend: (id: string, credits: number) => Promise<void>;

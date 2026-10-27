@@ -168,7 +168,14 @@ describe('the fleet alarms', () => {
   const createDlqAlarms = DLQ_ALARMS.match(/function createDlqAlarms\([\s\S]*?\n\}/)?.[0] ?? '';
 
   it('creates a pair for every descriptor', () => {
-    expect(DLQ_ALARMS).toMatch(/for \(const dlq of DLQ_DESCRIPTORS\) \{\s*createDlqAlarms\(dlq\);\s*\}/);
+    expect(DLQ_ALARMS).toMatch(/for \(const dlq of ALARMED_DLQS\) \{\s*createDlqAlarms\(dlq\);\s*\}/);
+  });
+
+  it('alarms the contributed DLQs through the same loop as the core ones', () => {
+    // A contributed DLQ outside ALARMED_DLQS would get no alarm, or one built without the shared specs.
+    const alarmed = DLQ_ALARMS.match(/const ALARMED_DLQS: InfraDlqDescriptor\[\] = \[[\s\S]*?\n\];/)?.[0] ?? '';
+    expect(alarmed).toMatch(/^ {2}\.\.\.DLQ_DESCRIPTORS,$/m);
+    expect(alarmed).toMatch(/^ {2}\.\.\.Object\.values\(contributedQueues\)\.map\(/m);
   });
 
   it('instantiates every spec the shared builder returns', () => {
