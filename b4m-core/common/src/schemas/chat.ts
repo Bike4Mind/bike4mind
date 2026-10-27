@@ -17,6 +17,13 @@ import { ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE, COMPLETION_TOOL_ERROR_CODES }
 import { ChatToolModeSchema } from './promptMeta';
 
 /**
+ * Smallest output budget every provider we route to accepts (OpenAI rejects `max_output_tokens`
+ * below 16 with a 400). Enforced at the /api/chat boundary and floored again in the OpenAI
+ * adapter for callers that bypass the schema (agents, CLI, pinned session settings).
+ */
+export const MIN_OUTPUT_TOKENS = 16;
+
+/**
  * Request schema for POST /api/chat - the simplified external chat surface.
  *
  * Shared between the Next.js API handler (apps/client/pages/api/chat.ts, which
@@ -49,9 +56,9 @@ export const SimplifiedChatRequestSchema = z.object({
   // Output-budget override. `max_tokens` is the canonical field; `maxTokens` and
   // `maxOutputTokens` are accepted aliases so callers using either casing aren't
   // silently ignored (Zod strips unknown keys). All three coalesce in transformToInternalFormat.
-  max_tokens: z.number().positive().optional(),
-  maxTokens: z.number().positive().optional(),
-  maxOutputTokens: z.number().positive().optional(),
+  max_tokens: z.number().int().min(MIN_OUTPUT_TOKENS).optional(),
+  maxTokens: z.number().int().min(MIN_OUTPUT_TOKENS).optional(),
+  maxOutputTokens: z.number().int().min(MIN_OUTPUT_TOKENS).optional(),
   stream: z.boolean().prefault(false),
   historyCount: z.number().positive().default(10),
   fileIds: z.array(z.string()).prefault([]),
