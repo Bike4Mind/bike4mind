@@ -168,12 +168,14 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
   // The palette ignores its single-key shortcuts while any dialog is open, so `c` never fires behind one.
   const profileCommands = useMemo<AdminCommand[]>(
     () => [
-      { id: 'credits', label: 'Adjust credits', shortcut: 'c', run: () => setAction('credits') },
+      // The header already shows Adjust credits and Suspend, so only the palette and shortcuts carry them.
+      { id: 'credits', label: 'Adjust credits', shortcut: 'c', paletteOnly: true, run: () => setAction('credits') },
       {
         id: 'suspend',
         label: 'Suspend account',
         shortcut: 's',
         disabled: !!user.isBanned,
+        paletteOnly: true,
         run: () => setAction('suspend'),
       },
       { id: 'revoke', label: 'Revoke API keys', run: () => setRevokeKeysOpen(true) },
