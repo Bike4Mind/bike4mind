@@ -6,6 +6,10 @@ const h = vi.hoisted(() => ({
   agentCreate: vi.fn(),
 }));
 
+vi.mock('@server/utils/callerModelList', () => ({
+  getCallerModelList: async () => ({ models: [{ id: 'catalog-model' }], supersededModels: [] }),
+}));
+
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.findById },
   agentRepository: { countByUserId: h.countByUserId, create: h.agentCreate },
