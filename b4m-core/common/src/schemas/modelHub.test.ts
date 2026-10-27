@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { build, fixtureManifest, ownEval, sha } from '../modelHub/__fixtures__/hubManifest';
-import { HubManifestSchema, ModelArchSchema, parseHubManifest, type HubManifestInput } from './modelHub';
+import {
+  CuratedCatalogSchema,
+  HubManifestSchema,
+  ModelArchSchema,
+  parseHubManifest,
+  type HubManifestInput,
+} from './modelHub';
 
 type EntryInput = HubManifestInput['entries'][number];
 
@@ -459,6 +465,62 @@ describe('curated sequence, changelog and tiers', () => {
   it('rejects an envelope whose sequence is not a positive integer', () => {
     expect(() => parseHubManifest({ ...curated(), sequence: 0 })).toThrow();
     expect(() => parseHubManifest({ ...curated(), sequence: 1.5 })).toThrow();
+  });
+
+  it('reads revoked key ids, defaulting to none, and rejects the envelope when they are unreadable', () => {
+    expect(parseHubManifest(curated()).manifest.revokedKeyIds).toEqual([]);
+    const ids = ['0123456789abcdef'];
+    expect(parseHubManifest({ ...curated(), revokedKeyIds: ids }).manifest.revokedKeyIds).toEqual(ids);
+    expect(() => parseHubManifest({ ...curated(), revokedKeyIds: ['XYZ'] })).toThrow();
+    expect(() => parseHubManifest({ ...curated(), revokedKeyIds: Array(17).fill(ids[0]) })).toThrow();
+  });
+
+  it('reads an entry minimum Desktop version and drops the entry when it is not a version', () => {
+    const m = curated();
+    m.entries.find(e => e.id === 'gemma-12b')!.minDesktopVersion = '0.2.0';
+    expect(parseHubManifest(m).manifest.entries.find(e => e.id === 'gemma-12b')?.minDesktopVersion).toBe('0.2.0');
+    Object.assign(
+      m.entries.find(e => e.id === 'gemma-12b')!,
+      { minDesktopVersion: 'soon' }
+    );
+    expect(parseHubManifest(m).dropped.map(d => d.path)).toContain(`entries.${index('gemma-12b')}`);
+  });
+});
+
+describe('CuratedCatalogSchema', () => {
+  const catalog = () => ({
+    ...fixtureManifest(),
+    sequence: 3,
+    changelog: [
+      { sequence: 3, date: '2026-10-27', added: ['gemma-12b'], removed: [], changed: [], notes: '' },
+      { sequence: 1, date: '2026-10-01', added: ['gone'], removed: [], changed: [], notes: '' },
+    ],
+  });
+  const problems = (input: unknown) =>
+    (CuratedCatalogSchema.safeParse(input).error?.issues ?? []).map(i => `${i.path.join('.')}: ${i.message}`);
+
+  it('accepts a catalog whose older items name entries since removed', () => {
+    expect(problems(catalog())).toEqual([]);
+  });
+
+  it('needs a sequence that the newest changelog item carries, and strictly decreasing items', () => {
+    expect(problems({ ...catalog(), sequence: undefined })).toEqual(['sequence: a published catalog needs a sequence']);
+    expect(problems({ ...catalog(), sequence: 4 })).toEqual([
+      'changelog.0.sequence: the newest changelog item must carry the catalog sequence',
+    ]);
+    const m = catalog();
+    m.changelog[1].sequence = 3;
+    expect(problems(m)).toEqual(['changelog.1.sequence: changelog sequences must strictly decrease']);
+  });
+
+  it('checks the newest item against the entries', () => {
+    const m = catalog();
+    m.changelog[0].changed = ['missing'];
+    m.changelog[0].removed = [{ id: 'gemma-12b', name: 'Gemma' }];
+    expect(problems(m)).toEqual([
+      'changelog.0: no entry missing',
+      'changelog.0.removed: entry gemma-12b is still listed',
+    ]);
   });
 });
 
