@@ -135,6 +135,22 @@ it('uses measured Ollama input tokens to compact before the next local turn', as
   expect((await store.get(id))?.messages.some(message => message.boundary)).toBe(true);
 });
 
+it('compacts at the old window when growing the local model fails', async () => {
+  const grow = vi.spyOn(OllamaLocal.prototype, 'growFor').mockRejectedValue(new Error('show failed'));
+  try {
+    const { store, events, requests, id, send } = await localService(100, () => answer(90));
+    await send('first prompt');
+    await send('second prompt');
+    expect(grow).toHaveBeenCalled();
+    expect(requests).toHaveLength(3);
+    expect(requests[1].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
+    expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, running: true });
+    expect((await store.get(id))?.messages.some(message => message.boundary)).toBe(true);
+  } finally {
+    grow.mockRestore();
+  }
+});
+
 // Signed out, the catalog keeps local models for seconds only, so the turn usually finds nothing cached.
 it('drops the oldest turns of an overflowing prompt, says so, and compacts before the next turn', async () => {
   let refuse = false;

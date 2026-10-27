@@ -101,4 +101,19 @@ describe('LocalContextSettings', () => {
     expect(byTestId('settings-local-context-error')?.textContent).toContain('Could not save this setting');
     expect(byTestId('summary')?.textContent).toMatch(/^Auto/);
   });
+
+  it('says when the saved choice could not be loaded', async () => {
+    await act(async () => root.unmount());
+    getLocalContext.mockRejectedValueOnce(new Error('no store'));
+    root = createRoot(host);
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <Harness />
+        </CssVarsProvider>
+      )
+    );
+
+    expect(byTestId('settings-local-context-error')?.textContent).toContain('Could not load this setting');
+  });
 });
