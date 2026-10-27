@@ -118,6 +118,7 @@ describe('classifyLicenses', () => {
   it('accepts the MIT name and copyright lines, and markdown quoting', () => {
     const phi = `Microsoft.\nCopyright (c) Microsoft Corporation.\n\nMIT License\n\n${MIT_BODY.replace('"AS IS"', '*AS IS*')}`;
     expect(classifyLicenses([phi])).toEqual({ title: 'MIT', permissive: true });
+    expect(classifyLicenses([MIT.replace('(c)', '\u00a9')])).toEqual({ title: 'MIT', permissive: true });
   });
 
   it('treats a template with added terms as restricted', () => {
@@ -130,6 +131,31 @@ describe('classifyLicenses', () => {
     const sneaky = APACHE.replace('[yyyy] [name of copyright owner]', '2024 Acme. Commercial use requires a fee');
     expect(classifyLicenses([sneaky]).permissive).toBe(false);
     expect(classifyLicenses(['Apache License\n  Version 2.0, January 2004\n']).permissive).toBe(false);
+  });
+
+  it.each([
+    ['Chinese restriction', '\u4ec5\u9650\u975e\u5546\u4e1a\u7528\u9014'],
+    ['Japanese restriction', '\u5546\u7528\u5229\u7528\u7981\u6b62'],
+    ['mixed restriction', 'DeepSeek \u5546\u7528\u5229\u7528\u7981\u6b62'],
+    ['symbol restriction', 'DeepSeek \u{1f6ab}\u{1f4b0}'],
+    ['format character', 'DeepSeek\u200d'],
+    ['combining character', 'DeepSeek\u0301'],
+    ['punctuation-only line', '!!!'],
+    ['copyright restriction', 'Copyright 2024 \u5546\u7528\u5229\u7528\u7981\u6b62'],
+  ])('requires acceptance for a MIT template with a %s', (_label, addition) => {
+    expect(classifyLicenses([`${addition}\n${MIT}`]).permissive).toBe(false);
+  });
+
+  it('requires acceptance for unfamiliar copyright text in either template', () => {
+    const holder = 'Copyright 2024 Acme \u5546\u7528\u5229\u7528\u7981\u6b62';
+    expect(classifyLicenses([MIT.replace('Copyright (c) 2023 DeepSeek', holder)]).permissive).toBe(false);
+    expect(classifyLicenses([APACHE.replace('Copyright [yyyy] [name of copyright owner]', holder)]).permissive).toBe(
+      false
+    );
+  });
+
+  it('requires acceptance for an unfamiliar name-only preamble', () => {
+    expect(classifyLicenses([`\u6df1\u5ea6\u6c42\u7d22\n${MIT}`]).permissive).toBe(false);
   });
 
   it('treats custom terms and a missing license as restricted and names them by their title line', () => {

@@ -145,7 +145,8 @@ const NOT_A_NAME =
 
 function isCopyrightLine(line: string): boolean {
   const holder = COPYRIGHT_RE.exec(line.trim())?.[1].replace(/\s*All rights reserved\.?$/i, '');
-  return holder !== undefined && !NOT_A_NAME.test(holder);
+  // The extra-terms check below only recognizes English; unfamiliar holder text must ask for acceptance.
+  return holder !== undefined && /^[\x20-\x7e]+$/.test(holder) && !NOT_A_NAME.test(holder);
 }
 
 function isApache(text: string): boolean {
@@ -169,7 +170,7 @@ function isMit(text: string): boolean {
     .split('\n')
     .map(line => line.trim())
     .filter(Boolean);
-  const words = (line: string) => line.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const words = (line: string) => line.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
   const holderWords = new Set(preamble.filter(isCopyrightLine).flatMap(words));
   return (
     preamble.length <= 6 &&
@@ -177,7 +178,7 @@ function isMit(text: string): boolean {
       line =>
         /^(?:the )?mit license(?: \(mit\))?$/i.test(line) ||
         isCopyrightLine(line) ||
-        words(line).every(word => holderWords.has(word))
+        (/^[\x20-\x7e]+$/.test(line) && words(line).length > 0 && words(line).every(word => holderWords.has(word)))
     )
   );
 }

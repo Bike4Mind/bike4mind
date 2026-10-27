@@ -371,6 +371,15 @@ describe('models ls', () => {
     await runModelsCommand('list', { _: [] }, h.deps);
     expect(h.lines[1]).toMatch(/No models installed/);
   });
+
+  it('reports a loaded-model lookup failure instead of marking every model unloaded', async () => {
+    const runtime = fakeRuntime({ loaded: vi.fn().mockRejectedValue(new Error('Ollama /api/ps returned 503')) });
+    const h = harness({ runtime });
+    await expect(runModelsCommand('ls', { _: [], 'output-format': 'json' }, h.deps)).rejects.toThrow(
+      'Ollama /api/ps returned 503'
+    );
+    expect(h.lines).toEqual([]);
+  });
 });
 
 describe('models search', () => {
@@ -495,6 +504,28 @@ describe('models search', () => {
 });
 
 describe('models show', () => {
+  it('suggests a pullable build when the default quant is split into shards', async () => {
+    const model = detail({
+      builds: [
+        build('Q4_K_M', 491_400_032, { split: true, ollamaRef: null, ollamaRefIssue: 'split' }),
+        build('Q8_0', 675_710_816),
+      ],
+    });
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(model) }) });
+    await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+    expect(h.lines).toContain(`Pull one with: b4m models pull ${REPO}:Q8_0`);
+    expect(h.lines).not.toContain(`Pull one with: b4m models pull ${REPO}:Q4_K_M`);
+  });
+
+  it('omits the pull suggestion when every build is unsupported', async () => {
+    const model = detail({
+      builds: [build('Q4_K_M', 491_400_032, { split: true, ollamaRef: null, ollamaRefIssue: 'split' })],
+    });
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(model) }) });
+    await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+    expect(h.lines.some(line => line.startsWith('Pull one with:'))).toBe(false);
+  });
+
   it('lists builds with refs or the reason there is none', async () => {
     const h = harness();
     await runModelsCommand('show', { _: [], repo: REPO }, h.deps);

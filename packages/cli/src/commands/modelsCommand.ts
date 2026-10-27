@@ -289,10 +289,7 @@ export async function listModels(deps: ModelsDeps, opts: ModelsOptions): Promise
   const target = await abortable(deps.resolveRuntime(), deps.signal);
   const { runtime } = target;
   const [models, loaded] = await abortable(
-    Promise.all([
-      runtime.list(),
-      runtime.capabilities.reportsLoaded ? runtime.loaded().catch(() => []) : Promise.resolve([]),
-    ]),
+    Promise.all([runtime.list(), runtime.capabilities.reportsLoaded ? runtime.loaded() : Promise.resolve([])]),
     deps.signal
   );
   const loadedNames = new Set(loaded.map(model => model.name));
@@ -455,7 +452,8 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
       deps.log(`  ${clean(projector.path)}  ${clean(projector.quant) || '-'}  ${formatBytes(projector.sizeBytes)}`);
     }
   }
-  const suggested = pickBuild(detail.builds, null) ?? detail.builds.find(build => build.ollamaRef);
+  const pullable = detail.builds.filter(build => !build.ollamaRefIssue || !UNPULLABLE.has(build.ollamaRefIssue));
+  const suggested = pickBuild(pullable, null) ?? pullable.find(build => build.ollamaRef);
   if (suggested?.quant) {
     deps.log('');
     deps.log(`Pull one with: b4m models pull ${id}:${clean(suggested.quant)}`);
