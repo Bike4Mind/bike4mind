@@ -320,6 +320,8 @@ const CliConfigSchema = z.object({
   sandbox: SandboxConfigSchema.optional(),
   additionalDirectories: z.array(z.string()).prefault([]),
   fallbackModels: z.array(z.string()).optional(),
+  ollamaHost: z.string().optional(),
+  localDefaultModel: z.string().optional(),
 });
 
 /**
@@ -1321,6 +1323,43 @@ export class ConfigStore {
   }
 
   /**
+   * `b4m models` writes defaultModel, ollamaHost and localDefaultModel from its own process, so like features
+   * they are taken from disk unless this caller's patch sets them.
+   */
+  private async mergeModelFields(
+    next: CliConfig,
+    snapshot: CliConfig,
+    patch: GlobalConfigPatch | undefined
+  ): Promise<CliConfig> {
+    let disk: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
+      const result = z.record(z.string(), z.unknown()).safeParse(parsed);
+      if (!result.success) return next;
+      disk = result.data;
+    } catch {
+      return next;
+    }
+    // A patch naming a key sets it; a whole config spread back (it carries `version`) only sets what it changed.
+    const wholeConfig = patch !== undefined && Object.prototype.hasOwnProperty.call(patch, 'version');
+    const changed = (key: 'defaultModel' | 'ollamaHost' | 'localDefaultModel') =>
+      patch !== undefined &&
+      Object.prototype.hasOwnProperty.call(patch, key) &&
+      (!wholeConfig || patch[key] !== snapshot[key]);
+    const optional = (key: 'ollamaHost' | 'localDefaultModel') =>
+      changed(key) || (disk[key] !== undefined && typeof disk[key] !== 'string')
+        ? next[key]
+        : (disk[key] as string | undefined);
+    return {
+      ...next,
+      defaultModel:
+        changed('defaultModel') || typeof disk.defaultModel !== 'string' ? next.defaultModel : disk.defaultModel,
+      ollamaHost: optional('ollamaHost'),
+      localDefaultModel: optional('localDefaultModel'),
+    };
+  }
+
+  /**
    * Save configuration to disk
    */
   async save(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
@@ -1387,6 +1426,9 @@ export class ConfigStore {
       // refresh features from disk so a concurrent writer isn't reverted - unless
       // this is a reset, which intentionally wipes the feature map.
       this.globalConfig = { ...global, features: opts?.clearFeatures ? {} : await this.readDiskFeatures() };
+    }
+    if (!opts?.clearFeatures) {
+      this.globalConfig = await this.mergeModelFields(this.globalConfig, global, config);
     }
 
     try {

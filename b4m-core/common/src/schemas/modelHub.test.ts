@@ -100,6 +100,12 @@ describe('HubManifestSchema', () => {
     ['arch.blockCount', e => (e.arch = { ...e.arch, blockCount: 2000 })],
     ['arch.contextMax', e => (e.arch = { ...e.arch, contextMax: 2 ** 25 })],
     ['arch.headCount', e => (e.arch = { ...e.arch, headCount: 4097 })],
+    ['arch.embeddingLength', e => (e.arch = { ...e.arch, embeddingLength: 65537 })],
+    ['arch.activeFeedForwardLength', e => (e.arch = { ...e.arch, activeFeedForwardLength: 1048577 })],
+    [
+      'arch.recurrent.kind',
+      e => (e.arch = { ...e.arch, recurrent: { layers: 1, stateBytesPerSeq: 1, kind: 'x'.repeat(33) } }),
+    ],
     ['arch.full.kvHeads', e => (e.arch = { ...e.arch, full: { ...e.arch.full, kvHeads: 1e6 } })],
     ['arch.kvProbe.runtime', e => (e.arch = { ...e.arch, kvProbe: kvProbe('b'.repeat(33)) })],
     ['params.activeB', e => (e.params = { totalB: 100000, activeB: 200000 })],
@@ -126,6 +132,18 @@ describe('HubManifestSchema', () => {
   ])('bounds %s', (path, edit) => {
     const found = issuesAfter('hybrid-27b', edit);
     expect(found.some(i => i.startsWith(`entries.0.${path}: Too big`))).toBe(true);
+  });
+
+  it('rejects a zero feed-forward width and an empty recurrent kind', () => {
+    const base = {
+      contextMax: 4096,
+      blockCount: 4,
+      full: { layers: 1, kvHeads: 1, keyLength: 1, valueLength: 1 },
+    };
+    expect(ModelArchSchema.safeParse({ ...base, activeFeedForwardLength: 0 }).success).toBe(false);
+    const recurrent = { layers: 1, stateBytesPerSeq: 1 };
+    expect(ModelArchSchema.safeParse({ ...base, recurrent: { ...recurrent, kind: '' } }).success).toBe(false);
+    expect(ModelArchSchema.safeParse({ ...base, recurrent: { ...recurrent, kind: 'x' } }).success).toBe(true);
   });
 
   it('bounds moeLayers on the arch alone, where no cross-field rule applies', () => {
@@ -255,6 +273,15 @@ describe('parseHubManifest', () => {
     expect(manifest.rankings).not.toHaveProperty('audio');
     expect(manifest.entries[0].builds[0].smoke[0].checks).toEqual(['load']);
     expect(dropped).toEqual([{ path: 'rankings.audio', reason: 'unknown role' }]);
+  });
+
+  it('keeps an entry whose recurrent kind this client has not calibrated', () => {
+    const m = fixtureManifest();
+    const recurrent = m.entries[0].arch.recurrent!;
+    Object.assign(recurrent, { kind: 'future-kind' });
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(dropped).toEqual([]);
+    expect(manifest.entries[0].arch.recurrent?.kind).toBe('future-kind');
   });
 
   it('drops an unreadable evidence item without dropping its build', () => {

@@ -23,7 +23,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   authSessionRepository: { revokeAllByUserId: (...args: unknown[]) => mockRevokeAllByUserId(...args) },
   realtimeConnectionRepository: { endConnections: (...args: unknown[]) => mockEndConnections(...args) },
-  adminSettingsRepository: {},
+  adminSettingsRepository: { findBySettingName: async () => null },
   creditTransactionRepository: {},
   creditLotRepository: {},
   organizationRepository: {},

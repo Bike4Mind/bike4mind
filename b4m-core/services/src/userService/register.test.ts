@@ -573,6 +573,29 @@ describe('registerUser', () => {
       expect(result).toMatchObject({ email: noInviteParams.email });
     });
 
+    it('snapshots staged grants only for new no-invite accounts when enabled', async () => {
+      setAllowOpenRegistration('true');
+      const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+        const values: Record<string, string> = {
+          stagedSignupGrantEnabled: 'true',
+          signupGrantCredits: '12',
+          verifiedUnlockCredits: '28',
+        };
+        return name in values ? { settingValue: values[name] } : readSetting(name);
+      });
+      const result = await registerUser(noInviteParams, mockAdapters);
+      expect(result.signupGrant).toEqual({
+        stage: 'pending_email',
+        signupCredits: 12,
+        unlockCredits: 28,
+        creditsReleased: 0,
+        nextCondition: 'email_verification',
+      });
+      const invited = await registerUser(baseParams, mockAdapters);
+      expect(invited.signupGrant).toBeUndefined();
+    });
+
     it('allows registration when invite check is skipped (OTC \u2014 email already proven)', async () => {
       setAllowOpenRegistration('false');
       const result = await registerUser(noInviteParams, { ...mockAdapters, skipInviteCheck: true });
@@ -605,6 +628,7 @@ describe('registerViaOTC', () => {
           create: vi.fn().mockImplementation(async (user: any) => ({ ...user, id: 'newUserId' })),
           update: vi.fn().mockImplementation(async (user: any) => user),
           claimFreeCreditGrant: vi.fn().mockResolvedValue(true),
+          findById: vi.fn().mockResolvedValue(null),
         },
         adminSettings: {
           findBySettingName: vi.fn().mockImplementation((name: string) => {

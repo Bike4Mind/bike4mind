@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/common';
 import { addCredits } from '../creditService';
 import { protectSignupCredits } from './signupProtection';
+import { releaseSignupTranche } from './stagedSignupGrant';
 
 type FreeCreditUser = {
   id: string;
@@ -79,6 +80,8 @@ export const grantFreeCredits = async (
     if (!alreadyGranted) await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
     return { creditsGranted: 0, currentCredits: null, withheld: true };
   }
+  const persisted = await db.users.findById(user.id);
+  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason });
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
   if (amount <= 0) return { creditsGranted: 0, currentCredits: null };
 

@@ -799,6 +799,18 @@ describe('HuggingFaceHub errors', () => {
     );
   });
 
+  it.each([
+    ['malformed JSON', TOKEN],
+    ['unexpected JSON shape', JSON.stringify({ [TOKEN]: TOKEN })],
+  ])('keeps echoed credentials out of %s errors and their causes', async (_label, body) => {
+    const hub = new HuggingFaceHub({ token: TOKEN, fetch: async () => new Response(body) });
+    const error = await caught(hub.search());
+
+    expect(error).toBeInstanceOf(RuntimeProtocolError);
+    expectNoToken(error);
+    expect(inspect(error, { depth: 10 })).not.toContain(TOKEN.slice(0, 10));
+  });
+
   it('never puts the token in an error, even when the server echoes it', async () => {
     const echo: Handler = (request, response) =>
       reply(
