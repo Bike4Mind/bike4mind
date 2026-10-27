@@ -55,6 +55,9 @@ jobs:
       - name: Check for premium overlay paths in pnpm-lock.yaml
         run: bash scripts/check-no-overlay-lockfile.sh
 
+      - name: Check tracked files against the overlay-literal allowlist
+        run: bash scripts/check-no-overlay-literals.sh
+
       - name: Run lockfile repair script tests
         run: bash .github/scripts/repair-lockfile-integrity.test.sh
 
