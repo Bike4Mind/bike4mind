@@ -390,6 +390,16 @@ describe('/api/v1/skills/market wire shapes', () => {
     expect(h.publish.mock.calls[0][1]).toMatchObject({ organizationId: undefined });
   });
 
+  it('publish leaves organization_id unset for a caller in no organization', async () => {
+    h.memberOrgs.mockResolvedValue([]);
+    await fire(listingsHandler, {
+      method: 'POST',
+      url: '/api/v1/skills/market/listings',
+      body: { skill_id: 'skill-1', visibility: 'organization' },
+    });
+    expect(h.publish.mock.calls[0][1]).toMatchObject({ organizationId: undefined });
+  });
+
   it("publish rejects the SPA route's camelCase body (422)", async () => {
     const res = await fire(listingsHandler, {
       method: 'POST',
