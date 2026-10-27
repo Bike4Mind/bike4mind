@@ -101,7 +101,7 @@ const RECURRENT_KIND: Record<string, NonNullable<ModelArch['recurrent']>['kind']
 };
 // Their expert tensors are feed_forward_length wide; other MoE architectures need expert_feed_forward_length.
 const FFN_WIDE_EXPERTS = new Set(['llama', 'granitemoe', 'granitehybrid']);
-const UNMODELED_ARCHES = new Set(['qwen4exp', 'deepseek32', 'glm-dsa']);
+const UNMODELED_ARCHES = new Set(['qwen4exp', 'deepseek32', 'glm-dsa', 'glm5-next', 'minimax-m3']);
 
 /** Reads `ModelArch` from GGUF metadata as llama.cpp b11889 sizes its caches; null if a key is missing or blanked.
  * Verbose `/api/show` tensors, when given, decide which layers hold experts. */
@@ -109,7 +109,7 @@ export function archFromModelInfo(modelInfo: ModelInfo | null | undefined, tenso
   if (!modelInfo) return null;
   const arch = modelInfo['general.architecture'];
   if (typeof arch !== 'string' || !arch) return null;
-  // Indexer KV caches (qwen4exp's QSA, the DSA lightning indexer) and qwen4exp's PLE conv history are not modeled,
+  // Indexer KV caches (qwen4exp's QSA, DSA, minimax-m3's MSA) and qwen4exp's PLE conv history are not modeled,
   // so any estimate would undercount.
   if (UNMODELED_ARCHES.has(arch)) return null;
   const field = (key: string) => modelInfo[`${arch}.${key}`];
