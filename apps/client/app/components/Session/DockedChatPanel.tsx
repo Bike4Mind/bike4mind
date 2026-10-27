@@ -5,6 +5,7 @@ import { Box, IconButton, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ChatPanelControls, { chatHeaderToolButtonSx } from './ChatPanelControls';
+import { adminSurfaceExcludeProps } from '@client/app/utils/themes/customizations/adminSkin';
 
 interface DockedChatPanelProps {
   children: React.ReactNode;
@@ -31,6 +32,8 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
   return (
     <Box
       data-testid="docked-chat-panel"
+      // App-wide chrome: the admin skin stops here (adminSkin.ts).
+      {...adminSurfaceExcludeProps}
       sx={{
         display: 'flex',
         flexDirection: 'column',

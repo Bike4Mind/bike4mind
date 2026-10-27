@@ -11,6 +11,7 @@ import {
 } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import CircularProgress from '@mui/joy/CircularProgress';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
@@ -72,6 +73,7 @@ export function Composer({
   streaming,
   attachments,
   blockedReason,
+  blockedAction,
   notReady,
   usage,
   placeholder = 'Send a message...',
@@ -104,6 +106,8 @@ export function Composer({
    * alternative is a request that is refused for reasons the user never sees.
    */
   blockedReason?: string | null;
+  /** A button beside `blockedReason` that fixes it. */
+  blockedAction?: { label: string; onClick: () => void } | null;
   /**
    * A word for the idle indicator naming a state that is not ready to send - "No folder" for a
    * Code session with no project. It blocks Send and draws NO banner: the control that answers
@@ -473,7 +477,25 @@ export function Composer({
 
       {blockedReason && (
         <Box sx={{ ...contentColumnSx, mt: 1 }}>
-          <Alert size="sm" color="warning" variant="soft" data-testid="composer-blocked-reason">
+          <Alert
+            size="sm"
+            color="warning"
+            variant="soft"
+            data-testid="composer-blocked-reason"
+            endDecorator={
+              blockedAction && (
+                <Button
+                  size="sm"
+                  variant="soft"
+                  color="warning"
+                  onClick={blockedAction.onClick}
+                  data-testid="composer-blocked-action-btn"
+                >
+                  {blockedAction.label}
+                </Button>
+              )
+            }
+          >
             {blockedReason}
           </Alert>
         </Box>

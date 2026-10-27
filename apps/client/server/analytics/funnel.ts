@@ -13,6 +13,7 @@ import { laneMetadata } from './lane';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { stableEventId } from './signupEvents';
 import { logEventSafe } from '@server/utils/analyticsLog';
+import { rewardInviterForFirstAnswer } from '@server/referrals/firstAnswerReward';
 
 // Server half of the funnel instrumentation. The client half (begin_checkout, upsell_*) is
 // app/utils/funnelEvents.ts. Users flagged isSynthetic are handled differently by each: the client
@@ -192,6 +193,7 @@ export async function emitEmailVerifiedFunnelEvents(opts: {
       event: 'credits_granted',
       metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
     }),
+    rewardInviterForFirstAnswer(opts.user.id),
   ]);
 }
 
@@ -215,16 +217,20 @@ export async function recordFirstValue(opts: {
     if (res.modifiedCount !== 1) return false;
     await opts.onRecorded?.();
     const createdAt = opts.user.createdAt ? new Date(opts.user.createdAt).getTime() : NaN;
-    return await emitFunnelEvent({
-      user: opts.user,
-      event: 'first_value',
-      metadata: {
-        feature: opts.feature,
-        ...(Number.isFinite(createdAt) && {
-          secondsSinceSignup: Math.max(0, Math.round((now.getTime() - createdAt) / 1000)),
-        }),
-      },
-    });
+    const [emitted] = await Promise.all([
+      emitFunnelEvent({
+        user: opts.user,
+        event: 'first_value',
+        metadata: {
+          feature: opts.feature,
+          ...(Number.isFinite(createdAt) && {
+            secondsSinceSignup: Math.max(0, Math.round((now.getTime() - createdAt) / 1000)),
+          }),
+        },
+      }),
+      rewardInviterForFirstAnswer(opts.user.id),
+    ]);
+    return emitted;
   } catch (err) {
     console.warn('[b4m-analytics] first_value not recorded', err instanceof Error ? err.message : err);
     return false;

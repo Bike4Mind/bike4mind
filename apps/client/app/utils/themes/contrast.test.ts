@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { extendTheme } from '@mui/joy/styles';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { environmentBannerPalette } from './admin';
 import { getThemeConfig } from './themePrimitives';
 
 /**
@@ -136,5 +137,11 @@ describe('admin token contrast', () => {
     for (const [use, [text, fill]] of Object.entries(pairs)) {
       expect(contrast(text, fill), use).toBeGreaterThanOrEqual(AA_TEXT);
     }
+  });
+});
+
+describe('environment banner contrast', () => {
+  it.each(Object.entries(environmentBannerPalette.background))('%s: the banner label reaches 4.5:1', (_env, fill) => {
+    expect(contrast(environmentBannerPalette.foreground, fill)).toBeGreaterThanOrEqual(AA_TEXT);
   });
 });

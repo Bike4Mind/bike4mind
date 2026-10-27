@@ -649,6 +649,21 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
                 </Stack>
               </Card>
             ) : null}
+            {version?.snapshot.claudeCodeAllowedTools?.length ? (
+              <Card variant="soft" sx={{ gap: 1 }} data-testid="market-claude-code-tools">
+                <Typography level="title-sm">Claude Code tools</Typography>
+                <Typography level="body-xs" textColor="text.tertiary">
+                  Granted when installed in Claude Code; not used in Bike4Mind.
+                </Typography>
+                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                  {version.snapshot.claudeCodeAllowedTools.map(t => (
+                    <Chip key={t} size="sm" variant="outlined">
+                      {t}
+                    </Chip>
+                  ))}
+                </Stack>
+              </Card>
+            ) : null}
           </Stack>
         </Box>
 

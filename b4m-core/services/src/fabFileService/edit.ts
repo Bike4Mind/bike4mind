@@ -8,6 +8,7 @@ import {
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { diffLines, type Change } from 'diff';
+import { signedUrlExpiresAt } from './get';
 
 const editFabFileSchema = z.object({
   id: z.string(),
@@ -208,10 +209,11 @@ Return only the edited content without any markdown code blocks or explanations.
       ContentType: fabFile.mimeType,
     });
 
+    const fileUrl = await storage.generateSignedUrl(filePath, 3600);
     const updatedFile: Partial<IFabFileDocument> = {
       id: fabFile.id,
-      fileUrl: await storage.generateSignedUrl(filePath, 3600),
-      fileUrlExpireAt: new Date(Date.now() + 3600 * 1000),
+      fileUrl,
+      fileUrlExpireAt: signedUrlExpiresAt(fileUrl, 3600),
       filePath,
       updatedAt: new Date(),
       ...FAB_FILE_CONTENT_REWRITE_PATCH,

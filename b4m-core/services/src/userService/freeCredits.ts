@@ -4,10 +4,15 @@ import {
   ICreditLotRepository,
   ICreditTransactionRepository,
   IUserRepository,
+  type IUserDocument,
   PENDING_FREE_CREDITS_TAG,
   settingsMap,
+  type SignupProtection,
 } from '@bike4mind/common';
 import { addCredits } from '../creditService';
+import type { SignupRiskSignals } from './signupRisk';
+import { releaseSignupTranche } from './stagedSignupGrant';
+import { protectSignupCredits } from './signupProtection';
 
 type FreeCreditUser = {
   id: string;
@@ -21,13 +26,17 @@ export type FreeCreditAdapters = {
     creditTransactions: ICreditTransactionRepository;
     creditLots?: ICreditLotRepository;
     users: IUserRepository;
+    signupProtection?: SignupProtection;
   };
   reason: string;
+  /** Network signals for a staged grant's first assessment; without it only signupMeta is read. */
+  collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
 };
 
 type FreeCreditLogger = { error: (message: string, ...args: unknown[]) => void };
 
 export type GrantFreeCreditsResult = {
+  withheld?: boolean;
   creditsGranted: number;
   currentCredits: number | null;
 };
@@ -66,8 +75,17 @@ const legacyOtcRegisterTransactionId = (userId: string) => `otc-register-grant:$
  */
 export const grantFreeCredits = async (
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
-  { db, reason }: FreeCreditAdapters
+  { db, reason, collectRiskSignals }: FreeCreditAdapters
 ): Promise<GrantFreeCreditsResult> => {
+  const persisted = await db.users.findById(user.id);
+  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason, collectRiskSignals });
+  if (await protectSignupCredits(user.id, db)) {
+    const alreadyGranted = await db.creditTransactions.findOne({
+      transactionId: { $in: [`verify-grant:${user.id}`, legacyOtcRegisterTransactionId(user.id)] },
+    });
+    if (!alreadyGranted) await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
+    return { creditsGranted: 0, currentCredits: null, withheld: true };
+  }
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
   if (amount <= 0) return { creditsGranted: 0, currentCredits: null };
 
@@ -109,11 +127,13 @@ export const releasePendingFreeCredits = async (
   adapters: FreeCreditAdapters & { logger: FreeCreditLogger }
 ): Promise<ReleasePendingFreeCreditsResult> => {
   const tags = user.tags ?? [];
-  if (!tags.includes(PENDING_FREE_CREDITS_TAG))
-    return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
-
   try {
-    const { creditsGranted, currentCredits } = await grantFreeCredits(user, adapters);
+    if (!tags.includes(PENDING_FREE_CREDITS_TAG)) {
+      await protectSignupCredits(user.id, adapters.db);
+      return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
+    }
+    const { creditsGranted, currentCredits, withheld } = await grantFreeCredits(user, adapters);
+    if (withheld) return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
     return {
       released: true,
       creditsGranted,

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
+  OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
@@ -15,6 +16,13 @@ import { FallbackInfoSchema } from './llm';
 import { SystemPromptDetailSchema } from './contextTelemetry';
 import { ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE, COMPLETION_TOOL_ERROR_CODES } from './cliCompletions';
 import { ChatToolModeSchema } from './promptMeta';
+
+/**
+ * OpenAI's minimum output budget (it rejects `max_output_tokens` below 16 with a 400), the
+ * strictest we route to. Enforced for all models at the /api/chat boundary and floored again in
+ * the OpenAI adapter for callers that bypass the schema (agents, CLI, pinned session settings).
+ */
+export const MIN_OUTPUT_TOKENS = 16;
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -49,9 +57,9 @@ export const SimplifiedChatRequestSchema = z.object({
   // Output-budget override. `max_tokens` is the canonical field; `maxTokens` and
   // `maxOutputTokens` are accepted aliases so callers using either casing aren't
   // silently ignored (Zod strips unknown keys). All three coalesce in transformToInternalFormat.
-  max_tokens: z.number().positive().optional(),
-  maxTokens: z.number().positive().optional(),
-  maxOutputTokens: z.number().positive().optional(),
+  max_tokens: z.number().int().min(MIN_OUTPUT_TOKENS).optional(),
+  maxTokens: z.number().int().min(MIN_OUTPUT_TOKENS).optional(),
+  maxOutputTokens: z.number().int().min(MIN_OUTPUT_TOKENS).optional(),
   stream: z.boolean().prefault(false),
   historyCount: z.number().positive().default(10),
   fileIds: z.array(z.string()).prefault([]),
@@ -341,6 +349,23 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
  */
 export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal(REQUEST_TIMEOUT_ERROR_CODE),
+  quest_id: z.string(),
+  sessionId: z.string().optional(),
+});
+
+/**
+ * 422 on `wait: true`. `errorCode` is `output_budget_exhausted` when a reasoning model spent the caller's
+ * whole `max_tokens` thinking; it is optional because schema-validation 422s carry none. `quest_id` and
+ * `sessionId` are present only on that settled-turn case.
+ */
+export const ChatWaitUnprocessableErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE).optional(),
+  quest_id: z.string().optional(),
+  sessionId: z.string().optional(),
+});
+
+/** 502 on `wait: true`: the turn settled as an error upstream; `quest_id` is the settled quest. */
+export const ChatWaitUpstreamErrorSchema = ApiErrorSchema.extend({
   quest_id: z.string(),
   sessionId: z.string().optional(),
 });

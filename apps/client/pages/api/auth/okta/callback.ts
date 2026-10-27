@@ -55,6 +55,7 @@ import {
   recordSignupAcquisition,
 } from '@server/analytics/funnel';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -96,8 +97,11 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
     // Handle OAuth errors from Okta
     if (error) {
-      // Log full error details for debugging, but show sanitized message to user
-      Logger.error('[Okta Callback] OAuth error from Okta:', { error, errorDescription });
+      // Log full error details for debugging, but show sanitized message to user. access_denied is
+      // the IdP refusing this user (policy, cancelled consent), an expected outcome, so it does not
+      // log at error, the level the alert channel pages on.
+      const logOktaError = error === 'access_denied' ? Logger.warn : Logger.error;
+      logOktaError('[Okta Callback] OAuth error from Okta:', { error, errorDescription });
       await authFailLogRepository.create({
         strategy: 'okta',
         ip,
@@ -498,6 +502,8 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
     if (isNewUser) {
       await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.Okta });
+      // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+      await refreshSignupRiskScore(user.id, Logger.globalInstance);
       const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
       await emitSignupFunnelEvents({
         user: { id: user.id, ...signupFunnel },

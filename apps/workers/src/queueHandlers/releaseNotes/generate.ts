@@ -130,6 +130,14 @@ const ACCURACY_RULES = [
   'or affects only that provider.',
 ];
 
+// isOperatorOnlyTitle in packages/scripts/src/releaseNotes/buildPayload.ts drops `admin`-scoped PRs that have no
+// author note; this rule covers the rest (other scopes, and admin-scoped PRs kept for their customer note).
+const OPERATOR_PANEL_RULE = [
+  "Changes only to the operator admin panel, the tools the service operator's staff use to run the service",
+  '(user and signup review, abuse controls, platform-wide settings, usage reports), are NOT customer-facing.',
+  'Settings that customers manage for their own organization are customer-facing.',
+];
+
 // Editorial only: triage never sees an author note.
 const TITLE_VS_NOTE_RULE = [
   'When a title and a note differ in scope, count or conditions, follow the narrower one: a change that',
@@ -142,6 +150,7 @@ function buildTriagePrompt(prs: ReleaseNotesJobPr[]): string {
     'You triage merged pull requests for customer-facing release notes of a SaaS AI workspace product.',
     'For each pull request decide whether a customer would notice the change. Security vulnerability fixes,',
     'internal refactors, CI, tests, dependency bumps, infrastructure and developer tooling are NOT customer-facing.',
+    ...OPERATOR_PANEL_RULE,
     'For customer-facing ones write "note": one plain-language sentence saying what changes for the customer.',
     'Never mention pull request numbers, ticket keys, file paths, code identifiers or people. For others use "".',
     ...ACCURACY_RULES,
@@ -162,9 +171,11 @@ function buildEditorialPrompt(notes: { number: number; title: string; note: stri
     'only numbers from the list).',
     `Also write "headline" (at most ${MAX_HEADLINE_CHARS} characters) and "summary" (at most ${MAX_SUMMARY_CHARS}`,
     'characters).',
-    'Keep every change that has a note unless it is purely internal (CI, tests, refactors, developer tooling)',
-    'or a security vulnerability fix, which is never described. A security or infrastructure change users can',
-    'see stays, e.g. "Other sessions are signed out after a password change" or "Uploads over 100MB no longer fail".',
+    'Keep every change that has a note unless it is purely internal (CI, tests, refactors, developer tooling),',
+    'only changes the operator admin panel, or is a security vulnerability fix, which is never described.',
+    'A security or infrastructure change users can see stays, e.g. "Other sessions are signed out after a password',
+    'change" or "Uploads over 100MB no longer fail".',
+    ...OPERATOR_PANEL_RULE,
     ...ACCURACY_RULES,
     ...TITLE_VS_NOTE_RULE,
     // Keep in sync with findGenericCopy in finalize.ts, which rejects copy that breaks these rules.

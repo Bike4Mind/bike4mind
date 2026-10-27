@@ -17,6 +17,8 @@ import {
   createAnthropicRequestTimeoutError,
   createAnthropicStreamTimeoutError,
   bedrockEmptyResponseMessage,
+  OutputBudgetExhaustedError,
+  StreamEndedWithoutFinishError,
 } from '@bike4mind/llm-adapters';
 
 // Helper to create mock Axios errors
@@ -49,6 +51,16 @@ function createAwsSdkError(name: string, httpStatusCode?: number, message?: stri
 }
 
 describe('shouldTriggerFallback', () => {
+  describe('empty reasoning turns', () => {
+    it('falls back on a stream that ended without a finish reason', () => {
+      expect(shouldTriggerFallback(new StreamEndedWithoutFinishError('DeepSeek', 'deepseek-flash'))).toBe(true);
+    });
+
+    it('does not fall back on an exhausted output budget, which fails the same way again', () => {
+      expect(shouldTriggerFallback(new OutputBudgetExhaustedError('DeepSeek', 'deepseek-flash'))).toBe(false);
+    });
+  });
+
   it('returns true for a Bedrock empty stream that stalled without a terminal event', () => {
     expect(shouldTriggerFallback(new Error(bedrockEmptyResponseMessage('m', 'r', true)))).toBe(true);
   });
@@ -194,6 +206,15 @@ describe('shouldTriggerFallback', () => {
     it('should return true for TypeError: terminated (undici/fetch)', () => {
       const error = new TypeError('terminated');
       expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for TypeError: fetch failed (undici/fetch)', () => {
+      const error = new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNRESET' }) });
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should not treat a non-TypeError "fetch failed" as a transport failure', () => {
+      expect(shouldTriggerFallback(new Error('fetch failed'))).toBe(false);
     });
   });
 

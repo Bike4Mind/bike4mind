@@ -96,9 +96,9 @@ jobs:
           API_URL: ${{ steps.config.outputs.api_url }}
           # Preview stacks live in a SEPARATE AWS account the dev role can't `sst shell`
           # into, so inject E2E_CLEANUP_SECRET (the only SST value the suite needs) directly
-          # from this repo secret. It must match the stable value the deployer seeds onto
-          # every stage (bike4mind-deployer _tier-deploy.yml).
-          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          # from this repo secret. It must match the preview-tier value the deployer seeds
+          # onto preview stages.
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET_PREVIEW }}
           AI_LATENCY_RUN: 'false'
           PW_WORKERS: '1'
           CI: 'true'
@@ -110,7 +110,7 @@ jobs:
           # ever ran. That comment branches on `preview_skipped` ahead of pass/fail for the same
           # reason - a skip must never render as either.
           if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-            echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
+            echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured; skipping (0 tests run)"
             echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -150,12 +150,12 @@ jobs:
             // Three states, not two: a run that could not start is neither. Checked first,
             // because a skip exits 0 and would otherwise report as a green "Passed" on a PR
             // where zero tests ran.
-            const skipped = '${{ steps.e2e.outputs.preview_skipped }}' === 'true';
-            const passed = '${{ steps.e2e.outcome }}' === 'success';
+            const skipped = process.env.E2E_PREVIEW_SKIPPED === 'true';
+            const passed = process.env.E2E_OUTCOME === 'success';
             const icon = skipped ? '⏭️' : passed ? '✅' : '❌';
             const status = skipped ? 'Skipped' : passed ? 'Passed' : 'Failed';
             const summary = skipped
-              ? 'Preview e2e is unavailable: the `E2E_CLEANUP_SECRET` repo secret is not configured, so no tests ran.'
+              ? 'Preview e2e is unavailable: the `E2E_CLEANUP_SECRET_PREVIEW` repo secret is not configured, so no tests ran.'
               : (summaryMatch ? summaryMatch[0].trim() : 'See report for details');
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             // The report upload is gated off on a skip, so offering a download would point at
@@ -197,3 +197,5 @@ jobs:
             }
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
+          E2E_PREVIEW_SKIPPED: ${{ steps.e2e.outputs.preview_skipped }}
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}

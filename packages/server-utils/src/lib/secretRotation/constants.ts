@@ -1,11 +1,20 @@
-export const SECRET_ROTATION_CONFIG: {
-  [key: string]: {
-    description: string;
-    rotationIntervalDays: number;
-    isAutomatic: boolean;
-    rotationProcess: string;
-  };
-} = {
+import {
+  describeDroppedContributions,
+  partitionContributed,
+  type ContributedSecretRotationSpec,
+  type PartitionedContributions,
+} from '@bike4mind/infra';
+import { contributedInfraResources } from '../../premium-generated/infraResources.generated';
+import { ensureContributedSecretsLoaded, isContributedSecret } from '../../utils/contributedSecrets';
+
+export interface SecretRotationEntry {
+  description: string;
+  rotationIntervalDays: number;
+  isAutomatic: boolean;
+  rotationProcess: string;
+}
+
+export const SECRET_ROTATION_CONFIG: { [key: string]: SecretRotationEntry } = {
   // ── Authentication ─────────────────────────────────────────────────────────
   MONGODB_URI: {
     description: 'Database Credentials',
@@ -147,6 +156,12 @@ export const SECRET_ROTATION_CONFIG: {
     isAutomatic: false,
     rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
   },
+  SLACK_ALARMS_WEBHOOK_URL: {
+    description: 'Slack webhook for CloudWatch alarm notifications',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
+  },
   SLACK_SIGNING_SECRET: {
     description: 'Slack app signing secret for request verification',
     rotationIntervalDays: 180,
@@ -267,9 +282,65 @@ export const SECRET_ROTATION_CONFIG: {
     rotationProcess: 'Generate new random token and update SST Secret',
   },
   E2E_CLEANUP_SECRET: {
-    description: 'Shared secret for E2E test cleanup endpoints (/api/test/create-user, /api/test/cleanup)',
+    description: 'Header secret for the E2E test endpoints (/api/test/*)',
     rotationIntervalDays: 180,
     isAutomatic: false,
-    rotationProcess: 'Generate new random token and update SST Secret via set-sst-secrets workflow',
+    rotationProcess: 'Generate a new random token and update the per-tier deployer environment secret, then redeploy',
   },
 };
+
+const contributedRotations = new Map<string, SecretRotationEntry>();
+let contributedRotationsLoaded = false;
+
+/**
+ * Register rotation reminders for contributed secrets. A rotation whose secret is not a
+ * registered contributed secret is rejected, so secrets must be registered first.
+ */
+export function registerContributedSecretRotations(
+  specs: readonly ContributedSecretRotationSpec[]
+): PartitionedContributions<ContributedSecretRotationSpec> {
+  ensureContributedSecretsLoaded();
+  const result = partitionContributed(specs, spec => spec.secret, new Set(Object.keys(SECRET_ROTATION_CONFIG)));
+  const accepted: ContributedSecretRotationSpec[] = [];
+  for (const spec of result.registered) {
+    if (!isContributedSecret(spec.secret)) result.rejected.push(spec.secret);
+    else if (contributedRotations.has(spec.secret)) result.duplicates.push(spec.secret);
+    else accepted.push(spec);
+  }
+  result.registered = accepted;
+  for (const { secret, ...entry } of accepted) contributedRotations.set(secret, entry);
+  for (const line of describeDroppedContributions('secret rotation', result)) console.warn(`[secretRotation] ${line}`);
+  return result;
+}
+
+function ensureContributedRotationsLoaded(): void {
+  if (contributedRotationsLoaded) return;
+  contributedRotationsLoaded = true;
+  registerContributedSecretRotations(contributedInfraResources.rotations);
+}
+
+/** Core rotation entries plus every registered contributed one. Core entries win a name clash. */
+export function getSecretRotationConfig(): { [key: string]: SecretRotationEntry } {
+  ensureContributedRotationsLoaded();
+  return { ...Object.fromEntries(contributedRotations), ...SECRET_ROTATION_CONFIG };
+}
+
+/**
+ * Names a package declared a rotation for that did not make it into the config. Anything
+ * that retires rotation records not in the config must stop when this is non-empty, or it
+ * would retire the records of a rotation that only failed to register.
+ */
+export function getUnregisteredContributedRotations(): string[] {
+  const config = getSecretRotationConfig();
+  return contributedInfraResources.rotations.map(r => r.secret).filter(name => !(name in config));
+}
+
+/** False in a tree where no package declares a rotation, e.g. a clone without overlays. */
+export function declaresContributedRotations(): boolean {
+  return contributedInfraResources.rotations.length > 0;
+}
+
+export function resetContributedSecretRotationsForTests(): void {
+  contributedRotations.clear();
+  contributedRotationsLoaded = false;
+}
