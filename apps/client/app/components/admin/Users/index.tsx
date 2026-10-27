@@ -130,6 +130,12 @@ const UsersTab: React.FC = () => {
     setSelectionFilterKey(filterKey);
     setSelection(NO_SELECTION);
   }
+  // keepPreviousData leaves the old filter's rows tickable until the new page lands; drop those too.
+  const [settledFilterKey, setSettledFilterKey] = useState(filterKey);
+  if (!usersQuery.isPlaceholderData && settledFilterKey !== filterKey) {
+    setSettledFilterKey(filterKey);
+    setSelection(NO_SELECTION);
+  }
   const selectedIds = selection.mode === 'explicit' ? selection.ids : [];
   const clearSelection = useCallback(() => setSelection(NO_SELECTION), []);
 
