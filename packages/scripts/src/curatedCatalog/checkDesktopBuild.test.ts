@@ -28,10 +28,21 @@ describe('curated:check-build', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('passes a build without the test keys and with an https or empty URL', async () => {
+  it('passes a build without the test keys and with an empty URL or exactly the expected one', async () => {
+    const expected = 'https://catalog.example.com/model-hub/curated-v2/latest.json';
     expect(await main([dir], {}, log)).toBe(0);
-    await info({ devKeys: false, manifestUrl: 'https://catalog.example.com/latest.json' });
-    expect(await main([dir], {}, log)).toBe(0);
+    await info({ devKeys: false, manifestUrl: expected });
+    expect(await main([dir, '--expect-url', expected], {}, log)).toBe(0);
+    expect(await main([dir], {}, log)).toBe(1);
+    expect(await main([dir, '--expect-url', ''], {}, log)).toBe(1);
+    expect(lines.at(-1)).toMatch(/no --expect-url was given/);
+    for (const other of [
+      'https://elsewhere.example.com/model-hub/curated-v2/latest.json',
+      'https://catalog.example.com/other/latest.json',
+    ]) {
+      expect(await main([dir, '--expect-url', other], {}, log)).toBe(1);
+      expect(lines.at(-1)).toBe(`B4M_CURATED_MANIFEST_URL is not the expected ${other} (baked: ${expected})`);
+    }
   });
 
   it('fails on either seed or key id anywhere in the build, naming the file', async () => {
