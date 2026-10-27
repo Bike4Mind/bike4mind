@@ -40,9 +40,15 @@ vi.mock('../Details/GrantSubscriptionModal', () => ({
     </div>
   ),
 }));
-vi.mock('../Activity/UserViewTabs', () => ({
-  UserActivityTabPanel: ({ userId }: { userId: string }) => <div data-testid="stub-activity" data-user-id={userId} />,
+vi.mock('./tabs/ActivityTab', () => ({
+  ActivityTab: ({ userId, onOpenCredits }: { userId: string; onOpenCredits: () => void }) => (
+    <div data-testid="stub-activity" data-user-id={userId}>
+      <button data-testid="stub-activity-credits-btn" onClick={onOpenCredits} />
+    </div>
+  ),
 }));
+vi.mock('./tabs/SignInsTab', () => ({ SignInsTab: () => <div data-testid="stub-signins" /> }));
+vi.mock('./tabs/AdminLogTab', () => ({ AdminLogTab: () => <div data-testid="stub-admin-log" /> }));
 vi.mock('./UserProfileStats', () => ({ UserProfileStats: () => <div data-testid="stub-stats" /> }));
 vi.mock('./tabs/OverviewTab', () => ({
   OverviewTab: ({ onAction, onViewActivity }: { onAction: (action: 'tags') => void; onViewActivity: () => void }) => (
@@ -59,8 +65,6 @@ vi.mock('./tabs/recordTabs', () => ({
     </div>
   ),
   ApiKeysTab: () => <div data-testid="stub-keys" />,
-  SignInsTab: () => <div data-testid="stub-signins" />,
-  AdminLogTab: () => <div data-testid="stub-admin-log" />,
 }));
 vi.mock('./actions/accessDialogs', () => {
   const stub = (id: string) => {
@@ -314,6 +318,14 @@ describe('UserProfileView', () => {
       fireEvent.click(screen.getByTestId('stub-overview-activity-btn'));
 
       expect(onTabChange).toHaveBeenCalledWith('activity');
+    });
+
+    it('lets a credit event on the activity tab open the credits tab', () => {
+      const { onTabChange } = setup(buildProfile(), 'activity');
+
+      fireEvent.click(screen.getByTestId('stub-activity-credits-btn'));
+
+      expect(onTabChange).toHaveBeenCalledWith('credits');
     });
 
     it('opens Adjust credits from the credits tab', () => {

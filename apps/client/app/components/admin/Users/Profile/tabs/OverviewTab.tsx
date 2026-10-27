@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
 import { Box, Button, Chip, Input, Stack, Typography } from '@mui/joy';
-import { resolveUserStorageLimit, storageLimitToBytes } from '@bike4mind/common';
+import { USER_TIMELINE_TYPES, resolveUserStorageLimit, storageLimitToBytes, type AuditEntry } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
-import { useUserActivity } from '@client/app/hooks/data/adminUserActivity';
+import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
+import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
 import UserSubscriptionStatus from '../../Details/UserSubscriptionStatus';
 import { Fact, RelativeTime, SectionCard, StatusChip, formatUtc, useUndoToast } from '../../../shared';
 import type { ProfileAction } from '../actions/profileActions';
 import { useAdminUserUpdate } from '../actions/useAdminUserUpdate';
-import { AuditTimeline } from './AuditTimeline';
+import { TimelineList, TimelineSkeleton } from './TimelineList';
+import { timelineItem } from './timelineItems';
 import {
   USER_ROLE_LABELS,
   displayName,
@@ -166,46 +168,53 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
 };
 
 const RecentActivityCard: React.FC<{ userId: string; onViewAll: () => void }> = ({ userId, onViewAll }) => {
-  const activity = useUserActivity(userId, { direction: 'target', includeSecurity: true });
-  const entries = activity.data?.pages[0]?.entries.slice(0, RECENT_ACTIVITY_COUNT) ?? [];
+  const timeline = useUserTimeline(userId, { types: USER_TIMELINE_TYPES }, { pageSize: RECENT_ACTIVITY_COUNT });
+  const [selected, setSelected] = useState<AuditEntry | null>(null);
+  const items = (timeline.data?.pages[0]?.entries ?? []).map(entry =>
+    timelineItem(entry, { onOpenAudit: setSelected, onOpenCredits: onViewAll })
+  );
 
   const body = () => {
-    if (activity.isLoading)
-      return (
-        <Typography level="body-sm" sx={{ p: 2, color: 'admin.inkMuted' }}>
-          Loading...
-        </Typography>
-      );
-    if (activity.isError) {
+    if (timeline.isLoading) return <TimelineSkeleton rows={3} />;
+    if (timeline.isError) {
       return (
         <Typography level="body-sm" sx={{ p: 2, color: 'admin.inkMuted' }}>
           Activity could not be loaded.
         </Typography>
       );
     }
-    if (entries.length === 0) {
+    if (items.length === 0) {
       return (
         <Typography level="body-sm" sx={{ p: 2, color: 'admin.inkMuted' }}>
           Nothing recorded for this account yet.
         </Typography>
       );
     }
-    return <AuditTimeline entries={entries} data-testid="user-profile-recent-activity" />;
+    return (
+      <TimelineList
+        items={items}
+        rowTestId="user-profile-recent-activity-row"
+        data-testid="user-profile-recent-activity"
+      />
+    );
   };
 
   return (
-    <SectionCard
-      title="Recent activity"
-      body="custom"
-      action={
-        <HeaderAction onClick={onViewAll} data-testid="user-profile-view-activity-btn">
-          View all
-        </HeaderAction>
-      }
-      data-testid="user-profile-activity-card"
-    >
-      {body()}
-    </SectionCard>
+    <>
+      <SectionCard
+        title="Recent activity"
+        body="custom"
+        action={
+          <HeaderAction onClick={onViewAll} data-testid="user-profile-view-activity-btn">
+            View all
+          </HeaderAction>
+        }
+        data-testid="user-profile-activity-card"
+      >
+        {body()}
+      </SectionCard>
+      <AuditEntryDrawer entry={selected} onClose={() => setSelected(null)} />
+    </>
   );
 };
 
