@@ -133,6 +133,7 @@
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/hearth": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
+    "@bike4mind/local-models": "workspace:*",
     "@bike4mind/mcp": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/sdk": "workspace:*",

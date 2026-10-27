@@ -7,6 +7,7 @@ import reactHooksPlugin from 'eslint-plugin-react-hooks';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
+import noRawAdminJoy from './eslint-rules/no-raw-admin-joy.mjs';
 
 /**
  * ESLint Flat Config for Bike4Mind Monorepo
@@ -386,7 +387,12 @@ const SERVER_UTILS_BOUNDARY = {
 
 // Local rules, served as one plugin. `--cache` keys results on the plugin's name@version, not on
 // the rule source, so the version is a hash of that source - editing a rule invalidates the cache.
-const localRuleSources = ['./eslint-rules/no-raw-entity-response.mjs'];
+const localRuleSources = [
+  './eslint-rules/no-raw-entity-response.mjs',
+  './eslint-rules/no-raw-admin-joy.mjs',
+  './eslint-rules/admin-joy-legacy.mjs',
+  './eslint-rules/admin-joy-legacy-imports.mjs',
+];
 const localRulesPlugin = {
   meta: {
     name: 'b4m-local-rules',
@@ -395,7 +401,7 @@ const localRulesPlugin = {
       .digest('hex')
       .slice(0, 12),
   },
-  rules: { 'no-raw-entity-response': noRawEntityResponse },
+  rules: { 'no-raw-entity-response': noRawEntityResponse, 'no-raw-admin-joy': noRawAdminJoy },
 };
 
 export default defineConfig([
@@ -497,6 +503,12 @@ export default defineConfig([
     files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
   })),
 
+  {
+    files: ['apps/client/app/components/admin/**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs}'],
+    ignores: ['apps/client/app/components/admin/shared/**'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-raw-admin-joy': 'error' },
+  },
   // TypeScript custom rules
   {
     files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],

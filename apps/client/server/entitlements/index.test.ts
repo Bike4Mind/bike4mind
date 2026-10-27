@@ -53,6 +53,17 @@ vi.mock('@client/lib/entitlements/registry', async () => {
   };
 });
 
+// Plan price ids are env-dependent, so the ladder read is a fixture; the real mapping is covered by
+// lib/userSubscriptions/utils.test.ts.
+vi.mock('@client/lib/userSubscriptions/utils', () => ({
+  getHighestLadderTier: (subscriptions: readonly { priceId: string }[]) =>
+    subscriptions.some(subscription => subscription.priceId === 'price_ladder_pro')
+      ? 2
+      : subscriptions.some(subscription => subscription.priceId === 'price_ladder_basic')
+        ? 1
+        : undefined,
+}));
+
 // DB-backed partner rules (issue #293) are resolved through this server module. Mock it so
 // the resolver test stays a pure unit (no DB); the module's own behavior is covered by
 // partnerRules.test.ts. Default: no partner keys, so existing cases are unaffected.
@@ -98,6 +109,60 @@ describe('getUserEntitlements', () => {
 
     await expect(getUserEntitlements(user)).resolves.not.toContain('someproduct:pro');
     expect(findActiveByOwners).not.toHaveBeenCalled();
+  });
+
+  describe('plan:paid', () => {
+    it.each(['price_ladder_basic', 'price_ladder_pro'])(
+      'is granted for an active ladder subscription (%s)',
+      async priceId => {
+        findActive.mockResolvedValue([{ priceId }]);
+
+        await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
+      }
+    );
+
+    // The fixture ladder price stands in for the Team price; the real mapping is lib/userSubscriptions/utils.test.ts.
+    it('is granted to a seat member through an org-owned Team subscription row', async () => {
+      findActive.mockResolvedValue([]);
+      findPlanHolderOrgIds.mockResolvedValue(['org1']);
+      findActiveByOwners.mockResolvedValue([
+        { priceId: 'price_ladder_pro', ownerType: 'Organization', ownerId: 'org1' },
+      ]);
+
+      await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
+    });
+
+    it('is granted for an admin_grant subscription row', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_ladder_pro', source: 'admin_grant' }]);
+
+      await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
+    });
+
+    it('is not granted without a subscription', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(getUserEntitlements(user)).resolves.not.toContain('plan:paid');
+    });
+
+    it('is not granted for a plan off the ladder', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_standalone' }]);
+
+      await expect(getUserEntitlements(user)).resolves.not.toContain('plan:paid');
+    });
+
+    it('is not granted by a passthrough tag', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(getUserEntitlements({ id: 'u-tag', tags: ['plan:paid'] })).resolves.not.toContain('plan:paid');
+    });
+
+    it('is granted exactly once when a tag and a ladder subscription both name it', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_ladder_basic' }]);
+
+      const keys = await getUserEntitlements({ id: 'u-both', tags: ['plan:paid'] });
+
+      expect(keys.filter(key => key === 'plan:paid')).toHaveLength(1);
+    });
   });
 
   it('grants nothing from unmapped prices; tag passthrough (plus baseline) still applies', async () => {

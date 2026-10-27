@@ -6,6 +6,7 @@ import {
   PROMPT_TEXT_MAX,
   UnprocessableEntityError,
   redactSessionForClient,
+  chatMessageResponseSchema,
 } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { SQSService } from '@bike4mind/utils';
@@ -175,7 +176,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // Redact server-owned systemPromptText AFTER it has been read above (the base-identity
     // gate) and after the engine has been invoked. Shallow copy - never mutate
     // the in-memory session, which is shared with engine reads.
-    return res.json({ quest, session: redactSessionForClient(session) });
+    return res.json({ quest: chatMessageResponseSchema.parse(quest), session: redactSessionForClient(session) });
   });
 
 export default handler;

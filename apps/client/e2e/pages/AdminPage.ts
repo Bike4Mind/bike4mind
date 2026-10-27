@@ -246,14 +246,16 @@ export class AdminPage extends BasePage {
 
   // --- Delete User (SpicyUserActions) ---
 
-  async typeDeleteConfirmation() {
+  async clickDeleteUserButton() {
     // Delete lives on the profile page's Admin (danger zone) tab.
     await this.page.getByTestId('user-profile-tab-admin').click();
-    await this.page.getByTestId('delete-user-confirm-input').getByRole('textbox').fill('DELETE');
+    await this.page.getByTestId('delete-user-btn').click();
   }
 
-  async clickDeleteUserButton() {
-    await this.page.getByTestId('delete-user-btn').click();
+  /** The delete dialog asks for the account's email; read it from the dialog rather than the fixture. */
+  async typeDeleteConfirmation() {
+    const expected = await this.page.getByTestId('delete-user-dialog-typed-expected').innerText();
+    await this.page.getByTestId('delete-user-confirm-input').fill(expected);
   }
 
   /** The confirm-delete button stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */

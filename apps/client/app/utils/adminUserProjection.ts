@@ -45,6 +45,8 @@ export const ADMIN_USER_LIST_FIELDS = [
   'subscribedUntil',
   'numReferralsAvailable',
   'currentCredits',
+  'signupGrant',
+  'signupGrantAssessment',
   'organizationId',
   'pendingEmail',
   'emailVerified',

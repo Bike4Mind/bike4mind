@@ -6,10 +6,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+import { ChatModels, ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
 
 const m = vi.hoisted(() => ({
   denied: new Set<string>(),
+  admissionFlags: [] as unknown[],
   reserve: vi.fn(),
   refund: vi.fn(),
   settle: vi.fn(),
@@ -55,7 +56,10 @@ vi.mock('@bike4mind/services', () => ({
   fabFilesService: { assertRewriteFits: m.assertRewriteFits },
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: async () => [{ id: 'model-a', backend: 'anthropic' }],
+  getAvailableModels: async () => [
+    { id: 'model-a', backend: 'anthropic' },
+    { id: ChatModels.CLAUDE_4_6_SONNET_BEDROCK, backend: 'anthropic' },
+  ],
   getLlmByModel: () => ({ complete: m.complete }),
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
@@ -63,12 +67,15 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
 }));
 vi.mock('@server/billing/meterPlatformCompletion', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
-  createModelAdmission: async () => ({
-    admits: async (id: string) => !m.denied.has(id),
-    assert: async (id: string) => {
-      if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
-    },
-  }),
+  createModelAdmission: async (_user: unknown, _models: unknown, systemModel?: boolean) => {
+    m.admissionFlags.push(systemModel);
+    return {
+      admits: async (id: string) => !m.denied.has(id),
+      assert: async (id: string) => {
+        if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
+      },
+    };
+  },
   completionRequestCeilingUsd: () => 1,
   reserveCompletionCredits: (...args: unknown[]) => m.reserve(...args),
   completionUsd: (
@@ -86,11 +93,11 @@ const { default: handler } = await import('@pages/api/fabfiles/[id]/edit');
 
 const FILE_ID = '65a000000000000000000001';
 
-async function call(applyImmediately = false) {
+async function call(applyImmediately = false, model?: string) {
   const { req, res } = createMocks({
     method: 'POST',
     query: { id: FILE_ID },
-    body: { instruction: 'Fix the typo', model: 'model-a', applyImmediately },
+    body: { instruction: 'Fix the typo', model: arguments.length > 1 ? model : 'model-a', applyImmediately },
   });
   Object.assign(req, { user: { id: 'u1' }, ability: { can: () => true }, logger: console });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
@@ -101,6 +108,7 @@ async function call(applyImmediately = false) {
 beforeEach(() => {
   vi.clearAllMocks();
   m.denied.clear();
+  m.admissionFlags.length = 0;
   const file = {
     id: FILE_ID,
     fileName: 'a.txt',
@@ -167,6 +175,13 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
     await expect(call()).rejects.toMatchObject({ statusCode: 403 });
     expect(m.reserve).not.toHaveBeenCalled();
     expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('admits a request-supplied model as a user choice and a platform-picked fallback as a system model', async () => {
+    await call();
+    await call(false, undefined);
+
+    expect(m.admissionFlags).toEqual([false, true]);
   });
 
   it('settles a funded call on the provider-reported usage', async () => {

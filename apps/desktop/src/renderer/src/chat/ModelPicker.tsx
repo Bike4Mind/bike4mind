@@ -8,6 +8,8 @@ import MenuItem from '@mui/joy/MenuItem';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatModelOption } from '@shared/chat';
+import { parseLocalModelId } from '@shared/chat';
+import type { NoLocalModels } from './noLocalModels';
 import type { ModelCatalogController } from './useChat';
 
 /** Above this the list is long enough that scanning it beats scrolling it. */
@@ -39,12 +41,20 @@ export function ModelPicker({
   modelId,
   disabled,
   onSelect,
+  noLocal,
+  onOpenModels,
+  local,
 }: {
   catalog: ModelCatalogController;
   /** The conversation's saved model. May not be in `catalog.models` - see `unavailable`. */
   modelId: string | null;
   disabled?: boolean;
   onSelect: (model: string) => void;
+  /** Signed out with no device model: the picker names that instead of the saved model. */
+  noLocal?: NoLocalModels | null;
+  onOpenModels?: () => void;
+  /** Signed out: models are on this device, not on a server. */
+  local?: boolean;
 }) {
   const [filter, setFilter] = useState('');
   const { models, loading, error } = catalog;
@@ -86,7 +96,10 @@ export function ModelPicker({
 
   // A saved model missing from a list that LOADED is genuinely gone from this deployment.
   // While the list is empty because it could not be read, nothing is known, so nothing is said.
-  const unavailable = !!modelId && models.length > 0 && !models.some(model => model.id === modelId);
+  const missing = !!modelId && models.length > 0 && !models.some(model => model.id === modelId);
+  // Local mode: a hosted id or the placeholder is replaced by main as soon as it sees a list.
+  const selecting = missing && local && !parseLocalModelId(modelId);
+  const unavailable = missing && !selecting;
 
   const matches = useMemo(() => {
     const query = filter.trim().toLowerCase();
@@ -94,7 +107,14 @@ export function ModelPicker({
     return models.filter(model => model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query));
   }, [models, filter]);
 
-  const label = modelId ? shortLabel(models, modelId) : 'No conversation';
+  const label =
+    noLocal && models.length === 0
+      ? 'No local model'
+      : selecting
+        ? 'Selecting model...'
+        : modelId
+          ? shortLabel(models, modelId)
+          : 'No conversation';
 
   return (
     <Dropdown onOpenChange={(_event, open) => open && setFilter('')}>
@@ -153,7 +173,8 @@ export function ModelPicker({
             sx={{ px: 1.5, py: 0.5, whiteSpace: 'normal' }}
             data-testid="model-picker-unavailable"
           >
-            This conversation is set to {modelId}, which this server does not offer. Pick another; otherwise the next
+            This conversation is set to {modelId}, which{' '}
+            {local ? 'is not installed on this device' : 'this server does not offer'}. Pick another; otherwise the next
             message switches automatically.
           </Typography>
         )}
@@ -164,7 +185,26 @@ export function ModelPicker({
           </Typography>
         )}
 
-        {!loading && error && (
+        {noLocal && (
+          // A menu item rather than loose text so keyboard and screen-reader users reach it; it rechecks on activation.
+          <MenuItem
+            onClick={() => void catalog.reload()}
+            sx={{ whiteSpace: 'normal', alignItems: 'flex-start' }}
+            data-testid="model-picker-no-local"
+          >
+            <Typography level="body-xs" textColor="text.tertiary">
+              {noLocal.reason}
+            </Typography>
+          </MenuItem>
+        )}
+
+        {noLocal?.fix === 'open-models' && onOpenModels && (
+          <MenuItem onClick={onOpenModels} data-testid="model-picker-open-models-item">
+            Open Models
+          </MenuItem>
+        )}
+
+        {!noLocal && !loading && error && (
           <Box sx={{ px: 1.5, py: 0.5 }}>
             <Typography level="body-xs" textColor="danger.plainColor" sx={{ whiteSpace: 'normal' }}>
               {error}
@@ -172,7 +212,7 @@ export function ModelPicker({
           </Box>
         )}
 
-        {!loading && !error && models.length === 0 && (
+        {!noLocal && !loading && !error && models.length === 0 && (
           <Typography
             level="body-xs"
             textColor="text.tertiary"
