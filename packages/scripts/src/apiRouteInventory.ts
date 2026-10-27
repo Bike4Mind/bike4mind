@@ -190,9 +190,16 @@ function chainRoot(expression: ts.Expression): string | null {
   }
 }
 
-const ROUTER_FACTORIES = new Set(['baseApi', 'nextRouteForContract']);
+const ROUTER_FACTORIES = new Set(['baseApi', 'adminApi', 'nextRouteForContract']);
 
-/** Names bound (directly or through another bound name) to a baseApi/nextRouteForContract chain. */
+/**
+ * adminApi wraps baseApi, and its requireAdminPermission rejects any API key lacking ApiKeyScope.ADMIN,
+ * so every adminApi route is implicitly admin-scoped. Must stay in sync with
+ * apps/client/server/middlewares/adminApi.ts.
+ */
+const ADMIN_API_IMPLICIT_SCOPE = 'ADMIN';
+
+/** Names bound (directly or through another bound name) to a baseApi/adminApi/nextRouteForContract chain. */
 function routerBindings(sourceFile: ts.SourceFile): Set<string> {
   const declarations: Array<{ name: string; root: string }> = [];
   visit(sourceFile, node => {
@@ -389,11 +396,16 @@ export function analyzeRouteSource(
     if (!ts.isCallExpression(node)) return;
     const callee = unwrap(node.expression);
     if (ts.isIdentifier(callee)) {
-      if (callee.text === 'baseApi') {
+      if (callee.text === 'baseApi' || callee.text === 'adminApi') {
         usesRouter = true;
         const options = readBaseApiOptions(node, context);
         auth.add(options.auth);
         options.scopes.forEach(scope => scopes.add(scope));
+        if (callee.text === 'adminApi' && options.auth !== 'jwt') {
+          scopes.add(
+            context.table.enumValues.get(ADMIN_API_IMPLICIT_SCOPE) ?? `?ApiKeyScope.${ADMIN_API_IMPLICIT_SCOPE}`
+          );
+        }
       } else if (callee.text === 'nextRouteForContract') {
         usesRouter = true;
         contracted = true;
@@ -757,7 +769,8 @@ export function renderInventoryMarkdown(
     '',
     '## Columns',
     '',
-    '- **Methods**: verbs registered on the `baseApi` / `nextRouteForContract` router, `dispatchByMethod` keys,',
+    '- **Methods**: verbs registered on the `baseApi` / `adminApi` / `nextRouteForContract` router,',
+    '  `dispatchByMethod` keys,',
     '  or the verbs a raw handler compares `req.method` against. `any` means no verb filter was found (a',
     '  `.use()`-only router, or a raw handler that never checks the method); `?` means the check lives in',
     '  imported code the generator does not follow.',

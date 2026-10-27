@@ -47,7 +47,8 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
-import { recordLoginEvent, recordSignupNetwork } from '@server/auth/networkMeta';
+import { recordLoginEvent, readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
+import { assertSignupNetworkWithinLimits, createSignupRiskCollector } from '@server/auth/signupNetworkLimits';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -382,6 +383,12 @@ const handler = baseApi({ auth: false })
       bootstrapClaimId = bootstrap.eligible ? await claimBootstrapAdmin() : null;
       const partnerDomainAllowed =
         bootstrapClaimId === null && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
+      const signupNetwork = readNetworkMeta(req);
+      // The network caps are for anonymous self-serve signups; a partner rule or the bootstrap
+      // claim is an admin's authorization, as for enterprise SSO.
+      if (bootstrapClaimId === null && !partnerDomainAllowed) {
+        await assertSignupNetworkWithinLimits(signupNetwork, req.logger);
+      }
       // A self-host install's staff all share one fresh domain, and a partner domain is one an
       // admin already vouched for, so neither is capped (see OTC_REGISTER_DOMAIN_BUDGETS).
       domainBudget =
@@ -433,6 +440,7 @@ const handler = baseApi({ auth: false })
             },
             logger: req.logger,
             skipInviteCheck: bootstrapClaimId !== null || partnerDomainAllowed,
+            collectRiskSignals: createSignupRiskCollector(signupNetwork),
           }
         );
       // Roll back the losing account when concurrent signups redeem one single-use invite.
@@ -455,7 +463,8 @@ const handler = baseApi({ auth: false })
       // even though the code was correct: the username is attacker-varying input, and an
       // uncapped re-issue would let one proven code probe username existence indefinitely.
       // Post-code-proven, so the specific error message leaks nothing about email existence.
-      const nextAttempts = attempts + 1;
+      // A network-cap refusal is not attacker-varying input, so it does not spend an attempt.
+      const nextAttempts = err instanceof TooManyRequestsError ? attempts : attempts + 1;
       const reissuedToken = jwt.sign(
         { email: tokenPayload.email, attempts: nextAttempts, jti: newNonce },
         Config.JWT_SECRET,
