@@ -165,7 +165,7 @@ const fetchCreditEntries = async (subject: ActivitySubject, page: TimelinePageOp
     summary: `${CREDIT_SUMMARIES[row.type]}: ${formatSignedCredits(row.credits)}`,
     detail: [row.description, row.status && row.status !== 'completed' ? `Payment ${row.status}` : undefined]
       .filter(Boolean)
-      .join(' · '),
+      .join(' \u00b7 '),
     credits: row.credits,
     transactionType: row.type,
   }));
@@ -184,9 +184,19 @@ export const notebookIdClauses = (cursor: AuditLogCursor | undefined, range: Tim
   if (cursor) {
     const ms = cursor.occurredAt.getTime();
     const earlier = { _id: { $lt: idAtSecond(Math.ceil(ms / 1000)) } };
-    // Only a cursor on a whole second can tie with a notebook's time; then the id breaks the tie.
-    const tied =
-      ms % 1000 === 0 ? { _id: { $gte: idAtSecond(ms / 1000), $lt: new Types.ObjectId(cursor.id) } } : undefined;
+    // Only a cursor on a whole second can tie with a notebook's time; then the id breaks the tie. The
+    // cursor id may come from another source and sit in a later second, so cap the tie at this second.
+    let tied: Record<string, unknown> | undefined;
+    if (ms % 1000 === 0) {
+      const secondEnd = idAtSecond(ms / 1000 + 1);
+      const cursorId = new Types.ObjectId(cursor.id);
+      tied = {
+        _id: {
+          $gte: idAtSecond(ms / 1000),
+          $lt: cursorId.toHexString() < secondEnd.toHexString() ? cursorId : secondEnd,
+        },
+      };
+    }
     clauses.push(tied ? { $or: [earlier, tied] } : earlier);
   }
   return clauses;

@@ -61,10 +61,18 @@ describe('notebookIdClauses', () => {
     expect(JSON.parse(JSON.stringify(clause))).toEqual({ _id: { $lt: idAt(second + 1) } });
   });
 
-  it('breaks a tie on a whole-second cursor by id', () => {
-    const [clause] = notebookIdClauses({ occurredAt: new Date(second * 1000), id: 'c'.repeat(24) }, {});
+  it('breaks a tie on a whole-second cursor by id when the id is in the same second', () => {
+    const cursorId = Types.ObjectId.createFromTime(second).toString().replace(/.$/, 'f');
+    const [clause] = notebookIdClauses({ occurredAt: new Date(second * 1000), id: cursorId }, {});
     expect(JSON.parse(JSON.stringify(clause))).toEqual({
-      $or: [{ _id: { $lt: idAt(second) } }, { _id: { $gte: idAt(second), $lt: 'c'.repeat(24) } }],
+      $or: [{ _id: { $lt: idAt(second) } }, { _id: { $gte: idAt(second), $lt: cursorId } }],
+    });
+  });
+
+  it('caps the tie at the cursor second when the cursor id was minted later', () => {
+    const [clause] = notebookIdClauses({ occurredAt: new Date(second * 1000), id: idAt(second + 5) }, {});
+    expect(JSON.parse(JSON.stringify(clause))).toEqual({
+      $or: [{ _id: { $lt: idAt(second) } }, { _id: { $gte: idAt(second), $lt: idAt(second + 1) } }],
     });
   });
 
