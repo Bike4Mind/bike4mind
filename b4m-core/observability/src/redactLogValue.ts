@@ -44,7 +44,7 @@ function requestIdOf(value: object): string | undefined {
  * request and response bodies on the error object. Keeping only the safe fields means an incident
  * log still says WHAT failed ("context length exceeded") without serializing the payload.
  */
-function redactProviderError(value: Error): unknown {
+function redactProviderError(value: Error, state: WalkState, depth: number): unknown {
   const record = value as Error & { code?: unknown; status?: unknown; $metadata?: { httpStatusCode?: unknown } };
   const status =
     typeof record.status === 'number'
@@ -58,7 +58,18 @@ function redactProviderError(value: Error): unknown {
     code: typeof record.code === 'string' ? record.code : undefined,
     status,
     requestId: requestIdOf(value),
+    ...causeField(value, state, depth),
   };
+}
+
+/**
+ * `cause` is non-enumerable when set through the Error constructor, so spreading an Error drops it -
+ * and with undici the cause is the only place the real network reason (ECONNRESET, ENOTFOUND, ...)
+ * lives. Walked like any nested value, so MAX_DEPTH and the circular guard bound a cause chain.
+ */
+function causeField(value: Error, state: WalkState, depth: number): { cause?: unknown } {
+  const { cause } = value as Error & { cause?: unknown };
+  return cause === undefined ? {} : { cause: walk(cause, state, depth + 1) };
 }
 
 function isProviderError(value: Error): boolean {
@@ -99,10 +110,11 @@ function walk(value: unknown, state: WalkState, depth: number): unknown {
     if (value instanceof Set) return [...value].map(entry => walk(entry, state, depth + 1));
     if (Array.isArray(value)) return value.map(entry => walk(entry, state, depth + 1));
     if (value instanceof Error) {
-      if (isProviderError(value)) return redactProviderError(value);
+      if (isProviderError(value)) return redactProviderError(value, state, depth);
       const fields = walk({ ...value }, state, depth + 1) as Record<string, unknown>;
       return {
         ...fields,
+        ...causeField(value, state, depth),
         name: value.name,
         message: redactString(value.message),
         stack: redactString(value.stack ?? ''),
