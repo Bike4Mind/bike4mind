@@ -22,6 +22,11 @@ import {
   KimiNativeToolStream,
 } from './kimiNativeTools';
 import { normalizeOpenAIFinishReason } from '../stopReason';
+import {
+  appendIdentityReminderToMessages,
+  buildIdentityReminder,
+  shouldOmitIdentityReminder,
+} from '../identityReminder';
 
 /**
  * Sent when Kimi is asked to continue after a tool result with no tools offered (base.ts
@@ -168,7 +173,11 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     // recursion. The previous mapping dropped the assistant turn (its `content` is
     // null) and remapped `role: 'tool'` to `'system'`, stripping `tool_call_id`, so
     // Moonshot saw no record its tool ran and re-issued the same call in a loop.
-    const formattedMessages = messages
+    const messagesWithIdentity = shouldOmitIdentityReminder(options)
+      ? messages
+      : appendIdentityReminderToMessages(messages, buildIdentityReminder(model, options.modelDisplayName));
+
+    const formattedMessages = messagesWithIdentity
       .map(raw => {
         const m = raw as IMessage & { tool_calls?: unknown; tool_call_id?: string; name?: string };
         if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
