@@ -21,6 +21,7 @@ import { VIDEO_GENERATION_API_ERROR_CODES, VIDEO_JOB_PUBLIC_ERROR_CODES } from '
 import { MUSIC_GENERATION_API_ERROR_CODES, MUSIC_JOB_PUBLIC_ERROR_CODES } from './schemas/musicGenerations';
 import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
+import { SKILL_MARKET_IMPORT_ERROR_CODES } from './schemas/skillMarketPublic';
 
 /**
  * The `satisfies readonly ApiErrorCode[]` on each narrowing tuple is what actually
@@ -56,6 +57,7 @@ describe('API_ERROR_CODES', () => {
       DECISIONS_ERROR_CODES,
       STORAGE_ERROR_CODES,
       COMPLETION_TOOL_ERROR_CODES,
+      SKILL_MARKET_IMPORT_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
     // AGENT_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/agents/createAgent.test.ts.
