@@ -6,28 +6,34 @@ setupMongoTest();
 
 describe('BlockedIPRepository', () => {
   it('keeps the 10-minute manual default for block(ip, reason)', async () => {
-    const doc = await blockedIPRepository.block('1.1.1.1', 'admin');
+    const { doc, created } = await blockedIPRepository.block('1.1.1.1', 'admin');
+    expect(created).toBe(true);
     expect(doc.source).toBe('manual');
     expect(doc.escalationLevel).toBe(0);
     expect(doc.expiresAt.getTime() - doc.blockedAt.getTime()).toBe(DEFAULT_BLOCK_DURATION_MS);
   });
 
   it('stores the given duration, source and escalation level', async () => {
-    const doc = await blockedIPRepository.block('1.1.1.2', 'auto', {
+    const { doc, created } = await blockedIPRepository.block('1.1.1.2', 'auto', {
       durationMs: 3_600_000,
       source: 'auto',
       escalationLevel: 1,
     });
+    expect(created).toBe(true);
     expect(doc.source).toBe('auto');
     expect(doc.escalationLevel).toBe(1);
     expect(doc.expiresAt.getTime() - doc.blockedAt.getTime()).toBe(3_600_000);
   });
 
-  it('returns the existing active block instead of creating a second', async () => {
-    const first = await blockedIPRepository.block('1.1.1.3', 'a');
-    const second = await blockedIPRepository.block('1.1.1.3', 'b', { durationMs: 86_400_000, source: 'auto' });
+  it('extends the existing active block instead of creating a second', async () => {
+    const { doc: first } = await blockedIPRepository.block('1.1.1.3', 'a');
+    const { doc: second, created } = await blockedIPRepository.block('1.1.1.3', 'b', {
+      durationMs: 86_400_000,
+      source: 'auto',
+    });
+    expect(created).toBe(false);
     expect(String(second._id)).toBe(String(first._id));
-    expect(second.expiresAt.getTime()).toBe(first.expiresAt.getTime());
+    expect(second.expiresAt.getTime()).toBeGreaterThanOrEqual(first.blockedAt.getTime() + 86_400_000);
     expect(await BlockedIP.countDocuments({ ip: '1.1.1.3' })).toBe(1);
   });
 
