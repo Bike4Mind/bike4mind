@@ -12,7 +12,7 @@ import {
   ModelNotFoundError,
 } from './errors';
 import { type FileLock, type LockOptions, lockFile, onDisk, storageError } from './fileLock';
-import { headerCapabilities, readGgufHeader } from './ggufHeader';
+import { headerCapabilities, readCapabilityInfo } from './ggufCapabilities';
 import { ggufQuantLabel, type HubGgufFile, type HuggingFaceHub } from './huggingface';
 import type { InstalledModel } from './types';
 
@@ -258,7 +258,7 @@ export class GgufModelStore {
         const first = files[0] as string;
         const expected = shardNames(first);
         const named = /mmproj/i.test(basename(first));
-        const header = named ? null : await readGgufHeader(paths[0] as string);
+        const header = named ? null : await readCapabilityInfo(paths[0] as string);
         const projector = named || header?.architecture === 'clip';
         const model: StoredGgufModel = {
           name: first,

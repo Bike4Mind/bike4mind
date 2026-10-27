@@ -2,21 +2,21 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { headerCapabilities, readGgufHeader } from './ggufHeader';
-import { ggufBytes, ggufWithTemplate } from './__test__/ggufBytes';
+import { headerCapabilities, readCapabilityInfo } from './ggufCapabilities';
+import { gguf, ggufWithTemplate, i32, u32 } from './__test__/ggufWriter';
 
 let dir: string;
 let count = 0;
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'gguf-header-test-'));
+  dir = await mkdtemp(join(tmpdir(), 'gguf-capabilities-test-'));
 });
 
 afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-async function file(bytes: Buffer): Promise<string> {
+async function file(bytes: Uint8Array): Promise<string> {
   const path = join(dir, `m-${++count}.gguf`);
   await writeFile(path, bytes);
   return path;
@@ -24,55 +24,61 @@ async function file(bytes: Buffer): Promise<string> {
 
 const TOOLS_TEMPLATE = '{%- if tools %}{{ tools | tojson }}{%- endif %}<think>{{ messages }}';
 
-describe('readGgufHeader', () => {
+describe('readCapabilityInfo', () => {
   it('reads the architecture, pooling type and template past the tokenizer arrays', async () => {
-    expect(await readGgufHeader(await file(ggufWithTemplate(TOOLS_TEMPLATE)))).toEqual({
+    expect(await readCapabilityInfo(await file(ggufWithTemplate(TOOLS_TEMPLATE)))).toEqual({
       chatTemplate: TOOLS_TEMPLATE,
       architecture: 'qwen2',
       poolingType: null,
     });
-    const embedder = ggufWithTemplate(null, 'qwen3', { type: 'u32', value: 3 });
-    expect(await readGgufHeader(await file(embedder))).toEqual({
+    const embedder = ggufWithTemplate(null, 'qwen3', u32(3));
+    expect(await readCapabilityInfo(await file(embedder))).toEqual({
       chatTemplate: null,
       architecture: 'qwen3',
       poolingType: 3,
     });
-    const unspecified = ggufWithTemplate(null, 'llama', { type: 'i32', value: -1 });
-    expect((await readGgufHeader(await file(unspecified)))?.poolingType).toBe(-1);
+    const unspecified = ggufWithTemplate(null, 'llama', i32(-1));
+    expect((await readCapabilityInfo(await file(unspecified)))?.poolingType).toBe(-1);
   });
 
   it('is undefined for a header it cannot read', async () => {
     const whole = ggufWithTemplate(TOOLS_TEMPLATE);
-    expect(await readGgufHeader(await file(whole.subarray(0, whole.length - 10)))).toBeUndefined();
-    expect(await readGgufHeader(await file(ggufBytes({}, 1)))).toBeUndefined();
-    expect(await readGgufHeader(await file(Buffer.from('PK\x03\x04 not gguf')))).toBeUndefined();
-    expect(await readGgufHeader(join(dir, 'absent.gguf'))).toBeUndefined();
+    expect(await readCapabilityInfo(await file(whole.subarray(0, whole.length - 10)))).toBeUndefined();
+    expect(await readCapabilityInfo(await file(gguf({ version: 1 })))).toBeUndefined();
+    expect(await readCapabilityInfo(await file(Buffer.from('PK\x03\x04 not gguf')))).toBeUndefined();
+    expect(await readCapabilityInfo(join(dir, 'absent.gguf'))).toBeUndefined();
   });
 
   it('gives up on arrays of arrays at once, as llama.cpp does', async () => {
-    const u32 = (value: number) => Buffer.from(new Uint32Array([value]).buffer);
-    const u64 = (value: number) => Buffer.from(new BigUint64Array([BigInt(value)]).buffer);
-    const head = Buffer.concat([Buffer.from('GGUF'), u32(3), u64(0), u64(1), u64(3), Buffer.from('a.b')]);
+    const u32le = (value: number) => Buffer.from(new Uint32Array([value]).buffer);
+    const u64le = (value: number) => Buffer.from(new BigUint64Array([BigInt(value)]).buffer);
+    const head = Buffer.concat([Buffer.from('GGUF'), u32le(3), u64le(0), u64le(1), u64le(3), Buffer.from('a.b')]);
     const depth = 200_000;
-    const nested = Buffer.concat([head, u32(9), Buffer.concat(Array(depth).fill(Buffer.concat([u32(9), u64(1)])))]);
+    const nested = Buffer.concat([
+      head,
+      u32le(9),
+      Buffer.concat(Array(depth).fill(Buffer.concat([u32le(9), u64le(1)]))),
+    ]);
     const wide = Buffer.concat([
       head,
-      u32(9),
-      u32(9),
-      u64(depth),
-      ...Array(depth).fill(Buffer.concat([u32(4), u64(0)])),
+      u32le(9),
+      u32le(9),
+      u64le(depth),
+      ...Array(depth).fill(Buffer.concat([u32le(4), u64le(0)])),
     ]);
+    const short = Buffer.concat([head, u32le(9), u32le(9), u64le(1), u32le(4), u64le(0)]);
     const started = Date.now();
-    expect(await readGgufHeader(await file(nested))).toBeUndefined();
-    expect(await readGgufHeader(await file(wide))).toBeUndefined();
+    expect(await readCapabilityInfo(await file(nested))).toBeUndefined();
+    expect(await readCapabilityInfo(await file(wide))).toBeUndefined();
+    expect(await readCapabilityInfo(await file(short))).toBeUndefined();
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('reads the file again once it changes', async () => {
     const path = await file(ggufWithTemplate('first'));
-    expect((await readGgufHeader(path))?.chatTemplate).toBe('first');
+    expect((await readCapabilityInfo(path))?.chatTemplate).toBe('first');
     await writeFile(path, ggufWithTemplate('second, longer'));
-    expect((await readGgufHeader(path))?.chatTemplate).toBe('second, longer');
+    expect((await readCapabilityInfo(path))?.chatTemplate).toBe('second, longer');
   });
 });
 

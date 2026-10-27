@@ -17,7 +17,7 @@ import { lockFile } from './fileLock';
 import { GgufModelStore, assertFileName, assertModelName } from './ggufStore';
 import type { HubGgufFile, HuggingFaceHub } from './huggingface';
 import type { PullProgress } from './types';
-import { ggufWithTemplate } from './__test__/ggufBytes';
+import { ggufWithTemplate, u32 } from './__test__/ggufWriter';
 
 const gguf = (size = 64) => Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(size - 4, 1)]);
 const sha = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
@@ -45,7 +45,7 @@ async function sourceFile(name: string, bytes: Buffer = gguf()): Promise<string>
   return path;
 }
 
-async function place(store: GgufModelStore, name: string, bytes: Buffer = gguf()): Promise<void> {
+async function place(store: GgufModelStore, name: string, bytes: Uint8Array = gguf()): Promise<void> {
   const path = join(store.dir, ...name.split('/'));
   await mkdir(join(path, '..'), { recursive: true });
   await writeFile(path, bytes);
@@ -146,7 +146,7 @@ describe('GgufModelStore', () => {
     const store = freshStore();
     await place(store, 'tools.gguf', ggufWithTemplate('{% if tools %}{{ tools }}{% endif %}<think>'));
     await place(store, 'plain.gguf', ggufWithTemplate('{{ messages }}'));
-    await place(store, 'embed.gguf', ggufWithTemplate(null, 'qwen3', { type: 'u32', value: 3 }));
+    await place(store, 'embed.gguf', ggufWithTemplate(null, 'qwen3', u32(3)));
     await place(store, 'unknown.gguf');
     await place(store, 'mmproj-x-f16.gguf', ggufWithTemplate(null));
     await place(store, 'vision-f16.gguf', ggufWithTemplate(null, 'clip'));
