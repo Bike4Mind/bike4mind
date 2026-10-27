@@ -1,6 +1,6 @@
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import type { PublishScopeTier, PublishSourceKind } from '@bike4mind/common';
-import { resolveRouterDistributionId } from '@server/security/wafSharedHelpers';
+import { resolveRouterDistributionId } from '@bike4mind/server-utils/security/wafSharedHelpers';
 import type { MinimalLogger } from './minimalLogger';
 import { buildPublishUrlPath } from './paths';
 
@@ -68,8 +68,7 @@ export function publishCachePaths(t: PublishCacheTarget): string[] {
 
 /**
  * The Router CloudFront distribution id, via the canonical resolver (which reads
- * the `RouterDistributionId` Linkable's `.id` - NOT `.value`; only the separate
- * `whatsNewDistributionId` Linkable uses `.value`). Returns undefined when the
+ * the `RouterDistributionId` Linkable's `.id`). Returns undefined when the
  * resource isn't linked (local/test) so invalidation cleanly no-ops rather than
  * throwing - this is a best-effort path.
  */

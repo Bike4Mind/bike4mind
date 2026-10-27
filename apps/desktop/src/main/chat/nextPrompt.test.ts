@@ -1,4 +1,4 @@
-import type { ChatModelOption } from '@shared/chat';
+import { isLocalBackend, type ChatModelOption } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import {
   pickSuggestionModel,
@@ -44,6 +44,20 @@ describe('pickSuggestionModel', () => {
   // A user who pinned Ollama must not be routed to a different provider when it stops.
   it('declines rather than substituting when the pinned model is not offered', () => {
     expect(pickSuggestionModel([option(SUGGESTION_MODELS[0])], 'qwen3:8b')).toBeNull();
+  });
+
+  it('offers and uses a device-local model pinned in Settings', () => {
+    const local = option('local:ollama:qwen3:8b', 'local-ollama');
+    expect(suggestionModelChoices([local])).toEqual([local]);
+    expect(pickSuggestionModel([local], local.id)).toBe(local);
+    expect(pickSuggestionModel([local])).toBeNull();
+  });
+
+  it('treats any local-* backend as device-local', () => {
+    const local = option('local:lmstudio:some-model', 'local-lmstudio');
+    expect(suggestionModelChoices([local])).toEqual([local]);
+    expect(isLocalBackend(local)).toBe(true);
+    expect(isLocalBackend(option('claude-sonnet'))).toBe(false);
   });
 
   it('refuses a pin on a big hosted model the picker never offered', () => {

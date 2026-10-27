@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { Logger } from '@bike4mind/observability';
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps, type WakeOutcome } from '@bike4mind/agents';
+import '@server/deepAgent/contributedToolbelts';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
@@ -8,6 +9,7 @@ import { loadLinkedAgentContext } from './missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { missionWakeMeter } from './wakeMetering';
+import { resolveThinkingVisibilityForUserId } from '@server/utils/thinkingVisibility';
 
 /**
  * Run a freshly-enrolled mission's FIRST wake so it is born alive - the single
@@ -53,6 +55,7 @@ export async function runMissionFirstWake(missionId: string, opts: FirstWakeOpti
           logger: opts.logger,
         }),
         loadLinkedAgent: loadLinkedAgentContext,
+        resolveThinkingVisibility: resolveThinkingVisibilityForUserId,
       })
     : noopRunAct;
 

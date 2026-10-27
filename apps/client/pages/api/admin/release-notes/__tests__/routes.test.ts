@@ -5,11 +5,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 
 const m = vi.hoisted(() => ({
   adminList: vi.fn(),
   edit: vi.fn(),
   attachVideo: vi.fn(),
+  attachImage: vi.fn(),
   hide: vi.fn(),
   unhide: vi.fn(),
   publishNow: vi.fn(),
@@ -42,6 +44,7 @@ vi.mock('@bike4mind/database', () => ({
     adminList: m.adminList,
     edit: m.edit,
     attachVideo: m.attachVideo,
+    attachImage: m.attachImage,
     hide: m.hide,
     unhide: m.unhide,
     publishNow: m.publishNow,
@@ -52,7 +55,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: { findOneAndUpdate: m.upsert, findOne: () => ({ lean: () => m.findSetting() }) },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: m.audit }));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: m.audit,
+  definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
+}));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: m.getSettings, invalidateSettingsCache: m.invalidate }));
 
 const { default: listHandler } = await import('@pages/api/admin/release-notes/index');
@@ -61,6 +67,10 @@ const { default: statusHandler } = await import('@pages/api/admin/release-notes/
 const { default: configHandler } = await import('@pages/api/admin/release-notes/config');
 
 const ID = '64b7f0c2a1b2c3d4e5f60718';
+const IMAGE = {
+  landscapeUrl: 'https://d111.cloudfront.net/still.png',
+  portraitUrl: 'https://d111.cloudfront.net/still-9x16.png',
+};
 const note = (overrides: Record<string, unknown> = {}) => ({
   id: ID,
   releaseTag: 'v1.2.3',
@@ -78,14 +88,22 @@ const note = (overrides: Record<string, unknown> = {}) => ({
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 async function call(
   handler: unknown,
-  opts: { method: string; isAdmin?: boolean; query?: Record<string, string>; body?: unknown; keyScopes?: string[] }
+  opts: {
+    method: string;
+    isAdmin?: boolean;
+    withheldAdmin?: boolean;
+    query?: Record<string, string>;
+    body?: unknown;
+    keyScopes?: string[];
+  }
 ) {
   const { req, res } = createMocks({
     method: opts.method as 'GET',
     query: opts.query ?? {},
     body: opts.body as object,
   });
-  Object.assign(req, { user: { id: 'admin-1', isAdmin: opts.isAdmin ?? true }, logger: { warn: vi.fn() } });
+  const user = { id: 'admin-1', isAdmin: opts.isAdmin ?? true };
+  Object.assign(req, { user: opts.withheldAdmin ? withholdAdminRole(user) : user, logger: { warn: vi.fn() } });
   if (opts.keyScopes) Object.assign(req, { apiKeyInfo: { scopes: opts.keyScopes } });
   const error = await (handler as Handler)(req, res).then(
     () => undefined,
@@ -169,6 +187,7 @@ describe('GET /api/admin/release-notes', () => {
     const { error } = await call(listHandler, {
       method: 'GET',
       query: { status: 'hidden' },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error?.statusCode).toBe(403);
@@ -180,10 +199,46 @@ describe('GET /api/admin/release-notes', () => {
     const { error, body } = await call(listHandler, {
       method: 'GET',
       query: { tag: 'v2026.10.20.1' },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error).toBeUndefined();
     expect(body.data[0]).toMatchObject({ releaseTag: 'v2026.10.20.1' });
+  });
+
+  // apiKeyAuth withholds the admin role from a key without the admin scope, so the job key arrives with isAdmin false.
+  it('lets a release-notes:write key without the admin role look a note up by tag', async () => {
+    m.findOne.mockResolvedValue(note({ releaseTag: 'v2026.10.23.2' }));
+    const { error, body } = await call(listHandler, {
+      method: 'GET',
+      withheldAdmin: true,
+      query: { tag: 'v2026.10.23.2' },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error).toBeUndefined();
+    expect(body.data[0]).toMatchObject({ releaseTag: 'v2026.10.23.2' });
+  });
+
+  it('still refuses a release-notes:write key without the admin role that browses without a tag', async () => {
+    const { error } = await call(listHandler, {
+      method: 'GET',
+      withheldAdmin: true,
+      query: {},
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(403);
+    expect(m.adminList).not.toHaveBeenCalled();
+  });
+
+  it('refuses a release-notes:write key whose owner is not an admin', async () => {
+    const { error } = await call(listHandler, {
+      method: 'GET',
+      isAdmin: false,
+      query: { tag: 'v2026.10.23.2' },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(403);
+    expect(m.findOne).not.toHaveBeenCalled();
   });
 
   it('leaves an admin:* key free to browse without a tag', async () => {
@@ -248,6 +303,41 @@ describe('PATCH /api/admin/release-notes/[id]', () => {
     expect(body.video).toEqual(video);
   });
 
+  it('sets an image and passes it to the edit', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note({ image: IMAGE }) });
+    const { status, body } = await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { image: IMAGE } });
+    expect(status).toBe(200);
+    expect(m.edit).toHaveBeenCalledWith(ID, { image: IMAGE });
+    expect(body.image).toEqual(IMAGE);
+  });
+
+  it('clears the image with null', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note() });
+    const { error } = await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { image: null } });
+    expect(error).toBeUndefined();
+    expect(m.edit).toHaveBeenCalledWith(ID, { image: null });
+  });
+
+  it('refuses an image on a disallowed host with 400', async () => {
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { image: { landscapeUrl: 'https://evil.example.com/s.png' } },
+    });
+    expect(error?.statusCode).toBe(400);
+    expect(error?.message).toContain('image.landscapeUrl');
+    expect(m.edit).not.toHaveBeenCalled();
+  });
+
+  it('serves the stored image on the admin note, and null when there is none', async () => {
+    m.findOne.mockResolvedValue(note({ image: IMAGE }));
+    const withImage = await call(listHandler, { method: 'GET', query: { tag: 'v1.2.3' } });
+    expect(withImage.body.data[0].image).toEqual(IMAGE);
+    m.findOne.mockResolvedValue(note());
+    const without = await call(listHandler, { method: 'GET', query: { tag: 'v1.2.3' } });
+    expect(without.body.data[0].image).toBeNull();
+  });
+
   it.each([
     ['empty headline', { headline: '' }],
     ['video on a disallowed host', { video: { landscapeUrl: 'https://evil.example.com/wide.mp4' } }],
@@ -292,16 +382,45 @@ describe('PATCH /api/admin/release-notes/[id]', () => {
 });
 
 describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', () => {
-  it('refuses any field but video with 403 and edits nothing', async () => {
+  it('refuses any field but video or image with 403 and edits nothing', async () => {
     const { error } = await call(editHandler, {
       method: 'PATCH',
       query: { id: ID },
       body: { headline: 'New headline', video: null },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error?.statusCode).toBe(403);
     expect(error?.message).toContain('headline');
     expect(m.edit).not.toHaveBeenCalled();
+    expect(m.attachVideo).not.toHaveBeenCalled();
+    expect(m.attachImage).not.toHaveBeenCalled();
+  });
+
+  it('sets the video for a key without the admin role, as apiKeyAuth hands it over', async () => {
+    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' };
+    m.attachVideo.mockResolvedValue({ kind: 'ok', note: note({ video, editedAt: null }) });
+    const { error, status } = await call(editHandler, {
+      method: 'PATCH',
+      withheldAdmin: true,
+      query: { id: ID },
+      body: { video },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error).toBeUndefined();
+    expect(status).toBe(200);
+    expect(m.attachVideo).toHaveBeenCalledWith(ID, video);
+  });
+
+  it('refuses a release-notes:write key whose owner is not an admin', async () => {
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      isAdmin: false,
+      query: { id: ID },
+      body: { video: { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' } },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(403);
     expect(m.attachVideo).not.toHaveBeenCalled();
   });
 
@@ -312,6 +431,7 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
       method: 'PATCH',
       query: { id: ID },
       body: { video },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error).toBeUndefined();
@@ -327,6 +447,47 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
       method: 'PATCH',
       query: { id: ID },
       body: { video: null },
+      withheldAdmin: true,
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(404);
+  });
+
+  it('sets the image through attachImage, which leaves editedAt alone, never through edit', async () => {
+    m.attachImage.mockResolvedValue({ kind: 'ok', note: note({ image: IMAGE, editedAt: null }) });
+    const { status, body } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { image: IMAGE },
+      withheldAdmin: true,
+      keyScopes: ['release-notes:write'],
+    });
+    expect(status).toBe(200);
+    expect(m.attachImage).toHaveBeenCalledWith(ID, IMAGE);
+    expect(m.edit).not.toHaveBeenCalled();
+    expect(body.editedAt).toBeNull();
+  });
+
+  it('refuses video and image in one request with 400 and writes nothing', async () => {
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { video: null, image: IMAGE },
+      withheldAdmin: true,
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(400);
+    expect(error?.message).toContain('send one per request');
+    for (const fn of [m.attachVideo, m.attachImage, m.edit]) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 when the note to attach an image to is gone', async () => {
+    m.attachImage.mockResolvedValue({ kind: 'notFound' });
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { image: IMAGE },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error?.statusCode).toBe(404);
@@ -475,4 +636,51 @@ describe('/api/admin/release-notes/config', () => {
       expect(m.upsert).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('release note admin audit', () => {
+  it('records an updated entry for an admin edit', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note() });
+    await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { headline: 'Faster search' } });
+
+    const auditCalls = m.audit.mock.calls.filter(([, input]) => input.action === 'settings.release_note.updated');
+    expect(auditCalls).toHaveLength(1);
+    expect(auditCalls[0][1]).toMatchObject({
+      action: 'settings.release_note.updated',
+      target: { kind: 'settings', id: ID },
+      details: { releaseTag: 'v1.2.3', fields: ['headline'] },
+    });
+  });
+
+  it('does not record the video attach done by a release-notes:write key', async () => {
+    m.attachVideo.mockResolvedValue({ kind: 'ok', note: note() });
+    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4', portraitUrl: null };
+    await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { video },
+      keyScopes: ['release-notes:write'],
+    });
+
+    expect(m.audit).not.toHaveBeenCalled();
+  });
+
+  it('records a status_changed entry carrying the action', async () => {
+    m.hide.mockResolvedValue({ kind: 'ok', note: note({ status: 'hidden' }) });
+    await call(statusHandler, { method: 'POST', query: { id: ID }, body: { action: 'hide' } });
+
+    expect(m.audit).toHaveBeenCalledTimes(1);
+    expect(m.audit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.release_note.status_changed',
+      target: { kind: 'settings', id: ID },
+      details: { releaseTag: 'v1.2.3', action: 'hide' },
+    });
+  });
+
+  it('records nothing when the mutation finds no note', async () => {
+    m.publishNow.mockResolvedValueOnce({ kind: 'notFound' });
+    await call(statusHandler, { method: 'POST', query: { id: ID }, body: { action: 'publishNow' } });
+
+    expect(m.audit).not.toHaveBeenCalled();
+  });
 });

@@ -73,6 +73,7 @@ The sandbox is configured through JSON config files with a 3-layer merge system.
     },
     "excludedCommands": ["docker", "watchman", "podman"],
     "allowUnsandboxedCommands": true,
+    "allowContainerSockets": false,
     "platform": {
       "linux": { "runtime": "bubblewrap" },
       "macos": { "runtime": "seatbelt", "profileTemplate": "default" }
@@ -121,6 +122,8 @@ On macOS (Seatbelt), access to denied paths is rejected. On Linux (Bubblewrap), 
 
 Must be `true` for the network proxy to start. When disabled, sandboxed commands have unrestricted network access.
 
+On macOS the sandbox profile permits only loopback traffic, so direct connections to other hosts are blocked and outbound traffic to them has to go through the proxy. On Linux the proxy is advisory: it is applied through proxy environment variables, and a process that ignores them can still connect directly. Node's built-in `fetch` honors the proxy only on recent Node releases (24.3 and newer are known to work); on older versions it connects directly and fails inside the sandbox.
+
 ### `allowedDomains`
 
 **Type:** `string[]` | **Default:** (see full schema above)
@@ -165,6 +168,26 @@ Controls what happens when an excluded command is executed:
 - **`false`** — Excluded commands are **blocked entirely** and recorded as violations
 
 Set to `false` for maximum security when you want to prevent any unsandboxed execution.
+
+### `allowContainerSockets`
+
+**Type:** `boolean` | **Default:** `false`
+
+Sandboxed commands cannot connect to container engine API sockets. The blocked locations are:
+
+- `/var/run/docker.sock` and `/run/docker.sock` (plus whatever file they link to)
+- `/run/podman` and `$TMPDIR/podman`
+- `~/.docker` (including Docker Desktop's `~/.docker/run` and `~/.docker/desktop`) and `~/Library/Containers/com.docker.docker/Data`
+- `~/.colima`, `~/.lima`, `~/.rd`, `~/.orbstack` and `~/.local/share/containers`
+- `$XDG_CONFIG_HOME/colima` (default `~/.config/colima`), `$COLIMA_HOME` and `$LIMA_HOME`
+- `docker.sock` and `podman` under `$XDG_RUNTIME_DIR`
+- the `unix://` socket named by `$DOCKER_HOST` or `$CONTAINER_HOST`
+
+On macOS the Seatbelt profile denies connecting to them; on Linux Bubblewrap hides the ones that exist behind an empty mount. This applies to unix sockets only: an engine that listens on a loopback TCP port is reachable when sandbox networking is on.
+
+On macOS the profile also denies writes inside the listed directories, even with `writeOnlyToWorkingDir: false`, so sandboxed tools cannot write `~/.docker/config.json` or Podman and buildah storage under `~/.local/share/containers`. It also denies renaming, chmod-ing or changing the timestamps of each parent directory of a listed path (such as `$HOME` or `$TMPDIR`), which stops a socket from being moved out from under the deny. Creating and deleting files inside those parent directories still works.
+
+Set to `true` only if a sandboxed tool genuinely needs to talk to the container engine directly. A repo config can turn this off but never on. The `docker` and `podman` commands themselves are in `excludedCommands` and are not affected.
 
 ## Platform Configuration
 

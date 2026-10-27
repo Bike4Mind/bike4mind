@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createRequest } from 'node-mocks-http';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
-const { agentRepository, route } = vi.hoisted(() => ({
+const { adminAuditLogRepository, agentRepository, route } = vi.hoisted(() => ({
+  adminAuditLogRepository: { append: vi.fn() },
   agentRepository: { findById: vi.fn(), update: vi.fn() },
   route: { patch: undefined as Handler | undefined },
 }));
@@ -20,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {}, agentRepository }));
+vi.mock('@bike4mind/database', () => ({ adminAuditLogRepository, adminSettingsRepository: {}, agentRepository }));
 vi.mock('@bike4mind/utils', async importActual => ({
   ...(await importActual<typeof import('@bike4mind/utils')>()),
   getSettingsMap: vi.fn().mockResolvedValue({}),
@@ -43,6 +45,7 @@ const makeRes = () => {
 describe('PATCH /api/admin/voice-agents/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    adminAuditLogRepository.append.mockResolvedValue(null);
     agentRepository.findById.mockResolvedValue({
       id: 'agent-1',
       type: 'voice',
@@ -52,13 +55,29 @@ describe('PATCH /api/admin/voice-agents/[id]', () => {
     agentRepository.update.mockResolvedValue(undefined);
   });
 
-  const patch = (body: Record<string, unknown>) =>
-    route.patch?.({ user: { isAdmin: true }, query: { id: 'agent-1' }, body, logger: { error: vi.fn() } }, makeRes());
+  const patch = (body: Record<string, unknown>) => {
+    const req = createRequest({
+      method: 'PATCH',
+      url: '/api/admin/voice-agents/agent-1',
+      query: { id: 'agent-1' },
+      body,
+    });
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true }, logger: { error: vi.fn() } });
+    return route.patch?.(req, makeRes());
+  };
 
   it('falls back to the existing name when Description is cleared', async () => {
     await patch({ description: '' });
 
     expect(agentRepository.update).toHaveBeenCalledWith({ id: 'agent-1', description: 'Aria' });
+    expect(adminAuditLogRepository.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'settings.voice_agent.updated',
+        actor: expect.objectContaining({ userId: 'admin-1', wasAdmin: true }),
+        target: { kind: 'settings', id: 'agent-1', displayName: 'Aria' },
+        context: expect.objectContaining({ route: '/api/admin/voice-agents/agent-1' }),
+      })
+    );
   });
 
   it('falls back to the new name, not the stale one, when Description is cleared alongside a rename', async () => {

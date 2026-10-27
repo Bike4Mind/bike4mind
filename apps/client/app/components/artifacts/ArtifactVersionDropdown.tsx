@@ -132,14 +132,16 @@ export const ArtifactVersionDropdown: React.FC<ArtifactVersionDropdownProps> = (
   return (
     <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
       <Stack direction="row" spacing={2} alignItems="center">
+        {/* The class names let a narrow host toolbar (ReactArtifactViewer) compact this control. */}
         <Typography level="body-sm" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           <VersionIcon fontSize="small" />
-          Version History
+          <span className="artifact-version-dropdown-history-text">Version History</span>
         </Typography>
 
         <FormControl size="sm">
-          <FormLabel>Version</FormLabel>
+          <FormLabel className="artifact-version-dropdown-label">Version</FormLabel>
           <Button
+            className="artifact-version-dropdown-button"
             variant="soft"
             size="sm"
             onClick={handleClick}

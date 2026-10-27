@@ -38,7 +38,7 @@ import {
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
@@ -46,7 +46,7 @@ import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
 // Required: the raw pathname embeds `id`/`file_id`, so without a stable bucket each file gets its
 // own counter instead of one budget per caller.

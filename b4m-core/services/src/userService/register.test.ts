@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { registerUser, registerViaOTC, RegisterUserParameters } from './register';
 import { BadRequestError } from '@bike4mind/utils';
-import { CURRENT_POLICY_VERSION, RegInviteStatusType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import {
+  CURRENT_POLICY_VERSION,
+  RegInviteStatusType,
+  PENDING_FREE_CREDITS_TAG,
+  RESERVED_USERNAME_MESSAGE,
+} from '@bike4mind/common';
 import * as creditService from '../creditService';
 
 const baseParams: RegisterUserParameters = {
@@ -79,6 +84,28 @@ describe('registerUser', () => {
     };
   });
 
+  it.each([
+    [null, 1000, null],
+    [1000, 1000, null],
+    [2500, 2500, 2500],
+  ])('resolves invite quota %s through the shared allocator', async (startingStorage, limit, override) => {
+    mockInvite.startingStorage = startingStorage;
+    const result = await registerUser(baseParams, mockAdapters);
+    expect(result.storageLimit).toBe(limit);
+    expect(result.storageLimitOverride).toBe(override);
+  });
+
+  it('keeps matched subscriber priority over an invite allocation', async () => {
+    mockInvite.email = baseParams.email;
+    mockInvite.startingStorage = 2500;
+    mockAdapters.db.subscribers = {
+      findByEmail: vi.fn().mockResolvedValue({ inviteCode: baseParams.inviteCode, startingStorage: null }),
+    };
+    const result = await registerUser(baseParams, mockAdapters);
+    expect(result.storageLimit).toBe(1000);
+    expect(result.storageLimitOverride).toBeNull();
+  });
+
   it('registers a new user with valid data and invite, deferring credits until email is proven', async () => {
     const result = await registerUser(baseParams, mockAdapters);
     expect(result).toMatchObject({ username: baseParams.username, email: baseParams.email, name: baseParams.name });
@@ -106,6 +133,83 @@ describe('registerUser', () => {
     const limitedInvite = mockAdapters.db.registrationInvites.update.mock.calls[0][0];
     expect(limitedInvite.used).toBe(limitedInvite.usageHistory[0].usedAt);
     expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
+  });
+
+  describe('invite-only OTC registration', () => {
+    it('redeems an email-bound invite and verifies the account', async () => {
+      mockInvite.email = baseParams.email;
+      mockAdapters.db.users.update = vi.fn().mockResolvedValue(undefined);
+      mockAdapters.db.creditTransactions = undefined;
+      const result = await registerViaOTC({ ...baseParams, password: '' }, mockAdapters);
+      expect(result).toMatchObject({ email: baseParams.email, emailVerified: true });
+      expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledWith(
+        expect.objectContaining({ id: mockInvite.id, status: RegInviteStatusType.used }),
+        undefined
+      );
+    });
+
+    it.each([
+      [{ email: 'other@example.com' }, 'This invite code was issued for a different email address'],
+      [{ used: new Date() }, 'Invite code already used'],
+      [{ expiresAt: new Date(0) }, 'Invite code has expired'],
+    ])('rejects an unusable invite %j', async (patch, message) => {
+      Object.assign(mockInvite, patch);
+      await expect(registerViaOTC({ ...baseParams, password: '' }, mockAdapters)).rejects.toThrow(message);
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+      expect(mockAdapters.db.registrationInvites.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reserved username prefix', () => {
+    const withSyntheticDomains = (domains: string) => {
+      const base = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation((name: string) =>
+        name === 'syntheticUserEmailDomains' ? Promise.resolve({ settingValue: domains }) : base(name)
+      );
+    };
+
+    it.each([
+      'persona-alice',
+      'Persona-Alice',
+      '  PERSONA-alice',
+      '\u0440\u0435rs\u043ena-alice',
+      '\uff50ersona-alice',
+    ])('rejects %j for an ordinary signup with the reserved-name message', async username => {
+      const error = await registerUser({ ...baseParams, username }, mockAdapters).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect((error as Error).message).toBe(RESERVED_USERNAME_MESSAGE);
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects it when the email is on a domain that is not configured as synthetic', async () => {
+      withSyntheticDomains('test.example');
+      await expect(
+        registerUser({ ...baseParams, username: 'persona-alice', email: 'alice@example.com' }, mockAdapters)
+      ).rejects.toThrow(RESERVED_USERNAME_MESSAGE);
+    });
+
+    it('allows it when the proven email is on a configured synthetic test domain', async () => {
+      withSyntheticDomains('@Test.Example, qa.example.org');
+      const result = await registerUser(
+        { ...baseParams, username: 'persona-alice', email: 'alice@sub.test.example' },
+        mockAdapters
+      );
+      expect(result.username).toBe('persona-alice');
+    });
+
+    it('rejects it when the settings read fails', async () => {
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation((name: string) =>
+        name === 'syntheticUserEmailDomains' ? Promise.reject(new Error('db down')) : Promise.resolve(null)
+      );
+      await expect(
+        registerUser({ ...baseParams, username: 'persona-alice', email: 'alice@test.example' }, mockAdapters)
+      ).rejects.toThrow(RESERVED_USERNAME_MESSAGE);
+    });
+
+    it('leaves names that only contain the word alone', async () => {
+      const result = await registerUser({ ...baseParams, username: 'personal-site' }, mockAdapters);
+      expect(result.username).toBe('personal-site');
+    });
   });
 
   // --- disposable-email blocking ---
@@ -374,7 +478,7 @@ describe('registerUser', () => {
       expect(result).toMatchObject({ email: noInviteParams.email });
     });
 
-    it('allows registration when invite check is skipped (OTC — email already proven)', async () => {
+    it('allows registration when invite check is skipped (OTC \u2014 email already proven)', async () => {
       setAllowOpenRegistration('false');
       const result = await registerUser(noInviteParams, { ...mockAdapters, skipInviteCheck: true });
       expect(result).toMatchObject({ email: noInviteParams.email });
@@ -405,6 +509,7 @@ describe('registerViaOTC', () => {
           findByUsernameOrEmail: vi.fn().mockResolvedValue(null),
           create: vi.fn().mockImplementation(async (user: any) => ({ ...user, id: 'newUserId' })),
           update: vi.fn().mockImplementation(async (user: any) => user),
+          claimFreeCreditGrant: vi.fn().mockResolvedValue(true),
         },
         adminSettings: {
           findBySettingName: vi.fn().mockImplementation((name: string) => {
@@ -462,6 +567,18 @@ describe('registerViaOTC', () => {
       tags: ['Customer'],
       pendingCreditGrant: null,
     });
+  });
+
+  it('registers an alias of an already-granted inbox but grants it nothing', async () => {
+    mockAdapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
+
+    const result = await registerViaOTC(otcParams, mockAdapters);
+
+    expect(mockAdapters.db.users.claimFreeCreditGrant).toHaveBeenCalledWith('newUserId');
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(result.emailVerified).toBe(true);
+    // The pending tag is released, so the refused grant is not retried on every login.
+    expect(result.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
   });
 
   it('grants the default credits for an admitted no-invite signup while open registration is off', async () => {

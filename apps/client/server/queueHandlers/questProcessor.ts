@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 import {
   connectDB,
   questRepository,
@@ -51,6 +52,8 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { operationalBillingAdapters } from '@server/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
 import { IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
@@ -110,6 +113,7 @@ export const getStaticOptions = () => {
       mcpServers: mcpServerRepository,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
+      operationalBilling: operationalBillingAdapters,
       agents: agentRepository,
       skills: skillRepository,
       prompts: promptRepository,
@@ -167,6 +171,7 @@ export const getStaticOptions = () => {
     // (e.g. a tag-less, entitlement-only subscriber). Pure function ref - safe to cache; the
     // per-request, per-user resolution happens inside ChatCompletionProcess.resolveEntitlementKeys.
     getEntitlements: getUserEntitlements,
+    getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     invokeCreateMemento: async (
       questId: string,

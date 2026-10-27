@@ -1,6 +1,7 @@
 import { toolDefinitionOverrideRepository } from '@bike4mind/database';
 import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { TOOL_MAPPING, TOOL_CATEGORIES } from '@client/app/utils/toolMapping';
 import { z } from 'zod';
@@ -17,6 +18,12 @@ const updateSchema = z.object({
     .max(500, 'Short description must not exceed 500 characters'),
   enabled: z.boolean().optional(),
 });
+
+const codeShortDescription = (description: string): string =>
+  description.length > 100 ? description.substring(0, 100) + '...' : description;
+
+const changedOnly = (changes: { field: string; before: unknown; after: unknown }[]) =>
+  changes.filter(c => JSON.stringify(c.before) !== JSON.stringify(c.after));
 
 // Find tool in code
 function findCodeTool(toolId: string): { toolName: string; description: string; category: string } | null {
@@ -100,8 +107,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           toolId,
           toolName: codeTool.toolName,
           description: codeTool.description,
-          shortDescription:
-            codeTool.description.length > 100 ? codeTool.description.substring(0, 100) + '...' : codeTool.description,
+          shortDescription: codeShortDescription(codeTool.description),
           category: codeTool.category,
           tags: [],
           parameters: { type: 'object' },
@@ -170,6 +176,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           throw new NotFoundError('Failed to update tool definition');
         }
 
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.tool_definition.override_updated',
+          target: { kind: 'settings', id: toolId, displayName: `${toolId} tool definition` },
+          summary: `updated tool definition override ${toolId}`,
+          changes: changedOnly([
+            { field: 'description', before: existingOverride.description, after: description },
+            { field: 'shortDescription', before: existingOverride.shortDescription, after: shortDescription },
+            { field: 'enabled', before: existingOverride.enabled, after: enabled },
+          ]),
+        });
+
         return res.json({
           toolId: updated.toolId,
           toolName: updated.toolName,
@@ -210,6 +227,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         createdBy: req.user!.id,
         lastUpdatedBy: req.user!.id,
         lastUpdatedByName: req.user!.name || req.user!.email || 'Unknown',
+      });
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.tool_definition.override_updated',
+        target: { kind: 'settings', id: toolId, displayName: `${toolId} tool definition` },
+        summary: `created tool definition override ${toolId}`,
+        changes: changedOnly([
+          { field: 'description', before: codeTool.description, after: description },
+          { field: 'shortDescription', before: codeShortDescription(codeTool.description), after: shortDescription },
+          { field: 'enabled', before: true, after: enabled },
+        ]),
       });
 
       return res.status(201).json({
@@ -275,14 +303,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       // Soft delete the override
       await toolDefinitionOverrideRepository.softDelete(toolId);
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.tool_definition.override_deleted',
+        target: { kind: 'settings', id: toolId, displayName: `${toolId} tool definition` },
+        summary: `deleted tool definition override ${toolId}`,
+      });
 
       // Return the code-only tool definition (what it reverts to)
       return res.json({
         toolId,
         toolName: codeTool.toolName,
         description: codeTool.description,
-        shortDescription:
-          codeTool.description.length > 100 ? codeTool.description.substring(0, 100) + '...' : codeTool.description,
+        shortDescription: codeShortDescription(codeTool.description),
         category: codeTool.category,
         tags: [],
         parameters: { type: 'object' },

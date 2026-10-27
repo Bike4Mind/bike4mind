@@ -24,6 +24,7 @@ import { PermissionManager } from '../../utils/PermissionManager.js';
 import { ToolCatalog } from './toolCatalog.js';
 import { PermissionDeniedError } from '@bike4mind/common';
 import { useCliStore } from '../../store/index.js';
+import { __resetHostAllowlistCacheForTests } from './stages/hostAllowlist.js';
 import { executeTool } from '../../llm/ToolRouter';
 import { getCliOnlyTools, resolveEditLocalFile } from '@bike4mind/services/llm/tools/cliTools';
 
@@ -70,6 +71,39 @@ function realTool(def: any, allowedDirectories: string[]): ICompletionOptionTool
   const logger = { info() {}, error() {}, warn() {}, debug() {} };
   return def.implementation({ logger, allowedDirectories }) as ICompletionOptionTools;
 }
+
+describe('wrapToolWithPermission: host allowlist in claude form (mcp__<server>__*)', () => {
+  const original = process.env.B4M_ALLOWED_TOOLS;
+  afterEach(() => {
+    if (original === undefined) delete process.env.B4M_ALLOWED_TOOLS;
+    else process.env.B4M_ALLOWED_TOOLS = original;
+    __resetHostAllowlistCacheForTests();
+  });
+
+  function mcpTool(name: string): ICompletionOptionTools {
+    return { ...tool(name), _isMcpTool: true };
+  }
+
+  it('runs an MCP tool named <server>__<tool> without a prompt when mcp__<server>__* is allowed', async () => {
+    process.env.B4M_ALLOWED_TOOLS = JSON.stringify(['mcp__host__*']);
+    __resetHostAllowlistCacheForTests();
+    const prompt = vi.fn();
+    const wrapped = wrap(mcpTool('host__read_self'), prompt, new PermissionManager(new ToolCatalog(), [], []));
+
+    expect(await wrapped.toolFn({})).toBe('ok');
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it('still prompts for a non-MCP tool with the same name shape', async () => {
+    process.env.B4M_ALLOWED_TOOLS = JSON.stringify(['mcp__host__*']);
+    __resetHostAllowlistCacheForTests();
+    const prompt = vi.fn(async () => ({ action: 'allow-once' }));
+    const wrapped = wrap(tool('host__read_self'), prompt, new PermissionManager(new ToolCatalog(), [], []));
+
+    await wrapped.toolFn({});
+    expect(prompt).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('wrapToolWithPermission: _sandboxCleanup guard (criterion 3)', () => {
   it('never deletes a model-supplied _sandboxCleanup path on an unsandboxed tool', async () => {

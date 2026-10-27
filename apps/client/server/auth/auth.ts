@@ -20,7 +20,7 @@ import nc from 'next-connect';
 import { Logger } from '@bike4mind/observability';
 import { jwtSecretOrKeyProvider } from './jwtSecretOrKeyProvider';
 import { verifyJwtPayload } from './verifyJwtPayload';
-import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from './mfaEnforcement';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { createGitHubStrategy } from './githubStrategy';
 import { isPolicyConsentRequired, type ConsentGateUser } from '@bike4mind/server-utils/auth/consentGate';

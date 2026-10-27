@@ -1,6 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  adminSettingsRepository,
   Organization,
   User,
   userRepository,
@@ -347,7 +348,7 @@ const handler = baseApi().put(
       // Admin branch: symmetric with the admin view of GET /users/[id].
       const safeUser = redactUserSecretsForSelf(finalUser, {
         keep: ['securityQuestions'],
-        keepAdminOnly: ['userNotes'],
+        keepAdminOnly: ['userNotes', 'signupMeta'],
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
@@ -380,6 +381,7 @@ const handler = baseApi().put(
         userService.updateUser(userId, body, {
           db: {
             users: userRepository,
+            adminSettings: adminSettingsRepository,
           },
         });
       // Only a password change needs the transaction; ordinary profile and preference saves skip it.

@@ -11,6 +11,8 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: {},
   userRepository: { findById: vi.fn() },
 }));
+const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
+vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 
 import { getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
 import { recordSessionOperationalUsage } from './recordSessionOperationalUsage';
@@ -52,6 +54,16 @@ describe('recordSessionOperationalUsage', () => {
     const { costUsd } = recordOperationalUsage.mock.calls[0][0];
     expect(costUsd).toBeCloseTo(getTurnsCost(modelInfo, turnUsage), 12);
     expect(costUsd).toBeLessThan(getTextModelCost(modelInfo, 301_000, 1_200));
+  });
+
+  it('hands the recorder the billing repos and the plan resolver, so free-tier spend can debit', async () => {
+    await run({ inputTokens: 1_000, outputTokens: 100 });
+
+    const { db } = recordOperationalUsage.mock.calls[0][1];
+    expect(db).toMatchObject({ activePlans: activePlanResolver });
+    expect(db.creditTransactions).toBeDefined();
+    expect(db.users).toBeDefined();
+    expect(db.organizations).toBeDefined();
   });
 
   it('prices the totals when the backend reports no per-request usage', async () => {

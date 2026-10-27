@@ -1,10 +1,14 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { IUserDocument, UnprocessableEntityError, type IMessage } from '@bike4mind/common';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 interface BlogEnhanceParams {
   content: string;
@@ -117,6 +121,7 @@ Summary:`;
 }
 
 const handler = baseApi().post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   try {
     const params = req.body as BlogEnhanceParams;
 

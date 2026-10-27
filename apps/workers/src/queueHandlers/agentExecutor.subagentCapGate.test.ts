@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({

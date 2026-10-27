@@ -96,6 +96,29 @@ the switch off or changing models clears the current hint and discards late answ
 previous choice. Ollama completion requests time out after 30 seconds; hosted requests after
 five. Loading the model list can add time before generation starts.
 
+## Local history and offline models
+
+Turn on **Local history** for a conversation to index its messages and visited browser pages
+on this device. The switch is in the browser pane's **...** menu (open the pane with the globe
+button in the conversation header); an icon in the header shows while it is on. Use **Search conversations** in the sidebar to search opted-in history while
+offline. Turning the switch off removes that conversation from the index. Settings -> General ->
+Local history -> **Clear local history** clears the current account's index; it does not delete
+the original conversations or disable future capture in opted-in sessions.
+
+Run Ollama locally on `127.0.0.1:11434` with a downloaded chat model, then choose that model
+in the model picker. From the signed-out screen, choose **Use local models**. These models
+send inference requests to the local daemon; cloud-backed Ollama models are excluded.
+Local requests use a 4,096-token context by default, capped at the model's supported window.
+To use a larger window, set `PARAMETER num_ctx 8192` (or another supported size) in the
+model's Ollama Modelfile; discovery and inference use the same explicit context size.
+Local Code sessions can still use network tools when permitted, so offline inference does not
+make tool execution offline.
+
+If a model is missing, check that Ollama is running at that address and the installed model
+supports chat, then refresh the model list. If history is missing, check the conversation's
+switch and the selected account. A clear or search error is shown in the interface; retry after
+resolving the reported problem. The search index is separate from the saved conversations.
+
 ## Import from Claude
 
 Open Settings -> Import to enable Claude Code sync or select a claude.ai data export.
@@ -516,11 +539,15 @@ Cases it handles rather than failing:
 - **The session already has its worktree** - reused, not recreated. Reuse is keyed only on the
   session's _own_ branch, which is saved on the session and handed back on every later
   resolution. A worktree some other tool registered for the base branch is never adopted.
-- **The branch does not exist yet** - created from the base's remote-tracking ref once that is
-  proven to contain the local base (so a stale local `main` does not start the branch behind),
-  otherwise from the base itself. With no base picked it is the branch `origin/HEAD` points
-  at, then `origin/main`, then `origin/master`, then `HEAD`. Always `--no-track`, so a later
-  `git push` does not aim at the base.
+- **The branch does not exist yet** - for a `main` base (`main`, `origin/main`, or no base
+  picked while the checkout is on `main`) it is created from `origin/main` right after a
+  successful fetch, so local-only or diverged `main` commits never seed it; if that fetch fails
+  the session fails to prepare instead of starting from stale history. Local `main` is never
+  touched. Any other base is created from its remote-tracking ref once that is proven to
+  contain the local base, otherwise from the base itself. With no base picked it is the branch
+  `origin/HEAD` points at, then `origin/main`, then `origin/master`, then `HEAD`. Always
+  `--no-track`, so a later `git push` does not aim at the base. A repository without an
+  `origin` remote uses its local `main`.
 
 **An occupied path is refused, never adopted or cleared.** If the target folder is already a
 git worktree holding something else, or exists but is not a worktree, the session fails to
@@ -538,9 +565,18 @@ removed on quit. A spare left behind by a crash is recognized by its git metadat
 `HEAD`; one that has been changed, or that the app does not own, is left alone and no spare is
 made.
 
-**Deleting a session never deletes its worktree.** A worktree can hold uncommitted work, and
-deleting a conversation must not be a way to lose code. Removing one stays a git operation the
-user performs themselves (`rmworktree <branch>`).
+**Deleting a session can also remove its worktree and branch.** The delete confirmation offers
+this only for an app-created checkout under `.b4m/worktrees` on a `b4m/` branch. It defaults on
+only when no other conversation (including archived ones) uses the directory or branch, the
+checkout has no uncommitted or untracked files, and its commits are preserved in its upstream
+or base branch. Ordinary ignored files do not prevent removal; nested worktrees and folders
+used by other conversations are kept. Running conversations must stop first; unsafe checkouts
+show the reason and are kept. Cleanup stops background processes, waits for terminal shells
+to exit and closes the browser, then rechecks safety and uses `git worktree remove` and
+`git branch -d`, without force. A shell that cannot be stopped keeps its checkout. New workspace
+bindings wait until cleanup finishes. Git refusals are shown in the dialog; the conversation is
+kept so you can retry or delete it without cleanup. Archiving, imported-session deletion and
+the agent's `session_delete` tool keep their worktrees.
 
 ### Starting a session in a worktree
 

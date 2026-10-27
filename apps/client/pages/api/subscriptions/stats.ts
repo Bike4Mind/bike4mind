@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const handler = baseApi().get(async (req, res) => {
   if (!req.user?.isAdmin) {

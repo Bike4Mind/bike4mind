@@ -1,6 +1,7 @@
 import {
   SettingKeySchema,
   isBlankSettingValue,
+  isEnforceCreditsLocked,
   SreAgentConfig,
   SRE_SECRET_PLACEHOLDER,
   formatUsdPerCredit,
@@ -10,7 +11,8 @@ import {
   MIN_PRICE_PER_CREDIT_USD,
   partitionDomainList,
   partitionEmailList,
-  settingsMap,
+  isRegisteredSettingKey,
+  resolveSettingDefinition,
 } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
@@ -25,6 +27,7 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/serve
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 
 // One-time guard so a self-host install running without a configured key logs the
@@ -44,11 +47,16 @@ const handler = baseApi().put(
     if (!req.ability) throw new NotFoundError('Ability not found');
     if (!req.ability.can('update', AdminSettings)) throw new NotFoundError('Permission denied');
 
-    const key = SettingKeySchema.parse(req.body.key);
+    // A contributed key is accepted once registered; anything else still fails SettingKeySchema (400).
+    const key: string =
+      typeof req.body.key === 'string' && isRegisteredSettingKey(req.body.key)
+        ? req.body.key
+        : SettingKeySchema.parse(req.body.key);
+    const definition = resolveSettingDefinition(key)!;
 
     // Delete, not store the default, so the setting reads as unset again. hardDelete: the upsert below
     // would match a soft-deleted tombstone without reviving it (softDeletePlugin, db-core/src/utils/mongo.ts).
-    if (settingsMap[key].clearDeletesRow && isBlankSettingValue(req.body.value)) {
+    if (definition.clearDeletesRow && isBlankSettingValue(req.body.value)) {
       await withTransaction(async () => {
         const existing = await AdminSettings.findOne({ settingName: key }).lean();
         await AdminSettings.deleteOne({ settingName: key }, { hardDelete: true });
@@ -60,7 +68,7 @@ const handler = baseApi().put(
       return res.json({ settingName: key, settingValue: null });
     }
 
-    let value = settingsMap[key].schema.parse(req.body.value);
+    let value = definition.schema.parse(req.body.value);
 
     if (key === 'forcedRetrievalMinSimilarityPct' && req.body.confirmAboveMeasuredFloor !== true) {
       await refuseFloorAboveMeasured(Number(value), req.logger);
@@ -72,6 +80,16 @@ const handler = baseApi().put(
       throw new BadRequestError(
         `Price Per Credit must be at least ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`
       );
+    }
+
+    if (key === 'enforceCredits' && value === false && isEnforceCreditsLocked()) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.admin_settings.denied',
+        target: { kind: 'settings', id: key, displayName: key },
+        summary: 'blocked disabling enforceCredits on a hosted deployment',
+        details: { attemptedAction: 'settings.admin_settings.updated', value: false },
+      });
+      throw new BadRequestError('enforceCredits is always on for hosted deployments.');
     }
 
     // The schema accepts any strings so a bad stored entry cannot blank the list on read; the write is
@@ -99,7 +117,7 @@ const handler = baseApi().put(
       value = valid;
     }
 
-    const isSensitiveSetting = settingsMap[key].isSensitive === true;
+    const isSensitiveSetting = definition.isSensitive === true;
 
     // The client is only ever sent a mask for a sensitive setting (see fetch.ts), so a
     // mask arriving here is never a real value - keep what is stored rather than
@@ -232,7 +250,7 @@ const handler = baseApi().put(
     // artifact stale. The cost is bounded (one indexed find + one small S3 PUT) and this
     // branch only runs on the rare publicSafe-settings write, so it can't realistically
     // approach the 60s function timeout.
-    if (settingsMap[key]?.publicSafe) {
+    if (definition.publicSafe) {
       await materializePublicSettingsArtifactSafe(req.logger);
     }
 

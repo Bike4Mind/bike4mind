@@ -18,8 +18,9 @@ import {
   InsufficientCreditsPreflightError,
   type PreflightCreditHold,
 } from '@server/utils/creditPreflight';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).
@@ -39,6 +40,7 @@ import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
  * typed body.
  */
 const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const {
     text,
     provider,
@@ -182,6 +184,16 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
                 // A voice names a voice of the requested provider, so it is meaningless once another stood in.
                 ...(voice && !fallbackFrom && { voice }),
                 ...(languageCode && { languageCode }),
+                request: {
+                  provider: vendor,
+                  text,
+                  ...(model !== undefined && { model }),
+                  ...(voice !== undefined && { voice }),
+                  ...(format !== undefined && { format }),
+                  ...(stability !== undefined && { stability }),
+                  ...(similarityBoost !== undefined && { similarityBoost }),
+                  ...(languageCode !== undefined && { languageCode }),
+                },
               },
             },
             req.logger

@@ -63,3 +63,5 @@ export * from './decisions';
 export * from './voiceApi';
 export * from './generationCallback';
 export * from './authOrigin';
+export * from './networkMeta';
+export * from './modelHub';

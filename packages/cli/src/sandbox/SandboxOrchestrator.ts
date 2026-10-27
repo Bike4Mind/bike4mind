@@ -100,15 +100,17 @@ export class SandboxOrchestrator {
 
     // 4. Sandbox the command
     const proxyEnv = this.proxyManager?.getProxyEnv() ?? {};
+    const proxyPort =
+      this.config.network.enabled && this.proxyManager?.isRunning() ? this.proxyManager.getPort() : null;
     const wrappedCommand = this.runtime.wrapCommand({
       command,
       cwd,
       filesystemConfig: this.config.filesystem,
-      // Belt-and-braces: never claim network is on to the runtime unless a proxy is
-      // actually running to filter it. This is the single consumption choke point, so
-      // any path that leaves a stale network.enabled flag (e.g. /sandbox:disable or
-      // /sandbox:mode) still fails closed here - the flag alone can't grant raw egress.
-      networkEnabled: this.config.network.enabled && (this.proxyManager?.isRunning() ?? false),
+      // Single choke point: a stale network.enabled flag without a running proxy grants nothing.
+      // Only the Seatbelt runtime confines egress to the proxy; Linux still relies on the proxy env vars.
+      networkEnabled: proxyPort !== null,
+      ...(proxyPort !== null && { proxyPort }),
+      allowContainerSockets: this.config.allowContainerSockets === true,
       env: proxyEnv,
       ...(this.runtime.platform === 'linux' &&
         this.config.platform.linux.seccompProfile && {
@@ -150,10 +152,7 @@ export class SandboxOrchestrator {
    * proxy in lockstep - this is the SINGLE lifecycle owner. Fail-closed: when
    * enabling, the proxy must be running afterwards or the flag stays false. The
    * flag is not trusted on its own either - shouldSandbox additionally gates on
-   * proxyManager.isRunning(), so a stale network.enabled left by any other path
-   * can never hand the runtime raw egress. Note the proxy only filters clients
-   * that honor HTTP(S)_PROXY; raw sockets (`curl --noproxy`, `nc`) still egress
-   * when network is on, so allowedDomains binds proxy-aware traffic only.
+   * proxyManager.isRunning().
    * Returns whether network is enabled on return. Does not persist - caller saves.
    */
   async setNetworkEnabled(enabled: boolean): Promise<boolean> {

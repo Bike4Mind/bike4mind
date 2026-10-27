@@ -75,6 +75,7 @@ type TabBarState = Omit<BrowserPaneState, 'tabs' | 'activeTabId'>;
 interface TabHooks {
   onClosed: () => void;
   onChanged: () => void;
+  onSnapshot: (snapshot: BrowserSnapshot) => void;
   /** A popup or `target=_blank` asked for `url`. `fromAgent` when one of the agent's own steps caused it. */
   onWindowOpen: (url: string, fromAgent: boolean, background: boolean) => void;
   onShortcut: (shortcut: BrowserTabShortcut) => void;
@@ -483,7 +484,9 @@ class ElectronPage implements BrowserPage {
 
   async snapshot(maxChars: number, inView = false): Promise<BrowserSnapshot> {
     const snapshot = await this.script<unknown>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
-    return browserSnapshotSchema.parse(snapshot);
+    const parsed = browserSnapshotSchema.parse(snapshot);
+    this.hooks.onSnapshot(parsed);
+    return parsed;
   }
 
   async scroll(target: ScrollTarget): Promise<string> {
@@ -693,7 +696,9 @@ export class BrowserManager implements BrowserProvider {
 
   constructor(
     private readonly onPageState: (sessionId: string, state: BrowserPaneState) => void = () => undefined,
-    onCookieState: (state: CookieImportState) => void = () => undefined
+    onCookieState: (state: CookieImportState) => void = () => undefined,
+    private readonly onSnapshot: (sessionId: string, snapshot: BrowserSnapshot) => void | Promise<void> = () =>
+      undefined
   ) {
     this.cookies = new CookieImporter(() => this.session(), onCookieState);
   }
@@ -944,6 +949,10 @@ export class BrowserManager implements BrowserProvider {
         this.push(sessionId);
         this.apply();
       },
+      onSnapshot: snapshot => {
+        // A script can settle after its tab closed or an account switch closed every tab.
+        if (this.sessions.get(sessionId)?.list.includes(tab)) void this.recordSnapshot(sessionId, snapshot);
+      },
       onWindowOpen: (url, fromAgent, background) => this.openFromPage(sessionId, tab, url, fromAgent, background),
       // Out of the input event first: Cmd+W destroys the very contents that is dispatching it.
       onShortcut: shortcut => setImmediate(() => void this.onShortcut(sessionId, shortcut)),
@@ -953,6 +962,14 @@ export class BrowserManager implements BrowserProvider {
     if (activate || !tabs.active) this.activate(sessionId, tab);
     else this.push(sessionId);
     return tab;
+  }
+
+  private async recordSnapshot(sessionId: string, snapshot: BrowserSnapshot): Promise<void> {
+    try {
+      await this.onSnapshot(sessionId, snapshot);
+    } catch (error) {
+      console.warn('BROWSER: could not index page snapshot:', error);
+    }
   }
 
   /**

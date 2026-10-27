@@ -1,6 +1,6 @@
 import { userRepository } from '@bike4mind/database';
-import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
-import { SubscriptionMetadata, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
+import { SubscriptionMetadata, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   handleUserSubscriptionInvoice,
   handleOrganizationSubscriptionInvoice,
@@ -11,7 +11,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { withEventContext } from '@workers/utils/eventContext';
 import { postNewSubscriptionToSlack } from '@server/integrations/slack/slack';
-import { emitPurchaseForSourceProducts } from '@server/analytics/signupEvents';
+import { emitPurchaseEvents } from '@server/analytics/signupEvents';
 
 export const handler = withEventContext(async (event, logger) => {
   const { invoiceId, subscriptionId } = StripeEvents.InvoicePaymentSucceeded.schema.parse(event.properties);
@@ -101,11 +101,11 @@ export const handler = withEventContext(async (event, logger) => {
     try {
       payer = await userRepository.findById(metadata.userId);
     } catch (error) {
-      logger.warn(`Purchase not credited to a source product: payer lookup failed for invoice ${invoiceId}`, {
+      logger.warn(`Purchase not reported to Overwatch: payer lookup failed for invoice ${invoiceId}`, {
         error,
       });
     }
-    await emitPurchaseForSourceProducts({
+    await emitPurchaseEvents({
       user: payer,
       paymentId: invoiceId,
       kind: 'subscription',

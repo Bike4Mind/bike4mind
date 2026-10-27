@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { resolvePyodideMirrorOrigin } from '@client/app/utils/pyodideDistribution';
-import { getTrustedHeaderClientIp } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
+import {
+  CLOUDFRONT_VIEWER_JA4_HEADER,
+  getTrustedHeaderClientIp,
+} from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import {
   resolveFilesOrigin,
   resolveObjectStoreOrigin,
@@ -103,6 +106,12 @@ export function proxy(request: NextRequest) {
   if (originSecret) {
     const headers = new Headers(request.headers);
     headers.delete(ORIGIN_VERIFY_HEADER);
+    if (process.env.B4M_SELF_HOST === 'true') headers.delete(CLOUDFRONT_VIEWER_JA4_HEADER);
+    response = NextResponse.next({ request: { headers } });
+  } else if (request.headers.has(CLOUDFRONT_VIEWER_JA4_HEADER)) {
+    // Without origin verification a direct client can supply this observation header.
+    const headers = new Headers(request.headers);
+    headers.delete(CLOUDFRONT_VIEWER_JA4_HEADER);
     response = NextResponse.next({ request: { headers } });
   } else {
     response = NextResponse.next();
@@ -154,7 +163,7 @@ export function proxy(request: NextRequest) {
   // www.redditstatic.com, pixel config fetch from pixel-config.reddit.com, and the
   // conversion beacon (rp.gif) to alb.reddit.com — the latter goes in both img-src
   // and connect-src since the pixel may use either transport.
-  const scriptSrcPolicy = `'self' 'unsafe-inline'${wasmUnsafeEval}${devUnsafeEval} blob: https://accounts.google.com https://js.stripe.com https://apis.google.com https://cdn.jsdelivr.net https://www.googletagmanager.com https://www.redditstatic.com https://connect.facebook.net`;
+  const scriptSrcPolicy = `'self' 'unsafe-inline'${wasmUnsafeEval}${devUnsafeEval} blob: https://accounts.google.com https://js.stripe.com https://apis.google.com https://cdn.jsdelivr.net https://www.googletagmanager.com https://www.redditstatic.com https://connect.facebook.net https://challenges.cloudflare.com`;
   const styleSrcPolicy = `'self' 'unsafe-inline'`;
 
   // Deployment's own files subdomain for CSP, derived from the account-tied SERVER_DOMAIN with
@@ -214,8 +223,8 @@ export function proxy(request: NextRequest) {
     style-src ${styleSrcPolicy};
     img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com${mapTileHost}${objectStoreHost}${whatsNewUpstreamHost};
     font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com data:;
-    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${desktopReleasesApiHost}${mapTileHost}${objectStoreHost}${whatsNewUpstreamHost};
-    frame-src 'self' blob: https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
+    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://challenges.cloudflare.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${desktopReleasesApiHost}${mapTileHost}${objectStoreHost}${whatsNewUpstreamHost};
+    frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
     object-src 'none';
     media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com${objectStoreHost}${whatsNewUpstreamHost};
     base-uri 'self';

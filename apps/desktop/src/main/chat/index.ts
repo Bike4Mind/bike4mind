@@ -63,7 +63,7 @@ import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
-import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
+import { IMAGE_BYTE_CAP, IMAGE_MAX_EDGE, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
@@ -83,7 +83,11 @@ import { ModelCatalog } from './ModelCatalog';
 import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
-import { sessionScopeFor, sessionScopeKey } from './sessionScope';
+import { LocalHistory } from './LocalHistory';
+import { registerHistoryIpc } from './historyIpc';
+import { captureHistoryPage } from './captureHistoryPage';
+import { OllamaLocal } from './OllamaLocal';
+import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
   currentBranch,
@@ -109,6 +113,8 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import type { PreparedImage } from './tools/types';
+import { desktopScreenCapturer } from './screen/desktopScreen';
 import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
@@ -170,6 +176,35 @@ function shrinkImage(bytes: Buffer, mediaType: string, maxEdge: number): { bytes
   const asJpeg = resized.toJPEG(SHRUNK_JPEG_QUALITY);
   if (asJpeg.length === 0) return null;
   return { bytes: asJpeg, mediaType: 'image/jpeg' };
+}
+
+/**
+ * Fit an image a tool shows the model, as shrinkImage does an attachment. Unlike that one it
+ * reports the sizes for the tool's result, and passes through what already fits so a GIF the
+ * decoder reads keeps its frames.
+ */
+function prepareToolImage(bytes: Buffer, mediaType: string, maxBytes: number): PreparedImage | null {
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return null;
+
+  const { width: sourceWidth, height: sourceHeight } = image.getSize();
+  const oversized = Math.max(sourceWidth, sourceHeight) > IMAGE_MAX_EDGE;
+  if (!oversized && bytes.length <= maxBytes) {
+    return { bytes, mediaType, width: sourceWidth, height: sourceHeight, sourceWidth, sourceHeight };
+  }
+
+  const edge = sourceWidth >= sourceHeight ? { width: IMAGE_MAX_EDGE } : { height: IMAGE_MAX_EDGE };
+  const resized = oversized ? image.resize({ ...edge, quality: 'best' }) : image;
+  if (resized.isEmpty()) return null;
+  const sizes = { ...resized.getSize(), sourceWidth, sourceHeight };
+
+  const asPng = resized.toPNG();
+  if (asPng.length > 0 && asPng.length <= maxBytes) return { bytes: asPng, mediaType: 'image/png', ...sizes };
+  for (const quality of [SHRUNK_JPEG_QUALITY, 60]) {
+    const asJpeg = resized.toJPEG(quality);
+    if (asJpeg.length > 0 && asJpeg.length <= maxBytes) return { bytes: asJpeg, mediaType: 'image/jpeg', ...sizes };
+  }
+  return null;
 }
 
 /**
@@ -306,7 +341,9 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
 
 export function registerChat(
   auth: AuthService,
-  hooks: Pick<ChatServiceDeps, 'sessionClosed'> & { observeStream?(event: ChatStreamEvent): void } = {}
+  hooks: Pick<ChatServiceDeps, 'sessionClosed' | 'releaseSessionTerminals'> & {
+    observeStream?(event: ChatStreamEvent): void;
+  } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
@@ -334,7 +371,7 @@ export function registerChat(
     join(userData, 'sessions'),
     PREFERRED_MODEL,
     randomUUID(),
-    () => sessionScopeFor(auth.getState()),
+    () => sessionScopeForChat(auth.getState()),
     approvalModes,
     REASONING_EFFORT
   );
@@ -380,18 +417,42 @@ export function registerChat(
     writeClipboard: text => clipboard.writeText(text),
     logger,
   });
-  const models = new ModelCatalog({
-    logger,
-    getApiClient: () => auth.getApiClient(),
-    getEnvironmentUrl: () => auth.getState().environment.url,
-  });
-
+  const local = new OllamaLocal();
+  const models = new ModelCatalog(
+    {
+      logger,
+      getApiClient: () => auth.getApiClient(),
+      getEnvironmentUrl: () => auth.getState().environment.url,
+    },
+    local
+  );
   const send = (channel: string, payload: unknown) => {
     logDownstream(channel, payload);
     for (const window of appWindows()) {
       window.webContents.send(channel, payload);
     }
   };
+
+  // History is an opt-in, rebuildable index: an unopenable file must not take chat down with it.
+  let history: LocalHistory | undefined;
+  try {
+    history = new LocalHistory(
+      join(userData, 'local-history.sqlite'),
+      () => {
+        const scope = sessionScopeForChat(auth.getState());
+        return scope ? sessionScopeKey(scope) : null;
+      },
+      () => {
+        try {
+          send(IPC_CHANNELS.chatHistoryChanged, undefined);
+        } catch (error) {
+          logger.warn(`CHAT: could not notify local history change: ${String(error)}`);
+        }
+      }
+    );
+  } catch (err) {
+    logger.warn(`CHAT: local history is unavailable: ${err instanceof Error ? err.message : err}`);
+  }
 
   // Built before the service so the service's tool results can bind a PR. It reaches the
   // service only through `chat`, which is first called long after both exist.
@@ -470,7 +531,16 @@ export function registerChat(
 
   const browser = new BrowserManager(
     (sessionId, state) => send(IPC_CHANNELS.browserPageState, { sessionId, ...state }),
-    state => send(IPC_CHANNELS.browserCookiesChanged, state)
+    state => send(IPC_CHANNELS.browserCookiesChanged, state),
+    (sessionId, snapshot) =>
+      captureHistoryPage(sessionId, snapshot.model, {
+        history,
+        store,
+        scopeKey: () => {
+          const scope = sessionScopeForChat(auth.getState());
+          return scope ? sessionScopeKey(scope) : null;
+        },
+      })
   );
 
   const service = new ChatService({
@@ -496,6 +566,10 @@ export function registerChat(
     sidebarSections,
     mcp,
     browser,
+    screen: desktopScreenCapturer(app.getName()),
+    prepareImage: prepareToolImage,
+    history,
+    local,
     artifacts,
     queue,
     skills,
@@ -514,6 +588,7 @@ export function registerChat(
     },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
     sessionClosed: hooks.sessionClosed,
+    releaseSessionTerminals: hooks.releaseSessionTerminals,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
@@ -567,6 +642,7 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );
+  registerHistoryIpc(ipcMain, service, history);
   // Validated here rather than trusted, like the approval mode below: an unrecognised value
   // must not reach the store, where it would be sent verbatim on the next turn.
   ipcMain.handle(IPC_CHANNELS.chatSetSessionReasoningEffort, (_event, sessionId: string, effort: unknown) => {
@@ -697,8 +773,15 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     service.renameSession(sessionId, title)
   );
-  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: string) => {
-    await service.deleteSession(sessionId);
+  ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
+    return service.inspectSessionWorktreeRemoval(sessionId);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: unknown, removeWorktree: unknown) => {
+    if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
+      throw new Error('Invalid delete request');
+    }
+    await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
   });
   registerSidebarIpc(ipcMain, sidebarSections, sessionId =>

@@ -8,6 +8,7 @@
 import { liveopsTriageConfigRepository, liveopsTriageConfigAuditLogRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
@@ -136,6 +137,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         action: 'create',
         userId: req.user.id,
         userName: req.user.username ?? req.user.email ?? 'Unknown',
+      });
+
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.triage_config.created',
+        target: { kind: 'settings', id: newConfig.id, displayName: newConfig.name },
+        summary: `created triage config ${newConfig.name}`,
+        details: {
+          enabled: newConfig.enabled,
+          issueTracker: newConfig.issueTracker,
+          organizationId: newConfig.organizationId,
+        },
       });
 
       return res.status(201).json(newConfig);

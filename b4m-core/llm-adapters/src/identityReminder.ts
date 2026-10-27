@@ -27,6 +27,15 @@ export function buildIdentityReminder(model: string, displayName?: string): stri
   ].join('\n');
 }
 
+/** Whether this call leaves the identity line out: raw, or the tool is actually on the request. */
+export function shouldOmitIdentityReminder(options: {
+  omitIdentityReminder?: boolean;
+  identityViaTool?: boolean;
+  tools?: readonly unknown[];
+}): boolean {
+  return Boolean(options.omitIdentityReminder || (options.identityViaTool && options.tools?.length));
+}
+
 /** Joins the identity reminder onto an already-joined system string. */
 export function appendIdentityReminder(systemText: string, identityReminder: string): string {
   return systemText ? `${systemText}\n\n${identityReminder}` : identityReminder;

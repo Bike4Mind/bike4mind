@@ -3,7 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { User, OverwatchUserFirstSeen } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { pseudonymizeUserId } from '@server/analytics/pseudonymize';
+import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
 const BATCH_SIZE = 500;

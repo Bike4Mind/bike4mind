@@ -11,11 +11,14 @@ import {
   User,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { Logger } from '@bike4mind/observability';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import { counterService } from '@bike4mind/services';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { z } from 'zod';
 import { Request } from 'express';
 import qs from 'qs';
@@ -651,6 +654,7 @@ const generateDailyReportResponse = async (
         ...dateMetrics,
         date,
         aiInsights,
+        appUrl: process.env.APP_URL?.trim(),
       });
 
       if (isHistoricalDate) {

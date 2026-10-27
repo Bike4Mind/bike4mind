@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+const audit = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: audit,
+  definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
+}));
+
 // `any` below is deliberate test-mock plumbing for the next-connect / node-mocks-http chain,
 // matching the repo's handler-test convention.
 // Read when the route module loads, which is before any test body runs
@@ -12,7 +18,6 @@ vi.hoisted(() => {
 const mockRefs = vi.hoisted(() => ({
   putHandler: null as null | ((req: any, res: any) => unknown),
   modal: null as any,
-  updateExistingModalCall: undefined as any,
   findOneAndUpdate: vi.fn(),
 }));
 
@@ -30,10 +35,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@bike4mind/database/social', () => ({
   ModalModel: {
     findById: () => Promise.resolve(mockRefs.modal),
-    findOneAndUpdate: (...args: unknown[]) => {
-      mockRefs.findOneAndUpdate(...args);
-      return Promise.resolve(mockRefs.modal);
-    },
+    findOneAndUpdate: (...args: unknown[]) => mockRefs.findOneAndUpdate(...args),
   },
 }));
 
@@ -42,28 +44,13 @@ vi.mock('@server/utils/cacheExternalImage', () => ({
   cacheExternalImages: vi.fn(async (images: unknown[]) => images),
 }));
 
-vi.mock('@bike4mind/server-utils/services/whatsNewDistribution', () => ({
-  WhatsNewDistributionService: {
-    updateExistingModal: vi.fn(async (...args: unknown[]) => {
-      mockRefs.updateExistingModalCall = args;
-    }),
-  },
-}));
-
-vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
-  emitModalGenerationMetrics: vi.fn(async () => undefined),
-}));
-
 vi.mock('@bike4mind/services', () => ({
   extractVariantForViewer: (doc: any) => doc,
   viewerClassifier: {
     classify: vi.fn(async () => 'customer'),
   },
-  MODAL_SAFE_DEFAULT_KEY: 'customer',
 }));
 
-import { WhatsNewDistributionService } from '@bike4mind/server-utils/services/whatsNewDistribution';
-import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import '@pages/api/modals/[id]/update';
 
 const MODAL_ID = '507f1f77bcf86cd799439011';
@@ -74,59 +61,6 @@ function mocks(body: Record<string, unknown> = {}) {
   (req as any).user = { id: 'admin-1', isAdmin: true };
   return { req, res };
 }
-
-describe('PUT /api/modals/[id] - S3 distribution repository metadata', () => {
-  beforeEach(() => {
-    mockRefs.updateExistingModalCall = undefined;
-    mockRefs.modal = {
-      _id: { toString: () => MODAL_ID },
-      tags: ['whats-new'],
-      generationMetadata: {
-        generatedDate: '2026-09-20',
-        releaseTag: 'v1.2.3',
-        modelUsed: 'gpt-5',
-        correlationId: 'corr-1',
-      },
-      variants: { customer: {} },
-      title: 'Updated title',
-      subtitle: '',
-      description: '',
-      createdAt: new Date('2026-09-20T00:00:00Z'),
-      toObject: () => mockRefs.modal,
-    };
-  });
-
-  it('publishes the canonical repository URL, not the retired one', async () => {
-    const { req, res } = mocks({ title: 'Updated title' });
-    await mockRefs.putHandler!(req, res);
-
-    expect(mockRefs.updateExistingModalCall).toBeDefined();
-    const [, , content] = mockRefs.updateExistingModalCall;
-    const payload = JSON.parse(content);
-    expect(payload.metadata.repositoryUrl).toBe('https://github.com/Bike4Mind/bike4mind');
-  });
-
-  // The response ends the Lambda invocation, so the failure metric emit must finish before it is sent.
-  it('waits for the S3SyncFailure metric before responding when the S3 sync fails', async () => {
-    let release!: () => void;
-    vi.mocked(WhatsNewDistributionService.updateExistingModal).mockRejectedValueOnce(new Error('s3 down'));
-    vi.mocked(emitModalGenerationMetrics).mockReturnValueOnce(
-      new Promise<void>(resolve => {
-        release = resolve;
-      })
-    );
-    const { req, res } = mocks({ title: 'Updated title' });
-    const pending = mockRefs.putHandler!(req, res);
-
-    await vi.waitFor(() => expect(emitModalGenerationMetrics).toHaveBeenCalled());
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(res._isEndCalled()).toBe(false);
-
-    release();
-    await pending;
-    expect(res._getStatusCode()).toBe(200);
-  });
-});
 
 afterAll(() => {
   delete process.env.S3_PRESIGN_ENDPOINT;
@@ -142,8 +76,10 @@ describe('PUT /api/modals/[id] - video', () => {
   };
 
   beforeEach(() => {
-    mockRefs.findOneAndUpdate.mockClear();
-    mockRefs.modal = { _id: { toString: () => MODAL_ID }, tags: [], toObject: () => mockRefs.modal };
+    vi.clearAllMocks();
+    audit.mockResolvedValue(null);
+    mockRefs.findOneAndUpdate.mockImplementation(async () => mockRefs.modal);
+    mockRefs.modal = { _id: { toString: () => MODAL_ID }, title: 'Demo', tags: [], toObject: () => mockRefs.modal };
   });
 
   it('persists the video urls', async () => {
@@ -152,6 +88,53 @@ describe('PUT /api/modals/[id] - video', () => {
 
     const [, update] = mockRefs.findOneAndUpdate.mock.calls[0];
     expect(update.$set.video).toEqual(video);
+    expect(audit.mock.calls[0][0]).toBe(req);
+    expect(audit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.modal.updated',
+      target: { kind: 'settings', id: MODAL_ID, displayName: 'Demo' },
+      details: { via: 'admin-modals', fields: ['video'] },
+    });
+    expect(mockRefs.findOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(audit.mock.invocationCallOrder[0]);
+  });
+
+  it('audits explicit false and null field names without their values', async () => {
+    const { req, res } = mocks({ enabled: false, video: null, subtitle: undefined });
+
+    await mockRefs.putHandler!(req, res);
+
+    expect(audit).toHaveBeenCalledOnce();
+    expect(audit.mock.calls[0][1].details).toEqual({ via: 'admin-modals', fields: ['video', 'enabled'] });
+  });
+
+  it('audits only the fields that changed when the body includes unchanged fields', async () => {
+    mockRefs.modal = { ...mockRefs.modal, enabled: true };
+    const { req, res } = mocks({ title: 'Demo', enabled: false });
+
+    await mockRefs.putHandler!(req, res);
+
+    expect(audit.mock.calls[0][1].details).toEqual({ via: 'admin-modals', fields: ['enabled'] });
+  });
+
+  it.each(['database failure', 'concurrent deletion', 'missing modal', 'permission denied'])(
+    'records nothing after %s',
+    async failure => {
+      const { req, res } = mocks({ enabled: false });
+      if (failure === 'database failure') mockRefs.findOneAndUpdate.mockRejectedValueOnce(new Error('write failed'));
+      if (failure === 'concurrent deletion') mockRefs.findOneAndUpdate.mockResolvedValueOnce(null);
+      if (failure === 'missing modal') mockRefs.modal = null;
+      if (failure === 'permission denied') Object.assign(req, { ability: { can: () => false } });
+
+      await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
+
+      expect(audit).not.toHaveBeenCalled();
+    }
+  );
+
+  it('returns 404 when the modal is deleted between the read and the update', async () => {
+    const { req, res } = mocks({ enabled: false });
+    mockRefs.findOneAndUpdate.mockResolvedValueOnce(null);
+
+    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ statusCode: 404, message: 'Modal not found' });
   });
 
   it('accepts clearing the video', async () => {
@@ -183,5 +166,6 @@ describe('PUT /api/modals/[id] - video', () => {
     const { req, res } = mocks({ video: bad });
     await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
     expect(mockRefs.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ApiKeyScope, KnowledgeType, createModalVideoSchema } from '@bike4mind/common';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
@@ -442,8 +442,11 @@ describe('POST /api/files/createFabFile - scope gate', () => {
 });
 
 describe('POST /api/files/createFabFile - signing boundaries', () => {
+  // A browser URL distinct from the cached private one is only minted on split-endpoint deploys.
+  afterEach(() => vi.unstubAllEnvs());
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://public.test');
     h.findByDatalakeTag.mockResolvedValue(null);
     h.lakeFind.mockResolvedValue([]);
     h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
@@ -578,6 +581,12 @@ describe('POST /api/files/createFabFile - release-notes:write key', () => {
     const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string };
     expect(persisted.filePath).toMatch(/^modals\/.+\.mp4$/);
     expect(json.mock.calls[0][0]).toHaveProperty('mediaUrl');
+  });
+
+  it("uploads What's New media for a key whose admin owner has the role withheld", async () => {
+    const { res } = makeRes();
+    await run(mp4(), res, { ...releaseKey, user: withholdAdminRole({ id: 'u1', isAdmin: true }) });
+    expect(h.fabFileCreate).toHaveBeenCalled();
   });
 
   it.each([

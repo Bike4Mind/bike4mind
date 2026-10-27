@@ -17,15 +17,15 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getOktaConfigWithFallback, exchangeCodeForTokens, fetchUserInfo } from '@server/auth/oktaOidcClient';
-import { verifyStateToken } from '@server/auth/jwtStateStore';
+import { verifyStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
 import {
   readStateNonceHash,
   clearStateNonce,
   readPkceVerifierCookie,
   clearPkceVerifierCookie,
-} from '@server/auth/oauthFlowCookie';
+} from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
 import { issueBrowserSession } from '@server/auth/issueSession';
@@ -54,6 +54,7 @@ import {
   emitSignupFunnelEvents,
   recordSignupAcquisition,
 } from '@server/analytics/funnel';
+import { recordSignupNetwork } from '@server/auth/networkMeta';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -496,6 +497,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     user.password = null;
 
     if (isNewUser) {
+      await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.Okta });
       const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
       await emitSignupFunnelEvents({
         user: { id: user.id, ...signupFunnel },

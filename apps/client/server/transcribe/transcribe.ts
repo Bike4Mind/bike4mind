@@ -6,8 +6,12 @@
  */
 import { DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { MIME_TO_EXTENSION, TRANSCRIBE_UPLOAD_PREFIX } from '@server/utils/transcribeConstants';
 import {
   assertTranscriptionCredits,
@@ -110,6 +114,7 @@ export async function transcribeUpload({
   logger: ILogger;
   mapProviderError?: (err: unknown) => unknown;
 }): Promise<speechToTextService.TranscriptionResult> {
+  assertAiAccessAllowed(user);
   const userId = user.id;
   // Ownership check: the init endpoint mints keys under transcribe-uploads/{userId}/.
   // Reject anything else to prevent users from transcribing arbitrary bucket objects.

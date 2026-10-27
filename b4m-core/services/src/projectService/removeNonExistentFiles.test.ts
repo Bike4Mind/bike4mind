@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { ForbiddenError, IUserDocument, Permission } from '@bike4mind/common';
 import { removeNonExistentFiles } from './removeNonExistentFiles';
 
 type Grant = { userId: string; permissions: Permission[]; projectId?: string };
@@ -74,6 +74,13 @@ describe('projectService - removeNonExistentFiles (narrowed writes)', () => {
       fileIds: ['f-live-granted', 'f-live-nogrant'],
       updatedAt: new Date('2026-01-01T00:00:00Z'),
     });
+  });
+
+  it('rejects with a ForbiddenError when the caller does not own the project', async () => {
+    project.userId = 'someone-else';
+
+    await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.projects.update).not.toHaveBeenCalled();
   });
 
   it('writes nothing when the project has no files', async () => {

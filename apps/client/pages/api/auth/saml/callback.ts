@@ -15,6 +15,7 @@ import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
+import { recordSignupNetwork } from '@server/auth/networkMeta';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {
@@ -142,6 +143,7 @@ const handleSamlCallback = async (req: any, res: any) => {
       // client-supplied one: only an active registered client yields a tag.
       if (user.isNewUser) {
         await stampOAuthSourceTag(user.id, clientIdFromAuthorizeRedirect(redirectTo));
+        await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.SAML });
         const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.SAML });
         await emitSignupFunnelEvents({
           user: { id: user.id, ...signupFunnel },

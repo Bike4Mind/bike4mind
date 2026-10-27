@@ -9,8 +9,11 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
     OVERWATCH_INGEST_KEY: 'b4m_live_testkey1234567890abcdef12345678',
     OVERWATCH_PRODUCT_INGEST_KEYS: '{"widgets":"b4m_live_widgetkey234567890abcdef1234567"}',
     OVERWATCH_PSEUDONYM_SALT: 'aaabbbcccddd0000111122223333444455556666777788889999aaaabbbbcccc0001',
+    STAGE: 'test',
   },
 }));
+const { mockEmitMetric } = vi.hoisted(() => ({ mockEmitMetric: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mockEmitMetric }));
 
 import {
   isAnalyticsConfigured,
@@ -19,7 +22,7 @@ import {
   emitVisitEvent,
   emitProductEvent,
 } from './emitActiveEvent';
-import { pseudonymize } from './pseudonymize';
+import { pseudonymize } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { OVERWATCH_ANONYMOUS_USER_ID, OVERWATCH_UNKNOWN_SESSION_ID } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
@@ -120,6 +123,19 @@ describe('emitActiveEvent', () => {
     expect(body.event.event).toBe('active');
     expect(body.event.schemaVersion).toBe(1);
     expect((body.event.metadata as Record<string, string>).userType).toBe('subscriber');
+  });
+
+  it("stamps the synthetic lane on a synthetic user's event, and nothing on anyone else's", async () => {
+    resetConfig();
+    await emitActiveEvent({ pseudoUserId: 'p1', sessionId: 's1', userType: 'free', isSynthetic: true });
+    await emitActiveEvent({ pseudoUserId: 'p2', sessionId: 's2', userType: 'free', isSynthetic: false });
+    await emitActiveEvent({ pseudoUserId: 'p3', sessionId: 's3', userType: 'free' });
+
+    const metadata = mockFetch.mock.calls.map(
+      ([, init]) =>
+        (JSON.parse((init as RequestInit).body as string) as { event: { metadata: unknown } }).event.metadata
+    );
+    expect(metadata).toEqual([{ userType: 'free', lane: 'synthetic' }, { userType: 'free' }, { userType: 'free' }]);
   });
 
   it('sends x-api-key header and no Authorization header', async () => {
@@ -263,6 +279,7 @@ describe('emitProductEvent', () => {
 
   beforeEach(() => {
     mockFetch.mockClear();
+    mockEmitMetric.mockReset().mockResolvedValue(undefined);
     vi.stubGlobal('fetch', mockFetch);
     mockFetch.mockResolvedValue({ status: 200 });
   });
@@ -390,6 +407,43 @@ describe('emitProductEvent', () => {
 
     expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] ingest request failed', { productId: 'widgets' });
     expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(WIDGETS_KEY);
+  });
+
+  it.each([
+    ['a 503', () => mockFetch.mockResolvedValue({ status: 503 })],
+    ['a 401', () => mockFetch.mockResolvedValue({ status: 401 })],
+    ['a redirect', () => mockFetch.mockResolvedValue({ type: 'opaqueredirect', status: 0 })],
+    ['a network failure', () => mockFetch.mockRejectedValue(new Error('network failure'))],
+  ])('counts %s on a reported emit, for the failed-ingest alarm', async (_label, fail) => {
+    resetConfig();
+    fail();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true });
+
+    expect(mockEmitMetric).toHaveBeenCalledTimes(1);
+    expect(mockEmitMetric).toHaveBeenCalledWith('Lumina5/Analytics', 'IngestEmitFailed', 1, { Stage: 'test' });
+  });
+
+  it('counts nothing for a delivered event, or a failure the caller did not ask to report', async () => {
+    resetConfig();
+    await emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true });
+
+    mockFetch.mockResolvedValue({ status: 503 });
+    await emitProductEvent({ productId: 'widgets', event: 'active', userId: 'u' });
+
+    expect(mockEmitMetric).not.toHaveBeenCalled();
+  });
+
+  it('never fails the caller when counting the failure fails', async () => {
+    resetConfig();
+    mockFetch.mockResolvedValue({ status: 500 });
+    mockEmitMetric.mockRejectedValue(new Error('cloudwatch down'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true })
+    ).resolves.toBeUndefined();
   });
 
   it('leaves the host emitters on the host product and key', async () => {

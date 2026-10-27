@@ -7,9 +7,9 @@ import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 import { User, userRepository } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getOAuthWorkspaceWithCredentials, buildUserLinkRedirectUri, verifyUserLinkStateToken } from '@bike4mind/slack';
-import { consumeStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { consumeStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { randomUUID } from 'crypto';
 
 const logger = new Logger();

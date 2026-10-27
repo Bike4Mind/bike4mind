@@ -3,11 +3,13 @@ import { redactSessionForClient } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
 import { InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
-import { assertSessionAccess } from '@server/utils/sessionAccess';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { Request } from 'express';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }>>(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { id } = req.query;
 
   // Bind the caller-supplied session id to the caller before renaming. Outside the try

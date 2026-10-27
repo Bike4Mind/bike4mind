@@ -24,6 +24,7 @@ import StripeCheckoutSuccessHandler from '@client/app/components/stripe/StripeCh
 import StripePaymentReturnHandler from '@client/app/components/stripe/StripePaymentReturnHandler';
 import { Toaster } from 'sonner';
 import { CookieConsentBanner } from '@client/app/components/CookieConsentBanner';
+import { ClientOutdatedBanner } from '@client/app/components/ClientOutdatedBanner';
 import { TranslationProvider } from '@client/app/contexts/TranslationProvider';
 import { QuestPreparationOverlay } from '@client/app/components/QuestPreparationOverlay';
 import { runLocalStorageCleanup } from '@client/app/utils/localStorageCleanup';
@@ -189,6 +190,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
     <CoreProviders>
       {mounted && <Toaster richColors closeButton position="bottom-right" />}
       {mounted && <CookieConsentBanner />}
+      <ClientOutdatedBanner />
       <TranslationProvider>
         <DefaultMetaTags />
         <div>

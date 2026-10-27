@@ -1,3 +1,4 @@
+import type { WorktreeRemoval } from './worktreeRemoval';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -84,6 +85,7 @@ import type {
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LocalHistoryResult, LocalHistoryState } from './history';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -117,6 +119,11 @@ export const IPC_CHANNELS = {
   chatListModels: 'chat:list-models',
   chatListSuggestionModels: 'chat:list-suggestion-models',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSetSessionHistory: 'chat:set-session-history',
+  chatSearchHistory: 'chat:search-history',
+  chatClearHistory: 'chat:clear-history',
+  chatHistoryState: 'chat:history-state',
+  chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
@@ -139,6 +146,7 @@ export const IPC_CHANNELS = {
   chatGetSession: 'chat:get-session',
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
+  chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
@@ -561,6 +569,11 @@ export interface DesktopApi {
     listSuggestionModels(): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null>;
+    searchHistory(query: string): Promise<LocalHistoryResult[]>;
+    clearHistory(): Promise<LocalHistoryState>;
+    historyState(): Promise<LocalHistoryState>;
+    onHistoryChanged(listener: () => void): () => void;
     /** How hard this conversation's model should think. Null when the session is gone. */
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
@@ -607,7 +620,8 @@ export interface DesktopApi {
     /** Null when the session is gone (deleted in another window, or a stale id). */
     getSession(sessionId: string): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
-    deleteSession(sessionId: string): Promise<void>;
+    deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
+    inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
     /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */

@@ -1,3 +1,4 @@
+import { USER_ID_PARAM } from '@bike4mind/common';
 import type { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import { oneOf, parsePage, parseStringList, toNumber } from '../adminSearchValues';
 
@@ -35,9 +36,12 @@ export const USERS_SORT_PARAM = 'sort';
 export const USERS_ORDER_PARAM = 'order';
 export const USERS_ORG_PARAM = 'org';
 export const USERS_TAGS_PARAM = 'tags';
-export const USERS_USER_ID_PARAM = 'userId';
+export const USERS_USER_ID_PARAM = USER_ID_PARAM;
 
-/** The params that describe the list view; `userId` (the open user) is separate. */
+/**
+ * The params that describe the list view. `userId` is separate: it is only read, so that the old
+ * `/admin?userId=` links can redirect to `/admin/users/$userId` (adminRoute's beforeLoad).
+ */
 const USERS_VIEW_PARAMS = [
   USERS_PAGE_PARAM,
   USERS_LIMIT_PARAM,
@@ -67,12 +71,23 @@ const parseLimit = (value: unknown): number | undefined => {
 };
 
 // The id is interpolated into `/api/users/<id>`, so only an ObjectId may come in from a link.
-const parseUserId = (value: unknown): string | undefined =>
+export const parseUserId = (value: unknown): string | undefined =>
   typeof value === 'string' && /^[0-9a-f]{24}$/.test(value) ? value : undefined;
 
-/** Per-key coercion for the route's `validateSearch`; anything invalid becomes undefined. */
-export const USERS_SEARCH_PARSERS: { readonly [K in keyof UsersSearch]-?: (value: unknown) => UsersSearch[K] } = {
-  [USERS_PAGE_PARAM]: parsePage,
+// A view param that fails to parse still asked for a view. Keeping the default page stops
+// `validateSearch` from reducing `?sort=bogus` to a bare visit that restores the saved view.
+const parseUsersPage = (value: unknown, search: Record<string, unknown> = {}): number | undefined =>
+  parsePage(value) ??
+  (USERS_VIEW_PARAMS.some(key => search[key] !== undefined) ? DEFAULT_USERS_PARAMS.page : undefined);
+
+/**
+ * Per-key coercion for the route's `validateSearch`, given the whole raw search as well; anything
+ * invalid becomes undefined.
+ */
+export const USERS_SEARCH_PARSERS: {
+  readonly [K in keyof UsersSearch]-?: (value: unknown, search?: Record<string, unknown>) => UsersSearch[K];
+} = {
+  [USERS_PAGE_PARAM]: parseUsersPage,
   [USERS_LIMIT_PARAM]: parseLimit,
   [USERS_SORT_PARAM]: oneOf(USERS_SORT_FIELDS),
   [USERS_ORDER_PARAM]: oneOf(SORT_ORDERS),

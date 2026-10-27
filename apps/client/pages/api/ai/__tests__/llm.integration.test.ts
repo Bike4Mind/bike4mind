@@ -51,6 +51,9 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+}));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
   // checkApiKeyRateLimit is stubbed.
@@ -400,6 +403,16 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       await handler(req, res);
       expect(invoked().authOrigin).toBe('session');
       expect(invoked().apiKeyId).toBeUndefined();
+    });
+
+    it.each([
+      ['withholds', [ApiKeyScope.AI_CHAT], true],
+      ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], false],
+    ] as const)('%s the admin role on the queued quest for a key with scopes %j', async (_, scopes, withheld) => {
+      validateWithScopes([...scopes]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
     });
   });
 

@@ -48,7 +48,7 @@ import {
   getDecisionProviderRegistry,
   resolveCallableDecisionProviders,
   resolveDecisionProviderKey,
-} from '@server/decisions/providers';
+} from '@bike4mind/server-utils/decisions/providers';
 import { resolveDecisionInput } from '@server/decisions/resolveDecisionInput';
 import type { FabFileAccessRequest } from '@server/files/loadAccessibleFabFile';
 

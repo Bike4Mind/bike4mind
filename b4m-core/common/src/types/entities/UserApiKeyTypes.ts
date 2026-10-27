@@ -169,6 +169,31 @@ export enum ApiKeyScope {
 }
 
 /**
+ * A scope value as stored on a key: a built-in {@link ApiKeyScope} or one an overlay contributes at
+ * build time. Whether a value is known is decided by the app's merged catalog, not by this type.
+ */
+export type ApiKeyScopeValue = ApiKeyScope | (string & {});
+
+// Matches the codegen's API_KEY_SCOPE_VALUE_RE (apps/client/scripts/generate-premium-glue.mjs); only a
+// built-in scope may carry the `*` action.
+const API_KEY_SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$/;
+export const API_KEY_SCOPE_VALUE_MAX_LENGTH = 100;
+const BUILT_IN_API_KEY_SCOPES: ReadonlySet<string> = new Set(Object.values(ApiKeyScope));
+
+/** True for a built-in {@link ApiKeyScope} value. */
+export const isBuiltInApiKeyScope = (value: unknown): value is ApiKeyScope =>
+  typeof value === 'string' && BUILT_IN_API_KEY_SCOPES.has(value);
+
+/**
+ * Shape check only (`<resource>:<action>`, lowercase): any built-in scope, or a value an overlay
+ * could contribute. For storage, where the contributed catalog may not be loaded; it says nothing
+ * about whether the value is offered or authorizes anything.
+ */
+export const isWellFormedApiKeyScope = (value: unknown): value is ApiKeyScopeValue =>
+  isBuiltInApiKeyScope(value) ||
+  (typeof value === 'string' && value.length <= API_KEY_SCOPE_VALUE_MAX_LENGTH && API_KEY_SCOPE_VALUE_RE.test(value));
+
+/**
  * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
  * Overwatch ingest, QA run ingest, release-note automation. A key carrying ANY of these is *confined* and
  * both ends of the system say the same thing about it in the same words:
@@ -187,6 +212,26 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.SKILLS_READ,
   ApiKeyScope.RELEASE_NOTES_WRITE,
 ];
+
+/**
+ * Built-in scopes left out of the public API reference. An explicit list, not a rule: `admin:*`, the
+ * confined integration scopes except `skills:read`, and the `optihashi:*` family. Documentation only -
+ * it never affects which scopes a key may hold or what the runtime accepts.
+ */
+export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.ADMIN,
+  ...CONFINED_API_KEY_SCOPES.filter(scope => scope !== ApiKeyScope.SKILLS_READ),
+  ApiKeyScope.OPTIHASHI_READ,
+  ApiKeyScope.OPTIHASHI_COMPUTE,
+];
+
+/**
+ * Built-in scopes published in the public OpenAPI spec: every {@link ApiKeyScope} not in
+ * {@link UNDOCUMENTED_API_KEY_SCOPES}. Built-in scopes only: scopes an overlay contributes are not listed.
+ */
+export const PUBLIC_DOC_API_KEY_SCOPES: readonly ApiKeyScope[] = Object.values(ApiKeyScope).filter(
+  scope => !UNDOCUMENTED_API_KEY_SCOPES.includes(scope)
+);
 
 export enum ApiKeyStatus {
   ACTIVE = 'active',
@@ -296,7 +341,7 @@ export interface IUserApiKey {
    */
   keyDigest?: string;
   keyPrefix: string; // First 16 chars for lookup (e.g., "b4m_live_xxxxxxx")
-  scopes: ApiKeyScope[]; // Permissions array
+  scopes: ApiKeyScopeValue[]; // Permissions array
   status: ApiKeyStatus;
   expiresAt?: Date; // Optional expiration
   lastUsedAt?: Date;
@@ -390,10 +435,11 @@ export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
  * Which per-user active-key cap a key counts against. Federated-exchange keys
  * (`createdFrom === 'oauth-exchange'`) are short-lived, at most one per (user, client),
  * and minted by a relying party rather than the user, so they get their own pool
- * instead of eating the user's dashboard/admin key slots. Caps live in
- * b4m-core/services/src/userApiKeyService/create.ts.
+ * instead of eating the user's dashboard/admin key slots. `personal` is the user-billed subset
+ * of `standard`, which the API key trust gate caps for untrusted owners (org-billed keys are not
+ * limited by trust). Caps live in b4m-core/services/src/userApiKeyService/create.ts.
  */
-export type ApiKeyCapPool = 'standard' | 'oauth-exchange';
+export type ApiKeyCapPool = 'standard' | 'personal' | 'oauth-exchange';
 
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;

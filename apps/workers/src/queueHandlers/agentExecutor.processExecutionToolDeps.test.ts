@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
 import type { ServerSubagentTracker } from '@bike4mind/services/llm';
+import { OPTI_SURFACE } from '@bike4mind/common';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
@@ -25,9 +27,24 @@ vi.mock('sst', () => ({
   }),
 }));
 
+// Records every frame the real `createWsSender` posts, in the order the sends complete. While
+// `holdTextDelta` is set, `subagent_text_delta` posts stay in flight until it resolves.
+const ws = vi.hoisted(() => ({
+  frames: [] as Array<{ action: string } & Record<string, unknown>>,
+  holdTextDelta: null as Promise<void> | null,
+}));
+
 vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   ApiGatewayManagementApiClient: class {
-    send() {
+    send(command: { input: { Data: Buffer } }) {
+      const frame = JSON.parse(command.input.Data.toString()) as { action: string } & Record<string, unknown>;
+      if (frame.action === 'subagent_text_delta' && ws.holdTextDelta) {
+        return ws.holdTextDelta.then(() => {
+          ws.frames.push(frame);
+          return {};
+        });
+      }
+      ws.frames.push(frame);
       return Promise.resolve({});
     }
   },
@@ -150,6 +167,48 @@ vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', (
   },
 }));
 
+vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({
+  premiumLlmTools: { fixture_tool: { name: 'fixture_tool' } },
+}));
+
+vi.mock('@server/premium-generated/premiumAgentExtensions.generated', () => ({
+  premiumAgentExtensions: [
+    {
+      surfaceProfiles: [
+        {
+          id: 'fixture-profile',
+          surface: 'fixture-surface',
+          build: () => ({
+            id: 'fixture-profile',
+            name: 'Fixture profile',
+            allowedTools: ['fixture_tool'],
+            deniedTools: [],
+            maxIterations: { quick: 5, medium: 15, very_thorough: 30 },
+            defaultThoroughness: 'medium',
+            isSynthetic: true,
+          }),
+        },
+      ],
+    },
+  ],
+}));
+
+// Pass-through spies, so the real registry still resolves and guards while the calls are observable.
+vi.mock('./agentExecutor.agentExtensions', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutor.agentExtensions')>(
+    './agentExecutor.agentExtensions'
+  );
+  const real = actual.executorAgentExtensions;
+  return {
+    ...actual,
+    executorAgentExtensions: {
+      ...real,
+      resolveSurfaceProfile: vi.fn(real.resolveSurfaceProfile),
+      applyToolMapGuards: vi.fn(real.applyToolMapGuards),
+    },
+  };
+});
+
 const execDoc = {
   id: 'exec-1',
   status: 'running',
@@ -218,6 +277,8 @@ describe('processExecution tool deps', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ws.frames.length = 0;
+    ws.holdTextDelta = null;
     buildSharedToolsMock.mockImplementation(() => {
       throw toolsBuilt;
     });
@@ -233,6 +294,24 @@ describe('processExecution tool deps', () => {
 
     expect((deps.attachedFileIds as string[]).slice().sort()).toEqual(['file-f', 'file-k', 'file-m']);
     expect(deps.sessionIncludeLibraryFiles).toBe(false);
+  });
+
+  describe('admin role behind a key without the admin scope', () => {
+    async function depsUserFor(doc: Record<string, unknown>) {
+      const { agentExecutionRepository, User } = await import('@bike4mind/database');
+      vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100, isAdmin: true } as never);
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      const deps = await runWithSession(baseSession);
+      return deps.user as { isAdmin?: boolean };
+    }
+
+    it('withholds the owner admin role when the run was started that way', async () => {
+      expect((await depsUserFor({ ...execDoc, apiKeyId: 'key-1', adminRoleWithheld: true })).isAdmin).toBe(false);
+    });
+
+    it('keeps the owner admin role for a run that does not withhold it', async () => {
+      expect((await depsUserFor({ ...execDoc, apiKeyId: 'key-1' })).isAdmin).toBe(true);
+    });
   });
 
   describe('video_generation wiring', () => {
@@ -507,6 +586,119 @@ describe('processExecution tool deps', () => {
       expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
     });
 
+    // The client clears a child's live-text buffer on each of these frames, so a delta that lands
+    // after one would bring stale "(streaming...)" text back under a finished child.
+    describe('live text deltas land before the frame that clears them', () => {
+      const delta = { childExecutionId: 'child-1', agentName: 'researcher', iteration: 0, delta: 'hello' };
+
+      const heldDeltaFrame = expect.objectContaining({
+        action: 'subagent_text_delta',
+        executionId: 'exec-1',
+        childExecutionId: 'child-1',
+        agentName: 'researcher',
+        iteration: 0,
+        delta: 'hello',
+      });
+
+      // `awaitCreditsWrite` is for terminal handlers whose last awaited call before their own send is
+      // the credits write. Their mocked work all resolves on the microtask queue, so once that call
+      // has happened one macrotask turn lets the handler reach its send (or its flush): a missing
+      // flush then shows up as the terminal frame going out while the delta is still held.
+      async function withDeltaInFlight(
+        sendTerminal: (tracker: ServerSubagentTracker) => Promise<void>,
+        { awaitCreditsWrite = false } = {}
+      ) {
+        const { agentExecutionRepository } = await import('@bike4mind/database');
+        const tracker = await subagentTracker();
+        let release!: () => void;
+        ws.holdTextDelta = new Promise<void>(resolve => {
+          release = resolve;
+        });
+        ws.frames.length = 0;
+        vi.mocked(agentExecutionRepository.incrementCreditsUsed).mockClear();
+
+        const delivered = tracker.onTextDelta!(delta);
+        const terminal = sendTerminal(tracker);
+        if (awaitCreditsWrite) {
+          await vi.waitFor(() => expect(agentExecutionRepository.incrementCreditsUsed).toHaveBeenCalled());
+        }
+        await new Promise(resolve => setImmediate(resolve));
+        const beforeRelease = ws.frames.map(frame => frame.action);
+
+        release();
+        await Promise.all([delivered, terminal]);
+        return { beforeRelease, afterRelease: [...ws.frames] };
+      }
+
+      it('sends subagent_iteration_step only after the child queued deltas', async () => {
+        const { beforeRelease, afterRelease } = await withDeltaInFlight(tracker =>
+          tracker.onStep({
+            childExecutionId: 'child-1',
+            agentName: 'researcher',
+            iteration: 0,
+            step: { type: 'thought', content: 'done', timestamp: 0 } as never,
+          })
+        );
+
+        expect(beforeRelease).not.toContain('subagent_iteration_step');
+        expect(afterRelease).toEqual([
+          heldDeltaFrame,
+          expect.objectContaining({
+            action: 'subagent_iteration_step',
+            executionId: 'exec-1',
+            childExecutionId: 'child-1',
+            agentName: 'researcher',
+            iteration: 0,
+            step: expect.objectContaining({ content: 'done' }),
+          }),
+        ]);
+      });
+
+      it('sends subagent_completed only after the child queued deltas', async () => {
+        const { beforeRelease, afterRelease } = await withDeltaInFlight(
+          tracker => tracker.onComplete({ childExecutionId: 'child-1', result: childResult }),
+          { awaitCreditsWrite: true }
+        );
+
+        expect(beforeRelease).not.toContain('subagent_completed');
+        expect(afterRelease).toEqual([
+          heldDeltaFrame,
+          expect.objectContaining({
+            action: 'subagent_completed',
+            executionId: 'exec-1',
+            childExecutionId: 'child-1',
+            agentName: 'researcher',
+            finalAnswer: 'found it',
+          }),
+        ]);
+      });
+
+      it('sends subagent_failed only after the child queued deltas', async () => {
+        const { beforeRelease, afterRelease } = await withDeltaInFlight(
+          tracker =>
+            tracker.onFailure({
+              childExecutionId: 'child-1',
+              error: 'boom',
+              isTimeout: false,
+              partialResult: childResult,
+            }),
+          { awaitCreditsWrite: true }
+        );
+
+        expect(beforeRelease).not.toContain('subagent_failed');
+        expect(afterRelease).toEqual([
+          heldDeltaFrame,
+          expect.objectContaining({
+            action: 'subagent_failed',
+            executionId: 'exec-1',
+            childExecutionId: 'child-1',
+            error: 'Subagent execution failed',
+            isTimeout: false,
+          }),
+        ]);
+      });
+    });
+
     // Reached only by spend no tracker bills, e.g. a subagent that ran untracked after
     // `tracker.onStart` failed.
     it('charges untracked subagent spend reported through onSubagentCredits', async () => {
@@ -693,6 +885,192 @@ describe('processExecution tool deps', () => {
 
       expect(resolveWorkspaceSettings).not.toHaveBeenCalled();
       expect(deps.agentStore).toBeUndefined();
+    });
+  });
+
+  describe('agent extensions', () => {
+    async function registry() {
+      const { executorAgentExtensions } = await import('./agentExecutor.agentExtensions');
+      return {
+        resolve: vi.mocked(executorAgentExtensions.resolveSurfaceProfile),
+        guard: vi.mocked(executorAgentExtensions.applyToolMapGuards),
+      };
+    }
+
+    it('resolves the surface profile on a continuation, then guards the contributed tools', async () => {
+      const { resolve, guard } = await registry();
+      guard.mockImplementationOnce(
+        tools =>
+          Object.fromEntries(
+            Object.entries(tools).map(([k, t]) => [k, { ...(t as object), guarded: true }])
+          ) as typeof tools
+      );
+      await runWithSession({ ...baseSession, surface: OPTI_SURFACE });
+
+      expect(resolve).toHaveBeenCalledWith(
+        OPTI_SURFACE,
+        expect.objectContaining({ executionId: 'exec-1', contributedToolNames: ['fixture_tool'] })
+      );
+      const profile = resolve.mock.results[0].value;
+      expect(profile.id).toBe('synthetic:opti-orchestration');
+      expect(profile.allowedTools).toContain('fixture_tool');
+
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(resolve.mock.invocationCallOrder[0]).toBeLessThan(guard.mock.invocationCallOrder[0]);
+      const [tools, ctx] = guard.mock.calls[0];
+      expect(Object.keys(tools)).toEqual(['fixture_tool']);
+      expect(ctx).toEqual(expect.objectContaining({ executionId: 'exec-1', runState: expect.any(Object) }));
+      const guarded = guard.mock.results[0].value;
+      const { externalTools, enabledTools, sessionDisabledTools } = buildSharedToolsMock.mock.calls[0][2] as {
+        externalTools: Record<string, unknown>;
+        enabledTools: string[];
+        sessionDisabledTools: string[];
+      };
+      expect(externalTools.fixture_tool).toBe(guarded.fixture_tool);
+      expect(externalTools.fixture_tool).not.toBe(tools.fixture_tool);
+      expect(externalTools.fixture_tool).toHaveProperty('guarded', true);
+      // The resolved profile, not the execution doc, is what shapes the toolbelt: its denials reach the build.
+      expect(sessionDisabledTools).toEqual(expect.arrayContaining(profile.deniedTools));
+      expect(enabledTools).toContain('fixture_tool');
+    });
+
+    it('preserves a pinned agent and its denials through a continuation on a contributed surface', async () => {
+      const { resolve, guard } = await registry();
+      const { sessionRepository, agentRepository, agentExecutionRepository, adminSettingsRepository } =
+        await import('@bike4mind/database');
+      const session = { ...baseSession, surface: 'fixture-surface', disableUserIntegrations: false };
+      vi.mocked(sessionRepository.findById).mockResolvedValue(session as never);
+      const pinnedDenials = ['web_search', 'fixture__write', 'delegate_to_agent', 'coordinate_task'];
+      const findAgent = vi.spyOn(agentRepository, 'findById').mockResolvedValue({
+        id: 'agent-1',
+        name: 'Pinned agent',
+        allowedTools: ['fixture_tool', 'web_search'],
+        deniedTools: pinnedDenials,
+      } as never);
+      // Only a new execution resolves memento gates; the continuation-only harness never mocked it.
+      const persistGates = vi
+        .spyOn(agentExecutionRepository, 'persistResolvedMementoGates')
+        .mockResolvedValue(undefined as never);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation((async (key: string) =>
+        key === 'orchestrationDefaults' ? undefined : false) as never);
+      const { handler } = await import('./agentExecutor');
+      const start = {
+        executionId: 'exec-1',
+        userId: 'user-1',
+        sessionId: 'session-1',
+        query: 'q',
+        model: 'claude-sonnet-5',
+        connectionId: 'conn-1',
+        agentId: 'agent-1',
+      };
+      await handler(start as never, lambdaContext).catch(() => undefined);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+      findAgent.mockRestore();
+      persistGates.mockRestore();
+
+      expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(agentExecutionRepository.persistProfileDeniedTools).toHaveBeenCalledExactlyOnceWith(
+        'exec-1',
+        pinnedDenials,
+        true
+      );
+      const [, persistedDenials, profileIsPinned] = vi.mocked(agentExecutionRepository.persistProfileDeniedTools).mock
+        .calls[0];
+      const [, persistedTools] = vi.mocked(agentExecutionRepository.persistResolvedEnabledTools).mock.calls[0];
+      vi.clearAllMocks();
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({
+        ...execDoc,
+        profileIsPinned,
+        profileDeniedTools: persistedDenials,
+        resolvedEnabledTools: persistedTools,
+      } as never);
+
+      const deps = await runWithSession(session);
+
+      expect(resolve).not.toHaveBeenCalled();
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(deps.agentStore).toBeUndefined();
+      expect(deps.dagDispatcher).toBeUndefined();
+      const options = buildSharedToolsMock.mock.calls[0][2];
+      expect(options.enabledTools).toContain('fixture_tool');
+      expect(options.enabledTools).not.toContain('web_search');
+      expect(options.sessionDisabledTools).toEqual(expect.arrayContaining(pinnedDenials));
+    });
+
+    it.each([undefined, false])(
+      'keeps stored denials only for unknown legacy provenance (%s)',
+      async profileIsPinned => {
+        const { resolve } = await registry();
+        const { agentExecutionRepository } = await import('@bike4mind/database');
+        const persistedDenials = ['web_search', 'fixture__write', 'delegate_to_agent', 'coordinate_task'];
+        vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({
+          ...execDoc,
+          profileIsPinned,
+          profileDeniedTools: persistedDenials,
+          resolvedEnabledTools: ['fixture_tool', 'web_search'],
+        } as never);
+
+        const deps = await runWithSession({
+          ...baseSession,
+          surface: 'fixture-surface',
+          disableUserIntegrations: false,
+        });
+
+        expect(resolve).toHaveBeenCalledTimes(1);
+        expect(resolve.mock.results[0].value.deniedTools).toEqual([]);
+        const options = buildSharedToolsMock.mock.calls[0][2];
+        expect(options.enabledTools).toContain('fixture_tool');
+        if (profileIsPinned === undefined) {
+          expect(options.enabledTools).not.toContain('web_search');
+          expect(options.sessionDisabledTools).toEqual(expect.arrayContaining(persistedDenials));
+          expect(deps.agentStore).toBeUndefined();
+          expect(deps.dagDispatcher).toBeUndefined();
+        } else {
+          expect(options.enabledTools).toContain('web_search');
+          expect(options.sessionDisabledTools).toEqual([]);
+          expect(deps.agentStore).toBeDefined();
+          expect(deps.dagDispatcher).toBeDefined();
+        }
+      }
+    );
+
+    it('records an unpinned surface profile for later continuations', async () => {
+      const { resolve } = await registry();
+      const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(sessionRepository.findById).mockResolvedValue({ ...baseSession, surface: 'fixture-surface' } as never);
+      const persistGates = vi
+        .spyOn(agentExecutionRepository, 'persistResolvedMementoGates')
+        .mockResolvedValue(undefined as never);
+      try {
+        const { handler } = await import('./agentExecutor');
+        await handler(
+          {
+            executionId: 'exec-1',
+            userId: 'user-1',
+            sessionId: 'session-1',
+            query: 'q',
+            model: 'claude-sonnet-5',
+            connectionId: 'conn-1',
+          },
+          lambdaContext
+        );
+      } finally {
+        persistGates.mockRestore();
+      }
+
+      expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(agentExecutionRepository.persistProfileDeniedTools).toHaveBeenCalledExactlyOnceWith('exec-1', [], false);
+    });
+
+    it('falls through to the default profile on a surface with none registered, still guarding tools', async () => {
+      const { resolve, guard } = await registry();
+      await runWithSession({ ...baseSession, surface: 'unregistered-surface' });
+
+      expect(resolve.mock.results[0].value).toBeUndefined();
+      expect(guard).toHaveBeenCalledTimes(1);
     });
   });
 });

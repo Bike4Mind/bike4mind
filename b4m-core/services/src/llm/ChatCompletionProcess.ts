@@ -52,12 +52,18 @@ import {
   tokenEstimateMultiplier,
   pairDataLakeTools,
   isClaudeModelId,
+  REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
+  createReasoningWithholder,
+  reasoningChannelOf,
+  withholdsReasoning,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
+import { fallbackThinkingVisibility } from '../thinkingVisibility';
 import {
   BadRequestError,
   buildAndSortMessages,
@@ -118,12 +124,13 @@ import {
   toRetrievalFilter,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
-import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
+import { sentBelowReasoningFloor, sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import {
   resolveOutputMaxTokens,
   reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
+  withFederatedSharedKeys,
   type ICompletionOptions,
   PipelineTimer,
   resolveDeprecatedModelId,
@@ -172,12 +179,13 @@ import {
   ELISION_NAME_MAX,
 } from './elisionStamp';
 import { buildEarlyStopStamp, buildIncompleteAnswerNotice, usageEventStatusForFinish } from './earlyStopStamp';
+import { logLlmUsageSettled } from './llmUsageSettledLog';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
-import { getEffectiveLLMApiKeys } from '../apiKeyService';
+import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
@@ -221,6 +229,7 @@ import {
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
   relocatePerTurnContext,
+  resolveIdentityReminder,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
@@ -287,6 +296,7 @@ import {
   libraryFlagForScope,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
+import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 const THROTTLE_INTERVAL = 100;
 const DISABLE_SERVER_THROTTLING = process.env.DISABLE_SERVER_THROTTLING === 'true';
@@ -553,6 +563,28 @@ export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
  */
 export const FORCE_STREAM_STALL_TEST_MARKER = '[[force-stream-stall]]';
 
+/**
+ * Whether `current_model_details` must not be offered to `model`. A model that cannot call tools
+ * keeps its identity line (unset counts as unsupported, matching canServeChat in the fallback
+ * selector). Alone, the tool would make a plain turn carry tools: the 5.4 family then loses
+ * reasoning_effort on chat completions, and the rest of the set moves onto the Responses
+ * transport, as does a dispatch profile with toolTransport 'responses' (the adapter honours it first:
+ * openaiBackend usesResponsesToolTransport). Shared by the primary-turn trim and the per-hop fallback
+ * override so they cannot drift.
+ */
+function withholdIdentityTool(
+  model: { id: string; supportsTools?: boolean; dispatchProfile?: { toolTransport?: string } },
+  toolNames: string[]
+): boolean {
+  return (
+    !model.supportsTools ||
+    ((REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model.id) ||
+      model.dispatchProfile?.toolTransport === 'responses') &&
+      toolNames.length === 1 &&
+      toolNames[0] === CURRENT_MODEL_DETAILS_TOOL_NAME)
+  );
+}
+
 export { isRequestTimeoutError, isStreamIdleTimeoutError };
 
 /**
@@ -806,10 +838,10 @@ export function attachmentHasIndexedContent(
 
 /**
  * Tools this process auto-adds server-side regardless of user selection. Three auto-add sites
- * feed this: the request-parse method (navigate_view), the conditional blog/skill/data-lake gate in
- * `process()` (blog_publish/blog_edit/blog_draft, skill, and the DATA_LAKE_TOOL_NAMES trio - each on
- * its own intent/catalog signal, see `shouldOfferBlogTools`/`shouldOfferSkillTool`/
- * `shouldOfferDataLakeTools`), and `resolveEnabledTools` (the
+ * feed this: the request-parse method (navigate_view and current_model_details), the conditional
+ * blog/skill/data-lake gate in `process()` (blog_publish/blog_edit/blog_draft, skill, and the
+ * DATA_LAKE_TOOL_NAMES trio - each on its own intent/catalog signal, see `shouldOfferBlogTools`/
+ * `shouldOfferSkillTool`/`shouldOfferDataLakeTools`), and `resolveEnabledTools` (the
  * attached-knowledge offer). Small local (Ollama) models get confused by tools they didn't ask
  * for, so the names in this list are trimmed for that backend unless the user explicitly enabled
  * them. Keep this list in sync with those auto-add sites.
@@ -825,6 +857,7 @@ export const AUTO_ADDED_TOOL_NAMES = [
   'blog_publish',
   'blog_edit',
   'navigate_view',
+  CURRENT_MODEL_DETAILS_TOOL_NAME,
   'skill',
   ...DATA_LAKE_TOOL_NAMES,
 ];
@@ -837,6 +870,7 @@ export const AUTO_ADDED_TOOL_NAMES = [
  * holder has and the rest is reported as writtenOffCredits: uncollected revenue
  * the usage event must surface so margin reporting doesn't count a phantom
  * collection. Best effort: the balance snapshot predates concurrent spend.
+ * Applied to organizations only; see computeHolderSettlement.
  */
 export function computeSettlementDelta(
   reservedCredits: number,
@@ -849,6 +883,44 @@ export function computeSettlementDelta(
   if (-delta <= available) return { delta, writtenOffCredits: 0 };
   // `available > 0 ? ...` avoids returning -0 when the balance is empty.
   return { delta: available > 0 ? -available : 0, writtenOffCredits: -delta - available };
+}
+
+/**
+ * The settlement a holder gets. Only a personal account is charged into debt; any other holder keeps
+ * computeSettlementDelta's zero floor (an organization's balance is a hard stop by design, #1238).
+ * A personal account is charged the shortfall in full,
+ * with one atomic $inc that may take the balance below zero: nothing is written off, turns settling
+ * concurrently each debit the live balance so the debt is exact however many were in flight, and
+ * the pre-flight hold ($inc, then reject below zero) refuses every later turn until a top-up clears
+ * it. Same contract as cliCompletions.ts, which never clamped.
+ */
+export function computeHolderSettlement(
+  ownerType: CreditHolderType,
+  reservedCredits: number,
+  totalCreditsUsed: number,
+  availableCredits: number
+): { delta: number; writtenOffCredits: number } {
+  if (ownerType !== CreditHolderType.User) {
+    return computeSettlementDelta(reservedCredits, totalCreditsUsed, availableCredits);
+  }
+  return { delta: reservedCredits - totalCreditsUsed, writtenOffCredits: 0 };
+}
+
+/**
+ * Warns when a shortfall settlement left the holder owing credits (see computeHolderSettlement). A
+ * refund that lands on a balance a sibling turn already took negative adds no debt and stays quiet.
+ */
+export function warnOnSettlementDebt(
+  logger: Logger,
+  holder: Pick<ICreditHolder, 'currentCredits'> | null,
+  context: { questId: string; ownerId: string; ownerType: CreditHolderType; reserved: number; used: number }
+): void {
+  if (!holder || holder.currentCredits >= 0 || context.used <= context.reserved) return;
+  logger.warn('[BILLING_SHORTFALL_DEBT] Settlement exceeded the balance; holder owes credits until topped up', {
+    ...context,
+    shortfall: context.used - context.reserved,
+    balanceAfter: holder.currentCredits,
+  });
 }
 
 /** One model's share of a turn's usage, priced against the turn's credit reservation. */
@@ -971,6 +1043,10 @@ export class ChatCompletionProcess {
   public priorUserPrompts?: string[];
 
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
+  private getThinkingVisibility: IChatCompletionServiceOptions['getThinkingVisibility'];
+  private thinkingVisibilityPromise?: Promise<ThinkingVisibility>;
+  /** Reasoning characters kept out of the current attempt's replies, still billed on an abort. */
+  private withheldReasoningChars = 0;
   /** Set once the turn's model resolves; gates the deprecated remap and every fallback hop. */
   private modelAdmission?: ModelAdmission;
   private entitlementsResolved = false;
@@ -1113,6 +1189,7 @@ export class ChatCompletionProcess {
     this.workspaceSessionSettings = options.workspaceSessionSettings;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
+    this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
@@ -1172,6 +1249,20 @@ export class ChatCompletionProcess {
       })();
     }
     return this.entitlementKeysPromise;
+  }
+
+  /** The caller's thinking visibility, resolved once per process. */
+  public resolveThinkingVisibility(): Promise<ThinkingVisibility> {
+    this.thinkingVisibilityPromise ??= (async (): Promise<ThinkingVisibility> => {
+      if (!this.getThinkingVisibility) return 'raw';
+      try {
+        return await this.getThinkingVisibility(this.user);
+      } catch (err) {
+        this.logger.warn(`Thinking visibility resolution failed; using the free level: ${(err as Error)?.message}`);
+        return fallbackThinkingVisibility({ adminSettings: this.db.adminSettings });
+      }
+    })();
+    return this.thinkingVisibilityPromise;
   }
 
   private entitlementResolution(): EntitlementResolution {
@@ -1730,6 +1821,8 @@ export class ChatCompletionProcess {
       if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
         finalEnabledTools.push('navigate_view');
       }
+      if (!finalEnabledTools.includes(CURRENT_MODEL_DETAILS_TOOL_NAME))
+        finalEnabledTools.push(CURRENT_MODEL_DETAILS_TOOL_NAME);
     }
 
     // Auto-add Lattice tools when Lattice feature is enabled
@@ -1801,8 +1894,8 @@ export class ChatCompletionProcess {
     if (amount <= 0 || !ownerId) return;
     this.reservedCredits = 0;
     // Bump the holder in the same synchronous step as the claim, before the refund awaits: a run
-    // that later reaches settlement reads this snapshot, and a stale one (still holding the
-    // reservation-reduced balance) would floor the whole debit at zero. Kept, not nulled, so the
+    // that later reaches settlement reads this snapshot, and on an org holder a stale one (still
+    // holding the reservation-reduced balance) would floor the whole debit at zero. Kept, not nulled, so the
     // settlement can charge against the restored balance.
     if (this.reservedCreditHolder) this.reservedCreditHolder.currentCredits += amount;
     try {
@@ -1865,6 +1958,8 @@ export class ChatCompletionProcess {
       return;
     }
 
+    // Started now so its reads overlap context assembly instead of delaying the first token.
+    void this.resolveThinkingVisibility();
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
     const {
       parsedBody,
@@ -2433,7 +2528,10 @@ export class ChatCompletionProcess {
       // without this the find returns undefined and the run dies with "Invalid LLM backend".
       const resolvedModelId = resolveDeprecatedModelId(model, 'ChatCompletionProcess');
       const modelInfo = models.find(m => m.id === resolvedModelId);
-      const llm = getLlmByModel(apiKeyTable, {
+      // Reuse trusted federation provenance across primary and fallback chat backends.
+      // Direct-SDK consumers below keep the original static key table.
+      const chatApiKeyTable = withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable));
+      const llm = getLlmByModel(chatApiKeyTable, {
         modelInfo,
         logger,
         endUserId: this.user.id,
@@ -2452,6 +2550,7 @@ export class ChatCompletionProcess {
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
       await this.modelAdmission.assert(modelInfo.id);
+      const servingModel = { current: modelInfo };
       // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
       // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
       if (quest.promptMeta && resolvedModelId !== model) {
@@ -2836,6 +2935,20 @@ export class ChatCompletionProcess {
         modelInfo,
         modelMaxOutputTokens: modelMaxOutput,
       });
+      const reasoningShortfall = sentBelowReasoningFloor({
+        requested: params.max_tokens,
+        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+        modelInfo,
+        modelMaxOutputTokens: modelMaxOutput,
+        thinking: params.thinking,
+      });
+      if (reasoningShortfall) {
+        // Honored as set; logged so an empty reply at max_tokens can be traced to the setting.
+        logger.info('[ChatCompletion] max_tokens below reasoning floor', {
+          model: modelInfo.id,
+          ...reasoningShortfall,
+        });
+      }
       // Reserve the non-history overhead that shares this budget before applying the
       // fraction, so heavier-payload turns (more tools, a longer running summary, a
       // large prompt) compact SOONER rather than overflowing first - this is the
@@ -3340,6 +3453,7 @@ export class ChatCompletionProcess {
 
       let allTools = toolBuilder.buildTools({
         enabledTools,
+        servingModel,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
         // `enabledTools` filter without ever being named - so a caller that suppressed our
         // additions gets them suppressed here too. This is what makes an empty tool profile
@@ -3377,6 +3491,7 @@ export class ChatCompletionProcess {
         apiKeyTable,
         getAbortSignal: () => abortSignalHolder.signal,
         thinking: thinking ? { enabled: thinking.enabled, budget_tokens: thinking.budget_tokens ?? 16000 } : undefined,
+        thinkingVisibility: await this.resolveThinkingVisibility(),
         agentStore,
         externalTools,
         toolAvailability,
@@ -3423,6 +3538,16 @@ export class ChatCompletionProcess {
             `🔧 [Tools] Trimmed ${before - allTools.length} auto-added tool(s) for local model ${modelInfo.id}`
           );
         }
+      }
+
+      if (
+        allTools &&
+        withholdIdentityTool(
+          modelInfo,
+          allTools.map(t => t.toolSchema.name)
+        )
+      ) {
+        allTools = allTools.filter(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME);
       }
 
       const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
@@ -4441,7 +4566,9 @@ export class ChatCompletionProcess {
           await reservationMethods.incrementCredits(reservationOwnerId, requiredCredits);
           const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + requiredCredits;
           const errorMessage = buildInsufficientCreditsMessage({
-            available: actualBalance,
+            // Only a balance that was already negative before this hold is debt; otherwise a
+            // sibling hold still in flight is what pushed it below zero.
+            available: reservationUserCredits < 0 ? actualBalance : Math.max(0, actualBalance),
             required: requiredCredits,
             organizationName: organization?.name,
           });
@@ -4649,9 +4776,8 @@ export class ChatCompletionProcess {
               }
             : undefined,
         tools: allTools,
-        // raw promises an empty system parameter; the adapters append a model-identity
-        // line on their own, so the promise has to be threaded down to them.
-        ...(promptMode === 'raw' ? { omitIdentityReminder: true } : {}),
+        // The adapters append a model-identity line on their own; see resolveIdentityReminder.
+        ...resolveIdentityReminder({ promptMode, offeredToolNames }),
       };
 
       // Create an AbortController to allow cancelling the request. Set up before the Research
@@ -4751,12 +4877,19 @@ export class ChatCompletionProcess {
         const researchResults = await researchModeService.processResearchMode(
           researchMode,
           outboundMessages,
-          options as ICompletionOptions,
+          // Each configuration runs on its own model: the tool is bound to the primary's serving
+          // model, so withhold it and let every adapter keep naming its own model.
+          {
+            ...options,
+            tools: allTools?.filter(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME),
+            identityViaTool: false,
+          } as ICompletionOptions,
           async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
             // Handle streaming for each configuration
             this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);
           },
-          abortController.signal
+          abortController.signal,
+          await this.resolveThinkingVisibility()
         );
 
         // Update quest with Research Mode results. A Stop makes the cancellation watcher
@@ -4779,6 +4912,20 @@ export class ChatCompletionProcess {
           );
           // A no-op once settled; a settlement that failed before moving the balance refunds the hold.
           await this.releaseReservedCredits(questId, logger);
+        }
+
+        if (!adminSettingsEnforceCredits) {
+          for (const usage of researchModeUsages(researchResults, models, inputTokens)) {
+            logLlmUsageSettled({
+              backend: usage.modelInfo.backend,
+              model: usage.modelInfo.id,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              usd: getTextModelCost(usage.modelInfo, usage.inputTokens, usage.outputTokens),
+              source: 'chat',
+              accountCreatedAt: this.user.createdAt,
+            });
+          }
         }
 
         // This early return skips the normal-path cleanup below, so drop the controller entry
@@ -5030,11 +5177,29 @@ export class ChatCompletionProcess {
               );
             }
 
+            // Per attempt: a fallback hop restarts the stream and can change the answering model.
+            const reasoningWithholder = withholdsReasoning(await this.resolveThinkingVisibility(), currentModel.id)
+              ? createReasoningWithholder(reasoningChannelOf(currentModel))
+              : null;
+            this.withheldReasoningChars = 0;
+            let lastStreamIndex = 0;
+
             await currentLlm.complete(
               currentModel.id,
               outboundMessages,
               {
                 ...options,
+                // A fallback hop gets its identity line back wherever the primary turn would have.
+                ...(options.identityViaTool &&
+                withholdIdentityTool(
+                  currentModel,
+                  (options.tools ?? []).map(t => t.toolSchema.name)
+                )
+                  ? {
+                      tools: options.tools?.filter(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME),
+                      identityViaTool: false,
+                    }
+                  : {}),
                 // Per attempt: a fallback hop must name the model that actually serves it.
                 modelDisplayName: currentModel.name,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
@@ -5157,8 +5322,14 @@ export class ChatCompletionProcess {
                   visibleCharsAtLastToolCall = countVisibleChars(quest.replies);
                 }
 
-                streamedTexts.forEach((text, index) => {
+                streamedTexts.forEach((streamedText, index) => {
+                  if (!streamedText) return;
+                  const text = reasoningWithholder
+                    ? reasoningWithholder.visible(streamedText, completionInfo?.channel)
+                    : streamedText;
+                  this.withheldReasoningChars += streamedText.length - text.length;
                   if (!text) return;
+                  lastStreamIndex = index;
                   appendStreamedChunk(replies, text, index, transitionMode);
                   quest.replies = Object.values(replies);
                   // Send message to the client for each received streamed message
@@ -5214,6 +5385,13 @@ export class ChatCompletionProcess {
                 if (completionInfo?.stopReason != null) actualTokenUsage.stopReason = completionInfo.stopReason;
               }
             );
+            const heldText = reasoningWithholder?.flush();
+            if (heldText) {
+              this.withheldReasoningChars -= heldText.length;
+              appendStreamedChunk(replies, heldText, lastStreamIndex, transitionMode);
+              quest.replies = Object.values(replies);
+              smartSend();
+            }
             // Completion succeeded
             completionSuccess = true;
             logger.info(
@@ -5404,7 +5582,7 @@ export class ChatCompletionProcess {
                 currentModel,
                 fallbackModelId,
                 models,
-                apiKeyTable,
+                chatApiKeyTable,
                 logger,
                 {
                   // A timeout that reaches here has spent its one same-model retry. triedModelIds
@@ -5413,7 +5591,8 @@ export class ChatCompletionProcess {
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
-                  requireTools: !!options.tools?.length,
+                  // the identity tool alone does not need a tool-capable fallback
+                  requireTools: !!options.tools?.some(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME),
                   isAdmitted: this.modelAdmission?.admits,
                 }
               );
@@ -5427,6 +5606,7 @@ export class ChatCompletionProcess {
               // Update to the fallback model
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
+              servingModel.current = currentModel;
               if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;
@@ -5995,6 +6175,17 @@ export class ChatCompletionProcess {
           estimatedCost,
           creditsUsed: textCreditsUsed,
         };
+        logLlmUsageSettled({
+          backend: currentModel.backend,
+          model: currentModel.id,
+          inputTokens: settledInputTokens,
+          outputTokens: settledOutputTokens,
+          cacheReadTokens: cacheReadInputTokens,
+          cacheWriteTokens: cacheCreationInputTokens,
+          usd: estimatedCost,
+          source: 'chat',
+          accountCreatedAt: this.user.createdAt,
+        });
 
         // Drift detection: log when our tokenizer diverges substantially from what
         // the provider reports. With provider-basis settlement this no longer
@@ -6136,7 +6327,8 @@ export class ChatCompletionProcess {
           this.reservedCredits = 0;
           this.reservationBasis = null;
           const { delta: settlementDelta, writtenOffCredits } = this.reservedCreditsOwnerId
-            ? computeSettlementDelta(
+            ? computeHolderSettlement(
+                this.reservedCreditsOwnerType,
                 reservedAtSettlement,
                 totalCreditsUsed,
                 this.reservedCreditHolder?.currentCredits ?? 0
@@ -6205,8 +6397,8 @@ export class ChatCompletionProcess {
             });
 
           try {
-            // Reconcile on the pre-computed, zero-floored delta (see
-            // computeSettlementDelta for the clamp semantics).
+            // Reconcile on the pre-computed delta (see computeHolderSettlement for which
+            // holders are floored at zero and which are charged into debt).
             const delta = settlementDelta;
             let reconciledHolder: ICreditHolder | null = this.reservedCreditHolder;
 
@@ -6219,6 +6411,13 @@ export class ChatCompletionProcess {
               logger.info(
                 `Credits reconciled for quest ${quest.id}: reserved=${reservedAtSettlement}, actual=${totalCreditsUsed}, delta=${delta}`
               );
+              warnOnSettlementDebt(logger, reconciledHolder, {
+                questId: quest.id,
+                ownerId: this.reservedCreditsOwnerId,
+                ownerType: this.reservedCreditsOwnerType,
+                reserved: reservedAtSettlement,
+                used: totalCreditsUsed,
+              });
             }
 
             // Record audit-trail transactions with skipBalanceUpdate (balance already settled)
@@ -6927,8 +7126,8 @@ export class ChatCompletionProcess {
   /**
    * Settle the turn's credit reservation against `usages` (plus `toolCredits`, the tool charges the
    * turn reserved) outside the normal completion path (a Research-mode turn, or one ended by a thrown
-   * abort): the balance moves by the reservation's difference from the usage, floored at zero like
-   * the main settlement (computeSettlementDelta), and each usage gets its ledger row and usage event.
+   * abort): the balance moves by the reservation's difference from the usage, settled like the main
+   * settlement (computeHolderSettlement), and each usage gets its ledger row and usage event.
    * The reservation is claimed before the first await, like the main settlement, so a caller's
    * releaseReservedCredits cannot refund it as well; a hold that was already released settles at
    * the full actual. A failed balance update restores the claim for the caller's rollback to refund.
@@ -6959,7 +7158,8 @@ export class ChatCompletionProcess {
       return { ...usage, costUsd, credits: usdToCreditsStochastic(costUsd) };
     });
     const totalCredits = priced.reduce((sum, usage) => sum + usage.credits, 0) + toolCredits;
-    const { delta, writtenOffCredits } = computeSettlementDelta(
+    const { delta, writtenOffCredits } = computeHolderSettlement(
+      ownerType,
       reserved,
       totalCredits,
       this.reservedCreditHolder?.currentCredits ?? 0
@@ -6976,10 +7176,22 @@ export class ChatCompletionProcess {
       }
     }
     logger.info(`Credits settled for quest ${quest.id}: reserved=${reserved}, actual=${totalCredits}, delta=${delta}`);
+    warnOnSettlementDebt(logger, holder, { questId: quest.id, ownerId, ownerType, reserved, used: totalCredits });
     this.reservedCreditHolder = null;
     quest.creditsUsed = totalCredits;
 
     for (const usage of priced) {
+      logLlmUsageSettled({
+        backend: usage.modelInfo.backend,
+        model: usage.modelInfo.id,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadInputTokens,
+        cacheWriteTokens: usage.cacheCreationInputTokens,
+        usd: usage.costUsd,
+        source: 'chat',
+        accountCreatedAt: this.user.createdAt,
+      });
       this.db.usageEvents
         ?.record({
           requestId: quest.id,
@@ -7069,10 +7281,12 @@ export class ChatCompletionProcess {
   ): Promise<void> {
     const basis = this.reservationBasis;
     if (!basis) return;
-    const streamedChars = (quest.replies?.length ? quest.replies : [quest.reply ?? '']).reduce(
-      (sum, reply) => sum + (reply?.length ?? 0),
-      0
-    );
+    const streamedChars =
+      this.withheldReasoningChars +
+      (quest.replies?.length ? quest.replies : [quest.reply ?? '']).reduce(
+        (sum, reply) => sum + (reply?.length ?? 0),
+        0
+      );
     const reported = basis.reported ?? {};
     const cacheReadInputTokens = reported.cacheReadInputTokens ?? 0;
     const cacheCreationInputTokens = reported.cacheCreationInputTokens ?? 0;
@@ -7319,7 +7533,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     } catch (error) {
       logger.warn(`Background admin settings fetch failed after ${Date.now() - adminSettingsStartTime}ms:`, error);
       // A stale-but-real map beats fabricated defaults here: getDefaultAdminSettings() hardcodes
-      // enforceCredits 'true', which would charge a deployment whose admin turned metering off.
+      // enforceCredits 'true', which would charge a self-host deployment whose admin turned metering off.
       // Fall back to the cached map, and to the defaults only when there is no cached map either.
       try {
         return await getSettingsMap(this.db, { logger });

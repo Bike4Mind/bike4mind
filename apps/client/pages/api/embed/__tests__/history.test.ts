@@ -14,7 +14,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/embedCors', () => ({ embedCors: () => () => {} }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 const mockVerifyEmbedSessionToken = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/embedSessionToken', () => ({ verifyEmbedSessionToken: mockVerifyEmbedSessionToken }));
@@ -140,5 +140,27 @@ describe('/api/embed/history', () => {
   it('refuses an origin outside the key allow-list', async () => {
     const { status } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'https://evil.example.com' });
     expect(status).toBe(403);
+  });
+
+  it('denies an opaque origin when the key restricts origins', async () => {
+    const { status, body } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'null' });
+    expect(status).toBe(403);
+    expect(body.error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('serves an opaque origin when the key has no allowed origins', async () => {
+    mockVerifyEmbedKeyById.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
+    const { status } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'null' });
+    expect(status).toBe(200);
+  });
+
+  it('serves an origin on the key allow-list', async () => {
+    const { status } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'https://host.example.com' });
+    expect(status).toBe(200);
+  });
+
+  it('still serves a request that carries no Origin header', async () => {
+    const { status } = await call('GET', { authorization: 'Bearer eyJ.tok' });
+    expect(status).toBe(200);
   });
 });

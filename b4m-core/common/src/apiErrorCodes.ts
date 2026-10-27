@@ -1,4 +1,5 @@
 export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
+export const API_KEY_TRUST_REQUIRED_ERROR_CODE = 'api_key_trust_required';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
 export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mismatch';
@@ -23,6 +24,8 @@ export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
 export const API_ERROR_CODES = [
   /** The user must revoke an active API key or wait for one to expire before minting another. */
   API_KEY_USER_CAP_ERROR_CODE,
+  /** The account is not yet trusted to mint (more) API keys; remediation is verifying email, waiting, purchasing or admin approval. */
+  API_KEY_TRUST_REQUIRED_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */
   AGENT_LIMIT_REACHED_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
@@ -85,7 +88,9 @@ export const API_ERROR_CODES = [
   'org_storage_limit_exceeded',
   /** The file is larger than the platform's per-file size limit. */
   'file_too_large',
-  // Completions tool search (POST /api/ai/v1/completions); see COMPLETION_TOOL_ERROR_CODES.
+  // Completions request errors (POST /api/ai/v1/completions).
+  /** The selected model cannot continue a final assistant message. */
+  'assistant_prefill_unsupported',
   /** A tool search server tool, `tool_reference` or tool search block was sent for a model that cannot serve it here. */
   'tool_search_unsupported',
   /** Every tool had `defer_loading: true` and no server tool was sent, so nothing would be loaded. */

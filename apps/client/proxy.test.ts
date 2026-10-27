@@ -79,6 +79,14 @@ describe('proxy CSP header', () => {
     expect(sources('connect-src')).toContain('https://www.facebook.com');
   });
 
+  it('allows the Turnstile script, widget frame and verification calls', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/login')).headers.get('Content-Security-Policy') ?? '';
+    const sources = (name: string) => (csp.match(new RegExp(`${name} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    for (const directive of ['script-src', 'frame-src', 'connect-src']) {
+      expect(sources(directive)).toContain('https://challenges.cloudflare.com');
+    }
+  });
+
   // connect-src too: the service worker's image cache re-fetches tiles, and a worker fetch is
   // checked against connect-src, so img-src alone leaves the map blank once the SW is active.
   it.each(['img-src', 'connect-src'])('%s allows the OpenStreetMap tiles the inline location map loads', directive => {
@@ -451,6 +459,39 @@ describe('proxy origin verification', () => {
     expect(response.status).toBe(200);
     expect(response.forwardedRequestHeaders).toBeUndefined();
   });
+
+  it('removes unverified fingerprint headers without refusing access', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', '');
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'cloudfront-viewer-ja4-fingerprint': 'client-supplied',
+      })
+    ) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders?.has('cloudfront-viewer-ja4-fingerprint')).toBe(false);
+  });
+
+  it('preserves a fingerprint only after origin verification', () => {
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'x-b4m-origin-verify': SECRET,
+        'cloudfront-viewer-ja4-fingerprint': 'synthetic',
+      })
+    ) as unknown as Forwarded;
+    expect(response.forwardedRequestHeaders?.get('cloudfront-viewer-ja4-fingerprint')).toBe('synthetic');
+  });
+
+  it('strips the fingerprint on self-host even after origin verification', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'x-b4m-origin-verify': SECRET,
+        'cloudfront-viewer-ja4-fingerprint': 'synthetic',
+      })
+    ) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders?.has('cloudfront-viewer-ja4-fingerprint')).toBe(false);
+  });
 });
 
 describe('proxy server-action probes', () => {
@@ -562,6 +603,38 @@ describe('proxy configured object-store origin', () => {
   it.each(['/api/files', '/p/example', '/embed/chat'])('preserves policy exclusions for %s', path => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
     expect(proxy(makeRequest(`https://app.example.invalid${path}`)).headers.get('Content-Security-Policy')).toBeNull();
+  });
+});
+
+// The owner's management listing shows thumbnails as presigned GETs on the published-artifacts
+// bucket (server/services/publish/thumbnailUrl.ts). img-src governs the <img>; connect-src governs
+// the service worker's image-cache re-fetch. A policy that narrows either drops them silently.
+describe('proxy CSP admits owner-only artifact thumbnail links', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const admits = (csp: string, directive: string, url: string) => {
+    const { protocol, host, origin } = new URL(url);
+    const sources = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').trim().split(/\s+/);
+    return sources.some(source => {
+      if (source === origin) return true;
+      const wildcard = /^(https?:)\/\/\*\.([^/]+)$/.exec(source);
+      return !!wildcard && wildcard[1] === protocol && host.endsWith(`.${wildcard[2]}`);
+    });
+  };
+  const thumbnailPath = `/publish-thumbnails/pub1/${'a'.repeat(64)}.webp?X-Amz-Signature=fixture`;
+
+  it.each(['img-src', 'connect-src'])('%s admits a hosted presigned S3 link', directive => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const csp = proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy') ?? '';
+    expect(admits(csp, directive, `https://example-bucket.s3.us-east-1.amazonaws.com${thumbnailPath}`)).toBe(true);
+  });
+
+  it.each(['img-src', 'connect-src'])('%s admits a self-host object-store link', directive => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
+    const csp = proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy') ?? '';
+    expect(admits(csp, directive, `https://objects.example.invalid/example-bucket${thumbnailPath}`)).toBe(true);
   });
 });
 

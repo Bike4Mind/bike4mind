@@ -25,7 +25,7 @@ const limiter = vi.hoisted(() => ({
   // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
   handle: (_req: any, _res: any, next: any) => next(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: { limit: number; windowMs: number }) => {
     limiter.built.push(options);
     // any: as above.

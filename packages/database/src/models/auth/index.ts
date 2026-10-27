@@ -1,6 +1,7 @@
 export * from './ApiKeyAlertModel';
 export * from './ApiKeyModel';
 export * from './ApiKeyUsageLogModel';
+export * from './AuthEventModel';
 export * from './AuthFailLogModel';
 export * from './AuthSessionModel';
 export * from './BlockedIPModel';
@@ -8,6 +9,8 @@ export * from './CcBridgeDeviceModel';
 export * from './CcBridgePairingTokenModel';
 export * from './DeviceAuthorizationModel';
 export * from './IdentityProviderModel';
+export * from './networkMetaFields';
+export * from './signupFingerprintClusters';
 export * from './OAuthAuthorizationCodeModel';
 export * from './OAuthClientModel';
 export * from './oauthClientAdmin';

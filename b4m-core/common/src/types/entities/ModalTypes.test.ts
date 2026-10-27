@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { getModalVideoErrors, isAllowedModalMediaUrl, MODAL_MEDIA_URL_HINT, ModalVideoSchema } from './ModalTypes';
+import {
+  createModalStillImageSchema,
+  getModalStillImageErrors,
+  getModalVideoErrors,
+  isAllowedModalMediaUrl,
+  MODAL_MEDIA_URL_HINT,
+  ModalVideoSchema,
+} from './ModalTypes';
 
 const S3 = 'https://bucket.s3.us-east-2.amazonaws.com/modals';
 
@@ -71,5 +78,31 @@ describe('ModalVideoSchema', () => {
     });
     expect(result.success).toBe(false);
     expect(result.error?.issues.map(i => i.path)).toEqual([['landscapeUrl'], ['portraitPosterUrl']]);
+  });
+});
+
+describe('getModalStillImageErrors', () => {
+  it('is empty for a valid or missing image', () => {
+    expect(getModalStillImageErrors(null)).toEqual({});
+    expect(getModalStillImageErrors({ landscapeUrl: `${S3}/s.png`, portraitUrl: null })).toEqual({});
+  });
+
+  it('flags a disallowed host on each field', () => {
+    expect(
+      getModalStillImageErrors({
+        landscapeUrl: 'https://evil.example.com/s.png',
+        portraitUrl: 'http://d111.cloudfront.net/t.png',
+      })
+    ).toEqual({ landscapeUrl: MODAL_MEDIA_URL_HINT, portraitUrl: MODAL_MEDIA_URL_HINT });
+  });
+});
+
+describe('createModalStillImageSchema', () => {
+  it('accepts a deployment origin and reports each problem on its field', () => {
+    const schema = createModalStillImageSchema({ extraOrigins: ['http://minio.local:9000'] });
+    expect(schema.safeParse({ landscapeUrl: 'http://minio.local:9000/modals/s.png' }).success).toBe(true);
+    const bad = schema.safeParse({ portraitUrl: 'https://evil.example.com/t.png' });
+    expect(bad.success).toBe(false);
+    expect(bad.error?.issues[0].path).toEqual(['portraitUrl']);
   });
 });

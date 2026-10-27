@@ -13,7 +13,9 @@ import {
 } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { Types } from 'mongoose';
 import { z } from 'zod';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { validateTemplate } from '@bike4mind/server-utils/services/liveopsTriagePrompt';
@@ -197,7 +199,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       // Audit log for SOC2 compliance - track changes
       const changes: Record<string, ILiveopsTriageConfigFieldChange> = {};
       for (const key of Object.keys(data) as Array<keyof typeof data>) {
-        const oldValue = existingConfig[key as keyof typeof existingConfig];
+        const rawOld = existingConfig[key as keyof typeof existingConfig];
+        // ObjectId fields on the hydrated doc must compare equal to their string form in the body
+        const oldValue = rawOld instanceof Types.ObjectId ? rawOld.toString() : rawOld;
         const newValue = data[key];
         if (oldValue !== newValue && newValue !== undefined) {
           changes[key] = { old: oldValue, new: newValue };
@@ -218,6 +222,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         userName: req.user.username ?? req.user.email ?? 'Unknown',
         changes: Object.keys(changes).length > 0 ? changes : undefined,
       });
+
+      if (Object.keys(changes).length > 0) {
+        await recordAdminActionFromRequest(req, {
+          action: 'ops.triage_config.updated',
+          target: { kind: 'settings', id, displayName: updatedConfig.name },
+          summary: `updated triage config ${updatedConfig.name}`,
+          details: { operation: action, changedFields: Object.keys(changes) },
+        });
+      }
 
       return res.json(updatedConfig);
     } catch (error) {
@@ -275,6 +288,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         action: 'delete',
         userId: req.user.id,
         userName: req.user.username ?? req.user.email ?? 'Unknown',
+      });
+
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.triage_config.deleted',
+        target: { kind: 'settings', id, displayName: configToDelete.name },
+        summary: `deleted triage config ${configToDelete.name}`,
       });
 
       return res.json({ success: true, message: 'Config deleted successfully' });

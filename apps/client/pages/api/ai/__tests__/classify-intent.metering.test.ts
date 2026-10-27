@@ -44,7 +44,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return api;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/database', async () => ({
@@ -140,9 +140,9 @@ vi.mock('@bike4mind/services/llm/intentClassifier', () => ({
 const { default: handler } = await import('@pages/api/ai/classify-intent');
 const { CascadeExhaustedError } = await import('@bike4mind/services/llm/intentClassifier');
 
-async function call() {
+async function call(user: Record<string, unknown> = { id: 'u1' }) {
   const { req, res } = createMocks({ method: 'POST', body: { message: 'what is the weather in Paris?' } });
-  Object.assign(req, { user: { id: 'u1' }, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() } });
+  Object.assign(req, { user, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() } });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
   return res;
@@ -385,6 +385,25 @@ describe('POST /api/ai/classify-intent metering', () => {
     expect(m.complete).not.toHaveBeenCalled();
     expect(m.hold).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
+  });
+
+  it('rejects a moderated user with 403 even when the answer is cached', async () => {
+    m.cached.mockResolvedValue({
+      useAgent: true,
+      confidence: 0.9,
+      reason: 'needs live data',
+      signals: [],
+      classifierModel: 'ops-model',
+      latencyMs: 1,
+      cacheHit: true,
+      earlyExited: false,
+      usage: [],
+    });
+
+    await expect(call({ id: 'u1', isModerated: true })).rejects.toMatchObject({ statusCode: 403 });
+    expect(m.cached).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+    expect(m.hold).not.toHaveBeenCalled();
   });
 
   it('refunds instead of settling a zero-cost classification', async () => {

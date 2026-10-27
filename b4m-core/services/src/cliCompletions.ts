@@ -32,9 +32,17 @@ import {
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   completionsSupportsToolSearch,
+  supportsAssistantPrefill,
+  ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
   isClaudeModelId,
   type CreditHoldRecord,
   type ICacheStrategy,
+  type ThinkingVisibility,
+  createReasoningWithholder,
+  reasoningChannelOf,
+  type ReasoningWithholder,
+  providerSummarizesReasoning,
+  withholdsReasoning,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -58,6 +66,7 @@ import {
   isModelProviderConfigured,
   isAdaptiveThinkingByDefault,
 } from '@bike4mind/llm-adapters';
+import { sentBelowReasoningFloor } from '@bike4mind/llm-adapters/model-sizing';
 import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
@@ -65,9 +74,11 @@ import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE }
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
+import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
 import { createModelAdmission, loadModelConfigurations } from './llm/modelAdmission';
-import { prepareWireTools } from './cliCompletionsToolSearch';
+import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+import { fallbackThinkingVisibility } from './thinkingVisibility';
 
 /** Persistence boundary: implementations commit each callback and its hold transition atomically. */
 export type CompletionCreditHolds = {
@@ -194,6 +205,8 @@ export interface CompletionParams {
   onReady?: () => void | Promise<void>;
   /** Entitlement resolver for model admission; omitted means tag-only access. */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
+  /** Resolved on the reloaded caller; omitted means `raw`. A failed resolution withholds. */
+  getThinkingVisibility?: (user: IUserDocument) => Promise<ThinkingVisibility>;
 }
 
 /**
@@ -410,6 +423,40 @@ function hasEffectiveConversationMessage(messages: IMessage[]): boolean {
   });
 }
 
+async function resolveCallerThinkingVisibility(
+  params: Pick<CompletionParams, 'getThinkingVisibility' | 'userId' | 'db'>,
+  actor: IUserDocument | null,
+  logger: Logger | undefined
+): Promise<ThinkingVisibility> {
+  if (!params.getThinkingVisibility) return 'raw';
+  try {
+    if (actor) return await params.getThinkingVisibility(actor);
+  } catch (error) {
+    logger?.warn?.('[cliCompletions] thinking visibility resolution failed; using the free level', {
+      userId: params.userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return fallbackThinkingVisibility({ adminSettings: params.db.adminSettings });
+}
+
+/**
+ * One frame with the caller-withheld reasoning removed. Anthropic thinking blocks ride client-tool
+ * frames so the caller can echo them unchanged on the next turn, which the provider requires; they
+ * are kept when the provider returns them summarized and dropped when they would carry the raw trace.
+ */
+export function withholdReasoningFromFrame(
+  withholder: ReasoningWithholder,
+  text: (string | null | undefined)[],
+  info: CompletionInfo | undefined,
+  model: string
+): { text: (string | null | undefined)[]; info: CompletionInfo | undefined } {
+  const visibleText = text.map(entry => (entry ? withholder.visible(entry, info?.channel) : entry));
+  if (!info?.thinking || providerSummarizesReasoning(model)) return { text: visibleText, info };
+  const { thinking: _withheld, ...rest } = info;
+  return { text: visibleText, info: rest };
+}
+
 /**
  * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
  */
@@ -501,6 +548,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
   }
 
+  // Modality is a property of the model, not its backend: an image/video model routed
+  // through a chat backend cannot be served by this text endpoint.
+  if (modelInfo && modelInfo.type !== 'text') {
+    throw new BadRequestError(
+      `Model '${params.model}' (type: ${modelInfo.type}) cannot be used for text completions.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
+
   // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
   const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
   const enforceCredits = getSettingsValue('enforceCredits', settings);
@@ -517,6 +573,17 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
   }).assert(model);
+  const withholdReasoning = withholdsReasoning(await resolveCallerThinkingVisibility(params, actor, logger), model);
+  const reasoningChannel = reasoningChannelOf(modelInfo ?? { id: model });
+  // Reasoning the caller may not see is not requested at all when the provider would return it raw.
+  const suppressThinking = withholdReasoning && reasoningChannel !== 'never' && !providerSummarizesReasoning(model);
+
+  if (modelInfo && !supportsAssistantPrefill(modelInfo) && hasAssistantPrefill(messages)) {
+    throw new BadRequestError(
+      `Model '${params.model}' does not support assistant message prefill. End the conversation with a user message.`,
+      { errorCode: ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE }
+    );
+  }
 
   const llm = getLlmByModel(apiKeys, {
     modelInfo,
@@ -599,12 +666,28 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
   // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
+  // DeepSeek reasons unless told not to, so withheld reasoning would still be billed.
   const thinking = withOllamaThinkingDefault(
-    options?.thinking?.enabled && modelInfo?.can_think
-      ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
-      : undefined,
+    suppressThinking && modelInfo?.backend === ModelBackend.DeepSeek
+      ? { enabled: false, budget_tokens: 0 }
+      : options?.thinking?.enabled && modelInfo?.can_think && !suppressThinking
+        ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
+        : undefined,
     modelInfo
   );
+  const reasoningShortfall =
+    modelInfo &&
+    sentBelowReasoningFloor({
+      requested: options?.maxTokens,
+      fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+      modelInfo,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+      thinking,
+    });
+  if (reasoningShortfall) {
+    // Honored as set; logged so an empty reply at max_tokens can be traced to the caller's budget.
+    logger?.info?.('[cliCompletions] max_tokens below reasoning floor', { model, ...reasoningShortfall });
+  }
 
   const requestTools = useServerTools ? params.serverTools! : (promotedTools ?? []);
   const cacheStrategy = buildClaudeCacheStrategy(modelInfo, messages, requestTools.length > 0, source);
@@ -612,11 +695,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // This path has no complexity classifier and clients rarely send an effort, so an adaptive Claude
   // that thinks unasked would run every request at the provider default (high on Opus 5). Any
   // explicit effort or thinking value from the client wins.
-  const reasoningEffort =
-    options?.reasoningEffort ??
-    (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(model, modelInfo)
-      ? 'medium'
-      : undefined);
+  const reasoningEffort = suppressThinking
+    ? undefined
+    : (options?.reasoningEffort ??
+      (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(model, modelInfo)
+        ? 'medium'
+        : undefined));
 
   const completionOptions: Partial<ICompletionOptions> = {
     temperature: options?.temperature,
@@ -798,6 +882,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       tierBasisTokens: finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens,
     });
 
+  const reasoningWithholder = withholdReasoning ? createReasoningWithholder(reasoningChannel) : null;
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -829,6 +914,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // only frame with `credits`, so a client reading credits sees exactly one number, and it is
     // the one the ledger charged. A provisional round-up here (usdToCredits, minimum 1) used to
     // precede a stochastic settlement of 0 on cheap calls, which read as a double charge.
+    if (reasoningWithholder) {
+      const withheld = withholdReasoningFromFrame(reasoningWithholder, text, info, model);
+      await onChunk(withheld.text, withheld.info);
+      return;
+    }
     await onChunk(text, info);
   };
 
@@ -839,6 +929,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   try {
     await params.onReady?.();
     await llm.complete(model, messages, completionOptions, wrappedOnChunk);
+    const heldText = reasoningWithholder?.flush();
+    if (heldText) await onChunk([heldText]);
   } catch (error) {
     if (params.abortSignal?.aborted && streamedOutputChars > 0) {
       abortError = error;
@@ -929,6 +1021,17 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   if (modelInfo) {
     finalUsdCost = settledUsdCost(modelInfo);
     finalCredits = usdToCreditsStochastic(finalUsdCost);
+    logLlmUsageSettled({
+      backend: modelInfo.backend,
+      model: modelInfo.id,
+      inputTokens: finalInputTokens,
+      outputTokens: finalOutputTokens,
+      cacheReadTokens: finalCacheReadTokens,
+      cacheWriteTokens: finalCacheCreationTokens,
+      usd: finalUsdCost,
+      source,
+      accountCreatedAt: storedActor?.createdAt,
+    });
 
     logger?.info?.(
       `[CLI_CREDITS] Sending final credits to client: ${finalCredits} credits (${finalInputTokens} input + ${finalOutputTokens} output tokens` +

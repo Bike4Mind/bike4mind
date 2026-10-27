@@ -46,7 +46,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `ReferralCreditsAmount` | **Two editors**: Growth and Pricing > Signup and starter credits, and Admin Settings > User Management > Referrals | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
 | `blockDisposableEmails` | Admin Settings > User Management > Credits System | `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), called from registration, the email-verified grant (`apps/client/server/auth/emailVerifiedGrants.ts`) and the OAuth starting-grant backfill. | no. Stops free-credit farming. | Signup and starter credits |
 | `blockedEmailDomains` | Admin Settings > User Management > Credits System | `isAdminBlockedEmailDomain` inside `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), so the same readers as `blockDisposableEmails`. Entries are normalized and validated on save in `apps/client/pages/api/settings/update.ts`. | no. Stops free-credit farming from domains the disposable list misses. | Signup and starter credits |
-| `syntheticUserEmailDomains` | Admin Settings > User Management > Credits System | Funnel analytics only (`apps/client/server/analytics/funnel.ts`). | no. Flags test accounts. | Signup and starter credits |
+| `syntheticUserEmailDomains` | Admin Settings > User Management > Credits System | Funnel analytics (`apps/client/server/analytics/funnel.ts`), and the reserved `persona-` username check (`b4m-core/services/src/userService/reservedUsername.ts`), which lets a verified email on one of these domains choose that prefix. | no. Flags test accounts. | Signup and starter credits |
 | `pricePerCredit` | Growth and Pricing > Credits and pricing | The per-credit Stripe purchase (`handlePerCreditTransaction` in `apps/client/lib/credits/utils.ts`, reached from `/api/stripe/start-payment`), the floor check on save (`apps/client/pages/api/settings/update.ts`) and `PaymentButton.tsx`. | yes, but only on the per-credit purchase path. No UI offers it today (every `PaymentButton` is a credit pack), and credit packs ignore this key. | Credit pricing and conversion |
 | `enforceCredits` | Growth and Pricing > Credits and pricing | 62 files. The credit gates on every billed path: chat completion and reservation (`apps/client/server/billing/reserveRequestCredits.ts`, `creditPreflight.ts`), image, music, video and generation jobs, voice sessions, embeddings, the agent executor in `apps/workers`, and `areCreditsEnforced` in `b4m-core/services/src/billing/isOperationalBillingEnabled.ts`; plus the credit UI (balance chip, composer, billing and credits modals). Default is off on self-host (`B4M_SELF_HOST`). | yes. Off means usage is not deducted from balances. | Credit pricing and conversion |
 | `billOperationalUsage` | Admin Settings > User Management > Credits System | `isOperationalBillingEnabled` and `recordOperationalUsage` (`b4m-core/services/src/billing/`), used by session preflight and lake semantic search. Lake research runs (`apps/workers/src/dataLakes/runLakeResearch.ts`) do not read it: they bill credits through `forceCreditBilling` whatever this key is set to. | yes. On also debits credits for background model and embedding spend (naming, summarization, tagging, KB search). | Credit pricing and conversion |
@@ -148,9 +148,10 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 
 </details>
 
-<details><summary><code>syntheticUserEmailDomains</code> (1 file)</summary>
+<details><summary><code>syntheticUserEmailDomains</code> (2 files)</summary>
 
 - `apps/client/server/analytics/funnel.ts`
+- `b4m-core/services/src/userService/reservedUsername.ts`
 
 </details>
 
@@ -268,7 +269,7 @@ No match outside the definition and tests.
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
-- `apps/client/lib/subscriptions/schema.ts`
+- `packages/server-utils/src/lib/subscriptions/schema.ts`
 - `apps/client/pages/api/admin/users/[userId]/grant-subscription.ts`
 - `apps/client/server/services/organizationService.ts`
 - `b4m-core/common/src/constants/organization.ts`
@@ -282,7 +283,7 @@ No match outside the definition and tests.
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/components/admin/OrganizationsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
-- `apps/client/lib/subscriptions/schema.ts`
+- `packages/server-utils/src/lib/subscriptions/schema.ts`
 - `apps/client/pages/api/admin/organizations/[id]/convert-to-paid.ts`
 - `apps/client/pages/api/admin/organizations/[id]/seats.ts`
 - `apps/client/pages/api/admin/organizations/grant.ts`

@@ -23,7 +23,7 @@ import {
   SubscriptionOwnerType,
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
-} from '@client/lib/subscriptions/types';
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
@@ -193,6 +193,7 @@ const OrganizationPage: FC = () => {
           onChange={(_, value) => requestTab(value as OrganizationTabs)}
         >
           <TabList
+            data-testid="organization-tabs"
             sx={{
               width: '240px',
               borderRight: '1px solid',

@@ -42,7 +42,7 @@ import AdminSettingsTab, { GROWTH_PRICING_ONLY_KEYS } from './AdminSettingsTab';
 import { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
-import { SEARCH_TERM_URL_DEBOUNCE_MS } from './useAdminSettingsSearchParams';
+import { SEARCH_TERM_URL_DEBOUNCE_MS } from './shared/useAdminListUrlState';
 
 /** The search the component's most recent navigate would produce from `previous`. */
 const lastWrittenSearch = (previous: SearchRecord) => {
