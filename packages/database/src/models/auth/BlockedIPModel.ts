@@ -60,8 +60,13 @@ export class BlockedIPRepository extends BaseRepository<IBlockedIPDocument> {
 
     const existing = await this.isBlocked(ip);
     if (existing) {
-      // Repeat blocks keep extending the window, without a new row or audit entry.
-      const refreshed = await this.model.findOneAndUpdate({ ip, active: true }, { expiresAt }, { new: true });
+      // Repeat blocks only ever extend the window (a short manual block must not cut an escalated
+      // auto block), without a new row or audit entry.
+      const refreshed = await this.model.findOneAndUpdate(
+        { ip, active: true, expiresAt: { $lt: expiresAt } },
+        { expiresAt },
+        { new: true }
+      );
       return { doc: refreshed ?? existing, created: false };
     }
 

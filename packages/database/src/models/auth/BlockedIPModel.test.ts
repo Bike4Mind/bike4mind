@@ -37,6 +37,17 @@ describe('BlockedIPRepository', () => {
     expect(await BlockedIP.countDocuments({ ip: '1.1.1.3' })).toBe(1);
   });
 
+  it('never shortens an active block when a shorter one is requested', async () => {
+    const { doc: auto } = await blockedIPRepository.block('1.1.1.4', 'auto', {
+      durationMs: 86_400_000,
+      source: 'auto',
+      escalationLevel: 2,
+    });
+    const { doc: manual, created } = await blockedIPRepository.block('1.1.1.4', 'admin');
+    expect(created).toBe(false);
+    expect(manual.expiresAt.getTime()).toBe(auto.expiresAt.getTime());
+  });
+
   it('returns the latest block of an IP regardless of state', async () => {
     const now = Date.now();
     await BlockedIP.create([
