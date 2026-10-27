@@ -111,6 +111,14 @@ const UsersTab: React.FC = () => {
     [selectedUserIds]
   );
   const clearSelection = useCallback(() => setSelectedUserIds(new Set()), []);
+  // The slim list and the domain table share one selection, but neither shows the other's rows,
+  // so a selection carried across the switch would reach the bulk abuse run unseen. The control
+  // handlers clear it too; this also covers back/forward, deep links and Clear filters.
+  const [selectionGroupBy, setSelectionGroupBy] = useState(params.groupBy);
+  if (selectionGroupBy !== params.groupBy) {
+    setSelectionGroupBy(params.groupBy);
+    setSelectedUserIds(new Set());
+  }
 
   const handleDownloadCsv = useCallback(async () => {
     try {

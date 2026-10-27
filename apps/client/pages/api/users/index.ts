@@ -143,10 +143,12 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     const sharedUserIds = isPicker && !projectId ? await findSharedWorkspaceUserIds(req.user) : undefined;
 
     const conditions = [];
-    if (recentSignups) {
-      const now = new Date();
-      conditions.push({ createdAt: { $gte: new Date(now.getTime() - 3600000), $lt: now } });
-    }
+    // One window for both the list filter and the grouped candidate scan below.
+    const now = new Date();
+    const recentSignupWindow = recentSignups
+      ? { createdAt: { $gte: new Date(now.getTime() - 60 * 60 * 1000), $lt: now } }
+      : undefined;
+    if (recentSignupWindow) conditions.push(recentSignupWindow);
     if (search) {
       const escapedSearch = escapeRegex(search);
       const idConditions: mongoose.FilterQuery<typeof User>[] = /^[0-9a-fA-F]{24}$/.test(search)
@@ -270,9 +272,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
     if (groupBy) {
       // Cap the indexed candidate scan before joins or grouping; filters can make this sample incomplete.
-      const candidates = await User.find(
-        recentSignups ? { createdAt: { $gte: new Date(Date.now() - 3600000), $lt: new Date() } } : {}
-      )
+      const candidates = await User.find(recentSignupWindow ?? {})
         .sort({ createdAt: -1 })
         .hint({ createdAt: 1 })
         .select('_id')
@@ -281,9 +281,21 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         .lean();
       const rows = await User.aggregate<{ _id: unknown; email: string | null; createdAt: Date }>([
         { $match: { $and: [query, { _id: { $in: candidates.slice(0, SIGNUP_SCAN_LIMIT).map(user => user._id) } }] } },
-        { $lookup: { from: 'organizations', localField: 'organizationId', foreignField: '_id', as: 'organization' } },
-        { $unwind: { path: '$organization', preserveNullAndEmptyArrays: true } },
-        { $match: organizationFilter },
+        // The join only serves the org filter, so skip it for up to 5,000 rows when there is none.
+        ...(Object.keys(organizationFilter).length > 0
+          ? [
+              {
+                $lookup: {
+                  from: 'organizations',
+                  localField: 'organizationId',
+                  foreignField: '_id',
+                  as: 'organization',
+                },
+              },
+              { $unwind: { path: '$organization', preserveNullAndEmptyArrays: true } },
+              { $match: organizationFilter },
+            ]
+          : []),
         { $project: { _id: 1, email: 1, createdAt: 1 } },
       ]).option({ maxTimeMS: 2000 });
       const grouped = await getDomainGroups(rows);

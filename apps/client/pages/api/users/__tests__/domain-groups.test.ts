@@ -51,4 +51,28 @@ describe('domain grouping handler', () => {
     expect(mocks.groups).toHaveBeenCalledWith(rows);
     expect(res._getJSONData()).toMatchObject({ groupsTruncated: true, keysTruncated: true, totalUsers: 1 });
   });
+
+  it('skips the organization join without an org filter and scans the same window it filters on', async () => {
+    mocks.find.mockClear();
+    mocks.aggregate.mockClear();
+    const chain = {
+      sort: vi.fn(),
+      hint: vi.fn(),
+      select: vi.fn(),
+      limit: vi.fn(),
+      maxTimeMS: vi.fn(),
+      lean: vi.fn().mockResolvedValue([{ _id: 'a' }]),
+    };
+    for (const method of [chain.sort, chain.hint, chain.select, chain.limit, chain.maxTimeMS])
+      method.mockReturnValue(chain);
+    mocks.find.mockReturnValue(chain);
+    mocks.aggregate.mockReturnValue({ option: vi.fn().mockResolvedValue([]) });
+    mocks.groups.mockResolvedValue({ groups: [], keysTruncated: false });
+    const { req, res } = createMocks({ query: { groupBy: 'emailDomain', recentSignups: 'hour' } });
+    Object.assign(req, { user: { isAdmin: true } });
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
+    const pipeline = mocks.aggregate.mock.calls[0][0];
+    expect(JSON.stringify(pipeline)).not.toContain('$lookup');
+    expect(pipeline[0].$match.$and[0].$and[1].$and).toContainEqual(mocks.find.mock.calls[0][0]);
+  });
 });
