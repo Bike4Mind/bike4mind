@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
@@ -52,6 +52,8 @@ vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
 import '@pages/api/user-api-keys/index';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
 
+import { AdminSettings } from '@bike4mind/database';
+
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let mongoServer: MongoMemoryServer;
@@ -64,6 +66,11 @@ beforeAll(async () => {
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
+});
+
+// These free-user fixtures exercise scope/credit behavior under the explicit open-access policy.
+beforeEach(async () => {
+  await AdminSettings.create({ settingName: 'apiKeyAccess', settingValue: 'all' });
 });
 
 afterEach(async () => {

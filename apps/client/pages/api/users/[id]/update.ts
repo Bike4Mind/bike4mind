@@ -348,7 +348,7 @@ const handler = baseApi().put(
       // Admin branch: symmetric with the admin view of GET /users/[id].
       const safeUser = redactUserSecretsForSelf(finalUser, {
         keep: ['securityQuestions'],
-        keepAdminOnly: ['userNotes', 'signupMeta'],
+        keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment'],
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.

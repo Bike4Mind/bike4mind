@@ -23,7 +23,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 // The admin toggle, flipped per test. The decision itself mirrors mfaEnforcement.ts (unit-tested
 // there); here it only has to depend on the setting and the user's enrollment.
 const enforcement = vi.hoisted(() => ({ enforced: false, readFails: false }));
-vi.mock('./mfaEnforcement', () => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: async (user: { mfa?: { totpEnabled?: boolean } }, opts: { impersonatedBy?: unknown } = {}) => {
     if (enforcement.readFails) throw new Error('settings read failed');
     return enforcement.enforced && !opts.impersonatedBy && !user.mfa?.totpEnabled;

@@ -45,7 +45,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ getSignedUrl: async (key: string) => `https://signed.example.invalid/${key}` }),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
@@ -86,7 +86,7 @@ vi.mock('@server/files/createPresignedUpload', () => ({
 }));
 vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: mockLoadAccessibleFabFile }));
 vi.mock('@server/managers/sessionManager', () => ({ getOrCreateSession: vi.fn().mockResolvedValue({}) }));
-vi.mock('@server/utils/orgAccess', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig => ({
   // Keep the real module: the route also reads the billing-input mapper and the stray-key guard.
   ...(await orig<Record<string, unknown>>()),
   resolveBillingOrgId: vi.fn().mockResolvedValue(undefined),

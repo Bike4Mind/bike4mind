@@ -17,15 +17,15 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getOktaConfigWithFallback, exchangeCodeForTokens, fetchUserInfo } from '@server/auth/oktaOidcClient';
-import { verifyStateToken } from '@server/auth/jwtStateStore';
+import { verifyStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
 import {
   readStateNonceHash,
   clearStateNonce,
   readPkceVerifierCookie,
   clearPkceVerifierCookie,
-} from '@server/auth/oauthFlowCookie';
+} from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
 import { issueBrowserSession } from '@server/auth/issueSession';
@@ -96,8 +96,11 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
     // Handle OAuth errors from Okta
     if (error) {
-      // Log full error details for debugging, but show sanitized message to user
-      Logger.error('[Okta Callback] OAuth error from Okta:', { error, errorDescription });
+      // Log full error details for debugging, but show sanitized message to user. access_denied is
+      // the IdP refusing this user (policy, cancelled consent), an expected outcome, so it does not
+      // log at error, the level the alert channel pages on.
+      const logOktaError = error === 'access_denied' ? Logger.warn : Logger.error;
+      logOktaError('[Okta Callback] OAuth error from Okta:', { error, errorDescription });
       await authFailLogRepository.create({
         strategy: 'okta',
         ip,

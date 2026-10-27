@@ -110,7 +110,7 @@ vi.mock('@bike4mind/services/llm/reranker', async importOriginal => {
 });
 
 const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({ modelId: MODEL.id, modelInfo: MODEL, llm: { complete: m.complete } }),
   },

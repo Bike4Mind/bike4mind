@@ -10,7 +10,7 @@ import { deleteAgentContract, getAgentContract, IAgent, updateAgentContract } fr
 import { agentRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validateAgentUpdate } from '@server/utils/agentValidation';

@@ -4,7 +4,7 @@ import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { agentRepository } from '@bike4mind/database';
 import { IAgent, IMessage } from '@bike4mind/common';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 // System prompt for generating agent descriptions

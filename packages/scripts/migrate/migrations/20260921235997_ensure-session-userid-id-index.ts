@@ -9,7 +9,7 @@ import { type MigrationFile } from './index';
  * every session the user has in memory for each page, or walks `_id` across all users' sessions.
  *
  * Migration rather than autoIndex, for the same reason as 20260921235980_ensure-session-origin-channel-index:
- * prod runs DocumentDB, where an index build takes a foreground collection lock, and left to autoIndex
+ * autoIndex builds are fire-and-forget (a failure is silent), and left to autoIndex
  * it would build on whichever Lambda's cold boot touches sessions first after deploy.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist. It builds every index the

@@ -1,72 +1,27 @@
-import {
-  Box,
-  Button,
-  Card,
-  Chip,
-  chipClasses,
-  Divider,
-  Stack,
-  TabList,
-  TabPanel,
-  Tabs,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
-import { useNavigate } from '@tanstack/react-router';
-import { cloneElement, useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Button, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import CheckIcon from '@mui/icons-material/Check';
-import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
-import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
-import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
-import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
-import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
-import TerminalOutlinedIcon from '@mui/icons-material/TerminalOutlined';
-import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
-import MicOutlinedIcon from '@mui/icons-material/MicOutlined';
-import SwapHorizOutlinedIcon from '@mui/icons-material/SwapHorizOutlined';
-import CodeOutlinedIcon from '@mui/icons-material/CodeOutlined';
-import DataObjectOutlinedIcon from '@mui/icons-material/DataObjectOutlined';
-import GroupAddOutlinedIcon from '@mui/icons-material/GroupAddOutlined';
-import ForkRightOutlinedIcon from '@mui/icons-material/ForkRightOutlined';
-import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
-import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
-import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
-import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
-import MusicNoteOutlinedIcon from '@mui/icons-material/MusicNoteOutlined';
-import GraphicEqOutlinedIcon from '@mui/icons-material/GraphicEqOutlined';
-import CableOutlinedIcon from '@mui/icons-material/CableOutlined';
-import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
-import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
-import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
-import TravelExploreOutlinedIcon from '@mui/icons-material/TravelExploreOutlined';
-import BoltOutlinedIcon from '@mui/icons-material/BoltOutlined';
-import IosShareOutlinedIcon from '@mui/icons-material/IosShareOutlined';
-import SearchOutlinedIcon from '@mui/icons-material/SearchOutlined';
-import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
-import FunctionsOutlinedIcon from '@mui/icons-material/FunctionsOutlined';
-import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
-import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
-import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
-import { api } from '@client/app/contexts/ApiContext';
 import { useClaimGear, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
 import { useVisibleGears } from '@client/app/hooks/useVisibleGears';
+import { useGearCta } from '@client/app/hooks/useGearCta';
 import { GEARS_TABS, TABS_WITH_DETAIL, groupGearsByTab, type GearsTabKey } from '@client/lib/gears/tabs';
-import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
-import { useFileBrowser } from '@client/app/components/Files/Browser';
-import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
-import { openInNewTab } from '@client/app/utils/externalLinks';
+import { rewardGreen } from '@client/app/components/common/gearRewardStyles';
 import PageFrame from '@client/app/components/common/PageFrame';
 import FeatureDetailView from '@client/app/components/common/FeatureDetailView';
-import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
-import { gray, grayAlpha } from '@client/app/utils/themes/colors';
 import HelpCenterButton from '@client/app/components/common/HelpCenterButton';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useMobileHeader } from '@client/app/hooks/useMobileHeader';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { GearCard } from '@client/app/components/gears/GearCard';
+import {
+  ClaimButton,
+  creditText,
+  PendingRewardNote,
+  RewardChip,
+  rewardState,
+} from '@client/app/components/gears/gearReward';
 
 /**
  * Gears - the feature tour, where each feature's one-time reward is claimed.
@@ -74,330 +29,8 @@ import { useLogEvent } from '@client/app/hooks/data/analytics';
  * Presentation (title/intro/CTA) is SERVER truth: the status endpoint
  * serves the code defaults merged with any Manage Gears admin overrides, so a
  * live copy or reward change needs no deploy. This page contributes only the
- * icons and the ctaAction interpreter.
+ * ctaAction interpreter.
  */
-
-const GEAR_ICONS: Partial<Record<GearKey, React.ReactElement>> = {
-  projects: <HubOutlinedIcon />,
-  agents: <SmartToyOutlinedIcon />,
-  datalakes: <DataLakeIcon />,
-  files: <FolderSharedIcon />,
-  published: <PublicOutlinedIcon />,
-  hearth: <LocalFireDepartmentOutlinedIcon />,
-  image: <ImageOutlinedIcon />,
-  models: <SwapHorizOutlinedIcon />,
-  react: <CodeOutlinedIcon />,
-  python: <DataObjectOutlinedIcon />,
-  voice: <MicOutlinedIcon />,
-  shareproject: <GroupAddOutlinedIcon />,
-  apikey: <KeyOutlinedIcon />,
-  apicall: <TerminalOutlinedIcon />,
-  forknotebook: <ForkRightOutlinedIcon />,
-  downloadnotebook: <DownloadOutlinedIcon />,
-  questmaster: <AutoAwesomeOutlinedIcon />,
-  mementos: <PsychologyOutlinedIcon />,
-  video: <MovieOutlinedIcon />,
-  music: <MusicNoteOutlinedIcon />,
-  sound: <GraphicEqOutlinedIcon />,
-  mcp: <CableOutlinedIcon />,
-  mfa: <SecurityOutlinedIcon />,
-  slack: <ForumOutlinedIcon />,
-  importopenai: <CloudDownloadOutlinedIcon />,
-  importclaude: <CloudDownloadOutlinedIcon />,
-  research: <TravelExploreOutlinedIcon />,
-  rapidreply: <BoltOutlinedIcon />,
-  shareagent: <IosShareOutlinedIcon />,
-  websearch: <SearchOutlinedIcon />,
-  webfetch: <LanguageOutlinedIcon />,
-  wolfram: <FunctionsOutlinedIcon />,
-  matheval: <CalculateOutlinedIcon />,
-  clidocs: <MenuBookOutlinedIcon />,
-};
-
-/** The reward as prose, for the tooltips: the chip shows the bare number. */
-const creditText = (gear: GearStatus) => `${gear.credits.toLocaleString()} credit${gear.credits === 1 ? '' : 's'}`;
-
-type RewardState = 'locked' | 'claimable' | 'pending' | 'claimed' | 'none';
-
-const rewardState = (gear: GearStatus): RewardState => {
-  // Checked before the unlock: a paid gear whose data was deleted is locked
-  // again, but offering its reward a second time would be a promise the claim
-  // endpoint refuses.
-  if (gear.claimed) return 'claimed';
-  // Set to 0 in Manage Gears: nothing to earn, so no marker. The fallback below would
-  // otherwise show the grey check for a payout that never happened.
-  if (gear.credits <= 0) return 'none';
-  if (!gear.unlocked) return 'locked';
-  if (gear.claimable) return 'claimable';
-  return gear.rewardPending ? 'pending' : 'claimed';
-};
-
-/**
- * The reward marker in a card's top-right corner, and again in the long-form
- * view's header, so opening a card never hides what it pays or lets it be claimed.
- * The ONLY thing on a card that knows whether the gear is earned: the card itself
- * stays identical either way - greying the whole card out said "this is spent",
- * when what is spent is the reward.
- */
-const RewardChip = ({
-  gear,
-  reward,
-  onClaim,
-  labeled = false,
-}: {
-  gear: GearStatus;
-  reward: RewardState;
-  onClaim: () => void;
-  /** For the long-form header, which has the width a card's top row does not. */
-  labeled?: boolean;
-}) => {
-  const isMobile = useIsMobile();
-  const amount = (clickable: boolean) => (
-    <Chip
-      size="sm"
-      variant="soft"
-      color={reward === 'claimable' ? 'success' : 'neutral'}
-      startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'var(--Icon-color)' }} />}
-      data-testid={`gear-reward-${gear.key}`}
-      {...(clickable && {
-        onClick: (event: React.MouseEvent) => {
-          event.stopPropagation();
-          onClaim();
-        },
-      })}
-      sx={theme => {
-        const { ink, stroke, fill, hoverFill, activeFill } =
-          reward === 'claimable'
-            ? rewardGreen(theme)
-            : {
-                ink: theme.palette.text.primary,
-                stroke: theme.palette.border.muted,
-                fill: grayAlpha[150][10],
-                hoverFill: grayAlpha[150][10],
-                activeFill: grayAlpha[150][10],
-              };
-        return {
-          gap: '6px',
-          '--Chip-minHeight': '24px',
-          fontSize: '13px',
-          backgroundColor: fill,
-          // A clickable Chip lays its action button over the root and paints it
-          // from these variables, so without them the green under it never shows.
-          '--variant-softBg': fill,
-          '--variant-softHoverBg': hoverFill,
-          '--variant-softActiveBg': activeFill,
-          '--variant-softColor': ink,
-          '--variant-softHoverColor': ink,
-          '--variant-softActiveColor': ink,
-          border: `1px solid ${stroke}`,
-          color: ink,
-          // CreditIcon reads var(--Icon-color), which Joy's
-          // variant would otherwise set from its own palette.
-          '--Icon-color': ink,
-        };
-      }}
-    >
-      {gear.credits.toLocaleString()}
-    </Chip>
-  );
-
-  // The long-form header has the width a card's top row lacks, so on a desktop
-  // a claimable reward is the claim button itself: its label carries the amount,
-  // so a chip beside it would only repeat it. A phone's header keeps the chip, with
-  // the button in a strip under the header instead (see renderPanel).
-  if (labeled && reward === 'claimable' && !isMobile) {
-    return <ClaimButton gear={gear} onClaim={onClaim} compact />;
-  }
-
-  return (
-    <>
-      {reward === 'pending' && (
-        <Tooltip title="Not claimable yet">
-          <Chip
-            size="sm"
-            variant="soft"
-            color="warning"
-            startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'var(--Icon-color)' }} />}
-            data-testid={`gear-pending-${gear.key}`}
-            // Joy sets gap as a plain declaration per size (3px on sm), not
-            // as a variable, so it is overridden directly.
-            sx={theme => ({
-              gap: '6px',
-              '--Chip-minHeight': '24px',
-              fontSize: '13px',
-              // The chip's own text colour, as the green and grey chips are
-              // stroked in theirs.
-              border: `1px solid ${theme.palette.warning.softColor}`,
-            })}
-          >
-            {gear.credits.toLocaleString()}
-          </Chip>
-        </Tooltip>
-      )}
-      {reward === 'claimed' && (
-        <Tooltip title={`Reward claimed - ${creditText(gear)}`}>
-          <Chip
-            size="sm"
-            variant="soft"
-            color="neutral"
-            data-testid={`gear-unlocked-${gear.key}`}
-            sx={theme => ({
-              ...neutralFrame(theme),
-              '--Chip-minHeight': '24px',
-              // Joy sizes a Chip from its content plus padding-inline and
-              // caps it at `max-content`, so a circle needs the padding
-              // cancelled, the cap lifted and the width pinned - otherwise
-              // the 16px glyph plus the border wins at 18px.
-              '--Chip-paddingInline': '0px',
-              width: '24px',
-              minWidth: '24px',
-              maxWidth: '24px',
-              borderRadius: '50%',
-              justifyContent: 'center',
-              color: theme.palette.text.tertiary,
-              // Joy's label slot is an inline-block that grows to fill the
-              // chip, so the glyph inside it sits on the text baseline
-              // rather than in the middle of the circle.
-              [`& .${chipClasses.label}`]: {
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                lineHeight: 1,
-              },
-            })}
-          >
-            <CheckIcon sx={{ fontSize: '16px', display: 'block' }} />
-          </Chip>
-        </Tooltip>
-      )}
-      {/* Locked and claimable share one shape: the neutral frame says "there
-                is a reward here", and green is kept for the one state that asks for
-                something. */}
-      {(reward === 'locked' || reward === 'claimable') && gear.credits > 0 && (
-        <Tooltip
-          title={
-            reward === 'claimable'
-              ? `Claim ${creditText(gear)}`
-              : `Earn ${creditText(gear)} the first time you use this.`
-          }
-        >
-          {amount(reward === 'claimable')}
-        </Tooltip>
-      )}
-    </>
-  );
-};
-
-/**
- * The button that pays a claimable reward out, in a footer under a card's CTA
- * and, on a phone, at the top of the open card. The chip beside the title is the
- * status, this is the action. A button rather than a line of text: a text line
- * read as a caption, and on a phone, with no hover to say otherwise, a thumb that
- * missed it landed on the card, which acts or navigates away.
- */
-const ClaimButton = ({
-  gear,
-  onClaim,
-  mt = '16px',
-  testId,
-  compact = false,
-}: {
-  gear: GearStatus;
-  onClaim: () => void;
-  mt?: string;
-  testId?: string;
-  /** Sized to its label and as tall as the back button beside it, for the open
-   *  card's header, so the header does not change height when the reward is claimed. */
-  compact?: boolean;
-}) => {
-  const isMobile = useIsMobile();
-  return (
-    <Typography
-      level="body-xs"
-      component="button"
-      data-testid={testId ?? `gear-claim-${gear.key}`}
-      onClick={event => {
-        event.stopPropagation();
-        onClaim();
-      }}
-      onKeyDown={event => event.stopPropagation()}
-      sx={theme => {
-        const green = rewardGreen(theme);
-        return {
-          mt: compact ? 0 : mt,
-          // A button shrinks to its label outside a flex column, so the width is set
-          // outright; the card footer and the open card's strip both want it full.
-          width: compact ? 'auto' : '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          // Taller on a phone, for a thumb; a mouse does not need the extra height.
-          minHeight: compact ? '32px' : isMobile ? '40px' : '36px',
-          px: '12px',
-          py: 0,
-          border: `1px solid ${green.stroke}`,
-          borderRadius: '6px',
-          backgroundColor: green.fill,
-          font: 'inherit',
-          fontSize: '13px',
-          fontWeight: 500,
-          color: green.ink,
-          cursor: 'pointer',
-          '@media (hover: hover)': { '&:hover': { backgroundColor: green.hoverFill } },
-          '&:active': { backgroundColor: green.activeFill },
-          '&:focus-visible': {
-            outline: `2px solid ${theme.palette.primary[500]}`,
-            outlineOffset: '2px',
-          },
-        };
-      }}
-    >
-      Claim {creditText(gear)}
-    </Typography>
-  );
-};
-
-/**
- * Each glyph's own bounds inside MUI's 24x24 box, measured with getBBox and
- * squared off, used as the icon's viewBox.
- *
- * Material's keylines differ by shape on purpose - a circle spans 20 units, a
- * square 18, a bar 16 - so at one font-size the drawings range from 16 to 24 and
- * a column of them reads as a jumble. Cropping the box to the glyph makes every
- * drawing fill the same 20px, where scaling the svg would have grown the element
- * past it. Only the glyphs that miss the common '2 2 20' keyline are listed.
- */
-/** The slot every icon occupies, and the glyph drawn inside it. A fixed slot
- *  keeps the titles aligned across cards whatever the glyph does. */
-const ICON_SLOT = 20;
-const ICON_BOX = 16;
-const GLYPH_VIEWBOX: Partial<Record<GearKey, string>> = {
-  projects: '0 -0.5 24 24',
-  agents: '1 0.5 22 22',
-  datalakes: '2 2.5 20 20',
-  hearth: '2.5 2 19 19',
-  image: '3 3 18 18',
-  models: '3 3 18 18',
-  voice: '2.5 2 19 19',
-  shareproject: '0 0 24 24',
-  apikey: '1 1 22 22',
-  forknotebook: '4 3 18 18',
-  downloadnotebook: '3.5 3 17 17',
-  questmaster: '1 1 22 22',
-  mementos: '3 3 18 18',
-  music: '3 3 18 18',
-  mcp: '3 3 18 18',
-  mfa: '1 1 22 22',
-  importopenai: '0 0 24 24',
-  importclaude: '0 0 24 24',
-  research: '2 1.75 20.5 20.5',
-  rapidreply: '3 3 18 18',
-  shareagent: '1 1 22 22',
-  websearch: '3 3 17.49 17.49',
-  wolfram: '4 4 16 16',
-  matheval: '3 3 18 18',
-  clidocs: '1 2 22 22',
-};
 
 const panelSx = {
   px: 0,
@@ -422,9 +55,7 @@ const GearsPage = () => {
   // Which card is expanded, per tab. Cleared on tab change so switching away and
   // back lands on the list rather than reopening whatever was last read.
   const [openKey, setOpenKey] = useState<GearKey | null>(null);
-  const navigate = useNavigate();
   const { gears, isPending, refetch } = useVisibleGears();
-  const { setOpen: setFileBrowserOpen } = useFileBrowser();
   // On a phone the Help Center moves up into the app header, beside the page name.
   const isMobile = useIsMobile();
   const helpCenter = useMemo(() => <HelpCenterButton testId="gears-helpcenter-btn" />, []);
@@ -479,37 +110,7 @@ const GearsPage = () => {
 
   const tabCards = groupGearsByTab(gears);
 
-  /** Interpret a gear's ctaAction - see lib/gears/presentation.ts for the grammar. */
-  const onCta = (gear: GearStatus) => {
-    const [action, stampDirective] = gear.ctaAction.split('#');
-    const stampKey = stampDirective?.startsWith('stamp:') ? stampDirective.slice('stamp:'.length) : null;
-    const claimStamp = () => {
-      if (!stampKey) return;
-      void api
-        .post('/api/gears/stamp', { key: stampKey })
-        .then(() => refetch())
-        .catch(() => undefined);
-    };
-
-    if (action === 'files') {
-      setFileBrowserOpen(true);
-      claimStamp();
-      return;
-    }
-    if (action.startsWith('external:')) {
-      openInNewTab(action.slice('external:'.length));
-      claimStamp();
-      return;
-    }
-    if (action.startsWith('navigate:')) {
-      const target = action.slice('navigate:'.length);
-      const [pathname, query] = target.split('?');
-      const search = query ? Object.fromEntries(new URLSearchParams(query).entries()) : undefined;
-      claimStamp();
-      // Admin-authored paths aren't in TanStack's static route union.
-      void navigate({ to: pathname, search } as never);
-    }
-  };
+  const onCta = useGearCta(() => void refetch());
 
   const renderCards = (cards: GearStatus[], opensDetail: boolean) => {
     const act = (gear: GearStatus) => (opensDetail ? openCard(gear.key) : onCta(gear));
@@ -525,136 +126,19 @@ const GearsPage = () => {
           gap: 2,
         }}
       >
-        {cards.map(gear => {
-          const reward = rewardState(gear);
-          const claimButton = reward === 'claimable' && <ClaimButton gear={gear} onClaim={() => claim(gear)} />;
-          return (
-            // Every card looks the same whether or not its gear is earned: the page is
-            // a place to read about features, and a checkmark grid turns it into a
-            // score. The unlock still happens and still pays - it just is not what
-            // this surface is for.
-            // The whole card is the control: a solid Button per card
-            // painted a grid of twenty-odd primary rectangles, which reads as twenty
-            // equally urgent calls to action rather than a list to browse.
-            <Card
-              key={gear.key}
-              ref={el => {
-                if (el) cardRefs.current.set(gear.key, el);
-                else cardRefs.current.delete(gear.key);
-              }}
-              variant="outlined"
-              data-testid={`gear-card-${gear.key}`}
-              role="button"
-              tabIndex={0}
-              onClick={() => act(gear)}
-              onKeyDown={event => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  act(gear);
-                }
-              }}
-              sx={theme => ({
-                display: 'flex',
-                flexDirection: 'column',
-                // Joy paints both a Card and PageFrame's Sheet with background.surface,
-                // so without this the card would sit on its own colour in light mode and
-                // read as a 1px outline on a flat sheet. White is a step past the theme's
-                // body grey, to lift the card off the frame rather than just clear it.
-                backgroundColor: theme.palette.mode === 'dark' ? theme.palette.background.body : gray[0],
-                // The softest step of the border scale: `divider`
-                // is the app's full-strength rule and reads as drawn lines across a
-                // grid of thirty cards.
-                borderColor: theme.palette.border.soft,
-                // Spacing is per-child rather than a single column gap: the steps down
-                // the card differ, so each margin is the gap above that element.
-                gap: 0,
-                cursor: 'pointer',
-                transition:
-                  'background-color 0.18s ease-out, border-color 0.18s ease-out, transform 0.22s cubic-bezier(0.2, 0.8, 0.3, 1)',
-                '&:hover': {
-                  backgroundColor: theme.palette.loginRegister.termsAndPrivacy.hoverBg,
-                  borderColor: theme.palette.border.light,
-                  transform: 'translateY(-2px)',
-                },
-                '@media (prefers-reduced-motion: reduce)': {
-                  transition: 'background-color 0.18s ease-out, border-color 0.18s ease-out',
-                  '&:hover': { transform: 'none' },
-                },
-                '&:focus-visible': {
-                  outline: `2px solid ${theme.palette.primary[500]}`,
-                  outlineOffset: '2px',
-                },
-              })}
-            >
-              <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-                {/* GEAR_ICONS holds bare elements, so size and colour are set once
-                here rather than repeated on every entry in the map. */}
-                <Stack direction="row" alignItems="center" gap={1}>
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: `${ICON_SLOT}px`,
-                      height: `${ICON_SLOT}px`,
-                      flexShrink: 0,
-                      // Tertiary because an icon at title strength competes with the
-                      // title beside it, thirty times over.
-                      color: 'text.tertiary',
-                      '& > svg': { fontSize: `${ICON_BOX}px` },
-                    }}
-                  >
-                    {cloneElement(GEAR_ICONS[gear.key] ?? <SettingsOutlinedIcon />, {
-                      viewBox: GLYPH_VIEWBOX[gear.key] ?? '2 2 20 20',
-                    })}
-                  </Box>
-                  <Typography level="title-md">{gear.title}</Typography>
-                </Stack>
-                <RewardChip gear={gear} reward={reward} onClaim={() => claim(gear)} />
-              </Stack>
-              <Typography level="body-sm" sx={{ opacity: 0.85, mt: '16px' }}>
-                {gear.intro}
-              </Typography>
-              {/* The deferred payout gets a full line rather than chip text: it is the
-                one state a glance at a colour cannot explain, and there is room here.
-                Worded for Published, the only gear that declares a rewardCheck - a
-                second one would need this copy to come from the gear instead. */}
-              {reward === 'pending' && (
-                <Typography
-                  level="body-xs"
-                  data-testid={`gear-pending-note-${gear.key}`}
-                  // The same token the soft chip paints its own text with.
-                  sx={{ mt: '16px', fontSize: '13px', color: 'warning.softColor' }}
-                >
-                  Once someone else opens your artifact link while signed in, you can claim {creditText(gear)}.
-                </Typography>
-              )}
-              {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}
-              <Typography
-                level="body-sm"
-                data-testid={`gear-cta-${gear.key}`}
-                sx={{ mt: 'auto', pt: '20px', color: 'text.primary' }}
-              >
-                {opensDetail ? 'Learn more' : gear.cta}
-                {/* An HTML entity rather than the arrow character, so this file stays
-                ASCII: Prettier rewrites a unicode escape back into the character. */}
-                <Box component="span" sx={{ ml: '6px' }}>
-                  &rarr;
-                </Box>
-              </Typography>
-              {/* A footer of its own under the CTA, split off by a divider, rather than a
-                  line between the copy and the CTA, where it was squeezed. The CTAs in a
-                  row stop lining up while a card has one - accepted, the state is brief
-                  and the misalignment points at the card that pays. */}
-              {claimButton && (
-                <>
-                  <Divider inset="context" sx={{ mt: '16px' }} />
-                  {claimButton}
-                </>
-              )}
-            </Card>
-          );
-        })}
+        {cards.map(gear => (
+          <GearCard
+            key={gear.key}
+            gear={gear}
+            ctaLabel={opensDetail ? 'Learn more' : gear.cta}
+            onActivate={() => act(gear)}
+            onClaim={() => claim(gear)}
+            cardRef={el => {
+              if (el) cardRefs.current.set(gear.key, el);
+              else cardRefs.current.delete(gear.key);
+            }}
+          />
+        ))}
       </Box>
     );
   };
@@ -674,7 +158,9 @@ const GearsPage = () => {
         // A phone's header has room for the chip alone, and the copy below is long,
         // so the claim goes right under the header rather than after it.
         banner={
-          isMobile && rewardState(open) === 'claimable' ? (
+          rewardState(open) === 'pending' ? (
+            <PendingRewardNote gear={open} />
+          ) : isMobile && rewardState(open) === 'claimable' ? (
             <ClaimButton gear={open} onClaim={() => claim(open)} mt="0px" testId={`gear-detail-claim-${open.key}`} />
           ) : undefined
         }

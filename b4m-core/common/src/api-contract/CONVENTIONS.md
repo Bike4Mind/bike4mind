@@ -161,6 +161,7 @@ re-deciding per endpoint:
 | The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
+| Free-tier daily credit allowance used up (`Retry-After` is the next UTC midnight) | `429` | `daily_free_limit_reached` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Per-tier agent cap reached | `400` | `agent_limit_reached` |
 | User storage quota exceeded | `400` | `storage_limit_exceeded` |
@@ -174,6 +175,7 @@ re-deciding per endpoint:
 | Referenced resource does not exist | `404` | - |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
+| Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
 | Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
 | Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |

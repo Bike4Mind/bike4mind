@@ -21,8 +21,8 @@ import jwt from 'jsonwebtoken';
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
   .use(requireTurnstile(TURNSTILE_ACTION_OTC_SEND))
-  .use(otcCounterLimit({ bucket: 'send-ip-daily', ...OTC_LIMITS.send.perIpDaily, subject: ipSubject }))
-  .use(otcCounterLimit({ bucket: 'send-ip-total', ...OTC_LIMITS.send.perIpTotal, subject: ipSubject }))
+  .use(otcCounterLimit({ bucket: 'send-ip-daily', window: OTC_LIMITS.send.perIpDaily, subject: ipSubject }))
+  .use(otcCounterLimit({ bucket: 'send-ip-total', window: OTC_LIMITS.send.perIpTotal, subject: ipSubject }))
   .use(otcDistinctEmailsPerIpLimit())
   .post(async (req, res) => {
     const { email } = req.body;
@@ -112,6 +112,7 @@ const handler = baseApi({ auth: false })
                 to: toEmail,
                 subject: 'Your sign-in code',
                 body: emailBody,
+                category: 'otc',
               });
               // Count accepted email dispatches even if token confirmation later fails.
               req.logger.info('otc-code-dispatched');

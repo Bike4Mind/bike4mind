@@ -14,6 +14,11 @@ vi.mock('./PermissionsSettings', () => ({
   permissionsSummary: () => 'Default permissions',
   usePermissions: () => [null, () => undefined, null, () => undefined],
 }));
+vi.mock('./LocalContextSettings', () => ({
+  LocalContextSettings: () => null,
+  localContextSummary: () => 'Auto',
+  useLocalContextSetting: () => [null, () => undefined, null],
+}));
 vi.mock('./useAppUpdate', async () => {
   const { initialUpdateState } = await import('@shared/update');
   return { useAppUpdate: () => ({ state: initialUpdateState('', false), blockedBy: null }) };

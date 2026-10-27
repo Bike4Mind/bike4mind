@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
     gitHubLakeAuthGrantRepository: { replace: h.replace, findLive: h.findLive, consume: h.consume },
   };
 });
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: h.encryptToken,
   decryptToken: h.decryptToken,
 }));

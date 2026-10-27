@@ -18,6 +18,7 @@ import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
+import { signedUrlExpiresAt } from './get';
 import { assertRewriteFits, commitContentRewrite } from './rewriteStorage';
 import { assertStorageOwnerTransferFits, reassignStorageOwner } from './reassignStorageOwner';
 import { storedTagNames } from '../tagService/bulkTagNames';
@@ -206,7 +207,7 @@ export const updateFabFile = async (
     }
 
     contentChanges.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
-    contentChanges.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);
+    contentChanges.fileUrlExpireAt = signedUrlExpiresAt(contentChanges.fileUrl, EXPIRE_IN_SECONDS);
 
     // The bytes just changed, so any cached extracted length now describes the previous content, and a
     // stale count leaves the pre-send attachment warning silent about a file that no longer fits.

@@ -115,7 +115,7 @@ it('refunds only a failed pre-invite lookup so that quota can be reserved again'
     email: 'sender@example.com',
     numReferralsAvailable: 2,
   });
-  vi.spyOn(registrationInviteRepository, 'findOne').mockRejectedValueOnce(new Error('lookup failed'));
+  vi.spyOn(registrationInviteRepository, 'find').mockRejectedValueOnce(new Error('lookup failed'));
   const call = request(String(user._id), ['failed@example.com', 'ok@example.com']);
   await call.run();
   expect(call.res._getJSONData()).toMatchObject({

@@ -5,7 +5,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { MCPClient } from '@bike4mind/mcp';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { decryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 

@@ -39,7 +39,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return api;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/database', async () => ({
@@ -65,6 +65,7 @@ vi.mock('@bike4mind/services', async () => ({
 }));
 vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   loadModelConfigurations: async () => [],
+  loadFreeTierAllowedModels: async () => undefined,
   createModelAdmission: () => ({ admits: async () => true, assert: async () => undefined }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));

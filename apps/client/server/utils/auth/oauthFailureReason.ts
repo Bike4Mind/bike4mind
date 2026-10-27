@@ -1,3 +1,5 @@
+import type { LoginErrorCode } from '@client/app/utils/loginErrorMessages';
+
 /**
  * Canonical, data-free OAuth failure reasons.
  *
@@ -16,6 +18,8 @@ export const OAUTH_FAILURE_REASONS = [
   'state_expired',
   'state_missing',
   'registration_closed',
+  // Set by the callback itself from the provider's `?error=access_denied` (user cancelled consent).
+  'access_denied',
   'internal',
 ] as const;
 
@@ -33,17 +37,18 @@ export function resolveOAuthFailureReason(code: unknown): OAuthFailureReason {
 }
 
 /**
- * Canonical reason -> user-facing redirect message. Derived only from the
- * whitelisted reason, never from `info.message` or raw error text.
+ * Canonical reason -> the `/login?error=` code the client maps to a user-facing message
+ * (app/utils/loginErrorMessages.ts; must stay in sync). The login page only renders known
+ * codes, so free text here would degrade to its generic fallback.
  */
-export function oauthFailureRedirectMessage(reason: OAuthFailureReason): string {
+export function oauthFailureLoginErrorCode(reason: OAuthFailureReason): LoginErrorCode {
   switch (reason) {
     case 'state_expired':
-      return 'Your login request expired. Please try again.';
+      return 'invalid_state';
     case 'registration_closed':
-      return 'This instance is invite-only. Ask an administrator for an invite.';
+      return 'registration_closed';
     default:
-      return 'Authentication failed';
+      return 'callback_error';
   }
 }
 

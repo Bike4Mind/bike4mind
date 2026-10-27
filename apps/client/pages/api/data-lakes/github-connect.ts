@@ -20,8 +20,8 @@ import {
   requireGitHubLakeAppConfig,
   resolveConnectableLake,
 } from '@server/integrations/github/dataLake/githubLakeConnection';
-import { clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { clearStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { assertLakeConnectorFree } from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';

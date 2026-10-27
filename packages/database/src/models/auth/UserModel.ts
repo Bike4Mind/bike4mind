@@ -12,6 +12,7 @@ import {
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
   MFA_ATTEMPT_RESET_WINDOW_MS,
+  SIGNUP_GRANT_UNLOCK_REASONS,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
@@ -83,6 +84,8 @@ const MFASchema = new Schema(
     totpSecret: { type: String, required: true, select: false },
     totpEnabled: { type: Boolean, default: false },
     backupCodes: { type: [String], default: [], select: false },
+    // Encrypted like totpSecret; only present between setup and enable.
+    pendingBackupCodes: { type: String, select: false },
     setupAt: { type: Date, required: true },
     lastUsedAt: { type: Date, default: null },
     // Server-side attempt tracking (can't be bypassed by refresh/cancel)
@@ -362,6 +365,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return this.existsOtherUserWithValue('username', username, excludeUserId);
   }
 
+  // A regex rather than .collation() for DocumentDB portability (see existsOtherUserWithValue).
+  // A null emailVerifiedAt is a legacy verified row from before the field was written.
+  async existsVerifiedUserOnEmailDomain(domain: string, verifiedBefore: Date): Promise<boolean> {
+    const normalized = domain.trim().toLowerCase();
+    if (!normalized) return false;
+    const filter = {
+      email: { $regex: `[@.]${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
+      emailVerified: true,
+      $or: [{ emailVerifiedAt: { $lte: verifiedBefore } }, { emailVerifiedAt: null }],
+      isBanned: { $ne: true },
+      isSystem: { $ne: true },
+      deletedAt: { $exists: false },
+    };
+    return (await this.model.exists(filter)) !== null;
+  }
+
   // An anchored case-insensitive regex instead of .collation(): DocumentDB has no collation
   // support (see documentdb-compat.ts), so this is the one form that matches the same rows on
   // both engines. The \s* anchors also match legacy rows stored with surrounding whitespace. Soft-deleted rows count, because the unique index still covers them.
@@ -417,15 +436,20 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   /**
    * Loads a user WITH the select:false MFA secrets - for server-side MFA verification only.
-   * `mfa.totpSecret` comes back decrypted; writing the snapshot back re-encrypts it (see
-   * encryptTotpSecretInUpdate), so snapshot writers never persist the plaintext.
+   * `mfa.totpSecret` and `mfa.pendingBackupCodes` come back decrypted; writing the snapshot back
+   * re-encrypts them (see encryptTotpSecretInUpdate), so snapshot writers never persist the plaintext.
    */
   async findByIdWithMfaSecrets(id: string): Promise<IUserDocument | null> {
-    const result = await this.model.findOne({ _id: id }).select('+mfa.totpSecret +mfa.backupCodes');
+    const result = await this.model
+      .findOne({ _id: id })
+      .select('+mfa.totpSecret +mfa.backupCodes +mfa.pendingBackupCodes');
     if (!result) return null;
     const user: IUserDocument = result.toJSON();
     if (user.mfa?.totpSecret) {
       user.mfa.totpSecret = decryptAtRest(user.mfa.totpSecret);
+    }
+    if (user.mfa?.pendingBackupCodes) {
+      user.mfa.pendingBackupCodes = decryptAtRest(user.mfa.pendingBackupCodes);
     }
     return user;
   }
@@ -543,7 +567,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'mfa.lastUsedAt': new Date(),
           updatedAt: new Date(),
         },
-        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1 },
+        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1, 'mfa.pendingBackupCodes': 1 },
       },
       { new: true }
     );
@@ -902,6 +926,22 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },
+    signupGrantAssessment: { type: Schema.Types.Mixed, default: undefined },
+    signupGrant: {
+      type: new Schema(
+        {
+          stage: { type: String, enum: ['pending_email', 'signup', 'unlocked'], required: true },
+          signupCredits: { type: Number, min: 0, required: true },
+          unlockCredits: { type: Number, min: 0, required: true },
+          creditsReleased: { type: Number, min: 0, required: true },
+          nextCondition: { type: String, enum: ['email_verification', 'verification', null], default: null },
+          unlockedBy: { type: String, enum: SIGNUP_GRANT_UNLOCK_REASONS },
+          unlockedOrgId: { type: String },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     lastCreditsPurchasedAt: { type: Date, default: null },
     tags: { type: [String], default: [] },
     level: { type: String, default: 'DemoUser' },
@@ -933,6 +973,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     userNotes: [UserNoteSchema],
     numReferralsAvailable: { type: Number, default: 0 },
     regInvites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+    referredByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
     loginRecords: [LoginRecordSchema],
     // reset password
@@ -1248,11 +1289,21 @@ UserSchema.index({ 'authProviders.strategy': 1, 'authProviders.id': 1 }, { name:
 // Without it both scan the full users collection. Explicit name so the migration and autoIndex
 // (mongo.ts) agree - see the authProviders_strategy_id note above.
 UserSchema.index({ groups: 1 }, { name: 'user_groups' });
+UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fingerprint_window' });
 // Serves the forward member lookup in OrganizationRepository.findMemberUserIds, which the org
 // feedback report and its drill-down routes call on every request. Without it that read scans the
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
+// Serves the per-organization org_invite unlock cap (apps/client/server/credits/orgInviteUnlock.ts).
+// Sparse: only accounts an org invite unlocked carry the field. Explicit name so the migration
+// 20260921235968 and autoIndex (mongo.ts) agree.
+UserSchema.index({ 'signupGrant.unlockedOrgId': 1 }, { sparse: true, name: 'signupGrant_unlockedOrgId' });
+UserSchema.index({ createdAt: 1 });
+// Serves the signupIpRetention cron's range scan for signups past the retention window. Sparse:
+// accounts created before signup network capture carry no signupMeta. Explicit name so migration
+// 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
+UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
@@ -1361,28 +1412,32 @@ function stripSecretlessMfaFromUpdate(this: Query<unknown, IUserDocument>) {
 }
 
 /**
- * Encrypts `mfa.totpSecret` on every update that writes it, so a read-only DB or backup exposure
- * cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
+ * Encrypts `mfa.totpSecret` (and `mfa.pendingBackupCodes`) on every update that writes it, so a
+ * read-only DB or backup exposure cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
  * that setupMFA and the snapshot writers (passkey authenticate, regenerate-backup-codes) use, and the
  * dotted `mfa.totpSecret` form. encryptAtRest leaves ciphertext untouched, so re-writing an
  * already-encrypted value is a no-op. Must stay in sync with the decrypt in findByIdWithMfaSecrets.
  */
+const MFA_ENCRYPTED_FIELDS = ['totpSecret', 'pendingBackupCodes'] as const;
+
 function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
   const update = this.getUpdate() as Record<string, unknown> | null;
   if (!update || Array.isArray(update)) return;
 
+  const encrypt = (value: string) => (isEncrypted(value) ? value : encryptAtRest(value));
   const encryptIn = (container: Record<string, unknown> | undefined) => {
     if (!container) return;
-    const mfa = container.mfa as { totpSecret?: unknown } | null | undefined;
-    if (mfa && typeof mfa === 'object' && typeof mfa.totpSecret === 'string') {
-      container.mfa = {
-        ...mfa,
-        totpSecret: isEncrypted(mfa.totpSecret) ? mfa.totpSecret : encryptAtRest(mfa.totpSecret),
-      };
+    const mfa = container.mfa as Record<string, unknown> | null | undefined;
+    if (mfa && typeof mfa === 'object') {
+      const encrypted = { ...mfa };
+      for (const field of MFA_ENCRYPTED_FIELDS) {
+        if (typeof encrypted[field] === 'string') encrypted[field] = encrypt(encrypted[field]);
+      }
+      container.mfa = encrypted;
     }
-    const dotted = container['mfa.totpSecret'];
-    if (typeof dotted === 'string') {
-      container['mfa.totpSecret'] = isEncrypted(dotted) ? dotted : encryptAtRest(dotted);
+    for (const field of MFA_ENCRYPTED_FIELDS) {
+      const dotted = container[`mfa.${field}`];
+      if (typeof dotted === 'string') container[`mfa.${field}`] = encrypt(dotted);
     }
   };
 
@@ -1427,6 +1482,10 @@ UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], encryptTotpSecre
 UserSchema.pre('save', function (next) {
   if (this.mfa?.totpSecret && !isEncrypted(this.mfa.totpSecret) && this.isModified('mfa.totpSecret')) {
     this.mfa.totpSecret = encryptAtRest(this.mfa.totpSecret);
+  }
+  const pendingCodes = this.mfa?.pendingBackupCodes;
+  if (pendingCodes && !isEncrypted(pendingCodes) && this.isModified('mfa.pendingBackupCodes')) {
+    this.mfa!.pendingBackupCodes = encryptAtRest(pendingCodes);
   }
   next();
 });

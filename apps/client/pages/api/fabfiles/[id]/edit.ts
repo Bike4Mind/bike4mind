@@ -34,7 +34,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService, fabFilesService } from '@bike4mind/services';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import {
   completionRequestCeilingUsd,
   completionUsd,
@@ -233,7 +233,8 @@ const handler = baseApi()
           );
         }
 
-        await (await createModelAdmission(user, models)).assert(modelInfo.id);
+        // A platform-picked fallback (no request model) is not a user choice, so it skips the user-facing gates.
+        await (await createModelAdmission(user, models, !model)).assert(modelInfo.id);
 
         // Initialize LLM backend
         const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });

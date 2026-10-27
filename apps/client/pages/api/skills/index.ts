@@ -14,7 +14,7 @@ import {
 } from '@server/utils/skillValidation';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { ShareableSkill, canManageSkillSharingWith, redactShareRosterForViewer } from '@server/utils/skillAccess';
 import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 

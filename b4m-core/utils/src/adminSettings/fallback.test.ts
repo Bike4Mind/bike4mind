@@ -16,6 +16,7 @@ import {
   LlmTimeoutError,
   createAnthropicRequestTimeoutError,
   createAnthropicStreamTimeoutError,
+  bedrockEmptyResponseMessage,
 } from '@bike4mind/llm-adapters';
 
 // Helper to create mock Axios errors
@@ -48,6 +49,10 @@ function createAwsSdkError(name: string, httpStatusCode?: number, message?: stri
 }
 
 describe('shouldTriggerFallback', () => {
+  it('returns true for a Bedrock empty stream that stalled without a terminal event', () => {
+    expect(shouldTriggerFallback(new Error(bedrockEmptyResponseMessage('m', 'r', true)))).toBe(true);
+  });
+
   describe('Anthropic API errors', () => {
     it('should return true for overloaded_error from Anthropic API', () => {
       const error = new Error(

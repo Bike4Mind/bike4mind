@@ -35,25 +35,25 @@ export class BlockedIPRepository extends BaseRepository<IBlockedIPDocument> {
     super(model);
   }
 
-  async block(ip: string, reason?: string): Promise<IBlockedIPDocument> {
+  async block(ip: string, reason?: string): Promise<{ doc: IBlockedIPDocument; created: boolean }> {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 10 * 60 * 1000); // 10 minutes from now
 
-    // Check for existing active non-expired block
-    const existing = await this.model.findOne({
-      ip,
-      active: true,
-      expiresAt: { $gt: now },
-    });
-    if (existing) return existing;
+    const existing = await this.isBlocked(ip);
+    if (existing) {
+      // Repeat blocks keep extending the window, without a new row or audit entry.
+      const refreshed = await this.model.findOneAndUpdate({ ip, active: true }, { expiresAt }, { new: true });
+      return { doc: refreshed ?? existing, created: false };
+    }
 
-    return this.model.create({
+    const doc = await this.model.create({
       ip,
       reason,
       active: true,
       blockedAt: now,
       expiresAt,
     });
+    return { doc, created: true };
   }
 
   async unblock(ip: string): Promise<IBlockedIPDocument | null> {

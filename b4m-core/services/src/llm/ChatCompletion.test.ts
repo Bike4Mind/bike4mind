@@ -10,6 +10,8 @@ import {
   shouldDeferCorpusToRetrieval,
   attachmentHasIndexedContent,
   computeSettlementDelta,
+  computeHolderSettlement,
+  warnOnSettlementDebt,
   clampFraction,
   dropOldestHistoryTurn,
   isAbortError,
@@ -49,12 +51,14 @@ import {
   MAX_FULL_TOOL_RESULT_CHARS,
   ResponsesStreamTruncatedError,
   createAnthropicStreamTimeoutError,
+  bedrockEmptyResponseMessage,
   type ICompletionBackend,
   federatedSharedKeyProviders,
 } from '@bike4mind/llm-adapters';
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ChatModels,
+  CreditHolderType,
   DATA_LAKE_TOOL_NAMES,
   DATA_LAKE_WRITE_TOOL_NAMES,
   ImageModels,
@@ -269,6 +273,9 @@ const baseOptions = {
   workspaceDeniedTools: { 'denied-surface': ['notion__search'], 'delegation-denied-surface': ['delegate_to_agent'] },
   workspaceSessionSettings: {},
 };
+
+// The constant countTokens mock would also count the auto-offered tool schema.
+const NO_AUTO_OFFERS = { skipAutoOffers: true } as const;
 
 describe('ChatCompletionProcess', () => {
   let service: ChatCompletionProcess;
@@ -890,6 +897,59 @@ describe('ChatCompletionProcess', () => {
 
       expect(complete).not.toHaveBeenCalled();
       expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'error' });
+    });
+
+    describe('free-tier gate on the direct (quest/Slack) path', () => {
+      const turn = () => {
+        mockSession.userId = 'user1';
+        const body = wireMinimalTurn();
+        const complete = vi.fn();
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn(),
+          currentModel: ChatModels.GPT4_1,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+        return { body, complete };
+      };
+      const gateOn = async () => {
+        const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+        mockedGetAvailableModels.mockResolvedValue([requested, gatedSuccessor] as never);
+        vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+        mockedGetSettingsValue.mockImplementation(((key: string) =>
+          key === 'freeTierModelGateEnabled'
+            ? true
+            : key === 'freeTierAllowedModels'
+              ? ['some-free-model']
+              : undefined) as typeof getSettingsValue);
+        onTestFinished(() => mockedGetSettingsValue.mockReset());
+      };
+
+      it('refuses a paid-only model for a free account before any provider call', async () => {
+        const { body, complete } = turn();
+        await gateOn();
+        (service as any).getEntitlements = vi.fn().mockResolvedValue(['base']);
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(complete).not.toHaveBeenCalled();
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({
+          type: 'error',
+          reply: expect.stringContaining('requires a paid plan'),
+        });
+      });
+
+      it('answers a failed entitlement read with a retryable error, not the upgrade prompt', async () => {
+        const { body, complete } = turn();
+        await gateOn();
+        (service as any).getEntitlements = vi.fn().mockRejectedValue(new Error('subscription DB down'));
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(complete).not.toHaveBeenCalled();
+        const reply = mockDb.quests.update.mock.calls.at(-1)?.[0].reply;
+        expect(reply).toContain('Could not verify your plan');
+        expect(reply).not.toContain('requires a paid plan');
+      });
     });
 
     it('refuses an unadmitted primary model with no remap before any provider call', async () => {
@@ -2543,6 +2603,83 @@ describe('ChatCompletionProcess', () => {
       });
     });
 
+    describe('thinking visibility', () => {
+      // An inline-reasoning model row, so the answer is parsed for the markers its adapter wraps around reasoning.
+      const streamReasoningTurn = () => {
+        const body = wireMinimalTurn();
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'Inline reasoner',
+            backend: ModelBackend.DeepSeek,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ] as any); // any: minimal model shape, as elsewhere in this file
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['<think>'], { channel: 'reasoning' });
+            await cb(['tagged trace'], { channel: 'reasoning' });
+            await cb(['</think>'], { channel: 'reasoning' });
+            await cb(['<think>inline trace</think>Visible answer.']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+        return body;
+      };
+      const storedText = () => `${(mockQuest.replies ?? []).join('')}|${mockQuest.reply ?? ''}`;
+      const capturePushes = () => {
+        const pushed: string[] = [];
+        vi.spyOn(service, 'sendStatusUpdate').mockImplementation(async quest => {
+          pushed.push((quest.replies ?? []).join(''));
+        });
+        return pushed;
+      };
+      const runAs = async (resolve: () => Promise<string>) => {
+        (service as any).getThinkingVisibility = vi.fn(resolve);
+        const pushed = capturePushes();
+        await service.process({ body: streamReasoningTurn(), logger: mockLogger });
+        return pushed;
+      };
+
+      it('keeps raw reasoning out of the push and stored reply of a free caller at the default summary level', async () => {
+        const pushed = await runAs(async () => 'summary');
+
+        expect(storedText()).toContain('Visible answer.');
+        expect(storedText()).not.toMatch(/trace|<think>/);
+        expect(pushed.join('')).toContain('Visible answer.');
+        expect(pushed.join('')).not.toMatch(/trace|<think>/);
+      });
+
+      it('withholds everything at none', async () => {
+        const pushed = await runAs(async () => 'none');
+
+        expect(storedText()).not.toMatch(/trace|<think>/);
+        expect(pushed.join('')).not.toMatch(/trace/);
+      });
+
+      it('leaves a paid caller at raw unchanged', async () => {
+        const pushed = await runAs(async () => 'raw');
+
+        expect(storedText()).toContain('<think>tagged trace</think>');
+        expect(storedText()).toContain('Visible answer.');
+        expect(pushed.join('')).toContain('tagged trace');
+      });
+
+      it('falls back to the free level when the resolution fails', async () => {
+        await runAs(async () => {
+          throw new Error('subscription read failed');
+        });
+
+        expect(storedText()).not.toMatch(/trace/);
+      });
+    });
+
     it('keeps a user-stopped quest as stopped when the aborted backend resolves normally', async () => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
@@ -2857,9 +2994,11 @@ describe('ChatCompletionProcess', () => {
 
         expect(incrementCredits).toHaveBeenCalledWith('owner-id', 50);
         expect(fields.reservedCreditHolder?.currentCredits).toBe(60);
-        // What the still-running process() computes at settlement. A zeroed holder would floor the
-        // debit at zero and give the turn away; the restored balance charges the real 30.
-        const { delta, writtenOffCredits } = computeSettlementDelta(
+        // What the still-running process() computes at settlement. On an org holder a zeroed
+        // snapshot would floor the debit at zero and give the turn away; the restored balance
+        // charges the real 30.
+        const { delta, writtenOffCredits } = computeHolderSettlement(
+          CreditHolderType.Organization,
           0,
           30,
           fields.reservedCreditHolder?.currentCredits ?? 0
@@ -2898,7 +3037,7 @@ describe('ChatCompletionProcess', () => {
       });
     });
 
-    describe('Research Mode cancellation', () => {
+    describe('Research Mode', () => {
       const RESEARCH_MODEL = 'gpt-4-research';
 
       function availableModels() {
@@ -3018,6 +3157,28 @@ describe('ChatCompletionProcess', () => {
           content: `${TURN_CONTEXT_HEADER}MEMENTO-FACT${TURN_CONTEXT_END}Hello`,
         });
         expect(JSON.stringify(messages.filter((m: IMessage) => m.role === 'system'))).not.toContain('MEMENTO-FACT');
+      });
+
+      it('gives each configuration its own identity line, not the primary-bound tool', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Answer']);
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn().mockResolvedValue([]) } as any);
+        mockedGetAvailableModels.mockResolvedValue(availableModels().map(m => ({ ...m, supportsTools: true })) as any);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({ body: researchBody() as any, logger: mockLogger });
+
+        const opts = complete.mock.calls[0][2];
+        const names = (opts.tools ?? []).map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
+        expect(names).not.toContain('current_model_details');
+        expect(opts.identityViaTool).toBe(false);
+        expect(opts.omitIdentityReminder).toBe(false);
       });
     });
 
@@ -3652,6 +3813,179 @@ describe('ChatCompletionProcess', () => {
         // raw has to reach through and turn that off too, or "empty stack" is off by 17 tokens.
         const completeOpts = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2];
         expect(completeOpts.omitIdentityReminder).toBe(true);
+      });
+
+      describe('current_model_details and the identity line', () => {
+        const turnBody = (extra: Record<string, unknown> = {}) => ({
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          ...extra,
+        });
+        const lastCompleteOpts = () => vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2];
+        const offered = () =>
+          (lastCompleteOpts().tools ?? []).map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
+        const setModel = (extra: Record<string, unknown>) => {
+          mockTextModel();
+          mockedGetAvailableModels.mockResolvedValue([
+            {
+              id: ChatModels.GPT4,
+              type: 'text',
+              name: 'GPT-4',
+              backend: ModelBackend.OpenAI,
+              max_tokens: 100,
+              contextWindow: 1000,
+              can_stream: false,
+              pricing: {},
+              supportsImageVariation: false,
+              ...extra,
+            },
+          ]);
+        };
+
+        it('offers the tool unselected and drops the identity line', async () => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody(), logger: mockLogger });
+          expect(offered()).toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(true);
+        });
+
+        it.each(['grounded', 'surface'] as const)('keeps the identity line under promptMode %s', async promptMode => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody({ promptMode }), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it('offers nothing under an explicit skipAutoOffers', async () => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody({ skipAutoOffers: true }), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+          expect(lastCompleteOpts().omitIdentityReminder).toBe(false);
+        });
+
+        it('keeps the identity line on an Ollama model', async () => {
+          setModel({ supportsTools: true, backend: ModelBackend.Ollama });
+          await service.process({ body: turnBody(), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it('keeps the identity line when the tool is deny-listed', async () => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody({ deniedTools: ['current_model_details'] }), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it.each([{ supportsTools: false }, {}])(
+          'keeps the identity line on a model that cannot call tools (%j)',
+          async extra => {
+            setModel(extra);
+            await service.process({ body: turnBody(), logger: mockLogger });
+            expect(offered()).not.toContain('current_model_details');
+            expect(lastCompleteOpts().identityViaTool).toBe(false);
+            // The per-attempt override masks the primary-turn trim above, so check the recorded list too.
+            const saved = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+              promptMeta?: { offeredTools?: string[] };
+            };
+            expect(saved?.promptMeta?.offeredTools).toBeDefined();
+            expect(saved.promptMeta!.offeredTools).not.toContain('current_model_details');
+          }
+        );
+
+        it('does not cost a GPT-5.4 turn its reasoning effort when the tool would be the only one', async () => {
+          setModel({ id: ChatModels.GPT5_4, supportsTools: true });
+          await service.process({
+            body: turnBody({ params: { ...startQuestParams.params, model: ChatModels.GPT5_4 } }),
+            logger: mockLogger,
+          });
+          expect(offered()).toEqual([]);
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it('withholds the lone tool from a registry-only model routed to the Responses transport by its profile', async () => {
+          const id = 'registry-only-responses-model';
+          setModel({ id, supportsTools: true, dispatchProfile: { toolTransport: 'responses' } });
+          await service.process({
+            body: turnBody({ params: { ...startQuestParams.params, model: id } }),
+            logger: mockLogger,
+          });
+          expect(offered()).toEqual([]);
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it('keeps the tool on a GPT-5.4 turn that already carries another tool', async () => {
+          setModel({ id: ChatModels.GPT5_4, supportsTools: true });
+          await service.process({
+            body: turnBody({
+              tools: ['current_datetime'],
+              params: { ...startQuestParams.params, model: ChatModels.GPT5_4 },
+            }),
+            logger: mockLogger,
+          });
+          expect(offered()).toContain('current_datetime');
+          expect(offered()).toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(true);
+        });
+
+        // The last case would carry the tool alone onto a GPT-5.4 model, which the primary trim also prevents.
+        it.each([{ supportsTools: false }, {}, { id: ChatModels.GPT5_4_MINI, supportsTools: true }])(
+          'hands a fallback hop that withholds the tool its identity line, and does not require tools for it (%j)',
+          async hopCaps => {
+            setModel({ supportsTools: true });
+            mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+            mockedShouldTriggerFallback.mockReturnValue(true);
+            mockedIsOverloadedError.mockReturnValue(false);
+            const primaryComplete = vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+            mockedGetLlmByModel.mockReturnValue({
+              complete: primaryComplete,
+              getModelInfo: vi.fn().mockResolvedValue([]),
+            } as any);
+            const fallbackComplete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+              await cb(['Hello from fallback']);
+            });
+            mockedGetLlmWithFallback.mockResolvedValue({
+              model: {
+                id: 'fallback-no-tools',
+                type: 'text',
+                name: 'No Tools',
+                backend: ModelBackend.OpenAI,
+                max_tokens: 100,
+                contextWindow: 1000,
+                can_stream: false,
+                pricing: {},
+                supportsImageVariation: false,
+                ...hopCaps,
+              },
+              backend: { complete: fallbackComplete, getModelInfo: vi.fn().mockResolvedValue([]) },
+              attempt: 1,
+            } as any);
+
+            await service.process({ body: turnBody(), logger: mockLogger });
+
+            // Precondition: the primary carried the tool, so the hop override below has something to undo.
+            const primaryOpts = primaryComplete.mock.calls[0][2];
+            expect(primaryOpts.identityViaTool).toBe(true);
+            expect(primaryOpts.tools.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toContain(
+              'current_model_details'
+            );
+
+            expect(mockedGetLlmWithFallback.mock.calls[0][5]).toMatchObject({ requireTools: false });
+            expect(fallbackComplete).toHaveBeenCalledTimes(1);
+            expect(mockDb.quests.update).toHaveBeenCalledWith(
+              expect.objectContaining({
+                replies: ['Hello from fallback'],
+                fallbackInfo: expect.objectContaining({ fallbackModel: hopCaps.id ?? 'fallback-no-tools' }),
+              })
+            );
+            const hopOpts = fallbackComplete.mock.calls[0][2];
+            expect(hopOpts.identityViaTool).toBe(false);
+            expect(hopOpts.tools ?? []).toEqual([]);
+          }
+        );
       });
 
       // A session's first turn used to keep the in-flight quest in history, so the caller's message
@@ -4336,7 +4670,13 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       const logger = mockLogger;
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = {
+        ...startQuestParams,
+        tools: [],
+        ...NO_AUTO_OFFERS,
+        projectId: undefined,
+        organizationId: undefined,
+      };
 
       await service.process({ body, logger });
 
@@ -4988,6 +5328,34 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // An org balance is a hard stop (#1238): an overshoot past it is floored at zero and written
+    // off, unlike a personal account's (see 'settlement beyond the balance (personal account)').
+    it('floors an org overshoot at the balance and reports the write-off', async () => {
+      const { complete } = reservationOrgSetup();
+      const LEFT_AFTER_HOLD = 10;
+      const state = { balance: expectedHold + LEFT_AFTER_HOLD };
+      fundedOrg();
+      mockDb.organizations.incrementCredits = vi.fn(async (_id: string, amount: number) => {
+        state.balance += amount;
+        return { id: 'org1', currentCredits: state.balance };
+      });
+      const outputTokens = 1_000_000;
+      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+        await cb(['A long answer'], { inputTokens: 10, outputTokens });
+      });
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      const actual = settledCredits(outputTokens);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', -LEFT_AFTER_HOLD);
+      expect(state.balance).toBe(0);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ writtenOffCredits: actual - expectedHold - LEFT_AFTER_HOLD })
+      );
+    });
+
     // A second gated tool call refused for credits ends the turn, but the image delivered before it
     // was spent and is billed like an abort's, not refunded with the hold.
     it('bills delivered tool charges when a later tool call is refused for credits', async () => {
@@ -5131,6 +5499,53 @@ describe('ChatCompletionProcess', () => {
         'text_generation_usage',
         expect.objectContaining({ model: 'claude-opus-4-8' })
       );
+    });
+
+    // The tool is built once, before the fallback loop; it must report the hop that is answering.
+    it('current_model_details reports the fallback model after a failover', async () => {
+      reservationOrgSetup({ supportsTools: true });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: try again')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 128_000,
+        contextWindow: 200_000,
+        can_stream: true,
+        supportsTools: true,
+        pricing: { 200000: { input: 0, output: 60 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      let reported: string | undefined;
+      mockedGetLlmWithFallback.mockResolvedValue({
+        model: fallbackModel,
+        backend: {
+          complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+            const tool = opts.tools.find(
+              (t: { toolSchema: { name: string } }) => t.toolSchema.name === 'current_model_details'
+            );
+            reported = await tool.toolFn({});
+            await cb(['x'], { inputTokens: 1, outputTokens: 1 });
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: fallbackModel.id,
+        },
+        attempt: 1,
+      } as any);
+
+      await service.process({ body: { ...reservationBody(), tools: [] }, logger: mockLogger });
+
+      expect(JSON.parse(reported ?? '{}')).toMatchObject({ id: 'claude-opus-4-8', servedVia: 'direct Anthropic API' });
     });
 
     // Cache reads and writes are priced at their own rates, as the main settlement prices them, not
@@ -6169,6 +6584,143 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // A personal turn that costs more than its hold plus the balance behind it is charged in full:
+    // the balance goes negative instead of the excess being written off, and that debt is what the
+    // next turn's pre-flight hold refuses on.
+    describe('settlement beyond the balance (personal account)', () => {
+      const BALANCE = 100;
+      const overshootModel = {
+        id: ChatModels.GPT4,
+        type: 'text' as const,
+        name: 'GPT-4',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: false,
+        pricing: { 200000: { input: 0, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      const personalBody = () => ({ ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined });
+      const setupPersonalTurn = (incrementCredits: ReturnType<typeof vi.fn>, complete: ReturnType<typeof vi.fn>) => {
+        mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+        mockedCalculateTotalTokenLength.mockResolvedValue(80);
+        mockedUsdToCredits.mockImplementation(realUsdToCredits);
+        mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+        enableAdminFlags('enforceCredits');
+        mockDb.users = {
+          update: vi.fn(),
+          findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: BALANCE }),
+          incrementCredits,
+        };
+        mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([overshootModel]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      };
+      // A stored balance that every $inc moves, so the hold, the settlement and the next turn's
+      // admission all see what the database would.
+      const fakeBalance = (initial: number) => {
+        const state = { balance: initial };
+        const incrementCredits = vi.fn(async (_id: string, amount: number) => {
+          state.balance += amount;
+          return { id: 'user1', currentCredits: state.balance };
+        });
+        return { state, incrementCredits };
+      };
+      // Far past any hold: the cost of a long tool run the hold was never priced for.
+      const OVERSHOOT_OUTPUT_TOKENS = 1_000_000;
+      const actual = realUsdToCreditsStochastic((OVERSHOOT_OUTPUT_TOKENS * 30) / 1_000_000, () => 0);
+
+      it('charges the whole overshoot into a negative balance instead of writing it off', async () => {
+        expect(actual).toBeGreaterThan(BALANCE);
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['A long answer'], { inputTokens: 10, outputTokens: OVERSHOOT_OUTPUT_TOKENS });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        const hold = -incrementCredits.mock.calls[0][1];
+        expect(hold).toBeGreaterThan(0);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - actual);
+        expect(state.balance).toBe(BALANCE - actual);
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: undefined })
+        );
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
+          expect.objectContaining({ ownerId: 'user1', balanceAfter: BALANCE - actual, shortfall: actual - hold })
+        );
+        expect(mockLogger.warn).not.toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_CLAMP]'),
+          expect.anything()
+        );
+      });
+
+      // The thrown-abort settlement (settleReservation) charges a personal account the same way.
+      it('charges a stopped turn past the balance in full too', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const TOOL_CHARGE = BALANCE * 3;
+        const complete = vi.fn().mockImplementation(async () => {
+          (service as any).toolCreditsMap.set('image_generation', [TOOL_CHARGE]);
+          const abort = new Error('The operation was aborted');
+          abort.name = 'AbortError';
+          throw abort;
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        mockQuest.sessionId = 'session1';
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        const hold = -incrementCredits.mock.calls[0][1];
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - TOOL_CHARGE);
+        expect(state.balance).toBe(BALANCE - TOOL_CHARGE);
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
+          expect.objectContaining({ balanceAfter: BALANCE - TOOL_CHARGE })
+        );
+      });
+
+      it('refuses the next turn while the balance is negative, without calling the model', async () => {
+        const { state, incrementCredits } = fakeBalance(-250);
+        const complete = vi.fn();
+        setupPersonalTurn(incrementCredits, complete);
+        (service as any).user = { ...mockUser, currentCredits: -250 };
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(complete).not.toHaveBeenCalled();
+        // The hold went on and came straight back off: the debt is untouched.
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(state.balance).toBe(-250);
+        expect(mockQuest.type).toBe('error');
+        expect(mockQuest.reply).toMatch(/250 credits owed/);
+      });
+
+      it('does not report a debt when a concurrent hold, not an earlier overshoot, drained the balance', async () => {
+        const { incrementCredits } = fakeBalance(BALANCE - 500);
+        setupPersonalTurn(incrementCredits, vi.fn());
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(mockQuest.type).toBe('error');
+        expect(mockQuest.reply).not.toMatch(/owed/);
+      });
+    });
+
     describe('settlement price stamp', () => {
       const stampedModel = (extra: Partial<ModelInfo> = {}): ModelInfo => ({
         id: ChatModels.GPT4,
@@ -6766,7 +7318,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], ...NO_AUTO_OFFERS, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -6811,6 +7363,7 @@ describe('ChatCompletionProcess', () => {
       ...startQuestParams,
       params: { ...startQuestParams.params, model: ChatModels.CLAUDE_5_SONNET_BEDROCK },
       tools: [],
+      ...NO_AUTO_OFFERS,
       projectId: undefined,
       organizationId: undefined,
     };
@@ -6926,7 +7479,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], ...NO_AUTO_OFFERS, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -6978,7 +7531,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], ...NO_AUTO_OFFERS, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -7190,7 +7743,13 @@ describe('ChatCompletionProcess', () => {
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
         await service.process({
-          body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+          body: {
+            ...startQuestParams,
+            tools: [],
+            ...NO_AUTO_OFFERS,
+            projectId: undefined,
+            organizationId: undefined,
+          },
           logger: mockLogger,
         });
         const updateCall = mockDb.quests.update.mock.calls.find(
@@ -11238,6 +11797,50 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    it('retries a stalled-empty Bedrock stream once on the same model, then falls back', async () => {
+      setupStreamIdleTimeoutMocks();
+      mockQuest.promptMeta.model = { name: ChatModels.CLAUDE_5_SONNET_BEDROCK, backend: ModelBackend.Bedrock };
+      const primaryComplete = vi
+        .fn()
+        .mockRejectedValue(
+          new Error(bedrockEmptyResponseMessage(ChatModels.CLAUDE_5_SONNET_BEDROCK, 'us-east-1', true))
+        );
+      mockedGetLlmByModel.mockReturnValue({
+        complete: primaryComplete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      });
+      const fallbackModel = {
+        id: 'claude-sonnet-4-8',
+        type: 'text' as const,
+        name: 'Claude Sonnet 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: {},
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['Hello from fallback']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-sonnet-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(primaryComplete).toHaveBeenCalledTimes(2);
+      expect(fallbackBackend.complete).toHaveBeenCalledTimes(1);
+    });
+
     describe('preview stall marker', () => {
       const claudeModel = {
         id: 'global.anthropic.claude-opus-4-8',
@@ -11895,6 +12498,70 @@ describe('attachmentHasIndexedContent (readable-chunk-text predicate, #1163)', (
 
   it('is false for an archived file even when fully vectorized', () => {
     expect(attachmentHasIndexedContent({ vectorized: true, chunkCount: 0, archivedAt: new Date() })).toBe(false);
+  });
+});
+
+describe('computeHolderSettlement', () => {
+  it('charges a personal shortfall in full, past the balance, with nothing written off', () => {
+    expect(computeHolderSettlement(CreditHolderType.User, 100, 130, 10)).toEqual({ delta: -30, writtenOffCredits: 0 });
+    expect(computeHolderSettlement(CreditHolderType.User, 100, 130, -50)).toEqual({
+      delta: -30,
+      writtenOffCredits: 0,
+    });
+  });
+
+  it('refunds a personal over-reservation like any other settlement', () => {
+    expect(computeHolderSettlement(CreditHolderType.User, 100, 60, 0)).toEqual({ delta: 40, writtenOffCredits: 0 });
+  });
+
+  // Parallel turns each settle with their own atomic $inc, so summing their deltas is the total debited.
+  it('lets concurrent personal overshoots add up instead of each being clamped to a stale snapshot', () => {
+    const staleSnapshot = 10;
+    const turns = [130, 150, 170].map(used => computeHolderSettlement(CreditHolderType.User, 100, used, staleSnapshot));
+    expect(turns.reduce((sum, turn) => sum + turn.delta, 0)).toBe(-150);
+    expect(turns.every(turn => turn.writtenOffCredits === 0)).toBe(true);
+  });
+
+  it('floors any non-personal holder, so a new holder type is not charged into debt by default', () => {
+    expect(computeHolderSettlement(CreditHolderType.Agent, 100, 130, 10)).toEqual({
+      delta: -10,
+      writtenOffCredits: 20,
+    });
+  });
+
+  it('keeps the zero floor for an organization (its balance is a hard stop)', () => {
+    expect(computeHolderSettlement(CreditHolderType.Organization, 100, 130, 10)).toEqual({
+      delta: -10,
+      writtenOffCredits: 20,
+    });
+  });
+});
+
+describe('warnOnSettlementDebt', () => {
+  type SettlementLogger = Parameters<typeof warnOnSettlementDebt>[0];
+  const context = { questId: 'q1', ownerId: 'user1', ownerType: CreditHolderType.User, reserved: 100, used: 130 };
+
+  it('warns with the debt when the settled balance is negative', () => {
+    const logger = { warn: vi.fn() } as unknown as SettlementLogger;
+    warnOnSettlementDebt(logger, { currentCredits: -20 }, context);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
+      expect.objectContaining({ shortfall: 30, balanceAfter: -20, ownerId: 'user1' })
+    );
+  });
+
+  it('stays quiet at a zero or positive balance, or with no holder', () => {
+    const logger = { warn: vi.fn() } as unknown as SettlementLogger;
+    warnOnSettlementDebt(logger, { currentCredits: 0 }, context);
+    warnOnSettlementDebt(logger, null, context);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  // A sibling turn's overshoot left the balance negative; this turn's own refund did not add to it.
+  it('stays quiet for a refund settlement that lands on a negative balance', () => {
+    const logger = { warn: vi.fn() } as unknown as SettlementLogger;
+    warnOnSettlementDebt(logger, { currentCredits: -110 }, { ...context, reserved: 40, used: 10 });
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 

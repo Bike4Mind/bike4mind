@@ -417,6 +417,12 @@ export interface ToolContext {
   llm: Pick<ICompletionBackend, 'complete'>;
   model?: string; // User's selected model for the current quest
   /**
+   * Per-turn mutable reference to the model actually serving the turn. The completion loop
+   * reassigns `.current` on every fallback hop while tools stay built, so read it at call time
+   * and never capture it at build time. Absent on hosts that do not run the fallback loop.
+   */
+  servingModel?: { current: ModelInfo };
+  /**
    * Model catalog for the current request, used to resolve provider + COGS pricing when a
    * tool records its own operational llm.complete spend (see recordToolOperationalUsage).
    * Present on the chat/agent path (from precomputed models); absent on lean harnesses,

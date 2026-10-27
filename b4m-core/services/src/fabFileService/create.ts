@@ -28,6 +28,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
+import { signedUrlExpiresAt } from './get';
 
 // The fab-file bucket reaps everything under these prefixes after 1 day (infra/buckets.ts,
 // expire-notebook-exports and expire-generated-audio-offload), so no durable FabFile may be stored there. Pinned to the rule by
@@ -268,7 +269,7 @@ export const prepareFabFile = async (
     // (see fabFileService/get.ts generateSignedUrl). Non-image content is unaffected.
     if (!mimeType.startsWith('image/')) {
       buildData.fileUrl = await storage.generateSignedUrl(filePath, DEFAULT_EXPIRE_IN_SECONDS, 'get');
-      buildData.fileUrlExpireAt = new Date(Date.now() + DEFAULT_EXPIRE_IN_SECONDS * 1000);
+      buildData.fileUrlExpireAt = signedUrlExpiresAt(buildData.fileUrl, DEFAULT_EXPIRE_IN_SECONDS);
     }
   } else {
     // Bound to the declared size, the one the size and storage checks above ran on.

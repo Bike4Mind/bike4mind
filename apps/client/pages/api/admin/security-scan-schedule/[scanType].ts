@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { securityScanScheduleRepository, SecurityScanType } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';

@@ -4,11 +4,11 @@ import { IUserDocument, isImageServeable } from '@bike4mind/common';
 import { Quest, Session, fabFileRepository } from '@bike4mind/database';
 import { SlackDevWorkspace, OrgSlackWorkspace } from '@bike4mind/database/infra';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
+import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
-import { loadFabFileAttachment, resolvePendingActionTarget } from '@server/utils/pendingActionTarget';
+import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
 import { TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 

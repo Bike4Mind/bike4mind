@@ -9,7 +9,7 @@ import { createAgentContract, listAgentsContract } from '@bike4mind/common';
 import { agentRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';

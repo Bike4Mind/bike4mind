@@ -200,6 +200,16 @@
         "default": "./dist/videoProviders/index.cjs"
       }
     },
+    "./embeddingProviders": {
+      "import": {
+        "types": "./dist/embeddingProviders/index.d.mts",
+        "default": "./dist/embeddingProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/embeddingProviders/index.d.cts",
+        "default": "./dist/embeddingProviders/index.cjs"
+      }
+    },
     "./musicProviders": {
       "import": {
         "types": "./dist/musicProviders/index.d.mts",

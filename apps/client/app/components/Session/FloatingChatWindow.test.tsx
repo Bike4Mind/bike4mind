@@ -32,6 +32,21 @@ describe('FloatingChatWindow', () => {
     expect(useSessionLayout.getState().layout).toBe('hide');
   });
 
+  it('collapses to the pill instead of hiding when closeToPill is set', () => {
+    render(
+      <Wrapper>
+        <FloatingChatWindow closeToPill>chat</FloatingChatWindow>
+      </Wrapper>
+    );
+
+    fireEvent.click(screen.getByTestId('floating-chat-close'));
+
+    const state = useSessionLayout.getState();
+    expect(state.layout).toBe('floatingChat');
+    expect(state.floatingChatMinimized).toBe(true);
+    expect(screen.getByTestId('floating-chat-minimized')).toBeTruthy();
+  });
+
   // The other half of DockedChatPanel's "Hide chat": the pill is a waypoint back to the
   // dock, so expanding it must not strand the chat in a floating window.
   it.each(['dockRight', 'dockBottom'] as const)('expands back into the %s that hid the chat here', dock => {

@@ -88,7 +88,7 @@ vi.mock('@server/auth/issueSession', () => ({
 }));
 
 // The per-user throttle is backed by the `caches` collection; this test has no Mongo.
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
   rateLimit: () => (_req: any, _res: any, next: any) => next(),
 }));

@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { optionalAuth } from '@server/middlewares/optionalAuth';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { z } from 'zod';
 import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
 import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/publish/parsePublishPath';

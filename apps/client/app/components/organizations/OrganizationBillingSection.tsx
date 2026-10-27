@@ -15,7 +15,7 @@ import {
   ISubscription,
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
-} from '@client/lib/subscriptions/types';
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import AddIcon from '@mui/icons-material/Add';
 import GroupIcon from '@mui/icons-material/Group';
 import PaymentIcon from '@mui/icons-material/Payment';

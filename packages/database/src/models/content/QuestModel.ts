@@ -562,6 +562,11 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
 export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
   {
     sessionId: { type: String, required: true },
+    signupActivity: {
+      type: new Schema({ userId: String, turnId: String, startedAt: Date }, { _id: false }),
+      default: undefined,
+      select: false,
+    },
     conversationItemId: { type: String, required: false },
     openaiMessageId: { type: String, required: false },
     claudeMessageId: { type: String, required: false },
@@ -1675,6 +1680,16 @@ function initializeQuestModel() {
 
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
+    // Built in production by migration 20260921235966_ensure-quest-signup-activity-index; keep the
+    // name and key in sync with it. Partial so the build and its entries cover only turns carrying
+    // provenance, not every quest; the activity aggregate's equality on userId implies the filter.
+    ChatHistoryItemSchema.index(
+      { 'signupActivity.userId': 1, status: 1, 'signupActivity.startedAt': 1 },
+      {
+        name: 'signupActivity_user_status_startedAt',
+        partialFilterExpression: { 'signupActivity.userId': { $exists: true } },
+      }
+    );
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });
@@ -1686,6 +1701,10 @@ function initializeQuestModel() {
 
     // Index for deletedAt and timestamp queries
     ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1 }, { name: 'deletedAt_timestamp_desc' });
+
+    // Model Logs pages need an _id tie-break when timestamps match. Keep the full sort in the
+    // index so even the first page does not fetch and sort every log in the selected date range.
+    ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1, _id: -1 }, { name: 'deletedAt_timestamp_id_desc' });
 
     // Index for finding messages without embeddings (for Zen Garden grooming)
     ChatHistoryItemSchema.index(
@@ -1736,13 +1755,13 @@ function initializeQuestModel() {
     // this the sweep collection-scans the largest collection every 5 minutes.
     // Dense on purpose: both fields exist on every quest. Pre-built by
     // 20260826000000_ensure-quest-status-updatedat-index rather than left to
-    // autoIndex, because prod runs DocumentDB where the build takes a foreground
-    // collection lock and would otherwise land on a request path.
+    // autoIndex, whose build is fire-and-forget (a failure is silent) and would
+    // otherwise start on whichever request path cold-boots onto quests first.
     ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });
 
     // Serves findUndispatchedCallbacks (questTimeoutSweep backstop). Partial, so it holds only
     // the handful of quests whose callback is armed but not yet claimed. Pre-built by
-    // 20260921235900_ensure-quest-callback-pending-index for the same DocumentDB reason as above.
+    // 20260921235900_ensure-quest-callback-pending-index for the same reason as above.
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, updatedAt: 1 },
       { name: 'callbackState_updatedAt', partialFilterExpression: { 'callback.state': 'pending' } }
@@ -1753,6 +1772,14 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, 'callback.dispatchedAt': 1 },
       { name: 'callbackState_dispatchedAt', partialFilterExpression: { 'callback.state': 'dispatched' } }
+    );
+
+    // Serves the telemetry opt-out delete (telemetryDeletion.ts) and the user/admin telemetry
+    // exports, which match a user's regenerated per-day hashes with $in. Sparse, so only quests
+    // that carry context telemetry are indexed. Pre-built by 20260921235969_ensure-advisor-indexes.
+    ChatHistoryItemSchema.index(
+      { 'promptMeta.contextTelemetry.anonymousSessionId.hash': 1 },
+      { name: 'contextTelemetry_anonymousSessionHash', sparse: true }
     );
   } catch (error) {
     // Plugin already applied, ignore error

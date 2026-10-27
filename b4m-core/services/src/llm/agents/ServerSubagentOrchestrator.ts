@@ -6,6 +6,7 @@ import {
   getTextModelCost,
   getTurnsCost,
   type ModelInfo,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
 import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -13,7 +14,7 @@ import type { Logger } from '@bike4mind/observability';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
 import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
-import type { ModelAdmission } from '../modelAdmission';
+import { isModelRequiresSubscriptionError, type ModelAdmission } from '../modelAdmission';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -301,6 +302,8 @@ export interface ServerOrchestratorDeps {
   onProgress?: (status: string) => Promise<void>;
   /** Extended thinking configuration to propagate to subagents */
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller; each subagent withholds what it may not see. */
+  thinkingVisibility?: ThinkingVisibility;
   /**
    * Artifact-emission guidance appended to every spawned subagent's system
    * prompt (optional). Set by the Agent Executor when the admin `EnableArtifacts`
@@ -463,8 +466,14 @@ export class ServerSubagentOrchestrator {
    * two THROW, so the loop catches per candidate - letting one escape would
    * discard every remaining rung including the degradation this exists for.
    * See `getLlmByModel` + `backendForAdapterFamily` in @bike4mind/llm-adapters.
+   *
+   * A candidate the caller's plan does not cover (the free-tier gate) is skipped the same way, so a free
+   * account's subagent degrades instead of failing. Every other admission refusal is left for
+   * `assertModelAdmitted` to raise.
    */
-  private resolveAgentRuntime(agentDef: ServerAgentDefinition): { llm: ICompletionBackend; model: string } {
+  private async resolveAgentRuntime(
+    agentDef: ServerAgentDefinition
+  ): Promise<{ llm: ICompletionBackend; model: string }> {
     const parent = { llm: this.deps.llm, model: this.deps.llm.currentModel };
     if (!agentDef.model) return parent;
     // An agent can stay pinned to a retired id; map it to the successor before any backend lookup.
@@ -485,6 +494,10 @@ export class ServerSubagentOrchestrator {
     for (const model of candidates) {
       // The parent's own backend already serves this id; no need to build another.
       if (model === parent.model) return parent;
+      if (await this.isPaidOnlyForCaller(model)) {
+        this.deps.logger.warn(`🤖⚠️ [SubagentOrchestrator] "${model}" needs a paid plan; trying the next candidate`);
+        continue;
+      }
       let backend: ICompletionBackend | null;
       try {
         backend = this.deps.resolveBackend(model);
@@ -518,6 +531,15 @@ export class ServerSubagentOrchestrator {
         `(tried ${candidates.join(', ')}); running on the parent's model "${parent.model}"`
     );
     return parent;
+  }
+
+  private async isPaidOnlyForCaller(model: string): Promise<boolean> {
+    try {
+      await this.deps.modelAdmission?.assert(model);
+      return false;
+    } catch (err) {
+      return isModelRequiresSubscriptionError(err);
+    }
   }
 
   /** Throws the admission error itself, the same message the dispatched path records on its failed child. */
@@ -580,7 +602,7 @@ export class ServerSubagentOrchestrator {
     // `effectiveModel` on the child doc, and the child re-resolves its backend
     // from that id alone - so an unserviceable id has to be replaced here or
     // the child Lambda dies on "Failed to create LLM backend".
-    const { llm: effectiveLlm, model: effectiveModel } = this.resolveAgentRuntime(agentDef);
+    const { llm: effectiveLlm, model: effectiveModel } = await this.resolveAgentRuntime(agentDef);
     await this.assertModelAdmitted(agentDef.name, effectiveModel);
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
     const maxIterations = agentDef.maxIterations[effectiveThoroughness];
@@ -683,6 +705,7 @@ export class ServerSubagentOrchestrator {
       }
     }
 
+    const effectiveModelInfo = this.deps.availableModels?.find(m => m.id === effectiveModel);
     const agent = new ReActAgent({
       userId: this.deps.userId,
       logger: this.deps.logger,
@@ -692,6 +715,9 @@ export class ServerSubagentOrchestrator {
       maxIterations,
       systemPrompt,
       thinking: this.deps.thinking,
+      thinkingVisibility: this.deps.thinkingVisibility,
+      modelBackend: effectiveModelInfo?.backend,
+      modelAdapterFamily: effectiveModelInfo?.adapterFamily,
       // Appended AFTER `systemPrompt` in getSystemPrompt(); only present when the
       // host opted into artifacts, so subagents emit <artifact> tags to bubble up.
       ...(this.deps.artifactEmissionPrompt && { artifactEmissionPrompt: this.deps.artifactEmissionPrompt }),
@@ -942,7 +968,7 @@ export class ServerSubagentOrchestrator {
     // backend from the persisted model id, so it must be one this deployment
     // can actually serve. The backend built here is discarded - the child
     // Lambda constructs its own.
-    const { model: effectiveModel } = this.resolveAgentRuntime(agentDef);
+    const { model: effectiveModel } = await this.resolveAgentRuntime(agentDef);
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
     const maxIterations = agentDef.maxIterations[effectiveThoroughness];
 

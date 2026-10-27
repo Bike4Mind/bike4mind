@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Box, Button, Checkbox, Option, Select, Skeleton, Stack, Table, Typography } from '@mui/joy';
 import { EmptyState } from './EmptyState';
 import { ErrorState } from './ErrorState';
-import { adminFocus, adminFocusScope, adminSurface } from './adminStyles';
+import { adminFocus, adminFocusScope, adminScrollGutter, adminSurface } from './adminStyles';
 import type { AdminSelection } from './BulkActionBar';
 
 export type DataColumn<Row> = {
@@ -112,12 +112,15 @@ export function DataTable<Row>({
       <Box
         role="region"
         aria-label={label}
+        // Tells the admin skin this table already has its own frame (adminSkin.ts, JoyTable).
+        data-admin-table-frame
         tabIndex={0}
         sx={{
           ...adminSurface,
           ...adminFocus,
           overflowX: 'auto',
           maxHeight: '65vh',
+          ...adminScrollGutter,
           borderWidth: 1,
           borderStyle: 'solid',
         }}
@@ -131,7 +134,6 @@ export function DataTable<Row>({
           data-testid={testId}
           sx={{
             minWidth: '40rem',
-            '--TableCell-headBackground': 'var(--joy-palette-admin-surface)',
             '--TableCell-selectedBackground': 'var(--joy-palette-admin-canvas)',
             '& th, & td': { borderColor: 'admin.border', color: 'admin.ink' },
             '& th': { color: 'admin.inkMuted' },
@@ -199,7 +201,8 @@ export function DataTable<Row>({
                   return (
                     <tr
                       key={id}
-                      tabIndex={onRowActivate ? 0 : undefined}
+                      tabIndex={onRowActivate || selectable ? 0 : undefined}
+                      aria-keyshortcuts={selectable ? 'x' : undefined}
                       aria-selected={selectable ? isSelected(id) : activeRowId === id}
                       data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
                       onClick={event => {
@@ -207,6 +210,21 @@ export function DataTable<Row>({
                         onRowActivate?.(row);
                       }}
                       onKeyDown={event => {
+                        if (
+                          event.target === event.currentTarget &&
+                          selectable &&
+                          event.key.toLowerCase() === 'x' &&
+                          !event.metaKey &&
+                          !event.ctrlKey &&
+                          !event.altKey &&
+                          !event.shiftKey &&
+                          !event.repeat &&
+                          !event.nativeEvent.isComposing
+                        ) {
+                          event.preventDefault();
+                          toggleRows([id], !isSelected(id));
+                          return;
+                        }
                         if (
                           event.target !== event.currentTarget ||
                           !onRowActivate ||

@@ -40,7 +40,7 @@ vi.mock('@server/integrations/jira/revokeAtlassianGrant', () => ({ revokeAtlassi
 vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: (v: string) => v }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: (v: string) => v }));
 
 await import('../disconnect');
 

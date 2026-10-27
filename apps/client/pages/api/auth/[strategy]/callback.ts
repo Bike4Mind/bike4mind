@@ -5,11 +5,12 @@ import { AuthStrategy } from '@bike4mind/common';
 import { authFailLogRepository } from '@bike4mind/database';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { issueBrowserSession } from '@server/auth/issueSession';
-import { verifyStateToken, BaseStatePayload } from '@server/auth/jwtStateStore';
+import { verifyStateToken, BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import passport from 'passport';
@@ -21,10 +22,21 @@ import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
 import { AuthEvents } from '@bike4mind/common';
-import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
+import { resolveOAuthFailureReason, oauthFailureLoginErrorCode } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+
+/**
+ * True for the provider's `invalid_grant` on the code exchange: the authorization code was already
+ * redeemed or has expired (back button, double submit, slow return). An expected outcome, so it
+ * logs at warn rather than at error, the level the alert channel pages on.
+ */
+function isReplayedOrExpiredCode(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const { name, code } = err as { name?: unknown; code?: unknown };
+  return name === 'TokenError' && code === 'invalid_grant';
+}
 
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
@@ -36,6 +48,7 @@ const handler = baseApi({ auth: false })
     next();
   })
   .use(checkBlockedIP())
+  .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }))
   .get(async (req: Request<{}, unknown, unknown, { strategy: AuthStrategy; state: string }>, res, next) => {
     const { strategy } = req.query;
 
@@ -60,7 +73,8 @@ const handler = baseApi({ auth: false })
         const email = (info as any)?.email || undefined;
 
         if (err) {
-          console.error('Passport Authenticate Error:', info, err);
+          const logError = isReplayedOrExpiredCode(err) ? console.warn : console.error;
+          logError('Passport Authenticate Error:', info, err);
           try {
             await authFailLogRepository.create({
               strategy,
@@ -81,8 +95,15 @@ const handler = baseApi({ auth: false })
           // Raw info (which may embed another user's email or DB error text via
           // info.message) is logged here for CloudWatch only. The audit reason and
           // redirect below must never read anything but the whitelisted code.
-          console.error('Passport Authenticate User Not Found Info:', info);
-          const reason = resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
+          // A whitelisted reason is an expected outcome (invite gate, stale or replayed state), so
+          // only an unrecognized failure logs at error, the level the alert channel pages on.
+          // passport-oauth2 turns a cancelled consent (`?error=access_denied`) into a code-less fail().
+          const reason =
+            (req.query as { error?: unknown }).error === 'access_denied'
+              ? 'access_denied'
+              : resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
+          const logFailure = reason === 'internal' ? console.error : console.warn;
+          logFailure('Passport Authenticate User Not Found Info:', info);
           try {
             await authFailLogRepository.create({
               strategy,
@@ -96,7 +117,7 @@ const handler = baseApi({ auth: false })
           } catch (logErr) {
             console.error('Failed to write AuthFailLog (oauth no user):', logErr);
           }
-          return res.redirect(`/login?error=${encodeURIComponent(oauthFailureRedirectMessage(reason))}`);
+          return res.redirect(`/login?error=${oauthFailureLoginErrorCode(reason)}`);
         }
 
         // Ban gate, mirroring saml/callback.ts and okta/callback.ts. Without it a banned
@@ -249,7 +270,7 @@ const handler = baseApi({ auth: false })
       } catch (callbackError) {
         // Catch any unhandled errors in the callback to prevent unhandled promise rejections
         console.error('Unhandled error in passport authenticate callback:', callbackError);
-        return res.redirect('/login?error=Authentication%20failed');
+        return res.redirect(`/login?error=${oauthFailureLoginErrorCode('internal')}`);
       }
     })(req, res, next);
   });

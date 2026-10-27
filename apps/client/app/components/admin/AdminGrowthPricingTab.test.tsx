@@ -60,6 +60,12 @@ describe('AdminGrowthPricingTab', () => {
         'defaultFreeCredits',
         'allowOpenRegistration',
         'ReferralCreditsAmount',
+        'ReferralFirstAnswerCredits',
+        'ReferralFirstPaymentCredits',
+        'ReferralSecondPaymentCredits',
+        'ReferralHoldDays',
+        'ReferralInvitesPerUser',
+        'ReferralAlertRewardsPerDay',
         'enableTeamPlan',
         'enforceCredits',
         'pricePerCredit',
@@ -129,6 +135,22 @@ describe('AdminGrowthPricingTab', () => {
     );
   });
 
+  it('keeps every inviter reward off by default and values a stored reward in dollars', () => {
+    serverSettings = [{ settingName: 'ReferralFirstPaymentCredits', settingValue: 6000 }];
+    renderTab();
+
+    expect(screen.getByTestId('admin-growth-pricing-current-ReferralFirstAnswerCredits').textContent).toBe(
+      'Current: 0 (default)'
+    );
+    expect(screen.getByTestId('admin-growth-pricing-current-ReferralHoldDays').textContent).toBe(
+      'Current: 14 (default)'
+    );
+    const floor = formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD);
+    expect(screen.getByTestId('admin-growth-pricing-derived-ReferralFirstPaymentCredits').textContent).toBe(
+      `6,000 credits = ${formatUsdAmount(6000 * MIN_PRICE_PER_CREDIT_USD)} at the floor ${floor} per credit`
+    );
+  });
+
   it('shows the unit and floor for the price per credit', () => {
     renderTab();
     expect(screen.getByTestId('admin-growth-pricing-derived-pricePerCredit').textContent).toBe(
@@ -180,6 +202,8 @@ describe('AdminGrowthPricingTab', () => {
       q: RATE_LIMIT_SETTINGS_SEARCH,
     });
     expect(RATE_LIMIT_SETTING_KEYS.length).toBeGreaterThan(0);
+    // Access policy shares the section, but this link opens only tier rate limits.
+    expect(RATE_LIMIT_SETTING_KEYS).not.toContain('apiKeyAccess');
     for (const key of RATE_LIMIT_SETTING_KEYS) {
       expect(key).toContain(RATE_LIMIT_SETTINGS_SEARCH);
       expect(settingsMap[key].category).toBe('SecOps');

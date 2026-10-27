@@ -11,13 +11,14 @@ import type { CompletionRequest } from './completions';
 import { MessageQueue } from './MessageQueue';
 import { LocalHistory } from './LocalHistory';
 import type { ModelCatalog } from './ModelCatalog';
-import { LOCAL_MODEL_PREFIX, type OllamaLocal } from './OllamaLocal';
+import type { OllamaLocal } from './OllamaLocal';
 import { SessionStore } from './SessionStore';
 import type { CompletionStreamEvent } from './streamEvents';
 import type { AccessStore } from './tools/AccessStore';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 
-const LOCAL_MODEL = `${LOCAL_MODEL_PREFIX}qwen3:8b`;
+const LOCAL_MODEL = 'local:ollama:qwen3:8b';
+const OTHER_RUNTIME_MODEL = 'local:lmstudio:some-model';
 const services: ChatService[] = [];
 
 afterEach(() => {
@@ -112,35 +113,38 @@ describe('device-local conversation boundary', () => {
     expect(events.some(event => event.type === 'error')).toBe(false);
   });
 
-  it('refuses a local relay to a hosted session before queueing or uploading its contents', async () => {
-    let targetId = '';
-    let rounds = 0;
-    const { service, store, events, post, queue, create } = await fixture(async (_request, emit) => {
-      if (rounds++ === 0) {
-        emit({
-          type: 'tool_use',
-          tools: [
-            {
-              id: 'send-private',
-              name: 'session_send',
-              arguments: JSON.stringify({ session_id: targetId, message: 'private local message' }),
-            },
-          ],
-        });
-      } else emit({ type: 'content', text: 'Kept here', stopReason: 'end_turn' });
-    });
-    const sourceId = await create();
-    targetId = await create('hosted');
-    await service.send(sourceId, 'hand this over');
-    await settled(events, sourceId);
-    expect((await store.get(sourceId))?.messages.at(-1)?.toolCalls?.[0]).toMatchObject({
-      status: 'error',
-      error: expect.stringContaining('cannot send messages to a hosted model'),
-    });
-    expect(queue.list(targetId)).toEqual([]);
-    expect((await store.get(targetId))?.messages).toEqual([]);
-    expect(post).not.toHaveBeenCalled();
-  });
+  it.each([LOCAL_MODEL, OTHER_RUNTIME_MODEL])(
+    'refuses a relay from %s to a hosted session before queueing or uploading its contents',
+    async localModel => {
+      let targetId = '';
+      let rounds = 0;
+      const { service, store, events, post, queue, create } = await fixture(async (_request, emit) => {
+        if (rounds++ === 0) {
+          emit({
+            type: 'tool_use',
+            tools: [
+              {
+                id: 'send-private',
+                name: 'session_send',
+                arguments: JSON.stringify({ session_id: targetId, message: 'private local message' }),
+              },
+            ],
+          });
+        } else emit({ type: 'content', text: 'Kept here', stopReason: 'end_turn' });
+      });
+      const sourceId = await create(localModel);
+      targetId = await create('hosted');
+      await service.send(sourceId, 'hand this over');
+      await settled(events, sourceId);
+      expect((await store.get(sourceId))?.messages.at(-1)?.toolCalls?.[0]).toMatchObject({
+        status: 'error',
+        error: expect.stringContaining('cannot send messages to a hosted model'),
+      });
+      expect(queue.list(targetId)).toEqual([]);
+      expect((await store.get(targetId))?.messages).toEqual([]);
+      expect(post).not.toHaveBeenCalled();
+    }
+  );
 
   it('still delivers a hosted relay to a local session', async () => {
     const { service, store, events, hostedStreams, create } = await fixture(async (_request, emit) => {
@@ -165,10 +169,10 @@ describe('device-local conversation boundary', () => {
     });
   });
 
-  it('refuses hosted session_read of a local transcript', async () => {
+  it.each([LOCAL_MODEL, OTHER_RUNTIME_MODEL])('refuses hosted session_read of a %s transcript', async localModel => {
     const { service, store, events, post, hostedStreams, create } = await fixture(async () => undefined);
     const sourceId = await create('hosted');
-    const targetId = await create();
+    const targetId = await create(localModel);
     await store.appendMessage(targetId, {
       id: 'private-prompt',
       role: 'user',
@@ -418,54 +422,57 @@ describe('device-local conversation boundary', () => {
     }
   });
 
-  it('withholds a local child error when its parent has switched to a hosted model', async () => {
-    let parentId = '';
-    let parentRounds = 0;
-    let failChild: (() => void) | undefined;
-    const { service, store, events, create } = await fixture(
-      async (request: CompletionRequest, emit: (event: CompletionStreamEvent) => void) => {
-        if (request.sessionId !== parentId) {
-          await new Promise<void>((_resolve, reject) => {
-            failChild = () => reject(new Error('private local failure details'));
-          });
-          return;
+  it.each([LOCAL_MODEL, OTHER_RUNTIME_MODEL])(
+    'withholds a %s child error when its parent has switched to a hosted model',
+    async localModel => {
+      let parentId = '';
+      let parentRounds = 0;
+      let failChild: (() => void) | undefined;
+      const { service, store, events, create } = await fixture(
+        async (request: CompletionRequest, emit: (event: CompletionStreamEvent) => void) => {
+          if (request.sessionId !== parentId) {
+            await new Promise<void>((_resolve, reject) => {
+              failChild = () => reject(new Error('private local failure details'));
+            });
+            return;
+          }
+          if (parentRounds++ === 0) {
+            emit({
+              type: 'tool_use',
+              tools: [
+                {
+                  id: 'suggest-child',
+                  name: 'session_spawn',
+                  arguments: JSON.stringify({ prompt: 'Private local task', title: 'Private task title' }),
+                },
+              ],
+            });
+          } else emit({ type: 'content', text: 'Suggested', stopReason: 'end_turn' });
         }
-        if (parentRounds++ === 0) {
-          emit({
-            type: 'tool_use',
-            tools: [
-              {
-                id: 'suggest-child',
-                name: 'session_spawn',
-                arguments: JSON.stringify({ prompt: 'Private local task', title: 'Private task title' }),
-              },
-            ],
-          });
-        } else emit({ type: 'content', text: 'Suggested', stopReason: 'end_turn' });
-      }
-    );
-    parentId = await create();
-    await service.send(parentId, 'suggest a child');
-    await settled(events, parentId);
-    await vi.waitUntil(() => !service.isSessionBusy(parentId));
-    const suggestion = (await store.get(parentId))?.spawnSuggestions?.[0];
-    if (!suggestion) throw new Error('Missing suggestion');
-    expect(
-      await service.startSpawnSuggestion({
-        sessionId: parentId,
-        suggestionId: suggestion.id,
-        prompt: suggestion.prompt,
-        title: suggestion.title,
-        placement: 'local',
-      })
-    ).toMatchObject({ ok: true });
-    await vi.waitUntil(() => failChild);
-    await service.setSessionModel(parentId, 'hosted');
-    failChild?.();
-    await vi.waitUntil(() => events.some(event => event.type === 'message' && event.sessionId === parentId));
-    const report = (await store.get(parentId))?.messages.at(-1);
-    expect(report?.content).toBe('A device-local child session finished. Open that conversation to read its report.');
-    expect(JSON.stringify(report)).not.toContain('private local failure details');
-    expect(JSON.stringify(report)).not.toContain('Private task title');
-  });
+      );
+      parentId = await create(localModel);
+      await service.send(parentId, 'suggest a child');
+      await settled(events, parentId);
+      await vi.waitUntil(() => !service.isSessionBusy(parentId));
+      const suggestion = (await store.get(parentId))?.spawnSuggestions?.[0];
+      if (!suggestion) throw new Error('Missing suggestion');
+      expect(
+        await service.startSpawnSuggestion({
+          sessionId: parentId,
+          suggestionId: suggestion.id,
+          prompt: suggestion.prompt,
+          title: suggestion.title,
+          placement: 'local',
+        })
+      ).toMatchObject({ ok: true });
+      await vi.waitUntil(() => failChild);
+      await service.setSessionModel(parentId, 'hosted');
+      failChild?.();
+      await vi.waitUntil(() => events.some(event => event.type === 'message' && event.sessionId === parentId));
+      const report = (await store.get(parentId))?.messages.at(-1);
+      expect(report?.content).toBe('A device-local child session finished. Open that conversation to read its report.');
+      expect(JSON.stringify(report)).not.toContain('private local failure details');
+      expect(JSON.stringify(report)).not.toContain('Private task title');
+    }
+  );
 });
