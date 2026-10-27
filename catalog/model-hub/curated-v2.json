@@ -338,8 +338,7 @@
               "params": "56380ca2ab89f1f68c283f4d50863c0bcab52ae3f1b9a88e4ab5617b176f71a3",
               "license": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
               "numCtx": null,
-              "projector": "c6398448d84a4836fdedf58f9775979e69ae0cc4dfdf4d697b5597693a555b12",
-              "installedTemplate": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315"
+              "projector": "c6398448d84a4836fdedf58f9775979e69ae0cc4dfdf4d697b5597693a555b12"
             }
           },
           "runtimeMin": { "ollama": "0.30.6" },
@@ -412,8 +411,7 @@
               "params": "56380ca2ab89f1f68c283f4d50863c0bcab52ae3f1b9a88e4ab5617b176f71a3",
               "license": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
               "numCtx": null,
-              "projector": "e70b0e5cd80323d5d588b4ed06780356b7b1ba03995a4b8164c6ae9db0ff5989",
-              "installedTemplate": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315"
+              "projector": "e70b0e5cd80323d5d588b4ed06780356b7b1ba03995a4b8164c6ae9db0ff5989"
             }
           },
           "runtimeMin": { "ollama": "0.30.6" },
@@ -487,8 +485,7 @@
               "params": "56380ca2ab89f1f68c283f4d50863c0bcab52ae3f1b9a88e4ab5617b176f71a3",
               "license": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
               "numCtx": null,
-              "projector": "d8e2de16e17515d9061b23c9a002715f996f9e0c87b93a9354264611bfab9239",
-              "installedTemplate": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315"
+              "projector": "d8e2de16e17515d9061b23c9a002715f996f9e0c87b93a9354264611bfab9239"
             }
           },
           "runtimeMin": { "ollama": "0.30.6" },
@@ -561,8 +558,7 @@
               "params": "906ee87bde6cff7bf3c3b1550f55cbbec261e027187fbb9f511f908ffc418334",
               "license": "4c6a8e842ef0d8504549facfb03f1273a8d0022991519bc1888522cc1a5517d1",
               "numCtx": null,
-              "projector": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e",
-              "installedTemplate": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315"
+              "projector": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e"
             }
           },
           "runtimeMin": { "ollama": "0.32.12" },
@@ -591,8 +587,7 @@
               "params": "448d29437397713495b408d51b4ccbc5ba95240a7583643efb2304921950b111",
               "license": "4c6a8e842ef0d8504549facfb03f1273a8d0022991519bc1888522cc1a5517d1",
               "numCtx": null,
-              "projector": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e",
-              "installedTemplate": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315"
+              "projector": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e"
             }
           },
           "runtimeMin": { "ollama": "0.32.12" },

@@ -107,7 +107,7 @@ for (const entry of CURATED.entries)
     if (!pins) continue;
     const template = sha256(templateText(refOf(reviewed)));
     if (pins.installedTemplate) pins.installedTemplate = template;
-    else pins.template = template;
+    else if (pins.template) pins.template = template;
     if (pins.license) pins.license = sha256(licenseText(refOf(reviewed)));
   }
 const curatedBuilds = () => CURATED.entries.flatMap(entry => entry.builds);
@@ -966,24 +966,24 @@ describe('ModelHubService curated list', () => {
     expect(ids).not.toContain('qwen3-5-4b');
   });
 
-  it('never offers a build whose template is not pinned, and leaves its slot empty', async () => {
+  it('never offers an hf.co build whose template is not pinned, and leaves its slot empty', async () => {
     const manifest: HubManifest = structuredClone(CURATED);
-    const pins = pinsOf(manifest.entries.find(entry => entry.id === 'gemma-4-26b')?.builds[0] as HubBuild);
+    const gsq = manifest.entries.find(entry => entry.id === 'qwen3-8-27b-gsq');
+    const pins = pinsOf(gsq?.builds.find(candidate => candidate.id === 'iq3-s') as HubBuild);
     if (!pins) throw new Error('no pins');
     delete pins.installedTemplate;
-    const { service, libraryLayers } = harness({ curated: manifest, hardware: machine('cpu', 62) });
+    const { service, hub } = harness({ curated: manifest, hardware: machine('discrete', 32, 15.9) });
 
     const list = await service.curated();
-    expect(list.entries.map(entry => entry.id)).not.toContain('gemma-4-26b');
-    expect(list.picks.map(pick => [pick.slot, pick.recommended])).toEqual([
-      ['fast', true],
-      ['light', false],
+    expect(list.entries.find(entry => entry.id === 'qwen3-8-27b-gsq')?.builds.map(build => build.id)).toEqual([
+      'iq2-xs',
     ]);
-    expect(await service.curatedPull('gemma-4-26b', 'qat-q4-0')).toMatchObject({
+    expect(list.picks.map(pick => pick.slot)).toEqual(['fast', 'long-context']);
+    expect(await service.curatedPull('qwen3-8-27b-gsq', 'iq3-s')).toMatchObject({
       ok: false,
       error: { kind: 'not-found' },
     });
-    expect(libraryLayers).not.toHaveBeenCalled();
+    expect(hub.getModel).not.toHaveBeenCalled();
   });
 
   it('keeps a pick listed with Download off while Ollama reports no version, and refuses its download', async () => {
@@ -1150,8 +1150,19 @@ describe('ModelHubService curated library pulls', () => {
     expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
   });
 
+  it('keeps a renderer-backed library build whatever placeholder template Ollama shows for it', async () => {
+    const { service, runtime, pulls } = harness();
+    const base = await runtime.inspect(REF);
+    runtime.inspect.mockResolvedValueOnce({ ...base, contents: base.contents && { ...base.contents, template: 'x' } });
+    const result = service.pull(libraryRequest);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].resolve();
+
+    await expect(result).resolves.toEqual({ ok: true, ref: REF });
+    expect(runtime.remove).not.toHaveBeenCalled();
+  });
+
   it.each([
-    ['another template', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, template: 'x' } })],
     ['another license', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, license: 'x' } })],
     ['no license', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, license: null } })],
     ['other weights', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, modelBlob: SHA } })],

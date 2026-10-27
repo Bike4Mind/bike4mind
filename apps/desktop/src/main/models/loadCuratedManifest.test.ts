@@ -33,13 +33,16 @@ describe('the bundled curated list', () => {
   });
 
   // A build without these pins is never offered, so a missing one would silently empty its slot.
-  it('pins the weights and the installed template of every build, and a floor Ollama version', () => {
+  it('pins the weights of every build, the template of every hf.co build, and a floor Ollama version', () => {
     for (const entry of strict().entries)
       for (const build of entry.builds) {
         const layers = pins(build);
         const label = `${entry.id} ${build.id}`;
+        const library = build.ollama?.kind === 'library';
         expect(layers, label).toBeDefined();
-        expect(layers?.installedTemplate ?? layers?.template, label).toMatch(SHA256);
+        // A library build chats through an Ollama renderer; /api/show then reports a placeholder template.
+        if (library) expect(layers?.installedTemplate, label).toBeUndefined();
+        else expect(layers?.installedTemplate ?? layers?.template, label).toMatch(SHA256);
         const weights = build.ollama?.kind === 'library' ? build.ollama.digest : build.weights[0]?.sha256;
         expect(weights, label).toMatch(SHA256);
         expect(build.runtimeMin?.ollama, label).toMatch(/^\d+\.\d+\.\d+$/);
