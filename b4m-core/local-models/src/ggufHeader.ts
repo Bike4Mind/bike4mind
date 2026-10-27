@@ -158,9 +158,10 @@ const ENCODER_ARCHITECTURES = new Set([
 ]);
 
 /**
- * What a model can do as its header shows it. A pooling type or an encoder-only architecture marks an embedding or
- * rerank model, which serves no chat. A template that never mentions `tools` cannot render them; an unreadable
- * header reports a chat model with tools, since llama-server runs with `--jinja` either way.
+ * What a model can do as its header shows it. A `clip` file is a vision projector and does nothing alone. A pooling
+ * type or an encoder-only architecture marks an embedding or rerank model, which serves no chat. A template that
+ * never mentions `tools` cannot render them; an unreadable header reports a chat model with tools, since
+ * llama-server runs with `--jinja` either way.
  */
 export function headerCapabilities(info: GgufHeaderInfo | undefined): {
   tools: boolean;
@@ -169,6 +170,7 @@ export function headerCapabilities(info: GgufHeaderInfo | undefined): {
   completion: boolean;
 } {
   if (info === undefined) return { tools: true, thinking: false, embeddings: false, completion: true };
+  if (info.architecture === 'clip') return { tools: false, thinking: false, embeddings: false, completion: false };
   const embeddings =
     (info.poolingType !== null && info.poolingType > 0) || ENCODER_ARCHITECTURES.has(info.architecture ?? '');
   if (embeddings) return { tools: false, thinking: false, embeddings: true, completion: false };

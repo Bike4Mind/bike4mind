@@ -77,6 +77,10 @@ describe('headerCapabilities', () => {
     expect(chat(null, null, 'nomic-bert')).toEqual(embeddings);
   });
 
+  it('reports nothing for a vision projector', () => {
+    expect(chat(null, null, 'clip')).toEqual({ tools: false, thinking: false, embeddings: false, completion: false });
+  });
+
   it('reports a chat model with tools when the header is unreadable', () => {
     expect(headerCapabilities(undefined)).toEqual({
       tools: true,

@@ -149,11 +149,18 @@ describe('GgufModelStore', () => {
     await place(store, 'embed.gguf', ggufWithTemplate(null, 'qwen3', { type: 'u32', value: 3 }));
     await place(store, 'unknown.gguf');
     await place(store, 'mmproj-x-f16.gguf', ggufWithTemplate(null));
-    const capabilities = Object.fromEntries((await store.list()).map(model => [model.name, model.capabilities]));
+    await place(store, 'vision-f16.gguf', ggufWithTemplate(null, 'clip'));
+    const models = await store.list();
+    const capabilities = Object.fromEntries(models.map(model => [model.name, model.capabilities]));
     const none = { tools: false, thinking: false, vision: false, embeddings: false, completion: false };
+    expect(models.filter(model => model.projector).map(model => model.name)).toEqual([
+      'mmproj-x-f16.gguf',
+      'vision-f16.gguf',
+    ]);
     expect(capabilities).toEqual({
       'embed.gguf': { ...none, embeddings: true },
       'mmproj-x-f16.gguf': none,
+      'vision-f16.gguf': none,
       'plain.gguf': { ...none, completion: true },
       'tools.gguf': { ...none, tools: true, thinking: true, completion: true },
       'unknown.gguf': { ...none, tools: true, completion: true },

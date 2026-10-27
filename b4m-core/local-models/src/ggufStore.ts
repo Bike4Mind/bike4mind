@@ -255,8 +255,9 @@ export class GgufModelStore {
         if (stats.some(entry => !entry?.isFile())) return null;
         const first = files[0] as string;
         const expected = shardNames(first);
-        const projector = /mmproj/i.test(basename(first));
-        const header = projector ? null : await readGgufHeader(paths[0] as string);
+        const named = /mmproj/i.test(basename(first));
+        const header = named ? null : await readGgufHeader(paths[0] as string);
+        const projector = named || header?.architecture === 'clip';
         const model: StoredGgufModel = {
           name: first,
           path: paths[0] as string,
