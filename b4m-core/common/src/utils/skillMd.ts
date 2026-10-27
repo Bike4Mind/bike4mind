@@ -105,11 +105,12 @@ const toText = (value: unknown): string | undefined =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : undefined;
 
 /**
- * Claude Code's `allowed-tools`: a YAML list, or one string separated by commas or spaces. A space
+ * Claude Code's `allowed-tools`: a YAML list, or one string separated by commas or spaces. Every list
+ * entry is split too, because the export joins them and Claude Code re-splits on commas and spaces. A space
  * inside parentheses (`Bash(git add:*)`) belongs to the entry; an unclosed `(` keeps the rest whole.
  */
-function splitAllowedTools(value: unknown): string[] {
-  if (Array.isArray(value)) return value.flatMap(v => toText(v)?.trim() || []);
+export function splitAllowedTools(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(v => splitAllowedTools(toText(v)));
   const text = toText(value);
   if (!text) return [];
   const tools: string[] = [];
@@ -179,7 +180,7 @@ export function parseSkillMd(input: string): ParseSkillMdResult {
       case 'allowed-tools': {
         const tools = splitAllowedTools(value);
         if (tools.length) fields.claudeCodeAllowedTools = tools;
-        else if (value != null && value !== '') dropped.push(key);
+        else if (value != null && value !== '' && !(Array.isArray(value) && value.length === 0)) dropped.push(key);
         break;
       }
       default:

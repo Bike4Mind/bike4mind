@@ -102,10 +102,15 @@ describe('parseSkillMd', () => {
       ['Bash(git add:*)', 'Read', 'Grep'],
     ],
     ['a YAML list', 'allowed-tools:\n  - Bash(gh pr view:*)\n  - Read', ['Bash(gh pr view:*)', 'Read']],
+    ['a YAML list entry packing several tools', 'allowed-tools:\n  - "Read(x), Bash"', ['Read(x)', 'Bash']],
     ['an unclosed paren', 'allowed-tools: Read, Bash(git add', ['Read', 'Bash(git add']],
   ])('keeps allowed-tools given as %s', (_label, line, expected) => {
     const result = parseSkillMd(`---\nname: x\n${line}\n---\nDo it.`);
     expect(result).toMatchObject({ ok: true, fields: { claudeCodeAllowedTools: expected }, dropped: [] });
+  });
+
+  it('does not report an empty allowed-tools list as dropped', () => {
+    expect(parseSkillMd('---\nname: x\nallowed-tools: []\n---\nDo it.')).toMatchObject({ ok: true, dropped: [] });
   });
 
   it('reports an allowed-tools value it cannot read as dropped', () => {
