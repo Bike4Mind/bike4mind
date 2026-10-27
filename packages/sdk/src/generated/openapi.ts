@@ -12,7 +12,7 @@ export interface paths {
     put?: never;
     /**
      * Send a chat message
-     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`. Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` is raised as a quest errorCode by any current throw site on this endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
+     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` is raised as a quest errorCode by any current throw site on this endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
      */
     post: operations['sendChatMessage'];
     delete?: never;
@@ -144,7 +144,7 @@ export interface paths {
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
-     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
     delete?: never;
@@ -1479,6 +1479,30 @@ export interface components {
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
     };
+    sendChatMessageResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'output_budget_exhausted';
+      quest_id?: string;
+      sessionId?: string;
+    };
+    sendChatMessageResponse502: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      quest_id: string;
+      sessionId?: string;
+    };
     sendChatMessageResponse504: {
       error: string;
       request_id?: string;
@@ -1844,7 +1868,8 @@ export interface components {
             | 'invalid_request'
             | 'provider_error'
             | 'provider_rejected'
-            | 'content_blocked';
+            | 'content_blocked'
+            | 'output_budget_exhausted';
         };
     createCompletionResponse400: {
       error: string;
@@ -6149,7 +6174,7 @@ export interface operations {
       };
     };
     responses: {
-      /** @description Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` schema). With `wait: true` the body is instead the completed turn: the ACK fields plus the reply (`response`/`responses`), `toolPayloads`, `createdAt`, `performance` timings and, when requested, `promptDetails`/`promptText`. A turn that FAILS still resolves with `200`, never a 4xx, on both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose explaining why lands in `reply`/`response` like any other answer, so the reply text alone cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a provider timeout or overload, and an in-process aborted turn; a real answer carries the turn's actual completion type instead (`"message"` for an ordinary reply). Two related states do NOT set `type: "error"`: a user-cancelled turn resolves as `status: "stopped"` with `type` left at `"message"`, and a recovered stuck quest that still has renderable content resolves as a success (`status: "done"`, no error) by design, to avoid destroying content to report a failure. `errorCode` then names the failure reason, but only for the billing failures that have one - `"insufficient_credits"` today; it is absent on every other `type: "error"` turn, so never use its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` body. The body also carries `sessionId`, the notebook the turn was recorded in - for an API-key caller that sent none (or any caller sending `newConversation: true`), that is the freshly created notebook's id; pass it back as the request's `sessionId` to continue. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary. */
+      /** @description Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` schema). With `wait: true` the body is instead the completed turn: the ACK fields plus the reply (`response`/`responses`), `toolPayloads`, `createdAt`, `performance` timings and, when requested, `promptDetails`/`promptText`. A turn that FAILS still resolves with `200`, never a 4xx, on both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose explaining why lands in `reply`/`response` like any other answer, so the reply text alone cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a provider timeout or overload, and an in-process aborted turn; a real answer carries the turn's actual completion type instead (`"message"` for an ordinary reply). Two related states do NOT set `type: "error"`: a user-cancelled turn resolves as `status: "stopped"` with `type` left at `"message"`, and a recovered stuck quest that still has renderable content resolves as a success (`status: "done"`, no error) by design, to avoid destroying content to report a failure. The one exception is output-budget exhaustion: a `wait: true` request answers it with the 422 or 502 error envelope (plus `quest_id`) instead of this body. `errorCode` then names the failure reason, but only for the billing failures that have one - `"insufficient_credits"` today; it is absent on every other `type: "error"` turn, so never use its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` body. The body also carries `sessionId`, the notebook the turn was recorded in - for an API-key caller that sent none (or any caller sending `newConversation: true`), that is the freshly created notebook's id; pass it back as the request's `sessionId` to continue. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary. */
       200: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -6253,7 +6278,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request body failed schema validation, or `sessionId` and `newConversation: true` were sent together (they are mutually exclusive). */
+      /** @description Request body failed schema validation, or `sessionId` and `newConversation: true` were sent together (they are mutually exclusive). A `wait: true` turn whose `max_tokens` a reasoning model spent entirely on thinking is `errorCode: output_budget_exhausted`; `quest_id` names the settled quest. Raise `max_tokens` or omit it. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -6273,7 +6298,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['sendChatMessageResponse422'];
         };
       };
       /** @description Per-user rate limit exceeded. A free-tier daily credit cap hit is distinguished by `errorCode: daily_free_limit_reached` and a `Retry-After` header until the next UTC midnight. */
@@ -6297,6 +6322,29 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description A `wait: true` turn failed upstream: a reasoning model spent the whole server-chosen output budget thinking and produced no answer. The quest (`quest_id`) is settled as an error. An unchanged retry is likely to fail the same way; a shorter prompt or an explicit `max_tokens` may help. */
+      502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['sendChatMessageResponse502'];
         };
       };
       /** @description A `wait: true` turn ran past the request deadline. The turn is already ended: its quest (`quest_id`) is settled as timed out with any partial reply kept, and unused reserved credits are refunded. Retry in async mode for a long turn. */
