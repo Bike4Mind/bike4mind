@@ -611,6 +611,26 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     });
   });
 
+  describe('output-budget minimum', () => {
+    it.each(['max_tokens', 'maxTokens', 'maxOutputTokens'])(
+      'rejects a tiny %s with 422 before any quest is created',
+      async field => {
+        validateWithScopes([ApiKeyScope.AI_CHAT]);
+        const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', [field]: 8 } });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(422);
+        expect(mockInvoke).not.toHaveBeenCalled();
+      }
+    );
+
+    it('forwards a budget at the minimum (2xx)', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', max_tokens: 16 } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+    });
+  });
+
   // Persisted on promptMeta by ChatCompletionInvoke so the tool-calling scorecard can split by it.
   describe('toolMode forwarding', () => {
     const invokedToolMode = () => (mockInvoke.mock.calls[0][0] as { body: { toolMode?: unknown } }).body.toolMode;
