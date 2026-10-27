@@ -93,4 +93,43 @@ describe('loadVersionQueue (real mongod)', () => {
     const all = await loadVersionQueue({ id: 'admin', isAdmin: true }, [], { filter: 'pending', limit: 10 });
     expect(ids(all.rows).sort()).toEqual([mine, other, pub].sort());
   });
+
+  it('links the approved version a held one would replace, never the row itself', async () => {
+    const fresh = await held(await listing('organization', ORG), 1, T0);
+    const l = await listing('organization', ORG);
+    const live = await held(l, 1, T0, false);
+    const next = await held(l, 2, new Date(T0.getTime() + 1000));
+    await SkillListing.updateOne({ _id: l._id }, { $set: { currentApprovedVersionId: live } });
+    const self = await listing('organization', ORG);
+    const own = await held(self, 1, new Date(T0.getTime() + 2000));
+    await SkillListing.updateOne({ _id: self._id }, { $set: { currentApprovedVersionId: own } });
+
+    const { rows } = await loadVersionQueue(orgAdmin, [ORG], { filter: 'pending', limit: 10 });
+    const prevOf = (id: string) => rows.find(r => String(r.version._id) === id)?.previous;
+    expect(prevOf(fresh)).toBeNull();
+    expect(prevOf(next)).toMatchObject({ id: live, version: 1 });
+    expect(prevOf(own)).toBeNull();
+  });
+
+  it('audits sampled approvals regardless of the pending pointer, but never by their author', async () => {
+    const l = await listing('organization', ORG);
+    const sampled = await held(l, 1, T0, false);
+    const unsampled = await held(l, 2, new Date(T0.getTime() + 1000), false);
+    const audited = await held(l, 3, new Date(T0.getTime() + 2000), false);
+    await SkillListingVersion.updateOne(
+      { _id: sampled },
+      { $set: { reviewStatus: 'auto_approved', auditSample: true } }
+    );
+    await SkillListingVersion.updateOne({ _id: unsampled }, { $set: { reviewStatus: 'approved' } });
+    await SkillListingVersion.updateOne(
+      { _id: audited },
+      { $set: { reviewStatus: 'approved', auditSample: true, auditedAt: T0 } }
+    );
+
+    const byReviewer = await loadVersionQueue(orgAdmin, [ORG], { filter: 'audit', limit: 10 });
+    expect(ids(byReviewer.rows)).toEqual([sampled]);
+    expect(byReviewer.rows[0].canDecide).toBe(true);
+    const byAuthor = await loadVersionQueue({ id: 'author-1' }, [ORG], { filter: 'audit', limit: 10 });
+    expect(byAuthor.rows[0].canDecide).toBe(false);
+  });
 });
