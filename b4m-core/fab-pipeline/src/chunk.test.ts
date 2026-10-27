@@ -440,6 +440,37 @@ describe('SmartChunker', () => {
     });
   });
 
+  describe('chunkFile with application/json', () => {
+    const chunkTexts = async (text: string): Promise<string> =>
+      (await chunker.chunkFile(Buffer.from(text, 'utf8'), 'application/json')).map(c => c.text).join('\n');
+
+    it('chunks a file with trailing commas and comments instead of throwing', async () => {
+      const text = '{\n  // note\n  "title": "Quarterly report",\n  "tags": ["a", "b",],\n}';
+      const out = await chunkTexts(text);
+
+      expect(out).toContain('Quarterly report');
+      expect(chunker.getExtractedText()).toBe(text);
+    });
+
+    it('chunks a BOM-prefixed file', async () => {
+      const out = await chunkTexts('﻿{\r\n  "y": "payload"\r\n}');
+
+      expect(out).toContain('payload');
+    });
+
+    it('falls back to text chunking for a file that is not JSON', async () => {
+      const out = await chunkTexts('{"a": nope, "note": "still searchable"}');
+
+      expect(out).toContain('still searchable');
+    });
+
+    it('keeps the structured path for valid JSON', async () => {
+      const chunks = await chunker.chunkFile(Buffer.from('{"k":"v"}', 'utf8'), 'application/json');
+
+      expect(chunks.map(c => c.text)).toEqual([JSON.stringify({ k: 'v' })]);
+    });
+  });
+
   describe('chunkFile with text/plain', () => {
     it('produces valid chunks for text/plain content with no whitespace', async () => {
       const content = Buffer.from('x'.repeat(20000));
