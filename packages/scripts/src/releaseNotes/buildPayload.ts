@@ -18,6 +18,9 @@ const SIZE_TIERS = [
 ];
 
 const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+const CONVENTIONAL_SCOPE = /^[a-z]+\(([^)]+)\)!?:/i;
+// The `admin` scope is the operator admin panel (apps/client/app/components/admin), which customers never see.
+const OPERATOR_ONLY_SCOPES = new Set(['admin']);
 const CUSTOMER_NOTE_HEADING = /^##\s+customer note\s*$/im;
 const PLACEHOLDER_NOTE = /^(n\/?a|none|-+)$/i;
 
@@ -32,6 +35,17 @@ export function parseCustomerNote(body: string): string | undefined {
   const nextHeading = rest.search(/^#{1,2}\s/m);
   const note = (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).replace(HTML_COMMENT, '').trim();
   return note && !PLACEHOLDER_NOTE.test(note) ? note.slice(0, CUSTOMER_NOTE_CHARS) : undefined;
+}
+
+/**
+ * True when every scope in a Conventional Commits title is operator-only, e.g. `feat(admin): ...`. A title that
+ * also names another scope (`feat(admin,chat): ...`) may reach customers, so it is kept.
+ */
+export function isOperatorOnlyTitle(title: string): boolean {
+  const scopes = CONVENTIONAL_SCOPE.exec(title.trim())?.[1]
+    .split(',')
+    .map(scope => scope.trim().toLowerCase());
+  return !!scopes?.length && scopes.every(scope => OPERATOR_ONLY_SCOPES.has(scope));
 }
 
 /** PR description with template comments stripped and whitespace collapsed, cut to `maxChars`. */
@@ -87,7 +101,8 @@ export async function buildReleaseNotesPayload(
   const prs: ReleaseNotesJobPr[] = [];
   for (const number of numbers) {
     const pr = await deps.getPRSummary(number);
-    if (!pr) continue;
+    // Dropped before the LLM, which would otherwise reword an operator tool as "Organizations can now ...".
+    if (!pr || isOperatorOnlyTitle(pr.title)) continue;
     const customerNote = parseCustomerNote(pr.body);
     prs.push({
       number,

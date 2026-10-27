@@ -6,6 +6,7 @@ import {
   capPayloadSize,
   enqueueReleaseNotes,
   excerptDescription,
+  isOperatorOnlyTitle,
   parseCustomerNote,
   selectBackfillPairs,
 } from './buildPayload';
@@ -48,6 +49,21 @@ describe('parseCustomerNote', () => {
       'Line one\n### Detail\nmore'
     );
   });
+});
+
+describe('isOperatorOnlyTitle', () => {
+  it.each(['feat(admin): group signups', 'fix(Admin)!: drop column', ' refactor( admin , ADMIN ): tidy'])(
+    'flags %s',
+    title => expect(isOperatorOnlyTitle(title)).toBe(true)
+  );
+
+  it.each([
+    'feat(admin,chat): shared toggle',
+    'feat(adminsettings): new key',
+    'feat(org): admins can rename the org',
+    'feat: admin panel polish',
+    'Merge admin work',
+  ])('keeps %s', title => expect(isOperatorOnlyTitle(title)).toBe(false));
 });
 
 describe('excerptDescription', () => {
@@ -135,6 +151,26 @@ describe('buildReleaseNotesPayload', () => {
       },
     ]);
     expect(payload).toMatchObject({ releaseTag: 'v1.0.0.2', deployedSha: sha40('v1.0.0.2'), previousTag: 'v1.0.0.1' });
+  });
+
+  it('drops admin-scoped PRs even when they carry a customer note', async () => {
+    const getCommitRange = vi.fn(async () => [
+      { sha: '1', message: 'feat(admin): signup review (#3)', author: '', authorEmail: '', date: '' },
+      { sha: '2', message: 'feat(chat): pinned chats (#4)', author: '', authorEmail: '', date: '' },
+    ]);
+    const getPRSummary = vi.fn(async (n: number) => ({
+      number: n,
+      title: n === 3 ? 'feat(admin): signup review' : 'feat(chat): pinned chats',
+      labels: [],
+      body: '## Customer note\nSomething new.',
+    }));
+
+    const payload = await buildReleaseNotesPayload(release('v1.0.0.2', '2026-01-02T00:00:00Z'), 'v1.0.0.1', {
+      getCommitRange,
+      getPRSummary,
+    });
+
+    expect(payload.prs.map(pr => pr.number)).toEqual([4]);
   });
 
   it('anchors deployedAt to enqueue time, not the release creation date', async () => {
