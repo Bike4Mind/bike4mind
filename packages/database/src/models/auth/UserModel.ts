@@ -13,6 +13,7 @@ import {
   ISignupRiskScore,
   SIGNUP_RISK_REVIEW_STATES,
   SIGNUP_RISK_SIGNALS,
+  type SignupRiskReviewState,
   UserModerationStatus,
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
@@ -901,6 +902,24 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return rows.map(row => row._id.toString());
   }
 
+  async findPendingRiskReviews(limit: number): Promise<IUserDocument[]> {
+    return this.model
+      .find(
+        { 'riskScore.reviewState': 'pending', isBanned: { $ne: true } },
+        { email: 1, username: 1, createdAt: 1, riskScore: 1 }
+      )
+      .sort({ 'riskScore.score': -1, _id: 1 })
+      .limit(limit)
+      .exec();
+  }
+
+  async setRiskReviewState(userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState): Promise<boolean> {
+    const result = await this.model
+      .updateOne({ _id: userId, 'riskScore.reviewState': from }, { $set: { 'riskScore.reviewState': to } })
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores the
    * appeal text so admins can review it alongside the user's escalation state. Returns the
@@ -1390,6 +1409,9 @@ UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
+// Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
+// 20260921235957 byte-for-byte.
+UserSchema.index({ 'riskScore.reviewState': 1, 'riskScore.score': -1 }, { name: 'user_riskScore_review' });
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel

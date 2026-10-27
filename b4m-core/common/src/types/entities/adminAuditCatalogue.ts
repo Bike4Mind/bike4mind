@@ -108,6 +108,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'abuse.bulk.revoke_sessions': { category: 'identity', severity: 'notice', write: 'strict' },
   'abuse.bulk.clawback': { category: 'credits', severity: 'notice', write: 'strict' },
   'abuse.bulk.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // Signup risk review (apps/client/pages/api/admin/signup-risk-reviews.ts): one strict entry per user,
+  // written in that user's transaction. reopened is the undo of approved.
+  'user.signup_risk.approved': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.signup_risk.reopened': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.signup_risk.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 

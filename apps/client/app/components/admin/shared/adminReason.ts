@@ -26,6 +26,7 @@ export const ADMIN_REASON_PRESETS = {
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
+  signupRiskApproval: ['Verified legitimate user', 'Known customer or partner', 'False positive signal'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

@@ -40,6 +40,16 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return first?.createdAt ?? null;
   }
 
+  async countCreatedByUserIds(userIds: string[]): Promise<Record<string, number>> {
+    if (userIds.length === 0) return {};
+    // aggregate skips the soft-delete filter, so deleted keys count as created.
+    const rows = await this.model.aggregate<{ _id: string; count: number }>([
+      { $match: { userId: { $in: userIds } } },
+      { $group: { _id: '$userId', count: { $sum: 1 } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
+  }
+
   findByUserIdAndId(userId: string, id: string) {
     return this.model.findOne({ _id: id, userId }).exec();
   }

@@ -1,4 +1,5 @@
 import { INTEGRATION_DEMAND_TAB_PARAMS } from './integrationDemandSearch';
+import { SIGNUP_RISK_REVIEW_TAB_PARAMS } from './signupRiskReviewSearch';
 import {
   ADMIN_AUDIT_LOG_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
@@ -37,6 +38,7 @@ export const ADMIN_SETTINGS_SEARCH_PARAM = 'q';
 export const ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG = 'webhook-audit-logs';
 export const ADMIN_MODEL_LOGS_TAB_SLUG = 'model-logs';
 export const ADMIN_INTEGRATION_DEMAND_TAB_SLUG = 'integration-demand';
+export const ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG = 'signup-risk-review';
 export { ADMIN_ORGANIZATIONS_TAB_SLUG };
 
 const EMERGENCY_ACCESS_PARAM = 'emergency_access';
@@ -50,7 +52,7 @@ export const ADMIN_GLOBAL_PARAMS = [EMERGENCY_ACCESS_PARAM, ADMIN_TAB_PARAM] as 
  * Tab slug -> the params that tab owns; each key has exactly one owner (tested). These URLs get
  * shared and copied into login redirects, so never register tokens, form fields, setting values, or
  * a search over user records. Admin Settings' `q` is fine: it searches config, not people; the Users,
- * Feedback, Model Logs and Organizations tabs' free-text searches are left out for exactly that reason.
+ * Feedback, Model Logs, Organizations and Risk review tabs' free-text searches are left out for exactly that reason.
  */
 export const ADMIN_TAB_PARAMS = {
   [ADMIN_USERS_TAB_SLUG]: USERS_TAB_PARAMS,
@@ -61,6 +63,7 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_MODEL_LOGS_TAB_SLUG]: MODEL_LOGS_TAB_PARAMS,
   [ADMIN_INTEGRATION_DEMAND_TAB_SLUG]: INTEGRATION_DEMAND_TAB_PARAMS,
   [ADMIN_ORGANIZATIONS_TAB_SLUG]: ORGS_TAB_PARAMS,
+  [ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG]: SIGNUP_RISK_REVIEW_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];
