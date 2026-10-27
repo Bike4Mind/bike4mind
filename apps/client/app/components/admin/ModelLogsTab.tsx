@@ -195,41 +195,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
 
   const currentItems = modelLogsQuery.data?.logs ?? [];
 
-  if (loading || modelLogsQuery.isLoading) {
-    return (
-      <Box>
-        <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
-          <Typography level="h4" sx={{ flex: 1 }}>
-            Model Response Logs
-          </Typography>
-          <Button
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            startDecorator={<RefreshIcon />}
-            onClick={handleRefresh}
-            disabled={loading || modelLogsQuery.isLoading}
-          >
-            Refresh
-          </Button>
-        </Stack>
-
-        <Card variant="outlined" sx={{ p: 2, mb: 3 }}>
-          <Stack spacing={2}>
-            <DateFilterComponent
-              startDate={startDate}
-              endDate={endDate}
-              onStartDateChange={date => setDateRange({ startDate: date })}
-              onEndDateChange={date => setDateRange({ endDate: date })}
-              onRangeSelect={selectLastDays}
-            />
-          </Stack>
-        </Card>
-
-        <LinearProgress />
-      </Box>
-    );
-  }
+  const isLoadingLogs = loading || modelLogsQuery.isLoading;
 
   return (
     <Box>
@@ -244,7 +210,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
           color="neutral"
           startDecorator={<RefreshIcon />}
           onClick={handleRefresh}
-          disabled={loading || modelLogsQuery.isLoading}
+          disabled={isLoadingLogs}
           data-testid="model-logs-refresh-btn"
         >
           Refresh
@@ -286,6 +252,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
             <Grid xs={12} md={4}>
               <Input
                 placeholder="Search logs..."
+                slotProps={{ input: { 'data-testid': 'model-logs-search-input' } }}
                 value={searchQuery}
                 slotProps={{ input: { 'data-testid': 'model-logs-search-input' } }}
                 onChange={e => handleSearchChange(e.target.value)}
@@ -299,7 +266,9 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
         View detailed logs of model responses, including performance metrics, token usage, and execution tracking.
       </Alert>
 
-      {modelLogsQuery.isError ? (
+      {isLoadingLogs ? (
+        <LinearProgress />
+      ) : modelLogsQuery.isError ? (
         <Card variant="outlined" sx={{ p: 2 }} data-testid="model-logs-error">
           <ErrorState message="Could not load model logs." onRetry={() => modelLogsQuery.refetch()} />
         </Card>

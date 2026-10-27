@@ -2,7 +2,7 @@ import React from 'react';
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -320,5 +320,49 @@ describe('ModelLogsTab', () => {
 
     await userEvent.click(screen.getByTestId('model-logs-refresh-btn'));
     expect(refetch).toHaveBeenCalled();
+  });
+
+  describe('while a filter change refetches', () => {
+    // Loaded for the first query key, loading for any other, like a fresh TanStack Query key.
+    const loadOnlyFirstKey = () => {
+      let firstKey: string | undefined;
+      mocks.useModelLogs.mockImplementation((options: unknown) => {
+        const key = JSON.stringify(options);
+        firstKey ??= key;
+        return key === firstKey ? queryResult({}) : queryResult({ data: undefined, isLoading: true, isSuccess: false });
+      });
+    };
+
+    it('keeps each typed character and focus in the search box', async () => {
+      loadOnlyFirstKey();
+      act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
+      renderTab();
+
+      const search = screen.getByTestId('model-logs-search-input');
+      await userEvent.type(search, 'sonnet');
+
+      expect(search).toHaveValue('sonnet');
+      expect(search).toHaveFocus();
+    });
+
+    it.each(['Start Date', 'End Date'])('keeps each typed year digit and focus in %s', label => {
+      loadOnlyFirstKey();
+      act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
+      renderTab();
+
+      const input = screen.getByLabelText(label);
+      act(() => input.focus());
+      // A browser date input commits the year segment once per digit.
+      for (const value of ['0002-10-01', '0020-10-01', '0202-10-01', '2026-10-01']) {
+        fireEvent.change(input, { target: { value } });
+        expect(input).toBeInTheDocument();
+        expect(input).toHaveFocus();
+      }
+
+      expect(input).toHaveValue('2026-10-01');
+      expect(fakeAdminRouter.search).toMatchObject({
+        [label === 'Start Date' ? 'modelLogsFrom' : 'modelLogsTo']: '2026-10-01',
+      });
+    });
   });
 });
