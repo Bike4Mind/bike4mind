@@ -59,6 +59,16 @@ describe('SignupDomainHoldsTab', () => {
     await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, { params: { page: 1 } }));
   });
 
+  it('sends one decision for a double-click', async () => {
+    postMock.mockResolvedValue({ data: { status: 'blocked', creditsReleased: 0, remaining: 0, nextCursor: null } });
+    renderTab();
+    const confirm = await screen.findByTestId('signup-domain-confirm-alpha.test');
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(screen.getByText('Domain confirmed; pending credits remain held.')).toBeInTheDocument());
+    expect(postMock).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps each domain release cursor when retrying pending grants', async () => {
     postMock
       .mockResolvedValueOnce({

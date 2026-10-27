@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Alert, Button, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SignupDomainReview } from '@bike4mind/common';
@@ -12,6 +12,8 @@ const ENDPOINT = '/api/admin/signup-domain-holds';
 export default function SignupDomainHoldsTab() {
   const [page, setPage] = useState(1);
   const [cursors, setCursors] = useState<Record<string, string | undefined>>({});
+  // isPending only flips after a re-render, so a double-click would otherwise send two decisions.
+  const decisionInFlight = useRef(false);
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: [...QUERY_KEY, page],
@@ -33,7 +35,15 @@ export default function SignupDomainHoldsTab() {
         setCursors(current => ({ ...current, [input.domain]: result.nextCursor ?? undefined }));
       await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
     },
+    onSettled: () => {
+      decisionInFlight.current = false;
+    },
   });
+  const decide = (input: { domain: string; action: 'confirm' | 'release'; afterUserId?: string }) => {
+    if (decisionInFlight.current) return;
+    decisionInFlight.current = true;
+    decision.mutate(input);
+  };
   return (
     <Stack spacing={2} data-testid="signup-domain-holds-tab">
       <Typography level="h3">Signup Domain Holds</Typography>
@@ -111,7 +121,7 @@ export default function SignupDomainHoldsTab() {
                   color="danger"
                   data-testid={`signup-domain-confirm-${review.domain}`}
                   disabled={decision.isPending || review.status !== 'held_pending_review'}
-                  onClick={() => decision.mutate({ domain: review.domain, action: 'confirm' })}
+                  onClick={() => decide({ domain: review.domain, action: 'confirm' })}
                 >
                   Confirm
                 </Button>
@@ -120,7 +130,7 @@ export default function SignupDomainHoldsTab() {
                   data-testid={`signup-domain-release-${review.domain}`}
                   disabled={decision.isPending}
                   onClick={() =>
-                    decision.mutate({ domain: review.domain, action: 'release', afterUserId: cursors[review.domain] })
+                    decide({ domain: review.domain, action: 'release', afterUserId: cursors[review.domain] })
                   }
                 >
                   {review.status === 'released' ? 'Retry pending grants' : 'Release'}
