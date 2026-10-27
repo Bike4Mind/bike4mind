@@ -14,6 +14,8 @@ import {
   PermissionDeniedError,
   ChunkClaimLostError,
   isChunkClaimLostError,
+  UnsupportedFileTypeError,
+  isUnsupportedFileTypeError,
   DuplicateFabFileError,
   isDuplicateFabFileError,
   UrlBlockedError,
@@ -136,6 +138,24 @@ describe('isChunkClaimLostError', () => {
     expect(isChunkClaimLostError(new Error('nope'))).toBe(false);
     expect(isChunkClaimLostError(null)).toBe(false);
     expect(isChunkClaimLostError(undefined)).toBe(false);
+  });
+});
+
+describe('UnsupportedFileTypeError / isUnsupportedFileTypeError', () => {
+  it('names the MIME type for the file owner', () => {
+    const err = new UnsupportedFileTypeError('application/x-cfb');
+    expect(err.mimeType).toBe('application/x-cfb');
+    expect(err.message).toContain('application/x-cfb');
+    expect(isUnsupportedFileTypeError(err)).toBe(true);
+  });
+
+  it('matches a same-named error from another module realm', () => {
+    expect(isUnsupportedFileTypeError(Object.assign(new Error('x'), { name: 'UnsupportedFileTypeError' }))).toBe(true);
+  });
+
+  it('returns false for unrelated errors and non-errors', () => {
+    expect(isUnsupportedFileTypeError(new Error('nope'))).toBe(false);
+    expect(isUnsupportedFileTypeError(null)).toBe(false);
   });
 });
 

@@ -4,7 +4,7 @@
  */
 
 import mongoose, { Types } from 'mongoose';
-import { FabFileSourceType, type IFabFile } from '@bike4mind/common';
+import { FabFileSourceType, isUnsupportedFileTypeError, type IFabFile } from '@bike4mind/common';
 import { FabFile } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import type { ExtractedDocumentDate, S3Storage } from '@bike4mind/fab-pipeline';
@@ -201,7 +201,10 @@ async function processFile(file: CandidateFile, opts: BackfillOptions, deps: Bac
   if (!resolved) {
     const content = await readStoredBytes(file, deps.storage);
     if (!content) return 'bytes-missing';
-    await deps.chunker.chunkFile(content, file.mimeType);
+    // An unsupported format has no text and so no date; it falls through as undated, as before.
+    await deps.chunker.chunkFile(content, file.mimeType).catch(error => {
+      if (!isUnsupportedFileTypeError(error)) throw error;
+    });
     if (!servesStoredBytes(file, deps.chunker.getExtractedText())) return 'stale-chunks';
     resolved = fabFilesService.resolveDocumentDate(file, deps.chunker.getDocumentDate());
   }

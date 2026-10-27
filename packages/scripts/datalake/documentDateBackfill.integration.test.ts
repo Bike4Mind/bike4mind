@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { DocumentDateSource, FabFileSourceType } from '@bike4mind/common';
+import { DocumentDateSource, FabFileSourceType, UnsupportedFileTypeError } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 import {
@@ -353,6 +353,21 @@ describe('runBackfill (real DB)', () => {
     expect(formatSummary(result, true)).toContain(`Failed file ids: ${broken.toString()}`);
     expect(await load(dated)).toMatchObject({ documentDate: FRONTMATTER_DATE });
     expect(exitCode(result)).toBe(1);
+  });
+
+  it('counts an unsupported format as undated, not failed', async () => {
+    const legacy = await seed('textless.png');
+
+    const result = await runBackfill(
+      execute,
+      makeDeps(async () => {
+        throw new UnsupportedFileTypeError('application/x-cfb');
+      }).deps
+    );
+
+    expect(result.counts).toMatchObject({ undated: 1, failed: 0 });
+    expect(await load(legacy)).toMatchObject({ documentDate: null, documentDateSource: null });
+    expect(exitCode(result)).toBe(0);
   });
 
   it('writes nothing on a dry run and reports the same counts', async () => {

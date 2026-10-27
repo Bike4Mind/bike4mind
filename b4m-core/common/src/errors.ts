@@ -361,6 +361,26 @@ export function isChunkClaimLostError(err: unknown): err is ChunkClaimLostError 
   return Boolean(err && (err instanceof ChunkClaimLostError || (err as Error).name === 'ChunkClaimLostError'));
 }
 
+/**
+ * Thrown by `SmartChunker.chunkFile` for a MIME type it cannot extract text from (e.g. legacy
+ * `application/x-cfb` Office files). Deterministic: a retry can never change the verdict, so the
+ * chunk queue handler records a terminal failure instead of rethrowing into the DLQ. The message is
+ * shown to the file owner. Deliberately NOT an HTTPError, same as `ChunkClaimLostError`.
+ */
+export class UnsupportedFileTypeError extends Error {
+  constructor(public mimeType: string | undefined) {
+    super(`Unsupported file format (${mimeType ?? 'unknown'}). Save it as .docx, .xlsx, .pptx or .pdf and re-upload.`);
+    this.name = 'UnsupportedFileTypeError';
+  }
+}
+
+/** Name fallback for the same cross-realm reason as `isChunkClaimLostError`. */
+export function isUnsupportedFileTypeError(err: unknown): err is UnsupportedFileTypeError {
+  return Boolean(
+    err && (err instanceof UnsupportedFileTypeError || (err as Error).name === 'UnsupportedFileTypeError')
+  );
+}
+
 export function isZodError(err: unknown): err is ZodError {
   return Boolean(err && (err instanceof ZodError || (err as ZodError).name === 'ZodError'));
 }

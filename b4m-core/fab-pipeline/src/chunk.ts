@@ -11,6 +11,7 @@ import {
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   SupportedFabFileMimeTypes,
+  UnsupportedFileTypeError,
   VoyageAIEmbeddingModel,
   readZipEntryBounded,
   type BoundedZipEntry,
@@ -416,8 +417,8 @@ export class SmartChunker {
           chunks = await this.chunkText(textContent);
           break;
         }
-        this.logger.error(`Unsupported file type: ${mimeType}`);
-        return [];
+        this.logger.warn(`Unsupported file type: ${mimeType}`);
+        throw new UnsupportedFileTypeError(mimeType);
     }
 
     // Post-chunking validation: guarantee no chunk exceeds the token limit

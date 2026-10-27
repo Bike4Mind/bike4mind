@@ -9,7 +9,13 @@ import {
   embeddingModelContextWindow,
 } from './chunk';
 import { Logger } from '@bike4mind/observability';
-import { countCodePoints, DocumentDateSource, MIN_CHUNK_CHARS_FLOOR } from '@bike4mind/common';
+import {
+  countCodePoints,
+  DocumentDateSource,
+  isUnsupportedFileTypeError,
+  MIN_CHUNK_CHARS_FLOOR,
+  type UnsupportedFileTypeError,
+} from '@bike4mind/common';
 
 /**
  * Forces `getMetadata()` to reject on the next PDF opened, so the guard in `readPdfDocumentDate`
@@ -762,11 +768,34 @@ describe('getExtractedText (lake admission fingerprint source, #1679)', () => {
     expect(small.getExtractedText()).toBe(large.getExtractedText());
   });
 
-  it('is undefined for a file that yields no extractable text', async () => {
+  it('is undefined for a media-only file that yields no extractable text', async () => {
     const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
-    await chunker.chunkFile(Buffer.from('anything'), 'application/octet-stream');
+    await expect(chunker.chunkFile(Buffer.from('anything'), 'audio/mpeg')).resolves.toEqual([]);
     chunker.freeEncoder();
     expect(chunker.getExtractedText()).toBeUndefined();
+  });
+
+  it('throws a typed error, at warn, for an unsupported format', async () => {
+    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    const error = vi.spyOn(Logger.prototype, 'error');
+    const err = await chunker.chunkFile(Buffer.from('anything'), 'application/x-cfb').catch((e: unknown) => e);
+    chunker.freeEncoder();
+
+    expect(isUnsupportedFileTypeError(err)).toBe(true);
+    expect((err as UnsupportedFileTypeError).mimeType).toBe('application/x-cfb');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('application/x-cfb'));
+    expect(error).not.toHaveBeenCalled();
+    expect(chunker.getExtractedText()).toBeUndefined();
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
+  it('still chunks an unknown text/* type as plain text', async () => {
+    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+    const chunks = await chunker.chunkFile(Buffer.from('hello world'), 'text/x-foo');
+    chunker.freeEncoder();
+    expect(chunks.length).toBeGreaterThan(0);
   });
 });
 
