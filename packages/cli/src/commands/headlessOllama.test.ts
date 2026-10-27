@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ILogger } from '@bike4mind/observability';
-import { createHeadlessLlmBackendDeps } from './headlessOllama.js';
+import { createHeadlessLlmBackendDeps, MAX_DIAGNOSTIC_ARG_CHARS } from './headlessOllama.js';
 
 const { constructBackend } = vi.hoisted(() => ({
   constructBackend: vi.fn<(host: string, logger: ILogger) => void>(),
@@ -61,5 +61,20 @@ describe('headless Ollama diagnostics', () => {
     expect(stderr).toHaveBeenCalledWith('circular {"model":"local","self":"[Circular]"}\n');
     expect(stderr).toHaveBeenCalledWith('failed: Error: connect ECONNREFUSED\n');
     expect(stderr).toHaveBeenCalledWith('nested {"cause":"Error: connect ECONNREFUSED"}\n');
+  });
+
+  it('caps each rendered argument and says how much was cut', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    createHeadlessLlmBackendDeps(true).createOllamaBackend('http://127.0.0.1:11434');
+    const logger = constructBackend.mock.lastCall![1];
+    const models = Array.from({ length: 500 }, (_, i) => ({ name: `model-${i}`, size: i }));
+    const full = JSON.stringify({ models });
+
+    logger.debug('models', { models }, 'x'.repeat(MAX_DIAGNOSTIC_ARG_CHARS));
+
+    const cut = full.length - MAX_DIAGNOSTIC_ARG_CHARS;
+    expect(stderr).toHaveBeenCalledWith(
+      `models ${full.slice(0, MAX_DIAGNOSTIC_ARG_CHARS)}... [${cut} more chars] ${'x'.repeat(MAX_DIAGNOSTIC_ARG_CHARS)}\n`
+    );
   });
 });
