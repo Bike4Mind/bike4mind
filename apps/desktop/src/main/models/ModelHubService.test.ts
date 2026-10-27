@@ -1,18 +1,26 @@
+import { createHash } from 'node:crypto';
 import {
   HubAccessError,
   HubRateLimitError,
   HuggingFaceHub,
   LocalRuntimeError,
   RuntimeConnectionError,
+  type HardwareProfile,
   type HubGgufBuild,
   type HubModelDetail,
   type HubSearchPage,
   type InstalledModel,
   type LoadedModel,
+  type ModelArch,
+  type ModelInspection,
+  type OllamaRegistryLayers,
   type PullOptions,
 } from '@bike4mind/local-models';
+import type { HubBuild, HubManifest } from '@bike4mind/common';
+import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
 import { describe, expect, it, vi } from 'vitest';
+import { loadCuratedManifest } from './loadCuratedManifest';
 import { ModelHubService, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
@@ -65,16 +73,117 @@ interface Deferred {
 
 type Health = { ok: boolean; version: string | null; error: string | null };
 
-function harness(options: { detail?: HubModelDetail; verified?: string | null; healthy?: boolean } = {}) {
+const GIB = 1024 ** 3;
+const machine = (memoryKind: HardwareProfile['memoryKind'], totalGiB: number, gpuGiB: number | null = null) =>
+  ({
+    platform: 'linux',
+    arch: 'x64',
+    memoryKind,
+    totalMemoryBytes: totalGiB * GIB,
+    gpuMemoryBytes: gpuGiB === null ? null : gpuGiB * GIB,
+    gpuName: gpuGiB === null ? null : 'Test GPU',
+    gpuCount: gpuGiB === null ? 0 : 1,
+    chip: null,
+    diskFreeBytes: null,
+    confidence: 'high',
+  }) satisfies HardwareProfile;
+const CPU_16 = machine('cpu', 16);
+
+const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+const libraryOf = (build: HubBuild) => (build.ollama?.kind === 'library' ? build.ollama : null);
+const pinsOf = (build: HubBuild) =>
+  build.ollama?.kind === 'library' || build.ollama?.kind === 'hf-pull' ? build.ollama.layers : undefined;
+/** The name Ollama lists a curated build under. */
+const refOf = (build: HubBuild) => libraryOf(build)?.ref ?? `hf.co/${build.hf?.repo}:${build.quant.label}`;
+const templateText = (ref: string) => `template of ${ref}`;
+const licenseText = (ref: string) => `license of ${ref}`;
+
+// The bundled list with its template and license pins swapped for digests of known text, so a stubbed Ollama can
+// report installed contents that match them.
+const CURATED: HubManifest = structuredClone(loadCuratedManifest(() => {}));
+for (const entry of CURATED.entries)
+  for (const reviewed of entry.builds) {
+    const pins = pinsOf(reviewed);
+    if (!pins) continue;
+    const template = sha256(templateText(refOf(reviewed)));
+    if (pins.installedTemplate) pins.installedTemplate = template;
+    else pins.template = template;
+    if (pins.license) pins.license = sha256(licenseText(refOf(reviewed)));
+  }
+const curatedBuilds = () => CURATED.entries.flatMap(entry => entry.builds);
+
+/** What Ollama reports for a curated build it installed as reviewed; nothing for any other name. */
+function installedAsReviewed(ref: string): Pick<ModelInspection, 'contents' | 'parameters'> | null {
+  const reviewed = curatedBuilds().find(candidate => refOf(candidate) === ref);
+  const pins = reviewed && pinsOf(reviewed);
+  if (!reviewed || !pins) return null;
+  return {
+    contents: {
+      template: templateText(ref),
+      license: pins.license ? licenseText(ref) : null,
+      modelBlob: libraryOf(reviewed)?.digest ?? reviewed.weights[0].sha256,
+    },
+    parameters: pins.numCtx ? `num_ctx ${pins.numCtx}` : null,
+  };
+}
+
+/** The registry layers Ollama would pull for a curated build, as reviewed. */
+function reviewedLayers(reviewed: HubBuild | undefined): OllamaRegistryLayers | null {
+  const pins = reviewed && pinsOf(reviewed);
+  if (!reviewed || !pins) return null;
+  return {
+    model: libraryOf(reviewed)?.digest ?? reviewed.weights[0].sha256,
+    others: (['template', 'params', 'license', 'projector', 'draft'] as const).flatMap(kind => {
+      const digest = pins[kind];
+      return digest ? [{ mediaType: `application/vnd.ollama.image.${kind}`, digest }] : [];
+    }),
+  };
+}
+
+// A small dense model's header, as Ollama's /api/show reports it through archFromModelInfo.
+const SMALL_ARCH: ModelArch = {
+  contextMax: 32768,
+  blockCount: 24,
+  headCount: 14,
+  full: { layers: 24, kvHeads: 2, keyLength: 64, valueLength: 64 },
+  mtpLayers: 0,
+};
+
+function harness(
+  options: {
+    detail?: HubModelDetail;
+    verified?: string | null;
+    healthy?: boolean;
+    version?: string;
+    curated?: HubManifest;
+    hardware?: HardwareProfile;
+    setting?: LocalContextSetting;
+  } = {}
+) {
   const pulls: Deferred[] = [];
   const runtime = {
     baseUrl: 'http://127.0.0.1:11434',
     health: vi.fn(async (): Promise<Health> =>
       options.healthy === false
         ? { ok: false, version: null, error: 'connection refused' }
-        : { ok: true, version: '0.40.11', error: null }
+        : { ok: true, version: options.version ?? '0.40.11', error: null }
     ),
     list: vi.fn(async (): Promise<InstalledModel[]> => []),
+    inspect: vi.fn(async (name: string): Promise<ModelInspection> => ({
+      model: {
+        name,
+        sizeBytes: null,
+        quantization: null,
+        family: null,
+        parameterSize: null,
+        modifiedAt: null,
+        capabilities: { tools: false, vision: false, thinking: false, embeddings: false, completion: true },
+      },
+      arch: SMALL_ARCH,
+      tensorStats: null,
+      parameters: null,
+      ...installedAsReviewed(name),
+    })),
     loaded: vi.fn(async (): Promise<LoadedModel[]> => []),
     pull: vi.fn(
       (_ref: string, opts?: PullOptions) =>
@@ -92,17 +201,28 @@ function harness(options: { detail?: HubModelDetail; verified?: string | null; h
     verifyOllamaRef: vi.fn(async (): Promise<string | null> =>
       options.verified === undefined ? `hf.co/${REPO}:Q4_K_M` : options.verified
     ),
+    ollamaLayers: vi.fn(async (repo: string, tag: string) =>
+      reviewedLayers(curatedBuilds().find(candidate => candidate.hf?.repo === repo && candidate.quant.label === tag))
+    ),
   } satisfies ModelHubPort;
+  const libraryLayers = vi.fn(async (ref: string, _options?: { signal?: AbortSignal }) =>
+    reviewedLayers(curatedBuilds().find(candidate => libraryOf(candidate)?.ref === ref))
+  );
   const pushed: ModelPull[][] = [];
   const installedChanged = vi.fn();
+  const hardware = vi.fn(async () => options.hardware ?? CPU_16);
   const service = new ModelHubService({
     runtime,
     hub,
+    libraryLayers,
+    hardware,
+    localContext: async () => options.setting ?? AUTO_LOCAL_CONTEXT,
+    curated: options.curated ?? CURATED,
     onPullsChanged: next => pushed.push(next),
     onInstalledChanged: installedChanged,
     progressIntervalMs: 0,
   });
-  return { service, runtime, hub, pulls, pushed, installedChanged };
+  return { service, runtime, hub, libraryLayers, pulls, pushed, installedChanged, hardware };
 }
 
 const request = {
@@ -233,6 +353,10 @@ describe('ModelHubService pulls', () => {
     const service = new ModelHubService({
       runtime,
       hub: new HuggingFaceHub({ fetch: fetchStub as unknown as typeof fetch }),
+      libraryLayers: async () => null,
+      hardware: async () => CPU_16,
+      localContext: async () => AUTO_LOCAL_CONTEXT,
+      curated: CURATED,
       onPullsChanged: () => {},
       onInstalledChanged: () => {},
     });
@@ -523,5 +647,662 @@ describe('ModelHubService reads', () => {
     expect(await service.remove('qwen2.5:0.5b')).toEqual({ ok: true });
     expect(runtime.remove).toHaveBeenCalledWith('qwen2.5:0.5b');
     expect(installedChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
+const GSQ_REPO = 'ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF';
+const GSQ = CURATED.entries.find(entry => entry.id === 'qwen3-8-27b-gsq');
+const IQ3 = GSQ?.builds.find(candidate => candidate.id === 'iq3-s');
+if (!GSQ || !IQ3) throw new Error('the bundled list lost its GSQ pick');
+const IQ3_FILE = IQ3.weights[0];
+const IQ3_REF = `hf.co/${GSQ_REPO}:IQ3_S`;
+
+/** The live Hugging Face view of the GSQ repo, serving the reviewed IQ3_S file unless told otherwise. */
+function gsqDetail(file: Partial<HubGgufBuild['files'][number]> = {}, overrides: Partial<HubModelDetail> = {}) {
+  return detail({
+    id: GSQ_REPO,
+    author: 'ISTA-DASLab',
+    builds: [
+      build({
+        id: IQ3_FILE.path.replace(/\.gguf$/i, ''),
+        quant: 'IQ3_S',
+        sizeBytes: IQ3_FILE.sizeBytes,
+        files: [
+          { path: IQ3_FILE.path, sizeBytes: IQ3_FILE.sizeBytes, sha256: IQ3_FILE.sha256, url: 'https://x', ...file },
+        ],
+        ollamaRef: IQ3_REF,
+      }),
+    ],
+    projectors: [
+      { path: 'mmproj-BF16.gguf', quant: 'BF16', sizeBytes: 931_146_528, sha256: 'c'.repeat(64), url: 'https://x' },
+    ],
+    ...overrides,
+  });
+}
+
+describe('ModelHubService fit', () => {
+  const installed = (overrides: Partial<InstalledModel> = {}): InstalledModel => ({
+    name: 'small:latest',
+    sizeBytes: 397_821_319,
+    quantization: 'Q4_K_M',
+    family: 'llama',
+    parameterSize: '494M',
+    modifiedAt: '2026-10-01T00:00:00Z',
+    capabilities: { tools: true, vision: false, thinking: false, embeddings: false, completion: true },
+    ...overrides,
+  });
+
+  it('rates installed models from the layer shapes Ollama reports, reading each tag once', async () => {
+    const { service, runtime, hardware } = harness();
+    runtime.list.mockResolvedValue([installed()]);
+
+    const first = await service.installed();
+    expect(first.ok && first.models[0].fit).toMatchObject({ level: 'fits', basis: 'arch' });
+    await service.installed();
+    expect(runtime.inspect).toHaveBeenCalledTimes(1);
+    expect(runtime.inspect).toHaveBeenCalledWith('small:latest', { tags: false });
+    expect(hardware).toHaveBeenCalledTimes(1);
+
+    runtime.list.mockResolvedValue([installed({ modifiedAt: '2026-10-02T00:00:00Z' })]);
+    await service.installed();
+    expect(runtime.inspect).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to the file size when Ollama cannot describe a model, and reads it again next time', async () => {
+    const { service, runtime } = harness();
+    runtime.list.mockResolvedValue([installed(), installed({ name: 'mystery:latest', sizeBytes: null })]);
+    runtime.inspect.mockRejectedValueOnce(new LocalRuntimeError('show timed out', 'ollama'));
+
+    const first = await service.installed();
+    expect(first.ok && first.models.map(model => [model.name, model.fit?.basis ?? null])).toEqual([
+      ['mystery:latest', null],
+      ['small:latest', 'size'],
+    ]);
+    const second = await service.installed();
+    expect(second.ok && second.models[1].fit?.basis).toBe('arch');
+  });
+
+  it('plans an installed model for the context chat sizes it with under the Settings choice', async () => {
+    const contexts = async (setting: LocalContextSetting) => {
+      const { service, runtime } = harness({ setting });
+      runtime.list.mockResolvedValue([
+        installed(),
+        installed({ name: 'long:latest' }),
+        installed({ name: 'huge:latest' }),
+      ]);
+      const parameters: Record<string, string> = { 'long:latest': 'num_ctx 24576', 'huge:latest': 'num_ctx 131072' };
+      const base = await runtime.inspect('x');
+      runtime.inspect.mockImplementation(async (name: string) => ({ ...base, parameters: parameters[name] ?? null }));
+      const result = await service.installed();
+      return result.ok ? result.models.map(model => [model.name, model.fit?.context]) : [];
+    };
+
+    // Auto runs a model that stays resident at its trained length, past any smaller num_ctx.
+    expect(await contexts(AUTO_LOCAL_CONTEXT)).toEqual([
+      ['huge:latest', 32768],
+      ['long:latest', 32768],
+      ['small:latest', 32768],
+    ]);
+    expect(await contexts({ mode: 'fixed', tokens: 16384 })).toEqual([
+      ['huge:latest', 16384],
+      ['long:latest', 16384],
+      ['small:latest', 16384],
+    ]);
+  });
+
+  it('caps a size-rated installed model at the context limit Ollama reports, and says when none is known', async () => {
+    const fitsUnder = async (setting: LocalContextSetting) => {
+      const { service, runtime } = harness({ setting });
+      runtime.list.mockResolvedValue([installed({ name: 'known:latest' }), installed({ name: 'unknown:latest' })]);
+      const base = await runtime.inspect('x');
+      runtime.inspect.mockImplementation(async (name: string) => ({
+        ...base,
+        arch: null,
+        parameters: 'num_ctx 32768',
+        contextLength: name === 'known:latest' ? 8192 : null,
+      }));
+      const result = await service.installed();
+      return Object.fromEntries(result.ok ? result.models.map(model => [model.name, model.fit]) : []);
+    };
+
+    const auto = await fitsUnder(AUTO_LOCAL_CONTEXT);
+    expect(auto['known:latest']).toMatchObject({ basis: 'size', context: 8192 });
+    expect(auto['known:latest']?.detail).toContain('the 8K context chat will use');
+    // Without layer shapes Auto cannot measure the model, so chat starts it at 16K whatever num_ctx says.
+    expect(auto['unknown:latest']).toMatchObject({ basis: 'size', context: 16384 });
+    expect(auto['unknown:latest']?.detail).toContain('the context chat will use (up to 16K)');
+
+    const fixed = await fitsUnder({ mode: 'fixed', tokens: 65536 });
+    expect(fixed['known:latest']).toMatchObject({ basis: 'size', context: 8192 });
+    expect(fixed['unknown:latest']?.detail).toContain('the context chat will use (up to 64K)');
+  });
+
+  it('caps an Explore build at the context its GGUF header declares', async () => {
+    const { service, hub } = harness();
+    const gguf = { architecture: 'llama', contextLength: 8192, parameterCount: null };
+    hub.getModel.mockResolvedValueOnce(detail({ id: 'someone/Other-GGUF', gguf }));
+    const capped = await service.detail('someone/Other-GGUF');
+    expect(capped.ok && capped.model.builds[0].fit).toMatchObject({ basis: 'size', context: 8192 });
+
+    hub.getModel.mockResolvedValueOnce(detail({ id: 'someone/Bare-GGUF' }));
+    const bare = await service.detail('someone/Bare-GGUF');
+    expect(bare.ok && bare.model.builds[0].fit?.detail).toContain('(up to 16K)');
+  });
+
+  it('rates the reviewed file of a curated repo from the manifest, and any other file by size', async () => {
+    const other = build({ id: 'other-q4_k_m', files: [{ ...build().files[0], path: 'other-q4_k_m.gguf' }] });
+    const { service } = harness({ detail: gsqDetail({}, { builds: [...gsqDetail().builds, other] }) });
+    const view = await service.detail(GSQ_REPO);
+    expect(view.ok && view.model.builds.map(entry => entry.fit?.basis)).toEqual(['arch', 'size']);
+  });
+});
+
+describe('ModelHubService curated list', () => {
+  const pickNames = async (hardware: HardwareProfile, version?: string) => {
+    const list = await harness({ hardware, version }).service.curated();
+    return list.picks.map(pick => `${pick.slot}:${pick.entryId}/${pick.buildId}${pick.recommended ? ' *' : ''}`);
+  };
+
+  it('rates every build at the fixed context Settings gives local chat', async () => {
+    const list = await harness({ setting: { mode: 'fixed', tokens: 32768 } }).service.curated();
+    const contexts = list.entries.flatMap(entry => entry.builds.map(build => build.fit.context));
+    expect(contexts.length).toBeGreaterThan(0);
+    expect(new Set(contexts)).toEqual(new Set([32768]));
+  });
+
+  it('lists every pick, smallest download first, with its fit, and downloads nothing', async () => {
+    const { service, runtime, libraryLayers, hub, hardware } = harness();
+    const list = await service.curated();
+
+    expect(list.updatedAt).toBe(CURATED.updatedAt);
+    expect(list.entries.map(entry => entry.id)).toEqual([
+      'qwen3-5-0-8b',
+      'qwen3-5-4b',
+      'gemma-4-e4b',
+      'gemma-4-12b',
+      'qwen3-8-27b-gsq',
+      'gemma-4-26b',
+      'qwen3-8-27b',
+    ]);
+    expect(list.machine).toEqual({
+      memoryKind: 'cpu',
+      totalMemoryBytes: 16 * GIB,
+      gpuMemoryBytes: null,
+      gpuName: null,
+    });
+    expect(list.entries.every(entry => entry.vision && entry.thinking && entry.tools)).toBe(true);
+    expect(list.entries.find(entry => entry.id === 'gemma-4-26b')).toMatchObject({
+      params: '25.2B, 3.8B active',
+      licenseName: 'apache-2.0',
+      licenseKind: 'permissive',
+      sourceName: 'Ollama',
+      sourceUrl: 'https://ollama.com/library/gemma4',
+      builds: [
+        {
+          id: 'qat-q4-0',
+          repo: 'gemma4:26b-a4b-it-qat',
+          pullBuildId: 'qat-q4-0',
+          ollamaRef: 'gemma4:26b-a4b-it-qat',
+          fit: { basis: 'arch' },
+          blockedReason: null,
+        },
+      ],
+    });
+    expect(list.entries.find(entry => entry.id === 'qwen3-8-27b-gsq')).toMatchObject({
+      sourceName: 'Hugging Face',
+      sourceUrl: `https://huggingface.co/${GSQ_REPO}`,
+      builds: [
+        {
+          id: 'iq3-s',
+          repo: GSQ_REPO,
+          pullBuildId: 'Qwen3.8-27B-GSQ-RCO-IQ3_S',
+          ollamaRef: IQ3_REF,
+          sizeBytes: IQ3_FILE.sizeBytes + 931_146_528,
+        },
+        { id: 'iq2-xs' },
+      ],
+    });
+    await service.curated();
+    expect(hardware).toHaveBeenCalledTimes(1);
+    expect(runtime.pull).not.toHaveBeenCalled();
+    expect(libraryLayers).not.toHaveBeenCalled();
+    expect(hub.getModel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'a CPU-only computer',
+      machine('cpu', 62),
+      ['best:gemma-4-26b/qat-q4-0 *', 'fast:qwen3-5-4b/q4-k-m', 'light:qwen3-5-0-8b/q8-0'],
+    ],
+    ['a 6 GB GPU', machine('discrete', 32, 6), ['best:qwen3-5-0-8b/q8-0 *']],
+    [
+      'an 8 GB GPU',
+      machine('discrete', 32, 7.6),
+      ['best:qwen3-5-4b/q4-k-m *', 'fast:qwen3-5-0-8b/q8-0', 'long-context:gemma-4-e4b/qat-q4-0'],
+    ],
+    [
+      'a 16 GB GPU',
+      machine('discrete', 32, 15.9),
+      ['best:qwen3-8-27b-gsq/iq3-s *', 'fast:gemma-4-12b/qat-q4-0', 'long-context:qwen3-8-27b-gsq/iq2-xs'],
+    ],
+    [
+      'a 32 GB GPU',
+      machine('discrete', 64, 31.8),
+      ['best:qwen3-8-27b/q4-k-m *', 'fast:gemma-4-26b/qat-q4-0', 'long-context:qwen3-8-27b-gsq/iq3-s'],
+    ],
+    [
+      'a 64 GB Mac',
+      machine('unified', 64),
+      ['best:qwen3-8-27b/q8-0 *', 'fast:gemma-4-26b/qat-q4-0', 'long-context:qwen3-8-27b/q4-k-m'],
+    ],
+    ['an 8 GB Mac, which the list has no picks for', machine('unified', 8), []],
+  ])('picks for %s, Best recommended', async (_label, hardware, expected) => {
+    expect(await pickNames(hardware)).toEqual(expected);
+  });
+
+  it('moves Recommended to the next pick that fits when Best does not', async () => {
+    const picks = await harness({ hardware: machine('cpu', 8) }).service.curated();
+    const best = picks.entries.find(entry => entry.id === 'gemma-4-26b')?.builds[0];
+    expect(best?.fit.level).toBe('too-large');
+    expect(picks.picks.map(pick => [pick.slot, pick.recommended])).toEqual([
+      ['best', false],
+      ['fast', true],
+      ['light', false],
+    ]);
+  });
+
+  it('keeps a pick that needs a newer Ollama, with Download off, and recommends the next one', async () => {
+    const { service } = harness({ hardware: machine('cpu', 62), version: '0.30.0' });
+    const list = await service.curated();
+    const blocked = Object.fromEntries(
+      list.entries.flatMap(entry => entry.builds.map(build => [`${entry.id}/${build.id}`, build.blockedReason]))
+    );
+    expect(blocked).toMatchObject({
+      'qwen3-5-0-8b/q8-0': null,
+      'gemma-4-26b/qat-q4-0': 'Needs Ollama 0.30.6 or newer',
+      'qwen3-8-27b/q4-k-m': 'Needs Ollama 0.32.12 or newer',
+      'qwen3-8-27b-gsq/iq3-s': 'Needs Ollama 0.32.12 or newer',
+    });
+    expect(list.picks.find(pick => pick.recommended)).toMatchObject({ slot: 'fast', entryId: 'qwen3-5-4b' });
+  });
+
+  it('never lists an abliterated pick, even when the policy would show it', async () => {
+    const manifest: HubManifest = structuredClone(CURATED);
+    manifest.policy.abliterated = 'curated-opt-in';
+    manifest.entries[0].flags.abliterated = true;
+    manifest.entries[1].lineage.variantType = 'abliterated';
+    const library = libraryOf(manifest.entries[2].builds[0]);
+    if (library) library.ref = 'gemma4:e4b-abliterated';
+    const { service } = harness({ curated: manifest, hardware: machine('discrete', 32, 7.6) });
+
+    const list = await service.curated();
+    expect(list.entries.map(entry => entry.id)).not.toEqual(expect.arrayContaining(['qwen3-5-0-8b']));
+    expect(list.entries.map(entry => entry.id).slice(0, 2)).toEqual(['gemma-4-12b', 'qwen3-8-27b-gsq']);
+    expect(list.picks).toEqual([]);
+    expect(await service.curatedPull('qwen3-5-0-8b', 'q8-0')).toMatchObject({
+      ok: false,
+      error: { kind: 'not-found' },
+    });
+  });
+
+  it('labels a pick restricted when its own or its base license is not permissive, or hides it by policy', async () => {
+    const manifest: HubManifest = structuredClone(CURATED);
+    manifest.entries[0].license.class = 'non-commercial';
+    manifest.entries[1].license.base.class = 'restricted-commercial';
+    const kinds = Object.fromEntries(
+      (await harness({ curated: manifest }).service.curated()).entries.map(entry => [entry.id, entry.licenseKind])
+    );
+    expect(kinds).toMatchObject({
+      'qwen3-5-0-8b': 'restricted',
+      'qwen3-5-4b': 'restricted',
+      'gemma-4-e4b': 'permissive',
+    });
+
+    manifest.policy.restrictedLicense = 'hidden';
+    const ids = (await harness({ curated: manifest }).service.curated()).entries.map(entry => entry.id);
+    expect(ids).not.toContain('qwen3-5-0-8b');
+    expect(ids).not.toContain('qwen3-5-4b');
+  });
+
+  it('never offers a build whose template is not pinned, and leaves its slot empty', async () => {
+    const manifest: HubManifest = structuredClone(CURATED);
+    const pins = pinsOf(manifest.entries.find(entry => entry.id === 'gemma-4-26b')?.builds[0] as HubBuild);
+    if (!pins) throw new Error('no pins');
+    delete pins.installedTemplate;
+    const { service, libraryLayers } = harness({ curated: manifest, hardware: machine('cpu', 62) });
+
+    const list = await service.curated();
+    expect(list.entries.map(entry => entry.id)).not.toContain('gemma-4-26b');
+    expect(list.picks.map(pick => [pick.slot, pick.recommended])).toEqual([
+      ['fast', true],
+      ['light', false],
+    ]);
+    expect(await service.curatedPull('gemma-4-26b', 'qat-q4-0')).toMatchObject({
+      ok: false,
+      error: { kind: 'not-found' },
+    });
+    expect(libraryLayers).not.toHaveBeenCalled();
+  });
+});
+
+describe('ModelHubService curated library pulls', () => {
+  const LIBRARY = CURATED.entries.find(entry => entry.id === 'gemma-4-e4b');
+  const E4B = LIBRARY?.builds[0];
+  const E4B_LIBRARY = E4B && libraryOf(E4B);
+  if (!LIBRARY || !E4B || !E4B_LIBRARY) throw new Error('the bundled list lost its Gemma 4 E4B pick');
+  const REF = E4B_LIBRARY.ref;
+  const libraryRequest = {
+    repo: REF,
+    buildId: E4B.id,
+    revision: E4B_LIBRARY.digest,
+    sizeBytes: E4B_LIBRARY.sizeBytes,
+    acceptLicense: false,
+    confirmAccess: false,
+    curated: { entryId: LIBRARY.id, buildId: E4B.id },
+  };
+  const reviewed = () => {
+    const layers = reviewedLayers(E4B);
+    if (!layers) throw new Error('no reviewed layers');
+    return layers;
+  };
+  const layer = (kind: string, digest = 'f'.repeat(64)) => ({
+    mediaType: `application/vnd.ollama.image.${kind}`,
+    digest,
+  });
+
+  it('shows the library build in the dialog without asking Hugging Face, with the fit of its row', async () => {
+    const { service, hub, libraryLayers } = harness();
+    const row = (await service.curated()).entries.find(entry => entry.id === LIBRARY.id)?.builds[0];
+    const dialog = await service.curatedPull(LIBRARY.id, E4B.id);
+
+    expect(dialog).toMatchObject({
+      ok: true,
+      model: {
+        id: REF,
+        revision: E4B_LIBRARY.digest,
+        url: `https://ollama.com/library/${REF}`,
+        licenseNames: ['apache-2.0'],
+        licenseHost: 'ollama.com',
+        licenseKind: 'permissive',
+        projectorBytes: null,
+        needsAccess: false,
+      },
+      build: { id: E4B.id, sizeBytes: E4B_LIBRARY.sizeBytes, ollamaRef: REF },
+    });
+    expect(dialog.ok && dialog.build.fit).toEqual(row?.fit);
+    expect(libraryLayers).toHaveBeenCalledWith(REF, expect.anything());
+    expect(hub.getModel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a different template', () => ({ ...reviewed(), others: [...reviewed().others, layer('template')] })],
+    [
+      'a different license',
+      () => ({
+        ...reviewed(),
+        others: reviewed().others.map(l => (l.mediaType.endsWith('license') ? layer('license') : l)),
+      }),
+    ],
+    [
+      'a different projector',
+      () => ({
+        ...reviewed(),
+        others: reviewed().others.map(l => (l.mediaType.endsWith('projector') ? layer('projector') : l)),
+      }),
+    ],
+    ['no params', () => ({ ...reviewed(), others: reviewed().others.filter(l => !l.mediaType.endsWith('params')) })],
+    ['an extra layer', () => ({ ...reviewed(), others: [...reviewed().others, layer('system')] })],
+    ['different weights', () => ({ ...reviewed(), model: 'f'.repeat(64) })],
+  ])('refuses the dialog and the pull once the library serves %s', async (_label, live) => {
+    const { service, libraryLayers, runtime } = harness();
+    libraryLayers.mockResolvedValue(live());
+    const expected = {
+      ok: false,
+      error: { kind: 'upstream-changed', message: expect.stringContaining('changed at its source') },
+    };
+
+    expect(await service.curatedPull(LIBRARY.id, E4B.id)).toMatchObject(expected);
+    expect(await service.pull(libraryRequest)).toMatchObject(expected);
+    expect(runtime.pull).not.toHaveBeenCalled();
+    expect(service.pulls()).toEqual([]);
+  });
+
+  it('says the build is gone when the library has no such tag', async () => {
+    const { service, libraryLayers } = harness();
+    libraryLayers.mockResolvedValueOnce(null);
+    expect(await service.curatedPull(LIBRARY.id, E4B.id)).toMatchObject({
+      ok: false,
+      error: {
+        kind: 'upstream-changed',
+        message: `The Ollama library no longer serves ${REF}, so Curated cannot offer it.`,
+      },
+    });
+  });
+
+  it('checks the layers, pulls the library ref, and keeps what Ollama installed as reviewed', async () => {
+    const { service, runtime, libraryLayers, pulls, installedChanged, hub } = harness();
+    const result = service.pull(libraryRequest);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    expect(runtime.pull).toHaveBeenCalledWith(REF, expect.anything());
+    expect(libraryLayers).toHaveBeenCalledWith(REF, expect.anything());
+    pulls[0].resolve();
+
+    await expect(result).resolves.toEqual({ ok: true, ref: REF });
+    expect(runtime.inspect).toHaveBeenCalledWith(REF, { tags: false });
+    expect(runtime.remove).not.toHaveBeenCalled();
+    expect(installedChanged).toHaveBeenCalledTimes(1);
+    expect(hub.getModel).not.toHaveBeenCalled();
+    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['another template', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, template: 'x' } })],
+    ['another license', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, license: 'x' } })],
+    ['no license', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, license: null } })],
+    ['other weights', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, modelBlob: SHA } })],
+    ['a num_ctx', (b: ModelInspection) => ({ ...b, parameters: 'num_ctx 8192' })],
+    ['nothing to compare', (b: ModelInspection) => ({ ...b, contents: undefined })],
+  ])('removes the model when Ollama installed %s than was checked', async (_label, installed) => {
+    const { service, runtime, pulls, installedChanged } = harness();
+    const base = await runtime.inspect(REF);
+    runtime.inspect.mockClear();
+    runtime.inspect.mockImplementationOnce(async () => installed(base));
+    const result = service.pull(libraryRequest);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].resolve();
+
+    expect(await result).toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
+    expect(runtime.remove).toHaveBeenCalledWith(REF);
+    expect(installedChanged).toHaveBeenCalledTimes(1);
+    expect(service.pulls()).toEqual([]);
+  });
+
+  it.each([
+    ['another repo', { repo: 'gemma4:latest' }, 'not-found'],
+    ['another build id', { buildId: 'q8-0' }, 'not-found'],
+    ['an older digest', { revision: 'e'.repeat(64) }, 'changed'],
+    ['another size', { sizeBytes: 1 }, 'changed'],
+  ] as const)('refuses a request naming %s without downloading', async (_label, change, kind) => {
+    const { service, runtime, libraryLayers } = harness();
+    expect(await service.pull({ ...libraryRequest, ...change })).toMatchObject({ ok: false, error: { kind } });
+    expect(libraryLayers).not.toHaveBeenCalled();
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('needs the license accepted for a pick whose base license is not permissive', async () => {
+    const manifest: HubManifest = structuredClone(CURATED);
+    const entry = manifest.entries.find(candidate => candidate.id === LIBRARY.id);
+    if (!entry) throw new Error('no entry');
+    entry.license.base.class = 'restricted-commercial';
+    const { service, runtime, pulls } = harness({ curated: manifest });
+
+    expect(await service.curatedPull(LIBRARY.id, E4B.id)).toMatchObject({
+      ok: true,
+      model: { licenseKind: 'restricted' },
+    });
+    expect(await service.pull(libraryRequest)).toMatchObject({ ok: false, error: { kind: 'license-required' } });
+    expect(runtime.pull).not.toHaveBeenCalled();
+    const result = service.pull({ ...libraryRequest, acceptLicense: true });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].resolve();
+    await expect(result).resolves.toMatchObject({ ok: true });
+  });
+
+  it('refuses the dialog and the pull while Ollama is older than the build needs', async () => {
+    const { service, runtime, libraryLayers } = harness({ version: '0.30.5' });
+    const expected = {
+      ok: false,
+      error: { kind: 'cannot-pull', message: expect.stringContaining('Needs Ollama 0.30.6 or newer') },
+    };
+    expect(await service.curatedPull(LIBRARY.id, E4B.id)).toMatchObject(expected);
+    expect(await service.pull(libraryRequest)).toMatchObject(expected);
+    expect(libraryLayers).not.toHaveBeenCalled();
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failure to reach Ollama in the pull list', async () => {
+    const { service, runtime } = harness({ healthy: false });
+    expect(await service.pull(libraryRequest)).toMatchObject({
+      ok: false,
+      error: { kind: 'runtime-unavailable' },
+      listed: true,
+    });
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+});
+
+describe('ModelHubService curated Hugging Face pulls', () => {
+  const gsqRequest = {
+    repo: GSQ_REPO,
+    buildId: 'Qwen3.8-27B-GSQ-RCO-IQ3_S',
+    revision: 'b'.repeat(40),
+    sizeBytes: IQ3_FILE.sizeBytes,
+    acceptLicense: false,
+    confirmAccess: false,
+    curated: { entryId: GSQ.id, buildId: IQ3.id },
+  };
+  const gsqHarness = (options: Parameters<typeof harness>[0] = {}) => {
+    const setup = harness({ detail: gsqDetail(), verified: IQ3_REF, ...options });
+    setup.hub.getModel.mockImplementation(async (id: string) =>
+      id === GSQ.lineage.base ? detail({ id, builds: [] }) : (options.detail ?? gsqDetail())
+    );
+    return setup;
+  };
+
+  it('hands back the live repo and build while the file, licenses and layers match the reviewed ones', async () => {
+    const { service, hub } = gsqHarness();
+    const row = (await service.curated()).entries.find(entry => entry.id === GSQ.id)?.builds[0];
+    const result = await service.curatedPull(GSQ.id, IQ3.id);
+
+    expect(result).toMatchObject({
+      ok: true,
+      model: { id: GSQ_REPO, revision: 'b'.repeat(40), licenseKind: 'permissive' },
+      build: { id: 'Qwen3.8-27B-GSQ-RCO-IQ3_S', fit: { basis: 'arch' } },
+    });
+    expect(result.ok && result.build.fit).toEqual(row?.fit);
+    expect(hub.getModel).toHaveBeenCalledWith(GSQ.lineage.base, expect.anything());
+    expect(hub.ollamaLayers).toHaveBeenCalledWith(GSQ_REPO, 'IQ3_S', expect.anything());
+  });
+
+  it.each([
+    ['a different sha256', gsqDetail({ sha256: 'f'.repeat(64) })],
+    ['a different size', gsqDetail({ sizeBytes: 1 })],
+    ['the file gone', gsqDetail({}, { builds: [build({ id: 'other' })] })],
+  ])('refuses the dialog once the repo has %s', async (_label, live) => {
+    const { service, runtime } = gsqHarness({ detail: live });
+    expect(await service.curatedPull(GSQ.id, IQ3.id)).toMatchObject({
+      ok: false,
+      error: { kind: 'upstream-changed', message: expect.stringContaining('changed on Hugging Face') },
+    });
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a license added to the repo card', ['apache-2.0', 'mit'], ['apache-2.0']],
+    ['the repo card license swapped', ['mit'], ['apache-2.0']],
+    ['the base model card license swapped', ['apache-2.0'], ['other']],
+  ])('refuses the dialog and the pull with %s', async (_label, repoLicenses, baseLicenses) => {
+    const { service, hub, runtime } = gsqHarness();
+    hub.getModel.mockImplementation(async (id: string) =>
+      id === GSQ.lineage.base
+        ? detail({ id, builds: [], licenses: baseLicenses })
+        : gsqDetail({}, { licenses: repoLicenses })
+    );
+    const expected = { ok: false, error: { kind: 'upstream-changed', message: expect.stringContaining('license') } };
+    expect(await service.curatedPull(GSQ.id, IQ3.id)).toMatchObject(expected);
+    expect(await service.pull(gsqRequest)).toMatchObject(expected);
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('refuses once hf.co starts serving a template layer the review did not see', async () => {
+    const { service, hub, runtime } = gsqHarness();
+    const live = reviewedLayers(IQ3);
+    if (!live) throw new Error('no layers');
+    hub.ollamaLayers.mockResolvedValue({
+      ...live,
+      others: [...live.others, { mediaType: 'application/vnd.ollama.image.template', digest: 'f'.repeat(64) }],
+    });
+    expect(await service.curatedPull(GSQ.id, IQ3.id)).toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
+    expect(await service.pull(gsqRequest)).toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('checks the layers of the verified tag, pulls, and checks the installed template against its pin', async () => {
+    const { service, hub, runtime, pulls } = gsqHarness();
+    const result = service.pull(gsqRequest);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    expect(hub.ollamaLayers).toHaveBeenCalledWith(GSQ_REPO, 'IQ3_S', expect.anything());
+    pulls[0].resolve();
+    await expect(result).resolves.toEqual({ ok: true, ref: IQ3_REF });
+    expect(runtime.remove).not.toHaveBeenCalled();
+
+    const again = gsqHarness();
+    again.runtime.inspect.mockResolvedValueOnce({
+      ...(await again.runtime.inspect(IQ3_REF)),
+      contents: { template: 'a different template', license: null, modelBlob: IQ3_FILE.sha256 },
+    });
+    const removed = again.service.pull(gsqRequest);
+    await vi.waitFor(() => expect(again.pulls).toHaveLength(1));
+    again.pulls[0].resolve();
+    await expect(removed).resolves.toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
+    expect(again.runtime.remove).toHaveBeenCalledWith(IQ3_REF);
+  });
+
+  it.each([
+    ['an unknown pick', { entryId: 'nope', buildId: 'iq3-s' }],
+    ['another build of the pick', { entryId: GSQ.id, buildId: 'iq2-xs' }],
+    ['a library pick', { entryId: 'gemma-4-12b', buildId: 'qat-q4-0' }],
+  ])('refuses %s without asking Hugging Face', async (_label, curated) => {
+    const { service, hub, runtime } = gsqHarness();
+    expect(await service.pull({ ...gsqRequest, curated })).toMatchObject({ ok: false, error: { kind: 'not-found' } });
+    expect(hub.getModel).not.toHaveBeenCalled();
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('refuses while Ollama is older than the build needs', async () => {
+    const { service, runtime } = gsqHarness({ version: '0.32.11' });
+    const expected = {
+      ok: false,
+      error: { kind: 'cannot-pull', message: expect.stringContaining('Needs Ollama 0.32.12') },
+    };
+    expect(await service.curatedPull(GSQ.id, IQ3.id)).toMatchObject(expected);
+    expect(await service.pull(gsqRequest)).toMatchObject(expected);
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('does not read registry layers for a pull from Explore', async () => {
+    const { service, hub, pulls } = harness();
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].resolve();
+    await result;
+    expect(hub.ollamaLayers).not.toHaveBeenCalled();
+  });
+
+  it('reports a Hugging Face outage from the dialog', async () => {
+    const { service, hub } = gsqHarness();
+    hub.getModel.mockRejectedValueOnce(new RuntimeConnectionError('offline', 'huggingface', { cause: new Error('x') }));
+    expect(await service.curatedPull(GSQ.id, IQ3.id)).toMatchObject({ ok: false, error: { kind: 'hub-unreachable' } });
   });
 });

@@ -1,0 +1,738 @@
+{
+  "schemaVersion": 2,
+  "sequence": 1,
+  "updatedAt": "2026-10-27T00:00:00Z",
+  "changelog": [
+    {
+      "sequence": 1,
+      "date": "2026-10-27",
+      "added": [
+        "qwen3-5-0-8b",
+        "qwen3-5-4b",
+        "gemma-4-e4b",
+        "gemma-4-12b",
+        "gemma-4-26b",
+        "qwen3-8-27b",
+        "qwen3-8-27b-gsq"
+      ],
+      "removed": [],
+      "changed": [],
+      "notes": "First curated list: Qwen3.5, Gemma 4 and Qwen3.8 picks for each memory size, all with thinking, tools and image input."
+    }
+  ],
+  "families": {
+    "qwen3-5": {
+      "ggufArch": "qwen35",
+      "sampling": { "thinking": { "temperature": 1, "top_p": 0.95, "top_k": 20, "presence_penalty": 1.5 } },
+      "reasoning": { "via": "kwarg", "key": "enable_thinking", "levels": { "off": false, "high": true } },
+      "ollama": { "renderer": "qwen3.5", "parser": "qwen3.5" },
+      "source": "https://huggingface.co/Qwen/Qwen3.5-4B/blob/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/README.md"
+    },
+    "gemma-4": {
+      "ggufArch": "gemma4",
+      "sampling": {
+        "thinking": { "temperature": 1, "top_p": 0.95, "top_k": 64 },
+        "nonThinking": { "temperature": 1, "top_p": 0.95, "top_k": 64 }
+      },
+      "reasoning": { "via": "kwarg", "key": "enable_thinking", "levels": { "off": false, "high": true } },
+      "ollama": { "parser": "gemma4" },
+      "source": "https://huggingface.co/google/gemma-4-E4B-it/blob/ee0ef6023621cff504d758262d4e04895a5af4a2/generation_config.json"
+    },
+    "qwen3-8": {
+      "ggufArch": "qwen35",
+      "sampling": { "thinking": { "temperature": 1, "top_p": 0.95, "top_k": 20 } },
+      "reasoning": { "via": "kwarg", "key": "enable_thinking", "levels": { "off": false, "high": true } },
+      "ollama": { "renderer": "qwen3.8", "parser": "qwen3.5" },
+      "source": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/generation_config.json"
+    }
+  },
+  "rankings": {},
+  "tiers": [
+    {
+      "memoryKind": "discrete",
+      "minGiB": 0,
+      "picks": [{ "slot": "best", "entry": "qwen3-5-0-8b", "build": "q8-0" }]
+    },
+    {
+      "memoryKind": "discrete",
+      "minGiB": 8,
+      "picks": [
+        { "slot": "best", "entry": "qwen3-5-4b", "build": "q4-k-m" },
+        { "slot": "fast", "entry": "qwen3-5-0-8b", "build": "q8-0" },
+        { "slot": "long-context", "entry": "gemma-4-e4b", "build": "qat-q4-0" }
+      ]
+    },
+    {
+      "memoryKind": "discrete",
+      "minGiB": 12,
+      "picks": [
+        { "slot": "best", "entry": "gemma-4-12b", "build": "qat-q4-0" },
+        { "slot": "fast", "entry": "qwen3-5-4b", "build": "q4-k-m" },
+        { "slot": "long-context", "entry": "qwen3-8-27b-gsq", "build": "iq2-xs" }
+      ]
+    },
+    {
+      "memoryKind": "discrete",
+      "minGiB": 16,
+      "picks": [
+        { "slot": "best", "entry": "qwen3-8-27b-gsq", "build": "iq3-s" },
+        { "slot": "fast", "entry": "gemma-4-12b", "build": "qat-q4-0" },
+        { "slot": "long-context", "entry": "qwen3-8-27b-gsq", "build": "iq2-xs" }
+      ]
+    },
+    {
+      "memoryKind": "discrete",
+      "minGiB": 24,
+      "picks": [
+        { "slot": "best", "entry": "qwen3-8-27b", "build": "q4-k-m" },
+        { "slot": "fast", "entry": "gemma-4-26b", "build": "qat-q4-0" },
+        { "slot": "long-context", "entry": "qwen3-8-27b-gsq", "build": "iq3-s" }
+      ]
+    },
+    {
+      "memoryKind": "discrete",
+      "minGiB": 48,
+      "picks": [
+        { "slot": "best", "entry": "qwen3-8-27b", "build": "q8-0" },
+        { "slot": "fast", "entry": "gemma-4-26b", "build": "qat-q4-0" },
+        { "slot": "long-context", "entry": "qwen3-8-27b", "build": "q4-k-m" }
+      ]
+    },
+    {
+      "memoryKind": "unified",
+      "minGiB": 16,
+      "picks": [
+        { "slot": "best", "entry": "gemma-4-12b", "build": "qat-q4-0" },
+        { "slot": "fast", "entry": "qwen3-5-4b", "build": "q4-k-m" },
+        { "slot": "long-context", "entry": "qwen3-8-27b-gsq", "build": "iq2-xs" }
+      ]
+    },
+    {
+      "memoryKind": "unified",
+      "minGiB": 32,
+      "picks": [
+        { "slot": "best", "entry": "qwen3-8-27b", "build": "q4-k-m" },
+        { "slot": "fast", "entry": "gemma-4-26b", "build": "qat-q4-0" },
+        { "slot": "long-context", "entry": "qwen3-8-27b-gsq", "build": "iq3-s" }
+      ]
+    },
+    {
+      "memoryKind": "unified",
+      "minGiB": 64,
+      "picks": [
+        { "slot": "best", "entry": "qwen3-8-27b", "build": "q8-0" },
+        { "slot": "fast", "entry": "gemma-4-26b", "build": "qat-q4-0" },
+        { "slot": "long-context", "entry": "qwen3-8-27b", "build": "q4-k-m" }
+      ]
+    },
+    {
+      "memoryKind": "cpu",
+      "minGiB": 0,
+      "picks": [
+        { "slot": "best", "entry": "gemma-4-26b", "build": "qat-q4-0" },
+        { "slot": "fast", "entry": "qwen3-5-4b", "build": "q4-k-m" },
+        { "slot": "light", "entry": "qwen3-5-0-8b", "build": "q8-0" }
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "id": "qwen3-5-0-8b",
+      "name": "Qwen3.5 0.8B",
+      "family": "qwen3-5",
+      "roles": ["chat", "vision"],
+      "why": "The smallest pick: runs on almost any computer and still thinks, calls tools and reads images.",
+      "lineage": {
+        "base": "Qwen/Qwen3.5-0.8B",
+        "variantType": "requant",
+        "steps": ["requant"],
+        "producer": { "name": "ollama", "tier": "A" }
+      },
+      "license": {
+        "id": "apache-2.0",
+        "spdx": true,
+        "class": "permissive",
+        "source": "https://ollama.com/library/qwen3.5/blobs/50cbab8a892c",
+        "base": {
+          "id": "apache-2.0",
+          "spdx": true,
+          "class": "permissive",
+          "source": "https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/2fc06364715b967f1860aea9cf38778875588b17/LICENSE"
+        },
+        "cardTag": "apache-2.0",
+        "gated": false,
+        "legal": "cleared"
+      },
+      "params": { "totalB": 0.75, "activeB": null },
+      "arch": {
+        "contextMax": 262144,
+        "blockCount": 24,
+        "headCount": 8,
+        "embeddingLength": 1024,
+        "activeFeedForwardLength": 3584,
+        "full": { "layers": 6, "kvHeads": 2, "keyLength": 256, "valueLength": 256 },
+        "recurrent": { "layers": 18, "stateBytesPerSeq": 20201472, "kind": "gated-delta-net" },
+        "mtpLayers": 0
+      },
+      "capabilities": { "tools": true, "vision": true, "thinking": true, "embeddings": false },
+      "flags": { "abliterated": false, "experimental": false, "licenseMismatch": false, "customQuant": false },
+      "reviewedAt": "2026-10-27",
+      "builds": [
+        {
+          "id": "q8-0",
+          "quant": { "label": "Q8_0", "family": "legacy", "scheme": "standard", "bpw": 8.63 },
+          "ollama": {
+            "kind": "library",
+            "ref": "qwen3.5:0.8b",
+            "sizeBytes": 1322069277,
+            "digest": "889ea3b9143cdc32146c7d530ce5f3d452ec18069086f6f4167ce9ae72a9691f",
+            "layers": {
+              "template": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315",
+              "params": "3cfce0087eaaa51070eb51ea44b80e6ccfb89d08ce58f4aeb0e48261aa9da329",
+              "license": "50cbab8a892c5f2993b8c7351a99182507472def3b1374558308605d99b86b32",
+              "numCtx": null,
+              "projector": "5ba2eb9bf28c5b5ff7a705f07bd9269f0f2dbd6cb2b4c46d5f98ed8d15d18883",
+              "draft": "b0108ebdcf5adea94899909c0cd6c12565f079f819991e68e464cb2e69a5d93d"
+            }
+          },
+          "runtimeMin": { "ollama": "0.19.0" },
+          "routing": { "preferred": "ollama", "reasons": ["library-tag", "renderer-known"], "ollamaFallback": false },
+          "smoke": [
+            {
+              "runtime": "ollama",
+              "runtimeVersion": "0.40.11",
+              "date": "2026-10-27",
+              "pass": true,
+              "checks": ["show", "load", "think", "tool"]
+            }
+          ],
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "qwen3-5-4b",
+      "name": "Qwen3.5 4B",
+      "family": "qwen3-5",
+      "roles": ["chat", "vision"],
+      "why": "Small and quick, with thinking, tools and image input, for 8 GB GPUs and CPU-only computers.",
+      "lineage": {
+        "base": "Qwen/Qwen3.5-4B",
+        "variantType": "requant",
+        "steps": ["requant"],
+        "producer": { "name": "ollama", "tier": "A" }
+      },
+      "license": {
+        "id": "apache-2.0",
+        "spdx": true,
+        "class": "permissive",
+        "source": "https://ollama.com/library/qwen3.5/blobs/50cbab8a892c",
+        "base": {
+          "id": "apache-2.0",
+          "spdx": true,
+          "class": "permissive",
+          "source": "https://huggingface.co/Qwen/Qwen3.5-4B/blob/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/LICENSE"
+        },
+        "cardTag": "apache-2.0",
+        "gated": false,
+        "legal": "cleared"
+      },
+      "params": { "totalB": 4.2, "activeB": null },
+      "arch": {
+        "contextMax": 262144,
+        "blockCount": 32,
+        "headCount": 16,
+        "embeddingLength": 2560,
+        "activeFeedForwardLength": 9216,
+        "full": { "layers": 8, "kvHeads": 4, "keyLength": 256, "valueLength": 256 },
+        "recurrent": { "layers": 24, "stateBytesPerSeq": 52690944, "kind": "gated-delta-net" },
+        "mtpLayers": 0
+      },
+      "capabilities": { "tools": true, "vision": true, "thinking": true, "embeddings": false },
+      "flags": { "abliterated": false, "experimental": false, "licenseMismatch": false, "customQuant": false },
+      "reviewedAt": "2026-10-27",
+      "builds": [
+        {
+          "id": "q4-k-m",
+          "quant": { "label": "Q4_K_M", "family": "K", "scheme": "standard", "bpw": 5.04 },
+          "ollama": {
+            "kind": "library",
+            "ref": "qwen3.5:4b",
+            "sizeBytes": 3324173934,
+            "digest": "a9d0a3e1d8c91732a3812becd31f8d4a8ff57414903f226306069f0437e2ac50",
+            "layers": {
+              "template": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315",
+              "params": "9371364b27a52acac9d87f88bd93c9db1174d8d6ec57f6888925cdc1788871ff",
+              "license": "50cbab8a892c5f2993b8c7351a99182507472def3b1374558308605d99b86b32",
+              "numCtx": null,
+              "projector": "e56a899b1540860385465756dd308c84417410b94dbc1c380adffd20a921ca60"
+            }
+          },
+          "runtimeMin": { "ollama": "0.19.0" },
+          "routing": { "preferred": "ollama", "reasons": ["library-tag", "renderer-known"], "ollamaFallback": false },
+          "smoke": [
+            {
+              "runtime": "ollama",
+              "runtimeVersion": "0.40.11",
+              "date": "2026-10-27",
+              "pass": true,
+              "checks": ["acquire", "show", "load", "think", "tool"]
+            }
+          ],
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "gemma-4-e4b",
+      "name": "Gemma 4 E4B",
+      "family": "gemma-4",
+      "roles": ["chat", "vision"],
+      "why": "Compact Gemma 4 with a 128K context, thinking, tools and image input.",
+      "lineage": {
+        "base": "google/gemma-4-E4B-it",
+        "variantType": "requant",
+        "steps": ["requant"],
+        "producer": { "name": "ollama", "tier": "A" }
+      },
+      "license": {
+        "id": "apache-2.0",
+        "spdx": true,
+        "class": "permissive",
+        "source": "https://ollama.com/library/gemma4/blobs/0d542e0c8804",
+        "base": {
+          "id": "apache-2.0",
+          "spdx": true,
+          "class": "permissive",
+          "source": "https://huggingface.co/google/gemma-4-E4B-it/blob/ee0ef6023621cff504d758262d4e04895a5af4a2/README.md"
+        },
+        "cardTag": "apache-2.0",
+        "gated": false,
+        "legal": "cleared"
+      },
+      "params": { "totalB": 7.5, "activeB": null },
+      "arch": {
+        "contextMax": 131072,
+        "blockCount": 42,
+        "headCount": 8,
+        "embeddingLength": 2560,
+        "activeFeedForwardLength": 10240,
+        "full": { "layers": 4, "kvHeads": 2, "keyLength": 512, "valueLength": 512 },
+        "swa": { "layers": 20, "kvHeads": 2, "keyLength": 256, "valueLength": 256, "window": 512 },
+        "mtpLayers": 0
+      },
+      "capabilities": { "tools": true, "vision": true, "thinking": true, "embeddings": false },
+      "flags": { "abliterated": false, "experimental": false, "licenseMismatch": false, "customQuant": false },
+      "reviewedAt": "2026-10-27",
+      "builds": [
+        {
+          "id": "qat-q4-0",
+          "quant": { "label": "QAT-Q4_0", "family": "legacy", "scheme": "standard", "bpw": 5.53 },
+          "ollama": {
+            "kind": "library",
+            "ref": "gemma4:e4b-it-qat",
+            "sizeBytes": 6146501801,
+            "digest": "e8b6a059ba86947a44ace84d6e5679795bc41862c25c30513142588f0e9dba1d",
+            "layers": {
+              "template": null,
+              "params": "56380ca2ab89f1f68c283f4d50863c0bcab52ae3f1b9a88e4ab5617b176f71a3",
+              "license": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+              "numCtx": null,
+              "projector": "c6398448d84a4836fdedf58f9775979e69ae0cc4dfdf4d697b5597693a555b12",
+              "installedTemplate": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315"
+            }
+          },
+          "runtimeMin": { "ollama": "0.30.6" },
+          "routing": { "preferred": "ollama", "reasons": ["library-tag", "renderer-known"], "ollamaFallback": false },
+          "smoke": [
+            {
+              "runtime": "ollama",
+              "runtimeVersion": "0.40.11",
+              "date": "2026-10-27",
+              "pass": true,
+              "checks": ["acquire", "show", "load", "think", "tool"]
+            }
+          ],
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "gemma-4-12b",
+      "name": "Gemma 4 12B",
+      "family": "gemma-4",
+      "roles": ["chat", "vision"],
+      "why": "A strong all-rounder that fits a 12 GB GPU, with a 256K context, thinking, tools and image input.",
+      "lineage": {
+        "base": "google/gemma-4-12B-it",
+        "variantType": "requant",
+        "steps": ["requant"],
+        "producer": { "name": "ollama", "tier": "A" }
+      },
+      "license": {
+        "id": "apache-2.0",
+        "spdx": true,
+        "class": "permissive",
+        "source": "https://ollama.com/library/gemma4/blobs/0d542e0c8804",
+        "base": {
+          "id": "apache-2.0",
+          "spdx": true,
+          "class": "permissive",
+          "source": "https://huggingface.co/google/gemma-4-12B-it/blob/707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7/README.md"
+        },
+        "cardTag": "apache-2.0",
+        "gated": false,
+        "legal": "cleared"
+      },
+      "params": { "totalB": 11.9, "activeB": null },
+      "arch": {
+        "contextMax": 262144,
+        "blockCount": 48,
+        "headCount": 16,
+        "embeddingLength": 3840,
+        "activeFeedForwardLength": 15360,
+        "full": { "layers": 8, "kvHeads": 1, "keyLength": 512, "valueLength": 512 },
+        "swa": { "layers": 40, "kvHeads": 8, "keyLength": 256, "valueLength": 256, "window": 1024 },
+        "mtpLayers": 0
+      },
+      "capabilities": { "tools": true, "vision": true, "thinking": true, "embeddings": false },
+      "flags": { "abliterated": false, "experimental": false, "licenseMismatch": false, "customQuant": false },
+      "reviewedAt": "2026-10-27",
+      "builds": [
+        {
+          "id": "qat-q4-0",
+          "quant": { "label": "QAT-Q4_0", "family": "legacy", "scheme": "standard", "bpw": 4.69 },
+          "ollama": {
+            "kind": "library",
+            "ref": "gemma4:12b-it-qat",
+            "sizeBytes": 7151003754,
+            "digest": "faff1a63667fac17ac5e777f47114688fcefea96e220e211aaa8d62c2c4561f1",
+            "layers": {
+              "template": null,
+              "params": "56380ca2ab89f1f68c283f4d50863c0bcab52ae3f1b9a88e4ab5617b176f71a3",
+              "license": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+              "numCtx": null,
+              "projector": "e70b0e5cd80323d5d588b4ed06780356b7b1ba03995a4b8164c6ae9db0ff5989",
+              "installedTemplate": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315"
+            }
+          },
+          "runtimeMin": { "ollama": "0.30.6" },
+          "routing": { "preferred": "ollama", "reasons": ["library-tag", "renderer-known"], "ollamaFallback": false },
+          "smoke": [
+            {
+              "runtime": "ollama",
+              "runtimeVersion": "0.40.11",
+              "date": "2026-10-27",
+              "pass": true,
+              "checks": ["acquire", "show", "load", "think", "tool"]
+            }
+          ],
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "gemma-4-26b",
+      "name": "Gemma 4 26B A4B",
+      "family": "gemma-4",
+      "roles": ["chat", "vision"],
+      "why": "Mixture of experts with 3.8B of its 25.2B parameters active per token, so it stays quick even on a CPU.",
+      "lineage": {
+        "base": "google/gemma-4-26B-A4B-it",
+        "variantType": "requant",
+        "steps": ["requant"],
+        "producer": { "name": "ollama", "tier": "A" }
+      },
+      "license": {
+        "id": "apache-2.0",
+        "spdx": true,
+        "class": "permissive",
+        "source": "https://ollama.com/library/gemma4/blobs/0d542e0c8804",
+        "base": {
+          "id": "apache-2.0",
+          "spdx": true,
+          "class": "permissive",
+          "source": "https://huggingface.co/google/gemma-4-26B-A4B-it/blob/4d7ae4984b7db7de8f8457170b3f1a419ee76d52/README.md"
+        },
+        "cardTag": "apache-2.0",
+        "gated": false,
+        "legal": "cleared"
+      },
+      "params": { "totalB": 25.2, "activeB": 3.8 },
+      "arch": {
+        "contextMax": 262144,
+        "blockCount": 30,
+        "headCount": 16,
+        "embeddingLength": 2816,
+        "activeFeedForwardLength": 5632,
+        "full": { "layers": 5, "kvHeads": 2, "keyLength": 512, "valueLength": 512 },
+        "swa": { "layers": 25, "kvHeads": 8, "keyLength": 256, "valueLength": 256, "window": 1024 },
+        "moe": { "experts": 128, "used": 8, "moeLayers": 30 },
+        "mtpLayers": 0
+      },
+      "capabilities": { "tools": true, "vision": true, "thinking": true, "embeddings": false },
+      "flags": { "abliterated": false, "experimental": false, "licenseMismatch": false, "customQuant": false },
+      "reviewedAt": "2026-10-27",
+      "builds": [
+        {
+          "id": "qat-q4-0",
+          "quant": { "label": "QAT-Q4_0", "family": "legacy", "scheme": "standard", "bpw": 4.58 },
+          "ollama": {
+            "kind": "library",
+            "ref": "gemma4:26b-a4b-it-qat",
+            "sizeBytes": 15634199946,
+            "digest": "4c856523d61d77922dbc0b26753a6bf6208e5d69d80db0c04dcd776832d054c5",
+            "layers": {
+              "template": null,
+              "params": "56380ca2ab89f1f68c283f4d50863c0bcab52ae3f1b9a88e4ab5617b176f71a3",
+              "license": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+              "numCtx": null,
+              "projector": "d8e2de16e17515d9061b23c9a002715f996f9e0c87b93a9354264611bfab9239",
+              "installedTemplate": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315"
+            }
+          },
+          "runtimeMin": { "ollama": "0.30.6" },
+          "routing": { "preferred": "ollama", "reasons": ["library-tag", "renderer-known"], "ollamaFallback": false },
+          "smoke": [
+            {
+              "runtime": "ollama",
+              "runtimeVersion": "0.40.11",
+              "date": "2026-10-27",
+              "pass": true,
+              "checks": ["acquire", "show", "load", "think", "tool"]
+            }
+          ],
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "qwen3-8-27b",
+      "name": "Qwen3.8 27B",
+      "family": "qwen3-8",
+      "roles": ["chat", "vision"],
+      "why": "The strongest pick for 24 GB and larger, with thinking, tools and image input.",
+      "lineage": {
+        "base": "Qwen/Qwen3.8-27B",
+        "variantType": "requant",
+        "steps": ["requant"],
+        "producer": { "name": "ollama", "tier": "A" }
+      },
+      "license": {
+        "id": "apache-2.0",
+        "spdx": true,
+        "class": "permissive",
+        "source": "https://ollama.com/library/qwen3.8/blobs/4c6a8e842ef0",
+        "base": {
+          "id": "apache-2.0",
+          "spdx": true,
+          "class": "permissive",
+          "source": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/LICENSE"
+        },
+        "cardTag": "apache-2.0",
+        "gated": false,
+        "legal": "cleared"
+      },
+      "params": { "totalB": 27.3, "activeB": null },
+      "arch": {
+        "contextMax": 262144,
+        "blockCount": 65,
+        "headCount": 24,
+        "embeddingLength": 5120,
+        "activeFeedForwardLength": 17408,
+        "full": { "layers": 16, "kvHeads": 4, "keyLength": 256, "valueLength": 256 },
+        "recurrent": { "layers": 48, "stateBytesPerSeq": 156893184, "kind": "gated-delta-net" },
+        "mtpLayers": 1
+      },
+      "capabilities": { "tools": true, "vision": true, "thinking": true, "embeddings": false },
+      "flags": { "abliterated": false, "experimental": false, "licenseMismatch": false, "customQuant": false },
+      "reviewedAt": "2026-10-27",
+      "builds": [
+        {
+          "id": "q4-k-m",
+          "quant": { "label": "Q4_K_M", "family": "K", "scheme": "standard", "bpw": 4.92 },
+          "ollama": {
+            "kind": "library",
+            "ref": "qwen3.8:27b",
+            "sizeBytes": 17741872154,
+            "digest": "f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d",
+            "layers": {
+              "template": null,
+              "params": "906ee87bde6cff7bf3c3b1550f55cbbec261e027187fbb9f511f908ffc418334",
+              "license": "4c6a8e842ef0d8504549facfb03f1273a8d0022991519bc1888522cc1a5517d1",
+              "numCtx": null,
+              "projector": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e",
+              "installedTemplate": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315"
+            }
+          },
+          "runtimeMin": { "ollama": "0.32.12" },
+          "routing": { "preferred": "ollama", "reasons": ["library-tag", "renderer-known"], "ollamaFallback": false },
+          "smoke": [
+            {
+              "runtime": "ollama",
+              "runtimeVersion": "0.40.11",
+              "date": "2026-10-27",
+              "pass": true,
+              "checks": ["acquire", "show", "load", "think", "tool"]
+            }
+          ],
+          "evidence": []
+        },
+        {
+          "id": "q8-0",
+          "quant": { "label": "Q8_0", "family": "legacy", "scheme": "standard", "bpw": 8.51 },
+          "ollama": {
+            "kind": "library",
+            "ref": "qwen3.8:27b-q8_0",
+            "sizeBytes": 29978242050,
+            "digest": "2bb22714289826d7b9e0ba376c3ce47d08bce39abe598745857c44d88c09bdbf",
+            "layers": {
+              "template": null,
+              "params": "448d29437397713495b408d51b4ccbc5ba95240a7583643efb2304921950b111",
+              "license": "4c6a8e842ef0d8504549facfb03f1273a8d0022991519bc1888522cc1a5517d1",
+              "numCtx": null,
+              "projector": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e",
+              "installedTemplate": "b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315"
+            }
+          },
+          "runtimeMin": { "ollama": "0.32.12" },
+          "routing": { "preferred": "ollama", "reasons": ["library-tag", "renderer-known"], "ollamaFallback": false },
+          "smoke": [
+            {
+              "runtime": "ollama",
+              "runtimeVersion": "0.40.11",
+              "date": "2026-10-27",
+              "pass": true,
+              "checks": ["acquire", "show", "load", "think", "tool"]
+            }
+          ],
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "qwen3-8-27b-gsq",
+      "name": "Qwen3.8 27B GSQ",
+      "family": "qwen3-8",
+      "roles": ["chat", "vision"],
+      "why": "Qwen3.8 27B compressed with GSQ-RCO by ISTA-DASLab to fit 12 and 16 GB GPUs, image input included.",
+      "lineage": {
+        "base": "Qwen/Qwen3.8-27B",
+        "variantType": "requant",
+        "steps": ["requant"],
+        "producer": { "name": "ISTA-DASLab", "tier": "B" }
+      },
+      "license": {
+        "id": "apache-2.0",
+        "spdx": true,
+        "class": "permissive",
+        "source": "https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF/blob/d562806dbafae37109975e970aae91b43e73b440/README.md",
+        "base": {
+          "id": "apache-2.0",
+          "spdx": true,
+          "class": "permissive",
+          "source": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/LICENSE"
+        },
+        "cardTag": "apache-2.0",
+        "gated": false,
+        "legal": "cleared"
+      },
+      "params": { "totalB": 26.9, "activeB": null },
+      "arch": {
+        "contextMax": 262144,
+        "blockCount": 64,
+        "headCount": 24,
+        "embeddingLength": 5120,
+        "activeFeedForwardLength": 17408,
+        "full": { "layers": 16, "kvHeads": 4, "keyLength": 256, "valueLength": 256 },
+        "recurrent": { "layers": 48, "stateBytesPerSeq": 156893184, "kind": "gated-delta-net" },
+        "mtpLayers": 0
+      },
+      "capabilities": { "tools": true, "vision": true, "thinking": true, "embeddings": false },
+      "flags": { "abliterated": false, "experimental": false, "licenseMismatch": false, "customQuant": false },
+      "reviewedAt": "2026-10-27",
+      "builds": [
+        {
+          "id": "iq3-s",
+          "hf": {
+            "repo": "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF",
+            "revision": "d562806dbafae37109975e970aae91b43e73b440"
+          },
+          "quant": { "label": "IQ3_S", "family": "IQ", "scheme": "gsq-rco", "bpw": 3.5 },
+          "weights": [
+            {
+              "path": "Qwen3.8-27B-GSQ-RCO-IQ3_S.gguf",
+              "sizeBytes": 11771546784,
+              "sha256": "64b53b64c7aa39f20a7e54bd80582fe595b1d745624ee8a72e92508c0326d810"
+            }
+          ],
+          "ollama": {
+            "kind": "hf-pull",
+            "modelfile": {},
+            "layers": {
+              "template": null,
+              "params": null,
+              "license": null,
+              "numCtx": null,
+              "projector": "13cb7bebccbd04afc8f4090cb949ecf8937cdf7377c5799b1a0c594e7c0d3e16",
+              "projectorBytes": 931146528,
+              "installedTemplate": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+            }
+          },
+          "runtimeMin": { "ollama": "0.32.12" },
+          "routing": { "preferred": "ollama", "reasons": ["no-ollama-renderer"], "ollamaFallback": false },
+          "smoke": [
+            {
+              "runtime": "ollama",
+              "runtimeVersion": "0.40.11",
+              "date": "2026-10-27",
+              "pass": true,
+              "checks": ["acquire", "show", "load", "think", "tool"]
+            }
+          ],
+          "evidence": []
+        },
+        {
+          "id": "iq2-xs",
+          "hf": {
+            "repo": "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF",
+            "revision": "d562806dbafae37109975e970aae91b43e73b440"
+          },
+          "quant": { "label": "IQ2_XS", "family": "IQ", "scheme": "gsq-rco", "bpw": 2.51 },
+          "weights": [
+            {
+              "path": "Qwen3.8-27B-GSQ-RCO-IQ2_XS.gguf",
+              "sizeBytes": 8422841472,
+              "sha256": "f0ae5006da0ce6225935339e4e989369f94de95d2263cf969519f8420c9ae02c"
+            }
+          ],
+          "ollama": {
+            "kind": "hf-pull",
+            "modelfile": {},
+            "layers": {
+              "template": null,
+              "params": null,
+              "license": null,
+              "numCtx": null,
+              "projector": "13cb7bebccbd04afc8f4090cb949ecf8937cdf7377c5799b1a0c594e7c0d3e16",
+              "projectorBytes": 931146528,
+              "installedTemplate": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+            }
+          },
+          "runtimeMin": { "ollama": "0.32.12" },
+          "routing": { "preferred": "ollama", "reasons": ["no-ollama-renderer"], "ollamaFallback": false },
+          "smoke": [
+            {
+              "runtime": "ollama",
+              "runtimeVersion": "0.40.11",
+              "date": "2026-10-27",
+              "pass": true,
+              "checks": ["acquire", "show", "load", "think", "tool", "image"]
+            }
+          ],
+          "evidence": []
+        }
+      ]
+    }
+  ]
+}

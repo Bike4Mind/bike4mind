@@ -3,10 +3,16 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type {
+  CuratedBuildView,
+  CuratedEntryView,
+  CuratedList,
+  CuratedPullResult,
+  HubBuildView,
   HubDetailResult,
   HubModelView,
   HubSearchResult,
   InstalledModelsResult,
+  ModelFit,
   ModelPull,
   ModelRuntimeStatus,
 } from '@shared/models';
@@ -67,11 +73,135 @@ function view(extra: Partial<HubModelView> = {}): HubModelView {
         sizeBytes: 491_400_032,
         ollamaRef: `hf.co/${REPO}:Q4_K_M`,
         blockedReason: null,
+        fit: null,
       },
     ],
     projectorBytes: null,
     needsAccess: false,
     ...extra,
+  };
+}
+
+const FITS: ModelFit = {
+  level: 'fits',
+  basis: 'arch',
+  context: 16384,
+  detail: 'Fits in memory at the 16K context chat will use: about 7.4 GiB of the 46.5 GiB a model can use here.',
+};
+const TOO_LARGE: ModelFit = {
+  level: 'too-large',
+  basis: 'arch',
+  context: 16384,
+  detail: 'Needs about 50 GiB at the 16K context chat will use, more than the 46.5 GiB a model can use here.',
+};
+
+const GSQ = 'ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF';
+const E4B_REF = 'gemma4:e4b-it-qat';
+
+function curatedBuild(extra: Partial<CuratedBuildView> & Pick<CuratedBuildView, 'id'>): CuratedBuildView {
+  return {
+    repo: GSQ,
+    pullBuildId: `Qwen3.8-27B-GSQ-RCO-${extra.id.toUpperCase().replace('-', '_')}`,
+    quant: extra.id.toUpperCase().replace('-', '_'),
+    sizeBytes: 9_353_988_000,
+    ollamaRef: `hf.co/${GSQ}:${extra.id.toUpperCase().replace('-', '_')}`,
+    fit: FITS,
+    blockedReason: null,
+    ...extra,
+  };
+}
+
+function curatedEntry(extra: Partial<CuratedEntryView> & Pick<CuratedEntryView, 'id' | 'builds'>): CuratedEntryView {
+  return {
+    name: extra.id,
+    why: 'On the list for its size.',
+    params: '27B',
+    licenseName: 'apache-2.0',
+    licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
+    licenseKind: 'permissive',
+    thinking: true,
+    vision: true,
+    code: false,
+    tools: true,
+    toolUse: { rating: 'unrated', note: null },
+    sourceUrl: `https://huggingface.co/${GSQ}`,
+    sourceName: 'Hugging Face',
+    ...extra,
+  };
+}
+
+const E4B = curatedBuild({
+  id: 'qat-q4-0',
+  repo: E4B_REF,
+  pullBuildId: 'qat-q4-0',
+  quant: 'Q4_0',
+  sizeBytes: 6_146_501_801,
+  ollamaRef: E4B_REF,
+});
+
+/** A CPU-only list whose Best pick will not fit, so Recommended sits on the Fast pick. */
+function curatedList(): CuratedList {
+  return {
+    updatedAt: '2026-10-27T00:00:00Z',
+    machine: { memoryKind: 'cpu', totalMemoryBytes: 62 * 1024 ** 3, gpuMemoryBytes: null, gpuName: null },
+    picks: [
+      { slot: 'best', entryId: 'qwen3-8-27b-gsq', buildId: 'iq3-s', recommended: false },
+      { slot: 'fast', entryId: 'gemma-4-e4b', buildId: 'qat-q4-0', recommended: true },
+      { slot: 'light', entryId: 'qwen3-8-27b-gsq', buildId: 'iq2-xs', recommended: false },
+    ],
+    entries: [
+      curatedEntry({
+        id: 'gemma-4-e4b',
+        name: 'Gemma 4 E4B',
+        params: '8B',
+        sourceUrl: 'https://ollama.com/library/gemma4',
+        sourceName: 'Ollama',
+        builds: [E4B],
+      }),
+      curatedEntry({
+        id: 'qwen3-8-27b-gsq',
+        name: 'Qwen3.8 27B GSQ',
+        builds: [curatedBuild({ id: 'iq2-xs' }), curatedBuild({ id: 'iq3-s', fit: TOO_LARGE })],
+      }),
+      curatedEntry({
+        id: 'qwen3-8-27b',
+        name: 'Qwen3.8 27B',
+        sourceUrl: 'https://ollama.com/library/qwen3.8',
+        sourceName: 'Ollama',
+        builds: [
+          curatedBuild({
+            id: 'q4-k-m',
+            repo: 'qwen3.8:27b',
+            pullBuildId: 'q4-k-m',
+            ollamaRef: 'qwen3.8:27b',
+            blockedReason: 'Needs Ollama 0.32.12 or newer',
+          }),
+        ],
+      }),
+    ],
+  };
+}
+
+/** What main hands back for the Gemma 4 E4B library build once its layers still match. */
+function libraryPull(fit: ModelFit = FITS): CuratedPullResult {
+  const build: HubBuildView = {
+    id: 'qat-q4-0',
+    quant: 'Q4_0',
+    sizeBytes: E4B.sizeBytes,
+    ollamaRef: E4B_REF,
+    blockedReason: null,
+    fit,
+  };
+  return {
+    ok: true,
+    model: view({
+      id: E4B_REF,
+      url: `https://ollama.com/library/${E4B_REF}`,
+      revision: 'd'.repeat(64),
+      licenseHost: 'ollama.com',
+      builds: [build],
+    }),
+    build,
   };
 }
 
@@ -81,6 +211,9 @@ interface Bridge {
   search: HubSearchResult;
   detail: HubDetailResult;
   pulls: ModelPull[];
+  curated: CuratedList;
+  curatedFailures: number;
+  curatedPull: CuratedPullResult;
 }
 
 let bridge: Bridge;
@@ -92,6 +225,7 @@ const calls = {
   search: vi.fn(),
   getDetail: vi.fn(),
   getStatus: vi.fn(),
+  getCuratedPull: vi.fn(),
 };
 
 beforeEach(() => {
@@ -101,6 +235,9 @@ beforeEach(() => {
     search: { ok: true, models: [card(REPO)], nextCursor: null },
     detail: { ok: true, model: view() },
     pulls: [],
+    curated: curatedList(),
+    curatedFailures: 0,
+    curatedPull: libraryPull(),
   };
   for (const fn of Object.values(calls)) fn.mockReset();
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
@@ -122,6 +259,17 @@ beforeEach(() => {
         return bridge.detail;
       },
       listPulls: async () => bridge.pulls,
+      listCurated: async () => {
+        if (bridge.curatedFailures > 0) {
+          bridge.curatedFailures -= 1;
+          throw new Error('ipc failed');
+        }
+        return bridge.curated;
+      },
+      getCuratedPull: async (entryId: string, buildId: string) => {
+        calls.getCuratedPull(entryId, buildId);
+        return bridge.curatedPull;
+      },
       pull: calls.pull,
       cancelPull: calls.cancelPull,
       dismissPull: vi.fn(),
@@ -147,7 +295,7 @@ afterEach(() => {
 
 const flush = () => act(async () => new Promise(resolve => setTimeout(resolve, 0)));
 
-async function mount(inUse?: ModelsInUse) {
+async function mount(inUse?: ModelsInUse, tab: 'curated' | 'installed' = 'installed') {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -161,7 +309,7 @@ async function mount(inUse?: ModelsInUse) {
   await flush();
   await flush();
   // The screen remembers its tab across visits, and so across tests.
-  await click(q('models-installed-tab'));
+  await click(q(`models-${tab}-tab`));
 }
 
 const q = (testId: string) => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
@@ -176,6 +324,311 @@ const click = async (element: HTMLElement | null) => {
 async function openExplore() {
   await click(q('models-explore-tab'));
 }
+
+const inside = (sectionId: string, testId: string) => [
+  ...(q(sectionId)?.querySelectorAll<HTMLElement>(`[data-testid="${testId}"]`) ?? []),
+];
+const pickButton = (slot: string) =>
+  q('models-curated-picks')?.querySelector<HTMLElement>(
+    `[data-slot="${slot}"] [data-testid="models-build-pull-btn"]`
+  ) ?? null;
+const entryButton = (entryId: string, buildId: string) =>
+  q('models-curated-all')?.querySelector<HTMLElement>(
+    `[data-entry="${entryId}"] [data-testid="models-build-pull-btn"][data-build="${buildId}"]`
+  ) ?? null;
+
+describe('ModelsScreen curated', () => {
+  it('opens on Curated on the first visit', async () => {
+    // The remembered tab is module state, so a fresh module graph stands for a fresh app start.
+    vi.resetModules();
+    const [{ act: freshAct }, { createRoot: freshRoot }, { CssVarsProvider: Provider }, theme, screen] =
+      await Promise.all([
+        import('react'),
+        import('react-dom/client'),
+        import('@mui/joy/styles'),
+        import('../theme'),
+        import('./ModelsScreen'),
+      ]);
+    const fresh = document.createElement('div');
+    document.body.appendChild(fresh);
+    const freshMount = freshRoot(fresh);
+    await freshAct(async () => {
+      freshMount.render(
+        <Provider theme={theme.desktopTheme}>
+          <screen.ModelsScreen onClose={() => {}} />
+        </Provider>
+      );
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(q('models-curated-tab')?.getAttribute('aria-selected')).toBe('true');
+    freshAct(() => freshMount.unmount());
+    fresh.remove();
+  });
+
+  it("shows the list's date, then this computer's picks by role, with Recommended on one", async () => {
+    await mount(undefined, 'curated');
+    expect(q('models-curated-date')?.textContent).toBe('Curated list from October 27, 2026.');
+    expect(q('models-curated-machine')?.textContent).toContain('no GPU memory was detected');
+
+    const picks = inside('models-curated-picks', 'models-curated-pick');
+    expect(picks.map(pick => [pick.dataset.slot, pick.dataset.entry, pick.dataset.build])).toEqual([
+      ['best', 'qwen3-8-27b-gsq', 'iq3-s'],
+      ['fast', 'gemma-4-e4b', 'qat-q4-0'],
+      ['light', 'qwen3-8-27b-gsq', 'iq2-xs'],
+    ]);
+    expect(inside('models-curated-picks', 'models-curated-slot-chip').map(chip => chip.textContent)).toEqual([
+      'Best',
+      'Fast',
+      'Light',
+    ]);
+    const recommended = inside('models-curated-picks', 'models-curated-recommended-chip');
+    expect(recommended).toHaveLength(1);
+    expect(recommended[0].closest<HTMLElement>('[data-testid="models-curated-pick"]')?.dataset.slot).toBe('fast');
+    expect(picks.every(pick => pick.querySelector('[data-testid="models-curated-vision-chip"]'))).toBe(true);
+    expect(
+      picks.map(pick => pick.querySelector<HTMLElement>('[data-testid="models-fit-badge"]')?.dataset.level)
+    ).toEqual(['too-large', 'fits', 'fits']);
+  });
+
+  it('lists every model with its source, Vision badge and a fit badge per build', async () => {
+    await mount(undefined, 'curated');
+    const entries = inside('models-curated-all', 'models-curated-entry');
+    expect(entries.map(entry => entry.dataset.entry)).toEqual(['gemma-4-e4b', 'qwen3-8-27b-gsq', 'qwen3-8-27b']);
+    expect(inside('models-curated-all', 'models-curated-vision-chip')).toHaveLength(3);
+    expect(
+      inside('models-curated-all', 'models-curated-source-link').map(link => [
+        link.textContent,
+        link.getAttribute('href'),
+      ])
+    ).toEqual([
+      ['Ollama', 'https://ollama.com/library/gemma4'],
+      ['Hugging Face', `https://huggingface.co/${GSQ}`],
+      ['Ollama', 'https://ollama.com/library/qwen3.8'],
+    ]);
+    expect(inside('models-curated-all', 'models-fit-badge').map(badge => badge.textContent)).toEqual([
+      'Fits',
+      'Fits',
+      'Will not fit',
+      'Fits',
+    ]);
+    expect(inside('models-curated-all', 'models-curated-quant-hint')).toHaveLength(1);
+  });
+
+  it('keeps a build that needs a newer Ollama on the list, with Download off and the reason shown', async () => {
+    await mount(undefined, 'curated');
+    const row = q('models-curated-all')?.querySelector<HTMLElement>(
+      '[data-entry="qwen3-8-27b"] [data-testid="models-build-row"]'
+    );
+    expect(row?.querySelector('[data-testid="models-build-blocked-reason"]')?.textContent).toBe(
+      'Needs Ollama 0.32.12 or newer'
+    );
+    expect(row?.querySelector('[data-testid="models-build-pull-btn"]')).toBeNull();
+  });
+
+  it('says when the list has no picks for this computer, and still lists every model', async () => {
+    bridge.curated.picks = [];
+    await mount(undefined, 'curated');
+    expect(q('models-curated-no-picks')).not.toBeNull();
+    expect(inside('models-curated-picks', 'models-curated-pick')).toHaveLength(0);
+    expect(inside('models-curated-all', 'models-curated-entry')).toHaveLength(3);
+  });
+
+  it('labels a restricted license', async () => {
+    bridge.curated.entries[0] = { ...bridge.curated.entries[0], licenseName: 'other', licenseKind: 'restricted' };
+    await mount(undefined, 'curated');
+    const chip = inside('models-curated-all', 'models-curated-license-chip')[0];
+    expect(chip?.textContent).toBe('Restricted license: other');
+    expect(chip?.dataset.kind).toBe('restricted');
+  });
+
+  it('says when the list could not load, and loads it on retry', async () => {
+    bridge.curatedFailures = 1;
+    await mount(undefined, 'curated');
+    expect(q('models-curated-load-error')?.textContent).toContain('Could not load the curated list.');
+    expect(q('models-curated-loading')).toBeNull();
+
+    await click(q('models-curated-retry-btn'));
+    expect(q('models-curated-load-error')).toBeNull();
+    expect(all('models-curated-entry')).toHaveLength(3);
+  });
+
+  it.each([
+    [{ tools: true, toolUse: { rating: 'unrated' as const, note: null } }, 'Tools', 'has not rated'],
+    [{ tools: true, toolUse: { rating: 'strong' as const, note: 'Chains calls well.' } }, 'Tools: strong', 'Chains'],
+    [{ tools: false, toolUse: { rating: 'unrated' as const, note: null } }, 'No tools', 'sends it none'],
+  ])('shows tool support and its rating: %j', async (change, label, tooltip) => {
+    bridge.curated.entries[0] = { ...bridge.curated.entries[0], ...change };
+    await mount(undefined, 'curated');
+    const chip = q('models-curated-tools-chip');
+    expect(chip?.textContent).toBe(label);
+    // A closed describeChild tooltip leaves its text in the chip's title.
+    expect(chip?.getAttribute('title')).toContain(tooltip);
+  });
+
+  it('marks a build installed only when Ollama lists its exact name', async () => {
+    const installed = (name: string) => ({
+      name,
+      sizeBytes: 1,
+      quantization: null,
+      family: null,
+      parameterSize: null,
+      modifiedAt: null,
+      capabilities,
+      loaded: false,
+      fit: null,
+    });
+    bridge.installed = {
+      ok: true,
+      models: [installed(E4B_REF), installed(`hf.co/${GSQ.toLowerCase()}:IQ2_XS`), installed('qwen3.8:latest')],
+    };
+    await mount(undefined, 'curated');
+    const rows = inside('models-curated-all', 'models-build-row');
+    expect(rows.map(row => row.querySelector('[data-testid="models-build-installed-chip"]') !== null)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it('checks a library pick before the dialog, then pulls the reviewed tag', async () => {
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    expect(calls.getCuratedPull).toHaveBeenCalledWith('gemma-4-e4b', 'qat-q4-0');
+    expect(q('models-pull-dialog-fit')?.textContent).toContain(FITS.detail);
+    expect(q('models-pull-dialog-fit-checkbox')).toBeNull();
+
+    await click(q('models-pull-dialog-confirm-btn'));
+    expect(calls.pull).toHaveBeenCalledWith({
+      repo: E4B_REF,
+      buildId: 'qat-q4-0',
+      revision: 'd'.repeat(64),
+      sizeBytes: E4B.sizeBytes,
+      acceptLicense: false,
+      confirmAccess: false,
+      curated: { entryId: 'gemma-4-e4b', buildId: 'qat-q4-0' },
+    });
+  });
+
+  it('downloads nothing when the dialog is dismissed', async () => {
+    await mount(undefined, 'curated');
+    await click(entryButton('gemma-4-e4b', 'qat-q4-0'));
+    expect(q('models-pull-dialog')).not.toBeNull();
+    await click(q('models-pull-dialog-cancel-btn'));
+    expect(q('models-pull-dialog')).toBeNull();
+    expect(calls.pull).not.toHaveBeenCalled();
+  });
+
+  it('shows the progress of a curated pull on its pick and its list row', async () => {
+    bridge.pulls = [
+      {
+        key: `${E4B_REF}#qat-q4-0`,
+        repo: E4B_REF,
+        buildId: 'qat-q4-0',
+        quant: 'Q4_0',
+        ref: E4B_REF,
+        phase: 'downloading',
+        completedBytes: 1_000_000_000,
+        totalBytes: E4B.sizeBytes,
+        expectedBytes: E4B.sizeBytes,
+        error: null,
+      },
+    ];
+    await mount(undefined, 'curated');
+    expect(inside('models-curated-picks', 'models-build-progress')).toHaveLength(1);
+    expect(inside('models-curated-all', 'models-build-progress')).toHaveLength(1);
+  });
+
+  it('needs an explicit override to download a build that will not fit', async () => {
+    bridge.curatedPull = libraryPull(TOO_LARGE);
+    await mount(undefined, 'curated');
+    await click(pickButton('best'));
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
+    await click(q('models-pull-dialog-fit-checkbox'));
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(false);
+    await click(q('models-pull-dialog-cancel-btn'));
+    expect(calls.pull).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Hugging Face pick whose file changed since review, and offers Explore', async () => {
+    bridge.curatedPull = {
+      ok: false,
+      error: { kind: 'upstream-changed', message: 'This file changed on Hugging Face since Bike4Mind reviewed it.' },
+    };
+    bridge.detail = { ok: true, model: view({ id: GSQ }) };
+    await mount(undefined, 'curated');
+    await click(pickButton('best'));
+    expect(inside('models-curated-picks', 'models-curated-error')[0]?.textContent).toContain('changed on Hugging Face');
+    expect(inside('models-curated-all', 'models-curated-error')).toHaveLength(0);
+    expect(q('models-pull-dialog')).toBeNull();
+
+    await click(q('models-curated-explore-btn'));
+    expect(q('models-explore-tab')?.getAttribute('aria-selected')).toBe('true');
+    expect(calls.search).toHaveBeenCalledWith({ query: GSQ });
+    expect(q('models-detail')?.dataset.repo).toBe(GSQ);
+  });
+
+  it.each([
+    [
+      'a library build that changed',
+      { kind: 'upstream-changed' as const, message: `${E4B_REF} changed at its source since Bike4Mind reviewed it.` },
+    ],
+    ['a revision-only change', { kind: 'changed' as const, message: 'Click Download again.' }],
+    ['an outage', { kind: 'hub-unreachable' as const, message: 'Hugging Face is unreachable.' }],
+  ])('offers no Explore shortcut for %s', async (_label, error) => {
+    bridge.curatedPull = { ok: false, error };
+    await mount(undefined, 'curated');
+    await click(entryButton('gemma-4-e4b', 'qat-q4-0'));
+    expect(q('models-curated-error')?.textContent).toContain(error.message);
+    expect(q('models-curated-explore-btn')).toBeNull();
+  });
+
+  it('clears the spinner and says so when the check itself fails', async () => {
+    const models = (window as unknown as { b4m: { models: Record<string, unknown> } }).b4m.models;
+    models.getCuratedPull = async () => {
+      throw new Error('ipc torn down');
+    };
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    expect(q('models-curated-error')?.textContent).toContain('Try again');
+    expect(pickButton('fast')?.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('opens the dialog only for the latest Download click', async () => {
+    const pending: Array<(result: CuratedPullResult) => void> = [];
+    const models = (window as unknown as { b4m: { models: Record<string, unknown> } }).b4m.models;
+    models.getCuratedPull = () => new Promise<CuratedPullResult>(resolve => pending.push(resolve));
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    await click(pickButton('best'));
+
+    await act(async () => pending[1](libraryPull(TOO_LARGE)));
+    await act(async () => pending[0](libraryPull(FITS)));
+    await flush();
+    expect(all('models-pull-dialog')).toHaveLength(1);
+    expect(q('models-pull-dialog-fit-checkbox')).not.toBeNull();
+  });
+
+  it('opens a fresh dialog, with nothing ticked, for each build', async () => {
+    bridge.curatedPull = libraryPull(TOO_LARGE);
+    await mount(undefined, 'curated');
+    await click(pickButton('best'));
+    await click(q('models-pull-dialog-fit-checkbox'));
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(false);
+
+    // The other build's response replaces the open dialog, which must not keep the tick.
+    await click(pickButton('light'));
+    expect(all('models-pull-dialog')).toHaveLength(1);
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('says downloads need Ollama when it is not running', async () => {
+    bridge.status = DOWN;
+    await mount(undefined, 'curated');
+    expect(q('models-curated-runtime-down')).not.toBeNull();
+    expect(all('models-build-pull-btn').every(button => button.hasAttribute('disabled'))).toBe(true);
+  });
+});
 
 describe('ModelsScreen installed', () => {
   it('shows the empty state and leads to Explore', async () => {
@@ -199,6 +652,7 @@ describe('ModelsScreen installed', () => {
           modifiedAt: null,
           capabilities,
           loaded: true,
+          fit: FITS,
         },
       ],
     };
@@ -206,6 +660,8 @@ describe('ModelsScreen installed', () => {
     expect(all('models-installed-row').map(row => row.dataset.name)).toEqual(['qwen2.5:0.5b']);
     expect(q('models-installed-loaded-chip')).not.toBeNull();
     expect(q('models-installed-row')?.textContent).toContain('Q4_K_M');
+    expect(q('models-fit-badge')?.dataset.level).toBe('fits');
+    expect(q('models-fit-badge')?.textContent).toBe('Fits');
 
     await click(q('models-installed-remove-btn'));
     expect(q('models-remove-dialog')).not.toBeNull();
@@ -231,6 +687,7 @@ describe('ModelsScreen installed', () => {
           modifiedAt: null,
           capabilities,
           loaded: false,
+          fit: null,
         },
       ],
     };
@@ -344,6 +801,7 @@ describe('ModelsScreen explore', () => {
   });
 
   it('shows the license before the download button and asks before pulling', async () => {
+    bridge.detail = { ok: true, model: view({ builds: [{ ...view().builds[0], fit: FITS }] }) };
     await mount();
     await openExplore();
     await click(q('models-explore-result-row'));
@@ -356,6 +814,7 @@ describe('ModelsScreen explore', () => {
       license && button && license.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     expect(detail?.textContent).toContain('491 MB');
+    expect(q('models-build-row')?.querySelector('[data-testid="models-fit-badge"]')?.textContent).toBe('Fits');
 
     await click(button);
     expect(q('models-pull-dialog-size')?.textContent).toContain('491 MB download');

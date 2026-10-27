@@ -94,6 +94,8 @@ import type {
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type {
+  CuratedList,
+  CuratedPullResult,
   HubDetailResult,
   HubSearchRequest,
   HubSearchResult,
@@ -305,6 +307,8 @@ export const IPC_CHANNELS = {
   modelsListInstalled: 'models:list-installed',
   modelsSearch: 'models:search',
   modelsGetDetail: 'models:get-detail',
+  modelsListCurated: 'models:list-curated',
+  modelsGetCuratedPull: 'models:get-curated-pull',
   modelsListPulls: 'models:list-pulls',
   /** Starts a download; resolves when it finishes, fails or is cancelled. */
   modelsPull: 'models:pull',
@@ -565,6 +569,8 @@ export interface DesktopApi {
     listInstalled(): Promise<InstalledModelsResult>;
     search(request: HubSearchRequest): Promise<HubSearchResult>;
     getDetail(repo: string): Promise<HubDetailResult>;
+    listCurated(): Promise<CuratedList>;
+    getCuratedPull(entryId: string, buildId: string): Promise<CuratedPullResult>;
     listPulls(): Promise<ModelPull[]>;
     pull(request: ModelPullRequest): Promise<ModelPullResult>;
     cancelPull(key: string): Promise<void>;

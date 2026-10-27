@@ -10,6 +10,7 @@ import {
   type LocalContextSetting,
 } from '@shared/localContextSetting';
 import type { CompletionMessage, CompletionRequest } from './completions';
+import { configuredNumCtx, positiveTokenCount } from './localChatContext';
 import {
   chatContextTokens,
   ContextOverflowError,
@@ -867,14 +868,5 @@ function contextBounds(inspection: Inspection): { limit: number | undefined; con
   const architectureLimit = Object.entries(inspection.model_info ?? {}).find(
     ([key, value]) => key.endsWith('.context_length') && positiveTokenCount(value) !== undefined
   )?.[1];
-  const configured = /^num_ctx[ \t]+(\S+)[ \t]*$/m.exec(inspection.parameters ?? '')?.[1];
-  return {
-    limit: positiveTokenCount(architectureLimit),
-    configured: positiveTokenCount(configured === undefined ? undefined : Number(configured)),
-  };
-}
-
-function positiveTokenCount(value: unknown): number | undefined {
-  const count = tokenCount(value);
-  return count !== undefined && count > 0 && Number.isSafeInteger(count) ? count : undefined;
+  return { limit: positiveTokenCount(architectureLimit), configured: configuredNumCtx(inspection.parameters) };
 }
