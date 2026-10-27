@@ -79,6 +79,7 @@ describe('publishCandidate', () => {
   it('writes the immutable pair, then the locked latest sig, then latest, then invalidates', async () => {
     goLive(store, signed(2));
     const liveSigEtag = store.objects.get(`${P}latest.json.sig`)?.etag;
+    const liveJsonEtag = store.objects.get(`${P}latest.json`)?.etag;
     expect(await publishCandidate(signed(3), deps())).toBe(EXIT.ok);
 
     expect(store.calls.filter(call => !call.startsWith('get'))).toEqual([
@@ -92,13 +93,14 @@ describe('publishCandidate', () => {
       { key: `${P}3.json`, cacheControl: 'public, max-age=31536000, immutable', condition: { ifNoneMatch: '*' } },
       { key: `${P}3.json.sig`, cacheControl: 'public, max-age=31536000, immutable', condition: { ifNoneMatch: '*' } },
       { key: `${P}latest.json.sig`, cacheControl: 'public, max-age=300', condition: { ifMatch: liveSigEtag } },
-      { key: `${P}latest.json`, cacheControl: 'public, max-age=300', condition: null },
+      { key: `${P}latest.json`, cacheControl: 'public, max-age=300', condition: { ifMatch: liveJsonEtag } },
     ]);
   });
 
   it('locks the first publish with If-None-Match', async () => {
     expect(await publishCandidate(signed(1), deps())).toBe(EXIT.ok);
     expect(store.puts[2]).toMatchObject({ key: `${P}latest.json.sig`, condition: { ifNoneMatch: '*' } });
+    expect(store.puts[3]).toMatchObject({ key: `${P}latest.json`, condition: { ifNoneMatch: '*' } });
     expect(lines).toContain('plan: first publish of sequence 1');
   });
 
@@ -112,6 +114,18 @@ describe('publishCandidate', () => {
     expect(await publishCandidate(signed(3), deps())).toBe(EXIT.failed);
     expect(store.calls).not.toContain(`put ${P}latest.json`);
     expect(lines.at(-1)).toMatch(/someone else published/);
+  });
+
+  it('does not overwrite a latest.json that another publish wrote after the live read', async () => {
+    goLive(store, signed(2));
+    const put = store.put.bind(store);
+    vi.spyOn(store, 'put').mockImplementation(async (key, bytes, cacheControl, condition) => {
+      if (key === `${P}latest.json`) store.seed(key, signed(4).manifest);
+      return put(key, bytes, cacheControl, condition);
+    });
+    expect(await publishCandidate(signed(3), deps())).toBe(EXIT.failed);
+    expect(store.objects.get(`${P}latest.json`)?.bytes).toEqual(signed(4).manifest);
+    expect(lines.at(-1)).toMatch(/latest\.json changed since it was read/);
   });
 
   it('continues past an identical immutable object from a partial run and stops on different bytes', async () => {
