@@ -2,10 +2,10 @@ import { User } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 /**
- * Ensure the admin users list indexes exist on users: lastActiveAt and currentCredits (the Last
- * active and Credits sorts), isBanned (partial, the Suspended view count) and
- * signupGrantAssessment.band (sparse, the High risk view and filter). See
- * apps/client/server/admin/usersList/listAdminUsers.ts.
+ * Ensure the admin users list indexes exist on users: createdAt, lastActiveAt and currentCredits
+ * each compound with _id (the Signed up, Last active and Credits sorts, which carry an _id
+ * tiebreak), isBanned (partial, the Suspended view count) and signupGrantAssessment.band (sparse,
+ * the High risk view and filter). See apps/client/server/admin/usersList/listAdminUsers.ts.
  *
  * Migration rather than autoIndex, for the same reason as
  * 20260902000000_ensure-quest-retrieval-index: autoIndex builds are fire-and-forget, so a failure
