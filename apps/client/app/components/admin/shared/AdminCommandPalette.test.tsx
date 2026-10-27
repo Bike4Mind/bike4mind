@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { AdminCommandPalette, type AdminCommand } from './AdminCommandPalette';
 
@@ -22,6 +22,10 @@ const setup = (commands: AdminCommand[] = []) =>
   );
 
 describe('AdminCommandPalette', () => {
+  beforeEach(() => {
+    navigate.mockReset();
+  });
+
   it('opens the mounted Help Center through its host callback', async () => {
     const onOpenHelp = vi.fn();
     render(
@@ -110,12 +114,29 @@ describe('AdminCommandPalette', () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
-  it('focuses the local search and ignores input typing', () => {
+  it('focuses the local search, and opens the palette from an input with Cmd/Ctrl+K', () => {
     setup();
     fireEvent.keyDown(document.body, { key: '/' });
     expect(screen.getByTestId('local-search')).toHaveFocus();
-    fireEvent.keyDown(screen.getByTestId('local-search'), { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(screen.getByTestId('local-search'), { key: 'k', ctrlKey: true, isComposing: true });
     expect(screen.queryByTestId('admin-search-input')).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByTestId('local-search'), { key: 'k', ctrlKey: true });
+    expect(screen.getByTestId('admin-search-input')).toHaveFocus();
+  });
+
+  it('wins `/` over a bubble-phase window listener such as the sidebar filter', () => {
+    const sidebarFilter = vi.fn((event: KeyboardEvent) => {
+      if (!event.defaultPrevented) event.preventDefault();
+    });
+    window.addEventListener('keydown', sidebarFilter);
+    try {
+      setup();
+      fireEvent.keyDown(document.body, { key: '/' });
+      expect(screen.getByTestId('local-search')).toHaveFocus();
+      expect(sidebarFilter.mock.calls[0][0].defaultPrevented).toBe(true);
+    } finally {
+      window.removeEventListener('keydown', sidebarFilter);
+    }
   });
 
   it('opens a user by validated ID without sending entity searches', async () => {

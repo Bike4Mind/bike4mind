@@ -133,6 +133,9 @@ describe('SlimUsersContainer selection', () => {
     expect(selection.onToggle).not.toHaveBeenCalled();
     fireEvent.keyDown(row, { key: 'x' });
     expect(selection.onToggle).toHaveBeenCalledExactlyOnceWith(users[0].id);
+    // Caps Lock reports an uppercase key without Shift.
+    fireEvent.keyDown(row, { key: 'X' });
+    expect(selection.onToggle).toHaveBeenCalledTimes(2);
   });
 
   const makeSelection = (selectedIds: string[] = []) => ({

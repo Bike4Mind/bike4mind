@@ -5,7 +5,7 @@ import { AdminTab } from '../adminSidebarConfig';
 import { adminTabToSlug } from '../adminTabSlugs';
 import { parseUserId } from '../Users/usersTabSearch';
 import { adminFocusScope, adminSurface } from './adminStyles';
-import { focusAdminSearch, isAdminShortcutEvent } from './adminKeyboard';
+import { focusAdminSearch, isAdminChordEvent, isAdminShortcutEvent } from './adminKeyboard';
 
 export type AdminCommand = { id: string; label: string; shortcut?: string; run: () => void };
 
@@ -15,7 +15,7 @@ const shortcuts = [
   ['x', 'Toggle selection of the focused table row'],
   ['c', 'Adjust credits on a user profile'],
   ['s', 'Open audited suspension preview on a user profile'],
-  ['Cmd/Ctrl+S', 'Save the focused settings editor (outside inputs)'],
+  ['Cmd/Ctrl+S', 'Save the settings editor you are working in'],
   ['?', 'Show keyboard shortcuts'],
 ];
 
@@ -68,17 +68,16 @@ export function AdminCommandPalette({
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      if (!isAdminShortcutEvent(event)) return;
       if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
       const key = event.key.toLowerCase();
-      if ((event.metaKey || event.ctrlKey) && key === 'k' && !event.shiftKey) {
+      if (isAdminChordEvent(event) && key === 'k' && !event.shiftKey) {
         event.preventDefault();
         setQuery('');
         setActive(0);
         setOpen(true);
         return;
       }
-      if (event.metaKey || event.ctrlKey) return;
+      if (!isAdminShortcutEvent(event) || event.metaKey || event.ctrlKey) return;
       if (key === '?') {
         event.preventDefault();
         setHelp(true);
@@ -93,8 +92,10 @@ export function AdminCommandPalette({
         }
       }
     };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
+    // Capture phase so the page search wins `/` over the sidebar filter's bubble listener (AdminSidebarNav),
+    // which then only takes `/` when this page has no visible search.
+    window.addEventListener('keydown', handleKey, true);
+    return () => window.removeEventListener('keydown', handleKey, true);
   }, [commands]);
 
   useEffect(() => {

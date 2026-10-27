@@ -61,6 +61,7 @@ import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { unsavedFieldKeys } from '../unsavedFieldLabels';
 import { stageFieldEdit } from '../stageFieldEdit';
 import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminCommandPalette';
+import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import BulkAbuseResponseModal from '../BulkAbuseResponseModal';
 
 interface UsersViewProps {
@@ -166,19 +167,22 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
     profileRoot.current?.querySelector<HTMLInputElement>('[data-admin-credits-input]')?.focus();
     setFocusCredits(false);
   }, [focusCredits, activeTab]);
-  const profileCommands: AdminCommand[] = [
-    {
-      id: 'credits',
-      label: 'Adjust credits',
-      shortcut: 'c',
-      run: () => {
-        setActiveTab('overview');
-        setFocusCredits(true);
+  const profileCommands = useMemo<AdminCommand[]>(
+    () => [
+      {
+        id: 'credits',
+        label: 'Adjust credits',
+        shortcut: 'c',
+        run: () => {
+          setActiveTab('overview');
+          setFocusCredits(true);
+        },
       },
-    },
-    { id: 'suspend', label: 'Suspend account', shortcut: 's', run: () => setProfileAction('suspend') },
-    { id: 'revoke', label: 'Revoke API keys', run: () => setProfileAction('revoke') },
-  ];
+      { id: 'suspend', label: 'Suspend account', shortcut: 's', run: () => setProfileAction('suspend') },
+      { id: 'revoke', label: 'Revoke API keys', run: () => setProfileAction('revoke') },
+    ],
+    [setActiveTab]
+  );
 
   useEffect(() => {
     setFormState({ ...user });
@@ -609,7 +613,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       )}
 
       {/* Full content - always visible on sm+ or on the page, conditionally on xs */}
-      {isPage && <AdminCommandPalette commands={profileCommands} />}
+      {isPage && <AdminCommandPalette commands={profileCommands} onOpenHelp={openHelpPanel} />}
       <Box sx={{ display: isPage ? 'block' : { xs: mobileExpanded ? 'block' : 'none', sm: 'block' } }}>
         {isPage ? <UserProfileHeader user={user} actions={quickActions} /> : cardHeader}
 

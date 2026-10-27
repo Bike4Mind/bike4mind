@@ -56,7 +56,7 @@ const selectionKeyDown = (event: React.KeyboardEvent, userId: string, selection?
   if (
     !selection ||
     event.target !== event.currentTarget ||
-    event.key !== 'x' ||
+    event.key.toLowerCase() !== 'x' ||
     event.metaKey ||
     event.ctrlKey ||
     event.shiftKey ||

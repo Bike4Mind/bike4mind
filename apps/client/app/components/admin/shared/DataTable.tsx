@@ -213,7 +213,7 @@ export function DataTable<Row>({
                         if (
                           event.target === event.currentTarget &&
                           selectable &&
-                          event.key === 'x' &&
+                          event.key.toLowerCase() === 'x' &&
                           !event.metaKey &&
                           !event.ctrlKey &&
                           !event.altKey &&

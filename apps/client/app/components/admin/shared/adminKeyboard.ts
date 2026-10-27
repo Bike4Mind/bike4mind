@@ -10,10 +10,17 @@ export function isAdminShortcutEvent(event: KeyboardEvent): boolean {
   );
 }
 
+// Modifier chords cannot collide with typing, so unlike single-key shortcuts they also run from inputs.
+export function isAdminChordEvent(event: KeyboardEvent): boolean {
+  return (
+    !event.defaultPrevented && !event.repeat && !event.isComposing && !event.altKey && (event.metaKey || event.ctrlKey)
+  );
+}
+
 export function useAdminSaveShortcut(ref: RefObject<HTMLElement | null>) {
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      if (!isAdminShortcutEvent(event) || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return;
+      if (!isAdminChordEvent(event) || event.key.toLowerCase() !== 's') return;
       const root = ref.current;
       if (!root || !(event.target instanceof Node) || !root.contains(event.target)) return;
       if (event.target instanceof Element && event.target.closest('[data-admin-settings-editor]') !== root) return;

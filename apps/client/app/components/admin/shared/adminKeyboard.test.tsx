@@ -53,7 +53,7 @@ describe('admin keyboard scoping', () => {
     expect(isAdminShortcutEvent(new KeyboardEvent('keydown', { key: 'c', ...options }))).toBe(false);
   });
 
-  it('saves only the focused editor outside inputs, and respects disabled buttons', () => {
+  it('saves only the editor that holds focus, including from its inputs, and respects disabled buttons', () => {
     const save = vi.fn();
     function Editor() {
       const ref = useRef<HTMLDivElement>(null);
@@ -68,14 +68,18 @@ describe('admin keyboard scoping', () => {
       );
     }
     render(<Editor />);
-    fireEvent.keyDown(screen.getByTestId('input'), { key: 's', metaKey: true });
     fireEvent.keyDown(document.body, { key: 's', metaKey: true });
+    fireEvent.keyDown(screen.getByTestId('input'), { key: 's', metaKey: true, isComposing: true });
     expect(save).not.toHaveBeenCalled();
-    fireEvent.keyDown(screen.getByTestId('editor'), { key: 's', ctrlKey: true });
+    const fromInput = new KeyboardEvent('keydown', { key: 's', metaKey: true, bubbles: true, cancelable: true });
+    screen.getByTestId('input').dispatchEvent(fromInput);
     expect(save).toHaveBeenCalledOnce();
+    expect(fromInput.defaultPrevented).toBe(true);
+    fireEvent.keyDown(screen.getByTestId('editor'), { key: 's', ctrlKey: true });
+    expect(save).toHaveBeenCalledTimes(2);
     screen.getByTestId('save').setAttribute('disabled', '');
     fireEvent.keyDown(screen.getByTestId('editor'), { key: 's', metaKey: true });
-    expect(save).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledTimes(2);
   });
 
   it('claims Cmd/Ctrl+S on an editor with no Save button so the browser dialog stays closed', () => {
