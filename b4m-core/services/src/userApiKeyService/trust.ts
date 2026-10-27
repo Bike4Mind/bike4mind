@@ -8,15 +8,15 @@ export type ApiKeyTrustSettings = {
   minAccountAgeDays: number;
   maxActiveKeysUntrusted: number;
   untrustedRateLimitPerMinute: number;
-  /** The quotas below are off at 0. */
-  untrustedRequestsPerDay: number;
-  untrustedTokensPerMinute: number;
-  untrustedMaxConcurrent: number;
+  /** The quotas below are off at 0 or when omitted by an existing caller. */
+  untrustedRequestsPerDay?: number;
+  untrustedTokensPerMinute?: number;
+  untrustedMaxConcurrent?: number;
 };
 
 export const loadApiKeyTrustSettings = async (db: {
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
-}): Promise<ApiKeyTrustSettings> => {
+}): Promise<Required<ApiKeyTrustSettings>> => {
   const settings = await getSettingsMap(db, {
     names: [
       'apiKeyTrustGateEnabled',

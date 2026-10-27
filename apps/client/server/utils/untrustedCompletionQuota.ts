@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Logger } from '@bike4mind/observability';
 import {
   CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
   CreditHolderType,
@@ -13,6 +14,7 @@ import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
 const TOKEN_WINDOW_MS = 60_000;
 // Backstop only: every exit path releases its slot, so this bounds a slot whose process died first.
 const COMPLETION_SLOT_LEASE_MS = 15 * 60_000;
+const COMPLETION_SLOT_RENEW_MS = 5 * 60_000;
 
 /** One lease document per account, shared by every key and every completion route. */
 export const completionSlotsKey = (userId: string) => `api-quota:${userId}:inflight-completions`;
@@ -33,8 +35,8 @@ type QuotaOwner = userApiKeyService.ApiKeyTrustSubject & { id: string };
  *
  * Tokens are only known once a completion settles, so the check reads the account's settled
  * usage over the last minute (see UsageEventRepository.userTokensSince for what is counted) and
- * refuses the next request while it is at or over the limit; one completion can overshoot, the
- * ones after it wait for the window to drain.
+ * refuses the next request while it is at or over the limit. Already admitted completions can
+ * overshoot; later requests wait for the window to drain.
  *
  * Throws a 429 carrying `errorCode` (and `retryAfter` for the token window). With `holdSlot`,
  * the caller must call `release()` once the work has actually ended, success or failure.
@@ -94,11 +96,38 @@ export async function admitApiKeyCompletion({
   }
 
   let released: Promise<void> | undefined;
+  let closed = false;
+  let renewalTimer: ReturnType<typeof setTimeout>;
+  const renew = async () => {
+    try {
+      const renewed = await cacheRepository.renewLease(key, holderId, COMPLETION_SLOT_LEASE_MS);
+      if (!renewed) {
+        Logger.globalInstance.warn('API completion quota slot expired before renewal', { userId: ownerId });
+        return;
+      }
+    } catch (error) {
+      Logger.globalInstance.warn('Failed to renew API completion quota slot', { userId: ownerId, error });
+    }
+    if (!closed) scheduleRenewal();
+  };
+  const scheduleRenewal = () => {
+    renewalTimer = setTimeout(() => void renew(), COMPLETION_SLOT_RENEW_MS);
+    renewalTimer.unref?.();
+  };
+  scheduleRenewal();
   return {
-    release: () =>
-      (released ??= cacheRepository.releaseLease(key, holderId).catch(() => {
-        // The lease lapses on its own; a failed release only holds the slot until then.
-      })),
+    release: () => {
+      if (released) return released;
+      closed = true;
+      clearTimeout(renewalTimer);
+      released = cacheRepository.releaseLease(key, holderId).catch(error => {
+        Logger.globalInstance.warn('Failed to release API completion quota slot; waiting for lease expiry', {
+          userId: ownerId,
+          error,
+        });
+      });
+      return released;
+    },
   };
 }
 
@@ -111,5 +140,11 @@ export function admitRequestCompletion(
   { holdSlot }: { holdSlot: boolean }
 ): Promise<CompletionQuotaGrant> {
   if (!req.apiKeyInfo || !req.user) return Promise.resolve(NO_COMPLETION_QUOTA);
-  return admitApiKeyCompletion({ owner: req.user, billingOwnerType: req.apiKeyInfo.billingOwnerType, holdSlot, req });
+  return admitApiKeyCompletion({
+    owner: req.user,
+    ownerUntrusted: req.apiKeyInfo.ownerUntrusted,
+    billingOwnerType: req.apiKeyInfo.billingOwnerType,
+    holdSlot,
+    req,
+  });
 }

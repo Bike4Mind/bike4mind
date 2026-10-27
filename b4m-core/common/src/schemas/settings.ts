@@ -3092,7 +3092,7 @@ export const settingsMap = {
     max: 100000,
     int: true,
     description:
-      "Dedicated per-minute ceiling for GET /api/v1/credits, counted per API key (per user for a session). Applies on top of the key's own limits. 0 disables it.",
+      "Dedicated per-minute ceiling for GET /api/v1/credits, counted per API key. JWT sessions are exempt. Applies on top of the key's own limits. 0 disables it.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 4,

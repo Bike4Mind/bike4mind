@@ -9,10 +9,13 @@ import { getCreditBalanceContract } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import type { Request } from 'express';
 import { rateLimit } from '@server/middlewares/rateLimit';
 
 /** Admin-set reads per minute; 0 turns the dedicated limit off (rateLimit skips a non-positive limit). */
-async function creditReadsPerMinute(): Promise<number> {
+async function creditReadsPerMinute(req: Request): Promise<number> {
+  if (!req.apiKeyInfo) return 0;
+
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
     { names: ['apiRateLimitCreditsPerMin'] }

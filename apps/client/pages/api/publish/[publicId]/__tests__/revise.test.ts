@@ -1,4 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
 import {
   GROWTH_RATIO_CEILING,
   SMALL_INPUT_MS_CEILING,

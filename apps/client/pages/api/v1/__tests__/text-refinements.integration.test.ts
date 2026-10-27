@@ -21,7 +21,10 @@ const { mockGetOperationsModel, mockRefineText, mockFindByKey, mockCreateOrUpdat
 );
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', async orig => ({
   ...(await orig<typeof import('@bike4mind/server-utils/services/operationsModelService')>()),

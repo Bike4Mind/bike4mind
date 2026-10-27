@@ -17,6 +17,8 @@ declare global {
       keyId: string;
       scopes: ApiKeyScopeValue[];
       rateLimit: IUserApiKeyRateLimit;
+      /** Owner trust before API key scopes can withhold the admin role. */
+      ownerUntrusted?: boolean;
       expiresAt?: Date;
       /** Overwatch product this key is bound to. Set only for OVERWATCH_INGEST_WRITE keys. */
       productId?: string;

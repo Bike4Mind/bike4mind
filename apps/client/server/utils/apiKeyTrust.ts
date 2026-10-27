@@ -20,7 +20,7 @@ export async function resolveApiKeyTrust(
   req?: ActiveSubscriptionsRequest
 ): Promise<{
   assessment: userApiKeyService.ApiKeyTrustAssessment;
-  settings: userApiKeyService.ApiKeyTrustSettings;
+  settings: Awaited<ReturnType<typeof userApiKeyService.loadApiKeyTrustSettings>>;
 }> {
   const settings = await userApiKeyService.loadApiKeyTrustSettings({ adminSettings: adminSettingsRepository });
   const assessment = await userApiKeyService.assessApiKeyTrust(user, {

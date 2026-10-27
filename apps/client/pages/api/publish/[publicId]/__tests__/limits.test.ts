@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHash } from 'node:crypto';
 import { PUBLISH_QUOTAS, TooManyRequestsError } from '@bike4mind/common';
 
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => undefined }),
+}));
+
 /**
  * Storage quota and the daily publish allowance on the two routes that rewrite a live page in place.
  * The real checkInPlaceRewriteQuota -> checkPublishQuota run against a stubbed usage aggregate, so

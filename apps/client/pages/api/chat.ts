@@ -90,21 +90,34 @@ const handler = nextRouteForContract(chatContract, {
   const quota = isApiKeyAuth(req)
     ? await admitApiKeyCompletion({
         owner: req.user,
+        ownerUntrusted: req.apiKeyInfo?.ownerUntrusted,
         billingOwnerType: req.apiKeyInfo?.billingOwnerType,
         holdSlot: Boolean(req.validated.wait),
         req,
       })
     : NO_COMPLETION_QUOTA;
-  // Freed when the handler returns, not on disconnect: a blocking turn keeps running after the client goes.
-  // A turn still running past the wait deadline's wind-down (`stuck`) frees its slot early.
+  let completionStarted = false;
+  const runCompletion = async (complete: () => Promise<unknown>): Promise<unknown> => {
+    completionStarted = true;
+    try {
+      return await complete();
+    } finally {
+      await quota.release();
+    }
+  };
   try {
-    return await handleChat(req, res);
+    return await handleChat(req, res, runCompletion);
   } finally {
-    await quota.release();
+    // A timed-out provider can outlive the response; its completion still owns the slot.
+    if (!completionStarted) await quota.release();
   }
 });
 
-async function handleChat(req: ChatRequest, res: Response) {
+async function handleChat(
+  req: ChatRequest,
+  res: Response,
+  runCompletion: (complete: () => Promise<unknown>) => Promise<unknown>
+) {
   const requestStartedAt = Date.now();
   const apiTimer = new PipelineTimer();
   apiTimer.phase('settings');
@@ -280,34 +293,36 @@ async function handleChat(req: ChatRequest, res: Response) {
     const processService = new ChatCompletionProcess(chatCompletionOptions);
     const turn = await runWithDeadline(
       abortSignal =>
-        processService.process({
-          body: {
-            ...internalRequest,
-            questId: quest.id,
-            userId: req.user.id,
-            // Mirrors invoke() above: process() reads the tool context's auth from this body only.
-            ...turnAuth,
-            embeddingModel: currentEmbeddingModel,
-            queryComplexity: 'simple',
-            // Optional schema fields - declared for QuestStartBodySchema type conformance
-            dashboardParams: undefined,
-            questMaster: undefined,
-            researchMode: undefined,
-            imageConfig: undefined,
-          },
-          logger: req.logger,
-          // Pass quest from invoke to skip redundant DB read
-          prefetchedQuest: quest,
-          // Pass session from invoke to skip redundant DB read
-          prefetchedSession: invokeService.prefetchedSession,
-          // Pass organization from invoke to skip redundant DB read
-          prefetchedOrganization: invokeService.prefetchedOrganization,
-          // Premium overlay tool implementations: a session whose effective enabledTools
-          // (its own, or its workspace's resolved at read time) include premium names needs
-          // the merge or those tools silently no-op on this synchronous path.
-          externalTools: premiumLlmTools,
-          abortSignal,
-        }),
+        runCompletion(() =>
+          processService.process({
+            body: {
+              ...internalRequest,
+              questId: quest.id,
+              userId: req.user.id,
+              // Mirrors invoke() above: process() reads the tool context's auth from this body only.
+              ...turnAuth,
+              embeddingModel: currentEmbeddingModel,
+              queryComplexity: 'simple',
+              // Optional schema fields - declared for QuestStartBodySchema type conformance
+              dashboardParams: undefined,
+              questMaster: undefined,
+              researchMode: undefined,
+              imageConfig: undefined,
+            },
+            logger: req.logger,
+            // Pass quest from invoke to skip redundant DB read
+            prefetchedQuest: quest,
+            // Pass session from invoke to skip redundant DB read
+            prefetchedSession: invokeService.prefetchedSession,
+            // Pass organization from invoke to skip redundant DB read
+            prefetchedOrganization: invokeService.prefetchedOrganization,
+            // Premium overlay tool implementations: a session whose effective enabledTools
+            // (its own, or its workspace's resolved at read time) include premium names needs
+            // the merge or those tools silently no-op on this synchronous path.
+            externalTools: premiumLlmTools,
+            abortSignal,
+          })
+        ),
       { budgetMs: WAIT_TURN_BUDGET_MS - (Date.now() - requestStartedAt), windDownMs: WAIT_TURN_WIND_DOWN_MS }
     );
 

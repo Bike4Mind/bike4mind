@@ -25,7 +25,7 @@ import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAcc
 import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
-import { applyUntrustedRateLimit } from '@server/utils/apiKeyTrust';
+import { resolveUntrustedKeyLimits } from '@server/utils/apiKeyTrust';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -194,7 +194,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
 
       // Judged before the admin role is withheld: trust is about the account, not the key's
       // authority, so an admin's key without the admin scope is still an admin-owned key.
-      const rateLimit = await applyUntrustedRateLimit(
+      const { rateLimit, ownerUntrusted } = await resolveUntrustedKeyLimits(
         user,
         { rateLimit: validation.rateLimit!, billingOwnerType: validation.billingOwnerType },
         req
@@ -207,6 +207,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
         keyId: validation.keyId!,
         scopes: validation.scopes!,
         rateLimit,
+        ownerUntrusted,
         expiresAt: validation.expiresAt,
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,

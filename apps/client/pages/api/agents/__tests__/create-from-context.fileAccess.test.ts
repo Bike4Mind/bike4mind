@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
+
 /**
  * Pins which files feed agent generation: the session's `knowledgeIds` and its messages' `fabFileIds`
  * are both client-written, and their contents go into the generated agent's prompt, so they must

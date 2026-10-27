@@ -1,3 +1,4 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
@@ -93,169 +94,171 @@ const createAgentMetadataForPrompt = (agent: IAgent): string => {
 
 const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{ id: string }, GenerateSystemPromptResponse, {}>
->(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  const { id } = req.query;
-  const userId = req.user!.id;
+>(
+  withRequestCompletionQuota(async (req, res) => {
+    assertAiAccessAllowed(req.user);
+    const { id } = req.query;
+    const userId = req.user!.id;
 
-  // Validate the id parameter
-  if (!id || typeof id !== 'string') {
-    throw new BadRequestError('Invalid agent ID');
-  }
-
-  // Find the agent
-  const agent = await agentRepository.findById(id);
-  assertAgentAccess(agent, userId, 'own');
-
-  try {
-    // Get agent operations settings
-    const settings = await agentOpsSettingsRepository.getSettings();
-
-    // Check if system prompt generation is enabled
-    if (settings && !settings.isEnabled) {
-      throw new BadRequestError('System prompt generation is currently disabled');
+    // Validate the id parameter
+    if (!id || typeof id !== 'string') {
+      throw new BadRequestError('Invalid agent ID');
     }
 
-    // Check rate limiting
-    const rateLimitSeconds = settings?.rateLimitSeconds || 60;
-    assertSystemPromptGenerationAllowed(agent, rateLimitSeconds);
+    // Find the agent
+    const agent = await agentRepository.findById(id);
+    assertAgentAccess(agent, userId, 'own');
 
-    // Get the active meta-prompt
-    const metaPrompt = await agentOpsSettingsRepository.getActiveMetaPrompt();
+    try {
+      // Get agent operations settings
+      const settings = await agentOpsSettingsRepository.getSettings();
 
-    if (!metaPrompt) {
-      throw new BadRequestError(
-        'No active meta-prompt found. Please contact an administrator to configure system prompt generation.'
-      );
-    }
+      // Check if system prompt generation is enabled
+      if (settings && !settings.isEnabled) {
+        throw new BadRequestError('System prompt generation is currently disabled');
+      }
 
-    // Prepare the agent metadata for the PromptCrafter
-    const agentMetadata = createAgentMetadataForPrompt(agent);
+      // Check rate limiting
+      const rateLimitSeconds = settings?.rateLimitSeconds || 60;
+      assertSystemPromptGenerationAllowed(agent, rateLimitSeconds);
 
-    // Build the user prompt with agent metadata
-    const userPrompt = `Please generate a comprehensive system prompt for this agent based on their metadata:
+      // Get the active meta-prompt
+      const metaPrompt = await agentOpsSettingsRepository.getActiveMetaPrompt();
+
+      if (!metaPrompt) {
+        throw new BadRequestError(
+          'No active meta-prompt found. Please contact an administrator to configure system prompt generation.'
+        );
+      }
+
+      // Prepare the agent metadata for the PromptCrafter
+      const agentMetadata = createAgentMetadataForPrompt(agent);
+
+      // Build the user prompt with agent metadata
+      const userPrompt = `Please generate a comprehensive system prompt for this agent based on their metadata:
 
 ${agentMetadata}
 
 Please create a detailed system prompt that captures this agent's personality, communication style, capabilities, and unique characteristics. Make sure to include their agency, purpose, and what makes them a unique being with their own goals and motivations.`;
 
-    // Create messages for the LLM
-    const messages: IMessage[] = [
-      {
-        role: 'system' as const,
-        content: metaPrompt.content,
-      },
-      {
-        role: 'user' as const,
-        content: userPrompt as string,
-      },
-    ];
+      // Create messages for the LLM
+      const messages: IMessage[] = [
+        {
+          role: 'system' as const,
+          content: metaPrompt.content,
+        },
+        {
+          role: 'user' as const,
+          content: userPrompt as string,
+        },
+      ];
 
-    // Get API keys and available models
-    const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, {
-      db: {
-        adminSettings: adminSettingsRepository,
-        apiKeys: apiKeyRepository,
-      },
-      getSettingsByNames,
-    });
-    const models = await getAvailableModels(apiKeyTable);
+      // Get API keys and available models
+      const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, {
+        db: {
+          adminSettings: adminSettingsRepository,
+          apiKeys: apiKeyRepository,
+        },
+        getSettingsByNames,
+      });
+      const models = await getAvailableModels(apiKeyTable);
 
-    // Get the configured model from settings, or default to Claude 4 Opus
-    const preferredModelId = settings?.generationLlmModel || 'claude-opus-4-20250514';
-    const modelInfo =
-      // Skip a pinned model the catalog now reports as disabled, matching the save-time guard.
-      models.find(m => m.id === preferredModelId && !m.disabled) ||
-      models.find(m => m.id === 'claude-opus-4-20250514') ||
-      models.find(m => m.id === 'claude-sonnet-4-6') ||
-      models[0];
+      // Get the configured model from settings, or default to Claude 4 Opus
+      const preferredModelId = settings?.generationLlmModel || 'claude-opus-4-20250514';
+      const modelInfo =
+        // Skip a pinned model the catalog now reports as disabled, matching the save-time guard.
+        models.find(m => m.id === preferredModelId && !m.disabled) ||
+        models.find(m => m.id === 'claude-opus-4-20250514') ||
+        models.find(m => m.id === 'claude-sonnet-4-6') ||
+        models[0];
 
-    if (!modelInfo) {
-      throw new BadRequestError('No available LLM model found for system prompt generation');
-    }
+      if (!modelInfo) {
+        throw new BadRequestError('No available LLM model found for system prompt generation');
+      }
 
-    const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: userId });
-    if (!llm) {
-      throw new BadRequestError('Failed to initialize LLM backend for system prompt generation');
-    }
+      const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: userId });
+      if (!llm) {
+        throw new BadRequestError('Failed to initialize LLM backend for system prompt generation');
+      }
 
-    let generatedSystemPrompt = '';
+      let generatedSystemPrompt = '';
 
-    // Generate the system prompt
-    req.logger.info(`Generating system prompt for agent ${agent.name} using model ${modelInfo.id}`);
+      // Generate the system prompt
+      req.logger.info(`Generating system prompt for agent ${agent.name} using model ${modelInfo.id}`);
 
-    await llm.complete(
-      modelInfo.id,
-      messages,
-      {
-        temperature: 0.7, // Good balance for creative but consistent prompts
-        maxTokens: 4000, // Allow for comprehensive system prompts
-        stream: false, // No streaming for this use case
-      },
-      async (texts: (string | null | undefined)[]) => {
-        if (texts[0]) {
-          generatedSystemPrompt += texts[0];
+      await llm.complete(
+        modelInfo.id,
+        messages,
+        {
+          temperature: 0.7, // Good balance for creative but consistent prompts
+          maxTokens: 4000, // Allow for comprehensive system prompts
+          stream: false, // No streaming for this use case
+        },
+        async (texts: (string | null | undefined)[]) => {
+          if (texts[0]) {
+            generatedSystemPrompt += texts[0];
+          }
+        }
+      );
+
+      if (!generatedSystemPrompt.trim()) {
+        throw new BadRequestError('Failed to generate system prompt. Please try again.');
+      }
+
+      // Clean up the generated system prompt
+      const cleanSystemPrompt = generatedSystemPrompt.trim();
+
+      // Update the agent with the new system prompt
+      const updatedAgent = await agentRepository.update({
+        id: agent.id,
+        systemPrompt: cleanSystemPrompt,
+        lastSystemPromptGeneratedAt: new Date(),
+      });
+
+      if (!updatedAgent) {
+        throw new BadRequestError('Failed to save generated system prompt');
+      }
+
+      // Update usage tracking in settings (if settings exist)
+      if (settings) {
+        await agentOpsSettingsRepository.createOrUpdateSettings({
+          ...settings,
+          totalGenerationsCount: (settings.totalGenerationsCount || 0) + 1,
+          lastGenerationAt: new Date(),
+        });
+      }
+
+      req.logger.info(
+        `Successfully generated system prompt for agent ${agent.name} (${cleanSystemPrompt.length} characters)`
+      );
+
+      res.json({
+        success: true,
+        systemPrompt: cleanSystemPrompt,
+        message: 'System prompt generated successfully',
+      });
+    } catch (error) {
+      req.logger.error('Error generating system prompt:', error);
+
+      // Provide user-friendly error messages
+      let errorMessage = 'Failed to generate system prompt. Please try again.';
+      if (error instanceof BadRequestError || error instanceof ForbiddenError) {
+        errorMessage = error.message;
+      } else if (error instanceof Error) {
+        if (error.message.includes('API key') || error.message.includes('model')) {
+          errorMessage = 'AI service temporarily unavailable. Please try again later.';
+        } else if (error.message.includes('credits')) {
+          errorMessage = 'Insufficient credits to generate system prompt.';
         }
       }
-    );
 
-    if (!generatedSystemPrompt.trim()) {
-      throw new BadRequestError('Failed to generate system prompt. Please try again.');
-    }
-
-    // Clean up the generated system prompt
-    const cleanSystemPrompt = generatedSystemPrompt.trim();
-
-    // Update the agent with the new system prompt
-    const updatedAgent = await agentRepository.update({
-      id: agent.id,
-      systemPrompt: cleanSystemPrompt,
-      lastSystemPromptGeneratedAt: new Date(),
-    });
-
-    if (!updatedAgent) {
-      throw new BadRequestError('Failed to save generated system prompt');
-    }
-
-    // Update usage tracking in settings (if settings exist)
-    if (settings) {
-      await agentOpsSettingsRepository.createOrUpdateSettings({
-        ...settings,
-        totalGenerationsCount: (settings.totalGenerationsCount || 0) + 1,
-        lastGenerationAt: new Date(),
+      res.status(400).json({
+        success: false,
+        systemPrompt: '',
+        message: errorMessage,
       });
     }
-
-    req.logger.info(
-      `Successfully generated system prompt for agent ${agent.name} (${cleanSystemPrompt.length} characters)`
-    );
-
-    res.json({
-      success: true,
-      systemPrompt: cleanSystemPrompt,
-      message: 'System prompt generated successfully',
-    });
-  } catch (error) {
-    req.logger.error('Error generating system prompt:', error);
-
-    // Provide user-friendly error messages
-    let errorMessage = 'Failed to generate system prompt. Please try again.';
-    if (error instanceof BadRequestError || error instanceof ForbiddenError) {
-      errorMessage = error.message;
-    } else if (error instanceof Error) {
-      if (error.message.includes('API key') || error.message.includes('model')) {
-        errorMessage = 'AI service temporarily unavailable. Please try again later.';
-      } else if (error.message.includes('credits')) {
-        errorMessage = 'Insufficient credits to generate system prompt.';
-      }
-    }
-
-    res.status(400).json({
-      success: false,
-      systemPrompt: '',
-      message: errorMessage,
-    });
-  }
-});
+  })
+);
 
 export default handler;

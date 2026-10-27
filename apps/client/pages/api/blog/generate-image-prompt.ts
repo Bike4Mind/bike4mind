@@ -1,3 +1,4 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { IUserDocument, UnprocessableEntityError } from '@bike4mind/common';
 import {
@@ -108,38 +109,40 @@ Generate a detailed image prompt for a featured blog image that captures the ess
   }
 }
 
-const handler = baseApi().post(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  try {
-    const params = req.body as GenerateImagePromptParams;
+const handler = baseApi().post(
+  withRequestCompletionQuota(async (req, res) => {
+    assertAiAccessAllowed(req.user);
+    try {
+      const params = req.body as GenerateImagePromptParams;
 
-    if (!params.content || !params.content.trim()) {
-      return res.status(400).json({
+      if (!params.content || !params.content.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Content is required',
+        });
+      }
+
+      if (!params.title || !params.title.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Title is required',
+        });
+      }
+
+      const result = await generateImagePrompt(req, req.user, params, req.logger);
+
+      return res.json(result);
+    } catch (error) {
+      // The credit reservation keeps its own 422 rather than collapsing into the generic 500.
+      if (error instanceof UnprocessableEntityError) throw error;
+      console.error('Blog image prompt generation error:', error);
+      return res.status(500).json({
         success: false,
-        message: 'Content is required',
+        message: error instanceof Error ? error.message : 'Failed to generate image prompt',
       });
     }
-
-    if (!params.title || !params.title.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Title is required',
-      });
-    }
-
-    const result = await generateImagePrompt(req, req.user, params, req.logger);
-
-    return res.json(result);
-  } catch (error) {
-    // The credit reservation keeps its own 422 rather than collapsing into the generic 500.
-    if (error instanceof UnprocessableEntityError) throw error;
-    console.error('Blog image prompt generation error:', error);
-    return res.status(500).json({
-      success: false,
-      message: error instanceof Error ? error.message : 'Failed to generate image prompt',
-    });
-  }
-});
+  })
+);
 
 export const config = {
   api: {

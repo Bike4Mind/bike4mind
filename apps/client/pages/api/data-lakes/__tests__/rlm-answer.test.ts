@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+import { ForbiddenError, TooManyRequestsError, insufficientCreditsError } from '@bike4mind/common';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const {
+  mockAdmitRequestCompletion,
+  mockQuotaRelease,
   mockResolveAccessibleLakes,
   mockBuildDataLakeTools,
   mockGetEffectiveLLMApiKeys,
@@ -12,6 +14,8 @@ const {
   mockRecordReplSandboxUnavailable,
   meter,
 } = vi.hoisted(() => ({
+  mockAdmitRequestCompletion: vi.fn(),
+  mockQuotaRelease: vi.fn(),
   mockResolveAccessibleLakes: vi.fn(),
   mockBuildDataLakeTools: vi.fn(),
   mockGetEffectiveLLMApiKeys: vi.fn(),
@@ -31,6 +35,11 @@ const {
     checkpoint: { totalInputTokens: 0, totalOutputTokens: 0 },
   },
 }));
+mockAdmitRequestCompletion.mockImplementation(async () => ({ release: mockQuotaRelease }));
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: mockAdmitRequestCompletion,
+}));
+
 meter.reserve.mockImplementation(async () => ({ reservedCredits: 10, refund: meter.refund }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -459,5 +468,86 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
     expect(meter.refund).toHaveBeenCalledTimes(1);
     expect(meter.settle).not.toHaveBeenCalled();
     expect(mockAgentRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/rlm-answer - completion quotas', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    meter.denied.clear();
+    mockResolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'sk-test' });
+    mockBuildDataLakeTools.mockReturnValue({});
+    mockAgentRun.mockResolvedValue({
+      finalAnswer: 'ok',
+      steps: [],
+      completionInfo: {
+        iterations: 1,
+        toolCalls: 0,
+        reachedMaxIterations: false,
+        totalInputTokens: 10,
+        totalOutputTokens: 1,
+      },
+    });
+  });
+
+  it('checks the request credential before any provider setup or credit reservation', async () => {
+    mockAdmitRequestCompletion.mockRejectedValueOnce(
+      new TooManyRequestsError('Token quota exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 12 })
+    );
+
+    await expect(call({ 'x-api-key': 'test-key' })).rejects.toMatchObject({
+      statusCode: 429,
+      additionalInfo: { errorCode: 'token_rate_limit_exceeded', retryAfter: 12 },
+    });
+    expect(mockGetEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(meter.reserve).not.toHaveBeenCalled();
+    expect(mockAgentRun).not.toHaveBeenCalled();
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
+  });
+
+  it('passes a JWT request to the credential-aware admission helper', async () => {
+    await call({ authorization: 'Bearer jwt' });
+    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 'user-1' } }), {
+      holdSlot: true,
+    });
+    expect(mockAgentRun).toHaveBeenCalledOnce();
+  });
+
+  it('holds its slot until the agent and usage settlement finish', async () => {
+    const { req, res } = makeReqRes({ 'x-api-key': 'test-key' });
+    const apiKeyRequest = { ...req, apiKeyInfo: { keyId: 'key-1' } };
+    let finishRun: (result: unknown) => void = () => undefined;
+    mockAgentRun.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          finishRun = resolve;
+        })
+    );
+    const pending = (handler as unknown as (request: unknown, response: unknown) => Promise<unknown>)(
+      apiKeyRequest,
+      res
+    );
+    await vi.waitFor(() => expect(mockAgentRun).toHaveBeenCalled());
+    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(apiKeyRequest, { holdSlot: true });
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
+    finishRun({ finalAnswer: 'ok', steps: [], completionInfo: { iterations: 1, toolCalls: 0 } });
+    await pending;
+    expect(meter.settle).toHaveBeenCalledBefore(mockQuotaRelease);
+    expect(mockQuotaRelease).toHaveBeenCalledOnce();
+  });
+
+  it('releases its slot when provider setup throws', async () => {
+    mockGetEffectiveLLMApiKeys.mockRejectedValueOnce(new Error('provider settings unavailable'));
+    await expect(call({ 'x-api-key': 'test-key' })).rejects.toThrow('provider settings unavailable');
+    expect(mockQuotaRelease).toHaveBeenCalledOnce();
+  });
+
+  it('releases its slot after a failed agent run is settled', async () => {
+    mockAgentRun.mockRejectedValueOnce(new Error('provider unavailable'));
+    const response = await call({ 'x-api-key': 'test-key' });
+    expect(response.statusCode).toBe(500);
+    expect(meter.settle).toHaveBeenCalledBefore(mockQuotaRelease);
+    expect(mockQuotaRelease).toHaveBeenCalledOnce();
   });
 });

@@ -1589,16 +1589,43 @@ describe('POST /api/chat (integration - untrusted owner quotas)', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith(
-      expect.objectContaining({ owner: expect.objectContaining({ id: 'user-1' }), holdSlot: false })
+      expect.objectContaining({
+        owner: expect.objectContaining({ id: 'user-1' }),
+        ownerUntrusted: true,
+        holdSlot: false,
+      })
     );
     expect(mockQuotaRelease).toHaveBeenCalled();
+  });
+
+  it('preserves admin owner trust after a non-admin key withholds the role', async () => {
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      _id: 'user-1',
+      isAdmin: true,
+      emailVerified: false,
+      createdAt: new Date(),
+      isBanned: false,
+      disputePending: false,
+    });
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: expect.objectContaining({ isAdmin: false }),
+        ownerUntrusted: false,
+      })
+    );
   });
 
   it('holds a slot for a blocking turn and frees it once the turn has answered', async () => {
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith(expect.objectContaining({ holdSlot: true }));
+    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerUntrusted: true, holdSlot: true })
+    );
     expect(mockQuotaRelease).toHaveBeenCalled();
   });
 
@@ -1622,6 +1649,49 @@ describe('POST /api/chat (integration - untrusted owner quotas)', () => {
 
     finishTurn();
     await pending;
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    'keeps a stuck provider slot until the underlying process %ss',
+    async settlement => {
+      waitTurnLimits.budgetMs = 0;
+      waitTurnLimits.windDownMs = 1;
+      let finishTurn: () => void = () => {};
+      mockProcess.mockImplementation(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            finishTurn = () => {
+              if (settlement === 'reject') reject(new Error('provider stopped late'));
+              else resolve();
+            };
+          })
+      );
+      mockInvoke.mockResolvedValue({ id: 'quest-3', status: 'running', reply: '', replies: [] });
+      mockQuestFindById.mockResolvedValue({ id: 'quest-3', status: 'running', reply: '', replies: [] });
+      mockSettleIfUnfinished.mockResolvedValue(true);
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      try {
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(504);
+        expect(mockQuotaRelease).not.toHaveBeenCalled();
+
+        finishTurn();
+        await vi.waitFor(() => expect(mockQuotaRelease).toHaveBeenCalledTimes(1));
+      } finally {
+        finishTurn();
+        waitTurnLimits.budgetMs = 45_000;
+        waitTurnLimits.windDownMs = 7_000;
+      }
+    }
+  );
+
+  it('frees the slot when setup fails before the provider starts', async () => {
+    mockInvoke.mockRejectedValue(new Error('invoke failed'));
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(500);
+    expect(mockProcess).not.toHaveBeenCalled();
     expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
   });
 

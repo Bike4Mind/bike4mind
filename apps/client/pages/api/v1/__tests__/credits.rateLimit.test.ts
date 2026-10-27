@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+type CreditRequest = { apiKeyInfo?: { keyId: string } };
+
 type LimiterOptions = {
-  limit: () => Promise<number>;
+  limit: (req: CreditRequest) => Promise<number>;
   windowMs: number;
   bucket: string;
   subject: (req: { apiKeyInfo?: { keyId: string } }) => string | undefined;
@@ -34,7 +36,9 @@ vi.mock('@bike4mind/utils', async orig => ({
 import '../credits';
 
 describe('GET /api/v1/credits dedicated rate limit', () => {
-  beforeEach(() => mockGetSettingsMap.mockReset());
+  beforeEach(() => {
+    mockGetSettingsMap.mockReset();
+  });
 
   it('runs its own limiter through the contract prelude, after auth and before the handler', () => {
     expect(captured.routeOptions).toMatchObject({ exemptReadsFromDailyRateLimit: true, rateLimit: 'credits-limiter' });
@@ -43,15 +47,21 @@ describe('GET /api/v1/credits dedicated rate limit', () => {
 
   it('is off by default, so nothing changes until an admin sets it', async () => {
     mockGetSettingsMap.mockResolvedValue({});
-    expect(await captured.limiter!.limit()).toBe(0);
+    expect(await captured.limiter!.limit({ apiKeyInfo: { keyId: 'k1' } })).toBe(0);
   });
 
   it('takes its per-minute ceiling from the admin setting', async () => {
     mockGetSettingsMap.mockResolvedValue({ apiRateLimitCreditsPerMin: '30' });
-    expect(await captured.limiter!.limit()).toBe(30);
+    expect(await captured.limiter!.limit({ apiKeyInfo: { keyId: 'k1' } })).toBe(30);
   });
 
-  it('counts per API key, and per user for a session', () => {
+  it('leaves JWT sessions exempt without reading the setting', async () => {
+    mockGetSettingsMap.mockResolvedValue({ apiRateLimitCreditsPerMin: '1' });
+    expect(await captured.limiter!.limit({})).toBe(0);
+    expect(mockGetSettingsMap).not.toHaveBeenCalled();
+  });
+
+  it('counts per API key', () => {
     expect(captured.limiter!.subject({ apiKeyInfo: { keyId: 'k1' } })).toBe('api-key:k1');
     expect(captured.limiter!.subject({})).toBeUndefined();
   });

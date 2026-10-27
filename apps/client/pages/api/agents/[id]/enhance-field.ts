@@ -1,3 +1,4 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
@@ -129,64 +130,65 @@ const FIELD_DESCRIPTIONS: Record<string, { label: string; description: string; s
 
 const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{ id: string }, EnhanceFieldResponse, EnhanceFieldRequest>
->(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  const { id } = req.query;
-  const userId = req.user!.id;
-  const { fieldName, currentValue, agentName } = req.body;
+>(
+  withRequestCompletionQuota(async (req, res) => {
+    assertAiAccessAllowed(req.user);
+    const { id } = req.query;
+    const userId = req.user!.id;
+    const { fieldName, currentValue, agentName } = req.body;
 
-  // Validate the id parameter
-  if (!id || typeof id !== 'string') {
-    throw new BadRequestError('Invalid agent ID');
-  }
-
-  // Validate required fields
-  if (!fieldName || typeof fieldName !== 'string') {
-    throw new BadRequestError('Field name is required');
-  }
-
-  if (!currentValue || typeof currentValue !== 'string' || currentValue.trim().length === 0) {
-    throw new BadRequestError('Current value is required for enhancement');
-  }
-
-  // Find the agent
-  const agent = await agentRepository.findById(id);
-  assertAgentAccess(agent, userId, 'own');
-
-  try {
-    // Get API keys and available models
-    const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, {
-      db: {
-        adminSettings: adminSettingsRepository,
-        apiKeys: apiKeyRepository,
-      },
-      getSettingsByNames,
-    });
-    const models = await getAvailableModels(apiKeyTable);
-
-    // Use a fast model for field enhancement (Haiku for speed)
-    const preferredModelId = 'claude-haiku-4-5-20251001';
-    const modelInfo =
-      models.find(m => m.id === preferredModelId) || models.find(m => m.id === 'claude-sonnet-4-6') || models[0];
-
-    if (!modelInfo) {
-      throw new BadRequestError('No available LLM model found for field enhancement');
+    // Validate the id parameter
+    if (!id || typeof id !== 'string') {
+      throw new BadRequestError('Invalid agent ID');
     }
 
-    const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: userId });
-    if (!llm) {
-      throw new BadRequestError('Failed to initialize LLM backend for field enhancement');
+    // Validate required fields
+    if (!fieldName || typeof fieldName !== 'string') {
+      throw new BadRequestError('Field name is required');
     }
 
-    // Get field metadata
-    const fieldMeta = FIELD_DESCRIPTIONS[fieldName] || {
-      label: fieldName,
-      description: 'A personality trait for this agent',
-      style: 'Enhance the given text while maintaining its core meaning.',
-    };
+    if (!currentValue || typeof currentValue !== 'string' || currentValue.trim().length === 0) {
+      throw new BadRequestError('Current value is required for enhancement');
+    }
 
-    // Build the enhancement prompt
-    const systemPrompt = `You are an expert at crafting rich, evocative personality descriptions for AI agents. Your task is to enhance and expand upon user-provided text while preserving the original intent and meaning.
+    // Find the agent
+    const agent = await agentRepository.findById(id);
+    assertAgentAccess(agent, userId, 'own');
+
+    try {
+      // Get API keys and available models
+      const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, {
+        db: {
+          adminSettings: adminSettingsRepository,
+          apiKeys: apiKeyRepository,
+        },
+        getSettingsByNames,
+      });
+      const models = await getAvailableModels(apiKeyTable);
+
+      // Use a fast model for field enhancement (Haiku for speed)
+      const preferredModelId = 'claude-haiku-4-5-20251001';
+      const modelInfo =
+        models.find(m => m.id === preferredModelId) || models.find(m => m.id === 'claude-sonnet-4-6') || models[0];
+
+      if (!modelInfo) {
+        throw new BadRequestError('No available LLM model found for field enhancement');
+      }
+
+      const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: userId });
+      if (!llm) {
+        throw new BadRequestError('Failed to initialize LLM backend for field enhancement');
+      }
+
+      // Get field metadata
+      const fieldMeta = FIELD_DESCRIPTIONS[fieldName] || {
+        label: fieldName,
+        description: 'A personality trait for this agent',
+        style: 'Enhance the given text while maintaining its core meaning.',
+      };
+
+      // Build the enhancement prompt
+      const systemPrompt = `You are an expert at crafting rich, evocative personality descriptions for AI agents. Your task is to enhance and expand upon user-provided text while preserving the original intent and meaning.
 
 Guidelines:
 - Use the user's input as the PRIMARY inspiration - their ideas are the foundation
@@ -198,7 +200,7 @@ Guidelines:
 
 Output ONLY the enhanced text. No explanations, no quotes, no prefixes.`;
 
-    const userPrompt = `Agent Name: ${agentName || agent.name || 'Unnamed Agent'}
+      const userPrompt = `Agent Name: ${agentName || agent.name || 'Unnamed Agent'}
 
 Field: ${fieldMeta.label}
 Purpose: ${fieldMeta.description}
@@ -209,79 +211,80 @@ User's Input:
 
 Please enhance this personality field, keeping the user's core idea as the foundation while making it more vivid and detailed.`;
 
-    // Create messages for the LLM
-    const messages: IMessage[] = [
-      {
-        role: 'system' as const,
-        content: systemPrompt,
-      },
-      {
-        role: 'user' as const,
-        content: userPrompt,
-      },
-    ];
+      // Create messages for the LLM
+      const messages: IMessage[] = [
+        {
+          role: 'system' as const,
+          content: systemPrompt,
+        },
+        {
+          role: 'user' as const,
+          content: userPrompt,
+        },
+      ];
 
-    let enhancedValue = '';
+      let enhancedValue = '';
 
-    // Generate the enhanced field
-    req.logger.info(`Enhancing ${fieldName} for agent ${agent.name} using model ${modelInfo.id}`);
+      // Generate the enhanced field
+      req.logger.info(`Enhancing ${fieldName} for agent ${agent.name} using model ${modelInfo.id}`);
 
-    await llm.complete(
-      modelInfo.id,
-      messages,
-      {
-        temperature: 0.8, // Slightly creative but focused
-        maxTokens: 500, // Keep it concise
-        stream: false,
-      },
-      async (texts: (string | null | undefined)[]) => {
-        if (texts[0]) {
-          enhancedValue += texts[0];
+      await llm.complete(
+        modelInfo.id,
+        messages,
+        {
+          temperature: 0.8, // Slightly creative but focused
+          maxTokens: 500, // Keep it concise
+          stream: false,
+        },
+        async (texts: (string | null | undefined)[]) => {
+          if (texts[0]) {
+            enhancedValue += texts[0];
+          }
+        }
+      );
+
+      if (!enhancedValue.trim()) {
+        throw new BadRequestError('Failed to enhance field. Please try again.');
+      }
+
+      // Clean up the generated text
+      const cleanEnhancedValue = enhancedValue.trim();
+
+      req.logger.info(
+        `Successfully enhanced ${fieldName} for agent ${agent.name} (${cleanEnhancedValue.length} characters)`
+      );
+
+      res.json({
+        success: true,
+        enhancedValue: cleanEnhancedValue,
+        message: 'Field enhanced successfully',
+      });
+    } catch (error) {
+      req.logger.error('Error enhancing field:', error);
+
+      // Re-throw known error types to let baseApi handle them with correct status codes
+      if (error instanceof BadRequestError || error instanceof NotFoundError || error instanceof ForbiddenError) {
+        throw error;
+      }
+
+      // For unknown errors, provide user-friendly message
+      let errorMessage = 'Failed to enhance field. Please try again.';
+      if (error instanceof Error) {
+        if (error.message.includes('API key') || error.message.includes('model')) {
+          errorMessage = 'AI service temporarily unavailable. Please try again later.';
+        } else if (error.message.includes('credits')) {
+          errorMessage = 'Insufficient credits to enhance field.';
         }
       }
-    );
 
-    if (!enhancedValue.trim()) {
-      throw new BadRequestError('Failed to enhance field. Please try again.');
+      // Return 500 for server errors, not 400
+      res.status(500).json({
+        success: false,
+        enhancedValue: '',
+        message: errorMessage,
+      });
     }
-
-    // Clean up the generated text
-    const cleanEnhancedValue = enhancedValue.trim();
-
-    req.logger.info(
-      `Successfully enhanced ${fieldName} for agent ${agent.name} (${cleanEnhancedValue.length} characters)`
-    );
-
-    res.json({
-      success: true,
-      enhancedValue: cleanEnhancedValue,
-      message: 'Field enhanced successfully',
-    });
-  } catch (error) {
-    req.logger.error('Error enhancing field:', error);
-
-    // Re-throw known error types to let baseApi handle them with correct status codes
-    if (error instanceof BadRequestError || error instanceof NotFoundError || error instanceof ForbiddenError) {
-      throw error;
-    }
-
-    // For unknown errors, provide user-friendly message
-    let errorMessage = 'Failed to enhance field. Please try again.';
-    if (error instanceof Error) {
-      if (error.message.includes('API key') || error.message.includes('model')) {
-        errorMessage = 'AI service temporarily unavailable. Please try again later.';
-      } else if (error.message.includes('credits')) {
-        errorMessage = 'Insufficient credits to enhance field.';
-      }
-    }
-
-    // Return 500 for server errors, not 400
-    res.status(500).json({
-      success: false,
-      enhancedValue: '',
-      message: errorMessage,
-    });
-  }
-});
+  })
+);
 
 export default handler;

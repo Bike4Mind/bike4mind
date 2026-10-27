@@ -3,6 +3,10 @@
  * surfaces as NotFoundError. The route's catch-all remaps errors to a 500; this one must pass through.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
 import { createMocks } from 'node-mocks-http';
 import { InternalServerError, NotFoundError } from '@bike4mind/utils';
 

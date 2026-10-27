@@ -1,3 +1,4 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
@@ -165,85 +166,87 @@ Generate a description that captures this agent's unique personality, personal m
 
 const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{ id: string }, AgentDescriptionResponse, {}>
->(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  const { id } = req.query;
-  const userId = req.user!.id;
+>(
+  withRequestCompletionQuota(async (req, res) => {
+    assertAiAccessAllowed(req.user);
+    const { id } = req.query;
+    const userId = req.user!.id;
 
-  // Validate the id parameter
-  if (!id || typeof id !== 'string') {
-    throw new Error('Invalid agent ID');
-  }
-
-  // Find the agent
-  const agent = await agentRepository.findById(id);
-  assertAgentAccess(agent, userId, 'own');
-
-  try {
-    // Build the context prompt from agent metadata
-    const userPrompt = buildAgentContextPrompt(agent);
-
-    // Create messages for the LLM
-    const messages: IMessage[] = [
-      {
-        role: 'system',
-        content: AGENT_DESCRIPTION_SYSTEM_PROMPT,
-      },
-      {
-        role: 'user',
-        content: userPrompt,
-      },
-    ];
-
-    // Use operations model for agent description generation
-    const { modelId, llm } = await OperationsModelService.getOperationsModel();
-
-    if (!llm) {
-      throw new Error('Failed to initialize LLM backend');
+    // Validate the id parameter
+    if (!id || typeof id !== 'string') {
+      throw new Error('Invalid agent ID');
     }
 
-    let generatedDescription = '';
+    // Find the agent
+    const agent = await agentRepository.findById(id);
+    assertAgentAccess(agent, userId, 'own');
 
-    await llm.complete(
-      modelId,
-      messages,
-      {
-        temperature: 0.7, // Slightly lower for more consistent results
-        maxTokens: 500, // Reasonable limit for descriptions
-        stream: false, // No streaming for this use case
-      },
-      async (texts: (string | null | undefined)[]) => {
-        if (texts[0]) {
-          generatedDescription += texts[0];
+    try {
+      // Build the context prompt from agent metadata
+      const userPrompt = buildAgentContextPrompt(agent);
+
+      // Create messages for the LLM
+      const messages: IMessage[] = [
+        {
+          role: 'system',
+          content: AGENT_DESCRIPTION_SYSTEM_PROMPT,
+        },
+        {
+          role: 'user',
+          content: userPrompt,
+        },
+      ];
+
+      // Use operations model for agent description generation
+      const { modelId, llm } = await OperationsModelService.getOperationsModel();
+
+      if (!llm) {
+        throw new Error('Failed to initialize LLM backend');
+      }
+
+      let generatedDescription = '';
+
+      await llm.complete(
+        modelId,
+        messages,
+        {
+          temperature: 0.7, // Slightly lower for more consistent results
+          maxTokens: 500, // Reasonable limit for descriptions
+          stream: false, // No streaming for this use case
+        },
+        async (texts: (string | null | undefined)[]) => {
+          if (texts[0]) {
+            generatedDescription += texts[0];
+          }
+        }
+      );
+
+      if (!generatedDescription.trim()) {
+        throw new Error('Failed to generate description');
+      }
+
+      // Clean up the generated description
+      const cleanDescription = generatedDescription.trim();
+
+      req.logger.info(`Generated description for agent ${agent.name}: ${cleanDescription.substring(0, 100)}...`);
+
+      res.json({ description: cleanDescription });
+    } catch (error) {
+      req.logger.error('Error generating agent description:', error);
+
+      // Provide user-friendly error messages
+      let errorMessage = 'Failed to generate description. Please try again.';
+      if (error instanceof Error) {
+        if (error.message.includes('API key') || error.message.includes('model')) {
+          errorMessage = 'AI service temporarily unavailable. Please try again later.';
+        } else if (error.message.includes('credits')) {
+          errorMessage = 'Insufficient credits to generate description.';
         }
       }
-    );
 
-    if (!generatedDescription.trim()) {
-      throw new Error('Failed to generate description');
+      res.status(500).json({ error: errorMessage });
     }
-
-    // Clean up the generated description
-    const cleanDescription = generatedDescription.trim();
-
-    req.logger.info(`Generated description for agent ${agent.name}: ${cleanDescription.substring(0, 100)}...`);
-
-    res.json({ description: cleanDescription });
-  } catch (error) {
-    req.logger.error('Error generating agent description:', error);
-
-    // Provide user-friendly error messages
-    let errorMessage = 'Failed to generate description. Please try again.';
-    if (error instanceof Error) {
-      if (error.message.includes('API key') || error.message.includes('model')) {
-        errorMessage = 'AI service temporarily unavailable. Please try again later.';
-      } else if (error.message.includes('credits')) {
-        errorMessage = 'Insufficient credits to generate description.';
-      }
-    }
-
-    res.status(500).json({ error: errorMessage });
-  }
-});
+  })
+);
 
 export default handler;
