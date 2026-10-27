@@ -302,6 +302,39 @@ describe('pickForMachine policy', () => {
     expect(p.alternates.find(c => c.entry.id === 'hybrid-27b')?.grade).toBe('B');
   });
 
+  describe('falls back to the most restrictive choice for a policy value this client does not know', () => {
+    const unknown = (field: string, edit: (m: HubManifestInput) => void = () => {}) =>
+      withManifest(m => {
+        edit(m);
+        Object.assign(m, { policy: { [field]: 'from-a-newer-catalog' } });
+      });
+    const ids = (p: ReturnType<typeof pick>) => [p.best, ...p.alternates].map(c => c?.entry.id);
+
+    it('abliterated: hidden even with the toggle on', () => {
+      const p = pick('mac-64', 'code', { manifest: unknown('abliterated'), showAbliterated: true });
+      expect(ids(p)).not.toContain('hybrid-27b-abliterated');
+    });
+
+    it('restrictedLicense: hidden', () => {
+      expect(ids(pick('mac-24', 'chat', { manifest: unknown('restrictedLicense') }))).not.toContain('restricted-moe');
+    });
+
+    it('bestPickPermissiveOnly: a restricted license is never the best pick', () => {
+      const manifest = unknown('bestPickPermissiveOnly', m => {
+        m.rankings.chat = ['moe-35b', 'restricted-moe', 'gemma-12b', 'hybrid-27b', 'dense-9b-tuned'];
+      });
+      const p = pick('mac-24', 'chat', { manifest });
+      expect(p.best?.entry.id).toBe('gemma-12b');
+      expect(p.alternates.map(c => c.entry.id)).toContain('restricted-moe');
+    });
+
+    it('minGradeForBestPick: only a grade A build is the best pick', () => {
+      const p = pick('mac-64', 'code', { manifest: unknown('minGradeForBestPick') });
+      expect(label(p.best)).toBe('hybrid-27b/iq4@llama-server fast:fits 262144 f16');
+      expect(p.best?.grade).toBe('A');
+    });
+  });
+
   it('defaults the policy block when the manifest omits it', () => {
     expect(parseHubManifest(fixtureManifest()).manifest.policy).toEqual({
       abliterated: 'curated-opt-in',
