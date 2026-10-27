@@ -105,19 +105,19 @@ describe('rewardInviterForFirstAnswer', () => {
     expect(mockSlack).not.toHaveBeenCalled();
   });
 
-  it('alerts once, on the reward that crosses the threshold', async () => {
-    mockCountDocuments.mockResolvedValue(51);
+  it('alerts only on the reward ranked one past the threshold, by counting rewards with a smaller id', async () => {
+    mockCountDocuments.mockResolvedValue(50);
     await rewardInviterForFirstAnswer('friend1');
     expect(mockSlack).toHaveBeenCalledTimes(1);
     expect(mockSlack.mock.calls[0][0]).toContain('51');
     expect(mockCountDocuments).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'generic_add', reason: REFERRAL_REWARD_REASON })
+      expect.objectContaining({ type: 'generic_add', reason: REFERRAL_REWARD_REASON, _id: { $lt: 'tx1' } })
     );
 
     mockSlack.mockClear();
-    mockCountDocuments.mockResolvedValue(50);
+    mockCountDocuments.mockResolvedValue(49);
     await rewardInviterForFirstAnswer('friend1');
-    mockCountDocuments.mockResolvedValue(52);
+    mockCountDocuments.mockResolvedValue(51);
     await rewardInviterForFirstAnswer('friend1');
     expect(mockSlack).not.toHaveBeenCalled();
   });
