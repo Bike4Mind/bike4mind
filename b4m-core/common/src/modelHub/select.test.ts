@@ -238,6 +238,26 @@ describe('pickForMachine policy', () => {
     expect(listed(tierC(6, 8))).toBe(false);
   });
 
+  it('never lists a Tier C variant whose tool-call counts have no runs, even past the schema', () => {
+    type Counts = { exact: number; of: number };
+    const listedWith = (edit: (own: { toolCall: Counts; parentToolCall?: Counts }) => void) => {
+      // The parsed manifest is frozen; a clone lets the counts go where the schema would refuse them.
+      const manifest = structuredClone(parseHubManifest(fixtureManifest()).manifest);
+      edit(manifest.entries.find(e => e.id === 'hybrid-27b-abliterated')!.builds[0].evidence[0].ownEval!);
+      return pickForMachine({
+        manifest,
+        hardware: MACHINES['mac-64'],
+        role: 'code',
+        runtimes: BOTH,
+        pins: PINS,
+        showAbliterated: true,
+      }).alternates.some(c => c.entry.id === 'hybrid-27b-abliterated');
+    };
+    expect(listedWith(() => {})).toBe(true);
+    expect(listedWith(own => Object.assign(own.parentToolCall!, { exact: 0, of: 0 }))).toBe(false);
+    expect(listedWith(own => (own.toolCall.of = 0))).toBe(false);
+  });
+
   it('lists a Tier B build on the runtime that carries its eval when an earlier runtime is also installed', () => {
     const manifest = withManifest(m => {
       const b = m.entries.find(e => e.id === 'dense-9b-tuned')!.builds[0];

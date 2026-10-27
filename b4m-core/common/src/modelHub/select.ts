@@ -171,7 +171,7 @@ function meetsListingBar(tier: ProducerTier, own: HubOwnEval | null): boolean {
   if (own === null) return false;
   if (tier === 'B') return true;
   const parent = own.parentToolCall;
-  if (!parent) return false;
+  if (!parent || own.toolCall.of <= 0 || parent.of <= 0) return false;
   // Cross-multiplied in integers, so a drop of exactly the tolerance is not lost to float rounding.
   const points = Math.round(TIER_C_TOOL_REGRESSION_TOLERANCE * 100);
   return 100 * own.toolCall.exact * parent.of >= (100 * parent.exact - points * parent.of) * own.toolCall.of;
