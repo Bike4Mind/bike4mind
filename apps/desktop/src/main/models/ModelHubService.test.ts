@@ -9,6 +9,7 @@ import {
   type HubGgufBuild,
   type HubModelDetail,
   type HubSearchPage,
+  type InspectOptions,
   type InstalledModel,
   type LoadedModel,
   type ModelArch,
@@ -159,6 +160,7 @@ function harness(
     curated?: HubManifest;
     hardware?: HardwareProfile;
     setting?: LocalContextSetting;
+    checkBackoffMs?: number[];
   } = {}
 ) {
   const pulls: Deferred[] = [];
@@ -170,7 +172,7 @@ function harness(
         : { ok: true, version: options.version === undefined ? '0.40.11' : options.version, error: null }
     ),
     list: vi.fn(async (): Promise<InstalledModel[]> => []),
-    inspect: vi.fn(async (name: string): Promise<ModelInspection> => ({
+    inspect: vi.fn(async (name: string, _options?: InspectOptions): Promise<ModelInspection> => ({
       model: {
         name,
         sizeBytes: null,
@@ -212,6 +214,7 @@ function harness(
   const pushed: ModelPull[][] = [];
   const installedChanged = vi.fn();
   const hardware = vi.fn(async () => options.hardware ?? CPU_16);
+  const warn = vi.fn();
   const service = new ModelHubService({
     runtime,
     hub,
@@ -221,9 +224,11 @@ function harness(
     curated: options.curated ?? CURATED,
     onPullsChanged: next => pushed.push(next),
     onInstalledChanged: installedChanged,
+    warn,
     progressIntervalMs: 0,
+    checkBackoffMs: options.checkBackoffMs ?? [0, 0],
   });
-  return { service, runtime, hub, libraryLayers, pulls, pushed, installedChanged, hardware };
+  return { service, runtime, hub, libraryLayers, pulls, pushed, installedChanged, hardware, warn };
 }
 
 const request = {
@@ -360,6 +365,7 @@ describe('ModelHubService pulls', () => {
       curated: CURATED,
       onPullsChanged: () => {},
       onInstalledChanged: () => {},
+      warn: () => {},
     });
 
     const view = await service.detail(repo);
@@ -1176,17 +1182,114 @@ describe('ModelHubService curated library pulls', () => {
   }
   const otherWeights = (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, modelBlob: SHA } });
 
-  it('keeps the model, saying it could not be checked, when Ollama cannot describe it after the pull', async () => {
+  const showTimedOut = () =>
+    new RuntimeConnectionError('ollama /api/show failed: timed out after 10000ms', 'ollama', {
+      cause: new DOMException('timed out', 'TimeoutError'),
+    });
+  const readsOf = (runtime: ReturnType<typeof harness>['runtime']) =>
+    runtime.inspect.mock.calls.filter(([name]) => name === REF);
+
+  /** Pulls E4B to completion and resolves with the pull's result. */
+  async function pulled(setup: ReturnType<typeof harness>) {
+    const result = setup.service.pull(libraryRequest);
+    await vi.waitFor(() => expect(setup.pulls).toHaveLength(1));
+    setup.pulls[0].resolve();
+    return result;
+  }
+
+  it('reads the model again after one failed read, and keeps it as checked', async () => {
     const setup = harness();
-    const result = await pulledAs(setup, () => Promise.reject(new LocalRuntimeError('show timed out', 'ollama')));
+    setup.runtime.inspect.mockRejectedValueOnce(showTimedOut());
+
+    expect(await pulled(setup)).toEqual({ ok: true, ref: REF });
+    expect(readsOf(setup.runtime)).toHaveLength(2);
+    expect(readsOf(setup.runtime)[1][1]).toMatchObject({ tags: false, signal: expect.any(AbortSignal) });
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+    expect(setup.service.pulls()).toEqual([]);
+    expect(setup.warn).toHaveBeenCalledTimes(1);
+    expect(setup.warn.mock.calls[0][0]).toContain(`could not describe ${REF} after its download (read 1 of 3`);
+  });
+
+  it('keeps the model, saying it could not be checked, and logs why when every read fails', async () => {
+    const setup = harness();
+    setup.runtime.inspect.mockRejectedValue(showTimedOut());
+    const result = await pulled(setup);
 
     expect(result).toMatchObject({
       ok: false,
       error: { kind: 'unverified', message: expect.stringContaining(`${REF} after downloading it`) },
     });
     expect(result.ok || result.error.message).toContain('It is still installed');
+    expect(readsOf(setup.runtime)).toHaveLength(3);
     expect(setup.runtime.remove).not.toHaveBeenCalled();
     expect(setup.installedChanged).toHaveBeenCalled();
+    expect(setup.warn.mock.calls.map(([line]) => line)).toEqual(
+      [1, 2, 3].map(read => expect.stringContaining(`read ${read} of 3`))
+    );
+    expect(setup.warn.mock.calls[2][0]).toContain('timed out after 10000ms');
+  });
+
+  it('stops reading at once when the download is cancelled between reads, keeping the model', async () => {
+    const setup = harness({ checkBackoffMs: [60_000, 60_000] });
+    setup.runtime.inspect.mockRejectedValue(showTimedOut());
+    const result = setup.service.pull(libraryRequest);
+    await vi.waitFor(() => expect(setup.pulls).toHaveLength(1));
+    setup.pulls[0].resolve();
+    await vi.waitFor(() => expect(setup.warn).toHaveBeenCalledTimes(1));
+    setup.service.cancel(pullKey(libraryRequest.repo, libraryRequest.buildId));
+
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    expect(readsOf(setup.runtime)).toHaveLength(1);
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+    expect(setup.service.pulls()).toEqual([]);
+  });
+
+  it('stops a read in flight when the download is cancelled', async () => {
+    const setup = harness();
+    setup.runtime.inspect.mockImplementation(
+      (_name, options) =>
+        new Promise((_resolve, reject) =>
+          options?.signal?.addEventListener('abort', () => reject(options.signal?.reason))
+        )
+    );
+    const result = setup.service.pull(libraryRequest);
+    await vi.waitFor(() => expect(setup.pulls).toHaveLength(1));
+    setup.pulls[0].resolve();
+    await vi.waitFor(() => expect(readsOf(setup.runtime)).toHaveLength(1));
+    setup.service.cancel(pullKey(libraryRequest.repo, libraryRequest.buildId));
+
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    expect(readsOf(setup.runtime)).toHaveLength(1);
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+  });
+
+  it('checks an unverified download again on request', async () => {
+    const setup = harness();
+    for (let read = 0; read < 3; read++) setup.runtime.inspect.mockRejectedValueOnce(showTimedOut());
+    expect(await pulled(setup)).toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    setup.installedChanged.mockClear();
+
+    expect(await setup.service.checkCurated(LIBRARY.id, E4B.id)).toEqual({ ok: true });
+    expect(readsOf(setup.runtime)).toHaveLength(4);
+    expect(setup.installedChanged).toHaveBeenCalled();
+    expect(await setup.service.checkCurated(LIBRARY.id, 'no-such-build')).toMatchObject({
+      ok: false,
+      error: { kind: 'not-found' },
+    });
+  });
+
+  it('removes an unverified download that a later check finds unreviewed, when Ollama lacked the tag', async () => {
+    const setup = harness();
+    const base = await setup.runtime.inspect(REF);
+    setup.runtime.inspect.mockRejectedValue(showTimedOut());
+    expect(await pulled(setup)).toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    setup.runtime.inspect.mockResolvedValue(otherWeights(base));
+
+    expect(await setup.service.checkCurated(LIBRARY.id, E4B.id)).toMatchObject({
+      ok: false,
+      error: { kind: 'upstream-changed', message: expect.stringContaining('removed what Ollama downloaded') },
+    });
+    expect(setup.runtime.remove).toHaveBeenCalledWith(REF);
   });
 
   it('names the unreviewed model still installed when removing it fails', async () => {

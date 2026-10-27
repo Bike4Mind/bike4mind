@@ -71,6 +71,8 @@ const api: DesktopApi = {
     listCurated: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListCurated),
     getCuratedPull: (entryId: string, buildId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.modelsGetCuratedPull, entryId, buildId),
+    checkCurated: (entryId: string, buildId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCurated, entryId, buildId),
     listPulls: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListPulls),
     pull: (request: ModelPullRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsPull, request),
     cancelPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsCancelPull, key),

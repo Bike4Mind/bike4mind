@@ -35,6 +35,7 @@ import {
   licenseKind,
   pullKey,
   type CuratedBuildView,
+  type CuratedCheckResult,
   type CuratedEntryView,
   type CuratedList,
   type CuratedPickView,
@@ -95,11 +96,18 @@ export interface ModelHubServiceDeps {
   curated: HubManifest;
   onPullsChanged: (pulls: ModelPull[]) => void;
   onInstalledChanged: () => void;
+  /** The main log. */
+  warn: (message: string) => void;
   /** Minimum gap between progress pushes (ms). */
   progressIntervalMs?: number;
+  /** Pauses between reads of a just-pulled model (ms); one more read than pauses. */
+  checkBackoffMs?: readonly number[];
 }
 
 const DEFAULT_PROGRESS_INTERVAL_MS = 250;
+// Ollama answers /api/show in under 0.3 s even under heavy load, so these only ride out a brief stall.
+const CHECK_TIMEOUT_MS = 5_000;
+const DEFAULT_CHECK_BACKOFF_MS = [1_000, 3_000];
 const SEARCH_LIMIT = 30;
 const OLLAMA_LIBRARY_URL = 'https://ollama.com/library';
 
@@ -185,6 +193,22 @@ function installedReviewed(inspection: ModelInspection, reviewed: HubBuild): boo
   if (pins.license ? contents.license === null || sha256(contents.license) !== pins.license : contents.license)
     return false;
   return (configuredNumCtx(inspection.parameters) ?? null) === pins.numCtx;
+}
+
+/** Waits `ms`; false when `signal` aborts first. */
+function pause(ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise(resolve => {
+    if (signal.aborted) return resolve(false);
+    const stop = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', stop);
+      resolve(true);
+    }, ms);
+    signal.addEventListener('abort', stop, { once: true });
+  });
 }
 
 const versionParts = (text: string) => /^v?(\d+)\.(\d+)\.(\d+)/.exec(text.trim())?.slice(1).map(Number);
@@ -415,6 +439,9 @@ export class ModelHubService {
   readonly #deps: ModelHubServiceDeps;
   readonly #pulls = new Map<string, PullEntry>();
   readonly #progressIntervalMs: number;
+  readonly #checkBackoffMs: readonly number[];
+  /** Curated pulls Ollama could not describe, by lowercased ref, with whether the tag was there before. */
+  readonly #unverified = new Map<string, boolean | null>();
   /** Installed models' layer shapes, keyed by name, modified time and size so a re-pulled tag is read again. */
   readonly #archs = new Map<
     string,
@@ -427,6 +454,7 @@ export class ModelHubService {
   constructor(deps: ModelHubServiceDeps) {
     this.#deps = deps;
     this.#progressIntervalMs = deps.progressIntervalMs ?? DEFAULT_PROGRESS_INTERVAL_MS;
+    this.#checkBackoffMs = deps.checkBackoffMs ?? DEFAULT_CHECK_BACKOFF_MS;
   }
 
   #machine(): Promise<HardwareProfile> {
@@ -537,17 +565,22 @@ export class ModelHubService {
    * After a curated pull: removes the model only when Ollama definitely installed something other than the reviewed
    * build, since the registry can change between the check and Ollama's own read, and never a tag it already had.
    */
-  async #checkInstalled(reviewed: HubBuild, ref: string, hadTag: boolean | null): Promise<ModelHubError | null> {
-    let inspection: ModelInspection;
-    try {
-      inspection = await this.#deps.runtime.inspect(ref, { tags: false });
-    } catch {
+  async #checkInstalled(
+    reviewed: HubBuild,
+    ref: string,
+    hadTag: boolean | null,
+    signal: AbortSignal
+  ): Promise<ModelHubError | null> {
+    const inspection = await this.#inspectPulled(ref, signal);
+    if (!inspection) {
+      this.#unverified.set(ref.toLowerCase(), hadTag);
       return hubError(
         'unverified',
         `Ollama could not describe ${ref} after downloading it, so Bike4Mind could not check it against the ` +
           'reviewed build. It is still installed; remove it from Installed unless you trust it.'
       );
     }
+    this.#unverified.delete(ref.toLowerCase());
     if (installedReviewed(inspection, reviewed)) return null;
     const changed = (outcome: string) =>
       hubError('upstream-changed', `${LAYERS_CHANGED} ${outcome}${libraryOf(reviewed) ? '' : EXPLORE_HINT}`);
@@ -565,6 +598,39 @@ export class ModelHubService {
       );
     }
     return changed('Bike4Mind removed what Ollama downloaded.');
+  }
+
+  /** Reads a just-pulled model, retrying a failed or slow read; null once the reads run out or `signal` aborts. */
+  async #inspectPulled(ref: string, signal: AbortSignal): Promise<ModelInspection | null> {
+    const pauses = this.#checkBackoffMs;
+    for (let attempt = 0; ; attempt++) {
+      const started = Date.now();
+      try {
+        return await this.#deps.runtime.inspect(ref, {
+          tags: false,
+          signal: AbortSignal.any([signal, AbortSignal.timeout(CHECK_TIMEOUT_MS)]),
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        this.#deps.warn(
+          `MODELS: could not describe ${ref} after its download (read ${attempt + 1} of ${pauses.length + 1}, ` +
+            `${Date.now() - started}ms): ${reason}`
+        );
+      }
+      if (attempt >= pauses.length || !(await pause(pauses[attempt], signal))) return null;
+    }
+  }
+
+  /** Re-runs the post-download check on an installed curated build that Ollama could not describe. */
+  async checkCurated(entryId: string, buildId: string): Promise<CuratedCheckResult> {
+    const picked = this.#reviewed(entryId, buildId);
+    if (!picked) return { ok: false, error: hubError('not-found', 'That model is not on the list.') };
+    const { build } = picked;
+    const ref = libraryOf(build)?.ref ?? `hf.co/${build.hf?.repo ?? ''}:${build.quant.label}`;
+    const hadTag = this.#unverified.get(ref.toLowerCase()) ?? null;
+    const error = await this.#checkInstalled(build, ref, hadTag, new AbortController().signal);
+    this.#deps.onInstalledChanged();
+    return error ? { ok: false, error } : { ok: true };
   }
 
   /** Whether Ollama lists `ref`; null when the list cannot be read. */
@@ -836,7 +902,7 @@ export class ModelHubService {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       return this.#fail(key, entry, pullEofError(error, ref) ?? toModelHubError(error));
     }
-    const installed = curated ? await this.#checkInstalled(curated.build, ref, hadTag) : null;
+    const installed = curated ? await this.#checkInstalled(curated.build, ref, hadTag, controller.signal) : null;
     this.#deps.onInstalledChanged();
     if (installed) return refuse(installed);
     this.#drop(key, entry);

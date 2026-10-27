@@ -227,6 +227,7 @@ const calls = {
   getDetail: vi.fn(),
   getStatus: vi.fn(),
   getCuratedPull: vi.fn(),
+  checkCurated: vi.fn(),
 };
 
 beforeEach(() => {
@@ -271,6 +272,7 @@ beforeEach(() => {
         calls.getCuratedPull(entryId, buildId);
         return bridge.curatedPull;
       },
+      checkCurated: calls.checkCurated,
       pull: calls.pull,
       cancelPull: calls.cancelPull,
       dismissPull: vi.fn(),
@@ -509,6 +511,28 @@ describe('ModelsScreen curated', () => {
       confirmAccess: false,
       curated: { entryId: 'gemma-4-e4b', buildId: 'qat-q4-0' },
     });
+  });
+
+  it('offers Check again when Ollama could not describe a finished download, and clears the alert once it passes', async () => {
+    calls.pull.mockResolvedValue({
+      ok: false,
+      listed: false,
+      error: { kind: 'unverified', message: `Ollama could not describe ${E4B_REF} after downloading it.` },
+    });
+    calls.checkCurated.mockResolvedValueOnce({ ok: false, error: { kind: 'unverified', message: 'Still no answer.' } });
+    calls.checkCurated.mockResolvedValueOnce({ ok: true });
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    await click(q('models-pull-dialog-confirm-btn'));
+    expect(q('models-curated-error')?.textContent).toContain('could not describe');
+    expect(q('models-curated-explore-btn')).toBeNull();
+
+    await click(q('models-curated-check-again-btn'));
+    expect(calls.checkCurated).toHaveBeenCalledWith('gemma-4-e4b', 'qat-q4-0');
+    expect(q('models-curated-error')?.textContent).toContain('Still no answer.');
+
+    await click(q('models-curated-check-again-btn'));
+    expect(q('models-curated-error')).toBeNull();
   });
 
   it('downloads nothing when the dialog is dismissed', async () => {

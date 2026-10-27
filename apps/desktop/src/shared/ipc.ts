@@ -94,6 +94,7 @@ import type {
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type {
+  CuratedCheckResult,
   CuratedList,
   CuratedPullResult,
   HubDetailResult,
@@ -309,6 +310,7 @@ export const IPC_CHANNELS = {
   modelsGetDetail: 'models:get-detail',
   modelsListCurated: 'models:list-curated',
   modelsGetCuratedPull: 'models:get-curated-pull',
+  modelsCheckCurated: 'models:check-curated',
   modelsListPulls: 'models:list-pulls',
   /** Starts a download; resolves when it finishes, fails or is cancelled. */
   modelsPull: 'models:pull',
@@ -571,6 +573,8 @@ export interface DesktopApi {
     getDetail(repo: string): Promise<HubDetailResult>;
     listCurated(): Promise<CuratedList>;
     getCuratedPull(entryId: string, buildId: string): Promise<CuratedPullResult>;
+    /** Checks an installed curated build against its review again, after Ollama could not describe it. */
+    checkCurated(entryId: string, buildId: string): Promise<CuratedCheckResult>;
     listPulls(): Promise<ModelPull[]>;
     pull(request: ModelPullRequest): Promise<ModelPullResult>;
     cancelPull(key: string): Promise<void>;
