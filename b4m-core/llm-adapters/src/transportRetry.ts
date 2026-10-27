@@ -23,7 +23,20 @@ export async function retryTransportErrors<T>(
       logger.warn(
         `[${label}] Transport error "${(err as Error).message}", retry ${attempt + 1}/${MAX_TRANSPORT_RETRIES}`
       );
-      await new Promise(resolve => setTimeout(resolve, 100 * 2 ** attempt));
+      await sleepUnlessAborted(100 * 2 ** attempt, abortSignal);
+      if (abortSignal?.aborted) throw err;
     }
   }
+}
+
+function sleepUnlessAborted(ms: number, abortSignal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const done = () => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    abortSignal?.addEventListener('abort', done, { once: true });
+  });
 }
