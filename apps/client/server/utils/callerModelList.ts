@@ -1,9 +1,23 @@
 import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
-import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
+import {
+  isFreeTierExempt,
+  isFreeTierModel,
+  isUnpricedTextModel,
+  loadFreeTierAllowedModels,
+} from '@bike4mind/services/llm/modelAdmission';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { getImageModelCapabilities, isImageModel, type ModelInfo, type SupersededModelInfo } from '@bike4mind/common';
+import {
+  getImageModelCapabilities,
+  isImageModel,
+  PAID_PLAN_ENTITLEMENT_KEY,
+  type IUserDocument,
+  type ModelInfo,
+  type SupersededModelInfo,
+} from '@bike4mind/common';
+import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
+import { Logger } from '@bike4mind/observability';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
 
@@ -41,9 +55,7 @@ async function buildCallerModelList(userId: string | null, enforceCredits: boole
   const listedModels = await getAvailableModels(apiKeys, modelCatalogListingOptions());
   // Same rule createModelAdmission refuses at call time (llm/modelAdmission.ts): with credits on,
   // an unpriced text model settles at $0, so the picker must not offer it either.
-  const offered = enforceCredits
-    ? listedModels.filter(model => !isUnpricedTextModel(model))
-    : listedModels;
+  const offered = enforceCredits ? listedModels.filter(model => !isUnpricedTextModel(model)) : listedModels;
   const models = offered.map(withImageCapabilities);
 
   // Superseded pins the client can offer to upgrade, resolved by llm-adapters
@@ -52,7 +64,47 @@ async function buildCallerModelList(userId: string | null, enforceCredits: boole
   return { models, supersededModels: getSupersededModels(offered) };
 }
 
+// Fails closed to "free" for the listing: a failed subscription read must not 500 the picker.
+async function holdsPaidPlan(user: IUserDocument): Promise<boolean> {
+  try {
+    return (await getUserEntitlements(toEntitlementUser(user))).includes(PAID_PLAN_ENTITLEMENT_KEY);
+  } catch (error) {
+    Logger.globalInstance.warn('callerModelList: entitlement read failed; listing free-tier models only', { error });
+    return false;
+  }
+}
+
+/**
+ * Same free-tier rule createModelAdmission refuses at call time (llm/modelAdmission.ts), applied after the
+ * cache so a plan change or a gate toggle shows on the next load. An anonymous caller is left unfiltered:
+ * it cannot call a model, so this list is not a gate for it. A failed allowlist read also lists unfiltered:
+ * the picker is not the gate, call-time admission still enforces.
+ */
+async function withoutPaidOnlyModels(list: CallerModelList, user: IUserDocument | null): Promise<CallerModelList> {
+  if (!user || isFreeTierExempt(user)) return list;
+  let allowedModels: ReadonlySet<string> | undefined;
+  try {
+    allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
+  } catch (error) {
+    Logger.globalInstance.warn('callerModelList: free-tier allowlist read failed; listing unfiltered', { error });
+    return list;
+  }
+  if (!allowedModels) return list;
+  if (await holdsPaidPlan(user)) return list;
+  const models = list.models.filter(model => isFreeTierModel(model.id, model, allowedModels));
+  const offeredIds = new Set<string>(models.map(model => model.id));
+  // An upgrade offer pointing at a paid-only model would only lead to a refusal.
+  return { models, supersededModels: list.supersededModels.filter(entry => offeredIds.has(entry.replacementId)) };
+}
+
 export async function getCallerModelList(
+  user: IUserDocument | null,
+  logger: { log: (message: string) => void }
+): Promise<CallerModelList> {
+  return withoutPaidOnlyModels(await getCachedCallerModelList(user?.id ?? null, logger), user);
+}
+
+async function getCachedCallerModelList(
   userId: string | null,
   logger: { log: (message: string) => void }
 ): Promise<CallerModelList> {

@@ -33,6 +33,13 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: vi.fn(() => false),
 }));
 
+// The free-tier gate is off here (no admin setting), so entitlements are never read; the mock only
+// keeps the Mongoose model chain out. The gate itself is covered in server/utils/callerModelList.test.ts.
+vi.mock('@server/entitlements', () => ({
+  getUserEntitlements: vi.fn(async () => []),
+  toEntitlementUser: (user: unknown) => user,
+}));
+
 // Strip the middleware chain (DB connect, auth, logging) so the test exercises
 // the route body, matching the other pages/api suites.
 vi.mock('@server/middlewares/baseApi', () => ({
