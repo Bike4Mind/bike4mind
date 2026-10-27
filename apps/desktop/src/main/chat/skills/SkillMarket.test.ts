@@ -153,6 +153,33 @@ describe('SkillMarket', () => {
     expect(detail?.update?.diff).toMatchObject({ added: 1, removed: 1 });
   });
 
+  it('counts a change to the Claude Code tools as a tool change', async () => {
+    get.mockImplementation(async (url: string) =>
+      url === '/api/skills/s1'
+        ? {
+            data: {
+              id: 's1',
+              body: 'line one\nline two',
+              claudeCodeAllowedTools: ['Read'],
+              importedFrom: { versionId: 'v1' },
+            },
+          }
+        : {
+            data: {
+              listing: listing(),
+              version: version({
+                snapshot: { name: 'x', description: 'd', body: 'line one\nline two', claudeCodeAllowedTools: ['Bash'] },
+              }),
+              myImport: { version: 1, skill: { id: 's1', name: 'x' } },
+            },
+          }
+    );
+
+    const { detail } = await market.listing({ id: 'l1' });
+    expect(detail?.version?.snapshot.claudeCodeAllowedTools).toEqual(['Bash']);
+    expect(detail?.update).toMatchObject({ toolsAdded: ['Bash'], toolsRemoved: ['Read'] });
+  });
+
   it('offers no update when the copy is already on the current version', async () => {
     get.mockImplementation(async (url: string) =>
       url === '/api/skills/s1'

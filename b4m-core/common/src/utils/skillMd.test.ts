@@ -108,6 +108,12 @@ describe('parseSkillMd', () => {
     expect(result).toMatchObject({ ok: true, fields: { claudeCodeAllowedTools: expected }, dropped: [] });
   });
 
+  it('reports an allowed-tools value it cannot read as dropped', () => {
+    const result = parseSkillMd('---\nname: x\nallowed-tools:\n  bash: yes\n---\nDo it.');
+    expect(result).toMatchObject({ ok: true, dropped: ['allowed-tools'] });
+    expect(result.ok && result.fields.claudeCodeAllowedTools).toBeUndefined();
+  });
+
   it('round-trips allowed-tools through toSkillMd, never writing B4M allowedTools', () => {
     const md = toSkillMd({
       name: 'commit',

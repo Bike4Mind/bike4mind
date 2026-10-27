@@ -179,6 +179,7 @@ export function parseSkillMd(input: string): ParseSkillMdResult {
       case 'allowed-tools': {
         const tools = splitAllowedTools(value);
         if (tools.length) fields.claudeCodeAllowedTools = tools;
+        else if (value != null && value !== '') dropped.push(key);
         break;
       }
       default:

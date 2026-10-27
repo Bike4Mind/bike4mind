@@ -508,7 +508,7 @@ function scanTools(
         'high_risk_tools',
         'high',
         'Declares Claude Code tools that act outside the conversation',
-        riskyClaudeCodeTools.join(', ')
+        riskyClaudeCodeTools.slice(0, 5).join(', ')
       )
     );
   }

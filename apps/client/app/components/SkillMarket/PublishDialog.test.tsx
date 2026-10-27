@@ -98,6 +98,26 @@ describe('PublishDialog', () => {
     await waitFor(() => expect(screen.queryByTestId('market-publish-already-listed')).not.toBeInTheDocument());
   });
 
+  it('shows the normal form when the only listing was withdrawn or delisted', () => {
+    h.myListings = [
+      { id: 'a', sourceSkillId: 'skill-1', status: 'withdrawn', visibility: 'public' },
+      { id: 'b', sourceSkillId: 'skill-1', status: 'delisted', visibility: 'public' },
+    ];
+    renderDialog();
+    expect(screen.queryByTestId('market-publish-already-listed')).not.toBeInTheDocument();
+    expect(screen.getByTestId('market-publish-visibility-public')).toBeInTheDocument();
+  });
+
+  it('keeps the already-listed form and shows the error when the new version fails', async () => {
+    h.myListings = [{ id: 'l9', sourceSkillId: 'skill-1', status: 'approved', visibility: 'public' }];
+    h.submitVersion.mockRejectedValue(new Error('Scan service unavailable'));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('market-publish-submit-btn'));
+    expect(await screen.findByTestId('market-publish-error')).toHaveTextContent('Scan service unavailable');
+    expect(screen.getByTestId('market-publish-already-listed')).toBeInTheDocument();
+    expect(h.suggest).toHaveBeenLastCalledWith('skill-1', false);
+  });
+
   it('links My listings in the conflict error when the listing was not known up front', async () => {
     h.publish.mockRejectedValue(
       new Error('This skill already has a listing. Submit a new version from My listings instead.')

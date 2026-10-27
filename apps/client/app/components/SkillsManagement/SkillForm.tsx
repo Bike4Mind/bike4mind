@@ -295,7 +295,17 @@ export const SkillForm: FC<SkillFormProps> = ({
 
         {claudeCodeAllowedTools.length ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="skill-form-claude-code-tools">
-            Claude Code tools: {claudeCodeAllowedTools.join(', ')}. Kept for Claude Code exports; not used in Bike4Mind.
+            Claude Code tools: {claudeCodeAllowedTools.join(', ')}. Kept for Claude Code exports; not used in Bike4Mind.{' '}
+            <Link
+              component="button"
+              type="button"
+              level="body-sm"
+              onClick={() => setClaudeCodeAllowedTools([])}
+              disabled={submitting}
+              data-testid="skill-form-claude-code-tools-remove"
+            >
+              Remove
+            </Link>
           </Typography>
         ) : null}
 

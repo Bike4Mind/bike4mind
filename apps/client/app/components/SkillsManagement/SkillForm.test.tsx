@@ -121,6 +121,24 @@ describe('SkillForm SKILL.md import', () => {
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('allowedTools');
   });
 
+  it('removes imported Claude Code tools, submitting an empty list', () => {
+    const onSubmit = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm
+          submitLabel="Save"
+          onSubmit={onSubmit}
+          onCancel={vi.fn()}
+          initialValue={{ name: 'commit', description: 'Commit', body: 'Commit it.', claudeCodeAllowedTools: ['Bash'] }}
+        />
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByTestId('skill-form-claude-code-tools-remove'));
+    expect(screen.queryByTestId('skill-form-claude-code-tools')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ claudeCodeAllowedTools: [] }));
+  });
+
   it.each([
     ['a .zip upload', () => upload('PK\u0003\u0004\u0000\u0000\u0008\u0000skills/x/SKILL.md'), 'binary or .zip'],
     ['pasted text with no frontmatter', () => paste('Just some instructions.'), 'No frontmatter found'],

@@ -119,16 +119,17 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
   const [tagError, setTagError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SubmitResult | null>(null);
-  const suggest = useSuggestListingTags(skillId, !result);
-  // The current skill's suggestions stand in for the tags until the author edits them.
-  const tagsTouched = editedTags !== null;
-  const tags = editedTags ?? suggest.data ?? [];
-
   // Same "live" rule as the server's ALREADY_LISTED check in pages/api/skills/market/publish.ts. While
   // the listings load, the normal form shows and a conflict still surfaces as the linked error.
   const existing = myListings?.find(
     l => l.sourceSkillId === skillId && l.status !== 'withdrawn' && l.status !== 'delisted'
   );
+  // An already-listed skill keeps its tags, so there is nothing to suggest.
+  const suggest = useSuggestListingTags(skillId, !result && !existing);
+  // The current skill's suggestions stand in for the tags until the author edits them.
+  const tagsTouched = editedTags !== null;
+  const tags = editedTags ?? suggest.data ?? [];
+
   const pending = publish.isPending || submitVersion.isPending;
 
   const orgs = me?.organizations ?? [];

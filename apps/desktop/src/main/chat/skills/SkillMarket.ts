@@ -427,8 +427,8 @@ export class SkillMarket {
     const importedFrom = asRecord(skill?.importedFrom);
     if (typeof skill?.body !== 'string' || importedFrom?.versionId === version.id) return undefined;
 
-    const before = asStrings(skill.allowedTools);
-    const after = version.snapshot.allowedTools ?? [];
+    const before = [...asStrings(skill.allowedTools), ...asStrings(skill.claudeCodeAllowedTools)];
+    const after = [...(version.snapshot.allowedTools ?? []), ...(version.snapshot.claudeCodeAllowedTools ?? [])];
     return {
       skillId: copy.id,
       ...(typeof importedFrom?.version === 'number' ? { fromVersion: importedFrom.version } : {}),
@@ -617,6 +617,7 @@ function toVersion(data: unknown): SkillMarketVersion | null {
       body: snapshot.body,
       ...(typeof snapshot.argumentHint === 'string' ? { argumentHint: snapshot.argumentHint } : {}),
       allowedTools: asStrings(snapshot.allowedTools),
+      claudeCodeAllowedTools: asStrings(snapshot.claudeCodeAllowedTools),
     },
     ...(asRecord(version.honestSummary)
       ? { honestSummary: version.honestSummary as SkillMarketVersion['honestSummary'] }
