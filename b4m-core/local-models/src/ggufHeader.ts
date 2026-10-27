@@ -71,6 +71,8 @@ class HeaderReader {
     if (type === GGUF_STRING) return this.skip(await this.u64());
     if (type !== GGUF_ARRAY) throw new Unreadable();
     const itemType = await this.u32();
+    // llama.cpp refuses arrays of arrays; nesting them costs one pending frame per level here.
+    if (itemType === GGUF_ARRAY) throw new Unreadable();
     const count = await this.u64();
     const itemSize = FIXED_SIZES[itemType];
     if (itemSize !== undefined) return this.skip(itemSize * count);
@@ -156,13 +158,10 @@ const ENCODER_ARCHITECTURES = new Set([
   'modern-bert',
   't5encoder',
 ]);
+/** Qwen-style `<think>`, gpt-oss's analysis channel and `reasoning_effort`, Magistral's `[THINK]`. */
+const THINKING_RE = /<think>|enable_thinking|reasoning_effort|<\|channel\|>analysis|\[THINK\]/;
 
-/**
- * What a model can do as its header shows it. A `clip` file is a vision projector and does nothing alone. A pooling
- * type or an encoder-only architecture marks an embedding or rerank model, which serves no chat. A template that
- * never mentions `tools` cannot render them; an unreadable header reports a chat model with tools, since
- * llama-server runs with `--jinja` either way.
- */
+/** What a model can do as its header shows it; an unreadable header reports a chat model with tools. */
 export function headerCapabilities(info: GgufHeaderInfo | undefined): {
   tools: boolean;
   thinking: boolean;
@@ -177,7 +176,7 @@ export function headerCapabilities(info: GgufHeaderInfo | undefined): {
   const template = info.chatTemplate;
   return {
     tools: template !== null && /\btools\b/.test(template),
-    thinking: template !== null && /<think>|enable_thinking/.test(template),
+    thinking: template !== null && THINKING_RE.test(template),
     embeddings: false,
     completion: true,
   };

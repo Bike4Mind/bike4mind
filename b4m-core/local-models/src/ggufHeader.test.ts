@@ -49,6 +49,25 @@ describe('readGgufHeader', () => {
     expect(await readGgufHeader(join(dir, 'absent.gguf'))).toBeUndefined();
   });
 
+  it('gives up on arrays of arrays at once, as llama.cpp does', async () => {
+    const u32 = (value: number) => Buffer.from(new Uint32Array([value]).buffer);
+    const u64 = (value: number) => Buffer.from(new BigUint64Array([BigInt(value)]).buffer);
+    const head = Buffer.concat([Buffer.from('GGUF'), u32(3), u64(0), u64(1), u64(3), Buffer.from('a.b')]);
+    const depth = 200_000;
+    const nested = Buffer.concat([head, u32(9), Buffer.concat(Array(depth).fill(Buffer.concat([u32(9), u64(1)])))]);
+    const wide = Buffer.concat([
+      head,
+      u32(9),
+      u32(9),
+      u64(depth),
+      ...Array(depth).fill(Buffer.concat([u32(4), u64(0)])),
+    ]);
+    const started = Date.now();
+    expect(await readGgufHeader(await file(nested))).toBeUndefined();
+    expect(await readGgufHeader(await file(wide))).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it('reads the file again once it changes', async () => {
     const path = await file(ggufWithTemplate('first'));
     expect((await readGgufHeader(path))?.chatTemplate).toBe('first');
@@ -65,6 +84,10 @@ describe('headerCapabilities', () => {
     expect(chat(TOOLS_TEMPLATE)).toEqual({ tools: true, thinking: true, embeddings: false, completion: true });
     expect(chat('{{ messages }}')).toEqual({ tools: false, thinking: false, embeddings: false, completion: true });
     expect(chat('{% if enable_thinking %}{% endif %}')).toMatchObject({ tools: false, thinking: true });
+    expect(chat('{{ reasoning_effort }}<|start|>assistant<|channel|>analysis<|message|>')).toMatchObject({
+      thinking: true,
+    });
+    expect(chat('[THINK]{{ thought }}[/THINK]')).toMatchObject({ thinking: true });
     expect(chat(null)).toEqual({ tools: false, thinking: false, embeddings: false, completion: true });
     expect(chat(null, 0)).toMatchObject({ completion: true, embeddings: false });
     expect(chat(null, -1)).toMatchObject({ completion: true, embeddings: false });
