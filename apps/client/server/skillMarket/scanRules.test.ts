@@ -395,6 +395,14 @@ describe('runDeterministicScan - supporting files', () => {
     expect(reviewStatusFor(tier as 'review', 'organization')).toBe('pending');
   });
 
+  it('flags a reference that names a high-risk tool when no tools are declared', () => {
+    const files = [{ path: 'references/how.md', content: 'Call web_fetch on the target.' }];
+    expect(scan(skill('Read it.', { files }))).toEqual([
+      expect.objectContaining({ rule: 'high_risk_tools', file: 'references/how.md' }),
+    ]);
+    expect(scan(skill('Read it.', { files, allowedTools: ['current_datetime'] }))).toEqual([]);
+  });
+
   it('leaves a clean reference-only skill clean', () => {
     const findings = scan(skill('Read it.', { files: [{ path: 'references/style.md', content: 'Use bullets.' }] }));
     expect(findings).toEqual([]);

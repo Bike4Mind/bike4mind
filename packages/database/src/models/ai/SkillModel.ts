@@ -279,10 +279,7 @@ export const SkillSchema = new Schema<ISkill, ISkillModel, ISkillMethods>(
     // Bounds live in checkSkillFiles (@bike4mind/common utils/skillFiles.ts), applied by every writer.
     files: {
       type: [
-        new Schema(
-          { path: { type: String, required: true }, content: { type: String, required: true } },
-          { _id: false }
-        ),
+        new Schema({ path: { type: String, required: true }, content: { type: String, default: '' } }, { _id: false }),
       ],
       default: undefined,
     },

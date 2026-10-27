@@ -112,6 +112,15 @@ describe('SkillForm SKILL.md import', () => {
     expect(value('skill-name-input')).toBe('');
   });
 
+  it('keeps no supporting files from a folder whose SKILL.md is malformed', async () => {
+    renderForm();
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: { files: [inFolder('s/SKILL.md', '---\nname: [\n---\nbody'), inFolder('s/scripts/a.py', 'x')] },
+    });
+    await waitFor(() => expect(screen.getByTestId('skill-form-import-error')).toBeInTheDocument());
+    expect(screen.queryByTestId('skill-form-files')).not.toBeInTheDocument();
+  });
+
   it.each(['resolve', 'reject'] as const)(
     'ignores an older file that later %ss after a newer import',
     async outcome => {

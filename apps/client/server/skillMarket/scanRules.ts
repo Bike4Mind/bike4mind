@@ -523,14 +523,18 @@ export function runDeterministicScan(snapshot: ISkillSnapshot, options: ScanOpti
 
   // The admin setting ADDS to the built-in list: a custom tool must never silently drop web_fetch
   // and the other defaults out of the review gate.
-  scanTools(snapshot, text, folded, [...DEFAULT_HIGH_RISK_TOOLS, ...(options.highRiskTools ?? [])]).forEach(f =>
-    findings.push(f)
-  );
+  const highRiskTools = [...DEFAULT_HIGH_RISK_TOOLS, ...(options.highRiskTools ?? [])];
+  scanTools(snapshot, text, folded, highRiskTools).forEach(f => findings.push(f));
 
   // Supporting files get the same text rules as the body. A script runs on the importer's machine
   // outside the model's view, so any script needs a human reviewer even when no rule fires.
   for (const file of snapshot.files ?? []) {
-    for (const f of scanText(file.content, allowlist).findings) {
+    const scanned = scanText(file.content, allowlist);
+    // Only the tool-mention half of scanTools: the declared-tools finding is about the body's frontmatter.
+    const mentions = snapshot.allowedTools?.length
+      ? []
+      : scanTools(snapshot, scanned.text, scanned.folded, highRiskTools);
+    for (const f of [...scanned.findings, ...mentions]) {
       findings.push({ ...f, message: `${file.path}: ${f.message}`, file: file.path });
     }
     if (file.path.startsWith('scripts/')) {

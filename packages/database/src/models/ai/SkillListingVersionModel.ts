@@ -37,7 +37,7 @@ const SkillListingVersionSchema = new Schema<ISkillListingVersionDocument>(
       files: {
         type: [
           new Schema(
-            { path: { type: String, required: true }, content: { type: String, required: true } },
+            { path: { type: String, required: true }, content: { type: String, default: '' } },
             { _id: false }
           ),
         ],

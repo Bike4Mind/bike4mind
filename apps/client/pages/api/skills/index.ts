@@ -96,7 +96,9 @@ const handler = baseApi()
       )
     );
 
-    res.json({ ...result, data: await attachMarketStatus(data) });
+    // Files are hashed for locallyModified, then dropped: up to 512 KB per row, and GET /api/skills/:id has them.
+    const withStatus = await attachMarketStatus(data);
+    res.json({ ...result, data: withStatus.map(({ files: _files, ...skill }) => skill) });
   })
   .post(async (req, res) => {
     const body = req.body as Partial<ISkill> & { scope?: { organizationId?: string; isSystem?: boolean } };

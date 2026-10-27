@@ -109,10 +109,10 @@ export const SkillForm: FC<SkillFormProps> = ({
   const importReadId = useRef(0);
 
   // Replaces argument hint and model-invocation flag with the file's values; other fields change only if the file sets them. A malformed file touches nothing.
-  const applySkillMd = (text: string) => {
+  const applySkillMd = (text: string): boolean => {
     const result = parseSkillMd(text);
     setImportResult(result);
-    if (!result.ok) return;
+    if (!result.ok) return false;
     const { fields } = result;
     if (fields.name !== undefined) setName(fields.name);
     if (fields.description !== undefined) setDescription(fields.description);
@@ -121,6 +121,7 @@ export const SkillForm: FC<SkillFormProps> = ({
     setDisableModelInvocation(fields.disableModelInvocation ?? false);
     setPasteOpen(false);
     setPasteText('');
+    return true;
   };
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -153,7 +154,7 @@ export const SkillForm: FC<SkillFormProps> = ({
         setImportResult({ ok: false, error: result.error });
         return;
       }
-      applySkillMd(result.skillMd);
+      if (!applySkillMd(result.skillMd)) return;
       setFiles(result.files);
       setSkippedFiles(result.skipped);
     });

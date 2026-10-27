@@ -50,7 +50,7 @@ describe('checkSkillFiles', () => {
     expect(errorOf(many)).toMatch(/at most 20/);
 
     // Multi-byte characters count as their UTF-8 bytes, not code units.
-    const big = 'é'.repeat(SKILL_FILE_LIMITS.maxFileBytes / 2 + 1);
+    const big = '\u00e9'.repeat(SKILL_FILE_LIMITS.maxFileBytes / 2 + 1);
     expect(errorOf([file('references/big.md', big)])).toBe('references/big.md: files must be 100 KB or smaller');
 
     const chunk = 'a'.repeat(SKILL_FILE_LIMITS.maxFileBytes);
