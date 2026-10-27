@@ -17,6 +17,8 @@ const SERVER = path.join(__dirname, '..');
 const SERVER_UTILS = path.join(__dirname, '..', '..', '..', '..', 'packages', 'server-utils', 'src');
 
 const EXPECTED_REFERENCES = [
+  // The scope catalog: lists it among the admin-only scopes for the mint UI; grants no reach.
+  '../../packages/server-utils/src/app/constants/apiKeyScopes.ts',
   'pages/api/admin/release-notes/[id].ts',
   'pages/api/admin/release-notes/index.ts',
   'pages/api/admin/users/[userId]/generate-api-key.ts',
