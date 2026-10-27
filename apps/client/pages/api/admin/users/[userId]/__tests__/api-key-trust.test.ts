@@ -28,10 +28,12 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 await import('../api-key-trust');
 
-const makeReq = (body: unknown, isAdmin = true) => ({
+const delegate = { id: 'del-1', username: 'del', isAdmin: false, adminPermissions: ['settings:manage'] };
+
+const makeReq = (body: unknown, isAdmin = true, user?: Record<string, unknown>) => ({
   query: { userId: 'user-1' },
   body,
-  user: { id: 'admin-1', username: 'admin', isAdmin },
+  user: user ?? { id: 'admin-1', username: 'admin', isAdmin },
   headers: {},
   logger: { info: vi.fn(), error: vi.fn() },
 });
@@ -98,5 +100,31 @@ describe('POST /api/admin/users/[userId]/api-key-trust', () => {
     await expect(h.handler!(makeReq(body), { json: vi.fn() })).rejects.toThrow(/invalid request body/i);
 
     expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegated operator changing trust for a user with admin access, without writing or auditing', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', username: 'u', adminPermissions: ['support:read'] });
+
+    await expect(h.handler!(makeReq({ approved: true }, false, delegate), { json: vi.fn() })).rejects.toThrow(
+      /Only full administrators can .* users with admin access/
+    );
+
+    expect(h.update).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin change trust for a user with admin access', async () => {
+    h.findById.mockResolvedValue({
+      id: 'user-1',
+      username: 'u',
+      apiKeyTrustApproved: false,
+      adminPermissions: ['support:read'],
+    });
+    const json = vi.fn();
+
+    await h.handler!(makeReq({ approved: true }), { json });
+
+    expect(h.update).toHaveBeenCalledWith({ id: 'user-1', apiKeyTrustApproved: true });
+    expect(json).toHaveBeenCalledWith({ apiKeyTrustApproved: true });
   });
 });

@@ -43,6 +43,8 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => 
 
 const findById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findById } }));
+const findUserById = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({ userRepository: { findById: findUserById } }));
 
 const resetApiKeyRateLimit = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/apiKeyRateLimitCheck', async importOriginal => {
@@ -84,11 +86,13 @@ function post(query: Record<string, unknown>, user?: Record<string, unknown>) {
 }
 
 const admin = { id: 'admin-1', username: 'admin', isAdmin: true };
+const delegate = { id: 'del-1', username: 'del', isAdmin: false, adminPermissions: ['settings:manage'] };
 
 describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     findById.mockResolvedValue(storedKey);
+    findUserById.mockResolvedValue({ id: 'owner-1', username: 'owner' });
     resetApiKeyRateLimit.mockResolvedValue({
       request: { minute: 0, day: 0 },
       management: { minute: 0, day: 0 },
@@ -247,5 +251,38 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
   it('registers POST only, so next-connect 405s every other verb', () => {
     expect(mockRefs.postHandler).not.toBeNull();
     expect(mockRefs.otherVerbs).toEqual([]);
+  });
+
+  it('refuses a delegated operator on a key owned by a user with admin access, without resetting or auditing', async () => {
+    findUserById.mockResolvedValue({ id: 'owner-1', adminPermissions: ['support:read'] });
+    const { req, res } = post({ id: 'key-1' }, delegate);
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(
+      /Only full administrators can reset API key rate limits of users with admin access/
+    );
+
+    expect(findUserById).toHaveBeenCalledWith('owner-1');
+    expect(resetApiKeyRateLimit).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin reset a key owned by a user with admin access', async () => {
+    findUserById.mockResolvedValue({ id: 'owner-1', adminPermissions: ['support:read'] });
+    const { req, res } = post({ id: 'key-1' }, admin);
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(resetApiKeyRateLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it('still lets a delegate reset an orphaned key whose owner no longer exists', async () => {
+    findUserById.mockResolvedValue(null);
+    const { req, res } = post({ id: 'key-1' }, delegate);
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(resetApiKeyRateLimit).toHaveBeenCalledTimes(1);
   });
 });

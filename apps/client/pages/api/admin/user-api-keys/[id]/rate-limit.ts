@@ -1,6 +1,7 @@
-import { canAccessAdmin } from '@bike4mind/common';
+import { assertCanActOnAdminTarget, canAccessAdmin } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { userRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -45,6 +46,8 @@ const handler = api.use(csrfProtection()).patch(
     if (!apiKey) {
       throw new NotFoundError('API key not found');
     }
+    // An orphaned key (owner deleted) has no admin access to protect, so it stays editable.
+    assertCanActOnAdminTarget(req.user, await userRepository.findById(apiKey.userId), 'change API key rate limits of');
 
     const updated = await userApiKeyService.updateApiKeyRateLimit(
       apiKey.userId,

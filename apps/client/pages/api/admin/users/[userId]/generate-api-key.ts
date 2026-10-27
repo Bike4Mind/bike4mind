@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
+import { requireStepUp } from '@server/auth/stepUp';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
@@ -170,11 +171,12 @@ async function screenPreauthorizedLakeIds(
  * Admin-only endpoint to generate an API key on behalf of any user.
  * Useful for creating service account keys without logging in as the target user.
  * Minting a key that authenticates as another user is impersonation, so it shares that permission
- * and the full-admin rule for privileged targets with loginAs.
+ * and the full-admin rule for privileged targets with loginAs - including its interactive,
+ * recently verified session: an admin API key cannot mint credentials for another user.
  */
 const api = adminApi({
   adminPermissions: { POST: 'users:impersonate' },
-  auth: true,
+  auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
 });
 const handler = api.use(csrfProtection()).post(
@@ -184,6 +186,7 @@ const handler = api.use(csrfProtection()).post(
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');
     }
+    await requireStepUp(req);
 
     const targetUser = await userRepository.findById(userId);
     if (!targetUser) {

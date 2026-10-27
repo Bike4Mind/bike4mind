@@ -18,6 +18,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
     const chain: Record<string, unknown> = Object.assign(
       (req: { method?: string }, res: unknown) => routes[req.method ?? 'GET']?.(req, res),
       {
+        // adminApi registers its permission guard here; these tests cover the audit, not the gate.
+        use: () => chain,
         get: on('GET'),
         post: on('POST'),
         put: on('PUT'),

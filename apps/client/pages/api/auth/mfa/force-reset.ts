@@ -1,4 +1,4 @@
-import { hasAdminPermission } from '@bike4mind/common';
+import { ForbiddenError, hasAdminPermission } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
@@ -105,7 +105,8 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
 
       resetBody = { success: result.success, user: redactUserSecretsForSelf(result.user) };
     } catch (error: any) {
-      if (auditWriteStarted) throw error;
+      // A refused admin target is an authorization failure (403), not a bad request.
+      if (auditWriteStarted || error instanceof ForbiddenError) throw error;
       console.error('Error force resetting MFA:', error);
       return res.status(400).json({ error: error.message || 'Failed to reset MFA' });
     }

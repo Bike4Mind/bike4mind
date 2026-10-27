@@ -44,9 +44,12 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 await import('../verify-email');
 
-const makeReq = () => ({
+const admin = { id: 'admin-1', username: 'admin', isAdmin: true };
+const delegate = { id: 'del-1', username: 'del', isAdmin: false, adminPermissions: ['settings:manage'] };
+
+const makeReq = (user: Record<string, unknown> = admin) => ({
   query: { userId: 'user-1' },
-  user: { id: 'admin-1', username: 'admin', isAdmin: true },
+  user,
   headers: {},
   logger: { info: vi.fn(), error: vi.fn() },
 });
@@ -131,5 +134,38 @@ describe('POST /api/admin/users/[userId]/verify-email', () => {
     expect(h.update).not.toHaveBeenCalled();
     expect(mockApplyGrants).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ alreadyVerified: true }));
+  });
+
+  it('refuses a delegated operator verifying a user with admin access, without writing or auditing', async () => {
+    h.findById.mockResolvedValue({
+      id: 'user-1',
+      emailVerified: false,
+      email: 'a@b.test',
+      adminPermissions: ['support:read'],
+    });
+
+    await expect(h.handler!(makeReq(delegate), { json: vi.fn() })).rejects.toThrow(
+      /Only full administrators can verify the email of users with admin access/
+    );
+
+    expect(h.update).not.toHaveBeenCalled();
+    expect(mockApplyGrants).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin verify a user with admin access', async () => {
+    h.findById.mockResolvedValue({
+      id: 'user-1',
+      username: 'u',
+      emailVerified: false,
+      email: 'a@b.test',
+      adminPermissions: ['support:read'],
+    });
+    const json = vi.fn();
+
+    await h.handler!(makeReq(admin), { json });
+
+    expect(h.update).toHaveBeenCalledTimes(1);
+    expect(json).toHaveBeenCalledWith({ message: 'Email verified successfully' });
   });
 });

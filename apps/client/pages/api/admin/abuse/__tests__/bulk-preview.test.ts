@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
-import { ADMIN, ALL_ACTIONS, USER_ID, makeUser } from '@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks';
+import {
+  ADMIN,
+  ALL_ACTIONS,
+  MODERATOR,
+  USER_ID,
+  makeUser,
+} from '@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks';
 
 vi.mock('@server/middlewares/baseApi', async () =>
   (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).baseApiMock()
@@ -43,9 +49,9 @@ import handler from '../bulk-preview';
 
 const BOUND = '6a00000000000000ffffffff';
 
-async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN, canEditSettings = true) {
+async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN) {
   const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user, ability: { can: () => canEditSettings } });
+  Object.assign(req, { user });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }
@@ -67,13 +73,14 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      allowedMethods: ['POST'],
     });
   });
 
   it('refuses a non-admin', async () => {
     await expect(
       call({ target: { kind: 'domain', domain: 'kashre.com' }, actions: ALL_ACTIONS }, { ...ADMIN, isAdmin: false })
-    ).rejects.toThrow('Admin access required');
+    ).rejects.toThrow('Missing permission: users:moderate');
     expect(mockResolve).not.toHaveBeenCalled();
   });
 
@@ -107,12 +114,15 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
     expect(res._getJSONData().blocksDomain).toBeNull();
   });
 
-  it.each(['github.io', 'co.uk', 'gmail.com', 'outlook.com', 'fastmail.com'])('refuses %s as a domain target', async domain => {
-    await expect(call({ target: { kind: 'domain', domain }, actions: ALL_ACTIONS })).rejects.toMatchObject({
-      statusCode: 400,
-    });
-    expect(mockResolve).not.toHaveBeenCalled();
-  });
+  it.each(['github.io', 'co.uk', 'gmail.com', 'outlook.com', 'fastmail.com'])(
+    'refuses %s as a domain target',
+    async domain => {
+      await expect(call({ target: { kind: 'domain', domain }, actions: ALL_ACTIONS })).rejects.toMatchObject({
+        statusCode: 400,
+      });
+      expect(mockResolve).not.toHaveBeenCalled();
+    }
+  );
 
   it('writes no audit entry', async () => {
     await call({ target: { kind: 'users', userIds: [USER_ID] }, actions: ALL_ACTIONS });
@@ -134,7 +144,7 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
 
   it('refuses to preview a domain ban for an admin who cannot edit admin settings', async () => {
     await expect(
-      call({ target: { kind: 'domain', domain: 'kashre.com' }, actions: ALL_ACTIONS }, ADMIN, false)
+      call({ target: { kind: 'domain', domain: 'kashre.com' }, actions: ALL_ACTIONS }, MODERATOR)
     ).rejects.toMatchObject({ statusCode: 403 });
     expect(mockResolve).not.toHaveBeenCalled();
   });
@@ -142,8 +152,7 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
   it('lets that admin act on a domain without banning it', async () => {
     await call(
       { target: { kind: 'domain', domain: 'kashre.com' }, actions: { ...ALL_ACTIONS, ban: false } },
-      ADMIN,
-      false
+      MODERATOR
     );
     expect(mockResolve).toHaveBeenCalled();
   });

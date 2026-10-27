@@ -47,6 +47,8 @@ interface UserDetailsProps {
 const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldChange }) => {
   const currentUser = useUser(state => state.currentUser);
   const canManage = hasAdminPermission(currentUser, 'settings:manage');
+  // Minting a key acts as the user, so it shares the impersonation grant (generate-api-key.ts).
+  const canGenerateApiKeys = hasAdminPermission(currentUser, 'users:impersonate');
   const canAdjustCredits = hasAdminPermission(currentUser, 'credits:adjust');
   const [organizationName, setOrganizationName] = useState<string | null>(user.organizationId?.name ?? null);
   const [isGrantSubscriptionModalOpen, setIsGrantSubscriptionModalOpen] = useState(false);
@@ -475,13 +477,13 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
             </Button>
           </AdminPermissionBoundary>
 
-          <AdminPermissionBoundary permission="settings:manage">
+          <AdminPermissionBoundary permission="users:impersonate">
             <Button
               startDecorator={<KeyIcon />}
               color="primary"
               variant="solid"
               onClick={() => {
-                if (canManage) setIsGenerateApiKeyModalOpen(true);
+                if (canGenerateApiKeys) setIsGenerateApiKeyModalOpen(true);
               }}
             >
               Generate API Key
@@ -541,7 +543,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
 
       <AdminGenerateApiKeyModal
         user={user}
-        open={isGenerateApiKeyModalOpen && canManage}
+        open={isGenerateApiKeyModalOpen && canGenerateApiKeys}
         onClose={() => setIsGenerateApiKeyModalOpen(false)}
       />
 

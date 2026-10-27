@@ -20,10 +20,12 @@ const LAKE_A_UPPER = '0123456789ABCDEF01234567';
 const LAKE_B = '89abcdef0123456789abcdef';
 
 const mockRefs = vi.hoisted(() => ({
+  stepUp: vi.fn(async () => undefined),
   postHandler: null as null | ((req: any, res: any) => unknown),
   adminApiOptions: undefined as unknown,
 }));
 
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRefs.stepUp }));
 vi.mock('@server/middlewares/adminApi', () => ({
   adminApi: (options: unknown) => {
     mockRefs.adminApiOptions = options;
@@ -212,6 +214,20 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
 
   it('gates minting on the impersonation permission', () => {
     expect(mockRefs.adminApiOptions).toMatchObject({ adminPermissions: { POST: 'users:impersonate' } });
+  });
+
+  it('refuses API keys, like loginAs', () => {
+    expect(mockRefs.adminApiOptions).toMatchObject({ auth: 'jwtOnly' });
+  });
+
+  it('requires step-up before looking up the target or minting', async () => {
+    mockRefs.stepUp.mockRejectedValueOnce(Object.assign(new Error('Step-up required'), { statusCode: 403 }));
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('Step-up required');
+    expect(mockRefs.stepUp).toHaveBeenCalledWith(req);
+    expect(mockUserFind).not.toHaveBeenCalled();
+    expect(mockCreateKey).not.toHaveBeenCalled();
   });
 
   it('refuses a delegated impersonator minting for a user with admin access', async () => {

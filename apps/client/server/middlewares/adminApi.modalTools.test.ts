@@ -24,6 +24,7 @@ vi.mock('./baseApi', () => ({
   },
 }));
 vi.mock('@client/server/tools/modalOperations', () => ({
+  collectModalChanges: async <T>(run: () => Promise<T>) => ({ result: await run(), changes: [] }),
   createModal: vi.fn(),
   listModals: effects.list,
   updateModal: vi.fn(),

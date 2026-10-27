@@ -133,7 +133,7 @@ describe('resolveBulkAbuseCohort', () => {
     expect(regex.test('bot@notkashre.com.')).toBe(false);
   });
 
-  it('excludes the actor, admins, system, paid accounts, purchasers and org owners with reasons', async () => {
+  it('excludes the actor, admins, delegated operators, system, paid accounts, purchasers and org owners', async () => {
     const users = [
       makeUser(1),
       makeUser(2, { isAdmin: true }),
@@ -143,6 +143,7 @@ describe('resolveBulkAbuseCohort', () => {
       makeUser(6),
       makeUser(7),
       { ...makeUser(8), id: ACTOR_ID },
+      makeUser(9, { adminPermissions: ['support:read'] }),
     ];
     const { adapters } = cohortAdapters({
       users,
@@ -164,6 +165,7 @@ describe('resolveBulkAbuseCohort', () => {
       [id(6)]: 'org_owner',
       [id(7)]: 'paid',
       [ACTOR_ID]: 'self',
+      [id(9)]: 'admin',
     });
   });
 

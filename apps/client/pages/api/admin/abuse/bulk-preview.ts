@@ -1,9 +1,13 @@
-import { ApiKeyScope, BulkAbusePreviewRequestSchema, type BulkAbusePreview } from '@bike4mind/common';
-import { AdminSettings } from '@bike4mind/database/infra';
+import {
+  ApiKeyScope,
+  hasAdminPermission,
+  BulkAbusePreviewRequestSchema,
+  type BulkAbusePreview,
+} from '@bike4mind/common';
 import { abuseService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import {
   bulkAbuseCohortAdapters,
   bulkAbusePreviewAdapters,
@@ -16,14 +20,17 @@ import { signBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToken'
  * Dry run of a bulk abuse response: who would be actioned, who is skipped and why, and what it
  * would change. Writes nothing. The returned previewToken is what bulk-execute.ts acts on.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  auth: 'jwtOnly',
+  adminPermissions: { POST: 'users:moderate' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const { target, actions } = BulkAbusePreviewRequestSchema.parse(req.body);
     await denySelfInBulkAbuseTarget(req, req.user, target);
     const domain = target.kind === 'domain' ? assertOwnedDomain(target.domain) : null;
     // A domain ban writes blockedEmailDomains, so it needs the settings route's permission too.
-    if (target.kind === 'domain' && actions.ban && !req.ability?.can('update', AdminSettings)) {
+    if (target.kind === 'domain' && actions.ban && !hasAdminPermission(req.user, 'settings:manage')) {
       throw new ForbiddenError('Banning a domain needs permission to edit admin settings.');
     }
 

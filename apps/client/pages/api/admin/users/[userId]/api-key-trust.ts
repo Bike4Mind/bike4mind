@@ -1,4 +1,4 @@
-import { canAccessAdmin } from '@bike4mind/common';
+import { assertCanActOnAdminTarget, canAccessAdmin } from '@bike4mind/common';
 import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
@@ -42,6 +42,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, auth: 
         if (!user) {
           throw new BadRequestError('User not found');
         }
+        assertCanActOnAdminTarget(req.user, user, 'change API key trust for');
 
         const before = user.apiKeyTrustApproved === true;
         // Unchanged is a no-op: no write and no audit entry, like verify-email on an already-verified user.

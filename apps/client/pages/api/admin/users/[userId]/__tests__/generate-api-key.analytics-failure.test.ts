@@ -9,8 +9,12 @@ import { UserApiKeyEvents } from '@bike4mind/common';
  * so the real logEventSafe runs and the counter write underneath throws.
  */
 
-const mockRefs = vi.hoisted(() => ({ postHandler: null as null | ((req: any, res: any) => unknown) }));
+const mockRefs = vi.hoisted(() => ({
+  stepUp: vi.fn(async () => undefined),
+  postHandler: null as null | ((req: any, res: any) => unknown),
+}));
 
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRefs.stepUp }));
 vi.mock('@server/middlewares/adminApi', () => ({
   adminApi: () => {
     const chain: any = {

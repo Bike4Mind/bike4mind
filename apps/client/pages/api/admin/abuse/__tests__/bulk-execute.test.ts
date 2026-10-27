@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
-import { ADMIN, ALL_ACTIONS, OTHER_ID, USER_ID, makeUser } from '@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks';
+import {
+  ADMIN,
+  ALL_ACTIONS,
+  MODERATOR,
+  OTHER_ID,
+  USER_ID,
+  makeUser,
+} from '@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks';
 
 vi.mock('@server/middlewares/baseApi', async () =>
   (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).baseApiMock()
@@ -66,9 +73,9 @@ function succeeded(userId: string) {
 
 const mockLoggerError = vi.fn();
 
-async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN, canEditSettings = true) {
+async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN) {
   const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user, ability: { can: () => canEditSettings }, logger: { error: mockLoggerError } });
+  Object.assign(req, { user, logger: { error: mockLoggerError } });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }
@@ -97,11 +104,12 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      allowedMethods: ['POST'],
     });
   });
 
   it('refuses a non-admin', async () => {
-    await expect(call(validBody(), { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
+    await expect(call(validBody(), { ...ADMIN, isAdmin: false })).rejects.toThrow('Missing permission: users:moderate');
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
@@ -293,7 +301,7 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
       previewToken: signBulkAbusePreviewToken(ADMIN.id, fingerprintFor(target, [USER_ID]), BOUND),
     });
 
-    await expect(call(body, ADMIN, false)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(call(body, MODERATOR)).rejects.toMatchObject({ statusCode: 403 });
     expect(mockAddBlockedDomain).not.toHaveBeenCalled();
     expect(mockExecute).not.toHaveBeenCalled();
   });

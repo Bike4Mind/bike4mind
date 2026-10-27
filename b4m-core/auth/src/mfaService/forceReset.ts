@@ -1,4 +1,4 @@
-import { IUserDocument, IUserRepository, hasAdminPermission } from '@bike4mind/common';
+import { IUserDocument, IUserRepository, assertCanActOnAdminTarget, hasAdminPermission } from '@bike4mind/common';
 
 export interface ForceResetMFARequest {
   targetUserId: string;
@@ -26,6 +26,7 @@ export async function forceResetMFA(
   if (!targetUser) {
     throw new Error('Target user not found.');
   }
+  assertCanActOnAdminTarget(adminUser, targetUser, 'reset MFA of');
 
   if (!targetUser.mfa || !targetUser.mfa.totpEnabled) {
     throw new Error('Target user does not have MFA enabled.');

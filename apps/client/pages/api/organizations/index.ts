@@ -6,7 +6,6 @@ import { Request } from 'express';
 import qs from 'qs';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
-import { toSafeOrganization, toSafeOrganizations } from '@bike4mind/common';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { toSafeOrganization, toSafeOrganizations, hasAdminPermission } from '@bike4mind/common';
 import { requireAdminPermission } from '@server/middlewares/adminApi';

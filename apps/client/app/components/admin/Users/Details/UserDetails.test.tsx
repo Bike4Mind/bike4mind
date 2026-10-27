@@ -52,6 +52,18 @@ describe('UserDetails - MFA reset reason', () => {
     expect(screen.getByRole('button', { name: 'Generate API Key' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'View API Keys' })).toBeEnabled();
   });
+  it('gates Generate API Key on users:impersonate, the permission its route requires', () => {
+    h.permissions = ['support:read', 'settings:manage'];
+    const { unmount } = render(<UserDetails user={user} editedFields={{}} onFieldChange={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.getByRole('button', { name: 'Generate API Key' })).toBeDisabled();
+    unmount();
+
+    h.permissions = ['support:read', 'users:impersonate'];
+    render(<UserDetails user={user} editedFields={{}} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
+    expect(screen.getByRole('button', { name: 'Generate API Key' })).toBeEnabled();
+  });
   it('requires a valid reason and sends it with the reset request', () => {
     h.permissions = ['settings:manage'];
     render(<UserDetails user={user} editedFields={{}} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });

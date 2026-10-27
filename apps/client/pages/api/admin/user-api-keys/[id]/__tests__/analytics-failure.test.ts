@@ -58,7 +58,9 @@ vi.mock('@bike4mind/services', () => ({
   },
   counterService: { incrementUserCounter },
 }));
+const findUserById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({
+  userRepository: { findById: findUserById },
   mongoose: {},
   Ability: class {},
   User: {},
@@ -85,6 +87,7 @@ describe('admin user-api-keys/[id] levers - failed analytics write', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     findById.mockResolvedValue(storedKey);
+    findUserById.mockResolvedValue(null);
   });
 
   it('PATCH rate-limit still answers 200 when the counter write throws', async () => {

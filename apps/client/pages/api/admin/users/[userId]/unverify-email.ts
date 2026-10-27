@@ -1,4 +1,4 @@
-import { canAccessAdmin } from '@bike4mind/common';
+import { assertCanActOnAdminTarget, canAccessAdmin } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -39,6 +39,7 @@ const handler = api.use(csrfProtection()).post(
       if (!user) {
         throw new BadRequestError('User not found');
       }
+      assertCanActOnAdminTarget(req.user, user, 'unverify the email of');
 
       // Check if already unverified
       if (!user.emailVerified) {

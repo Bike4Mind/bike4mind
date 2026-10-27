@@ -39,6 +39,8 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => 
 
 const findById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findById } }));
+const findUserById = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({ userRepository: { findById: findUserById } }));
 
 const updateApiKeyRateLimit = vi.hoisted(() =>
   vi.fn().mockResolvedValue({
@@ -61,6 +63,7 @@ import '@pages/api/admin/user-api-keys/[id]/rate-limit';
 
 const storedKey = { id: 'key-1', userId: 'owner-1', name: 'wedged key' };
 const admin = { id: 'admin-1', username: 'admin', isAdmin: true };
+const delegate = { id: 'del-1', username: 'del', isAdmin: false, adminPermissions: ['settings:manage'] };
 
 function patch(query: Record<string, unknown>, body: unknown, user?: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'PATCH', query, body });
@@ -74,6 +77,7 @@ describe('PATCH /api/admin/user-api-keys/[id]/rate-limit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     findById.mockResolvedValue(storedKey);
+    findUserById.mockResolvedValue({ id: 'owner-1', username: 'owner' });
     updateApiKeyRateLimit.mockResolvedValue({
       id: 'key-1',
       name: 'wedged key',
@@ -185,5 +189,38 @@ describe('PATCH /api/admin/user-api-keys/[id]/rate-limit', () => {
   it('registers PATCH only, so next-connect 405s every other verb', () => {
     expect(mockRefs.patchHandler).not.toBeNull();
     expect(mockRefs.otherVerbs).toEqual([]);
+  });
+
+  it('refuses a delegated operator on a key owned by a user with admin access, without writing or auditing', async () => {
+    findUserById.mockResolvedValue({ id: 'owner-1', adminPermissions: ['support:read'] });
+    const { req, res } = patch({ id: 'key-1' }, { requestsPerMinute: 600 }, delegate);
+
+    await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow(
+      /Only full administrators can change API key rate limits of users with admin access/
+    );
+
+    expect(findUserById).toHaveBeenCalledWith('owner-1');
+    expect(updateApiKeyRateLimit).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin update a key owned by a user with admin access', async () => {
+    findUserById.mockResolvedValue({ id: 'owner-1', adminPermissions: ['support:read'] });
+    const { req, res } = patch({ id: 'key-1' }, { requestsPerMinute: 600 }, admin);
+
+    await mockRefs.patchHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(updateApiKeyRateLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it('still lets a delegate update an orphaned key whose owner no longer exists', async () => {
+    findUserById.mockResolvedValue(null);
+    const { req, res } = patch({ id: 'key-1' }, { requestsPerMinute: 600 }, delegate);
+
+    await mockRefs.patchHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(updateApiKeyRateLimit).toHaveBeenCalledTimes(1);
   });
 });

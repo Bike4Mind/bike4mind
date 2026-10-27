@@ -54,17 +54,20 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow('read', CounterLog);
     }
 
-    if (user.isAdmin) {
-      allow('create', AdminSettings);
-      allow('read', AdminSettings);
-      allow('update', AdminSettings);
-      allow('delete', AdminSettings);
-
+    // The Modals admin tab is gated on settings:manage (adminTabRenderability.ts), so its CRUD must be too.
+    if (hasAdminPermission(user, 'settings:manage')) {
       allow('create', ModalModel);
       allow('update', ModalModel);
       allow('delete', ModalModel);
       allow('manage', ModalModel); // Full management permissions for modal tool
       allow('manage', 'Modal'); // Allow the modal-tool API to check this permission
+    }
+
+    if (user.isAdmin) {
+      allow('create', AdminSettings);
+      allow('read', AdminSettings);
+      allow('update', AdminSettings);
+      allow('delete', AdminSettings);
 
       allow('read', Organization);
       allow('update', Organization);

@@ -4,6 +4,7 @@ import {
   BULK_ABUSE_SAMPLE_SIZE,
   CreditHolderType,
   MAX_BULK_ABUSE_BATCH,
+  canAccessAdmin,
   ORG_MEMBERSHIP_ACL_PERMISSIONS,
   isEmailInDomains,
   normalizeEmailDomain,
@@ -86,7 +87,8 @@ const DOT_CLASS = '[.\u3002\uff0e\uff61]';
 
 function exclusionFor(user: IUser, actorId: string): BulkAbuseExclusionReason | null {
   if (user.id === actorId) return 'self';
-  if (user.isAdmin) return 'admin';
+  // Any admin access, delegated included: a users:moderate operator must not bulk-ban a peer.
+  if (canAccessAdmin(user)) return 'admin';
   if (user.isSystem) return 'system';
   return isPaidAccount(user) ? 'paid' : null;
 }

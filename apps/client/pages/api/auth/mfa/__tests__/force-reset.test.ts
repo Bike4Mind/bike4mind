@@ -176,6 +176,17 @@ describe('POST /api/auth/mfa/force-reset', () => {
     expect(mockRecord).not.toHaveBeenCalled();
   });
 
+  it('propagates a refused admin target as a 403 instead of turning it into a 400', async () => {
+    mockForceResetMFA.mockRejectedValue(
+      new ForbiddenError('Only full administrators can reset MFA of users with admin access')
+    );
+    const { res, run } = post({ userId: 'target1', reason: REASON });
+
+    await expect(run()).rejects.toMatchObject({ statusCode: 403 });
+    expect(res._getStatusCode()).not.toBe(400);
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
   it('propagates an audit write failure instead of turning it into a 400', async () => {
     mockRecord.mockRejectedValue(new Error('audit down'));
     const { res, run } = post({ userId: 'target1', reason: REASON });

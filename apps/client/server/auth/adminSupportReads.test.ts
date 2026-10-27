@@ -65,6 +65,7 @@ vi.mock('@server/models/Subscription', () => ({ Subscription: class Subscription
 vi.mock('@bike4mind/services', () => ({
   organizationService: { search: queries.organizations, create: queries.createOrganization },
 }));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn(async () => null) }));
 vi.mock('@server/users/sharedWorkspaceUserIds', () => ({ findSharedWorkspaceUserIds: vi.fn() }));
 vi.mock('@server/users/pendingProjectInviteeIds', () => ({ findPendingProjectInviteeIds: vi.fn() }));
 import defineAbilitiesFor from './ability';

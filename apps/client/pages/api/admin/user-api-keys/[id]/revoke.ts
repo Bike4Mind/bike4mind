@@ -1,5 +1,10 @@
-import { ApiKeyStatus, BadRequestError, NotFoundError } from '@bike4mind/common';
-import { realtimeConnectionRepository, userApiKeyRepository, withTransaction } from '@bike4mind/database';
+import { ApiKeyStatus, BadRequestError, NotFoundError, assertCanActOnAdminTarget } from '@bike4mind/common';
+import {
+  realtimeConnectionRepository,
+  userApiKeyRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -13,6 +18,8 @@ const handler = api.post(async (req, res) => {
   const canonicalKeyId = await withTransaction(async () => {
     const key = await userApiKeyRepository.findById(id);
     if (!key) throw new NotFoundError('API key not found');
+    // An orphaned key (owner deleted) has no admin access to protect, so it stays revocable.
+    assertCanActOnAdminTarget(req.user, await userRepository.findById(key.userId), 'revoke API keys of');
     if (key.status === ApiKeyStatus.DISABLED) return key.id;
 
     await userApiKeyRepository.revokeIfNotDisabled(key.id, req.user.id, reason);
