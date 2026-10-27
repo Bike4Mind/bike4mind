@@ -58,6 +58,8 @@ import type { McpMutationResult, McpServerInput, McpServersState } from '@shared
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
+import { LocalContextPreference } from './LocalContextPreference';
+import { localContextSizing } from './localContextSizing';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
@@ -87,7 +89,7 @@ import { SessionStore } from './SessionStore';
 import { LocalHistory } from './LocalHistory';
 import { registerHistoryIpc } from './historyIpc';
 import { captureHistoryPage } from './captureHistoryPage';
-import { OllamaLocal } from './OllamaLocal';
+import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -418,7 +420,11 @@ export function registerChat(
     writeClipboard: text => clipboard.writeText(text),
     logger,
   });
-  const local = new OllamaLocal((url, init) => net.fetch(url, init));
+  const localContext = new LocalContextPreference(join(userData, 'local-context.json'));
+  const local = new OllamaLocal(
+    (url, init) => net.fetch(url, init),
+    localContextSizing({ setting: () => localContext.read() })
+  );
   const models = new ModelCatalog(
     {
       logger,
@@ -596,6 +602,12 @@ export function registerChat(
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
   ipcMain.handle(IPC_CHANNELS.chatListSuggestionModels, () => service.listSuggestionModels());
+  ipcMain.handle(IPC_CHANNELS.chatGetLocalContext, () => localContext.read());
+  ipcMain.handle(IPC_CHANNELS.chatSetLocalContext, async (_event, setting: unknown) => {
+    const saved = await localContext.record(setting);
+    forgetLocalContexts();
+    return saved;
+  });
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
     service.setSessionArchived(sessionId, archived)
   );

@@ -1,4 +1,5 @@
 /** Context sizing and history fitting for local Ollama chat requests. */
+import { estimateFit, type FitInput, type HardwareProfile, type ModelArch } from '@bike4mind/common';
 import { estimateTextTokens } from '@shared/contextLimit';
 
 export interface OllamaMessage {
@@ -37,13 +38,70 @@ const SUMMARY_OVERHEAD_TOKENS = 1_024;
 const TRANSCRIPT_CHARS_PER_TOKEN = 3;
 const RETRY_MARGIN = 0.9;
 
+/** A context grown for one long prompt is rounded up to this, so the next long prompt rarely reloads. */
+const GROWTH_STEP_TOKENS = 4_096;
+
 /**
  * The num_ctx for every request to a model; Ollama reloads the model whenever it changes.
- * The Model Hub fit estimator is meant to replace the fixed target with a memory-aware one.
+ * `fromMemory` (memoryContextTokens) replaces the Modelfile's num_ctx, which can be the whole trained
+ * length; neither goes below the target, which Desktop's own instructions need.
  */
-export function localContextTokens(modelLimit: number | undefined, configured: number | undefined): number {
-  const wanted = Math.max(configured ?? 0, LOCAL_CONTEXT_TARGET_TOKENS);
+export function localContextTokens(
+  modelLimit: number | undefined,
+  configured: number | undefined,
+  fromMemory?: number
+): number {
+  const wanted = Math.max(fromMemory ?? configured ?? 0, LOCAL_CONTEXT_TARGET_TOKENS);
   return modelLimit === undefined ? wanted : Math.min(wanted, modelLimit);
+}
+
+/** What the Model Hub fit estimator needs to size a local model's context; any of it may be unknown. */
+export interface LocalModelFootprint {
+  arch: ModelArch | null;
+  /** The model's files as Ollama lists them, projector included. */
+  weightsBytes: number | null;
+  hardware: HardwareProfile | null;
+}
+
+function fitInput({ arch, weightsBytes, hardware }: LocalModelFootprint): Omit<FitInput, 'context'> | null {
+  if (!arch || !weightsBytes || !hardware?.totalMemoryBytes) return null;
+  // Ollama's KV cache type and flash attention are daemon-wide settings Desktop cannot read, so the
+  // estimate assumes its defaults; a quantized cache only makes the real footprint smaller.
+  return { model: { arch, weightsBytes }, hardware, mode: 'chat', runtime: { kind: 'ollama' } };
+}
+
+/**
+ * The largest context, up to the estimator's chat target and the model's trained length, that this
+ * machine's memory holds for the model, or its smallest preset when nothing fits. Undefined when the
+ * estimator cannot size the model.
+ */
+export function memoryContextTokens(footprint: LocalModelFootprint): number | undefined {
+  const input = fitInput(footprint);
+  return input ? estimateFit(input).context : undefined;
+}
+
+/** Undefined when the estimator cannot size the model. */
+export function fitsInMemory(footprint: LocalModelFootprint, context: number): boolean | undefined {
+  const input = fitInput(footprint);
+  if (!input) return undefined;
+  if (!Number.isInteger(context) || context < 1 || context > input.model.arch.contextMax) return false;
+  return estimateFit({ ...input, context }).requested?.fits === true;
+}
+
+/**
+ * The context a prompt Ollama measured at `measured` tokens needs, with the reply room fitToContext
+ * reserves; undefined when the model's trained length cannot hold it.
+ */
+export function grownContextTokens(
+  measured: number,
+  maxTokens: number | undefined,
+  modelLimit: number | undefined
+): number | undefined {
+  const reply = maxTokens ?? OUTPUT_RESERVE_TOKENS;
+  const needed = Math.min(measured + reply, Math.ceil((measured * 4) / 3));
+  const wanted = Math.ceil(needed / GROWTH_STEP_TOKENS) * GROWTH_STEP_TOKENS;
+  const context = modelLimit === undefined ? wanted : Math.min(wanted, modelLimit);
+  return context - Math.min(reply, Math.floor(context / 4)) >= measured ? context : undefined;
 }
 
 export function estimateTokens(messages: readonly OllamaMessage[], tools: readonly unknown[] = []): number {

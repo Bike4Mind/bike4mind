@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import type { HardwareProfile, ModelArch } from '@bike4mind/common';
 import {
   estimateTokens,
+  fitsInMemory,
   fitToContext,
+  grownContextTokens,
   LOCAL_CONTEXT_TARGET_TOKENS,
   localContextTokens,
   localTranscriptChars,
+  memoryContextTokens,
   overflowTokens,
   shrunkTranscriptChars,
+  type LocalModelFootprint,
   type OllamaMessage,
 } from './localContext';
 
@@ -168,6 +173,105 @@ describe('localTranscriptChars', () => {
 
   it('never goes below a quarter of the window', () => {
     expect(localTranscriptChars(2048, 1536)).toBe(512 * 3);
+  });
+});
+
+const GIB = 1024 ** 3;
+// Shaped like an 8B GQA model (32 layers, 8 KV heads of 128) at Q4, and qwen2.5:0.5b as Ollama reports it.
+const eightB: ModelArch = {
+  contextMax: 131072,
+  blockCount: 32,
+  headCount: 32,
+  full: { layers: 32, kvHeads: 8, keyLength: 128, valueLength: 128 },
+  mtpLayers: 0,
+};
+const qwenHalfB: ModelArch = {
+  contextMax: 32768,
+  blockCount: 24,
+  headCount: 14,
+  full: { layers: 24, kvHeads: 2, keyLength: 64, valueLength: 64 },
+  mtpLayers: 0,
+};
+const cpuMachine = (gib: number): HardwareProfile => ({
+  platform: 'linux',
+  arch: 'x64',
+  memoryKind: 'cpu',
+  totalMemoryBytes: gib * GIB,
+  gpuMemoryBytes: null,
+  gpuName: null,
+  gpuCount: 0,
+  chip: null,
+  diskFreeBytes: null,
+  confidence: 'high',
+});
+const eightBOn = (gib: number): LocalModelFootprint => ({
+  arch: eightB,
+  weightsBytes: 4.9 * GIB,
+  hardware: cpuMachine(gib),
+});
+
+describe('memoryContextTokens', () => {
+  it.each([
+    { gib: 12, expected: 8192 },
+    { gib: 16, expected: 32768 },
+    // The estimator's chat target caps it below the model's trained 128K.
+    { gib: 32, expected: 65536 },
+    { gib: 4, expected: 8192 },
+  ])('sizes an 8B model on $gib GiB to $expected', ({ gib, expected }) => {
+    expect(memoryContextTokens(eightBOn(gib))).toBe(expected);
+  });
+
+  it("stops at the model's trained length", () => {
+    expect(memoryContextTokens({ arch: qwenHalfB, weightsBytes: 397_821_000, hardware: cpuMachine(64) })).toBe(32768);
+  });
+
+  it.each([
+    { arch: null, weightsBytes: 4.9 * GIB, hardware: cpuMachine(32) },
+    { arch: eightB, weightsBytes: null, hardware: cpuMachine(32) },
+    { arch: eightB, weightsBytes: 4.9 * GIB, hardware: null },
+    { arch: eightB, weightsBytes: 4.9 * GIB, hardware: cpuMachine(0) },
+  ])('cannot say without the model shape, its size and the machine', footprint => {
+    expect(memoryContextTokens(footprint)).toBeUndefined();
+    expect(fitsInMemory(footprint, 16384)).toBeUndefined();
+  });
+
+  it('never takes the context below the 16K Desktop needs', () => {
+    expect(localContextTokens(eightB.contextMax, undefined, memoryContextTokens(eightBOn(12)))).toBe(16384);
+    expect(localContextTokens(eightB.contextMax, undefined, memoryContextTokens(eightBOn(4)))).toBe(16384);
+    expect(localContextTokens(eightB.contextMax, undefined, memoryContextTokens(eightBOn(32)))).toBe(65536);
+  });
+
+  it('puts the memory estimate in place of a Modelfile num_ctx, which may be the whole trained length', () => {
+    expect(localContextTokens(262144, 262144, 65536)).toBe(65536);
+    expect(localContextTokens(262144, 4096, 32768)).toBe(32768);
+    expect(localContextTokens(262144, 262144, undefined)).toBe(262144);
+  });
+});
+
+describe('fitsInMemory', () => {
+  it('checks one context against the estimate', () => {
+    expect(fitsInMemory(eightBOn(16), 20480)).toBe(true);
+    expect(fitsInMemory(eightBOn(16), 40960)).toBe(false);
+    expect(fitsInMemory(eightBOn(64), 262144)).toBe(false);
+  });
+});
+
+describe('grownContextTokens', () => {
+  it.each([
+    { measured: 10_569, maxTokens: undefined, limit: 32768, expected: 16384 },
+    { measured: 30_000, maxTokens: undefined, limit: 131072, expected: 32768 },
+    { measured: 3_000, maxTokens: 8192, limit: undefined, expected: 4096 },
+    { measured: 31_000, maxTokens: undefined, limit: 32768, expected: undefined },
+  ])('grows to $expected for $measured tokens within $limit', ({ measured, maxTokens, limit, expected }) => {
+    expect(grownContextTokens(measured, maxTokens, limit)).toBe(expected);
+  });
+
+  it('leaves the reply the room fitToContext reserves', () => {
+    for (const measured of [5_000, 17_000, 40_000, 70_001]) {
+      const grown = grownContextTokens(measured, undefined, undefined) ?? 0;
+      expect(grown % 4096).toBe(0);
+      expect(grown - Math.min(2048, Math.floor(grown / 4))).toBeGreaterThanOrEqual(measured);
+    }
   });
 });
 

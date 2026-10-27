@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { HardwareProfile, ModelArch } from '@bike4mind/common';
+import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import type { CompletionMessage } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
-import { OllamaLocal } from './OllamaLocal';
+import { forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
 
 describe('OllamaLocal', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    forgetLocalContexts();
   });
 
   it.each(['gpt-4', 'local:lmstudio:x', 'local:', 'local:ollama', 'local:ollama:', 'local::x'])(
@@ -530,6 +533,164 @@ describe('OllamaLocal', () => {
     await expect(
       new OllamaLocal().stream({ model: 'local:ollama:llama', messages: [] }, () => undefined)
     ).rejects.toThrow('Ollama returned HTTP 404.');
+  });
+});
+
+describe('OllamaLocal context sizing', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    forgetLocalContexts();
+  });
+
+  const GIB = 1024 ** 3;
+  const eightB: ModelArch = {
+    contextMax: 131072,
+    blockCount: 32,
+    headCount: 32,
+    full: { layers: 32, kvHeads: 8, keyLength: 128, valueLength: 128 },
+    mtpLayers: 0,
+  };
+  const cpu = (gib: number): HardwareProfile => ({
+    platform: 'linux',
+    arch: 'x64',
+    memoryKind: 'cpu',
+    totalMemoryBytes: gib * GIB,
+    gpuMemoryBytes: null,
+    gpuName: null,
+    gpuCount: 0,
+    chip: null,
+    diskFreeBytes: null,
+    confidence: 'high',
+  });
+  const sizing = (setting: LocalContextSetting, gib: number | null): LocalContextSizing => ({
+    setting: async () => setting,
+    footprint: vi.fn(async () =>
+      gib === null
+        ? { arch: null, weightsBytes: null, hardware: null }
+        : { arch: eightB, weightsBytes: 4.9 * GIB, hardware: cpu(gib) }
+    ),
+  });
+  const overflow = (tokens: number) =>
+    Response.json(
+      { error: `request (${tokens} tokens) exceeds the available context size (4096 tokens), try increasing it` },
+      { status: 400 }
+    );
+  const done = () => new Response(`${JSON.stringify({ done: true })}\n`);
+  const ollama = (show: Record<string, unknown>, ...replies: (() => Response)[]) => {
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/tags')) return Response.json({ models: [{ name: 'llama' }] });
+      if (url.endsWith('/api/show')) return Response.json({ capabilities: ['completion'], ...show });
+      return (replies.shift() ?? done)();
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return () =>
+      fetchMock.mock.calls
+        .filter(([input]) => String(input).endsWith('/api/chat'))
+        .map(([, init]) => (JSON.parse(String(init?.body)) as { options: { num_ctx: number } }).options.num_ctx);
+  };
+  const longTurn = {
+    model: 'local:ollama:llama',
+    messages: [
+      { role: 'system' as const, content: 'instructions' },
+      { role: 'user' as const, content: 'x'.repeat(200) },
+    ],
+  };
+  const trainedFor = (tokens: number) => ({ model_info: { 'llama.context_length': tokens } });
+
+  it.each([
+    { setting: AUTO_LOCAL_CONTEXT, gib: 32, show: trainedFor(131072), expected: 65536 },
+    { setting: AUTO_LOCAL_CONTEXT, gib: 16, show: trainedFor(131072), expected: 32768 },
+    { setting: AUTO_LOCAL_CONTEXT, gib: 12, show: trainedFor(131072), expected: 16384 },
+    { setting: AUTO_LOCAL_CONTEXT, gib: null, show: trainedFor(131072), expected: 16384 },
+    { setting: AUTO_LOCAL_CONTEXT, gib: 32, show: trainedFor(8192), expected: 8192 },
+    {
+      setting: AUTO_LOCAL_CONTEXT,
+      gib: 32,
+      show: { ...trainedFor(262144), parameters: 'num_ctx 262144' },
+      expected: 65536,
+    },
+    {
+      setting: AUTO_LOCAL_CONTEXT,
+      gib: 4,
+      show: { ...trainedFor(262144), parameters: 'num_ctx 262144' },
+      expected: 16384,
+    },
+    { setting: { mode: 'fixed', tokens: 32768 } as const, gib: 64, show: trainedFor(131072), expected: 32768 },
+    { setting: { mode: 'fixed', tokens: 262144 } as const, gib: 64, show: trainedFor(32768), expected: 32768 },
+    {
+      setting: { mode: 'fixed', tokens: 16384 } as const,
+      gib: 64,
+      show: { ...trainedFor(131072), parameters: 'num_ctx 65536' },
+      expected: 16384,
+    },
+  ])(
+    'advertises and sends one context: $setting.mode, $gib GiB -> $expected',
+    async ({ setting, gib, show, expected }) => {
+      const sent = ollama(show);
+      const local = new OllamaLocal(undefined, sizing(setting, gib));
+      expect((await local.models())[0].contextWindow).toBe(expected);
+      await local.stream(longTurn, () => undefined);
+      await local.stream(longTurn, () => undefined);
+      expect(sent()).toEqual([expected, expected]);
+      expect(await new OllamaLocal(undefined, sizing(setting, gib)).contextTokens('local:ollama:llama')).toBe(expected);
+    }
+  );
+
+  it('grows Auto for a prompt that needs more and keeps the larger context afterwards', async () => {
+    const sent = ollama(trainedFor(131072), () => overflow(70_000));
+    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 32));
+    const onTrimmed = vi.fn();
+    await local.stream(longTurn, () => undefined, undefined, onTrimmed);
+    await local.stream(longTurn, () => undefined);
+    expect(sent()).toEqual([65536, 73728, 73728]);
+    expect(onTrimmed).not.toHaveBeenCalled();
+    expect(await local.contextTokens('local:ollama:llama')).toBe(73728);
+
+    forgetLocalContexts();
+    await local.stream(longTurn, () => undefined);
+    expect(sent().at(-1)).toBe(65536);
+  });
+
+  it.each([
+    {
+      setting: AUTO_LOCAL_CONTEXT,
+      gib: 16,
+      show: trainedFor(131072),
+      measured: 36_000,
+      hint: "would not fit this computer's memory",
+    },
+    {
+      setting: AUTO_LOCAL_CONTEXT,
+      gib: 64,
+      show: trainedFor(32768),
+      measured: 31_000,
+      hint: 'the most this model supports',
+    },
+    {
+      setting: { mode: 'fixed', tokens: 16384 } as const,
+      gib: 64,
+      show: trainedFor(131072),
+      measured: 20_000,
+      hint: 'Settings can give local models a larger context',
+    },
+  ])(
+    'says why a prompt that does not fit was not given more room: $hint',
+    async ({ setting, gib, show, measured, hint }) => {
+      const sent = ollama(show, () => overflow(measured));
+      await expect(new OllamaLocal(undefined, sizing(setting, gib)).stream(longTurn, () => undefined)).rejects.toThrow(
+        hint
+      );
+      expect(sent()).toHaveLength(1);
+    }
+  );
+
+  it('does not grow when the estimator cannot size the model', async () => {
+    const sent = ollama(trainedFor(131072), () => overflow(20_000));
+    await expect(
+      new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, null)).stream(longTurn, () => undefined)
+    ).rejects.toThrow(/more than the 16384 this model is run with\.$/);
+    expect(sent()).toEqual([16384]);
   });
 });
 

@@ -1,13 +1,18 @@
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
 import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
+import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import type { CompletionMessage, CompletionRequest } from './completions';
 import {
   ContextOverflowError,
   estimateTokens,
   fitToContext,
+  fitsInMemory,
+  grownContextTokens,
   localContextTokens,
+  memoryContextTokens,
   overflowTokens,
+  type LocalModelFootprint,
   type OllamaMessage,
 } from './localContext';
 import type { CompletionStreamEvent } from './streamEvents';
@@ -42,6 +47,15 @@ const CHAT_URL = `${OLLAMA_URL}/api/chat` as const;
 /** Typed to the chat URL alone, so the 1 s calls in json() cannot be routed through it. */
 export type ChatFetch = (url: typeof CHAT_URL, init: RequestInit) => Promise<Response>;
 
+/** Without one, every model runs at the fixed default of localContextTokens. */
+export interface LocalContextSizing {
+  setting(): Promise<LocalContextSetting>;
+  /** By Ollama model name; fields it cannot measure are null. */
+  footprint(model: string): Promise<LocalModelFootprint>;
+}
+
+type Inspection = z.infer<typeof showSchema>;
+
 export class OllamaLocal {
   /**
    * Main passes Electron's net.fetch: Node's fetch gives up after five minutes without response
@@ -49,7 +63,10 @@ export class OllamaLocal {
    * Only chat uses it: Chromium allows 6 sockets per host and each open stream holds one, so the
    * short calls stay on Node's fetch, which a full pool cannot starve.
    */
-  constructor(private readonly chatFetch: ChatFetch = (url, init) => globalThis.fetch(url, init)) {}
+  constructor(
+    private readonly chatFetch: ChatFetch = (url, init) => globalThis.fetch(url, init),
+    private readonly sizing?: LocalContextSizing
+  ) {}
 
   async models(): Promise<ChatModelOption[]> {
     const tags = tagsSchema.safeParse(await this.json('/api/tags').catch(() => null));
@@ -67,7 +84,7 @@ export class OllamaLocal {
     const known = contextByModel.get(modelId);
     if (known !== undefined) return known;
     const name = ollamaModelName(modelId);
-    return rememberContext(modelId, showSchema.parse(await this.json('/api/show', { name }, signal)));
+    return this.resolveContext(modelId, showSchema.parse(await this.json('/api/show', { name }, signal)));
   }
 
   async stream(
@@ -83,7 +100,7 @@ export class OllamaLocal {
     // Inspect again before sending private messages, even when discovery was cached.
     if (usesRemoteModel(inspection)) throw new Error('Cloud-backed Ollama models cannot be used as local models.');
     if (!inspection.capabilities.includes('completion')) throw new Error('This Ollama model cannot answer chat.');
-    const numCtx = rememberContext(request.model, inspection);
+    let numCtx = await this.resolveContext(request.model, inspection);
     const messages = toMessages(request.messages);
     const tools = (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
     const post = (fitted: OllamaMessage[]) =>
@@ -115,6 +132,16 @@ export class OllamaLocal {
     let sent = messages;
     let response = await post(sent);
     let measured = await refusedSize(response);
+    let hint = '';
+    if (measured !== undefined) {
+      const growth = await this.grow(request.model, inspection, measured, request.maxTokens, numCtx);
+      hint = growth.hint;
+      if (growth.tokens !== undefined) {
+        numCtx = growth.tokens;
+        response = await post(sent);
+        measured = await refusedSize(response);
+      }
+    }
     const whole = measured;
     let left = 0;
     for (let retry = 0; measured !== undefined; retry++) {
@@ -122,7 +149,7 @@ export class OllamaLocal {
       const fit = fitToContext(sent, tools, numCtx, request.maxTokens, (1.1 * measured) / estimateTokens(sent, tools));
       if (fit.dropped === 0)
         throw new ContextOverflowError(
-          `This turn and Desktop's instructions take ${measured} tokens, more than the ${numCtx} this model is run with.`,
+          `This turn and Desktop's instructions take ${measured} tokens, more than the ${numCtx} this model is run with.${hint}`,
           measured,
           numCtx
         );
@@ -175,6 +202,54 @@ export class OllamaLocal {
     }
   }
 
+  /**
+   * Fixed: the Settings size, within the model's trained length. Auto: what fits this machine's
+   * memory, or what a long prompt grew it to. The same inputs give the same figure every time, so
+   * a model is not reloaded between messages.
+   */
+  private async resolveContext(modelId: string, inspection: Inspection): Promise<number> {
+    const { limit, configured } = contextBounds(inspection);
+    const setting = (await this.sizing?.setting()) ?? AUTO_LOCAL_CONTEXT;
+    const tokens =
+      setting.mode === 'fixed'
+        ? Math.min(setting.tokens, limit ?? setting.tokens)
+        : Math.max(
+            localContextTokens(limit, configured, await this.memoryTokens(modelId)),
+            grownByModel.get(modelId) ?? 0
+          );
+    contextByModel.set(modelId, tokens);
+    return tokens;
+  }
+
+  private async memoryTokens(modelId: string): Promise<number | undefined> {
+    return this.sizing ? memoryContextTokens(await this.sizing.footprint(ollamaModelName(modelId))) : undefined;
+  }
+
+  /** Under Auto, the larger context a refused prompt needs when the model and memory hold it; else why not. */
+  private async grow(
+    modelId: string,
+    inspection: Inspection,
+    measured: number,
+    maxTokens: number | undefined,
+    current: number
+  ): Promise<{ tokens?: number; hint: string }> {
+    if (!this.sizing) return { hint: '' };
+    const setting = await this.sizing.setting();
+    const { limit } = contextBounds(inspection);
+    if (setting.mode === 'fixed')
+      return {
+        hint: limit === undefined || current < limit ? ' Settings can give local models a larger context.' : '',
+      };
+    const wanted = grownContextTokens(measured, maxTokens, limit);
+    if (wanted === undefined || wanted <= current) return { hint: ' That is the most this model supports.' };
+    const fits = fitsInMemory(await this.sizing.footprint(ollamaModelName(modelId)), wanted);
+    if (fits === undefined) return { hint: '' };
+    if (!fits) return { hint: " A larger context would not fit this computer's memory." };
+    grownByModel.set(modelId, wanted);
+    contextByModel.set(modelId, wanted);
+    return { tokens: wanted, hint: '' };
+  }
+
   private async model(name: string): Promise<ChatModelOption | null> {
     const show = showSchema.safeParse(await this.json('/api/show', { name }).catch(() => null));
     // Embedding-only models cannot answer /api/chat; failed inspection is not a plain-text capability.
@@ -187,7 +262,7 @@ export class OllamaLocal {
       backend: localBackend(OLLAMA_RUNTIME_ID),
       supportsTools: capabilities.includes('tools'),
       supportsVision: capabilities.includes('vision'),
-      contextWindow: rememberContext(id, show.data),
+      contextWindow: await this.resolveContext(id, show.data),
       ...(capabilities.includes('thinking') ? { thinkingToggle: true } : {}),
     };
   }
@@ -353,23 +428,25 @@ function ollamaModelName(modelId: string): string {
 
 // Module-wide so every OllamaLocal instance (catalog, chat, tests) reads the same figure.
 const contextByModel = new Map<string, number>();
+/** Contexts Auto grew for a long prompt, kept for the app run so the model is not reloaded back down. */
+const grownByModel = new Map<string, number>();
 
-function rememberContext(modelId: string, inspection: z.infer<typeof showSchema>): number {
-  const tokens = contextWindow(inspection);
-  contextByModel.set(modelId, tokens);
-  return tokens;
+/** After the Settings choice changes: every model is sized again on its next request. */
+export function forgetLocalContexts(): void {
+  contextByModel.clear();
+  grownByModel.clear();
 }
 
-/** Keep the advertised limit equal to the allocation every inference actually requests. */
-function contextWindow(inspection: z.infer<typeof showSchema>): number {
+/** The model's trained length and its Modelfile num_ctx, when they are valid counts. */
+function contextBounds(inspection: Inspection): { limit: number | undefined; configured: number | undefined } {
   const architectureLimit = Object.entries(inspection.model_info ?? {}).find(
     ([key, value]) => key.endsWith('.context_length') && positiveTokenCount(value) !== undefined
   )?.[1];
   const configured = /^num_ctx[ \t]+(\S+)[ \t]*$/m.exec(inspection.parameters ?? '')?.[1];
-  return localContextTokens(
-    positiveTokenCount(architectureLimit),
-    positiveTokenCount(configured === undefined ? undefined : Number(configured))
-  );
+  return {
+    limit: positiveTokenCount(architectureLimit),
+    configured: positiveTokenCount(configured === undefined ? undefined : Number(configured)),
+  };
 }
 
 function positiveTokenCount(value: unknown): number | undefined {

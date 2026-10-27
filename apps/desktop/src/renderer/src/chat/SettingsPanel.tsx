@@ -18,6 +18,8 @@ import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './ClaudeImportSettings';
+import type { LocalContextSetting } from '@shared/localContextSetting';
+import { LocalContextSettings, localContextSummary, useLocalContextSetting } from './LocalContextSettings';
 import { LocalHistorySettings } from './LocalHistorySettings';
 import { EntrySection, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
 import {
@@ -138,6 +140,20 @@ function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => vo
         slotProps={{ input: { 'aria-label': 'Show dollar costs', 'data-testid': 'settings-dollar-costs-switch' } }}
       />
     ),
+  };
+}
+
+function localContextEntry(
+  setting: LocalContextSetting | null,
+  onChange: (setting: LocalContextSetting) => void,
+  error: string | null
+): ConfigEntry {
+  return {
+    id: 'local-context',
+    icon: <SlidersIcon />,
+    label: 'Local model context',
+    summary: localContextSummary(setting),
+    control: <LocalContextSettings setting={setting} onChange={onChange} error={error} />,
   };
 }
 
@@ -265,12 +281,14 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
   const [permissions, setPermissions, permissionsError, retryPermissions] = usePermissions();
   const [claudeImport, setClaudeImport, importError, retryImport] = useClaudeImport();
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
+  const [localContext, setLocalContext, localContextError] = useLocalContextSetting();
 
   return {
     general: [
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      localContextEntry(localContext, next => void setLocalContext(next), localContextError),
       localHistoryEntry(),
       ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),
