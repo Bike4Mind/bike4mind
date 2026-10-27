@@ -27,6 +27,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import {
   createModelAdmission as createSharedModelAdmission,
+  loadFreeTierAllowedModels,
   loadModelConfigurations,
   type ModelAdmission,
 } from '@bike4mind/services/llm/modelAdmission';
@@ -58,16 +59,17 @@ export type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] 
  * b4m-core/services/src/llm/modelAdmission.ts (shared with ChatCompletionInvoke, the fallback chain,
  * executeCompletion and the agent executor). Pass the resolved catalog so a disabled model, or an
  * unpriced text model while credits are enforced, is refused too. `systemModel` skips the per-user
- * picker access rules for a model the platform chose (the operations model, a fixed default).
+ * picker access rules and the free-tier gate for a model the platform chose (the operations model, a fixed default).
  */
 export async function createModelAdmission(
   user: IUserDocument,
   models?: ModelInfo[],
   systemModel = false
 ): Promise<ModelAdmission> {
-  const [configs, enforceCredits] = await Promise.all([
+  const [configs, enforceCredits, freeTierAllowedModels] = await Promise.all([
     systemModel ? [] : loadModelConfigurations(adminSettingsRepository),
     isCreditsEnforced(),
+    systemModel ? undefined : loadFreeTierAllowedModels(adminSettingsRepository),
   ]);
   return createSharedModelAdmission({
     user,
@@ -75,6 +77,7 @@ export async function createModelAdmission(
     getEntitlements: () => getUserEntitlements(user),
     models,
     enforceCredits,
+    freeTierAllowedModels,
   });
 }
 

@@ -18,6 +18,7 @@ import type {
 import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
 import type { CreatedSession } from '@shared/ipc';
+import type { ModelRuntimeStatus } from '@shared/models';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
 import { addDirPath } from './commands';
@@ -276,7 +277,12 @@ export interface ModelCatalogController {
   error: string | null;
   /** Refetch, bypassing main's cache. */
   reload: () => Promise<void>;
+  /** Local mode only: whether Ollama answers, read with each list. Null until the first answer. */
+  runtime?: ModelRuntimeStatus | null;
 }
+
+/** How often local mode checks that Ollama still answers (one cheap request) while the window is visible. */
+export const LOCAL_STATUS_POLL_MS = 5_000;
 
 /**
  * The models this server offers, refetched when the environment changes.
@@ -284,19 +290,57 @@ export interface ModelCatalogController {
  * Auth state is the trigger rather than a timer: switching hosted -> self-host changes which
  * providers have keys, so the previous server's list is not just stale but wrong, and leaving
  * it on screen would offer models this deployment will reject.
+ *
+ * `local` (signed out, device models only) also polls Ollama's status, because it starting,
+ * stopping or gaining a model raises no event. The list is reread only when reachability changes
+ * or while it is empty.
  */
-export function useModelCatalog(): ModelCatalogController {
+export function useModelCatalog(local = false): ModelCatalogController {
   const [models, setModels] = useState<ChatModelOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<ModelRuntimeStatus | null>(null);
+  const latestLoad = useRef(0);
+  const seen = useRef({ empty: true, reachable: null as boolean | null });
+  seen.current = { empty: models.length === 0, reachable: runtime?.reachable ?? null };
 
-  const load = useCallback(async (force: boolean) => {
-    setLoading(true);
-    const catalog = await window.b4m.chat.listModels(force);
-    setModels(catalog.models);
-    setError(catalog.error ?? null);
-    setLoading(false);
-  }, []);
+  const load = useCallback(
+    async (force: boolean, quiet = false) => {
+      const mine = ++latestLoad.current;
+      if (!quiet) setLoading(true);
+      const [catalog, status] = await Promise.all([
+        window.b4m.chat.listModels(force),
+        local ? window.b4m.models.getStatus().catch(() => null) : null,
+      ]);
+      // A slower, older response must not overwrite a newer one.
+      if (mine !== latestLoad.current) return;
+      setModels(catalog.models);
+      setError(catalog.error ?? null);
+      setRuntime(status);
+      setLoading(false);
+    },
+    [local]
+  );
+
+  useEffect(() => {
+    if (!local) return;
+    const check = async () => {
+      if (document.hidden) return;
+      const status = await window.b4m.models.getStatus().catch(() => null);
+      if (!status) return;
+      const { empty, reachable } = seen.current;
+      if (status.reachable !== reachable || (status.reachable && empty)) await load(true, true);
+    };
+    const tick = () => void check();
+    const timer = setInterval(tick, LOCAL_STATUS_POLL_MS);
+    window.addEventListener('focus', tick);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', tick);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [local, load]);
 
   useEffect(() => {
     void load(false);
@@ -317,7 +361,7 @@ export function useModelCatalog(): ModelCatalogController {
 
   const reload = useCallback(() => load(true), [load]);
 
-  return { models, loading, error, reload };
+  return { models, loading, error, reload, runtime };
 }
 
 export interface ProjectBindingError {
@@ -364,7 +408,10 @@ export interface ConversationController {
   /** One-shot message about something main changed while accepting a turn. Not a failure. */
   notice: string | null;
   dismissNotice: () => void;
-  send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<void>;
+  /** False when main refused the turn; the text is already back in the composer. */
+  send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<boolean>;
+  /** Device-local: move a conversation whose model is not installed to the one a send would use. */
+  settleLocalModel: () => Promise<void>;
   stop: () => void;
   /** Resume the last reply if the agent loop's budget cut it short. */
   continueReply: () => Promise<void>;
@@ -777,11 +824,11 @@ export function useConversation(
 
   const sessionProject = session?.project;
   const send = useCallback(
-    async (text: string, attachments: readonly ChatAttachment[] = []) => {
-      if (!sessionId) return;
+    async (text: string, attachments: readonly ChatAttachment[] = []): Promise<boolean> => {
+      if (!sessionId) return true;
       const prompt = text.trim();
       // An attachment on its own is a turn; only a turn with neither is not.
-      if (!prompt && attachments.length === 0) return;
+      if (!prompt && attachments.length === 0) return true;
 
       transcriptVersion.current++;
       setSendError(null);
@@ -830,12 +877,18 @@ export function useConversation(
       if (!result.ok) {
         discardOptimistic();
         setSendError(result.error);
-        return;
+        // The box was cleared on send; a refused turn must not cost the user what they typed.
+        if (prompt)
+          setReturned({
+            id: ++returnBatch.current,
+            messages: [{ id: 'refused', sessionId, text: prompt, queuedAt: new Date().toISOString() }],
+          });
+        return false;
       }
       // It queued after all: the pending row above the composer is where it lives now.
       if (result.queued) {
         discardOptimistic();
-        return;
+        return true;
       }
       if (result.notice) setNotice(result.notice);
       // It went out although this window thought a reply was running - the turn that was
@@ -859,6 +912,7 @@ export function useConversation(
         const { messages: _messages, spawnSuggestions: _suggestions, ...rest } = summary;
         onSummaryChanged({ ...rest, messageCount: summary.messages.length });
       }
+      return true;
     },
     [sessionId, streaming, preparing, sessionProject, onSummaryChanged]
   );
@@ -1004,6 +1058,15 @@ export function useConversation(
     },
     [sessionId, onSummaryChanged]
   );
+
+  const settleLocalModel = useCallback(async () => {
+    if (!sessionId) return;
+    const settled = await window.b4m.chat.settleLocalModel(sessionId);
+    if (!settled || activeSessionId.current !== sessionId) return;
+    if (settled.notice) setNotice(settled.notice);
+    setSession(current => (current?.id === sessionId ? { ...current, model: settled.session.model } : current));
+    onSummaryChanged(settled.session);
+  }, [sessionId, onSummaryChanged]);
 
   const setHistory = useCallback(
     async (enabled: boolean) => {
@@ -1204,6 +1267,7 @@ export function useConversation(
     settledTurns,
     rename,
     setModel,
+    settleLocalModel,
     setReasoningEffort,
     setApprovalMode,
     project,

@@ -3,6 +3,12 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 // Mirrors ChatCompletionInvokeRetryBinding.test.ts: only the two out-of-process collaborators are
 // mocked, so the error classes and guards under test stay real.
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('../apiKeyService', () => ({
   getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}),
 }));

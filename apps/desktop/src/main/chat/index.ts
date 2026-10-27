@@ -518,6 +518,8 @@ export function registerChat(
     output: (sessionId, processId, stream, text) =>
       broadcast({ type: 'background-output', sessionId, processId, stream, text }),
     status: (sessionId, process) => broadcast({ type: 'background-status', sessionId, process }),
+    // Only ever fires once a process has run, long after `service` below exists.
+    exited: (sessionId, processId) => service.backgroundExited(sessionId, processId),
   });
 
   // safeStorage for the same reason as the auth vault: an env variable holding an API key and a
@@ -578,6 +580,7 @@ export function registerChat(
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
     protectedPaths: [userData],
     getApiClient: () => auth.getApiClient(),
+    isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
     getEnvironmentUrl: () => auth.getState().environment.url,
     emit: event => {
       broadcast(event);
@@ -642,6 +645,9 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.skillMarketOpenSource, (_event, url: string) => skillMarket.openSourceUrl(url));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatSettleLocalModel, (_event, sessionId: string) =>
+    service.settleSessionModel(sessionId)
   );
   registerHistoryIpc(ipcMain, service, history);
   // Validated here rather than trusted, like the approval mode below: an unrecognised value

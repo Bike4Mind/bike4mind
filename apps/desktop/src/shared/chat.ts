@@ -621,18 +621,27 @@ export interface ChatRelayOrigin {
 }
 
 /**
- * A turn the APP started on the user's standing instruction rather than anyone typing it: today
- * only auto-fix on a pull request (see main/pr/autoFix.ts). Carried on the queue entry and on
- * the message it becomes, so the thread can say who started it and a guard can hold the turn to
- * the rules the user agreed to (no force-push, no merge).
+ * A turn the APP started rather than anyone typing it. Carried on the queue entry and on the
+ * message it becomes, so the thread can say who started it.
+ *
+ * 'auto-fix' runs on the user's standing instruction for a pull request (see main/pr/autoFix.ts),
+ * and a guard holds it to the rules they agreed to (no force-push, no merge). 'background-exit'
+ * tells the model a background command it started has ended (see main/chat/backgroundWake.ts).
  */
-export interface ChatAutomaticOrigin {
-  kind: 'auto-fix';
-  prUrl: string;
-  prNumber: number;
-  /** One line for the thread's collapsed row, e.g. "2 failing checks on #611". */
-  summary: string;
-}
+export type ChatAutomaticOrigin =
+  | {
+      kind: 'auto-fix';
+      prUrl: string;
+      prNumber: number;
+      /** One line for the thread's collapsed row, e.g. "2 failing checks on #611". */
+      summary: string;
+    }
+  | {
+      kind: 'background-exit';
+      processIds: string[];
+      /** One line for the thread's collapsed row, e.g. "[a1b2c3d4] exited 0". */
+      summary: string;
+    };
 
 export interface ChatMessage {
   id: string;
@@ -845,6 +854,18 @@ export function isLocalBackend(model: { backend?: string }): boolean {
 
 export function localBackend(runtimeId: string): string {
   return `local-${runtimeId}`;
+}
+
+/**
+ * Held by a device-local conversation with no model to pick. Malformed on purpose: `isLocalModel`
+ * is true so it never goes hosted, `parseLocalModelId` is null so it names no model.
+ */
+export const NO_LOCAL_MODEL = 'local:';
+
+/** The device-local model a conversation moves to: the remembered pick if listed, else the first. */
+export function pickLocalModel(models: readonly { id: string }[], remembered?: string | null): string | null {
+  if (remembered && models.some(model => model.id === remembered)) return remembered;
+  return models[0]?.id ?? null;
 }
 
 /**
@@ -1335,7 +1356,7 @@ export interface ChatQueuedMessage {
    */
   relay?: ChatRelayOrigin;
   /**
-   * Set when the app queued this on its own (auto-fix). Like a relay it never merges, never
+   * Set when the app queued this on its own (auto-fix, a background exit). Like a relay it never merges, never
    * goes back to the composer, and is not offered "send now".
    */
   automatic?: ChatAutomaticOrigin;

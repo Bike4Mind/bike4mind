@@ -1,4 +1,4 @@
-import { BedrockEmbeddingModel, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from '@bike4mind/common';
+import { BedrockEmbeddingModel, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from '../schemas/embedding';
 import { describe, expect, it } from 'vitest';
 import { planEmbeddingDimensions } from './planEmbeddingDimensions';
 

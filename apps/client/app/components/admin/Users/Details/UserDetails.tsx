@@ -7,28 +7,16 @@ import AdminApiKeysModal from './AdminApiKeysModal';
 import MFAStatusBadge from '../MFAStatusBadge';
 import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
-import { IUserDocument, isValidAdminActionReason } from '@bike4mind/common';
-import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
+import { IUserDocument } from '@bike4mind/common';
+import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
+import { ADMIN_REASON_PRESETS } from '@client/app/components/admin/shared/adminReason';
 import KeyIcon from '@mui/icons-material/Key';
 import CardGiftcardIcon from '@mui/icons-material/CardGiftcard';
 import SecurityIcon from '@mui/icons-material/Security';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import EmailIcon from '@mui/icons-material/Email';
-import {
-  Button,
-  Input,
-  Stack,
-  Tooltip,
-  Box,
-  Alert,
-  Typography,
-  Chip,
-  Modal,
-  ModalDialog,
-  ModalClose,
-  Switch,
-} from '@mui/joy';
+import { Button, Input, Stack, Tooltip, Box, Alert, Typography, Chip, Switch } from '@mui/joy';
 import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -47,7 +35,6 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   const [isGenerateApiKeyModalOpen, setIsGenerateApiKeyModalOpen] = useState(false);
   const [isApiKeysModalOpen, setIsApiKeysModalOpen] = useState(false);
   const [isMfaResetOpen, setIsMfaResetOpen] = useState(false);
-  const [mfaResetReason, setMfaResetReason] = useState('');
   // Server-confirmed value from the last toggle; overrides the prop until the refetch lands.
   const [apiKeyTrustOverride, setApiKeyTrustOverride] = useState<boolean | null>(null);
   const apiKeyTrustApproved = apiKeyTrustOverride ?? user.apiKeyTrustApproved === true;
@@ -151,19 +138,13 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
     onFieldChange('email', newEmail);
   };
 
-  const closeMfaReset = () => {
-    setIsMfaResetOpen(false);
-    setMfaResetReason('');
-  };
+  const closeMfaReset = () => setIsMfaResetOpen(false);
 
-  const handleResetMFA = () => {
-    setMfaResetReason('');
-    setIsMfaResetOpen(true);
-  };
+  const handleResetMFA = () => setIsMfaResetOpen(true);
 
-  const confirmResetMFA = () => {
+  const confirmResetMFA = (reason: string) => {
     forceResetMFA.mutate(
-      { userId: user.id, reason: mfaResetReason.trim() },
+      { userId: user.id, reason },
       {
         onSuccess: () => {
           toast.success('User MFA has been reset successfully');
@@ -475,31 +456,19 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
         </Stack>
       </Box>
 
-      <Modal open={isMfaResetOpen} onClose={closeMfaReset}>
-        <ModalDialog data-testid="mfa-reset-modal">
-          <ModalClose />
-          <Typography level="title-md">Reset User MFA</Typography>
-          <Typography level="body-sm" sx={{ mb: 1 }}>
-            Are you sure you want to reset MFA for {user.name}? This will disable their current MFA setup and they will
-            need to set it up again.
-          </Typography>
-          <AdminReasonField value={mfaResetReason} onChange={setMfaResetReason} data-testid="mfa-reset-reason-input" />
-          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
-            <Button variant="plain" color="neutral" onClick={closeMfaReset}>
-              Cancel
-            </Button>
-            <Button
-              color="danger"
-              disabled={!isValidAdminActionReason(mfaResetReason)}
-              loading={forceResetMFA.isPending}
-              onClick={confirmResetMFA}
-              data-testid="mfa-reset-confirm-btn"
-            >
-              Reset MFA
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+      <ActionDialog
+        open={isMfaResetOpen}
+        onClose={closeMfaReset}
+        title="Reset MFA"
+        description={`Turns off MFA for ${user.name}. They must set it up again at their next sign-in.`}
+        reasonPresets={ADMIN_REASON_PRESETS.mfaReset}
+        confirmLabel="Reset MFA"
+        tone="danger"
+        pending={forceResetMFA.isPending}
+        onConfirm={confirmResetMFA}
+        data-testid="mfa-reset-modal"
+        testIds={{ reason: 'mfa-reset-reason-input', confirm: 'mfa-reset-confirm-btn' }}
+      />
 
       <GrantSubscriptionModal
         user={user}

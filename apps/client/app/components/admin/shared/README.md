@@ -50,3 +50,38 @@ See `IntegrationDemandTab.tsx` for a complete query-backed example.
 `EntityHeader` supplies copy controls with visible failure feedback and relative
 timestamps with exact UTC tooltips. `SectionCard` groups read-only definition-list
 facts; use separate settings components for forms.
+
+## Audited writes
+
+Every write that changes money or access goes through `ActionDialog` (see section 4
+of `../DESIGN_GUIDE.md`). It owns the reason: pick presets from
+`ADMIN_REASON_PRESETS` in `adminReason.ts` and the dialog hands `onConfirm` the
+composed audit string ("Preset: note", or either alone). Put the before/after
+preview, a bulk dry run or extra inputs in `children`, and pass `blockedReason`
+while those inputs are not ready so the disabled commit explains itself.
+Irreversible commands add `typedConfirm`; `tone="danger"` styles only the commit.
+
+```tsx
+<ActionDialog
+  open={open}
+  onClose={close}
+  title="Adjust credits"
+  reasonPresets={ADMIN_REASON_PRESETS.creditAdjustment}
+  confirmLabel={`Set balance to ${next.toLocaleString()}`}
+  blockedReason={isValid ? null : 'Enter a balance of 0 or more.'}
+  pending={mutation.isPending}
+  onConfirm={reason => mutation.mutate({ balance: next, reason }, { onSuccess: close })}
+  data-testid="adjust-credits-dialog"
+>
+  <BalancePreview before={current} after={next} />
+</ActionDialog>
+```
+
+Forms that keep their own submit button use `ReasonPicker` directly with an
+`AdminReasonDraft`, submitting `composeAdminReason(draft)` and gating on
+`isAdminReasonComplete(draft)`. Every preset must pass the shared
+`adminActionReason` rule unchanged; `server/utils/adminAudit.test.ts` pins this.
+
+After a write that can be reversed, call `useUndoToast()` (the provider is mounted
+in `AdminPage`). `onUndo` must perform the reverse write, which records its own
+audit entry; the toast only offers it for 30 seconds, one offer at a time.
