@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Fails if a step interpolates ${{ ... }} into script text.
 
-Scanned: `run:` bodies in .github/workflows/*.yml|yaml, `with: script:` bodies of
-actions/github-script steps in those workflows, and `run:` bodies in composite
-actions under .github/actions/*/action.yml.
+Scanned: `run:` bodies and the `with: script:` bodies of actions/github-script
+steps, in .github/workflows/*.yml|yaml and in composite actions anywhere under
+.github/actions (action.yml or action.yaml).
 
 GitHub substitutes ${{ }} into the script text before bash (or node) parses it,
 so any value carrying metacharacters changes what the script does. Passing the
@@ -39,10 +39,21 @@ EXEMPT: set[str] = set()
 RUN_KEY = re.compile(r"^(\s*)(?:-\s+)?run:\s*(\S.*)?$")
 SCRIPT_KEY = re.compile(r"^(\s*)script:\s*(\S.*)?$")
 STEP_ITEM = re.compile(r"^(\s*)-\s")
-GITHUB_SCRIPT = re.compile(r"^\s*(?:-\s+)?uses:\s*['\"]?actions/github-script@")
+# Owner and repo names in `uses:` are case-insensitive on GitHub.
+GITHUB_SCRIPT = re.compile(r"^\s*(?:-\s+)?uses:\s*['\"]?actions/github-script@", re.IGNORECASE)
 STEPS_KEY = re.compile(r"^(\s*)steps:\s*$")
 BLOCK_SCALAR = re.compile(r"^[|>][+-]?\d*$")
 EXPR = re.compile(r"\$\{\{\s*(.*?)\s*\}\}", re.DOTALL)
+
+
+def in_steps(line, steps_indent):
+    """True while `line` is still inside a `steps:` block opened at steps_indent.
+
+    YAML lets the list items sit at the key's own indentation (`steps:` then `- run:`),
+    so a `-` item at that indentation is still inside the block.
+    """
+    indent = len(line) - len(line.lstrip())
+    return indent > steps_indent or (indent == steps_indent and STEP_ITEM.match(line) is not None)
 
 
 def run_bodies(lines):
@@ -55,22 +66,18 @@ def run_bodies(lines):
     steps_indent = None
     while i < len(lines):
         line = lines[i]
-        stripped_indent = len(line) - len(line.lstrip())
         steps_match = STEPS_KEY.match(line)
         if steps_match:
             steps_indent = len(steps_match.group(1))
             i += 1
             continue
-        if line.strip() and steps_indent is not None and stripped_indent <= steps_indent:
+        if line.strip() and steps_indent is not None and not in_steps(line, steps_indent):
             steps_indent = None
         match = RUN_KEY.match(line)
         if not match or steps_indent is None:
             i += 1
             continue
         indent = len(match.group(1))
-        if indent <= steps_indent:
-            i += 1
-            continue
         start = i
         body, i = scalar_body(lines, i, indent, match.group(2))
         yield start + 1, body
@@ -106,8 +113,7 @@ def steps(lines):
         i += 1
         while i < len(lines):
             line = lines[i]
-            indent = len(line) - len(line.lstrip())
-            if line.strip() and indent <= steps_indent:
+            if line.strip() and not in_steps(line, steps_indent):
                 break
             item = STEP_ITEM.match(line)
             if item and (item_indent is None or len(item.group(1)) == item_indent):
@@ -137,14 +143,12 @@ def github_script_bodies(lines):
 def main() -> int:
     violations = []
     workflows = sorted(list(WORKFLOWS.glob("*.yml")) + list(WORKFLOWS.glob("*.yaml")))
-    actions = sorted(ACTIONS.glob("*/action.yml"))
+    actions = sorted(list(ACTIONS.rglob("action.yml")) + list(ACTIONS.rglob("action.yaml")))
     for path in workflows + actions:
         if path in workflows and path.name in EXEMPT:
             continue
         lines = path.read_text().split("\n")
-        bodies = list(run_bodies(lines))
-        if path in workflows:
-            bodies += list(github_script_bodies(lines))
+        bodies = list(run_bodies(lines)) + list(github_script_bodies(lines))
         for line_number, body in sorted(bodies):
             if "${{" not in body:
                 continue

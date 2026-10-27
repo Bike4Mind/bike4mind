@@ -489,8 +489,9 @@ jobs:
     # RUNNER_LABEL default is the 2-core tier for API, guard and shell-only jobs, and also
     # carries typecheck and the `tier: light` legs here (the 2-worker integration lanes).
     # Size full-pool worker budgets for 4 cores. On merge_group events every job prefers the
-    # matching *_QUEUE variable, a separately capped pool so PR traffic cannot starve the
-    # queue; an unset *_QUEUE variable falls through to the PR label.
+    # matching *_QUEUE variable, so the queue can run on a separately capped pool; an unset
+    # *_QUEUE variable falls through to the PR label. The isolation is only as real as the
+    # variable: a *_QUEUE label equal to its PR label shares the PR pool.
     runs-on: ${{ matrix.shard.tier == 'light' && (github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m') || (github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m') }}
     name: Run Tests (${{ matrix.shard.name }})
     # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
@@ -1018,6 +1019,11 @@ jobs:
       # Keyless - the vectors need a credential and are a deploy-time step, not built here.
       - name: Generate the help index
         run: pnpm --filter @bike4mind/scripts help:build-index
+
+      # The other half of the image prebuild's help:build. Docs-only PRs no longer run
+      # selfhost-image, so this is what still fails them on a copy or media-policy error.
+      - name: Bundle the help content
+        run: pnpm --filter @bike4mind/scripts help:bundle-content
 
   # Type-checks the packed @bike4mind/* declarations as a consumer would (see
   # scripts/check-published-dts.mjs). Needs core-build for the dist/ it packs.

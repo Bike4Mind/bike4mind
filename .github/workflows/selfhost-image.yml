@@ -15,7 +15,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'apps/client/**'
+      # The Dockerfile copies all of apps/ and turbo-builds every app but the client too.
+      - 'apps/**'
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
@@ -42,7 +43,8 @@ on:
       - '.github/workflows/selfhost-image.yml'
   pull_request:
     paths:
-      - 'apps/client/**'
+      # The Dockerfile copies all of apps/ and turbo-builds every app but the client too.
+      - 'apps/**'
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'

@@ -48,6 +48,8 @@ function snapshotEnabled({
           : {},
     },
     vars: { CANONICAL_REPO: canonicalRepository },
+    // Actions' startsWith ignores case.
+    startsWith: (value: string, prefix: string) => value.toLowerCase().startsWith(prefix.toLowerCase()),
   });
 }
 
@@ -58,6 +60,7 @@ describe('release snapshot gate', () => {
     ['feature branch', 'feat/example', true],
     ['nested feature branch', 'fix/release/main', true],
     ['similarly named feature branch', 'changeset-release/main-fix', true],
+    ['merge queue branch', 'gh-readonly-queue/main/pr-1-abc123', false],
   ] as const)('%s', (_name, branch, expected) => {
     expect(snapshotEnabled({ branch })).toBe(expected);
   });

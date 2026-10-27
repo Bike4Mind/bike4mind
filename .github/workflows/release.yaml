@@ -306,6 +306,7 @@ jobs:
       github.event.workflow_run.path == '.github/workflows/test.yaml' &&
       github.event.workflow_run.head_branch != 'main' &&
       github.event.workflow_run.head_branch != 'changeset-release/main' &&
+      !startsWith(github.event.workflow_run.head_branch, 'gh-readonly-queue/') &&
       github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
     concurrency:
       group: snapshot-${{ github.event.workflow_run.head_branch }}

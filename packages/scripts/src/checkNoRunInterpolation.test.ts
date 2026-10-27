@@ -28,10 +28,11 @@ function scan(files: Record<string, string>, actions: Record<string, string> = {
   const workflows = path.join(dir, '.github', 'workflows');
   fs.mkdirSync(workflows, { recursive: true });
   for (const [name, body] of Object.entries(files)) fs.writeFileSync(path.join(workflows, name), body);
-  for (const [name, body] of Object.entries(actions)) {
-    const actionDir = path.join(dir, '.github', 'actions', name);
-    fs.mkdirSync(actionDir, { recursive: true });
-    fs.writeFileSync(path.join(actionDir, 'action.yml'), body);
+  // Keys are paths under .github/actions, e.g. 'demo/action.yml'.
+  for (const [file, body] of Object.entries(actions)) {
+    const actionPath = path.join(dir, '.github', 'actions', file);
+    fs.mkdirSync(path.dirname(actionPath), { recursive: true });
+    fs.writeFileSync(actionPath, body);
   }
   const r = spawnSync('python3', [GUARD], { cwd: dir, encoding: 'utf8' });
   if (r.error) throw r.error;
@@ -152,7 +153,7 @@ jobs:
     const r = scan(
       {},
       {
-        demo: `name: demo
+        'demo/action.yml': `name: demo
 runs:
   using: composite
   steps:
@@ -165,6 +166,78 @@ runs:
     );
     expect(r.status).toBe(1);
     expect(r.out).toContain('.github/actions/demo/action.yml:8  ->  ${{ inputs.stage }}');
+  });
+
+  it('passes a github-script step that reads its value from process.env', () => {
+    const r = scan({
+      'gs-ok.yml': workflow(`      - name: Comment
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: \${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const n = Number(process.env.PR_NUMBER);
+`),
+    });
+    expect(r.status).toBe(0);
+  });
+
+  it('matches the github-script owner and repo case-insensitively', () => {
+    const r = scan({
+      'gs-case.yml': workflow(`      - uses: Actions/GitHub-Script@v8
+        with:
+          script: core.info('\${{ github.ref }}')
+`),
+    });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('.github/workflows/gs-case.yml:9  ->  ${{ github.ref }}');
+  });
+
+  it('flags steps listed at the same indentation as steps:', () => {
+    const r = scan({
+      'compact.yml': `name: t
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - run: echo \${{ github.ref }}
+`,
+    });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('.github/workflows/compact.yml:7  ->  ${{ github.ref }}');
+  });
+
+  it('flags a github-script body in a composite action', () => {
+    const r = scan(
+      {},
+      {
+        'gs/action.yml': `name: gs
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v8
+      with:
+        script: core.info('\${{ inputs.stage }}')
+`,
+      }
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('.github/actions/gs/action.yml:7  ->  ${{ inputs.stage }}');
+  });
+
+  it('scans nested composite actions and action.yaml', () => {
+    const action = `name: a
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo \${{ inputs.stage }}
+`;
+    const r = scan({}, { 'nested/inner/action.yml': action, 'alt/action.yaml': action });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('.github/actions/nested/inner/action.yml:6  ->  ${{ inputs.stage }}');
+    expect(r.out).toContain('.github/actions/alt/action.yaml:6  ->  ${{ inputs.stage }}');
   });
 
   it('scans .yaml files too', () => {
