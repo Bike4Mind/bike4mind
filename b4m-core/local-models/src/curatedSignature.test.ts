@@ -2,6 +2,7 @@ import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:cryp
 import { describe, expect, it } from 'vitest';
 import {
   CURATED_MAX_MANIFEST_BYTES,
+  CURATED_MAX_SEQUENCE,
   curatedKeyFromSeed,
   curatedKeyId,
   curatedPublicKey,
@@ -125,6 +126,16 @@ describe('keys and signature files', () => {
       JSON.stringify({ sequence: 9, extra: true, signatures: [{ keyId: 'a'.repeat(16), sig: 'x' }] })
     );
     expect(parseCuratedSignatureFile(file)).toEqual({ sequence: 9, signatures: [{ keyId: 'a'.repeat(16), sig: 'x' }] });
+  });
+
+  it('caps the sequence hint at the list sequence cap', () => {
+    const hint = (sequence: number) =>
+      parseCuratedSignatureFile(
+        encode(JSON.stringify({ sequence, signatures: [{ keyId: 'a'.repeat(16), sig: 'x' }] }))
+      );
+    expect(CURATED_MAX_SEQUENCE).toBe(1_000_000);
+    expect(hint(1_000_000)?.sequence).toBe(1_000_000);
+    expect(hint(1_000_001)).toBeNull();
   });
 
   it('imports a seed as the same key every time', () => {
