@@ -137,6 +137,7 @@ const UsersTab: React.FC = () => {
           <AnomalyBanner
             snapshot={anomalyQuery.data}
             onReview={() => {
+              clearSelection();
               setSearch('');
               setParams({
                 recentSignups: 'hour',
@@ -154,9 +155,10 @@ const UsersTab: React.FC = () => {
               aria-label="Group by"
               data-testid="users-group-by"
               value={params.groupBy ?? 'none'}
-              onChange={(_, value) =>
-                setParams({ groupBy: value === 'emailDomain' ? 'emailDomain' : undefined, page: 1 })
-              }
+              onChange={(_, value) => {
+                clearSelection();
+                setParams({ groupBy: value === 'emailDomain' ? 'emailDomain' : undefined, page: 1 });
+              }}
             >
               <Option value="none">Group by: None</Option>
               <Option value="emailDomain">Group by: Email domain</Option>
@@ -165,7 +167,10 @@ const UsersTab: React.FC = () => {
               label="Signed up in the last hour"
               checked={params.recentSignups === 'hour'}
               slotProps={{ input: { 'data-testid': 'users-recent-signups-filter' } }}
-              onChange={event => setParams({ recentSignups: event.target.checked ? 'hour' : undefined, page: 1 })}
+              onChange={event => {
+                clearSelection();
+                setParams({ recentSignups: event.target.checked ? 'hour' : undefined, page: 1 });
+              }}
             />
           </Stack>
           <UsersFilterBar
