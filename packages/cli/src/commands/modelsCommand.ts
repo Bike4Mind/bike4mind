@@ -583,8 +583,9 @@ export async function requireUnchangedLicenses(
   shown: { label: string; link: string },
   signal: AbortSignal
 ): Promise<void> {
-  const now = licenseFor(await hub.getModel(detail.id, { signal }), hub.endpoint);
-  if (now.label !== shown.label || now.link !== shown.link) {
+  const currentDetail = await hub.getModel(detail.id, { signal });
+  const now = licenseFor(currentDetail, hub.endpoint);
+  if (!sameList(currentDetail.licenses, detail.licenses) || now.label !== shown.label || now.link !== shown.link) {
     throw changedSinceReview(clean(detail.id), `its license is now ${now.label}`);
   }
 }
@@ -691,10 +692,17 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
     throw error;
   }
   deps.log(`Removed ${clean(name)}.`);
-  if (deps.config.defaultModel === name) {
+  if (deps.config.defaultModel && normalizeModelName(deps.config.defaultModel) === normalizeModelName(name)) {
     deps.log('It was your default model; pick another with: b4m models use <name>');
   }
   return 0;
+}
+
+function normalizeModelName(name: string): string {
+  const withoutLibrary = name.replace(/^library\//i, '');
+  return withoutLibrary.lastIndexOf(':') > withoutLibrary.lastIndexOf('/')
+    ? withoutLibrary
+    : `${withoutLibrary}:latest`;
 }
 
 export async function useModel(name: string, deps: ModelsDeps): Promise<number> {

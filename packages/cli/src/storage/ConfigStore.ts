@@ -1333,7 +1333,10 @@ export class ConfigStore {
   ): Promise<CliConfig> {
     let disk: Record<string, unknown>;
     try {
-      disk = JSON.parse(await fs.readFile(this.configPath, 'utf-8')) as Record<string, unknown>;
+      const parsed: unknown = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
+      const result = z.record(z.string(), z.unknown()).safeParse(parsed);
+      if (!result.success) return next;
+      disk = result.data;
     } catch {
       return next;
     }
