@@ -20,7 +20,6 @@ const GithubUnlockClaimSchema = new Schema<IGithubUnlockClaimDocument>(
 );
 
 GithubUnlockClaimSchema.index({ githubId: 1 }, { unique: true });
-GithubUnlockClaimSchema.index({ userId: 1 });
 
 export interface IGithubUnlockClaimModel extends Model<IGithubUnlockClaimDocument> {}
 

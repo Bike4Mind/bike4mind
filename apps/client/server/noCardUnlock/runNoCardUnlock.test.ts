@@ -14,6 +14,7 @@ import {
   User,
   creditTransactionRepository,
   mcpServerRepository,
+  signupProtectionRepository,
 } from '@bike4mind/database';
 import { runNoCardUnlock } from './runNoCardUnlock';
 
@@ -107,6 +108,32 @@ describe('runNoCardUnlock', () => {
       refusal: 'github_already_claimed',
     });
     expect((await User.findById(second).lean())?.currentCredits).toBe(0);
+  });
+
+  it('refuses with a rate-limit code, not a reauthorize prompt, when GitHub rate limits with a 403', async () => {
+    const id = await seedUser();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('{}', { status: 403, headers: { 'x-ratelimit-remaining': '0' } }))
+    );
+
+    expect(await runNoCardUnlock('github_verified', id)).toEqual({
+      creditsGranted: 0,
+      currentCredits: 0,
+      refusal: 'github_rate_limited',
+    });
+  });
+
+  it('refuses without crediting or claiming when the signup domain is held', async () => {
+    const id = await seedUser();
+    vi.spyOn(signupProtectionRepository, 'findReview').mockResolvedValue({ status: 'held_pending_review' } as never);
+
+    expect(await runNoCardUnlock('github_verified', id)).toEqual({
+      creditsGranted: 0,
+      currentCredits: 0,
+      refusal: 'signup_held',
+    });
+    expect(await GithubUnlockClaim.countDocuments({ githubId: 1 })).toBe(0);
   });
 
   it('releases the claim and rethrows when the credit write fails', async () => {

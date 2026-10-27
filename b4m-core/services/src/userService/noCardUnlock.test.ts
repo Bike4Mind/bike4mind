@@ -91,6 +91,15 @@ describe('githubValidator', () => {
     }
   });
 
+  it('reports GitHub rate limiting separately from a missing scope', async () => {
+    const deps = githubDeps({
+      getUser: async () => {
+        throw new GithubApiError(403, true);
+      },
+    });
+    expect(await githubValidator(deps)(user)).toEqual({ ok: false, refusal: 'github_rate_limited' });
+  });
+
   it('rethrows a transient GitHub failure', async () => {
     const deps = githubDeps({
       getUser: async () => {

@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/database';
 import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { userService } from '@bike4mind/services';
+import { signupProtection } from '@server/auth/signupProtection';
 
 const { GithubApiError, githubValidator, grantNoCardUnlock, loadNoCardUnlockSettings, workEmailValidator } =
   userService;
@@ -43,7 +44,13 @@ async function githubGet<T>(path: string, token: string): Promise<T> {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
     signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
   });
-  if (!response.ok) throw new GithubApiError(response.status);
+  if (!response.ok) {
+    const rateLimited =
+      response.status === 429 ||
+      (response.status === 403 &&
+        (response.headers.get('x-ratelimit-remaining') === '0' || response.headers.has('retry-after')));
+    throw new GithubApiError(response.status, rateLimited);
+  }
   return JSON.parse(await readCappedText(response)) as T;
 }
 
@@ -94,6 +101,7 @@ export async function runNoCardUnlock(reason: NoCardUnlockReason, userId: string
     validators,
     withTransaction,
     settings,
+    signupProtection,
   });
 
   if (result.granted) {

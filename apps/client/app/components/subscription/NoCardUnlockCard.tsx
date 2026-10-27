@@ -10,6 +10,7 @@ const REFUSAL_TEXT: Record<NoCardUnlockRefusal, string> = {
   disabled: 'This unlock is not available for your account right now.',
   github_not_linked: 'Connect your GitHub account first, then try again.',
   github_reauthorize_required: 'Reconnect GitHub to share your verified email, then try again.',
+  github_rate_limited: 'GitHub is limiting requests right now. Try again in a few minutes.',
   github_too_new: 'This GitHub account is too new to qualify.',
   github_few_repos: 'This GitHub account does not have enough public activity to qualify.',
   github_email_unverified: 'This GitHub account has no verified email.',
@@ -20,6 +21,7 @@ const REFUSAL_TEXT: Record<NoCardUnlockRefusal, string> = {
   work_email_catch_all: 'This email domain could not be verified as a work address.',
   work_email_probe_inconclusive: 'We could not verify this email domain right now.',
   domain_cap_reached: 'Too many unlocks have been claimed for this domain today. Try again tomorrow.',
+  signup_held: 'Unlocks for your email domain are on hold while we review recent signups.',
   cap_reached: 'You have already unlocked the maximum available.',
   already_granted: 'This unlock has already been applied to your account.',
 };

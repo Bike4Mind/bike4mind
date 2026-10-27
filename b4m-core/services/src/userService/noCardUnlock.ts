@@ -13,11 +13,13 @@ import {
   type NoCardUnlockReason,
   type NoCardUnlockRefusal,
   type NoCardUnlockSettings,
+  type SignupProtection,
 } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService/addCredits';
 import { accountBlockReasons } from './accountState';
 import { isDisposableEmail } from './disposableEmail';
+import { protectSignupCredits } from './signupProtection';
 
 /** `reasonGranted`: this user already holds a ledger row for the reason, e.g. a concurrent request won the grant. */
 export type NoCardUnlockRelease = (opts: { reasonGranted: boolean }) => Promise<void>;
@@ -40,7 +42,10 @@ export type GithubProfile = { id: number; login: string; created_at: string; pub
 export type GithubEmail = { email: string; verified: boolean; primary: boolean };
 
 export class GithubApiError extends Error {
-  constructor(readonly status: number) {
+  constructor(
+    readonly status: number,
+    readonly rateLimited = false
+  ) {
     super(`GitHub API responded ${status}`);
     this.name = 'GithubApiError';
   }
@@ -78,6 +83,7 @@ export function githubValidator(deps: GithubValidatorDeps): NoCardUnlockValidato
       profile = await deps.github.getUser(token);
       emails = await deps.github.getEmails(token);
     } catch (error) {
+      if (error instanceof GithubApiError && error.rateLimited) return deny('github_rate_limited');
       if (error instanceof GithubApiError && REAUTHORIZE_STATUSES.has(error.status)) {
         return deny('github_reauthorize_required');
       }
@@ -204,7 +210,7 @@ export type GrantNoCardUnlockResult =
 
 export interface GrantNoCardUnlockAdapters {
   db: {
-    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>;
+    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName' | 'findBySettingNames'>;
     creditTransactions: ICreditTransactionRepository;
     creditLots: ICreditLotRepository;
     users: IUserRepository;
@@ -212,6 +218,7 @@ export interface GrantNoCardUnlockAdapters {
   validators: Record<NoCardUnlockReason, NoCardUnlockValidator>;
   withTransaction: <T>(fn: () => Promise<T>) => Promise<T>;
   settings?: NoCardUnlockSettings;
+  signupProtection?: SignupProtection;
 }
 
 const refused = (refusal: NoCardUnlockRefusal): GrantNoCardUnlockResult => ({ granted: false, refusal });
@@ -219,7 +226,7 @@ const refused = (refusal: NoCardUnlockRefusal): GrantNoCardUnlockResult => ({ gr
 export async function grantNoCardUnlock(
   userId: string,
   reason: NoCardUnlockReason,
-  { db, validators, withTransaction, settings: preloaded }: GrantNoCardUnlockAdapters
+  { db, validators, withTransaction, settings: preloaded, signupProtection }: GrantNoCardUnlockAdapters
 ): Promise<GrantNoCardUnlockResult> {
   const settings = preloaded ?? (await loadNoCardUnlockSettings(db.adminSettings));
   if (!settings.enabled) return refused('disabled');
@@ -232,6 +239,10 @@ export async function grantNoCardUnlock(
 
   const transactionId = noCardUnlockTransactionId(reason, userId);
   if (await db.creditTransactions.findOne({ transactionId })) return refused('already_granted');
+
+  if (await protectSignupCredits(userId, { users: db.users, adminSettings: db.adminSettings, signupProtection })) {
+    return refused('signup_held');
+  }
 
   const check = await validators[reason]({ id: user.id, email: user.email ?? '' });
   if (!check.ok) return refused(check.refusal);

@@ -5,6 +5,7 @@ export type NoCardUnlockRefusal =
   | 'disabled'
   | 'github_not_linked'
   | 'github_reauthorize_required'
+  | 'github_rate_limited'
   | 'github_too_new'
   | 'github_few_repos'
   | 'github_email_unverified'
@@ -15,6 +16,7 @@ export type NoCardUnlockRefusal =
   | 'work_email_catch_all'
   | 'work_email_probe_inconclusive'
   | 'domain_cap_reached'
+  | 'signup_held'
   | 'cap_reached'
   | 'already_granted';
 
