@@ -314,8 +314,9 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({
     }
   }, [isMinimized, hiddenFromLayout]);
 
-  // Handle close - dismiss the panel entirely. Re-docking is a separate action
-  // (the dock-right/dock-bottom controls in ChatPanelControls), not this button's job.
+  // Close hides the panel entirely, or collapses to the pill when closeToPill is set (pages with
+  // no other launcher). Re-docking is a separate action (the dock-right/dock-bottom controls in
+  // ChatPanelControls), not this button's job.
   const handleClose = useCallback(() => {
     if (closeToPill) {
       setSessionLayout({ floatingChatMinimized: true });
