@@ -160,6 +160,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   hasUsablePassword: true,
   groups: true,
   isAdmin: true,
+  adminPermissions: true,
   storageLimit: true,
   storageLimitOverride: true,
   planStorageLimit: true,
