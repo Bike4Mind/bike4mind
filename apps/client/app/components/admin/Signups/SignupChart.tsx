@@ -75,7 +75,10 @@ export function SignupChart({
           margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
           barCategoryGap={1}
           onClick={state => {
-            const index = Number(state?.activeTooltipIndex);
+            // null outside the plot (legend, axis gutters); Number(null) would be 0 and pick the oldest bucket
+            const raw = state?.activeTooltipIndex;
+            if (raw == null) return;
+            const index = Number(raw);
             const bucket = Number.isInteger(index) ? data.buckets[index] : undefined;
             if (bucket && onBucketClick) onBucketClick(bucket.start);
           }}
