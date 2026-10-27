@@ -246,8 +246,44 @@ describe('OllamaLocal', () => {
     [undefined, 'end_turn'],
     ['custom', 'custom'],
   ])('normalizes Ollama stop reason %s to %s', async (reason, expected) => {
-    const { events } = await streamWith(`${JSON.stringify({ done: true, done_reason: reason })}\n`);
-    expect(events).toEqual([{ type: 'content', stopReason: expected }]);
+    const { events } = await streamWith(
+      `${JSON.stringify({ message: { content: 'ok' }, done: true, done_reason: reason })}\n`
+    );
+    expect(events).toEqual([
+      { type: 'content', text: 'ok' },
+      { type: 'content', stopReason: expected },
+    ]);
+  });
+
+  it.each([
+    {
+      replies: ['', 'pong'],
+      events: [
+        { type: 'content', text: 'pong' },
+        { type: 'content', stopReason: 'stop' },
+      ],
+    },
+    { replies: ['', ''], error: 'llama ended its reply without writing anything' },
+  ])('asks once more when the model stops without a word: $replies', async ({ replies, events, error }) => {
+    const bodies = replies.map(
+      text =>
+        `${text ? `${JSON.stringify({ message: { content: text }, done: false })}\n` : ''}${JSON.stringify({ message: { content: '' }, done: true, done_reason: 'stop' })}\n`
+    );
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) =>
+      String(input).endsWith('/api/show')
+        ? Response.json({ capabilities: ['completion'] })
+        : new Response(bodies.shift() ?? '', { status: 200 })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const seen: unknown[] = [];
+    const turn = new OllamaLocal().stream(
+      { model: 'local:ollama:llama', messages: [{ role: 'user', content: 'hi' }] },
+      e => seen.push(e)
+    );
+    if (error) await expect(turn).rejects.toThrow(error);
+    else await turn;
+    expect(seen).toEqual(events ?? []);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/chat'))).toHaveLength(2);
   });
 
   it.each([

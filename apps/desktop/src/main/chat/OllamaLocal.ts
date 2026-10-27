@@ -32,6 +32,7 @@ const TURN_INSPECT_TIMEOUT_MS = 10_000;
 const INSPECT_RETRY_MS = 5_000;
 const INSPECT_RETRY_MAX_MS = 300_000;
 const MAX_TRIM_RETRIES = 3;
+const EMPTY_REPLY_RETRIES = 1;
 const remoteFields = { remote_host: z.string().optional(), remote_model: z.string().optional() };
 const tagsSchema = z.object({
   models: z.array(
@@ -267,27 +268,17 @@ export class OllamaLocal {
                 ? { ...event, usage: { ...event.usage, inputTokens: whole } }
                 : event
             );
-    const reader = response.body.getReader();
-    const decoder = new StringDecoder('utf8');
-    let pending = '';
-    let completed = false;
-    const consume = (line: string) => {
-      if (line.trim()) completed = emitLine(line, report) || completed;
-    };
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        pending += decoder.write(Buffer.from(value));
-        const lines = pending.split('\n');
-        pending = lines.pop() ?? '';
-        for (const line of lines) consume(line);
-      }
-      consume(pending + decoder.end());
-      if (!completed) throw new Error('Ollama stream ended before the reply finished.');
-    } finally {
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
+    // Small models sometimes end their turn before saying anything; that is asked again once, then reported.
+    let body = response.body;
+    for (let attempt = 0; ; attempt++) {
+      if (await readReply(body, report)) return;
+      if (attempt === EMPTY_REPLY_RETRIES)
+        throw new Error(
+          `${model} ended its reply without writing anything. Send the message again or pick a larger model.`
+        );
+      const again = await send(sent);
+      if (!again.ok || !again.body) throw await ollamaError(again);
+      body = again.body;
     }
   }
 
@@ -529,6 +520,43 @@ function toMessages(messages: CompletionMessage[]): OllamaMessage[] {
         : [];
     return [...results, ...own];
   });
+}
+
+/** False, with the final frame held back, when the model stopped without text, thinking or a tool call. */
+async function readReply(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (event: CompletionStreamEvent) => void
+): Promise<boolean> {
+  const reader = body.getReader();
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  let completed = false;
+  let wrote = false;
+  let held: CompletionStreamEvent | undefined;
+  const forward = (event: CompletionStreamEvent) => {
+    if (event.type === 'tool_use' || (event.type === 'content' && event.text)) wrote = true;
+    if (!wrote && event.type === 'content' && event.stopReason === 'stop') held = event;
+    else onEvent(event);
+  };
+  const consume = (line: string) => {
+    if (line.trim()) completed = emitLine(line, forward) || completed;
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pending += decoder.write(Buffer.from(value));
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) consume(line);
+    }
+    consume(pending + decoder.end());
+    if (!completed) throw new Error('Ollama stream ended before the reply finished.');
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  return held === undefined;
 }
 
 function emitLine(line: string, onEvent: (event: CompletionStreamEvent) => void): boolean {
