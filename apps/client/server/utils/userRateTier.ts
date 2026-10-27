@@ -53,11 +53,17 @@ const TIER_SETTING_KEY = {
  * call these routes make. Pass the request to resolve through its per-request
  * memo, so the handler's entitlement gate reuses these reads instead of repeating them.
  */
-export async function resolveUserRateTier(user: RateTierUser, req?: ActiveSubscriptionsRequest): Promise<UserRateTier> {
+export async function resolveUserRateTier(
+  user: RateTierUser,
+  req?: ActiveSubscriptionsRequest,
+  options?: { strict?: boolean }
+): Promise<UserRateTier> {
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return 'bypass';
 
   const activeSubscriptions =
-    req?.user?.id === user.id ? await getRequestActiveSubscriptions(req) : await getActiveSubscriptionsForUser(user.id);
+    req?.user?.id === user.id
+      ? await getRequestActiveSubscriptions(req, options)
+      : await getActiveSubscriptionsForUser(user.id, options);
 
   return ladderRateTier(activeSubscriptions);
 }

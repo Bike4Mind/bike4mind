@@ -3,6 +3,7 @@ import { AdminTab } from './adminSidebarConfig';
 import {
   ADMIN_INTEGRATION_DEMAND_TAB_SLUG,
   ADMIN_MODEL_LOGS_TAB_SLUG,
+  ADMIN_ORGANIZATIONS_TAB_SLUG,
   ADMIN_SETTINGS_TAB_SLUG,
   ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
 } from './adminTabParams';
@@ -31,7 +32,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Analysts]: 'analysts',
   [AdminTab.Subscribers]: 'subscribers',
   [AdminTab.Subscriptions]: 'subscriptions',
-  [AdminTab.Organizations]: 'organizations',
+  [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
   [AdminTab.CreditAnalytics]: 'credit-analytics',
   [AdminTab.SecretsRotation]: 'secrets-rotation',
   [AdminTab.BulkImport]: 'bulk-import',

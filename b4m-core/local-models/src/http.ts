@@ -71,7 +71,10 @@ export function runtimeEndpointId(baseUrl: string): string {
   return url.protocol === 'http:' && url.pathname === '/' ? hostPort(baseUrl) : baseUrl;
 }
 
-function combinedSignal(signal: AbortSignal | undefined, timeoutMs: number | undefined): AbortSignal | undefined {
+export function combinedSignal(
+  signal: AbortSignal | undefined,
+  timeoutMs: number | undefined
+): AbortSignal | undefined {
   const timeout = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
   if (signal && timeout) return AbortSignal.any([signal, timeout]);
   return signal ?? timeout;
