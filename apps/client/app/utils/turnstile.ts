@@ -86,17 +86,34 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
   overlay.appendChild(card);
   document.body.appendChild(overlay);
 
+  // aria-modal is only a hint to assistive tech: inert is what actually keeps focus and clicks
+  // out of the page behind the card, including anything stacked above the backdrop (e.g. banners).
+  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+  const inertedByUs: HTMLElement[] = [];
+  const makeBackgroundInert = () => {
+    for (const el of Array.from(document.body.children)) {
+      if (el !== overlay && el instanceof HTMLElement && !el.hasAttribute('inert')) {
+        el.setAttribute('inert', '');
+        inertedByUs.push(el);
+      }
+    }
+  };
+  let onKeyDown: ((e: KeyboardEvent) => void) | undefined;
+
   // The overlay stays bare and click-through on the invisible path; the backdrop and card only
   // appear once Cloudflare decides the user must interact, so no empty modal flashes.
   const showChrome = () => {
     overlay.style.background = 'rgba(0,0,0,0.45)';
     overlay.style.pointerEvents = 'auto';
-    card.style.cssText = `background:${dark ? '#1f2329' : '#fff'};color:${dark ? '#e6e8eb' : '#1f2329'};padding:20px 24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-width:calc(100vw - 32px);text-align:center`;
+    card.style.cssText = `background:${dark ? '#1f2329' : '#fff'};color:${dark ? '#e6e8eb' : '#1f2329'};padding:20px 24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box;max-width:calc(100vw - 32px);text-align:center`;
     message.style.display = 'block';
     cancel.style.display = 'block';
     card.setAttribute('role', 'dialog');
     card.setAttribute('aria-modal', 'true');
     card.setAttribute('aria-labelledby', message.id);
+    card.tabIndex = -1;
+    makeBackgroundInert();
+    card.focus();
   };
 
   let widgetId: string | undefined;
@@ -109,7 +126,12 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
         fn();
       };
       // The backdrop blocks the page, so give the user a way out of a stuck challenge.
-      cancel.onclick = () => settle(() => reject(new Error('turnstile-cancelled')));
+      const cancelChallenge = () => settle(() => reject(new Error('turnstile-cancelled')));
+      cancel.onclick = cancelChallenge;
+      onKeyDown = e => {
+        if (e.key === 'Escape' && card.getAttribute('role')) cancelChallenge();
+      };
+      document.addEventListener('keydown', onKeyDown);
       widgetId = turnstile.render(container, {
         sitekey: siteKey,
         action,
@@ -123,10 +145,13 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
     });
   } finally {
     clearTimeout(timer);
+    if (onKeyDown) document.removeEventListener('keydown', onKeyDown);
     try {
       if (widgetId !== undefined) turnstile.remove(widgetId);
     } finally {
       overlay.remove();
+      for (const el of inertedByUs) el.removeAttribute('inert');
+      if (inertedByUs.length) previouslyFocused?.focus();
     }
   }
 }

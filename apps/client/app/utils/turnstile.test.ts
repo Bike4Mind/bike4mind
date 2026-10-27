@@ -84,6 +84,51 @@ describe('getTurnstileToken', () => {
     expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
   });
 
+  it('makes the page inert, focuses the card, and restores both on every exit', async () => {
+    const page = document.createElement('main');
+    const field = document.createElement('input');
+    page.appendChild(field);
+    const banner = document.createElement('aside');
+    banner.setAttribute('inert', '');
+    document.body.append(page, banner);
+    field.focus();
+    let opts: RenderOptions | undefined;
+    render.mockImplementation((_el: HTMLElement, o: RenderOptions) => {
+      opts = o;
+      return 'widget-1';
+    });
+    const pending = getTurnstileToken('site', 'otc-send');
+    await vi.waitFor(() => expect(opts).toBeDefined());
+    expect(page.hasAttribute('inert')).toBe(false);
+    opts!['before-interactive-callback']();
+    const card = document.querySelector<HTMLElement>('[data-testid="turnstile-challenge-card"]')!;
+    expect(page.hasAttribute('inert')).toBe(true);
+    expect(document.activeElement).toBe(card);
+    opts!.callback('tok-1');
+    await pending;
+    expect(page.hasAttribute('inert')).toBe(false);
+    expect(banner.hasAttribute('inert')).toBe(true);
+    expect(document.activeElement).toBe(field);
+  });
+
+  it('cancels on Escape only while the card is showing', async () => {
+    let opts: RenderOptions | undefined;
+    render.mockImplementation((_el: HTMLElement, o: RenderOptions) => {
+      opts = o;
+      return 'widget-1';
+    });
+    const pending = getTurnstileToken('site', 'otc-send');
+    const rejection = expect(pending).rejects.toThrow('turnstile-cancelled');
+    await vi.waitFor(() => expect(opts).toBeDefined());
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).not.toBeNull();
+    opts!['before-interactive-callback']();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await rejection;
+    expect(remove).toHaveBeenCalledWith('widget-1');
+    expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+  });
+
   it('matches the widget theme to the app color scheme', async () => {
     document.documentElement.setAttribute('data-joy-color-scheme', 'dark');
     render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
