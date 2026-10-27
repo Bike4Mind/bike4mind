@@ -13,6 +13,7 @@ import {
   type HubModelView,
   type HubSearchResult,
   type InstalledModelsResult,
+  type MachineView,
   type ModelFit,
   type ModelHubError,
   type ModelPull,
@@ -27,6 +28,8 @@ import { ModelsScreen } from './ModelsScreen';
 import { DOWN_RECHECK_MS } from './useModelHub';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const GIB = 1024 ** 3;
 
 // jsdom ships no matchMedia, and Joy's colour-scheme provider asks for one on mount.
 window.matchMedia ??= ((query: string) => ({
@@ -150,7 +153,7 @@ function curatedList(): CuratedList {
   return {
     updatedAt: '2026-10-27T00:00:00Z',
     source: { origin: 'bundled', sequence: 1, check: 'off', checkedAt: null, stale: false },
-    machine: { memoryKind: 'cpu', totalMemoryBytes: 62 * 1024 ** 3, gpuMemoryBytes: null, gpuName: null },
+    machine: { memoryKind: 'cpu', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'high' },
     picks: [
       { slot: 'best', entryId: 'qwen3-8-27b-gsq', buildId: 'iq3-s', recommended: false },
       { slot: 'fast', entryId: 'gemma-4-e4b', buildId: 'qat-q4-0', recommended: true },
@@ -515,6 +518,39 @@ describe('ModelsScreen curated', () => {
     expect(q('models-curated-no-picks')).not.toBeNull();
     expect(inside('models-curated-picks', 'models-curated-pick')).toHaveLength(0);
     expect(inside('models-curated-all', 'models-curated-entry')).toHaveLength(3);
+  });
+
+  it.each([
+    [
+      'a Mac by its total memory',
+      { memoryKind: 'unified', totalMemoryBytes: 32 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'high' },
+      'This computer has 32 GiB of memory, shared with its GPU.',
+    ],
+    [
+      'a Strix Halo by what its GPU can use, not the RAM the OS sees',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 62 * GIB,
+        gpuMemoryBytes: 64 * GIB,
+        gpuName: 'AMD Radeon 8060S Graphics',
+        confidence: 'high',
+      },
+      'This computer has 62 GiB of RAM, and its GPU (AMD Radeon 8060S Graphics) can use 64 GiB of shared memory.',
+    ],
+    [
+      'a Strix Halo budget that could not be confirmed as a lower bound',
+      { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: 31 * GIB, gpuName: null, confidence: 'low' },
+      'This computer has 62 GiB of RAM, and its GPU can use at least 31 GiB of shared memory. The exact amount could not be confirmed.',
+    ],
+    [
+      'unified memory whose GPU budget could not be measured',
+      { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'low' },
+      'This computer has 62 GiB of memory, shared with its GPU. How much of it the GPU can use could not be measured.',
+    ],
+  ] satisfies [string, MachineView, string][])('describes %s', async (_label, machine, text) => {
+    bridge.curated.machine = machine;
+    await mount(undefined, 'curated');
+    expect(q('models-curated-machine')?.textContent).toContain(text);
   });
 
   it('labels a restricted license', async () => {

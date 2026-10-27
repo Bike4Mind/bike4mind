@@ -7,13 +7,16 @@ const SOLD_SIZE_SLACK = 0.94;
 
 export interface HardwareClass {
   memoryKind: HubTier['memoryKind'];
-  /** GPU memory on a discrete GPU, total memory otherwise. */
+  /** GPU memory on a discrete GPU or AMD unified memory, total memory otherwise. */
   memoryBytes: number;
 }
 
 /** A discrete machine whose GPU memory is unknown is planned, and so classed, as CPU only. */
 export function hardwareClass(hw: HardwareProfile): HardwareClass {
-  if (hw.memoryKind === 'unified') return { memoryKind: 'unified', memoryBytes: hw.totalMemoryBytes };
+  // Only AMD unified memory reports gpuMemoryBytes: what ROCm can allocate, which a firmware carve-out keeps outside
+  // totalMemoryBytes. A low-confidence figure is already the smaller of the pools ROCm might use.
+  if (hw.memoryKind === 'unified')
+    return { memoryKind: 'unified', memoryBytes: hw.gpuMemoryBytes ?? hw.totalMemoryBytes };
   // gpuMemoryBytes sums every GPU, which Ollama splits layers across.
   if (hw.memoryKind === 'discrete' && hw.gpuMemoryBytes)
     return { memoryKind: 'discrete', memoryBytes: hw.gpuMemoryBytes };

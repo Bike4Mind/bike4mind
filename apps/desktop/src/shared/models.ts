@@ -61,9 +61,11 @@ export interface ModelFit {
 export interface MachineView {
   memoryKind: 'unified' | 'discrete' | 'cpu';
   totalMemoryBytes: number;
-  /** Null on unified memory and when no GPU could be measured. */
+  /** What ROCm can allocate on AMD unified memory; null on other unified memory and when no GPU could be measured. */
   gpuMemoryBytes: number | null;
   gpuName: string | null;
+  /** 'low' when the GPU's memory could not be measured or confirmed. */
+  confidence: 'high' | 'low';
 }
 
 export interface LocalModelEntry {

@@ -40,11 +40,20 @@ const CHECK_FAILED = 'Could not check this model with the Models service. Try ag
 
 function machineText(machine: MachineView): string {
   const memory = formatMemory(machine.totalMemoryBytes);
-  if (machine.memoryKind === 'unified') return `This computer has ${memory} of memory, shared with its GPU.`;
+  const gpuName = machine.gpuName ? ` (${machine.gpuName})` : '';
+  // Only AMD unified memory reports gpuMemoryBytes, sized from what ROCm can allocate rather than the RAM the OS sees.
+  if (machine.memoryKind === 'unified' && machine.gpuMemoryBytes) {
+    const shared = formatMemory(machine.gpuMemoryBytes);
+    return machine.confidence === 'low'
+      ? `This computer has ${memory} of RAM, and its GPU${gpuName} can use at least ${shared} of shared memory. The exact amount could not be confirmed.`
+      : `This computer has ${memory} of RAM, and its GPU${gpuName} can use ${shared} of shared memory.`;
+  }
+  if (machine.memoryKind === 'unified')
+    return machine.confidence === 'low'
+      ? `This computer has ${memory} of memory, shared with its GPU. How much of it the GPU can use could not be measured.`
+      : `This computer has ${memory} of memory, shared with its GPU.`;
   if (machine.memoryKind === 'discrete' && machine.gpuMemoryBytes)
-    return `This computer has ${memory} of RAM and ${formatMemory(machine.gpuMemoryBytes)} of GPU memory${
-      machine.gpuName ? ` (${machine.gpuName})` : ''
-    }.`;
+    return `This computer has ${memory} of RAM and ${formatMemory(machine.gpuMemoryBytes)} of GPU memory${gpuName}.`;
   return `This computer has ${memory} of RAM and no GPU memory was detected, so badges assume models run on the CPU.`;
 }
 

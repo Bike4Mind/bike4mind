@@ -187,6 +187,7 @@ describe('machineView', () => {
       totalMemoryBytes: 64 * GIB,
       gpuMemoryBytes: 24 * GIB,
       gpuName: 'NVIDIA GeForce RTX 4090',
+      confidence: 'high',
     });
   });
 });
