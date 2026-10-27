@@ -5,8 +5,10 @@
  * MongoDB (no schema-level cap on string-array length).
  */
 
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, InternalServerError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { IAgent, supportedChatModels, supportedImageModels, triggerWordsSchema } from '@bike4mind/common';
+import { getCallerModelList } from '@server/utils/callerModelList';
 
 /**
  * A body field failed one of these validators. A BadRequestError (400) on the SPA routes; the
@@ -158,17 +160,41 @@ export function validateTriggerWords(value: unknown): string[] | undefined {
 }
 
 /**
+ * The static enums only know models that shipped with the build; newer ones arrive through the
+ * dynamic catalog and chat accepts them by that route. An enum hit passes without a lookup, so the
+ * live fan-out runs only for ids the enums miss. The catalog is the caller's own picker list, so
+ * "accepted here" means "selectable in chat for this user".
+ */
+async function assertModelsSelectable(agentData: Partial<IAgent>, userId: string) {
+  const checks = [
+    { id: agentData.preferredModel, known: supportedChatModels, message: 'Invalid model' },
+    { id: agentData.preferredImageModel, known: supportedImageModels, message: 'Invalid image model' },
+  ].filter(({ id, known }) => id && !known.safeParse(id).success);
+  if (checks.length === 0) return;
+
+  const { models } = await getCallerModelList(userId, new Logger());
+  // An empty catalog means every backend listing failed; reject as unavailable, not as a bad model.
+  if (models.length === 0) {
+    throw new InternalServerError('Model catalog is unavailable; try again shortly');
+  }
+  for (const { id, message } of checks) {
+    if (!models.some(model => model.id === id)) {
+      throw new AgentValidationError(`${message}: ${id}`);
+    }
+  }
+}
+
+/**
  * Validates and normalizes the fields of an agent body in place, for PUT /api/agents/[id],
  * PATCH /api/v1/agents/[id] and createAgent (both POST routes). Only fields present on `agentData` are checked. `label` renames a field
- * in an error message, so the v1 route can name its snake_case spelling.
+ * in an error message, so the v1 route can name its snake_case spelling. `userId` scopes the model
+ * catalog lookup to the keys the caller can actually chat with.
  */
-export function validateAgentUpdate(agentData: Partial<IAgent>, label: (field: string) => string = field => field) {
-  if (agentData.preferredModel && !supportedChatModels.safeParse(agentData.preferredModel).success) {
-    throw new AgentValidationError(`Invalid model: ${agentData.preferredModel}`);
-  }
-  if (agentData.preferredImageModel && !supportedImageModels.safeParse(agentData.preferredImageModel).success) {
-    throw new AgentValidationError(`Invalid image model: ${agentData.preferredImageModel}`);
-  }
+export async function validateAgentUpdate(
+  agentData: Partial<IAgent>,
+  userId: string,
+  label: (field: string) => string = field => field
+) {
   if (agentData.temperature !== undefined && (agentData.temperature < 0 || agentData.temperature > 2)) {
     throw new AgentValidationError('Temperature must be between 0 and 2');
   }
@@ -205,4 +231,7 @@ export function validateAgentUpdate(agentData: Partial<IAgent>, label: (field: s
   if (agentData.fallbackModels !== undefined) {
     agentData.fallbackModels = validateStringList(agentData.fallbackModels, 'fallbackModels');
   }
+
+  // Last, so a body the cheap checks reject never pays for the live catalog fan-out.
+  await assertModelsSelectable(agentData, userId);
 }
