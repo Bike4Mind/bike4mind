@@ -623,11 +623,12 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       }
     );
 
-    it('forwards a budget at the minimum (2xx)', async () => {
+    it.each(['max_tokens', 'maxTokens', 'maxOutputTokens'])('forwards a %s at the minimum (2xx)', async field => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
-      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', max_tokens: 16 } });
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', [field]: 16 } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
+      expect((mockInvoke.mock.calls[0][0] as { body: { max_tokens?: number } }).body.max_tokens).toBe(16);
     });
   });
 
