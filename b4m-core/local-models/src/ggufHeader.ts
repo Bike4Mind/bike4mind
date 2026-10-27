@@ -4,6 +4,8 @@ const CHAT_TEMPLATE_KEY = 'tokenizer.chat_template';
 /** Tokenizer arrays come before the template and run to a few MB; past this the header is given up on. */
 const MAX_SCAN_BYTES = 64 * 1024 * 1024;
 const CHUNK_BYTES = 1024 * 1024;
+const GGUF_U32 = 4;
+const GGUF_I32 = 5;
 const GGUF_STRING = 8;
 const GGUF_ARRAY = 9;
 const FIXED_SIZES: Record<number, number> = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8 };
@@ -91,7 +93,15 @@ class HeaderReader {
   }
 }
 
-async function scan(path: string): Promise<string | null | undefined> {
+export interface GgufHeaderInfo {
+  /** `tokenizer.chat_template`, or null when the header has none. */
+  chatTemplate: string | null;
+  architecture: string | null;
+  /** `<architecture>.pooling_type`: 0 none, 1 mean, 2 cls, 3 last, 4 rank; null when absent. */
+  poolingType: number | null;
+}
+
+async function scan(path: string): Promise<GgufHeaderInfo | undefined> {
   const handle = await open(path, 'r');
   try {
     const reader = new HeaderReader(handle);
@@ -100,13 +110,21 @@ async function scan(path: string): Promise<string | null | undefined> {
     if (version !== 2 && version !== 3) return undefined;
     await reader.u64();
     const pairs = await reader.u64();
+    const info: GgufHeaderInfo = { chatTemplate: null, architecture: null, poolingType: null };
     for (let i = 0; i < pairs; i++) {
       const key = await reader.string();
       const type = await reader.u32();
-      if (key === CHAT_TEMPLATE_KEY && type === GGUF_STRING) return await reader.string();
-      await reader.skipValue(type);
+      if (key === 'general.architecture' && type === GGUF_STRING) info.architecture = await reader.string();
+      else if (key.endsWith('.pooling_type') && (type === GGUF_U32 || type === GGUF_I32)) {
+        const value = await reader.u32();
+        info.poolingType = type === GGUF_I32 ? value | 0 : value;
+      } else if (key === CHAT_TEMPLATE_KEY && type === GGUF_STRING) {
+        // Converters write the tokenizer keys last, after the architecture's own keys.
+        info.chatTemplate = await reader.string();
+        return info;
+      } else await reader.skipValue(type);
     }
-    return null;
+    return info;
   } catch {
     return undefined;
   } finally {
@@ -114,28 +132,51 @@ async function scan(path: string): Promise<string | null | undefined> {
   }
 }
 
-const cache = new Map<string, string | null | undefined>();
+const cache = new Map<string, GgufHeaderInfo | undefined>();
 
 /**
- * The `tokenizer.chat_template` in a GGUF file's header: null when the header has none, undefined when it could
- * not be read (not GGUF v2/v3, truncated, or past the scan cap). Cached by path, mtime and size.
+ * The chat template, architecture and pooling type in a GGUF file's header; undefined when it could not be read
+ * (not GGUF v2/v3, truncated, or past the scan cap). Cached by path, mtime and size.
  */
-export async function readGgufChatTemplate(path: string): Promise<string | null | undefined> {
-  const info = await stat(path).catch(() => null);
-  if (!info) return undefined;
-  const key = `${path}\0${info.mtimeMs}\0${info.size}`;
+export async function readGgufHeader(path: string): Promise<GgufHeaderInfo | undefined> {
+  const stats = await stat(path).catch(() => null);
+  if (!stats) return undefined;
+  const key = `${path}\0${stats.mtimeMs}\0${stats.size}`;
   if (cache.has(key)) return cache.get(key);
-  const template = await scan(path).catch(() => undefined);
-  cache.set(key, template);
-  return template;
+  const info = await scan(path).catch(() => undefined);
+  cache.set(key, info);
+  return info;
 }
 
+const ENCODER_ARCHITECTURES = new Set([
+  'bert',
+  'nomic-bert',
+  'nomic-bert-moe',
+  'jina-bert-v2',
+  'modern-bert',
+  't5encoder',
+]);
+
 /**
- * Tool and thinking support as the chat template shows it. A template that never mentions `tools` cannot render
- * them; an unreadable header reports tools as supported, since llama-server runs with `--jinja` either way.
+ * What a model can do as its header shows it. A pooling type or an encoder-only architecture marks an embedding or
+ * rerank model, which serves no chat. A template that never mentions `tools` cannot render them; an unreadable
+ * header reports a chat model with tools, since llama-server runs with `--jinja` either way.
  */
-export function templateCapabilities(template: string | null | undefined): { tools: boolean; thinking: boolean } {
-  if (template === undefined) return { tools: true, thinking: false };
-  if (template === null) return { tools: false, thinking: false };
-  return { tools: /\btools\b/.test(template), thinking: /<think>|enable_thinking/.test(template) };
+export function headerCapabilities(info: GgufHeaderInfo | undefined): {
+  tools: boolean;
+  thinking: boolean;
+  embeddings: boolean;
+  completion: boolean;
+} {
+  if (info === undefined) return { tools: true, thinking: false, embeddings: false, completion: true };
+  const embeddings =
+    (info.poolingType !== null && info.poolingType > 0) || ENCODER_ARCHITECTURES.has(info.architecture ?? '');
+  if (embeddings) return { tools: false, thinking: false, embeddings: true, completion: false };
+  const template = info.chatTemplate;
+  return {
+    tools: template !== null && /\btools\b/.test(template),
+    thinking: template !== null && /<think>|enable_thinking/.test(template),
+    embeddings: false,
+    completion: true,
+  };
 }

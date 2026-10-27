@@ -142,21 +142,21 @@ describe('GgufModelStore', () => {
     expect(models[1]?.missingShards).toEqual(['half-00001-of-00003.gguf', 'half-00003-of-00003.gguf']);
   });
 
-  it('reads tool and thinking support from the chat template, reporting tools when it is unreadable', async () => {
+  it('reads capabilities from the header, reporting a chat model with tools when it is unreadable', async () => {
     const store = freshStore();
     await place(store, 'tools.gguf', ggufWithTemplate('{% if tools %}{{ tools }}{% endif %}<think>'));
     await place(store, 'plain.gguf', ggufWithTemplate('{{ messages }}'));
+    await place(store, 'embed.gguf', ggufWithTemplate(null, 'qwen3', { type: 'u32', value: 3 }));
     await place(store, 'unknown.gguf');
-    const capabilities = Object.fromEntries(
-      (await store.list()).map(model => [
-        model.name,
-        { tools: model.capabilities.tools, thinking: model.capabilities.thinking },
-      ])
-    );
+    await place(store, 'mmproj-x-f16.gguf', ggufWithTemplate(null));
+    const capabilities = Object.fromEntries((await store.list()).map(model => [model.name, model.capabilities]));
+    const none = { tools: false, thinking: false, vision: false, embeddings: false, completion: false };
     expect(capabilities).toEqual({
-      'plain.gguf': { tools: false, thinking: false },
-      'tools.gguf': { tools: true, thinking: true },
-      'unknown.gguf': { tools: true, thinking: false },
+      'embed.gguf': { ...none, embeddings: true },
+      'mmproj-x-f16.gguf': none,
+      'plain.gguf': { ...none, completion: true },
+      'tools.gguf': { ...none, tools: true, thinking: true, completion: true },
+      'unknown.gguf': { ...none, tools: true, completion: true },
     });
   });
 

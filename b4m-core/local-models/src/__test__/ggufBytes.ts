@@ -16,6 +16,7 @@ const text = (value: string) => {
 
 export type GgufValue =
   | { type: 'u32'; value: number }
+  | { type: 'i32'; value: number }
   | { type: 'string'; value: string }
   | { type: 'strings'; value: string[] }
   | { type: 'floats'; count: number };
@@ -24,6 +25,11 @@ function encode(entry: GgufValue): Buffer {
   switch (entry.type) {
     case 'u32':
       return Buffer.concat([u32(4), u32(entry.value)]);
+    case 'i32': {
+      const value = Buffer.alloc(4);
+      value.writeInt32LE(entry.value);
+      return Buffer.concat([u32(5), value]);
+    }
     case 'string':
       return Buffer.concat([u32(8), text(entry.value)]);
     case 'strings':
@@ -45,10 +51,11 @@ export function ggufBytes(metadata: Record<string, GgufValue>, version = 3): Buf
 }
 
 /** A header with tokenizer arrays ahead of `template`, as converted models have; no template key when null. */
-export function ggufWithTemplate(template: string | null): Buffer {
+export function ggufWithTemplate(template: string | null, architecture = 'qwen2', pooling?: GgufValue): Buffer {
   return ggufBytes({
-    'general.architecture': { type: 'string', value: 'qwen2' },
+    'general.architecture': { type: 'string', value: architecture },
     'general.alignment': { type: 'u32', value: 32 },
+    ...(pooling ? { [`${architecture}.pooling_type`]: pooling } : {}),
     'tokenizer.ggml.tokens': { type: 'strings', value: ['<s>', 'hello', 'world'] },
     'tokenizer.ggml.scores': { type: 'floats', count: 3 },
     ...(template === null ? {} : { 'tokenizer.chat_template': { type: 'string' as const, value: template } }),
