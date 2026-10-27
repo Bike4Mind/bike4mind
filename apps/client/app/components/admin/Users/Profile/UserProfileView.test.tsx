@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient } from '@tanstack/react-query';
 import { UserProfileView } from './UserProfileView';
 import { USER_PROFILE_TABS, type UserProfileTab } from './userProfileSearch';
 import { ProfileTestWrapper, buildProfile } from './profileTestUtils';
@@ -13,8 +14,18 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@client/app/hooks/useHelpPanel', () => ({ openHelpPanel: vi.fn() }));
 vi.mock('../BulkAbuseResponseModal', () => ({
-  default: ({ selectedUserIds, recordAction }: { selectedUserIds: string[]; recordAction: string }) => (
-    <div role="dialog" data-testid="bulk-abuse-modal" data-user={selectedUserIds[0]} data-action={recordAction} />
+  default: ({
+    selectedUserIds,
+    recordAction,
+    onExecuted,
+  }: {
+    selectedUserIds: string[];
+    recordAction: string;
+    onExecuted: () => void;
+  }) => (
+    <div role="dialog" data-testid="bulk-abuse-modal" data-user={selectedUserIds[0]} data-action={recordAction}>
+      <button data-testid="stub-bulk-executed-btn" onClick={onExecuted} />
+    </div>
   ),
 }));
 vi.mock('./actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => mocks.update }));
@@ -148,6 +159,17 @@ describe('UserProfileView', () => {
       const modal = screen.getByTestId('bulk-abuse-modal');
       expect(modal).toHaveAttribute('data-user', buildProfile().id);
       expect(modal).toHaveAttribute('data-action', 'revoke');
+    });
+
+    it('refetches the API keys once the revoke has run', () => {
+      const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+      setup();
+
+      fireEvent.click(screen.getByTestId('admin-command-revoke-btn'));
+      fireEvent.click(screen.getByTestId('stub-bulk-executed-btn'));
+
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'user-api-keys', buildProfile().id] });
+      invalidate.mockRestore();
     });
 
     it('closes the dialog from its cancel button', async () => {

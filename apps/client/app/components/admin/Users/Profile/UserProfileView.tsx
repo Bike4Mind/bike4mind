@@ -243,6 +243,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
           onExecuted={() => {
             void queryClient.invalidateQueries({ queryKey: ['users'] });
             void queryClient.invalidateQueries({ queryKey: ['admin', 'users', user.id] });
+            void queryClient.invalidateQueries({ queryKey: ['admin', 'user-api-keys', user.id] });
           }}
         />
       )}
