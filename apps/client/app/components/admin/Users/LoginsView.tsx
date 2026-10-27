@@ -16,7 +16,6 @@ const LoginsView: React.FC<LoginsViewProps> = ({ user }) => {
   const logins =
     counters.data?.find(counter => counter.action === AuthEvents.LOGIN || counter.action === AuthEvents.REGISTER)
       ?.count ?? 0;
-  const isAlert = logins === 0;
 
   const lastLoginRecord = user.loginRecords?.reduce(
     (prev, current) => (prev.loginTime > current.loginTime ? prev : current),
@@ -40,7 +39,8 @@ const LoginsView: React.FC<LoginsViewProps> = ({ user }) => {
           aria-label={`${logins} logins, view last login details`}
           size="sm"
           variant="soft"
-          color={isAlert ? 'danger' : 'success'}
+          // Zero is not a fault, so it reads neutral, not red (DESIGN_GUIDE.md, "Status tones").
+          color={logins === 0 ? 'neutral' : 'success'}
           startDecorator={<CircleIcon sx={{ fontSize: 8 }} />}
           onClick={handleOpenModal}
         >
