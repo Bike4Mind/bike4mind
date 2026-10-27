@@ -47,7 +47,7 @@ test.describe('Admin - Navigation', () => {
     await basePage.dismissModals();
     await expect(adminPage.page.getByTestId('admin-dashboard')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
 
-    const panel = page.locator('[role="tabpanel"]').filter({ visible: true }).first();
+    const panel = page.getByRole('tabpanel').filter({ has: page.getByTestId('admin-dashboard') });
     const { scrollWidth, clientWidth } = await panel.evaluate(el => ({
       scrollWidth: el.scrollWidth,
       clientWidth: el.clientWidth,
