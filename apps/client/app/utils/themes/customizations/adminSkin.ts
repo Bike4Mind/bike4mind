@@ -1,6 +1,6 @@
 import type { Components, Theme } from '@mui/joy/styles';
 import { adminPalette, type AdminPalette } from '../admin';
-import { adminScrollArea, adminScrollbar } from './adminScrollbar';
+import { adminScrollGutter, adminScrollbar } from './adminScrollbar';
 
 /**
  * The admin skin: Joy component overrides that only take effect under an element carrying
@@ -17,6 +17,8 @@ export const ADMIN_SURFACE_ATTRIBUTE = 'data-admin-surface';
  * help panel). The skin stops at it, so the widget looks exactly as it does on any other page.
  */
 export const ADMIN_SURFACE_EXCLUDE_ATTRIBUTE = 'data-admin-surface-exclude';
+/** Spread onto the root of app-wide chrome to opt it out of the admin skin. */
+export const adminSurfaceExcludeProps = { [ADMIN_SURFACE_EXCLUDE_ATTRIBUTE]: '' };
 
 const surface = `[${ADMIN_SURFACE_ATTRIBUTE}]`;
 const exclude = `[${ADMIN_SURFACE_EXCLUDE_ATTRIBUTE}]`;
@@ -24,12 +26,13 @@ const notExcluded = `:where(:not(${exclude}, ${exclude} *))`;
 const adminMounted = `body:has(${surface})`;
 // Portalled popups render under <body>, outside the admin root, so they are matched while an admin
 // surface is mounted instead. A popup opened from excluded chrome portals there too; it is told apart
-// by its trigger: an expanded control inside the chrome owns the open menu or listbox, and a tooltip
-// shows while the pointer is over the chrome.
+// by its trigger: an expanded popup trigger (not any disclosure) inside the chrome owns the open menu
+// or listbox, and a tooltip shows while the pointer is over the chrome.
 const dialogRoots = '.MuiModalDialog-root, .MuiDrawer-content';
 const popupRoots = '.MuiMenu-root, .MuiSelect-listbox, .MuiAutocomplete-listbox';
 const adminDialogsMounted = adminMounted;
-const adminPopupsMounted = `${adminMounted}:not(:has(${exclude} [aria-expanded="true"]))`;
+const popupTrigger = '[aria-haspopup]:not([aria-haspopup="false"]), [role="combobox"]';
+const adminPopupsMounted = `${adminMounted}:not(:has(${exclude} :is(${popupTrigger})[aria-expanded="true"]))`;
 const adminTooltipsMounted = `${adminMounted}:not(:has(${exclude}:hover))`;
 const portalScope = `${adminDialogsMounted} :is(${dialogRoots}), ${adminPopupsMounted} :is(${popupRoots})`;
 /** The portalled roots that carry the admin variables, as a list so each can take its own prefix. */
@@ -298,7 +301,7 @@ export const adminSkinGlobalStyles = (theme: Theme) => ({
       outlineOffset: '2px',
     },
   // Overlay scrollbars on every admin scroll area; the main frame, sidebar, tables and dialog bodies
-  // also reserve the gutter (`adminScrollArea`).
+  // also reserve the gutter (`adminScrollGutter`).
   [`${inSurface('*')}, ${adminDialogsMounted} :is(${dialogRoots})${notExcluded}, ${adminDialogsMounted} :is(${dialogRoots}) *${notExcluded}`]:
     adminScrollbar,
   // Material icons sit outside Joy's theme. Help icons are 16 px and muted, never larger than the heading they explain.
@@ -658,7 +661,7 @@ export const adminSkinComponents = {
   },
   JoyDialogContent: {
     styleOverrides: {
-      root: { [IN_ADMIN]: adminScrollArea },
+      root: { [IN_ADMIN]: adminScrollGutter },
     },
   },
   JoyDialogTitle: {

@@ -15,7 +15,7 @@ import { SidebarNav } from './AdminSidebarNav';
 import { AdminTab } from './adminSidebarConfig';
 import { environmentChipLabel, resolveCurrentEnvironment } from './environmentBanner';
 import { adminTabToSlug } from './adminTabSlugs';
-import { adminFocus, adminScrollArea } from './shared/adminStyles';
+import { adminFocus, adminScrollGutter } from './shared/adminStyles';
 import { useAdminModal } from './useAdminModal';
 import { useAdminNotifications } from './useAdminNotifications';
 import { useAdminSidebarCollapsed } from './useAdminSidebarState';
@@ -130,7 +130,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
                 Admin
               </Typography>
             </Box>
-            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', ...adminScrollArea }}>{children}</Box>
+            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', ...adminScrollGutter }}>{children}</Box>
           </Box>
         </Box>
         <Drawer

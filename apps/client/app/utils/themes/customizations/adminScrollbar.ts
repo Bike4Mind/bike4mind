@@ -18,5 +18,5 @@ export const adminScrollbar = {
   '&:is(:hover, :focus-within)::-webkit-scrollbar-thumb': { backgroundColor: thumb },
 } as const;
 
-/** `adminScrollbar` plus a reserved gutter, so content does not shift when the area starts to overflow. */
-export const adminScrollArea = { ...adminScrollbar, scrollbarGutter: 'stable' } as const;
+/** Reserves the scrollbar gutter, so content does not shift when the area starts to overflow. */
+export const adminScrollGutter = { scrollbarGutter: 'stable' } as const;

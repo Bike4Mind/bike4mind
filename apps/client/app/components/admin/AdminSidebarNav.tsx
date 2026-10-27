@@ -11,7 +11,7 @@ import {
 } from 'react';
 import { ChevronDown, Ellipsis, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
 import { Avatar, Box, Chip, Dropdown, IconButton, Input, Menu, MenuButton, MenuItem, Tooltip } from '@mui/joy';
-import { adminFocus, adminScrollArea } from './shared/adminStyles';
+import { adminFocus, adminScrollGutter } from './shared/adminStyles';
 import {
   AdminTab,
   SIDEBAR_SECTIONS,
@@ -161,7 +161,7 @@ const kbdSx = {
 const quietScrollSx = {
   overflowY: 'auto',
   overscrollBehavior: 'contain',
-  ...adminScrollArea,
+  ...adminScrollGutter,
 } as const;
 
 // The size goes in an inline style too: app-wide svg rules otherwise beat lucide's width attribute.

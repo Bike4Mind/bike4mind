@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { Button, IconButton, Option, Select, Sheet, Typography } from '@mui/joy';
+import { Button, Drawer, IconButton, Option, Select, Sheet, Typography } from '@mui/joy';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import FloatingChatWindow from '@client/app/components/Session/FloatingChatWindow';
 import AppTheme from '../AppTheme';
@@ -134,5 +134,62 @@ describe('admin skin exclusion', () => {
     expect(
       getComputedStyle(document.documentElement).getPropertyValue('--app-joy-palette-primary-solidBg').trim()
     ).toBe('var(--joy-palette-primary-solidBg)');
+  });
+
+  // A disclosure that stays expanded (a "Show more" button, an accordion) is not a popup trigger.
+  it('keeps admin popups skinned while the chat holds an expanded disclosure', () => {
+    const renderAdminSelect = (chatExpanded: boolean) =>
+      render(
+        <AppTheme>
+          <Sheet data-admin-surface="">
+            <Select
+              data-testid="admin-select"
+              defaultValue="a"
+              slotProps={{ listbox: { 'data-testid': 'admin-listbox' } as object }}
+            >
+              <Option value="a">A</Option>
+            </Select>
+          </Sheet>
+          <div data-admin-surface-exclude="">
+            <Button aria-expanded={chatExpanded}>Show more</Button>
+          </div>
+        </AppTheme>
+      );
+    renderAdminSelect(false);
+    fireEvent.click(screen.getByTestId('admin-select'));
+    const skinned = stylesOf(['admin-listbox']);
+    cleanup();
+    renderAdminSelect(true);
+    fireEvent.click(screen.getByTestId('admin-select'));
+
+    expect(stylesOf(['admin-listbox'])).toEqual(skinned);
+  });
+
+  // The help panel is a portalled Drawer, so it reaches the marker through the portal scope, not the
+  // `[surface] [exclude]` variable restore the chat relies on.
+  describe('portalled drawer', () => {
+    const renderDrawer = (adminRoot: boolean, marked: boolean) =>
+      render(
+        <AppTheme>
+          {adminRoot && <Sheet data-admin-surface="" />}
+          <Drawer open {...(marked ? { 'data-admin-surface-exclude': '' } : {})}>
+            <Button data-testid="drawer-btn">Go</Button>
+          </Drawer>
+        </AppTheme>
+      );
+    const buttonStyle = () => stylesOf(['drawer-btn']);
+
+    it('skins an unmarked drawer under the admin root and leaves a marked one as the app renders it', () => {
+      renderDrawer(false, false);
+      const app = buttonStyle();
+      cleanup();
+      renderDrawer(true, false);
+      const unmarked = buttonStyle();
+      cleanup();
+      renderDrawer(true, true);
+
+      expect(unmarked).not.toEqual(app);
+      expect(buttonStyle()).toEqual(app);
+    });
   });
 });

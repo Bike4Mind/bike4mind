@@ -1,4 +1,4 @@
-export { adminScrollArea } from '@client/app/utils/themes/customizations/adminScrollbar';
+export { adminScrollGutter } from '@client/app/utils/themes/customizations/adminScrollbar';
 
 const focusRing = {
   // The app theme removes Joy button outlines with !important; admin controls must restore them.
