@@ -139,7 +139,7 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
     if (event.shiftKey && (document.activeElement === startSentinel || document.activeElement === card)) {
       event.preventDefault();
       cancel.focus();
-    } else if (!event.shiftKey && document.activeElement === cancel) {
+    } else if (!event.shiftKey && (document.activeElement === cancel || document.activeElement === card)) {
       // No preventDefault: the default Tab action advances from startSentinel into the widget.
       focusBeforeWidget();
     }

@@ -182,7 +182,7 @@ describe('getTurnstileToken', () => {
     expect(laterPortal.hasAttribute('inert')).toBe(false);
   });
 
-  it('lets Tab reach the widget inside its closed shadow root and wraps at the card edges', async () => {
+  it('parks Tab focus before the widget in its closed shadow root and wraps at the card edges', async () => {
     let options: RenderOptions | undefined;
     render.mockImplementation((element: HTMLElement, renderOptions: RenderOptions) => {
       // Real Turnstile mounts its iframe in a closed shadow root, so the page cannot query it.
@@ -205,7 +205,13 @@ describe('getTurnstileToken', () => {
       return event;
     };
 
+    // The first Tab from the card goes to the widget instead of skipping it to Cancel.
+    expect(document.activeElement).toBe(card);
+    expect(pressTab().defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(startSentinel);
+
     // Shift+Tab leaving the widget lands on the start sentinel and wraps to Cancel.
+    cancel.focus();
     startSentinel.focus();
     expect(document.activeElement).toBe(cancel);
 
