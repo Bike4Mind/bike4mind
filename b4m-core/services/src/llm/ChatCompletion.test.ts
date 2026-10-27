@@ -1161,6 +1161,28 @@ describe('ChatCompletionProcess', () => {
         expect(statusText()).not.toMatch(/cheap-model|Trying alternative model/);
       });
 
+      it('records no retry for the silent hop and masks the substitute retries it does store', async () => {
+        const { body, complete, requested } = await wireFailingSubstitute(['cheap-model']);
+        const inner = complete.getMockImplementation()!;
+        complete.mockImplementation(async (modelId: string, messages: unknown, opts: any, cb: unknown) => {
+          if (modelId === 'cheap-model-2') {
+            const error = Object.assign(new Error('rate limited'), { status: 429, requestID: 'req_provider' });
+            opts._internal.turnTelemetry.onRetry({ error, delayMs: 0, model: modelId });
+          }
+          return inner(modelId, messages, opts, cb);
+        });
+
+        await service.process({ body, logger: mockLogger });
+
+        const retries = mockDb.quests.update.mock.calls.at(-1)?.[0].turnTiming.retries;
+        expect(retries).toHaveLength(1);
+        for (const retry of retries) {
+          expect(retry.model).toBe(requested.id);
+          expect(retry.status).toBeUndefined();
+          expect(retry.requestId).toBeUndefined();
+        }
+      });
+
       it('current_model_details still reports the requested model after the hop', async () => {
         const { body, complete, requested } = await wireFailingSubstitute(['cheap-model']);
         mockedGetAvailableModels.mockResolvedValue([

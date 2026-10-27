@@ -2577,6 +2577,13 @@ export class ChatCompletionProcess {
         : null;
       if (shadowModelInfo) {
         logger.info('[ModelRouting] tier substitution', { requested: requestedModelInfo.id, actual: modelInfo.id });
+        // Backends report retries under the substitute's id, and status/request-id formats hint at its provider.
+        turnTiming.maskStoredRetries(retry => ({
+          ...retry,
+          status: undefined,
+          requestId: undefined,
+          model: this.isSubstituteId(retry.model) ? requestedModelInfo.id : retry.model,
+        }));
       }
       this.modelAdmission = createModelAdmission({
         user: this.user,
@@ -5671,7 +5678,7 @@ export class ChatCompletionProcess {
                 failed: currentModel.id,
                 next: next.id,
               });
-              turnTiming.recordRetry(lastError, 0, this.ledgerModel(currentModel).id);
+              // No turnTiming retry: a normal user's failed request records none, so one here would show.
               substitution.actual = next;
               substitution.substituteIds.add(next.id);
               currentModel = next;
