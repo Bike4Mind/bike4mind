@@ -51,7 +51,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({ EnableMCPServer: true })),
   getSettingsValue: (key: string, map: Record<string, unknown>) => map[key],
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptEnvVariables: mockEncrypt,
   decryptEnvVariables: (v: unknown) => v,
 }));

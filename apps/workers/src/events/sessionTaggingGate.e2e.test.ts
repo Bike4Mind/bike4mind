@@ -60,7 +60,7 @@ vi.mock('@server/utils/eventBus', () => ({
   NotebookCurationEvents: { Start: { publish: vi.fn() } },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
       modelId: 'test-model',

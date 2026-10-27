@@ -2,7 +2,7 @@ import { organizationRepository, userRepository, withTransaction } from '@bike4m
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';

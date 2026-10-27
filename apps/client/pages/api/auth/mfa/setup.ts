@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { readSignInOrigin } from '@server/auth/signInSecondFactor';
@@ -11,7 +11,9 @@ import { isFreshSignIn, stepUpGate } from '@server/auth/stepUp';
 // enrollment; see isFreshSignIn for which origins count).
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(stepUpGate({ skip: async req => !!req.user?.mfaPending || (!!req.user && (await isFreshSignIn(req.user))) }))
-  .use(rateLimit({ limit: 3, windowMs: 15 * 60 * 1000 })) // 3 setups per 15 minutes
+  // Repeat calls re-serve the pending secret (see setupMFA), and the enforcement screen calls
+  // this on every page load, so a tight limit locks out users who reload mid-enrollment.
+  .use(rateLimit({ limit: 10, windowMs: 15 * 60 * 1000 }))
   .post(
     asyncHandler(async (req, res) => {
       const user = req.user;
@@ -25,7 +27,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       try {
         // Get fresh user data from database to ensure we have latest MFA state
-        const freshUser = await userRepository.findById(user.id);
+        const freshUser = await userRepository.findByIdWithMfaSecrets(user.id);
         if (!freshUser) {
           return res.status(404).json({ error: 'User not found in database' });
         }

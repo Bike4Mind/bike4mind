@@ -45,7 +45,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 vi.mock('@bike4mind/database/ai', () => ({
   rapidReplyAuditLogRepository: { createLog: h.createLog },

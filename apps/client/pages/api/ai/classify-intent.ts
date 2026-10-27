@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';

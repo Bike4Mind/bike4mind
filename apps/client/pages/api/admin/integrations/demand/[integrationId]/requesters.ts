@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ApiKeyScope, type IntegrationRequestersResponse } from '@bike4mind/common';
 import { integrationRequestRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 import { ForbiddenError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';

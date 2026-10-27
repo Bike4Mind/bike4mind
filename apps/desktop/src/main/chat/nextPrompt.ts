@@ -1,5 +1,5 @@
 import { ChatModels } from '@bike4mind/common';
-import type { ChatModelOption } from '@shared/chat';
+import { isLocalBackend, type ChatModelOption } from '@shared/chat';
 import type { CompletionMessage } from './completions';
 
 /**
@@ -41,11 +41,7 @@ export const SUGGESTION_MODELS: readonly string[] = [
  */
 export function suggestionModelChoices(available: readonly ChatModelOption[]): ChatModelOption[] {
   const hosted = SUGGESTION_MODELS.flatMap(id => available.filter(model => model.id === id));
-  return [...hosted, ...available.filter(isLocalModel)];
-}
-
-export function isLocalModel(model: Pick<ChatModelOption, 'backend'>): boolean {
-  return model.backend === 'ollama' || model.backend === 'local-ollama';
+  return [...hosted, ...available.filter(isLocalBackend)];
 }
 
 /**

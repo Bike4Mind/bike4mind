@@ -7,7 +7,7 @@ import { ensureAtlasVectorSearchIndexes } from '@bike4mind/fab-pipeline';
 import { Context } from 'aws-lambda';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
-import { contextToLogs } from '@server/utils/logger';
+import { contextToLogs } from '@bike4mind/server-utils/utils/logger';
 
 export const createDatabase = async (_event: unknown, context: Context) => {
   const logger = new Logger().withMetadata(contextToLogs(context));

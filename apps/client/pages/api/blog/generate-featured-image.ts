@@ -12,7 +12,7 @@ import {
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository, usageEventRepository } from '@bike4mind/database';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import axios from 'axios';
 import {

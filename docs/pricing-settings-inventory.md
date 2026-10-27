@@ -269,7 +269,7 @@ No match outside the definition and tests.
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
-- `apps/client/lib/subscriptions/schema.ts`
+- `packages/server-utils/src/lib/subscriptions/schema.ts`
 - `apps/client/pages/api/admin/users/[userId]/grant-subscription.ts`
 - `apps/client/server/services/organizationService.ts`
 - `b4m-core/common/src/constants/organization.ts`
@@ -283,7 +283,7 @@ No match outside the definition and tests.
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/components/admin/OrganizationsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
-- `apps/client/lib/subscriptions/schema.ts`
+- `packages/server-utils/src/lib/subscriptions/schema.ts`
 - `apps/client/pages/api/admin/organizations/[id]/convert-to-paid.ts`
 - `apps/client/pages/api/admin/organizations/[id]/seats.ts`
 - `apps/client/pages/api/admin/organizations/grant.ts`

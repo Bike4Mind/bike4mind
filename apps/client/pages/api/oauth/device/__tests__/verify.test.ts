@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/utils/apiKeyAccessGate', () => ({
   CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',
   SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',

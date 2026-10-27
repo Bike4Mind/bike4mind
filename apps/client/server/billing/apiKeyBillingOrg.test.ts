@@ -8,7 +8,7 @@ const { mockFindById, mockResolveBillingOrgId } = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({ organizationRepository: { findById: mockFindById } }));
-vi.mock('@server/utils/orgAccess', () => ({ resolveBillingOrgId: mockResolveBillingOrgId }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ resolveBillingOrgId: mockResolveBillingOrgId }));
 vi.mock('@bike4mind/services', async () => ({
   organizationService: await import('../../../../b4m-core/services/src/organizationService/orgAuthority'),
 }));

@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   Session: { findById: async () => h.session },
   sessionRepository: { update: h.update },
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({ modelId: 'test-model', modelInfo: {}, llm: { complete: h.complete } }),
   },

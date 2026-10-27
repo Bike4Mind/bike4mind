@@ -74,9 +74,20 @@ const parseLimit = (value: unknown): number | undefined => {
 export const parseUserId = (value: unknown): string | undefined =>
   typeof value === 'string' && /^[0-9a-f]{24}$/.test(value) ? value : undefined;
 
-/** Per-key coercion for the route's `validateSearch`; anything invalid becomes undefined. */
-export const USERS_SEARCH_PARSERS: { readonly [K in keyof UsersSearch]-?: (value: unknown) => UsersSearch[K] } = {
-  [USERS_PAGE_PARAM]: parsePage,
+// A view param that fails to parse still asked for a view. Keeping the default page stops
+// `validateSearch` from reducing `?sort=bogus` to a bare visit that restores the saved view.
+const parseUsersPage = (value: unknown, search: Record<string, unknown> = {}): number | undefined =>
+  parsePage(value) ??
+  (USERS_VIEW_PARAMS.some(key => search[key] !== undefined) ? DEFAULT_USERS_PARAMS.page : undefined);
+
+/**
+ * Per-key coercion for the route's `validateSearch`, given the whole raw search as well; anything
+ * invalid becomes undefined.
+ */
+export const USERS_SEARCH_PARSERS: {
+  readonly [K in keyof UsersSearch]-?: (value: unknown, search?: Record<string, unknown>) => UsersSearch[K];
+} = {
+  [USERS_PAGE_PARAM]: parseUsersPage,
   [USERS_LIMIT_PARAM]: parseLimit,
   [USERS_SORT_PARAM]: oneOf(USERS_SORT_FIELDS),
   [USERS_ORDER_PARAM]: oneOf(SORT_ORDERS),
