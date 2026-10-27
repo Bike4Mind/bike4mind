@@ -62,7 +62,7 @@ const createRoute = nextRouteForContract(createAgentContract, {
         deniedTools: body.denied_tools,
         triggerWords: body.trigger_words,
       },
-      req.user.id,
+      req.user,
       v1FieldLabel,
       req.logger
     ));
