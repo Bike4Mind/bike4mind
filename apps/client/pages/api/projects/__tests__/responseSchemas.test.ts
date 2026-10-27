@@ -73,7 +73,7 @@ const file = {
   type: 'text',
   isGlobalRead: false,
   isGlobalWrite: false,
-  users: [],
+  users: [{ userId: 'u1', permissions: ['read'], user: { passwordHash: UNDECLARED } }],
   groups: [],
   createdAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-02T00:00:00Z'),
