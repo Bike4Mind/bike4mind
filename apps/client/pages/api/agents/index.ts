@@ -42,7 +42,12 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
   .post(async (req, res) => {
     assertAgentsWriteScope(req);
     try {
-      const { agent, userCredits } = await createAgent(req.body as Partial<IAgent>, req.user!.id);
+      const { agent, userCredits } = await createAgent(
+        req.body as Partial<IAgent>,
+        req.user!.id,
+        undefined,
+        req.logger
+      );
 
       // Return agent and updated user credits
       return res.status(201).json({
