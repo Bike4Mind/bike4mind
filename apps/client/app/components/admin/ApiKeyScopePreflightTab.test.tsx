@@ -242,6 +242,20 @@ describe('ApiKeyScopePreflightTab', () => {
     expect(screen.queryByTestId('scope-preflight-run-echo')).toBeNull();
   });
 
+  it('does not count cached rows in the header after a failed refetch or during a new run', () => {
+    mockUseApiKeyScopePreflight.mockReturnValue(state({ data: result({ rows: [row()] }), error: new Error('nope') }));
+    const { rerender } = renderTab();
+    expect(screen.getByTestId('admin-page-header')).not.toHaveTextContent('(1)');
+
+    mockUseApiKeyScopePreflight.mockReturnValue(state({ data: result({ rows: [row()] }), isFetching: true }));
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <ApiKeyScopePreflightTab />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('admin-page-header')).not.toHaveTextContent('(1)');
+  });
+
   it("shows the handler's refusal, not axios's generic status string", () => {
     // The refusals are the remedy: an unlogged prefix explains why the answer
     // would have been false, and an unknown scope explains a caught typo.

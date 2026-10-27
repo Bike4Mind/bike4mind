@@ -95,7 +95,7 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
     <Stack spacing={2} data-testid="admin-scope-preflight-tab">
       <AdminPageHeader
         title="API key scope preflight"
-        count={data?.rows.length}
+        count={data && !isFetching && !error ? data.rows.length : undefined}
         description={
           <>
             Before declaring <code>requiredScopes</code> on routes that currently have none, check which live keys would
