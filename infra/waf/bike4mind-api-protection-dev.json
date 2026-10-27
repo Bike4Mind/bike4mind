@@ -874,8 +874,18 @@
           "VendorName": "AWS",
           "Name": "AWSManagedRulesAmazonIpReputationList",
           "RuleActionOverrides": [
-            { "Name": "AWSManagedIPReputationList",   "ActionToUse": { "Count": {} } },
-            { "Name": "AWSManagedReconnaissanceList", "ActionToUse": { "Count": {} } }
+            {
+              "Name": "AWSManagedIPReputationList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            },
+            {
+              "Name": "AWSManagedReconnaissanceList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            }
           ]
         }
       },
@@ -2077,8 +2087,12 @@
                 "EnableRegexInPath": false,
                 "RequestInspection": {
                   "PayloadType": "JSON",
-                  "UsernameField": { "Identifier": "/email" },
-                  "PasswordField": { "Identifier": "/code" }
+                  "UsernameField": {
+                    "Identifier": "/email"
+                  },
+                  "PasswordField": {
+                    "Identifier": "/code"
+                  }
                 }
               }
             }
@@ -2086,22 +2100,87 @@
           "ScopeDownStatement": {
             "ByteMatchStatement": {
               "SearchString": "/api/otc/",
-              "FieldToMatch": { "UriPath": {} },
+              "FieldToMatch": {
+                "UriPath": {}
+              },
               "TextTransformations": [
-                { "Priority": 0, "Type": "URL_DECODE" },
-                { "Priority": 1, "Type": "NORMALIZE_PATH" },
-                { "Priority": 2, "Type": "LOWERCASE" }
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
               ],
               "PositionalConstraint": "STARTS_WITH"
             }
           }
         }
       },
-      "OverrideAction": { "Count": {} },
+      "OverrideAction": {
+        "Count": {}
+      },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
         "MetricName": "AWS-AWSManagedRulesACFPRuleSet"
+      }
+    },
+    {
+      "Name": "block-forged-waf-forwarding-headers",
+      "Priority": 28,
+      "Statement": {
+        "OrStatement": {
+          "Statements": [
+            {
+              "ByteMatchStatement": {
+                "SearchString": "1",
+                "FieldToMatch": {
+                  "SingleHeader": {
+                    "Name": "x-amzn-waf-x-waf-anon-ip"
+                  }
+                },
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "NONE"
+                  }
+                ],
+                "PositionalConstraint": "EXACTLY"
+              }
+            },
+            {
+              "ByteMatchStatement": {
+                "SearchString": "1",
+                "FieldToMatch": {
+                  "SingleHeader": {
+                    "Name": "x-amzn-waf-x-waf-bot-signal"
+                  }
+                },
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "NONE"
+                  }
+                ],
+                "PositionalConstraint": "EXACTLY"
+              }
+            }
+          ]
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "block-forged-waf-forwarding-headers"
       }
     },
     {
@@ -2198,7 +2277,10 @@
         "Count": {
           "CustomRequestHandling": {
             "InsertHeaders": [
-              { "Name": "x-waf-anon-ip", "Value": "1" }
+              {
+                "Name": "x-waf-anon-ip",
+                "Value": "1"
+              }
             ]
           }
         }
@@ -2222,7 +2304,10 @@
         "Count": {
           "CustomRequestHandling": {
             "InsertHeaders": [
-              { "Name": "x-waf-bot-signal", "Value": "1" }
+              {
+                "Name": "x-waf-bot-signal",
+                "Value": "1"
+              }
             ]
           }
         }

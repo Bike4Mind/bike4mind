@@ -971,6 +971,22 @@ describe('wafPolicy', () => {
     }
   });
 
+  describe('forgery-guard rule', () => {
+    for (const stage of ['dev']) {
+      it(`counts requests that carry a forged x-amzn-waf-x-waf-anon-ip header on ${stage}`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const rule = rules.find(r => r.Name === 'block-forged-waf-forwarding-headers');
+        expect(rule).toBeDefined();
+        expect(rule!.Priority).toBe(28);
+        expect((rule!.Action as any).Count).toBeDefined();
+        const stmts = (rule!.Statement as any).OrStatement.Statements;
+        const headers = stmts.map((s: any) => s.ByteMatchStatement.FieldToMatch.SingleHeader.Name);
+        expect(headers).toContain('x-amzn-waf-x-waf-anon-ip');
+        expect(headers).toContain('x-amzn-waf-x-waf-bot-signal');
+      });
+    }
+  });
+
   describe('label-forwarding rules', () => {
     for (const stage of ['dev']) {
       it(`injects x-waf-anon-ip on ${stage} when the anonymous-ip label matches`, () => {
