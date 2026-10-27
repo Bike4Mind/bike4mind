@@ -124,6 +124,33 @@ describe('BulkAbuseResponseModal', () => {
     expect(executeMutate).not.toHaveBeenCalled();
   });
 
+  it('previews a suspension as ban plus sessions with locked controls and no credit clawback', () => {
+    render(
+      <TestWrapper>
+        <BulkAbuseResponseModal
+          selectedUserIds={[USER_ID]}
+          recordAction="suspend"
+          onClose={vi.fn()}
+          onExecuted={vi.fn()}
+        />
+      </TestWrapper>
+    );
+    expect(screen.getByText('Suspend account')).toBeInTheDocument();
+    expect(screen.getByTestId('bulk-abuse-target-domain-radio')).toBeDisabled();
+    for (const action of ['ban', 'revokeApiKeys', 'revokeSessions', 'clawbackFreeCredits']) {
+      expect(screen.getByTestId(`bulk-abuse-action-${action}-checkbox`)).toBeDisabled();
+    }
+    fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
+    expect(previewMutate).toHaveBeenCalledWith(
+      {
+        target: { kind: 'users', userIds: [USER_ID] },
+        actions: { ban: true, revokeApiKeys: true, revokeSessions: true, clawbackFreeCredits: false },
+      },
+      expect.anything()
+    );
+    expect(executeMutate).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mutationState.previewError = null;
