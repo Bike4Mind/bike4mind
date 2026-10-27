@@ -48,6 +48,35 @@ describe('CreditAdjustmentsLog', () => {
     expect(screen.queryByTestId('admin-table-sort-delta-btn')).toBeNull();
   });
 
+  it('returns to the first server page when the page size changes', () => {
+    renderLog();
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    expect(useLog).toHaveBeenLastCalledWith({ page: 2, limit: 25, days: 90 });
+    fireEvent.click(screen.getByTestId('admin-table-page-size'));
+    fireEvent.click(screen.getByTestId('admin-table-page-size-50'));
+    expect(useLog).toHaveBeenLastCalledWith({ page: 1, limit: 50, days: 90 });
+  });
+
+  it.each([0, 1])('recovers from an out-of-range server page with %i total pages', totalPages => {
+    const rendered = renderLog();
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    expect(useLog).toHaveBeenLastCalledWith({ page: 3, limit: 25, days: 90 });
+    useLog.mockReturnValue({
+      data: { ...result, rows: [], total: totalPages, totalPages },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch,
+    });
+    rendered.rerender(
+      <CssVarsProvider theme={theme}>
+        <CreditAdjustmentsLog />
+      </CssVarsProvider>
+    );
+    expect(useLog).toHaveBeenLastCalledWith({ page: 1, limit: 25, days: 90 });
+  });
+
   it('offers retry on errors and refresh on empty results', () => {
     useLog.mockReturnValue({ error: new Error('Try again'), refetch });
     const rendered = renderLog();

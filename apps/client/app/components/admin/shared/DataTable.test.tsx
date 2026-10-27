@@ -37,12 +37,15 @@ describe('DataTable', () => {
     const onPageSizeChange = vi.fn();
     renderTable({
       rows: rows.slice(25, 50),
+      selection: { mode: 'allMatching' },
+      onSelectionChange: vi.fn(),
       serverPagination: { page: 2, pageSize: 25, total: 101, onPageChange, onPageSizeChange },
     });
     expect(tableRows()).toHaveLength(25);
     expect(tableRows()[0]).toHaveAttribute('data-testid', 'admin-table-row-26');
     expect(screen.getByText('26-50 of 101')).toBeTruthy();
     expect(screen.queryByTestId('admin-table-sort-count-btn')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
     fireEvent.click(screen.getByTestId('admin-table-next-btn'));
     expect(onPageChange).toHaveBeenLastCalledWith(3);
     fireEvent.click(screen.getByTestId('admin-table-previous-btn'));

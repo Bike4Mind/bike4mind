@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -80,6 +80,34 @@ describe('ApiKeyScopePreflightTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseApiKeyScopePreflight.mockReturnValue(state());
+  });
+
+  it('focuses the endpoint field from the initial empty state', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('scope-preflight-start-btn'));
+    expect(screen.getByTestId('scope-preflight-prefix-input').querySelector('input')).toHaveFocus();
+  });
+
+  it('filters and sorts the complete result, resetting pagination when the search changes', () => {
+    const rows = Array.from({ length: 51 }, (_, index) => row({ keyId: `key-${index + 1}`, requests: 51 - index }));
+    mockUseApiKeyScopePreflight.mockReturnValue(state({ data: result({ rows }) }));
+    renderTab();
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    expect(screen.getByTestId('admin-table-row-key-26')).toBeTruthy();
+
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'KEY-' } });
+    expect(screen.getByTestId('admin-table-row-key-1')).toBeTruthy();
+    expect(screen.getByTestId('admin-table-previous-btn')).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'KEY-51' } });
+    expect(screen.getByTestId('admin-table-row-key-51')).toBeTruthy();
+    expect(screen.getByTestId('admin-table-previous-btn')).toBeDisabled();
+    expect(screen.getByTestId('scope-preflight-deny-count')).toHaveTextContent('51');
+
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: '' } });
+    fireEvent.click(screen.getByTestId('admin-table-sort-requests-btn'));
+    const firstRow = within(screen.getByTestId('scope-preflight-results')).getAllByRole('row')[1];
+    expect(firstRow).toHaveAttribute('data-testid', 'admin-table-row-key-51');
   });
 
   it('keeps Run disabled until a rooted prefix and a scope are both supplied', async () => {
@@ -258,12 +286,14 @@ describe('ApiKeyScopePreflightTab', () => {
 
   it('offers Clear search, not a re-run, when a search matches no returned keys', async () => {
     const refetch = vi.fn();
-    mockUseApiKeyScopePreflight.mockReturnValue(state({ data: result({ rows: [row()] }), refetch }));
+    mockUseApiKeyScopePreflight.mockReturnValue(state({ data: result({ rows: [row()], truncated: true }), refetch }));
     renderTab();
 
     const search = screen.getByTestId('admin-filter-search-input');
     await userEvent.type(search, 'nomatch');
     expect(screen.getByText('No returned keys match')).toBeInTheDocument();
+    expect(screen.getByTestId('scope-preflight-truncated')).toBeTruthy();
+    expect(screen.queryByTestId('scope-preflight-empty')).toBeNull();
     expect(screen.queryByTestId('admin-table-refresh-btn')).toBeNull();
 
     await userEvent.click(screen.getByTestId('scope-preflight-clear-search-btn'));
