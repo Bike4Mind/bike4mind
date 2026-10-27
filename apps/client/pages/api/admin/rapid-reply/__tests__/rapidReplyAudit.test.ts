@@ -32,10 +32,14 @@ type Route = (req: unknown, res: unknown) => unknown;
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, Route> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const chain: Record<string, unknown> & Route = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return routes[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
-        use: () => chain,
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: (fn: Route) => ((routes.GET = fn), chain),
         post: (fn: Route) => ((routes.POST = fn), chain),
         put: (fn: Route) => ((routes.PUT = fn), chain),
