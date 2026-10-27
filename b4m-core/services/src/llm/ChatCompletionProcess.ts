@@ -4993,6 +4993,10 @@ export class ChatCompletionProcess {
       let toolPairingRetried = false;
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
+      // Guard: record at most one provider-refusal hit per turn even when multiple fallback
+      // models are tried. Each fallback hop that also refuses should not stack hits, because
+      // the policy threshold is per-user-prompt, not per-model-attempt.
+      let providerRefusalHitRecorded = false;
       // Where the last tool call landed in the visible reply, so the end of the turn can tell
       // an answer written after the tools ran from a preamble written before them. The slots
       // themselves can't say this: every iteration appends into the same indices.
@@ -5452,7 +5456,12 @@ export class ChatCompletionProcess {
               // moderation are separate concerns. Fire-and-forget so the throw/fallback
               // path is not delayed. The credit rollback (if any) runs in the outer catch
               // independently; both must happen regardless of the other.
-              void this.recordModerationHit('provider', [], quest.id, logger);
+              // Guard: at most one hit per turn -- multiple fallback hops refusing the same
+              // prompt must not multiply the hit count beyond what the policy intends.
+              if (!providerRefusalHitRecorded) {
+                providerRefusalHitRecorded = true;
+                void this.recordModerationHit('provider', [], quest.id, logger);
+              }
             }
 
             logger.warn(
