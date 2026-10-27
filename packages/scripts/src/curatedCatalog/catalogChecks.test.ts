@@ -125,7 +125,8 @@ describe('planPublish', () => {
       catalogBytes(sequence, catalog => {
         catalog.revokedKeyIds = [REVOKED];
         edit?.(catalog);
-      })
+      }),
+      [signing, recovery]
     );
   const reason = (edit: Parameters<typeof catalogBytes>[1]) => {
     const plan = planPublish(next(edit), live);
@@ -146,7 +147,8 @@ describe('planPublish', () => {
           if (from === 3) catalog.revokedKeyIds = [REVOKED];
           catalog.sequence = to;
           catalog.changelog.unshift({ ...catalog.changelog[0], sequence: to, notes: `Release ${to}.` });
-        })
+        }),
+        [signing, recovery]
       );
     const at = (sequence: number) => {
       const plan = planPublish(jump(3, sequence), live);
@@ -162,19 +164,27 @@ describe('planPublish', () => {
     });
   });
 
-  it('refuses a new revocation unless a recovery key signed the list', () => {
+  it('refuses any list that names revoked keys unless a recovery key co-signed it, even with nothing new', () => {
     const NEW = '00000000000000bb';
-    const growing = (signers: (typeof signing)[]) =>
+    const revoking = (ids: string[], signers: (typeof signing)[]) =>
       candidate(
-        catalogBytes(4, catalog => (catalog.revokedKeyIds = [REVOKED, NEW])),
+        catalogBytes(4, catalog => (catalog.revokedKeyIds = ids)),
         signers
       );
-    expect(planPublish(growing([signing]), live)).toEqual({
+    expect(planPublish(revoking([REVOKED, NEW], [signing]), live)).toEqual({
       kind: 'refused',
-      reason: `revokedKeyIds adds ${NEW} without a recovery-key signature`,
+      reason: `revokedKeyIds names ${REVOKED}, ${NEW}, so a recovery key must co-sign the list`,
     });
-    expect(planPublish(growing([recovery, signing]), live)).toEqual({ kind: 'publish', liveSequence: 3 });
-    expect(planPublish(next(), null)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(REVOKED) });
+    expect(planPublish(revoking([REVOKED], [signing]), live)).toMatchObject({
+      kind: 'refused',
+      reason: expect.stringMatching(/recovery key must co-sign/),
+    });
+    expect(planPublish(revoking([REVOKED], [signing]), null)).toMatchObject({ kind: 'refused' });
+    expect(planPublish(revoking([REVOKED, NEW], [recovery, signing]), live)).toEqual({
+      kind: 'publish',
+      liveSequence: 3,
+    });
+    expect(planPublish(revoking([REVOKED], [recovery]), null)).toEqual({ kind: 'first-publish' });
   });
 
   it('is a no-op for the live bytes and behind live for a lower or a different equal sequence', () => {
