@@ -76,6 +76,13 @@ describe('readNetworkMeta', () => {
     expect(meta.wafBotSignal).toBeNull();
   });
 
+  it('reads wafAnonIp and wafBotSignal as true on a deployed stage when headers are present', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', 'synthetic-secret');
+    const meta = readNetworkMeta(reqWith({ 'x-waf-anon-ip': '1', 'x-waf-bot-signal': '1' }));
+    expect(meta.wafAnonIp).toBe(true);
+    expect(meta.wafBotSignal).toBe(true);
+  });
+
   it('captures only a bounded observation when origin verification is enabled', () => {
     const ja4 = 't13d0101h2_111111111111_222222222222';
     const req = reqWith({ 'cloudfront-viewer-ja4-fingerprint': ja4 });
