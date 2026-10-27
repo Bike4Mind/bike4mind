@@ -3170,36 +3170,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 4,
   }),
-  shadowTierModelAllowlist: makeObjectSetting<string[]>({
-    key: 'shadowTierModelAllowlist',
-    name: 'Restricted Tier Model Allowlist',
-    defaultValue: ['gpt-5.4-nano', 'gemini-3.1-flash-lite'],
-    description:
-      'Models available to users in the restricted tier. A request for any other model runs on the first entry that is available to the caller. Must contain at least one model id.',
-    category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    schema: z.array(z.string()).min(1),
-  }),
-  shadowTierRequestsPerMin: makeNumberSetting({
-    key: 'shadowTierRequestsPerMin',
-    name: 'Restricted Tier Rate Limit (requests/min)',
-    defaultValue: 3,
-    min: 1,
-    max: 1000,
-    description: 'Max requests per minute for users in the restricted tier, on sessions and API keys.',
-    category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-  }),
-  shadowTierDailyTokenCap: makeNumberSetting({
-    key: 'shadowTierDailyTokenCap',
-    name: 'Restricted Tier Daily Token Cap',
-    defaultValue: 20000,
-    min: 1000,
-    max: 10_000_000,
-    description: 'Max input plus output tokens per UTC day for users in the restricted tier.',
-    category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-  }),
   tagLineMain: makeStringSetting({
     key: 'tagLineMain',
     name: 'Tag Line Main',
@@ -4020,26 +3990,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
-  signupMinSubmitMs: makeNumberSetting({
-    key: 'signupMinSubmitMs',
-    name: 'Signup Minimum Submit Time (ms)',
-    defaultValue: 1500,
-    min: 0,
-    max: 60000,
-    description:
-      'A signup form submitted faster than this after the form loaded is recorded as a risk signal on the new account. The submission itself is never rejected.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
-  signupBotChecksEnabled: makeBooleanSetting({
-    key: 'signupBotChecksEnabled',
-    name: 'Signup Bot Checks',
-    defaultValue: true,
-    description:
-      'Records risk signals (hidden field filled, missing or invalid form token, too-fast submit) at signup and places flagged new accounts in the restricted tier. Turn OFF to stop recording signals.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
     // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
@@ -4232,6 +4182,56 @@ export const settingsMap = {
         minimumCount: z.number().int().min(1).max(1000000),
       })
       .strict(),
+  }),
+  signupMinSubmitMs: makeNumberSetting({
+    key: 'signupMinSubmitMs',
+    name: 'Signup Minimum Submit Time (ms)',
+    defaultValue: 1500,
+    min: 0,
+    max: 60000,
+    description:
+      'A signup form submitted faster than this after the form loaded is recorded as a risk signal on the new account. The submission itself is never rejected.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupBotChecksEnabled: makeBooleanSetting({
+    key: 'signupBotChecksEnabled',
+    name: 'Signup Bot Checks',
+    defaultValue: true,
+    description:
+      'Records risk signals (hidden field filled, missing or invalid form token, too-fast submit) at signup and places flagged new accounts in the restricted tier. Turn OFF to stop recording signals.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  shadowTierModelAllowlist: makeObjectSetting<string[]>({
+    key: 'shadowTierModelAllowlist',
+    name: 'Restricted Tier Model Allowlist',
+    defaultValue: ['gpt-5.4-nano', 'gemini-3.1-flash-lite'],
+    description:
+      'Models available to users in the restricted tier. A request for any other model runs on the first entry that is available to the caller. Must contain at least one model id.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    schema: z.array(z.string()).min(1),
+  }),
+  shadowTierRequestsPerMin: makeNumberSetting({
+    key: 'shadowTierRequestsPerMin',
+    name: 'Restricted Tier Rate Limit (requests/min)',
+    defaultValue: 3,
+    min: 1,
+    max: 1000,
+    description: 'Max requests per minute for users in the restricted tier, on sessions and API keys.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+  }),
+  shadowTierDailyTokenCap: makeNumberSetting({
+    key: 'shadowTierDailyTokenCap',
+    name: 'Restricted Tier Daily Token Cap',
+    defaultValue: 20000,
+    min: 1000,
+    max: 10_000_000,
+    description: 'Max input plus output tokens per UTC day for users in the restricted tier.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',
