@@ -389,10 +389,17 @@ describe('HuggingFaceHub.getModel', () => {
         file('Llama-3.2-1B-Instruct-Q6_K.gguf', 1021800576),
         file('Llama-3.2-1B-Instruct-Q6_K_L.gguf', 1085415552),
         file('Llama-3.2-1B-Instruct-IQ4_XS.gguf', 743000000),
+        file('Model-UD-Q4_K_L.gguf', 1),
+        file('Model-Q8_K_L.gguf', 2),
+        file('Model-F16-Q4_K_L.gguf', 3),
       ])
     );
     const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
     expect(detail.builds.map(build => [build.quant, build.ollamaRef, build.ollamaRefIssue])).toEqual([
+      ['UD-Q4_K_L', null, 'unsupported-quant'],
+      ['Q8_K_L', null, 'unsupported-quant'],
+      // Another scheme in the name still gives the registry a tag it accepts.
+      ['Q4_K_L', `hf.co/${repo}:F16-Q4_K_L`, null],
       ['IQ4_XS', `hf.co/${repo}:IQ4_XS`, null],
       ['Q3_K_XL', `hf.co/${repo}:Q3_K_XL`, null],
       ['Q4_K_M', `hf.co/${repo}:Q4_K_M`, null],

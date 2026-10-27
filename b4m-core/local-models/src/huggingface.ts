@@ -116,7 +116,9 @@ export interface HubGgufProjector extends HubGgufFile {
 /**
  * Why a build has no Ollama ref. Hugging Face's registry refuses sharded GGUFs, needs a quant scheme in the tag,
  * serves the first file in path order whose name ends with the tag (`ambiguous`: no tag reaches this one), and
- * resolves only `main`. `unsupported-quant`: the file has a quant label (e.g. `Q4_K_L`) the registry rejects as a tag. `unsupported-name`: the repo id, or every tail of the file name, breaks Ollama's name rules.
+ * resolves only `main`. `unsupported-name`: the repo id, or every tail of the file name, breaks Ollama's name rules.
+ * `unsupported-quant`: no tail of the file name is a tag the registry accepts, because its quant label (e.g.
+ * `Q4_K_L`) is rejected.
  */
 export type OllamaRefIssue =
   | 'split'
@@ -133,7 +135,7 @@ export interface HubGgufBuild {
    * it keeps its first shard's path instead.
    */
   id: string;
-  /** Upper-case quant label as the Hub reads it from the file name, e.g. `Q4_K_M` or `UD-Q4_K_XL`. */
+  /** Upper-case quant label read from the file name, e.g. `Q4_K_M` or `UD-Q4_K_XL`; `Q4_K_L` and kin are ours. */
   quant: string | null;
   /** The file, or every shard in order. */
   files: HubGgufFile[];
@@ -181,7 +183,8 @@ export interface HubModelDetail extends HubModelSummary {
 }
 
 // The Hub labels a GGUF by the last quant scheme in its upper-cased file name (scheme list from huggingface.js
-// packages/tasks/src/gguf.ts). Longest first, so Q4_0_4_4 is not read as Q4_0; the registry tells those apart.
+// packages/tasks/src/gguf.ts, plus the `_XL` schemes).
+// Longest first, so Q4_0_4_4 is not read as Q4_0; the registry tells those apart.
 const QUANT_SCHEMES = [
   'F32 F16 BF16 Q4_0 Q4_1 Q4_1_SOME_F16 Q4_2 Q4_3 Q8_0 Q5_0 Q5_1 Q2_K Q3_K_S Q3_K_M Q3_K_L Q4_K_S Q4_K_M Q5_K_S',
   'Q5_K_M Q6_K IQ2_XXS IQ2_XS Q2_K_S IQ3_XS IQ3_XXS IQ1_S IQ4_NL IQ3_S IQ3_M IQ2_S IQ2_M IQ4_XS IQ1_M Q4_0_4_4',
@@ -518,10 +521,12 @@ function groupGgufFiles(
           ? 'split'
           : !build.quant
             ? 'no-quant-label'
-            : REGISTRY_REJECTED_QUANTS.has(build.quant.replace(/^UD-/, ''))
-              ? 'unsupported-quant'
-              : !repoOk || !tag
-                ? 'unsupported-name'
+            : !repoOk
+              ? 'unsupported-name'
+              : !tag
+                ? REGISTRY_REJECTED_QUANTS.has(build.quant.replace(/^UD-/, ''))
+                  ? 'unsupported-quant'
+                  : 'unsupported-name'
                 : pinned
                   ? 'pinned-revision'
                   : !plans.get(build.id)?.unique
