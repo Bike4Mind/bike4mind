@@ -7,19 +7,19 @@ const LEGACY_SEED = `
 069c0fd3979b 0788614b3938 07c79827305e 07dcf88475fe 080ed3e0d392 085a16311592 085f7b671c0e 08e7e98a46ea
 0a251cf95f46 0aabf881da2b 0b337074c70f 0c88b6367241 0d119fd0d32c 0d6ae17c640a 0e4aea3f65e2 0f41949eaec1
 1072c65e46a4 10dbc40ebbe9 10f24ae25362 115f3f769671 11cc92235ae8 12482b7e1ad0 129566209214 1321a72682a9
-1684e10bfdb3 16bca98303b2 174f292b2c5d 17e8900be450 17ebd0f2b1e3 194285aca1ba 1aaca6dce28e 1bb806fd997f
+1684e10bfdb3 16bca98303b2 17e8900be450 17ebd0f2b1e3 194285aca1ba 1aaca6dce28e 1bb806fd997f
 1bc6f6451909 1c0d49e464d2 1fb1f3fc424e 2008c3ee7616 206ac1b5c273 21d0bb0f522a 22394c3ae59f 23c5dbe38c62
 242d5a2b2e97 243cad0a8ac5 24eadc5b33cc 25067d35251b 258fbe859b6d 25bcdf101b50 25ce8ddf9d2b
 29051873ed26 2920ec150470 2a04f7bff6fe 2b4f8344422a 2bf7b61bed84 2bff116a55f5 2c025eb3b73c
 2c901735a4cb 2d305da3cdc4 2d3670ecd606 2e37fbac941b 2e3ac54b7154 2e6353f669e3 2e6888f479d5 2eb927ef4a46
-2ed882bb22ae 2ef37c2e2c94 2f0ab631adc3 2f234de390db 2f620478ac6a 2f91883ed973 2fc40391ca31 2fdc2e0b829c
-31617db73f2b 31c617980486 32f2089e6d27 3463552d7759 350efa8ccb14 35884ed714cb 369e060a227e 3781b2e67763
-37a70e432b71 37cba665495b 3979778768d8 3a1642518922 3a6efe7298ed 3aa0321b6274 3b334f7f2498 3b86c658c0bf
+2ed882bb22ae 2ef37c2e2c94 2f0ab631adc3 2f234de390db 2f91883ed973 2fc40391ca31 2fdc2e0b829c
+ 31c617980486 32f2089e6d27 3463552d7759 350efa8ccb14 35884ed714cb 369e060a227e 3781b2e67763
+37a70e432b71 37cba665495b 3979778768d8 3a6efe7298ed 3aa0321b6274 3b334f7f2498 3b86c658c0bf
 3bb083db8e64 3c2330f2704b 3dc9363baa1a 3df999299a2d 3e3eaf9cd77c 3e4176be1c48 3ec72e3ac0a3 3effb03d9325
 3f574e507de6 40f556547602 413f7c8082e4 419f21991350 41a8f5c2b662 41f918864b1c 42e07254368d 434a8e4932ed
 43d112295f48 46bd586deb06 49627b2c4d6b 49bddae03ab9 4b1fbd0505df 4b38e95bd3e3 4b56c2365175 4b7ce8871d5f
 4bd858496fa6 4bdf4b58eefe 4be8154314f1 4ca8d8bb3c82 4dc25ea3603f 4f71544360b9 5086931d9a00
-5104cfb8d929 5132413e8c42 51423d9e0878 516d279ce4f4 5171252d9a94 51947f2b1cdb 51cf666f59e7 53d06dab635c
+5104cfb8d929 5132413e8c42 51423d9e0878 5171252d9a94 51947f2b1cdb 51cf666f59e7 53d06dab635c
 545593ba3989 548b1206f618 55b27aa4d619 5605b2684050 58e7cd021cb6 5931a8193ada 5a5583cb1274 5d0706dedeeb
 5d5074ebd89b 6061ef57218e 60ffb54be1c8 642b95025886 64bf2def6df8 64ecbfe8b19b 65a4fc3788a6 65e21f6e4e9c
 66a1f13bee09 66b8806c19b4 694c40e91bf8 6a032237a84b 6a4110961627 6cb4a83cf579 6cc07f5224fa 6d4d6131f033
@@ -27,19 +27,19 @@ const LEGACY_SEED = `
 71962a5dc759 719ca3481f88 734d71859fd4 747dbc66d426 74d86b0154ca 759e9e7d0711 7622709bda98
 76467e0ca19b 7754cd457960 777dd2c3b707 77d0050dc89d 792b8f3b724e 793331087f34 795061ea8886 7962d46a3446
 79b8cbfc6191 79ea94f9b88b 7a0b85223940 7a50ea2ea194 7b6d55eeebe5 7b9a664ba43f 7ce094888133 7f05fda4b2fa
-7f7d74a5303c 80c347fac5c3 83165b5eba40 87151090a57a 887df910134d 888d16d5150f 8a6e6e9471e0 8ad42d260760
-8c0e1bee2b84 8c2e191d863d 8cba600510be 8f30f4df4e00 9010936ef52e 9055466fcd66 915da41cefea 915f3bafe4aa
+7f7d74a5303c 83165b5eba40 87151090a57a 887df910134d 888d16d5150f 8a6e6e9471e0 8ad42d260760
+ 8c2e191d863d 8cba600510be 8f30f4df4e00 9010936ef52e 9055466fcd66 915da41cefea 915f3bafe4aa
 91e15aa96b03 91e44cbba12e 924aaf9417c9 9254086e6ed4 940aee7f30e2 94bbfbdc2d93 964d26f17aa0 96d197f8efc4
-97516a017c6c 9753176e5bb6 979461b1272f 983d9ce4696f 98a395a91fdd 98fb4183f353 99069dcdd917 994a7f7c9794
+97516a017c6c 9753176e5bb6 979461b1272f 983d9ce4696f 98a395a91fdd 98fb4183f353 994a7f7c9794
 99fa0c084e36 9a026e700cfa 9a1ff7e1d12e 9a4341780250 9cfe2eb5678c 9e33e2f983fb 9e52b5b6346b 9edad7f1553a
 9f37736e6fd4 9f3c722a7f67 9f3d3f1ad7fd 9fe9a48f4854 a16323739af9 a18d2ff783bc a280c00afed4 a2a7c12f14d5
 a3f668fd4337 a488744e3f90 a506d4524398 a55e1ffa0a01 a5c186a4566f a60937820a10 a6b740f9897b a71db4c94101
 a72eeda922cd a83f1d351296 a85ea22e23aa a8d5a258a0c1 a8ff7ea266a0 a9971548b046 aada9ea4dafb ab12e849ff49
 ab42063db17b acd55bc542a0 ad09d7340386 adacd7acc19b ae16bf8273b5 ae3cad32c089 b1697044be20 b23231a84d81
-b353e60d17ba b40ffa3a1dbf b41b44ce4353 b4a4a2b7ffc8 b6b845a3bc97 b7b08bbdbe5a b7b736e1f21b b82d70b355a2
+ b40ffa3a1dbf b41b44ce4353 b4a4a2b7ffc8 b6b845a3bc97 b7b08bbdbe5a b7b736e1f21b b82d70b355a2
 b874bdda5f71 b9f292210c04 baf01b51e4b7 bb2d0b43d52a beef1bc8cb2d bf09f35f0f2e c0adb9f551c2
-c13cdf5f2c35 c1eb00a1ad7b c34bc8c804be c4fae3cb4fe3 c540d14fc295 c62aa429e63d c791ba46d0aa c85527a2a3c4
-c87f0ad2714d c93de48dc431 c9e85a6882b7 ca7e3bc6e1c0 cb023f64b05c ccd61d7ec1a4 cd0d66e9428d ce6de24d1ac3
+ c1eb00a1ad7b c34bc8c804be c4fae3cb4fe3 c540d14fc295 c62aa429e63d c791ba46d0aa c85527a2a3c4
+c87f0ad2714d c93de48dc431 c9e85a6882b7 cb023f64b05c ccd61d7ec1a4 cd0d66e9428d ce6de24d1ac3
 cecac0a0d0e1 cf3724707a21 cf69d9fa323d d044ae74b577 d048d7d25e61 d0edc8b9aaa7 d1700eeb02c3 d233b56c881c
 d312a05b0b11 d3e467aeaff4 d3eaab3ea5bc d4c60d613a97 d62a191ecb73 d6ea87dfd1f3 d72c4c7fb8cb d7d544e14816
 d8960e4f9824 d935bc3fc33f d9ef50186023 db2f2ec79ba9 db38b5af6ebf dba77c4f75e1 dcb472615f55 decee2b17e42
@@ -66,13 +66,11 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/ai/transcribe',
     '/api/ai/transcribe/init',
     '/api/ai/voice-sessions',
-    '/api/analytics/aggregate',
     '/api/analytics/log-event',
     '/api/api-keys',
     '/api/api-keys/[id]/delete',
     '/api/api-keys/[id]/set-active',
     '/api/api-keys/create',
-    '/api/app-files',
     '/api/app-files/[id]/upload',
     '/api/app-files/delete',
     '/api/app-files/generate-presigned-url',
@@ -86,7 +84,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/artifacts/types',
     '/api/auth/github/authorize',
     '/api/auth/github/disconnect',
-    '/api/auth/mfa/force-reset',
     '/api/auth/mfa/status',
     '/api/auth/trusted-devices',
     '/api/auth/trusted-devices/[id]',
@@ -125,7 +122,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/email/send',
     '/api/email/send-verification',
     '/api/entitlements',
-    '/api/external-image',
     '/api/fabfiles/[id]/apply-auto-rename',
     '/api/fabfiles/[id]/apply-edit',
     '/api/fabfiles/[id]/auto-rename',
@@ -163,7 +159,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/import-history/upload',
     '/api/inbox',
     '/api/inbox/[id]/delete',
-    '/api/inbox/admin-send',
     '/api/inbox/create',
     '/api/inbox/read',
     '/api/integrations/[integration]/rotate-token',
@@ -297,9 +292,7 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/reg-invites',
     '/api/reg-invites/create',
     '/api/reg-invites/delete',
-    '/api/reg-invites/migrate',
     '/api/reg-invites/refer',
-    '/api/reg-invites/update',
     '/api/research/agents',
     '/api/research/agents/[id]',
     '/api/research/agents/[id]/files',
@@ -339,10 +332,8 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/sessions/recent-proactive-messages',
     '/api/sessions/semantic-search',
     '/api/sessions/shared',
-    '/api/settings',
     '/api/settings/fetch',
     '/api/settings/serverConfig',
-    '/api/settings/update',
     '/api/skills',
     '/api/skills/[id]',
     '/api/skills/[id]/share',
@@ -371,11 +362,9 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/subscribers/[id]/delete',
     '/api/subscribers/generate-invite',
     '/api/subscribers/waiting-count',
-    '/api/subscriptions',
     '/api/subscriptions/[ownerType]/[ownerId]',
     '/api/subscriptions/checkout-session',
     '/api/subscriptions/own',
-    '/api/subscriptions/stats',
     '/api/subscriptions/subscribe',
     '/api/system-prompts/activatable',
     '/api/transforms/batch',
