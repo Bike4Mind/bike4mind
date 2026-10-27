@@ -269,7 +269,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     if (agentData.preferredModel === agent.preferredModel) delete agentData.preferredModel;
     if (agentData.preferredImageModel === agent.preferredImageModel) delete agentData.preferredImageModel;
 
-    await validateAgentUpdate(agentData, req.user!.id, undefined, req.logger);
+    await validateAgentUpdate(agentData, req.user!, undefined, req.logger);
 
     // Handle capabilities conversion if it's in the old format
     if (
