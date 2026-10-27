@@ -177,8 +177,8 @@ describe('ModelCatalog', () => {
   });
 
   it("shows a local model's context as it is now: grown by a conversation, or sized again after Settings", async () => {
-    // The stub estimator: 64K fits 32 GiB, 32K is the most that fits 10 GiB.
-    let hardware = cpuMachine(32);
+    // The stub estimator: 64K is the most that fits 13 GiB, 32K the most that fits 10 GiB.
+    let hardware = cpuMachine(13);
     const footprint = () => ({ arch: stubArch(131072), weightsBytes: 4 * GIB, hardware });
     const replies = [
       () =>
@@ -215,6 +215,7 @@ describe('ModelCatalog', () => {
       );
       const grown = await local.contextTokens('local:ollama:qwen');
       expect(grown).toBeGreaterThan(65536);
+      expect(catalog.cached()?.find(model => model.id === 'local:ollama:qwen')?.contextWindow).toBe(grown);
       expect((await contextOf())?.contextWindow).toBe(grown);
 
       hardware = cpuMachine(10);

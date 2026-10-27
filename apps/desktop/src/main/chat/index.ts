@@ -423,10 +423,8 @@ export function registerChat(
   });
   const localContext = new LocalContextPreference(join(userData, 'local-context.json'));
   void localHardware.profile();
-  const local = new OllamaLocal(
-    (url, init) => net.fetch(url, init),
-    localContextSizing({ setting: () => localContext.read() })
-  );
+  const localSizing = localContextSizing({ setting: () => localContext.read() });
+  const local = new OllamaLocal((url, init) => net.fetch(url, init), localSizing);
   const models = new ModelCatalog(
     {
       logger,
@@ -608,6 +606,7 @@ export function registerChat(
     preference: localContext,
     forget: () => {
       forgetLocalContexts();
+      localSizing.forget?.();
       models.forgetLocal();
     },
     fit: () => local.contextFit(),

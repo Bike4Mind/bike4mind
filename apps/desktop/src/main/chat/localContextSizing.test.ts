@@ -55,6 +55,17 @@ describe('HardwareProbe', () => {
     expect(await hardware.profile()).toBeNull();
     expect(hardware.known()).toBeNull();
   });
+
+  it('probes again a minute after a failure', async () => {
+    let clock = 0;
+    const probe = vi.fn().mockRejectedValueOnce(new Error('busy')).mockResolvedValue(machine);
+    const hardware = new HardwareProbe(probe, () => clock);
+    expect(await hardware.profile()).toBeNull();
+    expect(await hardware.profile()).toBeNull();
+    clock = 60_001;
+    expect(await hardware.profile()).toBe(machine);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('localContextSizing', () => {
@@ -99,6 +110,21 @@ describe('localContextSizing', () => {
 
     clock = 60_001;
     expect((await sized.footprint(hybrid)).arch?.contextMax).toBe(131072);
+    expect(showVerbose).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not keep the unknown shape of a model listed before /api/show answered', async () => {
+    const sized = sizing();
+    expect(sized.cachedFootprint({ ...qwen, modelInfo: undefined }).arch).toBeNull();
+    expect((await sized.footprint(qwen)).arch?.contextMax).toBe(32768);
+  });
+
+  it('reads every shape again after a Settings change', async () => {
+    const showVerbose = vi.fn(async () => verbose);
+    const sized = sizing({ showVerbose });
+    await sized.footprint(hybrid);
+    sized.forget?.();
+    await sized.footprint(hybrid);
     expect(showVerbose).toHaveBeenCalledTimes(2);
   });
 

@@ -7,13 +7,22 @@ import type { LocalContextSizing, LocalModelFacts } from './OllamaLocal';
 export class HardwareProbe {
   private pending: Promise<HardwareProfile | null> | undefined;
   private result: HardwareProfile | null | undefined;
+  private retryAt = 0;
 
-  constructor(private readonly probe: () => Promise<HardwareProfile> = () => probeHardware()) {}
+  constructor(
+    private readonly probe: () => Promise<HardwareProfile> = () => probeHardware(),
+    private readonly now: () => number = Date.now
+  ) {}
 
+  /** Null after a failed probe, which is tried again a minute later. */
   profile(): Promise<HardwareProfile | null> {
+    if (this.result === null && this.now() >= this.retryAt) this.pending = undefined;
     this.pending ??= this.probe().then(
       profile => (this.result = profile),
-      () => (this.result = null)
+      () => {
+        this.retryAt = this.now() + RETRY_AFTER_MS;
+        return (this.result = null);
+      }
     );
     return this.pending;
   }
@@ -77,9 +86,8 @@ interface ArchEntry {
 }
 
 /**
- * Reads a model's shape from the `/api/show` OllamaLocal already made, fetching the verbose one only
- * when Ollama left per-layer arrays out, and remembers it until the tag's digest changes. A failed
- * fetch reads as unknown and is retried after a growing pause, not on every refresh.
+ * A model's shape from the `/api/show` OllamaLocal made (verbose only when per-layer arrays are missing),
+ * kept per digest until Settings change. A failed verbose show is retried after a growing pause.
  */
 export function localContextSizing({
   setting,
@@ -92,6 +100,8 @@ export function localContextSizing({
   const entryFor = (facts: LocalModelFacts): ArchEntry => {
     const known = arches.get(facts.name);
     if (known && known.digest === facts.digest && (known.retryAt === undefined || now() < known.retryAt)) return known;
+    // Listed while /api/show was too slow to answer: unknown for now, not for the rest of the run.
+    if (!facts.modelInfo) return { digest: facts.digest, arch: null, failures: 0 };
     const failures = known && known.digest === facts.digest ? known.failures : 0;
     if (!truncatedPerLayer(facts.modelInfo)) {
       const entry = { digest: facts.digest, arch: archFromModelInfo(facts.modelInfo), failures: 0 };
@@ -132,6 +142,9 @@ export function localContextSizing({
     cachedFootprint(facts): LocalModelFootprint {
       void hardware.profile();
       return footprintOf(facts, entryFor(facts).arch, hardware.known() ?? null);
+    },
+    forget() {
+      arches.clear();
     },
   };
 }

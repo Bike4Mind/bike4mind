@@ -1,13 +1,11 @@
 import type { FitInput, FitPlan, FitResult, HardwareProfile, ModelArch } from '@bike4mind/common';
 
 /**
- * A stand-in for estimateFit (b4m-core/common/src/modelHub/fit.ts) with round numbers, so sizing
- * tests pin Desktop's choices and not the estimator's constants. Memory is the weights plus 128 KiB
- * a token (16K = 2 GiB, 32K = 4 GiB, 64K = 8 GiB); a model is resident when that fits the GPU, or RAM
- * without one, and loads with layers offloaded when it fits GPU and RAM together. The target is 64K.
+ * estimateFit (b4m-core/common/src/modelHub/fit.ts) in round numbers: weights plus 2 GiB per 16K, resident
+ * when that fits the GPU (or RAM without one), loading with offload when it fits both; it pins Desktop's choices.
  */
 export const GIB = 1024 ** 3;
-export const STUB_TARGET_TOKENS = 65_536;
+const STUB_TARGET_TOKENS = 65_536;
 const KV_BYTES_PER_TOKEN = 128 * 1024;
 
 type StubPlan = Pick<FitPlan, 'context' | 'placement'> & { fits: boolean };
@@ -39,6 +37,7 @@ export const stubArch = (contextMax = 262_144): ModelArch => ({
   mtpLayers: 0,
 });
 
+/** A CPU-only machine as the probe reports it once it can vouch for having no GPU. */
 export const cpuMachine = (gib: number): HardwareProfile => ({
   platform: 'linux',
   arch: 'x64',
@@ -68,5 +67,5 @@ export const unifiedMachine = (gib: number): HardwareProfile => ({
   gpuCount: 1,
 });
 
-/** What the probe reports without nvidia-smi or a known GPU: the RAM, and no claim about a GPU. */
+/** What the probe reports today on a machine without nvidia-smi: the RAM, and no claim about a GPU. */
 export const lowConfidenceMachine = (gib: number): HardwareProfile => ({ ...cpuMachine(gib), confidence: 'low' });

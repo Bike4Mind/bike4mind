@@ -41,8 +41,8 @@ const RETRY_MARGIN = 0.9;
 
 /** Granularity of the largest resident context growth searches for. */
 const GROWTH_STEP_TOKENS = 4_096;
-const AUTO_STEPS = [32_768, LOCAL_CONTEXT_TARGET_TOKENS];
 const MAX_LOCAL_CONTEXT = LOCAL_CONTEXT_SIZES[LOCAL_CONTEXT_SIZES.length - 1];
+const LARGEST_FIRST = [...LOCAL_CONTEXT_SIZES].reverse();
 
 /** What the Model Hub fit estimator needs to size a local model's context; any of it may be unknown. */
 export interface LocalModelFootprint {
@@ -65,8 +65,8 @@ type SizedInput = Omit<FitInput, 'context'>;
 
 function fitInput({ arch, weightsBytes, hardware }: LocalModelFootprint): SizedInput | null {
   if (!arch || !weightsBytes || !hardware?.totalMemoryBytes) return null;
-  // Ollama's KV cache type and flash attention are daemon-wide settings Desktop cannot read, so the
-  // estimate assumes its defaults; a quantized cache only makes the real footprint smaller.
+  // Ollama's cache type, flash attention and num_parallel are daemon settings its API does not report, so
+  // this assumes the defaults; flash attention off or num_parallel above 1 makes the real footprint larger.
   return { model: { arch, weightsBytes }, hardware, mode: 'chat', runtime: { kind: 'ollama' } };
 }
 
@@ -87,10 +87,8 @@ function resident(input: SizedInput, context: number): boolean {
 }
 
 /**
- * The context chat uses for a model before any conversation grows it. Fixed: the Settings size. Auto:
- * the largest of the estimator's target (64K), 32K and 16K that stays resident, else 16K; a larger
- * Modelfile num_ctx wins when it is resident too. Never past the trained length. Auto stays at 16K
- * when the model or the machine cannot be measured, including a GPU the probe cannot see.
+ * Auto: the trained length or the largest Settings size that stays resident, else (or unmeasured) 16K;
+ * a larger resident Modelfile num_ctx wins. Fixed: the Settings size. Never past the trained length.
  */
 export function chatContextTokens({ setting, footprint, modelLimit, configured }: ChatContextInput): number {
   const limit = trainedLimit(footprint, modelLimit);
@@ -100,7 +98,7 @@ export function chatContextTokens({ setting, footprint, modelLimit, configured }
   const input = fitInput(footprint);
   if (!input || footprint.hardware?.confidence === 'low') return floor;
   const allowed = (tokens: number) => tokens === cap(tokens) && resident(input, tokens);
-  const picked = [estimateFit(input).target, ...AUTO_STEPS].find(allowed) ?? floor;
+  const picked = [cap(MAX_LOCAL_CONTEXT), ...LARGEST_FIRST].find(allowed) ?? floor;
   return configured !== undefined && configured > picked && allowed(configured) ? configured : picked;
 }
 
@@ -120,10 +118,8 @@ export type ContextGrowth =
   { tokens: number; slower: boolean } | { tokens?: undefined; reason: 'model-limit' | 'memory' | 'unmeasured' };
 
 /**
- * Where Auto takes a model whose prompt Ollama measured at `measured` tokens: once, to the largest
- * resident context up to the trained length, so a growing conversation reloads rarely. When no
- * resident size holds the prompt, or the probe could not measure the GPU, the smallest Settings size
- * that holds it (or the 4K step that does), marked slower when it is not resident.
+ * Where Auto takes a model whose prompt needs `measured` tokens: once, to the largest resident context.
+ * Without one, or with an unmeasured GPU, the smallest Settings size that holds it; slower if offloaded.
  */
 export function grownContext(
   footprint: LocalModelFootprint,

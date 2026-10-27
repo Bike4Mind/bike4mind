@@ -77,6 +77,8 @@ export interface LocalContextSizing {
   footprint(facts: LocalModelFacts): Promise<LocalModelFootprint>;
   /** What is known now, without waiting; starts whatever is missing. */
   cachedFootprint(facts: LocalModelFacts): LocalModelFootprint;
+  /** After the Settings choice changes: read every model's shape again. */
+  forget?(): void;
 }
 
 type Inspection = z.infer<typeof showSchema>;
@@ -161,8 +163,10 @@ export class OllamaLocal {
     const tools = inspection.capabilities.includes('tools')
       ? (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }))
       : [];
-    const post = (fitted: OllamaMessage[]) =>
-      this.chatFetch(CHAT_URL, {
+    const post = (fitted: OllamaMessage[]) => {
+      // Another conversation may have grown the model, or a load failure lowered it, since this turn began.
+      numCtx = contextByModel.get(request.model) ?? numCtx;
+      return this.chatFetch(CHAT_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         signal,
@@ -185,18 +189,19 @@ export class OllamaLocal {
           ...(tools.length > 0 ? { tools } : {}),
         }),
       });
+    };
     let fellBack = false;
     // An explicit num_ctx turns off Ollama's own step-down when a load runs out of memory.
     const send = async (fitted: OllamaMessage[]) => {
       const reply = await post(fitted);
-      if (reply.status < 500 || fellBack) return reply;
+      if (fellBack || !(await failedToLoad(reply))) return reply;
       fellBack = true;
-      const floor = await this.fallBack(request.model, inspection, numCtx);
+      const tried = numCtx;
+      const floor = await this.fallBack(request.model, inspection, tried);
       if (floor === undefined) return reply;
       onNotice?.(
-        `This model could not load with a ${contextSizeLabel(numCtx)} context, so Desktop runs it at ${contextSizeLabel(floor)} for now.`
+        `This model could not load with a ${shortSize(tried)}-token context, so Desktop runs it at ${shortSize(floor)} for now.`
       );
-      numCtx = floor;
       return post(fitted);
     };
     // Everything goes out first: auto-compaction works from the measured size and must get its
@@ -211,7 +216,7 @@ export class OllamaLocal {
       if (growth.tokens !== undefined) {
         numCtx = growth.tokens;
         if (growth.slower)
-          onNotice?.(`This conversation now runs with a ${contextSizeLabel(numCtx)} context.${SLOWER_HINT}`);
+          onNotice?.(`This conversation now runs with a ${shortSize(numCtx)}-token context.${SLOWER_HINT}`);
         response = await send(sent);
         measured = await refusedSize(response);
       }
@@ -219,6 +224,7 @@ export class OllamaLocal {
     const whole = measured;
     let left = 0;
     for (let retry = 0; measured !== undefined; retry++) {
+      numCtx = contextByModel.get(request.model) ?? numCtx;
       // Rescaled from each refusal: the dropped turns need not be as token-dense as the kept ones.
       const fit = fitToContext(sent, tools, numCtx, request.maxTokens, (1.1 * measured) / estimateTokens(sent, tools));
       if (fit.dropped === 0)
@@ -277,37 +283,58 @@ export class OllamaLocal {
   }
 
   /**
-   * Sized from the whole footprint (waiting for the hardware probe and inspection) the first time
-   * a model is used, then kept for the app run, so a late answer never reloads the model between
-   * messages; only growth, a failed load or a Settings change moves it.
+   * Sized on a model's first request, then kept for the app run so a late answer never reloads it;
+   * a footprint missing the weights or the machine (a slow daemon or probe) is sized again next time.
    */
   private async resolveContext(modelId: string, inspection: Inspection): Promise<number> {
     const known = contextByModel.get(modelId);
     if (known !== undefined) return known;
-    const name = ollamaModelName(modelId);
-    const footprint = this.sizing ? await this.sizing.footprint(await this.facts(name, inspection)) : UNMEASURED;
-    const tokens = await this.sized(inspection, footprint);
+    const generation = sizingGeneration;
+    const setting = await this.setting();
+    const sizing = setting.mode === 'auto' ? this.sizing : undefined;
+    const footprint = sizing
+      ? await sizing.footprint(await this.facts(ollamaModelName(modelId), inspection))
+      : UNMEASURED;
+    if (generation !== sizingGeneration) return this.resolveContext(modelId, inspection);
     const raced = contextByModel.get(modelId);
     if (raced !== undefined) return raced;
-    contextByModel.set(modelId, tokens);
+    const { limit, configured } = contextBounds(inspection);
+    const tokens = chatContextTokens({ setting, footprint, modelLimit: limit, configured });
+    if (!sizing || (footprint.weightsBytes !== null && footprint.hardware !== null))
+      contextByModel.set(modelId, tokens);
     return tokens;
   }
 
+  private async setting(): Promise<LocalContextSetting> {
+    return (await this.sizing?.setting()) ?? AUTO_LOCAL_CONTEXT;
+  }
+
   private async sized(inspection: Inspection, footprint: LocalModelFootprint): Promise<number> {
-    const setting = (await this.sizing?.setting()) ?? AUTO_LOCAL_CONTEXT;
     const { limit, configured } = contextBounds(inspection);
-    return chatContextTokens({ setting, footprint, modelLimit: limit, configured });
+    return chatContextTokens({ setting: await this.setting(), footprint, modelLimit: limit, configured });
   }
 
   /** Auto, after a load failed: the 16K floor, once per app run; undefined when there is nothing lower to try. */
   private async fallBack(modelId: string, inspection: Inspection, current: number): Promise<number | undefined> {
-    const setting = (await this.sizing?.setting()) ?? AUTO_LOCAL_CONTEXT;
+    const generation = sizingGeneration;
+    const setting = await this.setting();
     const { limit } = contextBounds(inspection);
     const floor = Math.min(LOCAL_CONTEXT_TARGET_TOKENS, limit ?? LOCAL_CONTEXT_TARGET_TOKENS);
-    if (setting.mode === 'fixed' || current <= floor) return undefined;
+    if (setting.mode === 'fixed' || current <= floor || generation !== sizingGeneration) return undefined;
     failedLoads.add(modelId);
     contextByModel.set(modelId, floor);
     return floor;
+  }
+
+  /**
+   * Under Auto, grows the model so a prompt of `tokens` fits, as an overflow would; the new num_ctx, or
+   * undefined when it cannot grow. ChatService asks before compacting a conversation near its window.
+   */
+  async growFor(modelId: string, tokens: number): Promise<number | undefined> {
+    const name = ollamaModelName(modelId);
+    const inspection = knownInspections.get(name) ?? showSchema.parse(await this.json('/api/show', { name }));
+    const current = await this.resolveContext(modelId, inspection);
+    return (await this.grow(modelId, inspection, tokens, undefined, current)).tokens;
   }
 
   /** Under Auto, the larger context a refused prompt needs when the model and memory hold it; else why not. */
@@ -318,18 +345,24 @@ export class OllamaLocal {
     maxTokens: number | undefined,
     current: number
   ): Promise<{ tokens?: number; slower?: boolean; hint: string }> {
-    const setting = (await this.sizing?.setting()) ?? AUTO_LOCAL_CONTEXT;
+    const generation = sizingGeneration;
+    const setting = await this.setting();
     const { limit } = contextBounds(inspection);
     if (setting.mode === 'fixed') {
       const larger = LOCAL_CONTEXT_SIZES.some(size => size > current) && (limit === undefined || current < limit);
       return { hint: larger ? ' Settings can give local models a larger context.' : '' };
     }
-    // Another conversation may have grown it while this request was out.
-    const other = contextByModel.get(modelId) ?? 0;
-    if (failedLoads.has(modelId)) return other > current ? { tokens: other, hint: '' } : { hint: GROWTH_HINTS.memory };
     const footprint = this.sizing
       ? await this.sizing.footprint(await this.facts(ollamaModelName(modelId), inspection))
       : UNMEASURED;
+    // Settings changed while this was measured: the new choice decides the size.
+    if (generation !== sizingGeneration) {
+      const fresh = await this.resolveContext(modelId, inspection);
+      return fresh > current ? { tokens: fresh, hint: '' } : { hint: '' };
+    }
+    // Another conversation may have grown it while this request was out.
+    const other = contextByModel.get(modelId) ?? 0;
+    if (failedLoads.has(modelId)) return other > current ? { tokens: other, hint: '' } : { hint: GROWTH_HINTS.memory };
     const growth = grownContext(footprint, measured, maxTokens, limit, current);
     if (growth.tokens === undefined)
       return other > current ? { tokens: other, hint: '' } : { hint: GROWTH_HINTS[growth.reason] };
@@ -560,6 +593,18 @@ async function httpError(response: Response): Promise<string> {
   return `Ollama returned HTTP ${response.status}${detail ? `: ${detail}` : '.'}`;
 }
 
+// 500 with one of these is the runner failing to load at this size; 503 and the rest are not a size problem.
+const LOAD_FAILURE =
+  /requires more system memory|unable to allocate|failed to (?:allocate|load)|out of memory|runner process has terminated/i;
+
+async function failedToLoad(response: Response): Promise<boolean> {
+  return response.status === 500 && LOAD_FAILURE.test(await response.clone().text());
+}
+
+function shortSize(tokens: number): string {
+  return contextSizeLabel(tokens).replace(/ tokens$/, '');
+}
+
 async function refusedSize(response: Response): Promise<number | undefined> {
   return response.status === 400 ? overflowTokens(await response.clone().text()) : undefined;
 }
@@ -572,6 +617,8 @@ function ollamaModelName(modelId: string): string {
 
 // Module-wide so every OllamaLocal instance (catalog, chat, tests) reads the same figure.
 const contextByModel = new Map<string, number>();
+/** Bumped by a Settings change, so sizing that started before it does not write its stale result. */
+let sizingGeneration = 0;
 /** Models that failed to load above the floor this app run; Auto no longer grows them. */
 const failedLoads = new Set<string>();
 const tagFacts = new Map<string, { sizeBytes?: number; digest?: string }>();
@@ -597,6 +644,7 @@ function forgetLocalContext(modelId: string): void {
 
 /** After the Settings choice changes: every model is sized again on its next request. */
 export function forgetLocalContexts(): void {
+  sizingGeneration++;
   contextByModel.clear();
   failedLoads.clear();
   tagFacts.clear();

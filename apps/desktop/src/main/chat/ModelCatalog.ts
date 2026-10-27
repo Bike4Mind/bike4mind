@@ -85,7 +85,9 @@ export class ModelCatalog {
   cached(): ChatModelOption[] | null {
     const entry = this.cache;
     if (!this.deps.getApiClient()) {
-      return this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : null;
+      return this.localCache && Date.now() < this.localCache.expiresAt
+        ? withCurrentContexts(this.localCache.models)
+        : null;
     }
     if (!entry) return null;
     if (entry.environmentUrl !== this.deps.getEnvironmentUrl()) return null;

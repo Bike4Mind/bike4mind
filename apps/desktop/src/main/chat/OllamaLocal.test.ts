@@ -870,10 +870,10 @@ describe('OllamaLocal context sizing', () => {
     const outOfMemory = () => Response.json({ error: 'model requires more system memory' }, { status: 500 });
     const sent = ollama(trainedFor(131072), outOfMemory, done, () => overflow(20_000));
     const onNotice = vi.fn();
-    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 32));
+    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13));
     await local.stream(longTurn, () => undefined, undefined, undefined, onNotice);
     expect(sent()).toEqual([65536, 16384]);
-    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('could not load with a 64K tokens context'));
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('could not load with a 64K-token context'));
     expect((await local.models())[0].contextWindow).toBe(16384);
     // It does not grow back into the size that failed.
     await expect(local.stream(longTurn, () => undefined)).rejects.toThrow("would not fit this computer's memory");
@@ -972,7 +972,7 @@ describe('OllamaLocal context sizing', () => {
 
   it('sizes a model again once its tag points at a new digest', async () => {
     const sent = ollama(trainedFor(131072));
-    const sized = sizing(AUTO_LOCAL_CONTEXT, 32);
+    const sized = sizing(AUTO_LOCAL_CONTEXT, 13);
     const local = new OllamaLocal(undefined, sized);
     await local.models();
     await local.stream(longTurn, () => undefined);
@@ -988,6 +988,193 @@ describe('OllamaLocal context sizing', () => {
     expect(fit[16384]).toBeUndefined();
     expect(fit[131072]).toEqual(['llama']);
     expect(fit[262144]).toEqual(['llama']);
+  });
+
+  const qwenInfo = {
+    'general.architecture': 'qwen2',
+    'qwen2.block_count': 24,
+    'qwen2.context_length': 32768,
+    'qwen2.attention.head_count': 14,
+    'qwen2.attention.head_count_kv': 2,
+    'qwen2.embedding_length': 896,
+  };
+  /** Ollama serving one 4 GiB qwen2 model, with `/api/tags` and `/api/show` failing while told to. */
+  const flakyOllama = () => {
+    const state = { showFails: false, tagsFails: false, sent: [] as number[] };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/api/tags')) {
+          if (state.tagsFails) return new Response('', { status: 500 });
+          return Response.json({ models: [{ name: 'qwen', size: 4 * GIB, digest: 'one' }] });
+        }
+        if (url.endsWith('/api/show')) {
+          if (state.showFails) throw new DOMException('timed out', 'TimeoutError');
+          return Response.json({ capabilities: ['completion'], model_info: qwenInfo });
+        }
+        state.sent.push((JSON.parse(String(init?.body)) as { options: { num_ctx: number } }).options.num_ctx);
+        return done();
+      })
+    );
+    return state;
+  };
+  const realSizing = () =>
+    localContextSizing({ setting: async () => AUTO_LOCAL_CONTEXT, hardware: new HardwareProbe(async () => cpu(13)) });
+  const qwenTurn = { model: 'local:ollama:qwen', messages: [{ role: 'user' as const, content: 'hi' }] };
+
+  it('sizes a model listed while /api/show was too slow once a turn brings its shape', async () => {
+    const ollamaState = flakyOllama();
+    const local = new OllamaLocal(undefined, realSizing());
+    ollamaState.showFails = true;
+    expect((await local.models())[0].contextWindow).toBe(16384);
+    ollamaState.showFails = false;
+    await local.stream(qwenTurn, () => undefined);
+    expect(ollamaState.sent).toEqual([32768]);
+  });
+
+  it('sizes a model again on its next turn when /api/tags failed on the first', async () => {
+    const ollamaState = flakyOllama();
+    const local = new OllamaLocal(undefined, realSizing());
+    ollamaState.tagsFails = true;
+    await local.stream(qwenTurn, () => undefined);
+    ollamaState.tagsFails = false;
+    await local.stream(qwenTurn, () => undefined);
+    await local.stream(qwenTurn, () => undefined);
+    expect(ollamaState.sent).toEqual([16384, 32768, 32768]);
+  });
+
+  it('lets a Settings change made while a model is being sized win', async () => {
+    let setting: LocalContextSetting = AUTO_LOCAL_CONTEXT;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const sent = ollama(trainedFor(131072));
+    const measured = footprintOn(13);
+    const footprint = vi.fn(async () => {
+      await held;
+      return measured;
+    });
+    const local = new OllamaLocal(undefined, {
+      setting: async () => setting,
+      footprint,
+      cachedFootprint: () => measured,
+    });
+    const turn = local.stream(longTurn, () => undefined);
+    await vi.waitFor(() => expect(footprint).toHaveBeenCalled());
+    setting = { mode: 'fixed', tokens: 16384 };
+    forgetLocalContexts();
+    release();
+    await turn;
+    expect(sent()).toEqual([16384]);
+    expect(await local.contextTokens('local:ollama:llama')).toBe(16384);
+  });
+
+  it('does not let a growth measured before a Settings change override it', async () => {
+    let setting: LocalContextSetting = AUTO_LOCAL_CONTEXT;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const sent = ollama(trainedFor(131072), () => overflow(70_000));
+    const measured = footprintOn(13);
+    let calls = 0;
+    const footprint = vi.fn(async () => {
+      if (++calls === 2) await held;
+      return measured;
+    });
+    const local = new OllamaLocal(undefined, {
+      setting: async () => setting,
+      footprint,
+      cachedFootprint: () => measured,
+    });
+    const turn = local.stream(longTurn, () => undefined);
+    await vi.waitFor(() => expect(footprint).toHaveBeenCalledTimes(2));
+    setting = { mode: 'fixed', tokens: 16384 };
+    forgetLocalContexts();
+    release();
+    await expect(turn).rejects.toThrow('more than the 16384');
+    expect(sent()).toEqual([65536]);
+    expect(await local.contextTokens('local:ollama:llama')).toBe(16384);
+  });
+
+  it.each([
+    { status: 503, error: 'server busy, please try again.  maximum pending requests exceeded' },
+    { status: 500, error: 'unexpected EOF' },
+  ])('keeps the Auto size after a $status that is not a failed load', async ({ status, error }) => {
+    const sent = ollama(trainedFor(131072), () => Response.json({ error }, { status }));
+    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13));
+    await expect(local.stream(longTurn, () => undefined)).rejects.toThrow(`HTTP ${status}`);
+    await local.stream(longTurn, () => undefined);
+    expect(sent()).toEqual([65536, 65536]);
+  });
+
+  it("sends every request with the model's context as it is at send time", async () => {
+    let releaseB: () => void = () => undefined;
+    const heldB = new Promise<void>(resolve => {
+      releaseB = resolve;
+    });
+    const sent: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/api/tags')) return Response.json({ models: [{ name: 'llama', size: 1, digest: 'one' }] });
+        if (url.endsWith('/api/show')) return Response.json({ capabilities: ['completion'], ...trainedFor(131072) });
+        const body = JSON.parse(String(init?.body)) as {
+          options: { num_ctx: number };
+          messages: { content: string }[];
+        };
+        const who = body.messages.at(-1)?.content ?? '';
+        sent.push(`${who}:${body.options.num_ctx}`);
+        if (who === 'b' && body.messages.length > 1) {
+          await heldB;
+          return overflow(30_000);
+        }
+        if (who === 'a' && sent.filter(entry => entry.startsWith('a:')).length === 1)
+          return Response.json({ error: 'model requires more system memory' }, { status: 500 });
+        return done();
+      })
+    );
+    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13));
+    const b = local.stream(
+      {
+        model: 'local:ollama:llama',
+        messages: [
+          { role: 'user', content: 'x'.repeat(40_000) },
+          { role: 'assistant', content: 'ok' },
+          { role: 'user', content: 'b' },
+        ],
+      },
+      () => undefined
+    );
+    await vi.waitFor(() => expect(sent).toEqual(['b:65536']));
+    await local.stream({ model: 'local:ollama:llama', messages: [{ role: 'user', content: 'a' }] }, () => undefined);
+    releaseB();
+    await b;
+    expect(sent).toEqual(['b:65536', 'a:65536', 'a:16384', 'b:16384']);
+  });
+
+  it('grows Auto ahead of compaction, and not under a Fixed size', async () => {
+    ollama(trainedFor(131072));
+    expect(
+      await new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, lowConfidence(64))).growFor(
+        'local:ollama:llama',
+        20_000
+      )
+    ).toBe(32768);
+    forgetLocalContexts();
+    expect(await new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13)).growFor('local:ollama:llama', 70_000)).toBe(
+      73728
+    );
+    forgetLocalContexts();
+    expect(
+      await new OllamaLocal(undefined, sizing({ mode: 'fixed', tokens: 16384 }, 64)).growFor(
+        'local:ollama:llama',
+        20_000
+      )
+    ).toBeUndefined();
   });
 });
 
