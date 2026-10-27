@@ -1,0 +1,71 @@
+import type { IAdminSettingsRepository } from './types';
+
+export const SIGNUP_GRANT_UNLOCK_REASONS = [
+  'card_verified',
+  'phone_verified',
+  'admin',
+  'activity',
+  'org_invite',
+  'github_verified',
+  'work_email_verified',
+] as const;
+
+export type SignupGrantUnlockReason = (typeof SIGNUP_GRANT_UNLOCK_REASONS)[number];
+
+export interface SignupGrantAssessment {
+  band: 'full' | 'reduced' | 'review';
+  credits: number;
+  score: number | null;
+  reasons: string[];
+  missing: string[];
+  policyVersion: string | null;
+  status: 'evaluated' | 'disabled' | 'unavailable';
+}
+
+export interface SignupGrant {
+  stage: 'pending_email' | 'signup' | 'unlocked';
+  signupCredits: number;
+  unlockCredits: number;
+  creditsReleased: number;
+  nextCondition: 'email_verification' | 'verification' | null;
+  unlockedBy?: SignupGrantUnlockReason;
+  /** Organization whose invite released the remainder; caps org_invite unlocks per org. */
+  unlockedOrgId?: string;
+}
+
+export function signupGrantRemaining(grant: SignupGrant): number {
+  return Math.max(0, grant.signupCredits + grant.unlockCredits - grant.creditsReleased);
+}
+
+export function nonnegativeGrantCredits(value: unknown): number {
+  if (typeof value !== 'string' && typeof value !== 'number') return 0;
+  if (typeof value === 'string' && !value.trim()) return 0;
+  const amount = Number(value);
+  return Number.isSafeInteger(amount) && amount >= 0 ? amount : 0;
+}
+
+/** Missing new settings preserve the installed grant; migration never enables staging. */
+export async function resolveSignupGrantSettings(adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>) {
+  const enabled = await adminSettings.findBySettingName('stagedSignupGrantEnabled');
+  const signup = await adminSettings.findBySettingName('signupGrantCredits');
+  const legacy = signup == null ? await adminSettings.findBySettingName('defaultFreeCredits') : null;
+  const unlock = await adminSettings.findBySettingName('verifiedUnlockCredits');
+  return {
+    enabled: enabled?.settingValue === 'true' || (enabled?.settingValue as unknown) === true,
+    signupCredits: nonnegativeGrantCredits(signup == null ? legacy?.settingValue : signup.settingValue),
+    unlockCredits: nonnegativeGrantCredits(unlock?.settingValue),
+  };
+}
+
+export async function newSignupGrant(adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>) {
+  const enabled = await adminSettings.findBySettingName('stagedSignupGrantEnabled');
+  if (enabled?.settingValue !== 'true' && (enabled?.settingValue as unknown) !== true) return undefined;
+  const config = await resolveSignupGrantSettings(adminSettings);
+  return {
+    stage: 'pending_email',
+    signupCredits: config.signupCredits,
+    unlockCredits: config.unlockCredits,
+    creditsReleased: 0,
+    nextCondition: 'email_verification',
+  } satisfies SignupGrant;
+}

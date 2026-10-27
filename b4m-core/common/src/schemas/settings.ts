@@ -456,6 +456,14 @@ export const SettingKeySchema = z.enum([
   'freeTierDailySpendCapCredits',
   'freeTierDay1SpendCapCredits',
   'freeTierDays2To7SpendCapCredits',
+  'stagedSignupGrantEnabled',
+  'signupGrantCredits',
+  'verifiedUnlockCredits',
+  'signupGrantRiskPolicy',
+  'signupGrantActivityEnabled',
+  'signupGrantOrgInviteEnabled',
+  'signupGrantActivityMinMessages',
+  'signupGrantActivityMinDays',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
@@ -465,6 +473,7 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
+  'signupAnomaly',
 
   // WEATHER SERVICE SETTINGS
   'EnableWeatherService',
@@ -621,6 +630,10 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
   'apiKeyAccess',
+
+  // FREE-TIER MODEL ALLOWLIST
+  'freeTierModelGateEnabled',
+  'freeTierAllowedModels',
 
   // OVERWATCH ROLLUP CRON SETTINGS
   'overwatchRollupSync',
@@ -2075,7 +2088,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'turnstileEnabled', order: 8 },
       { key: 'turnstileFailClosed', order: 9 },
       { key: 'turnstileSiteKey', order: 10 },
-      { key: 'signupRiskScoring', order: 11 },
+      { key: 'stagedSignupGrantEnabled', order: 11 },
+      { key: 'signupGrantCredits', order: 12 },
+      { key: 'verifiedUnlockCredits', order: 13 },
+      { key: 'signupGrantRiskPolicy', order: 14 },
+      { key: 'signupGrantActivityEnabled', order: 15 },
+      { key: 'signupGrantActivityMinMessages', order: 16 },
+      { key: 'signupGrantActivityMinDays', order: 17 },
+      { key: 'signupGrantOrgInviteEnabled', order: 18 },
+      { key: 'signupRiskScoring', order: 19 },
+      { key: 'signupAnomaly', order: 20 },
     ],
   },
   KNOWLEDGE: {
@@ -2192,6 +2214,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiKeyMinAccountAgeDays', order: 2 },
       { key: 'maxActiveKeysUntrusted', order: 3 },
       { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
+    ],
+  },
+  FREE_TIER_MODELS: {
+    id: 'freeTierModelsService',
+    name: 'Free-Tier Models',
+    description: 'Which text models accounts without a paid plan may call, on every surface',
+    icon: 'Security',
+    settings: [
+      { key: 'freeTierModelGateEnabled', order: 1 },
+      { key: 'freeTierAllowedModels', order: 2 },
     ],
   },
   THINKING_VISIBILITY: {
@@ -3631,6 +3663,40 @@ export const settingsMap = {
     order: 4,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
+  // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
+  // the model picker (apps/client/server/utils/callerModelList.ts).
+  freeTierModelGateEnabled: makeBooleanSetting({
+    key: 'freeTierModelGateEnabled',
+    name: 'Free-Tier Model Gate',
+    // Self-host has no billing stack, so every account would read as free; the gate is hosted-only by default.
+    defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
+    description:
+      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) to the free-tier text models, on web chat, CLI, API keys, agents and fallbacks. Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
+    order: 1,
+  }),
+  freeTierAllowedModels: makeObjectSetting<string[]>({
+    key: 'freeTierAllowedModels',
+    name: 'Free-Tier Allowed Models',
+    defaultValue: [
+      ChatModels.CLAUDE_5_5_HAIKU,
+      ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+      ChatModels.CLAUDE_4_5_HAIKU,
+      ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
+      ChatModels.GPT5_4_MINI,
+      ChatModels.GPT5_4_NANO,
+      ChatModels.GEMINI_3_1_FLASH_LITE,
+      ChatModels.GEMINI_2_5_FLASH_LITE,
+    ],
+    description:
+      'Text model IDs free accounts may call while the Free-Tier Model Gate is on, one per line. The Default API Model is always allowed so a free account can still chat. A model missing here, including a newly added one, is paid-only.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
+    order: 2,
+    dependsOn: 'freeTierModelGateEnabled',
+    schema: z.array(z.string()),
+  }),
   // Tiers resolve in b4m-core/services/src/thinkingVisibility.ts. Multi-turn tool replay is
   // unaffected: provider thinking blocks still go back to the provider whatever the level.
   thinkingVisibilityFree: makeStringSetting({
@@ -3808,6 +3874,92 @@ export const settingsMap = {
     // refuses invalid entries and readers filter with partitionDomainList.
     schema: z.array(z.string()),
   }),
+  stagedSignupGrantEnabled: makeBooleanSetting({
+    key: 'stagedSignupGrantEnabled',
+    name: 'Staged Signup Grants',
+    defaultValue: false,
+    userReadable: true,
+    description:
+      'Enroll new self-serve accounts in staged grants. Existing accounts and explicit invite grants are unchanged.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantCredits: makeNumberSetting({
+    key: 'signupGrantCredits',
+    name: 'Signup Grant Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    userReadable: true,
+    description:
+      'Credits released after email verification for newly enrolled staged accounts. Migrated from the installed default grant without increasing it.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  verifiedUnlockCredits: makeNumberSetting({
+    key: 'verifiedUnlockCredits',
+    name: 'Verified Unlock Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    userReadable: true,
+    description:
+      'Maximum additional credits available after server-validated unlocks. Stronger evidence pays only the cumulative difference. Does not enable a verification flow.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantRiskPolicy: makeObjectSetting<Record<string, unknown>>({
+    key: 'signupGrantRiskPolicy',
+    name: 'Signup Grant Assessment Policy',
+    defaultValue: { enabled: false },
+    schema: z.record(z.string(), z.unknown()),
+    description:
+      'Private server assessment policy for new staged signup tranches. Invalid or unavailable enabled policies hold the tranche.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantActivityEnabled: makeBooleanSetting({
+    key: 'signupGrantActivityEnabled',
+    name: 'Signup Grant Activity Unlock',
+    defaultValue: false,
+    userReadable: true,
+    description: 'Allow enrolled accounts to request an unlock based on server-completed first-party chat activity.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantOrgInviteEnabled: makeBooleanSetting({
+    key: 'signupGrantOrgInviteEnabled',
+    name: 'Signup Grant Organization Invite Unlock',
+    defaultValue: false,
+    userReadable: true,
+    description:
+      'Allow staged grant unlocks after organization invitation acceptance. Off by default; enable only by operator decision until a replenishing organization grant budget is implemented.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantActivityMinMessages: makeNumberSetting({
+    key: 'signupGrantActivityMinMessages',
+    name: 'Signup Activity Minimum Messages',
+    defaultValue: 0,
+    min: 0,
+    max: 10000,
+    int: true,
+    description: 'Private minimum completed chat turns for activity unlock. Zero disables eligibility.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantActivityMinDays: makeNumberSetting({
+    key: 'signupGrantActivityMinDays',
+    name: 'Signup Activity Minimum Days',
+    defaultValue: 0,
+    min: 0,
+    max: 365,
+    int: true,
+    description:
+      'Private minimum distinct UTC activity days and elapsed whole days between first and last activity. Zero disables eligibility.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
     // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
@@ -3951,6 +4103,24 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     schema: SignupRiskScoringSchema,
+  }),
+  signupAnomaly: makeObjectSetting({
+    key: 'signupAnomaly',
+    name: 'Signup anomaly detection',
+    defaultValue: { signupBaseline: 0, apiKeyBaseline: 0, thresholdMultiplier: 2, minimumCount: 10 },
+    description:
+      'Expected hourly signups and API keys, multiplier above baseline, and minimum event count. ' +
+      'Generic defaults only; tune these for your deployment. Domain hints are review signals, not proof of abuse.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    schema: z
+      .object({
+        signupBaseline: z.number().int().min(0).max(1000000),
+        apiKeyBaseline: z.number().int().min(0).max(1000000),
+        thresholdMultiplier: z.number().min(1).max(100),
+        minimumCount: z.number().int().min(1).max(1000000),
+      })
+      .strict(),
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',

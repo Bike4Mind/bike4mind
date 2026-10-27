@@ -44,6 +44,7 @@ import { AdminTab } from './adminSidebarConfig';
 import { canRenderAdminTab } from './adminTabRenderability';
 import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
+import { UndoToastProvider } from './shared/UndoToast';
 
 export { AdminTab } from './adminSidebarConfig';
 
@@ -148,18 +149,18 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
 
   const adminSession = useGetSession(adminSessionId);
 
-  // Set floatingChat layout on mount, restore on unmount
-  // FloatingChatWindow auto-minimizes on narrow screens, so no need to check here
+  // Mount the assistant as the minimized pill so it is on hand without covering the page; restore on unmount
   useEffect(() => {
     if (!currentUser?.isAdmin) return;
-    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: false });
+    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: true });
     return () => {
-      setSessionLayout({ layout: 'hide' });
+      // Reset the minimized default too, or the next floating chat opened elsewhere starts as the pill
+      setSessionLayout({ layout: 'hide', floatingChatMinimized: false });
     };
   }, [currentUser?.isAdmin]);
 
   return (
-    <>
+    <UndoToastProvider>
       <Tabs
         aria-label="Admin tabs"
         value={activeTab}
@@ -316,10 +317,11 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             currentSessionId={adminSessionId ?? undefined}
             isLoading={!adminSessionId || adminSession.isPending}
             autoHideOnEmpty={false}
+            floatingChatCloseToPill
           />
         </Box>
       </NotebookFilepondProvider>
-    </>
+    </UndoToastProvider>
   );
 };
 

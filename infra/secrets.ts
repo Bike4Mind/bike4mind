@@ -7,6 +7,7 @@ export const secrets = {
   JWT_SECRET: new sst.Secret('JWT_SECRET', 'my-secret-placeholder-value'),
   SLACK_WEBHOOK_URL: new sst.Secret('SLACK_WEBHOOK_URL', 'not-configured'),
   SLACK_ERROR_REPORTING_WEBHOOK_URL: new sst.Secret('SLACK_ERROR_REPORTING_WEBHOOK_URL', 'not-configured'),
+  SLACK_ALARMS_WEBHOOK_URL: new sst.Secret('SLACK_ALARMS_WEBHOOK_URL', 'not-configured'),
   GOOGLE_CLIENT_ID: new sst.Secret('GOOGLE_CLIENT_ID', 'not-configured'),
   GOOGLE_CLIENT_SECRET: new sst.Secret('GOOGLE_CLIENT_SECRET', 'not-configured'),
   GITHUB_CLIENT_ID: new sst.Secret('GITHUB_CLIENT_ID', 'not-configured'),
@@ -137,8 +138,8 @@ export const secrets = {
   // Generate with: openssl genrsa 2048 | base64 | tr -d '\n'
   // If not set, an ephemeral key is generated at runtime (dev only — NOT safe for production).
   OAUTH_RSA_PRIVATE_KEY: new sst.Secret('OAUTH_RSA_PRIVATE_KEY', 'not-configured'),
-  // Shared secret for E2E test endpoints (/api/test/create-user, /api/test/cleanup)
-  // Set per stage: sst secret set E2E_CLEANUP_SECRET <value> --stage <stage>
+  // Header secret for the E2E test endpoints (/api/test/*). The deployer seeds a per-tier value
+  // on every deploy; local stages: sst secret set E2E_CLEANUP_SECRET <value> --stage <stage>
   E2E_CLEANUP_SECRET: new sst.Secret('E2E_CLEANUP_SECRET', 'not-configured'),
   // Feature flag for the break-glass emergency-login endpoint.
   // Endpoint returns 404 by default — set to 'true' to activate during an OAuth outage.

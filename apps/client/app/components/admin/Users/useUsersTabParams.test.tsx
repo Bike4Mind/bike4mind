@@ -30,6 +30,16 @@ beforeEach(() => {
 });
 
 describe('Users tab URL precedence', () => {
+  it('round-trips anomaly review and grouping through URL and persisted state', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, groupBy: 'emailDomain', recentSignups: 'hour' }));
+    const { result } = renderUsersTab();
+    expect(result.current[0]).toMatchObject({ groupBy: 'emailDomain', recentSignups: 'hour' });
+    expect(useUsersTab.getState().params).toMatchObject({ groupBy: 'emailDomain', recentSignups: 'hour' });
+    act(() => result.current[1]({ groupBy: undefined, recentSignups: undefined }));
+    expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1 });
+    expect(result.current[0].groupBy).toBeUndefined();
+  });
+
   it('writes the stored view into a bare users URL, without the free-text search', () => {
     act(() => fakeAdminRouter.reset({ tab: 'users' }));
     const { result } = renderUsersTab();

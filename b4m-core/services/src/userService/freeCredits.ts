@@ -8,6 +8,7 @@ import {
   settingsMap,
 } from '@bike4mind/common';
 import { addCredits } from '../creditService';
+import { releaseSignupTranche } from './stagedSignupGrant';
 
 type FreeCreditUser = {
   id: string;
@@ -68,6 +69,8 @@ export const grantFreeCredits = async (
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
   { db, reason }: FreeCreditAdapters
 ): Promise<GrantFreeCreditsResult> => {
+  const persisted = await db.users.findById(user.id);
+  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason });
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
   if (amount <= 0) return { creditsGranted: 0, currentCredits: null };
 

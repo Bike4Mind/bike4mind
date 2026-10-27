@@ -20,6 +20,7 @@ export function secretUserFields() {
     loginRecords: [{ ip: SECRET_VALUE }],
     signupMeta: { ip: SECRET_VALUE },
     freeCreditClaimEmail: SECRET_VALUE,
+    signupGrantAssessment: { policyVersion: SECRET_VALUE },
     authProviders: [
       {
         id: 'goog-sub-1',

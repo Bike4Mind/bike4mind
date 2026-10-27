@@ -20,6 +20,7 @@ import {
   systemAuditActor,
   type RecordAdminActionFromRequestInput,
 } from './adminAudit';
+import { ADMIN_REASON_PRESETS, composeAdminReason } from '@client/app/components/admin/shared/adminReason';
 
 type RequestOverrides = {
   user?: Record<string, unknown>;
@@ -217,6 +218,12 @@ describe('parseAdminActionReason', () => {
 
   it('returns a trimmed valid reason', () => {
     expect(parseAdminActionReason('  Reproducing a ticket  ')).toBe('Reproducing a ticket');
+  });
+
+  // ReasonPicker sends a preset on its own as the whole reason, so the audit entry must keep it verbatim.
+  it.each(Object.values(ADMIN_REASON_PRESETS).flat())('accepts the ReasonPicker preset %j unchanged', preset => {
+    expect(parseAdminActionReason(preset)).toBe(preset);
+    expect(parseAdminActionReason(composeAdminReason({ preset, note: ' ticket 42 ' }))).toBe(`${preset}: ticket 42`);
   });
 });
 

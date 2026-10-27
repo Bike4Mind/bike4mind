@@ -98,13 +98,14 @@ Every admin page renders inside the shared admin layout (sidebar navigation plus
 The sidebar is the frame of every admin page, so it sets the tone. Calm, scannable and never louder than the content.
 
 - **Size and surface.** 248 px wide on desktop, `canvas` background, 1 px `border` on its right edge, padding 20 px top and 14 px sides. No shadow, no colored background.
-- **Brand row.** 28 px ink tile with the product mark, "Admin" in 14 / 600, and a `Cmd K` key hint pushed to the right. 18 px below it before the first item.
+- **Brand row.** 28 px ink tile with the product mark, "Admin" in 14 / 600, a neutral environment chip (Local, Staging, Preview; hidden on production), and a `Cmd K` key hint pushed to the right. 18 px below it before the first item.
 - **Search.** A 32 px filter input under the brand row ("Filter pages", `/` to focus). Typing narrows items across all sections and hides empty sections.
 - **Sections.** A small number of groups (Overview, People, Money, Trust and safety, AI, Platform, Settings) with a 12 / 500 `inkMuted` label in sentence case, 20 px above each label. Labels are static text, not accordions; there are no section icons, no section colors and no dividers between sections.
 - **Items.** 36 px tall, 8 px radius, 10 px horizontal padding, 16 px stroke icon (2 px stroke, `inkMuted`) then the label in 14 / 500 `inkSecondary`. One line only: labels are short ("Credits", not "Credit Analytics") and truncate with a tooltip rather than wrap. Hover: `hover` fill and `ink` text.
 - **Active item.** `surface` fill, `ink` text and icon, and a 1 px `border` ring. Exactly one active item; on a detail page the item of its list is active (Users on a user profile).
-- **Long lists.** A section with more than 7 items shows the 5 most used and a "More" row that expands in place. The sidebar scrolls on its own with a hidden scrollbar until hover; the brand row and search stay pinned.
+- **Long lists.** A section with more than 7 items shows the 5 most used and a "More" row that expands in place. The sidebar scrolls on its own, and every admin scroll area uses a thin overlay scrollbar that shows on hover or focus; the brand row and search stay pinned.
 - **Footer.** Pinned at the bottom: the signed-in admin (24 px avatar, name, role in `inkMuted`) and a collapse button.
+- **App-wide chrome.** Anything that renders under the admin root but belongs to the whole app (the floating AI chat, the help panel) spreads `adminSurfaceExcludeProps` on its root so the admin skin stops there.
 - **Collapsed and mobile.** Collapsed is a 64 px icon rail with tooltips, remembered per admin. Under 900 px the sidebar becomes a drawer opened from a menu button in the page header.
 
 ### Page skeletons
@@ -224,3 +225,11 @@ Shortcuts:
 2. **Users first.** Rebuild the users list and user profile on the toolkit; split `FullUsersView` into the profile shell and section cards.
 3. **Every other admin tab.** Organizations, credits, API keys, security, settings and audit log move onto the same page anatomy, one PR per tab.
 4. **Lock it in.** A lint rule against raw Joy `Card`, `Modal` and `Table` in admin code outside `shared/`, and a design-review checkbox in the PR template.
+
+### Lint guard
+
+`b4m/no-raw-admin-joy` rejects raw Joy `Card`, `Modal` and `Table` imports (including aliases and component subpaths) outside the root `admin/shared/` toolkit. Namespace imports and re-exports cannot bypass it. Use `SectionCard`, `ActionDialog` and `DataTable` instead.
+
+An exceptional import needs an immediately preceding comment: `// admin-toolkit-allow YYYY-MM-DD -- concrete reason the toolkit cannot serve this use case`. Keep exceptions local to one import; do not disable the rule for a file or directory.
+
+Pre-toolkit imports are recorded by file and component in `eslint-rules/admin-joy-legacy.mjs`, with their recording date and migration justification. Each declaration is pinned to its original line and a SHA-256 text fingerprint in `eslint-rules/admin-joy-legacy-imports.mjs`, not a transferable import count. New declarations fail even in legacy files, and changed or removed declarations produce a stale-exception error. Remove baseline entries when migrating; do not add new screens. Formatting or line shifts also require explicitly re-justifying the affected exception. This strictness avoids granting a removed import's allowance to another declaration without editing tabs awaiting their own migrations.

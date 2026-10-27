@@ -74,6 +74,14 @@ describe('SidebarNav', () => {
     expect(screen.getByTestId('admin-settings-btn')).toBeInTheDocument();
   });
 
+  it.each([
+    ['Staging', 'Staging'],
+    [null, undefined],
+  ])('names the environment beside the brand: %s', (environmentLabel, expected) => {
+    renderNav({ environmentLabel });
+    expect(screen.queryByTestId('admin-sidebar-environment-chip')?.textContent).toBe(expected);
+  });
+
   it('selects the clicked tab', () => {
     const { onTabSelect } = renderNav();
 

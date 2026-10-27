@@ -289,7 +289,7 @@ export const wafOobAlarmTopic = productionAlerts
 export const wafAlarmSlackHandler = productionAlerts
   ? new sst.aws.Function('WafAlarmSlackHandler', {
       handler: 'apps/workers/src/events/wafAlarmToSlack.handler',
-      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
+      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       logging: { retention: '1 month' },
     })
@@ -384,7 +384,7 @@ if (productionAlerts && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic && wafAl
     {
       name: `${$app.name}-${$app.stage}-waf-alarm-slack-handler-dlq-messages`,
       alarmDescription:
-        'WafAlarmSlackHandlerDlq has messages -- WAF rate-limit alert delivery to Slack is failing; check SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
+        'WafAlarmSlackHandlerDlq has messages -- WAF rate-limit alert delivery to Slack is failing; check SLACK_ALARMS_WEBHOOK_URL, SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
       comparisonOperator: 'GreaterThanThreshold',
       evaluationPeriods: 1,
       metricName: 'ApproximateNumberOfMessagesVisible',
