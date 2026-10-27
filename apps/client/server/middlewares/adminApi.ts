@@ -3,6 +3,7 @@ import {
   ForbiddenError,
   MethodNotAllowedError,
   hasAdminPermission,
+  missingAdminPermissionMessage,
   type AdminPermissionId,
 } from '@bike4mind/common';
 import type { Request, Response } from 'express';
@@ -24,7 +25,7 @@ export function requireAdminPermission(req: PermissionRequest, permission: Admin
     throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.ADMIN] });
   }
   if (!hasAdminPermission(req.user, permission)) {
-    throw new ForbiddenError(`Missing permission: ${permission}`, { required_permission: permission });
+    throw new ForbiddenError(missingAdminPermissionMessage(permission), { required_permission: permission });
   }
 }
 

@@ -401,7 +401,7 @@ export function analyzeRouteSource(
         const options = readBaseApiOptions(node, context);
         auth.add(options.auth);
         options.scopes.forEach(scope => scopes.add(scope));
-        if (callee.text === 'adminApi') {
+        if (callee.text === 'adminApi' && options.auth !== 'jwt') {
           scopes.add(
             context.table.enumValues.get(ADMIN_API_IMPLICIT_SCOPE) ?? `?ApiKeyScope.${ADMIN_API_IMPLICIT_SCOPE}`
           );

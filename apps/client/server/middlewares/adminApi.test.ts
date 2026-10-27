@@ -65,5 +65,15 @@ describe('adminApi', () => {
         'credits:adjust'
       )
     ).not.toThrow();
+    expect(() =>
+      requireAdminPermission(
+        { user: { adminPermissions: ['support:read'] }, apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] } },
+        'credits:adjust'
+      )
+    ).toThrow('Missing permission: credits:adjust');
+  });
+
+  it('refuses a request with no user', () => {
+    expect(() => requireAdminPermission({}, 'support:read')).toThrow('Missing permission: support:read');
   });
 });

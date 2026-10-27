@@ -90,4 +90,8 @@ describe('admin permissions', () => {
     expect(AdminPermissionsSchema.safeParse(['support:read', 'users:write']).success).toBe(false);
     expect(AdminPermissionsSchema.parse([...ADMIN_PERMISSIONS])).toEqual(ADMIN_PERMISSIONS);
   });
+
+  it('rejects repeated permissions at the input boundary', () => {
+    expect(AdminPermissionsSchema.safeParse(['support:read', 'support:read']).success).toBe(false);
+  });
 });

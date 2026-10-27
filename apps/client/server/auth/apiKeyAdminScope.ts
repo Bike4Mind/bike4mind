@@ -14,8 +14,9 @@ export function apiKeyGrantsAdmin(scopes: readonly string[] | undefined): boolea
 }
 
 /**
- * Makes `user.isAdmin` read false for the rest of the request. It is an own accessor, so `save()`,
- * `get('isAdmin')` and `toJSON()` still see the stored role and nothing is written back.
+ * Makes `user.isAdmin` read false and `user.adminPermissions` read `[]` for the rest of the request.
+ * They are own accessors, so `save()`, `get(...)` and `toJSON()` still see the stored values and
+ * nothing is written back. Assign a new array to change permissions; an in-place push is lost.
  */
 export function withholdAdminRole<T extends AdminFlagged>(user: T): T {
   if (!user.isAdmin && !user.adminPermissions?.length) return user;

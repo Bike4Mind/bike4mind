@@ -12,7 +12,10 @@ export const ADMIN_PERMISSIONS = [
 ] as const;
 
 export const AdminPermissionSchema = z.enum(ADMIN_PERMISSIONS);
-export const AdminPermissionsSchema = z.array(AdminPermissionSchema).max(ADMIN_PERMISSIONS.length);
+export const AdminPermissionsSchema = z
+  .array(AdminPermissionSchema)
+  .max(ADMIN_PERMISSIONS.length)
+  .refine(ids => new Set(ids).size === ids.length, 'Admin permissions must not repeat');
 export type AdminPermissionId = z.infer<typeof AdminPermissionSchema>;
 
 type AdminIdentity = {
@@ -51,7 +54,11 @@ export function assertCanActOnAdminTarget(
   }
 }
 
-/** A delegated settings manager may only hand out grants it holds, and never the full-admin flag. */
+/**
+ * A delegated settings manager may only hand out grants it holds, and never the full-admin flag.
+ * This checks the grant only, not who receives it: a grant endpoint must also call
+ * assertCanActOnAdminTarget so a delegate cannot demote or strip an account with admin access.
+ */
 export function assertCanGrantAdminAccess(
   actor: AdminIdentity | null | undefined,
   grant: { isAdmin?: boolean; adminPermissions?: readonly AdminPermissionId[] }
