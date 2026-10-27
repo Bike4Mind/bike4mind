@@ -139,6 +139,9 @@ import {
   isTurnEndingTool,
   ResponsesStreamTruncatedError,
   LlmTimeoutError,
+  isOutputBudgetExhaustedError,
+  isStreamEndedWithoutFinishError,
+  type OutputBudgetExhaustedError,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -323,6 +326,17 @@ export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Pl
 /** Final reply when every allowlisted model failed a substituted turn; the provider's own wording would name the substitute. */
 export const MODEL_UNAVAILABLE_ERROR_REPLY =
   'The AI service is temporarily unavailable. Please try again in a few minutes.';
+
+/**
+ * Final reply when a reasoning model spent its whole output budget and the caller set `max_tokens`
+ * (API callers, and the web UI, which always sends one). Worded so it is actionable on both.
+ */
+export const OUTPUT_BUDGET_EXHAUSTED_REPLY =
+  'The model used its whole output budget reasoning before it could answer. Raise the max tokens setting (max_tokens in the API), or use the model default.';
+
+/** Same failure when the server chose the budget (voice, or an API call that sent no `max_tokens`): nothing for the user to raise. */
+export const OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY =
+  'The model ran out of room while reasoning and could not answer. Please try again or simplify the request.';
 
 // Context management constants: message-history limits per query type
 
@@ -631,6 +645,7 @@ export function isAbortError(error: unknown): boolean {
  */
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
+  if (isOutputBudgetExhaustedError(error)) return false;
   if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) return false;
   if (!(error instanceof Error)) return true;
   return !(
@@ -1894,6 +1909,8 @@ export class ChatCompletionProcess {
     };
   }
 
+  /** Set when the turn failed because a reasoning model spent its whole output budget; the quest is already settled. */
+  public terminalError: OutputBudgetExhaustedError | undefined;
   /** Pipeline phase durations from the most recent process() call. Available after process() resolves. */
   public pipelinePhases: Record<string, number> | null = null;
 
@@ -5078,6 +5095,7 @@ export class ChatCompletionProcess {
       let toolPairingRetried = false;
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
+      let streamEndedWithoutFinishRetried = false;
       // Where the last tool call landed in the visible reply, so the end of the turn can tell
       // an answer written after the tools ran from a preamble written before them. The slots
       // themselves can't say this: every iteration appends into the same indices.
@@ -5494,7 +5512,8 @@ export class ChatCompletionProcess {
           } catch (attemptError) {
             lastError = attemptError as Error;
             // Aborts (user cancel, client disconnect, or request/idle timeout) are
-            // benign - log the raw error at warn so its stack stays out of the
+            // benign, and output-budget exhaustion is deterministic and settled as terminal
+            // below (an error log would trip the alert) - log the raw error at warn so its stack stays out of the
             // CloudWatch ERROR to LiveOps/Slack alerts. This bare dump was
             // the last error-severity log on the abort path; the backends and the
             // formatted summary below were already downgraded. Real failures still dump
@@ -5502,7 +5521,8 @@ export class ChatCompletionProcess {
             if (
               isAbortError(lastError) ||
               isStreamIdleTimeoutError(lastError) ||
-              lastError instanceof ResponsesStreamTruncatedError
+              lastError instanceof ResponsesStreamTruncatedError ||
+              isOutputBudgetExhaustedError(lastError)
             ) {
               logger.warn(lastError);
             } else {
@@ -5649,6 +5669,27 @@ export class ChatCompletionProcess {
 
               turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, this.ledgerModel(currentModel).id);
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
+
+              resetStreamStateForRetry();
+
+              continue;
+            }
+
+            // A stream that closed with no finish reason and no output: one same-model retry,
+            // then the fallback chain.
+            if (isStreamEndedWithoutFinishError(lastError) && !streamEndedWithoutFinishRetried) {
+              streamEndedWithoutFinishRetried = true;
+              const EMPTY_STREAM_RETRY_DELAY_MS = 2000;
+              const jitter = Math.floor(Math.random() * 500);
+
+              logger.info(
+                `[Empty Stream Retry] ${currentModel.id} stream ended without a finish reason, retrying once in ${EMPTY_STREAM_RETRY_DELAY_MS + jitter}ms`
+              );
+
+              this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
+
+              turnTiming.recordRetry(lastError, EMPTY_STREAM_RETRY_DELAY_MS + jitter, currentModel.id);
+              await new Promise(resolve => setTimeout(resolve, EMPTY_STREAM_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
 
@@ -7165,6 +7206,19 @@ export class ChatCompletionProcess {
         // was meant to avoid.
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
         setErrorReply(SLOW_MODEL_ERROR_REPLY);
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (isOutputBudgetExhaustedError(err)) {
+        // WARN, not error: retrying with the same budget fails the same way, and error severity
+        // would trip the CloudWatch ERROR alert. Settled rather than rethrown so the queue path
+        // does not DLQ-retry a deterministic failure; the /api/chat wait route reads terminalError.
+        logger.warn(`[Output Budget] Quest ${questId}: ${err.message}`);
+        this.terminalError = err;
+        setErrorReply(
+          (params.max_tokens ?? 0) > 0 ? OUTPUT_BUDGET_EXHAUSTED_REPLY : OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY
+        );
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);

@@ -108,12 +108,12 @@ describe('SkillUploadDialog', () => {
   it('shows the ignored keys and the files that are not uploaded', () => {
     render(
       <SkillUploadDialog
-        preview={preview({ dropped: ['allowed-tools', 'model'], extraFiles: ['a.py', 'b.md'], extraFileCount: 7 })}
+        preview={preview({ dropped: ['hooks', 'model'], extraFiles: ['a.py', 'b.md'], extraFileCount: 7 })}
         onClose={() => {}}
       />
     );
     expect($('skill-upload-dropped')?.textContent).toContain(
-      'Ignored (not supported in Bike4Mind skills): allowed-tools, model'
+      'Ignored (not supported in Bike4Mind skills): hooks, model'
     );
     expect($('skill-upload-extra-files')?.textContent).toContain('Only SKILL.md is uploaded; 7 other files');
     expect($('skill-upload-extra-files')?.textContent).toContain('a.py, b.md');

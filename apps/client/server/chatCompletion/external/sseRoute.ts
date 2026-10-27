@@ -31,6 +31,7 @@ import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { resolveQuestErrorCode } from '@bike4mind/services/llm';
 import { getHttpStatus, isSafetyRefusalError } from '@bike4mind/utils';
+import { isOutputBudgetExhaustedError } from '@bike4mind/llm-adapters';
 import {
   connectDB,
   mongoose,
@@ -127,14 +128,21 @@ function toJsonError(
 }
 
 /** A failure after onReady: a typed in-band frame that never carries the raw upstream body. */
-function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
+function toStreamErrorFrame(error: unknown, requestId: string, callerSetMaxTokens: boolean): SSEErrorEvent {
   const questCode = resolveQuestErrorCode(error);
   let frameError: unknown = error;
   let code: CompletionSseErrorCode | undefined = questCode;
   if (!questCode) {
     const status = error instanceof Error ? getHttpStatus(error) : undefined;
-    // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
-    if (error instanceof Error && isSafetyRefusalError(error)) {
+    // Retrying the same budget fails the same way, unlike provider_error. Only a budget the caller
+    // chose gets its own code; a server-chosen one is not theirs to raise.
+    if (callerSetMaxTokens && isOutputBudgetExhaustedError(error)) {
+      frameError = new Error(
+        'The model used your whole max_tokens budget reasoning before it could answer. Raise max_tokens, or omit it to use the model default.'
+      );
+      code = 'output_budget_exhausted';
+    } else if (error instanceof Error && isSafetyRefusalError(error)) {
+      // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
       frameError = new Error('The model declined this request');
       code = 'content_blocked';
     } else if (isUpstreamCallerError(error)) {
@@ -392,7 +400,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
     } catch (error) {
       const jsonError = toJsonError(error, requestId);
-      const level = jsonError.status < 500 ? 'warn' : 'error';
+      // Budget exhaustion is expected, not an operator fault, whoever chose the budget (same policy as
+      // /api/chat); emitProcessingFailed already skips it via isOperatorFault. Only a positive
+      // max_tokens counts as the caller's: resolveOutputMaxTokens discards the rest.
+      const budgetExhausted = isOutputBudgetExhaustedError(error);
+      const callerSetMaxTokens = budgetExhausted && (body?.options?.maxTokens ?? 0) > 0;
+      const level = jsonError.status < 500 || budgetExhausted ? 'warn' : 'error';
       const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
       logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
       // Provider caller errors are not operator failures, including SDK errors that are not HTTPErrors.
@@ -400,7 +413,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       try {
         if (res.headersSent) {
-          write(serializeSSEEvent(toStreamErrorFrame(error, requestId)));
+          write(serializeSSEEvent(toStreamErrorFrame(error, requestId, callerSetMaxTokens)));
           end();
           if (heartbeat) clearInterval(heartbeat);
         } else {

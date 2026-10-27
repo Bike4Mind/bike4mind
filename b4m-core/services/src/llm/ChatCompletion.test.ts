@@ -21,6 +21,8 @@ import {
   FORCE_STREAM_STALL_TEST_MARKER,
   SLOW_MODEL_ERROR_REPLY,
   MODEL_UNAVAILABLE_ERROR_REPLY,
+  OUTPUT_BUDGET_EXHAUSTED_REPLY,
+  OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY,
 } from './ChatCompletionProcess';
 import {
   buildAndSortMessages,
@@ -53,6 +55,8 @@ import {
   MAX_FULL_TOOL_RESULT_CHARS,
   ResponsesStreamTruncatedError,
   createAnthropicStreamTimeoutError,
+  OutputBudgetExhaustedError,
+  StreamEndedWithoutFinishError,
   bedrockEmptyResponseMessage,
   type ICompletionBackend,
   federatedSharedKeyProviders,
@@ -12002,6 +12006,95 @@ describe('ChatCompletionProcess', () => {
           type: 'error',
           status: 'done',
         })
+      );
+    });
+
+    it('settles a budget-exhausted quest as terminal without retrying or rethrowing', async () => {
+      setupStreamIdleTimeoutMocks();
+      // Real shouldTriggerFallback does not match the budget error, so it is non-retryable.
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      const complete = vi.fn().mockRejectedValue(new OutputBudgetExhaustedError('DeepSeek', 'deepseek-flash'));
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(service.terminalError).toBeInstanceOf(OutputBudgetExhaustedError);
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({ reply: OUTPUT_BUDGET_EXHAUSTED_REPLY, type: 'error', status: 'done' })
+      );
+      // The inner fallback-loop catch must not dump it at error: that trips the operator Slack alert.
+      expect(mockLogger.error).not.toHaveBeenCalledWith(expect.any(OutputBudgetExhaustedError));
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.any(OutputBudgetExhaustedError));
+    });
+
+    it.each([undefined, 0, -1])('settles with the server reply when max_tokens is %s', async maxTokens => {
+      setupStreamIdleTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new OutputBudgetExhaustedError('DeepSeek', 'deepseek-flash')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = {
+        ...startQuestParams,
+        params: { ...startQuestParams.params, max_tokens: maxTokens },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({ reply: OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY, type: 'error', status: 'done' })
+      );
+      expect(OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY).not.toMatch(/max_tokens/);
+    });
+
+    it('retries a stream that ended without a finish reason only once on the same model', async () => {
+      setupStreamIdleTimeoutMocks();
+      const complete = vi.fn().mockRejectedValue(new StreamEndedWithoutFinishError('DeepSeek', 'deepseek-flash'));
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger })).catch(() => undefined);
+
+      expect(complete).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries a stream that ended without a finish reason once on the same model', async () => {
+      setupStreamIdleTimeoutMocks();
+      let callCount = 0;
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              callCount++;
+              if (callCount === 1) throw new StreamEndedWithoutFinishError('DeepSeek', 'deepseek-flash');
+              await cb(['Recovered']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(callCount).toBe(2);
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({ replies: ['Recovered'], status: 'done', type: 'message' })
       );
     });
 
