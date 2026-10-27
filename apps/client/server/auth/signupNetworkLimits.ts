@@ -1,7 +1,6 @@
 import { isIP } from 'node:net';
 import { type INetworkMeta, type IUserDocument, TooManyRequestsError } from '@bike4mind/common';
 import { adminSettingsRepository, authEventRepository } from '@bike4mind/database';
-import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import type { userService } from '@bike4mind/services';
 import { SIGNUP_LIMITED_MESSAGE } from '@server/utils/auth/oauthFailureReason';
 
@@ -64,9 +63,10 @@ async function readLimit(key: 'maxSignupsPerIpPerDay' | 'maxSignupsPerAsnPerHour
  * Refuse a new self-serve account once its IP (24h) or ASN (1h) has reached the admin cap. Both caps
  * default to 0 (off). Fails open: a settings or count failure is logged and the signup proceeds,
  * because the staged grant still assesses the account and a refusal here locks real people out.
+ * Unlike the OTC rate limits this is not skipped under E2E: the caps are off unless an operator sets
+ * one, and a preview or staging stage is exactly where a tester needs to see the refusal.
  */
 export async function isSignupNetworkOverLimit(network: SignupNetwork, logger: WarnLogger) {
-  if (isE2EEnabled()) return false;
   try {
     const [ipLimit, asnLimit] = await Promise.all([
       readLimit('maxSignupsPerIpPerDay'),

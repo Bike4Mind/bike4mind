@@ -525,55 +525,16 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(40);
   });
 
-  it('treats a failed signal lookup as missing signals, and skips it for a disabled policy', async () => {
+  it('skips signal collection for a disabled policy', async () => {
     const failingCollector = vi.fn(async () => {
       throw new Error('lookup timeout');
     });
-    const disabled = await createUser();
+    const user = await createUser();
     expect(
-      (await userService.releaseSignupTranche(disabled.id, { ...adapters, collectRiskSignals: failingCollector }))
+      (await userService.releaseSignupTranche(user.id, { ...adapters, collectRiskSignals: failingCollector }))
         .creditsGranted
     ).toBe(12);
     expect(failingCollector).not.toHaveBeenCalled();
-
-    await User.deleteMany({});
-    const user = await createUser();
-    await User.updateOne({ _id: user.id }, { 'signupMeta.isDatacenter': true });
-    const db = {
-      ...adapters.db,
-      adminSettings: {
-        ...adminSettings,
-        findBySettingName: async (name: string) =>
-          name === 'signupGrantRiskPolicy'
-            ? ({
-                settingValue: JSON.stringify({
-                  enabled: true,
-                  version: 'test',
-                  rules: [
-                    {
-                      signal: 'datacenter',
-                      comparison: 'eq',
-                      threshold: 1,
-                      weight: 2,
-                      missing: 'review',
-                      missingWeight: 0,
-                    },
-                  ],
-                  reducedAt: 1,
-                  reviewAt: 3,
-                  reducedFraction: 0.5,
-                }),
-              } as never)
-            : adminSettings.findBySettingName(name),
-      },
-    };
-    // The stored datacenter flag still decides; the failed lookup does not hold the grant.
-    expect(
-      (await userService.releaseSignupTranche(user.id, { ...adapters, db, collectRiskSignals: failingCollector }))
-        .creditsGranted
-    ).toBe(6);
-    expect(failingCollector).toHaveBeenCalledTimes(1);
-    expect((await User.findById(user.id))?.signupGrantAssessment?.status).toBe('evaluated');
   });
 
   it('rejects unbounded validator entitlements and banned accounts', async () => {

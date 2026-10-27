@@ -3,13 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockFindBySettingName = vi.fn();
 const mockRecentDistinctSignups = vi.fn();
-const mockIsE2EEnabled = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findBySettingName: (...args: unknown[]) => mockFindBySettingName(...args) },
   authEventRepository: { recentDistinctSignups: (...args: unknown[]) => mockRecentDistinctSignups(...args) },
 }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: () => mockIsE2EEnabled() }));
 
 import {
   assertSignupNetworkWithinLimits,
@@ -35,8 +33,6 @@ const counts = (day: { ipSignups: number | null; prefixSignups: number | null },
 beforeEach(() => {
   mockFindBySettingName.mockReset();
   mockRecentDistinctSignups.mockReset();
-  mockIsE2EEnabled.mockReset();
-  mockIsE2EEnabled.mockReturnValue(false);
   logger.warn.mockReset();
 });
 
@@ -120,12 +116,8 @@ describe('isSignupNetworkOverLimit', () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
-  it('ignores a malformed cap and skips under E2E', async () => {
+  it('ignores a malformed cap', async () => {
     settings({ maxSignupsPerIpPerDay: 'abc' });
-    expect(await isSignupNetworkOverLimit(network, logger)).toBe(false);
-    mockIsE2EEnabled.mockReturnValue(true);
-    settings({ maxSignupsPerIpPerDay: '1' });
-    counts({ ipSignups: 5, prefixSignups: 5 }, 5);
     expect(await isSignupNetworkOverLimit(network, logger)).toBe(false);
   });
 
