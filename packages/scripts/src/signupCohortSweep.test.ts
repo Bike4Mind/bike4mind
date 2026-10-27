@@ -28,6 +28,12 @@ describe('parseDomainFactsFile', () => {
     expect([...facts.keys()]).toEqual(['harbor.example']);
   });
 
+  it('rejects two entries that normalize to the same registrable domain', () => {
+    expect(() => parseDomainFactsFile({ 'mail.acme.com': {}, 'acme.com': {} })).toThrow(
+      /more than one entry for acme\.com/
+    );
+  });
+
   it('rejects a key that is not a domain', () => {
     expect(() => parseDomainFactsFile({ com: {} })).toThrow(/not a registrable domain/);
   });
@@ -63,6 +69,24 @@ describe('renderCohortCsv', () => {
       '"member","1","review","2","2","1","harbor.example quarry.test","","harbor.example|quarry.test:mx+ns","u1","harbor.example","2026-03-10T00:00:00.000Z","cohort of 2 domains, 2 users; 2 domains share MX hosts mx.mail.example"'
     );
     expect(lines[2]).toContain('"\'=quarry.test"');
+  });
+
+  it.each(['+1', '-1', '@x', '\tx', '\rx'])('defuses a spreadsheet formula prefix in %j', value => {
+    const [, row] = renderCohortCsv({
+      cohorts: [
+        {
+          domains: ['harbor.example', 'quarry.test'],
+          members: [{ userId: value, domain: 'harbor.example', createdAt: null }],
+          datacenterSignups: 0,
+          edges: [],
+          bridgeDomains: [],
+          tooBroad: false,
+          reasons: [],
+        },
+      ],
+      commonKeys: [],
+    }).split('\n');
+    expect(row).toContain(`"'${value}"`);
   });
 
   it('lists common keys with their domain counts', () => {

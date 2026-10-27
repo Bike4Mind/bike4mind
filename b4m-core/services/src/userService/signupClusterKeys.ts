@@ -1,3 +1,4 @@
+import { domainToASCII } from 'node:url';
 import { emailDomainOf } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
@@ -57,9 +58,28 @@ export const DEFAULT_CLUSTER_KEY_OPTIONS: ClusterKeyOptions = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
+function assertPositiveWidth(name: string, value: number): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive finite number, got ${value}`);
+  }
+}
+
+/**
+ * The eTLD+1 of a host or bare domain: trimmed, lowercased, trailing dots stripped and converted to
+ * punycode, so `Mail.Example.com.` and `example.com` agree, as do a Unicode domain and its `xn--` form.
+ * Null when it is not a valid registrable domain.
+ */
+export function normalizeRegistrableDomain(domain: string | null): string | null {
+  const host = domain?.trim().toLowerCase().replace(/\.+$/, '');
+  if (!host) return null;
+  const ascii = domainToASCII(host);
+  if (!ascii) return null;
+  return registrableDomain(ascii, { allowPrivateDomains: true });
+}
+
 /** The eTLD+1 a signup email belongs to, so `x@mail.example.com` and `y@example.com` group together. */
 export const signupRegistrableDomain = (email: string): string | null =>
-  registrableDomain(emailDomainOf(email), { allowPrivateDomains: true });
+  normalizeRegistrableDomain(emailDomainOf(email));
 
 const isHexRun = (run: string, minLength: number) =>
   run.length >= minLength && (run.match(/[a-f]/g)?.length ?? 0) >= 2 && (run.match(/[0-9]/g)?.length ?? 0) >= 2;
@@ -145,6 +165,7 @@ export function domainClusterKeys(
   const registeredAt = facts.registeredAt?.getTime();
   if (registrar && registeredAt !== undefined && !Number.isNaN(registeredAt)) {
     const days = options.registrationBucketDays;
+    assertPositiveWidth('registrationBucketDays', days);
     for (const bucket of timeBuckets(registeredAt, days * DAY_MS)) {
       keys.push({
         kind: 'registration',
@@ -166,12 +187,13 @@ export function signupClusterKeys(
   if (shape && (options.localPartShapes === 'any' || options.localPartShapes.includes(shape))) {
     keys.push({ kind: 'localPartShape', value: shape, label: `local-part shape ${shape}` });
   }
-  if (typeof record.asn === 'number') {
+  if (typeof record.asn === 'number' && Number.isFinite(record.asn)) {
     keys.push({ kind: 'asn', value: String(record.asn), label: `signup ASN ${record.asn}` });
   }
   const createdAt = record.createdAt?.getTime();
   if (createdAt !== undefined && !Number.isNaN(createdAt)) {
     const hours = options.signupBucketHours;
+    assertPositiveWidth('signupBucketHours', hours);
     for (const bucket of timeBuckets(createdAt, hours * HOUR_MS)) {
       keys.push({
         kind: 'signupWindow',

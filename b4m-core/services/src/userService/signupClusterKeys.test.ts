@@ -17,6 +17,12 @@ describe('signupRegistrableDomain', () => {
     expect(signupRegistrableDomain('a@Sample.Example')).toBe('sample.example');
     expect(signupRegistrableDomain('no-at-sign')).toBeNull();
   });
+
+  it('maps a Unicode domain and its punycode form to the same domain', () => {
+    const ascii = signupRegistrableDomain('a@xn--r8jz45g.jp');
+    expect(ascii).toBe('xn--r8jz45g.jp');
+    expect(signupRegistrableDomain('a@\u4f8b\u3048.jp')).toBe(ascii);
+  });
 });
 
 describe('localPartShape', () => {
@@ -183,5 +189,36 @@ describe('cachedFailOpenLookup', () => {
     expect(await cached('a.example')).toBeNull();
     expect(onError).toHaveBeenCalledWith('a.example', expect.any(Error));
     expect(await cached('a.example')).toEqual({ nameservers: ['ns.dns.example'] });
+  });
+});
+
+describe('cluster key guards', () => {
+  const record = {
+    userId: 'u',
+    domain: 'x.example',
+    localPartShape: null,
+    createdAt: null,
+    asn: null,
+    isDatacenter: null,
+  };
+
+  it('emits no ASN key for a NaN or infinite ASN', () => {
+    expect(kindsOf(signupClusterKeys({ ...record, asn: Number.NaN }))).not.toContain('asn');
+    expect(kindsOf(signupClusterKeys({ ...record, asn: Infinity }))).not.toContain('asn');
+    expect(kindsOf(signupClusterKeys({ ...record, asn: 64500 }))).toContain('asn');
+  });
+
+  it.each([0, -1, Number.NaN, Infinity])('rejects a signup bucket width of %s', hours => {
+    const options = { ...DEFAULT_CLUSTER_KEY_OPTIONS, signupBucketHours: hours };
+    expect(() => signupClusterKeys({ ...record, createdAt: new Date('2026-03-10T00:00:00Z') }, options)).toThrow(
+      /signupBucketHours must be a positive finite number/
+    );
+  });
+
+  it.each([0, -1, Number.NaN, Infinity])('rejects a registration bucket width of %s', days => {
+    const options = { ...DEFAULT_CLUSTER_KEY_OPTIONS, registrationBucketDays: days };
+    expect(() =>
+      domainClusterKeys({ registrar: 'Registrar Example', registeredAt: new Date('2026-03-10T00:00:00Z') }, options)
+    ).toThrow(/registrationBucketDays must be a positive finite number/);
   });
 });

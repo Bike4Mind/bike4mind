@@ -325,8 +325,8 @@ pnpm exec sst shell --stage staging \
 ```
 
 Use explicit UTC timestamps for the `[since, until)` signup window. Omitted date limits are
-unbounded. `--max-users` stops after reading that many users; it does not produce a random or
-complete sample of each domain. The example is a bounded staging run, not production tuning.
+unbounded. `--max-users` reads only the earliest signups in the window (by `createdAt`, then id) and warns
+when the cap is hit; it does not produce a random or complete sample of each domain. The example is a bounded staging run, not production tuning.
 All tuning defaults are placeholders: set thresholds and shared-provider exclusions deliberately
 before interpreting a report. `--help` lists every option. Without `--facts` or `--shapes`, only
 stored signup ASN and time-window keys can link domains.

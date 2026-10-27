@@ -1,3 +1,4 @@
+import { domainToASCII } from 'node:url';
 import { z } from 'zod';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import type { User } from '@bike4mind/database';
@@ -7,9 +8,13 @@ type DomainFacts = userService.DomainFacts;
 type SignupGroupingResult = userService.SignupGroupingResult;
 type CohortOptions = userService.CohortOptions;
 
-/** Same normalization the records use, so a facts or mailbox entry such as `mail.example.com.` matches. */
+/**
+ * Same normalization the records use, so a facts or mailbox entry such as `mail.example.com.` matches.
+ * Must stay in sync with normalizeRegistrableDomain in the services package, which is imported lazily here.
+ */
 const normalizeDomainEntry = (entry: string): string => {
-  const domain = registrableDomain(entry.trim(), { allowPrivateDomains: true });
+  const ascii = domainToASCII(entry.trim().toLowerCase().replace(/\.+$/, ''));
+  const domain = ascii ? registrableDomain(ascii, { allowPrivateDomains: true }) : null;
   if (!domain) throw new Error(`"${entry}" is not a registrable domain`);
   return domain;
 };
@@ -27,7 +32,15 @@ const domainFactsFileSchema = z.record(
 /** Parses a `{ "<registrable domain>": { mxHosts, nameservers, registrar, registeredAt } }` file. */
 export function parseDomainFactsFile(json: unknown): Map<string, DomainFacts> {
   const parsed = domainFactsFileSchema.parse(json);
-  return new Map(Object.entries(parsed).map(([domain, facts]) => [normalizeDomainEntry(domain), facts]));
+  const byDomain = new Map<string, DomainFacts>();
+  for (const [entry, facts] of Object.entries(parsed)) {
+    const domain = normalizeDomainEntry(entry);
+    if (byDomain.has(domain)) {
+      throw new Error(`Facts file has more than one entry for ${domain} (including "${entry}")`);
+    }
+    byDomain.set(domain, facts);
+  }
+  return byDomain;
 }
 
 export const COHORT_CSV_COLUMNS = [
@@ -168,7 +181,8 @@ export async function readSignupRecords(
     })
     .read('secondaryPreferred')
     .lean();
-  if (maxUsers) query.limit(maxUsers);
+  // A stable order makes the cap take the earliest signups instead of whatever the server returns first.
+  if (maxUsers) query.sort({ createdAt: 1, _id: 1 }).limit(maxUsers);
 
   const records: userService.SignupRecord[] = [];
   for await (const doc of query.cursor()) {
@@ -185,6 +199,9 @@ export async function readSignupRecords(
         options
       )
     );
+  }
+  if (maxUsers && records.length >= maxUsers) {
+    console.warn(`[signup-cohort-sweep] Read the --max-users cap of ${maxUsers}; later signups were not included`);
   }
   return records;
 }

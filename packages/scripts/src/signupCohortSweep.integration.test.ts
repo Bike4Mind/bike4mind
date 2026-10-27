@@ -76,10 +76,16 @@ describe('readSignupRecords', () => {
     expect(ids(records)).not.toContain(atEnd);
   });
 
-  it('stops at maxUsers', async () => {
-    for (const name of ['a', 'b', 'c']) await insertUser(`${name}@${name}.example`, at('2026-03-10'));
+  it('stops at maxUsers, taking the earliest signups and warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const latest = await insertUser('c@c.example', at('2026-03-12'));
+    const earliest = await insertUser('a@a.example', at('2026-03-10'));
+    const middle = await insertUser('b@b.example', at('2026-03-11'));
     const records = await readSignupRecords(User, { maxUsers: 2 }, OPTIONS);
-    expect(records).toHaveLength(2);
+    expect(ids(records)).toEqual([earliest, middle].sort());
+    expect(ids(records)).not.toContain(latest);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('--max-users cap of 2'));
+    warn.mockRestore();
   });
 
   it('skips a user whose email is not a string', async () => {

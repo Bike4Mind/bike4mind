@@ -17,7 +17,7 @@ Usage:
 Selection:
   --since <ISO UTC>               only users created at or after this time
   --until <ISO UTC>               only users created before this time
-  --max-users <n>                 stop after reading n users
+  --max-users <n>                 read only the n earliest signups in the window (warns when hit)
 Inputs:
   --facts <file.json>             domain facts: { "<domain>": { mxHosts, nameservers, registrar, registeredAt } }
   --shapes <a,b|any>              local-part shapes that count as a key (none unless given)

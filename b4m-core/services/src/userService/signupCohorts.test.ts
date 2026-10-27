@@ -6,7 +6,13 @@ import {
   type DomainFacts,
   type SignupFootprint,
 } from './signupClusterKeys';
-import { DEFAULT_COHORT_OPTIONS, findCandidateCohorts, groupDomainProfiles, type CohortOptions } from './signupCohorts';
+import {
+  buildDomainProfiles,
+  DEFAULT_COHORT_OPTIONS,
+  findCandidateCohorts,
+  groupDomainProfiles,
+  type CohortOptions,
+} from './signupCohorts';
 
 const OPTIONS: CohortOptions = { ...DEFAULT_COHORT_OPTIONS, localPartShapes: ['alpha+digits'] };
 const SHARED_MX = { mxHosts: ['mx.shared-mail.example'] };
@@ -233,5 +239,85 @@ describe('findCandidateCohorts', () => {
     const options = { ...OPTIONS, sharedMailboxDomains: ['Quarry.Test'] };
     const { cohorts } = await findCandidateCohorts(grouped, lookupFrom(FACTS), options);
     expect(cohorts[0].domains).toEqual(['harbor.example', 'meadow.example']);
+  });
+
+  it('excludes a mailbox domain given as a subdomain with a trailing dot and mixed case', async () => {
+    const options = { ...OPTIONS, sharedMailboxDomains: ['Mail.Quarry.Test.'] };
+    const { cohorts } = await findCandidateCohorts(grouped, lookupFrom(FACTS), options);
+    expect(cohorts[0].domains).toEqual(['harbor.example', 'meadow.example']);
+  });
+});
+
+describe('groupDomainProfiles guards and determinism', () => {
+  const key = (kind: ClusterKey['kind'], value: string): ClusterKey => ({ kind, value, label: `${kind} ${value}` });
+
+  it('does not link domains that share only signup windows of both grids', () => {
+    const windows = [key('signupWindow', 'a1'), key('signupWindow', 'b1')];
+    const profiles = [
+      { domain: 'a.example', members: [], keys: windows },
+      { domain: 'b.example', members: [], keys: windows },
+    ];
+    expect(groupDomainProfiles(profiles, OPTIONS).cohorts).toEqual([]);
+  });
+
+  it('drops a user key carried by fewer than minUserKeyShare of a domain users', () => {
+    const at = (domain: string, asn: number | null, n: number) => record(`sam${n}@${domain}`, { asn });
+    const records = [
+      at('a.example', 64500, 1),
+      at('a.example', null, 2),
+      at('a.example', null, 3),
+      at('b.example', 64500, 4),
+      at('b.example', null, 5),
+      at('b.example', null, 6),
+    ];
+    const options = { ...DEFAULT_COHORT_OPTIONS, minSharedKeyKinds: 1 };
+    const profiles = buildDomainProfiles(records, new Map(), options);
+    expect(profiles.flatMap(p => p.keys).filter(k => k.kind === 'asn')).toEqual([]);
+    const kept = buildDomainProfiles(records, new Map(), { ...options, minUserKeyShare: 0.3 });
+    expect(kept.flatMap(p => p.keys).filter(k => k.kind === 'asn')).toHaveLength(2);
+  });
+
+  it('requires minDomains domains in a cohort', async () => {
+    const two = [...harbor, ...meadow];
+    const facts = lookupFrom(FACTS);
+    expect((await findCandidateCohorts(two, facts, OPTIONS)).cohorts).toHaveLength(1);
+    expect((await findCandidateCohorts(two, facts, { ...OPTIONS, minDomains: 3 })).cohorts).toEqual([]);
+    expect((await findCandidateCohorts(grouped, facts, { ...OPTIONS, minDomains: 3 })).cohorts).toHaveLength(1);
+  });
+
+  it('produces identical output whatever the input profile order', () => {
+    const facts = new Map<string, DomainFacts | null>([
+      ['harbor.example', { ...SHARED_MX, ...SHARED_NS }],
+      ['meadow.example', { ...SHARED_MX, ...SHARED_NS }],
+      ['quarry.test', SHARED_NS],
+    ]);
+    const stamped = grouped.map((r, index) => ({ ...r, createdAt: new Date(Date.UTC(2026, 2, 10, index)) }));
+    const profiles = buildDomainProfiles(stamped, facts, OPTIONS);
+    const forward = groupDomainProfiles(profiles, OPTIONS);
+    const reversed = groupDomainProfiles(
+      [...profiles].reverse().map(p => ({ ...p, members: [...p.members].reverse(), keys: [...p.keys].reverse() })),
+      OPTIONS
+    );
+    expect(forward.cohorts).toHaveLength(1);
+    expect(reversed).toEqual(forward);
+  });
+
+  it('orders edges by domain pair whatever the input profile order', () => {
+    const pairs = [
+      ['a', 'b'],
+      ['b', 'c'],
+      ['c', 'd'],
+    ];
+    const profiles = ['a', 'b', 'c', 'd'].map(name => ({
+      domain: `${name}.example`,
+      members: [],
+      keys: pairs.flatMap(([left, right], index) =>
+        name === left || name === right ? [key('mx', `mx${index}`), key('ns', `ns${index}`)] : []
+      ),
+    }));
+    const expected = pairs.map(([left, right]) => [`${left}.example`, `${right}.example`]);
+    for (const input of [profiles, [...profiles].reverse()]) {
+      expect(groupDomainProfiles(input, OPTIONS).cohorts[0].edges.map(edge => edge.domains)).toEqual(expected);
+    }
   });
 });

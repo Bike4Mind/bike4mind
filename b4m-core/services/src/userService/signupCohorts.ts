@@ -8,6 +8,7 @@ import {
   type ClusterKeyOptions,
   type DomainFacts,
   type DomainFactsLookup,
+  normalizeRegistrableDomain,
   type SignupRecord,
 } from './signupClusterKeys';
 
@@ -62,10 +63,21 @@ export type CommonKey = { label: string; domainCount: number };
 
 export type SignupGroupingResult = { cohorts: CandidateCohort[]; commonKeys: CommonKey[] };
 
+const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+// Orders members by domain, then signup time (no time last), then user id, so output ignores input order.
+const compareMembers = (a: CohortMember, b: CohortMember) =>
+  compareText(a.domain, b.domain) ||
+  (a.createdAt?.getTime() ?? Infinity) - (b.createdAt?.getTime() ?? Infinity) ||
+  compareText(a.userId, b.userId);
+
 const keyId = (key: ClusterKey) => `${key.kind}:${key.value}`;
 
 const excludedDomainsOf = (options: CohortOptions) =>
-  new Set([...DISALLOWED_SIGNUP_RULE_DOMAINS, ...options.sharedMailboxDomains.map(d => d.trim().toLowerCase())]);
+  new Set([
+    ...DISALLOWED_SIGNUP_RULE_DOMAINS,
+    ...options.sharedMailboxDomains.flatMap(entry => normalizeRegistrableDomain(entry) ?? []),
+  ]);
 
 /** One profile per registrable domain: its infrastructure keys plus the per-user keys most of its users share. */
 export function buildDomainProfiles(
@@ -223,9 +235,12 @@ export function groupDomainProfiles(
   for (const group of groups.values()) {
     if (group.profiles.length < options.minDomains) continue;
     const domains = group.profiles.map(profile => profile.domain).sort();
-    const members = group.profiles.flatMap(profile =>
-      profile.members.map(member => ({ userId: member.userId, domain: profile.domain, createdAt: member.createdAt }))
-    );
+    const members = group.profiles
+      .flatMap(profile =>
+        profile.members.map(member => ({ userId: member.userId, domain: profile.domain, createdAt: member.createdAt }))
+      )
+      .sort(compareMembers);
+    group.edges.sort((a, b) => compareText(a.edge.domains.join(','), b.edge.domains.join(',')));
     const tooBroad = domains.length > options.maxCohortDomains;
     const bridgeDomains = tooBroad
       ? []
