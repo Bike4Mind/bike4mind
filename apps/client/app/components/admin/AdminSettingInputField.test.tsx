@@ -186,6 +186,14 @@ describe('AdminSettingInputField number setting', () => {
     expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: 200 }, expect.anything());
   });
 
+  it('saves a dirty value on Cmd/Ctrl+S from the focused card', () => {
+    renderBandField(50);
+    fireEvent.change(bandInput(), { target: { value: '200' } });
+    fireEvent.keyDown(screen.getByLabelText(`${bandSetting.name} settings editor`), { key: 's', ctrlKey: true });
+
+    expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: 200 }, expect.anything());
+  });
+
   it('forwards a cleared field as an empty value instead of coercing it to 0', () => {
     renderBandField(50);
     fireEvent.change(bandInput(), { target: { value: '' } });

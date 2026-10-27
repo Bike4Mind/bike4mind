@@ -47,4 +47,16 @@ describe('admin keyboard scoping', () => {
     fireEvent.keyDown(screen.getByTestId('editor'), { key: 's', metaKey: true });
     expect(save).toHaveBeenCalledOnce();
   });
+
+  it('claims Cmd/Ctrl+S on an editor with no Save button so the browser dialog stays closed', () => {
+    function CleanEditor() {
+      const ref = useRef<HTMLDivElement>(null);
+      useAdminSaveShortcut(ref);
+      return <div ref={ref} data-admin-settings-editor data-testid="clean-editor" tabIndex={0} />;
+    }
+    render(<CleanEditor />);
+    const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true });
+    screen.getByTestId('clean-editor').dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
 });

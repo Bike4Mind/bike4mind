@@ -18,10 +18,10 @@ export function useAdminSaveShortcut(ref: RefObject<HTMLElement | null>) {
       if (!root || !(event.target instanceof Node) || !root.contains(event.target)) return;
       if (event.target instanceof Element && event.target.closest('[data-admin-settings-editor]') !== root) return;
       if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
-      const save = root.querySelector<HTMLButtonElement>('button[data-admin-save]');
-      if (!save) return;
+      // Claim the key even with no Save button rendered (a clean sub-setting) so the browser's Save Page stays out.
       event.preventDefault();
-      if (!save.disabled) save.click();
+      const save = root.querySelector<HTMLButtonElement>('button[data-admin-save]');
+      if (save && !save.disabled) save.click();
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);

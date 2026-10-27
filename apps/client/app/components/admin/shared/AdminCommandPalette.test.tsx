@@ -50,6 +50,22 @@ describe('AdminCommandPalette', () => {
     expect(screen.queryByTestId('admin-search-input')).not.toBeInTheDocument();
   });
 
+  it('routes section commands through onNavigate instead of the router when provided', async () => {
+    navigate.mockClear();
+    const onNavigate = vi.fn();
+    render(
+      <CssVarsProvider theme={theme}>
+        <AdminCommandPalette commands={[]} onNavigate={onNavigate} />
+      </CssVarsProvider>
+    );
+    fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+    const input = screen.getByTestId('admin-search-input');
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledTimes(1));
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('restores opener focus on Escape and traps Tab within the palette', async () => {
     const user = userEvent.setup();
     setup();
