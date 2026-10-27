@@ -40,7 +40,11 @@ export class BlockedIPRepository extends BaseRepository<IBlockedIPDocument> {
     const expiresAt = new Date(now.getTime() + 10 * 60 * 1000); // 10 minutes from now
 
     const existing = await this.isBlocked(ip);
-    if (existing) return { doc: existing, created: false };
+    if (existing) {
+      // Repeat blocks keep extending the window, without a new row or audit entry.
+      const refreshed = await this.model.findOneAndUpdate({ ip, active: true }, { expiresAt }, { new: true });
+      return { doc: refreshed ?? existing, created: false };
+    }
 
     const doc = await this.model.create({
       ip,

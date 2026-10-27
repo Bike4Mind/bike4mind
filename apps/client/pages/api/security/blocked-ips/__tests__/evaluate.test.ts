@@ -130,7 +130,7 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
     const { req, res } = mocks(ADMIN);
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().blocked).toEqual(['1.1.1.1']);
+    expect(res._getJSONData().blocked).toEqual([]);
     expect(blockedIP.block).toHaveBeenCalledTimes(1);
     expect(audit.record).not.toHaveBeenCalled();
   });

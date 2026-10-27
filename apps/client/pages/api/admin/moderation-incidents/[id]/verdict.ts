@@ -398,7 +398,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
             )
           );
         return res.status(500).json({
-          error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. Once the claim is stale (up to 10 minutes), use mark_reported with this reportId.`,
+          error: `NCMEC finalized the report (reportId=${ncmecReportId}) but recording it failed. 10 minutes after this error, use mark_reported with this reportId.`,
           ncmecReportId,
         });
       }

@@ -31,7 +31,7 @@ const handler = baseApi().post(async (req, res) => {
           reason,
         });
       });
-      blocked.push(r.ip);
+      if (ipBlocked) blocked.push(r.ip);
     } catch (error) {
       if (ipBlocked) {
         // The audit or commit failed and rolled this block back; keep blocking the rest and fail the run after.
@@ -44,14 +44,12 @@ const handler = baseApi().post(async (req, res) => {
     }
   }
   if (auditFailed.length > 0) {
-    return res
-      .status(500)
-      .json({
-        error: 'Audit or commit failed; these IPs were not blocked',
-        auditFailed,
-        blocked,
-        evaluatedSince: since,
-      });
+    return res.status(500).json({
+      error: 'Audit or commit failed; these IPs were not blocked',
+      auditFailed,
+      blocked,
+      evaluatedSince: since,
+    });
   }
   return res.status(200).json({ blocked, evaluatedSince: since });
 });
