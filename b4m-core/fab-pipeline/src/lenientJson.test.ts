@@ -53,6 +53,17 @@ describe('parseLenientJson', () => {
     });
   });
 
+  it('does not treat a comma with no preceding member as trailing', () => {
+    expect(() => parseLenientJson('{,}')).toThrow(SyntaxError);
+    expect(() => parseLenientJson('[,]')).toThrow(SyntaxError);
+    expect(() => parseLenientJson('[1,,]')).toThrow(SyntaxError);
+    expect(() => parseLenientJson('{"a":1,,}')).toThrow(SyntaxError);
+  });
+
+  it('still drops a trailing comma after a nested value or a comment', () => {
+    expect(parseLenientJson('{"a":{"b":[1,2],},"c":"x", /* tail */ }')).toEqual({ a: { b: [1, 2] }, c: 'x' });
+  });
+
   it('throws on text that is not JSON even after cleaning', () => {
     expect(() => parseLenientJson('{"a": nope,}')).toThrow(SyntaxError);
     expect(() => parseLenientJson('# just markdown')).toThrow(SyntaxError);
