@@ -53,6 +53,20 @@ describe('check-no-overlay-literals.sh', () => {
     expect(out).toContain('not allowlisted');
   });
 
+  it('fails on a term embedded in a camelCase identifier', () => {
+    const embedded = `is${WORD[0].toUpperCase()}${WORD.slice(1)}Enabled`;
+    const { status, out } = runGuard({ 'src/a.ts': `const ${embedded} = true;\n` }, []);
+    expect(status).toBe(1);
+    expect(out).toContain('src/a.ts');
+  });
+
+  it('catches the short term when embedded but not inside an unrelated word', () => {
+    const short = ['I', 'on', 'Q'].join('');
+    expect(runGuard({ 'src/a.ts': `const is${short}Enabled = 1;\n` }, []).status).toBe(1);
+    const unrelated = ['func', 'tion', 'Queue'].join('');
+    expect(runGuard({ 'src/b.ts': `const ${unrelated} = 1;\n` }, ['# empty']).status).toBe(0);
+  });
+
   it('fails on an unallowlisted path match', () => {
     const { status, out } = runGuard({ [`docs/${WORD}-notes.md`]: 'plain\n' }, []);
     expect(status).toBe(1);

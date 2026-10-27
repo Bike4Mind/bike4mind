@@ -17,14 +17,14 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-PATTERN_B64='KF58W15bOmFsbnVtOl1dKShvcHRpaGFzaGl8cXVhbnR1bXxpb25xfHF1Ym98cWFvYSk='
+PATTERN_B64='KFtvT11bcFBdW3RUXVtpSV1baEhdW2FBXVtzU11baEhdW2lJXXxbcVFdW3VVXVthQV1bbk5dW3RUXVt1VV1bbU1dfFtpSV1bb09dW25OXVtxUV0oW15hLXpdfCQpfFtxUV1bdVVdW2JCXVtvT118W3FRXVthQV1bb09dW2FBXSk='
 PATTERN=$(printf '%s' "$PATTERN_B64" | base64 -d)
 ALLOWLIST="scripts/overlay-literals-allowlist.txt"
 
 all_matches() {
   {
-    git grep -lIiE -e "$PATTERN" -- . || true
-    git ls-files | grep -iE -e "$PATTERN" || true
+    git grep -lIE -e "$PATTERN" -- . || true
+    git ls-files | grep -E -e "$PATTERN" || true
   } | sort -u
 }
 

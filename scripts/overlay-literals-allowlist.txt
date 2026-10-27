@@ -164,3 +164,8 @@ scripts/codemods/__tests__/move-to-server-utils.test.ts
 sst-env.d.ts
 sst.config.ts
 vitest.shared.ts
+apps/client/app/components/admin/__tests__/adminSettingsGrouping.test.ts
+apps/client/server/managers/systemSecretsManager.ts
+docs-site/pnpm-lock.yaml
+packages/scripts/migrate/migrations/20260911000000_drop-dead-feature-default-settings.ts
+b4m-core/infra/src/__tests__/contributions.test.ts
