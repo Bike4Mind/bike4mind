@@ -6,9 +6,8 @@ const EMPTY = { schemaVersion: 2, updatedAt: '1970-01-01T00:00:00Z', families: {
 const SHOWN_DROPS = 5;
 
 /**
- * The Curated tab's list, read without ever throwing: a bad envelope gives an empty list, so the rest of the
- * Models screen still registers, and what the reader dropped is logged by path and reason. `input` defaults to the
- * bundled list; a fetched one can replace it here.
+ * The Curated tab's list from `input` (a fetched list can be passed here), never throwing: unreadable input falls
+ * back to the bundled list, and what the reader dropped is logged by path and reason.
  */
 export function loadCuratedManifest(warn: (message: string) => void, input: unknown = bundled): HubManifest {
   try {
@@ -19,7 +18,12 @@ export function loadCuratedManifest(warn: (message: string) => void, input: unkn
     }
     return manifest;
   } catch (error) {
-    warn(`MODELS: curated list unreadable, showing none: ${error instanceof Error ? error.message : 'unknown'}`);
+    const reason = error instanceof Error ? error.message : 'unknown';
+    if (input !== bundled) {
+      warn(`MODELS: curated list unreadable, showing the bundled one: ${reason}`);
+      return loadCuratedManifest(warn);
+    }
+    warn(`MODELS: bundled curated list unreadable, showing none: ${reason}`);
     return parseHubManifest(EMPTY).manifest;
   }
 }
