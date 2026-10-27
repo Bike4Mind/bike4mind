@@ -46,7 +46,10 @@ export interface ModelArch {
   full: AttentionGroup;
   swa?: AttentionGroup & { window: number };
   mla?: { layers: number; kvLoraRank: number; ropeDim: number };
-  /** F32 state per sequence; does not grow with context. `kind` is set for layer types with measured compute. */
+  /**
+   * F32 state per sequence; does not grow with context. `kind` is set for layer types with measured compute and must
+   * match RECURRENT_KINDS in @bike4mind/common (schemas/modelHub.ts).
+   */
   recurrent?: { layers: number; stateBytesPerSeq: number; kind?: 'mamba2' | 'gated-delta-net' };
   /** Multi-token-prediction layers, each with its own KV at full-attention cost. */
   mtpLayers: number;
