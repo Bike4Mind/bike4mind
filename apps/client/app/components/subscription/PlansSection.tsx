@@ -15,7 +15,7 @@ import {
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
   TEAM_PLAN_UNAVAILABLE_MESSAGE,
 } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { professionalPriceIdForStage, SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
 import { Box, Button, Skeleton, Stack, Tab, tabClasses, TabList, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useId, useMemo, useState } from 'react';
@@ -106,12 +106,8 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
     () => [
       {
         ...PROFESSIONAL_PLAN,
-        // Account-tied Stripe price from NEXT_PUBLIC_* env vars (no brand fallback). Same env
-        // contract as PROFESSIONAL_PRICE_ID in userSubscriptions/constants; selected by runtime
-        // stage here to match the rest of this section.
-        priceId: isTestMode
-          ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
-          : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? ''),
+        // Selected by runtime stage here to match the rest of this section.
+        priceId: professionalPriceIdForStage(isTestMode),
       },
     ],
     [isTestMode]

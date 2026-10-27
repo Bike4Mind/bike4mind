@@ -21,6 +21,12 @@ export interface ISkill {
   /** Optional tool whitelist used when the skill is invoked via the LLM tool. */
   allowedTools?: string[];
 
+  /**
+   * Claude Code `allowed-tools` from an imported SKILL.md (e.g. `Bash(git:*)`, `Read`), kept verbatim
+   * so an export or plugin install restores it. Never enforced inside Bike4Mind; see allowedTools.
+   */
+  claudeCodeAllowedTools?: string[];
+
   /** When true, the skill is hidden from the LLM tool catalog (user-invocation only). */
   disableModelInvocation?: boolean;
 

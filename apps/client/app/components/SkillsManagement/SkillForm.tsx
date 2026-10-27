@@ -13,7 +13,7 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import { parseSkillMd, type ParseSkillMdResult } from '@bike4mind/common/utils/skillMd';
+import { parseSkillMd, referencedRelativePaths, type ParseSkillMdResult } from '@bike4mind/common/utils/skillMd';
 import { SKILL_FILE_DIRS, checkSkillFiles, type ISkillFile } from '@bike4mind/common';
 import { SkillFormInput } from '@client/app/hooks/data/skills';
 
@@ -93,6 +93,7 @@ export const SkillForm: FC<SkillFormProps> = ({
   const [body, setBody] = useState(initialValue?.body ?? '');
   const [argumentHint, setArgumentHint] = useState(initialValue?.argumentHint ?? '');
   const [disableModelInvocation, setDisableModelInvocation] = useState(Boolean(initialValue?.disableModelInvocation));
+  const [claudeCodeAllowedTools, setClaudeCodeAllowedTools] = useState(initialValue?.claudeCodeAllowedTools ?? []);
   const [importResult, setImportResult] = useState<ParseSkillMdResult | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
@@ -108,8 +109,17 @@ export const SkillForm: FC<SkillFormProps> = ({
   // Bumped by every import so a slow earlier file read cannot overwrite a newer one.
   const importReadId = useRef(0);
 
-  // Replaces argument hint and model-invocation flag with the file's values; other fields change only if the file sets them. A malformed file touches nothing.
+  // Replaces argument hint, Claude Code tools and model-invocation flag with the file's values; other fields change only if the file sets them. A malformed file touches nothing.
   const applySkillMd = (text: string): boolean => {
+    // Checked here, not in parseSkillMd: the CLI relies on it accepting a frontmatter-less commands/*.md.
+    if (text.includes('\u0000')) {
+      setImportResult({ ok: false, error: 'This is not a text file (it looks like a binary or .zip file).' });
+      return false;
+    }
+    if (!/^\uFEFF?---/.test(text)) {
+      setImportResult({ ok: false, error: 'No frontmatter found: a SKILL.md starts with a --- block.' });
+      return false;
+    }
     const result = parseSkillMd(text);
     setImportResult(result);
     if (!result.ok) return false;
@@ -119,6 +129,7 @@ export const SkillForm: FC<SkillFormProps> = ({
     setArgumentHint(fields.argumentHint ?? '');
     if (fields.body !== undefined) setBody(fields.body);
     setDisableModelInvocation(fields.disableModelInvocation ?? false);
+    setClaudeCodeAllowedTools(fields.claudeCodeAllowedTools ?? []);
     setPasteOpen(false);
     setPasteText('');
     return true;
@@ -167,6 +178,10 @@ export const SkillForm: FC<SkillFormProps> = ({
 
   const source = importResult?.ok ? importResult.source : undefined;
   const sourceIsSameOrigin = source ? isSameOrigin(source.url) : false;
+  // Files a folder import brought in are not missing, so they do not count toward the warning.
+  const supportingFiles = importResult?.ok
+    ? referencedRelativePaths(importResult.fields.body ?? '').filter(path => !files.some(f => f.path === path))
+    : [];
 
   const nameError =
     name.length === 0
@@ -201,6 +216,8 @@ export const SkillForm: FC<SkillFormProps> = ({
       description: description.trim(),
       body,
       ...(argumentHint.trim() && { argumentHint: argumentHint.trim() }),
+      // Always sent, so re-importing a file without allowed-tools clears it on edit.
+      claudeCodeAllowedTools,
       disableModelInvocation,
       files,
     });
@@ -306,6 +323,13 @@ export const SkillForm: FC<SkillFormProps> = ({
                 Not supported in Bike4Mind skills: {importResult.dropped.join(', ')}. These were ignored.
               </Alert>
             ) : null}
+            {supportingFiles.length ? (
+              <Alert color="warning" variant="soft" data-testid="skill-form-import-supporting-files">
+                This skill references files that were not imported: {supportingFiles.slice(0, 5).join(', ')}
+                {supportingFiles.length > 5 ? ` and ${supportingFiles.length - 5} more` : ''}. Paste what it needs into
+                the body, or the skill may not work.
+              </Alert>
+            ) : null}
           </Stack>
         ) : null}
 
@@ -349,6 +373,22 @@ export const SkillForm: FC<SkillFormProps> = ({
           />
           <FormHelperText>Optional — appears next to the name in the picker.</FormHelperText>
         </FormControl>
+
+        {claudeCodeAllowedTools.length ? (
+          <Typography level="body-sm" textColor="text.tertiary" data-testid="skill-form-claude-code-tools">
+            Claude Code tools: {claudeCodeAllowedTools.join(', ')}. Kept for Claude Code exports; not used in Bike4Mind.{' '}
+            <Link
+              component="button"
+              type="button"
+              level="body-sm"
+              onClick={() => setClaudeCodeAllowedTools([])}
+              disabled={submitting}
+              data-testid="skill-form-claude-code-tools-remove"
+            >
+              Remove
+            </Link>
+          </Typography>
+        ) : null}
 
         <FormControl error={Boolean(bodyError && body.length > 0)} required>
           <FormLabel>Body</FormLabel>

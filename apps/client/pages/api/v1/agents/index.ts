@@ -62,8 +62,9 @@ const createRoute = nextRouteForContract(createAgentContract, {
         deniedTools: body.denied_tools,
         triggerWords: body.trigger_words,
       },
-      req.user.id,
-      v1FieldLabel
+      req.user,
+      v1FieldLabel,
+      req.logger
     ));
   } catch (error) {
     throw toV1AgentError(error);

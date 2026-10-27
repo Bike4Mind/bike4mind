@@ -6,21 +6,32 @@ import { compareSkillFilePaths, type ISkill } from '@bike4mind/common';
  * and may be changed on import to avoid a collision, which must not read as "locally modified".
  */
 export function skillContentHash(
-  skill: Pick<ISkill, 'description' | 'body' | 'argumentHint' | 'allowedTools' | 'disableModelInvocation' | 'files'>
+  skill: Pick<
+    ISkill,
+    | 'description'
+    | 'body'
+    | 'argumentHint'
+    | 'allowedTools'
+    | 'claudeCodeAllowedTools'
+    | 'disableModelInvocation'
+    | 'files'
+  >
 ): string {
-  const fields: unknown[] = [
+  const parts: unknown[] = [
     skill.description,
     skill.body,
     skill.argumentHint ?? '',
     skill.allowedTools ?? [],
     Boolean(skill.disableModelInvocation),
   ];
-  // Appended only when present, so a skill without files keeps the hash it had before files existed.
+  // Each optional field is appended only when set, so every hash computed before it existed stays
+  // valid. Keep the order: claudeCodeAllowedTools shipped first, files after it.
+  if (skill.claudeCodeAllowedTools?.length) parts.push(skill.claudeCodeAllowedTools);
   if (skill.files?.length) {
     const sorted = [...skill.files].sort(compareSkillFilePaths);
-    fields.push(sorted.map(f => [f.path, sha256(f.content)]));
+    parts.push(sorted.map(f => [f.path, sha256(f.content)]));
   }
-  return sha256(JSON.stringify(fields));
+  return sha256(JSON.stringify(parts));
 }
 
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');

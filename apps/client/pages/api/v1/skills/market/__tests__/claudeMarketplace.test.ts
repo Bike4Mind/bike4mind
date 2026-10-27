@@ -23,6 +23,7 @@ const {
   mockMemberOrgs,
   mockAdminOrgs,
   mockFindOrg,
+  baseApiOptions,
 } = vi.hoisted(() => ({
   mockFind: vi.fn(),
   mockFindOne: vi.fn(),
@@ -34,12 +35,14 @@ const {
   mockMemberOrgs: vi.fn(),
   mockAdminOrgs: vi.fn(),
   mockFindOrg: vi.fn(),
+  baseApiOptions: [] as Array<{ requiredScopes?: Parameters<typeof decideScopeGate>[0] }>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
     res.status(405).end(),
-  baseApi: () => {
+  baseApi: (options: { requiredScopes?: Parameters<typeof decideScopeGate>[0] }) => {
+    baseApiOptions.push(options);
     type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
     const compose =
       (...handlers: Mw[]) =>
@@ -76,7 +79,9 @@ vi.mock('@bike4mind/database/infra', () => ({
 process.env.APP_URL = 'https://app.example.test/';
 
 const { default: feedHandler } = await import('@pages/api/v1/skills/market/claude-marketplace.json');
+const zipBaseApiIndex = baseApiOptions.length;
 const { default: zipHandler } = await import('@pages/api/v1/skills/market/[id]/claude-plugin.zip');
+const { publicAppUrl } = await import('@server/utils/validators');
 
 const ORG_ID = '65a0000000000000000000aa';
 const LISTING_A = '65b000000000000000000001';
@@ -116,8 +121,12 @@ const version = (id: string, name = 'review-pr') => ({
 type MarketplaceRequest = Parameters<typeof feedHandler>[0] & Parameters<typeof zipHandler>[0];
 type MarketplaceResponse = Parameters<typeof feedHandler>[1];
 
-async function call(handler: typeof feedHandler | typeof zipHandler, query: Record<string, string>) {
-  const { req, res } = createMocks<MarketplaceRequest, MarketplaceResponse>({ method: 'GET', query });
+async function call(
+  handler: typeof feedHandler | typeof zipHandler,
+  query: Record<string, string>,
+  headers: Record<string, string> = {}
+) {
+  const { req, res } = createMocks<MarketplaceRequest, MarketplaceResponse>({ method: 'GET', query, headers });
   Object.assign(req, { user: { id: 'u1' }, logger });
   try {
     await handler(req, res);
@@ -166,6 +175,13 @@ const unzip = (zip: Buffer) =>
     });
   });
 
+async function callWithReq(query: Record<string, string>, headers: Record<string, string>) {
+  const { req, res } = createMocks<MarketplaceRequest, MarketplaceResponse>({ method: 'GET', query, headers });
+  Object.assign(req, { user: { id: 'u1' }, logger });
+  await feedHandler(req, res);
+  return { req, res };
+}
+
 const zipOf = async (id: string) => {
   const { error, res } = await call(zipHandler, { id });
   expect(error).toBeNull();
@@ -200,6 +216,24 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
     const [plugin] = res._getJSONData().plugins;
     const zip = await zipOf(LISTING_A);
     expect(createHash('sha256').update(zip).digest('hex')).toBe(plugin.source.sha256);
+  });
+
+  // The Team marketplace tab builds the feed URL from serverConfigPublic's apiUrl (publicAppUrl), so
+  // every zip URL must share that origin or Claude Code fetches the zips from a different host.
+  it.each([
+    ['a deployed APP_URL', 'https://app.example.test/', 'evil.example.test', 'https://app.example.test'],
+    ['a localhost APP_URL on another port', 'http://localhost:3000', 'localhost:4321', 'http://localhost:4321'],
+  ])('serves zip URLs on the same origin as the tab feed URL, on %s', async (_label, appUrl, host, origin) => {
+    const saved = process.env.APP_URL;
+    process.env.APP_URL = appUrl;
+    try {
+      const { res, req } = await callWithReq({ orgId: ORG_ID }, { host });
+      expect(new URL(publicAppUrl(req)).origin).toBe(origin);
+      const urls = res._getJSONData().plugins.map((p: { source: { url: string } }) => new URL(p.source.url).origin);
+      expect(urls).toEqual([origin, origin]);
+    } finally {
+      process.env.APP_URL = saved;
+    }
   });
 
   it('fails closed when the membership lookup fails', async () => {
@@ -336,6 +370,23 @@ describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {
     expect(entries.get('skills/review-pr/scripts/run.py')?.mode).toBe(0o755);
   });
 
+  it("carries the author's Claude Code allowed-tools into the plugin's SKILL.md", async () => {
+    const v = version(LISTING_A);
+    mockFindVersion.mockResolvedValue(
+      doc({ ...v, snapshot: { ...v.snapshot, claudeCodeAllowedTools: ['Bash(git:*)', 'Read'] } })
+    );
+    const text = (await zipOf(LISTING_A)).toString('utf8');
+    expect(text).toContain('allowed-tools: Bash(git:*), Read');
+    expect(text).not.toContain('web_search');
+  });
+
+  it("404s a caller who is not a member of the listing's org", async () => {
+    mockMemberOrgs.mockResolvedValue(['65a0000000000000000000bb']);
+    const { error } = await call(zipHandler, { id: LISTING_A });
+    expect(error?.statusCode).toBe(404);
+    expect(mockFindVersion).not.toHaveBeenCalled();
+  });
+
   it('404s a pinned version that does not belong to the listing', async () => {
     mockFindPinnedVersion.mockResolvedValueOnce(null);
     const { error } = await call(zipHandler, { id: LISTING_A, version: '3' });
@@ -384,6 +435,14 @@ describe('marketplace API key confinement', () => {
       expect(decideScopeGate(contract.scopes, [ApiKeyScope.READ_NOTEBOOKS], new Set())).toEqual({ outcome: 'deny' });
     }
   );
+
+  // Distinct from the contract check above: this is the scope list the zip route actually hands
+  // baseApi (whose apiKeyAuth runs decideScopeGate), so a route wired to the wrong contract fails.
+  it('wires skills:read into the zip route, which denies a key without it', () => {
+    const { requiredScopes } = baseApiOptions[zipBaseApiIndex];
+    expect(requiredScopes).toEqual([ApiKeyScope.SKILLS_READ]);
+    expect(decideScopeGate(requiredScopes, [ApiKeyScope.READ_NOTEBOOKS], new Set())).toEqual({ outcome: 'deny' });
+  });
 
   it('keeps the key off unrelated routes, including during scope staging', () => {
     expect(decideScopeGate(undefined, [ApiKeyScope.SKILLS_READ], new Set())).toEqual({ outcome: 'deny' });

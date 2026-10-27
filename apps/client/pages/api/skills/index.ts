@@ -12,6 +12,7 @@ import {
   validateSkillArgumentHint,
   validateSkillAllowedTools,
   validateSkillFiles,
+  validateSkillClaudeCodeAllowedTools,
 } from '@server/utils/skillValidation';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
@@ -109,6 +110,7 @@ const handler = baseApi()
     const argumentHint = validateSkillArgumentHint(body.argumentHint);
     const allowedTools = validateSkillAllowedTools(body.allowedTools);
     const files = validateSkillFiles(body.files);
+    const claudeCodeAllowedTools = validateSkillClaudeCodeAllowedTools(body.claudeCodeAllowedTools);
 
     const scope = await resolveCreateScope(body, { id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) });
 
@@ -120,6 +122,7 @@ const handler = baseApi()
         ...(argumentHint !== undefined && { argumentHint }),
         ...(allowedTools !== undefined && { allowedTools }),
         ...(files?.length ? { files } : {}),
+        ...(claudeCodeAllowedTools?.length && { claudeCodeAllowedTools }),
         disableModelInvocation: Boolean(body.disableModelInvocation),
         ...scope,
         isGlobalRead: false,

@@ -7,6 +7,7 @@ import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
+import type { SignupRiskSignal } from '../../schemas/settings';
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 
 export enum CollectionType {
@@ -46,10 +47,33 @@ export interface INetworkMeta {
   /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
   isDatacenter: boolean | null;
   ja4?: string | null;
+  /**
+   * WAF anonymous-IP label matched; null on self-host and when ORIGIN_VERIFY_SECRET is absent (no WAF attached).
+   * Only set to true on /api/otc/ paths -- the AnonymousIpList rule is scoped there;
+   * false on other deployed paths means unchecked, not "not anonymous".
+   */
+  wafAnonIp?: boolean | null;
+  /** WAF bot-control bot label matched; null on self-host and when ORIGIN_VERIFY_SECRET is absent (no WAF attached). */
+  wafBotSignal?: boolean | null;
 }
 
 export interface ISignupMeta extends INetworkMeta {
   capturedAt: Date;
+}
+
+/**
+ * none and pending follow the score on every recompute; approved and banned are an admin's ruling
+ * and a recompute never changes them.
+ */
+export const SIGNUP_RISK_REVIEW_STATES = ['none', 'pending', 'approved', 'banned'] as const;
+export type SignupRiskReviewState = (typeof SIGNUP_RISK_REVIEW_STATES)[number];
+
+export interface ISignupRiskScore {
+  /** 0-100, from scoreSignupRisk (b4m-core/services/src/userService/signupRiskScore.ts). */
+  score: number;
+  signals: { signal: SignupRiskSignal; points: number; reason: string }[];
+  computedAt: Date;
+  reviewState: SignupRiskReviewState;
 }
 
 export interface ILoginRecord {
@@ -202,8 +226,15 @@ export interface IUserPreferences {
   desktopPromoDismissed?: boolean;
 }
 
-/** Source of a moderation flag - which moderation backend produced the hit. */
-export type ModerationHitSource = 'openai' | 'bedrock';
+/**
+ * Which system produced a moderation hit.
+ * - 'openai': OpenAI Moderation API pre-send check.
+ * - 'bedrock': Bedrock Guardrails pre-send check.
+ * - 'provider': provider-side block (settled refusal/content_filter stop reason or a
+ *   classifier throw that no fallback model answered); no pre-call moderation service was involved and
+ *   no category labels are available from the provider.
+ */
+export type ModerationHitSource = 'openai' | 'bedrock' | 'provider';
 
 /**
  * Escalation state for a user's moderation record.
@@ -677,6 +708,9 @@ export interface IUser extends ICreditHolder {
   /** Network metadata of the signup request, written once at account creation. Admin-only PII. */
   signupMeta?: ISignupMeta | null;
 
+  /** Abuse risk of a new account. Never shown to the user: the signals would say how to avoid them. */
+  riskScore?: ISignupRiskScore | null;
+
   /**
    * A test persona or test-domain account, decided at signup. Funnel analytics skip or tag these so
    * synthetic traffic never reaches conversion metrics.
@@ -863,6 +897,17 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
     status: UserModerationStatus,
     options?: { throttledUntil?: Date | null }
   ) => Promise<IUserDocument | null>;
+  /**
+   * Store a recomputed risk score. `riskScore.reviewState` is only the proposal: an approved or
+   * banned state already stored is kept, in the same write, so an admin ruling made since the
+   * caller read the user is never undone.
+   */
+  setRiskScore: (userId: string, riskScore: ISignupRiskScore) => Promise<void>;
+  /**
+   * Ids of users created at or after `since` whose risk review is not settled (approved or banned),
+   * in id order; pass the last id back as `afterId` for the next page.
+   */
+  findRiskScoringCandidateIds: (since: Date, options: { afterId?: string; limit: number }) => Promise<string[]>;
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores
    * the appeal text for admin review. Returns the updated user.

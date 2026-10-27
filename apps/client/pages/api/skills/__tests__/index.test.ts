@@ -118,6 +118,19 @@ describe('/api/skills POST — scope creation', () => {
     await expect(handler(req, res)).rejects.toBeTruthy();
     expect(mockCreate).not.toHaveBeenCalled();
   });
+
+  it('persists Claude Code allowed-tools, one tool per entry', async () => {
+    const { req, res } = makeReqRes({ ...baseBody, claudeCodeAllowedTools: ['Bash(git:*)', 'Read, Grep'] });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreate.mock.calls[0][0].claudeCodeAllowedTools).toEqual(['Bash(git:*)', 'Read', 'Grep']);
+  });
+
+  it('rejects Claude Code allowed-tools that are not a string list', async () => {
+    const { req, res } = makeReqRes({ ...baseBody, claudeCodeAllowedTools: 'Bash' });
+    await expect(handler(req, res)).rejects.toBeTruthy();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
 });
 
 describe('/api/skills GET — scope visibility', () => {
