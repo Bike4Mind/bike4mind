@@ -276,8 +276,6 @@ const treeEntrySchema = z.object({
 
 const errorBodySchema = z.object({ error: z.string() });
 
-const manifestSchema = registryManifestSchema;
-
 type ModelEntry = z.infer<typeof modelEntrySchema>;
 type TreeEntry = z.infer<typeof treeEntrySchema>;
 
@@ -793,9 +791,13 @@ export class HuggingFaceHub {
     const plan = (tagPlans.get(detail.builds) ?? planOllamaTags(detail.builds)).get(build.id);
     const context = { signal: options.signal, repo: detail.id, accept: REGISTRY_MANIFEST_ACCEPT, manifest: true };
     for (const tag of plan?.tags.slice(0, MAX_VERIFY_TAGS) ?? []) {
-      let manifest: z.infer<typeof manifestSchema>;
+      let manifest: z.infer<typeof registryManifestSchema>;
       try {
-        ({ data: manifest } = await this.#getJson(`/v2/${detail.id}/manifests/${tag}`, manifestSchema, context));
+        ({ data: manifest } = await this.#getJson(
+          `/v2/${detail.id}/manifests/${tag}`,
+          registryManifestSchema,
+          context
+        ));
       } catch (error) {
         // 400 is the registry's "not available", "sharded" and "not a valid quantization scheme".
         if (error instanceof RuntimeHttpError && [400, 404].includes(error.status)) continue;
@@ -852,7 +854,7 @@ export class HuggingFaceHub {
     if (!OLLAMA_TAG_RE.test(tag)) throw new LocalRuntimeError('Invalid Ollama tag', this.id);
     const context = { signal: options.signal, repo, accept: REGISTRY_MANIFEST_ACCEPT, manifest: true };
     try {
-      const { data } = await this.#getJson(`/v2/${repo}/manifests/${tag}`, manifestSchema, context);
+      const { data } = await this.#getJson(`/v2/${repo}/manifests/${tag}`, registryManifestSchema, context);
       return registryLayers(data);
     } catch (error) {
       if (error instanceof RuntimeHttpError && [400, 404].includes(error.status)) return null;
