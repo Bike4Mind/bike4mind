@@ -7,13 +7,13 @@ export interface HardwareProfile {
   arch: string;
   memoryKind: 'unified' | 'discrete' | 'cpu';
   totalMemoryBytes: number;
-  /** Summed across GPUs; null on unified memory, where the GPU shares `totalMemoryBytes`, or when unknown. */
+  /** Summed across one vendor's GPUs; null on unified memory, where the GPU shares `totalMemoryBytes`, or unknown. */
   gpuMemoryBytes: number | null;
   gpuName: string | null;
   gpuCount: number;
   chip: string | null;
   diskFreeBytes: number | null;
-  /** 'low' when a GPU the probe cannot measure (AMD, Intel, unknown) may be present. */
+  /** 'low' when a usable GPU's memory is unknown or the GPUs could not be listed; `cpu` with 'high' has no usable GPU. */
   confidence: 'high' | 'low';
   /** Apple: `recommendedMaxWorkingSetSize` from a llama-server load log, or a non-zero `iogpu.wired_limit_mb`. */
   gpuWorkingSetBytes?: number | null;

@@ -83,6 +83,7 @@ describe('BackgroundProcessRegistry', () => {
   let registry: BackgroundProcessRegistry;
   let statuses: BackgroundProcessInfo[];
   let output: string[];
+  let exits: string[];
 
   const start = (command: string, sessionId = 'session-a') =>
     registry.start({ sessionId, command, cwd: root, roots: [root], protectedPaths: [] });
@@ -91,9 +92,11 @@ describe('BackgroundProcessRegistry', () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-bg-')));
     statuses = [];
     output = [];
+    exits = [];
     registry = new BackgroundProcessRegistry({
       output: (_sessionId, _processId, _stream, text) => output.push(text),
       status: (_sessionId, info) => statuses.push(info),
+      exited: (sessionId, processId) => exits.push(`${sessionId}:${processId}`),
     });
   });
 
@@ -148,6 +151,47 @@ describe('BackgroundProcessRegistry', () => {
     expect(read?.info.status).toBe('exited');
     expect(read?.info.exitCode).toBe(7);
   }, 20_000);
+
+  describe('exit notices', () => {
+    const startWaking = (command: string, sessionId = 'session-a') =>
+      registry.start({ sessionId, command, cwd: root, roots: [root], protectedPaths: [], wakeOnExit: true });
+
+    it('reports a command that ends on its own, once, with its last output', async () => {
+      const info = await startWaking('echo built; exit 3');
+      await registry.settle(info.id, 3_000);
+
+      expect(exits).toEqual([`session-a:${info.id}`]);
+      const notice = registry.takeExitNotice(info.id, 'session-a', 1_000);
+      expect(notice?.info).toMatchObject({ status: 'exited', exitCode: 3 });
+      expect(notice?.tail).toContain('built');
+      expect(registry.takeExitNotice(info.id, 'session-a', 1_000)).toBeNull();
+      // Scoped like every other read: another conversation cannot take it.
+      expect(registry.takeExitNotice(info.id, 'session-b', 1_000)).toBeNull();
+    }, 20_000);
+
+    it('has nothing to report once the model has read the process finished', async () => {
+      const info = await startWaking('exit 0');
+      await registry.settle(info.id, 3_000);
+      registry.readForModel(info.id, 'session-a', 1_000);
+      expect(registry.takeExitNotice(info.id, 'session-a', 1_000)).toBeNull();
+
+      const listed = await startWaking('exit 0');
+      await registry.settle(listed.id, 3_000);
+      registry.markExitsSeen('session-a');
+      expect(registry.takeExitNotice(listed.id, 'session-a', 1_000)).toBeNull();
+    }, 20_000);
+
+    it('reports nothing for a kill, or for a process nobody asked to hear about', async () => {
+      const killed = await startWaking('sleep 30');
+      await registry.kill(killed.id, 'session-a');
+      expect(registry.takeExitNotice(killed.id, 'session-a', 1_000)).toBeNull();
+
+      const quiet = await start('exit 0');
+      await registry.settle(quiet.id, 3_000);
+
+      expect(exits).toEqual([]);
+    }, 20_000);
+  });
 
   /** The reason signals go to -pgid: a bare pid leaves the command's children running. */
   it('kills the whole process group, not just the command it spawned', async () => {

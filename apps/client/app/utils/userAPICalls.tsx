@@ -4,6 +4,7 @@ import {
   IUser,
 } from '@bike4mind/common';
 import type { AdminUserListItem } from './adminUserProjection';
+import type { EmailDomainGroup } from './signupAnomaly';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import axios, { AxiosResponse } from 'axios';
@@ -28,6 +29,8 @@ export interface IGetUsersParams {
   projectId?: string;
   pendingInviteProjectId?: string;
   publicView?: boolean;
+  recentSignups?: 'hour';
+  groupBy?: 'emailDomain';
 }
 
 export interface IGetUsersResponse {
@@ -39,6 +42,9 @@ export interface IGetUsersResponse {
   currentPage: number;
   totalPages: number;
   totalUsers: number;
+  groups?: EmailDomainGroup[];
+  groupsTruncated?: boolean;
+  keysTruncated?: boolean;
 }
 
 export const fetchUsers = async (params: IGetUsersParams & { downloadAll?: boolean }): Promise<IGetUsersResponse> => {
@@ -47,6 +53,7 @@ export const fetchUsers = async (params: IGetUsersParams & { downloadAll?: boole
     return response.data;
   } catch (error) {
     console.error('Error fetching users:', error);
+    if (params.groupBy) throw error;
     return { users: [], currentPage: 1, totalPages: 1, totalUsers: 0 };
   }
 };
