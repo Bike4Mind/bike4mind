@@ -131,7 +131,7 @@ CreditTransactionSchema.index({ ownerType: 1, createdAt: -1, type: 1 });
 CreditTransactionSchema.index({ stripeDisputeId: 1 }, { unique: true, sparse: true });
 // Serves the admin user timeline's credit events (userTimeline.ts). Partial on the non-usage types so a
 // page never walks a heavy user's usage rows; a query must repeat the same `type: { $in }` to use it.
-// Built by the 20260921235946 ensure migration.
+// Built by the 20260921235947 ensure migration.
 CreditTransactionSchema.index(
   { ownerId: 1, ownerType: 1, createdAt: -1, _id: -1 },
   {

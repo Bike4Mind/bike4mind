@@ -17,7 +17,7 @@ import EnsureQuestSignupActivityIndex from './20260921235966_ensure-quest-signup
 import EnsureUserSignupGrantOrgIndex from './20260921235968_ensure-user-signup-grant-org-index';
 import RedropShareTokenScalarIndex from './20260921235975_redrop-share-token-scalar-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
-import EnsureCreditTransactionBalanceEventIndex from './20260921235946_ensure-credit-transaction-balance-event-index';
+import EnsureCreditTransactionBalanceEventIndex from './20260921235947_ensure-credit-transaction-balance-event-index';
 import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
 import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';

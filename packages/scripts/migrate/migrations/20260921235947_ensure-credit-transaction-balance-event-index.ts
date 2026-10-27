@@ -14,7 +14,7 @@ import { type MigrationFile } from './index';
  * this model's other declared indexes an environment happens to be missing.
  */
 const migration: MigrationFile = {
-  id: 20260921235946,
+  id: 20260921235947,
   name: 'ensure credit transaction balance event index',
 
   up: async () => {
