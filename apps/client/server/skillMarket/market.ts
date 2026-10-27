@@ -180,6 +180,7 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
   body: skill.body,
   ...(skill.argumentHint ? { argumentHint: skill.argumentHint } : {}),
   ...(skill.allowedTools?.length ? { allowedTools: [...skill.allowedTools] } : {}),
+  ...(skill.claudeCodeAllowedTools?.length ? { claudeCodeAllowedTools: [...skill.claudeCodeAllowedTools] } : {}),
   disableModelInvocation: Boolean(skill.disableModelInvocation),
 });
 
