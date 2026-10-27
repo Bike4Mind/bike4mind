@@ -53,13 +53,17 @@ const SENSITIVE_ADMIN_SETTING_NAMES = new Set(
     .map(def => def.key)
 );
 
+// Settings tied to a stage's own Cloudflare Turnstile widget. Copying them would enable the challenge
+// on a preview whose hostname the widget does not list; a preview opts in by setting them itself.
+const PREVIEW_UNSYNCED_ADMIN_SETTING_NAMES = ['turnstileEnabled', 'turnstileFailClosed', 'turnstileSiteKey'];
+
 // Source-side query for a synced collection. adminsettings excludes sensitive rows (above);
 // every other collection copies in full. Used for BOTH the count and the cursor so the
 // progress total matches what is actually inserted.
 function syncSourceFilter(collectionName: string): Record<string, unknown> {
   if (collectionName === 'adminsettings') {
     return {
-      settingName: { $nin: Array.from(SENSITIVE_ADMIN_SETTING_NAMES) },
+      settingName: { $nin: [...SENSITIVE_ADMIN_SETTING_NAMES, ...PREVIEW_UNSYNCED_ADMIN_SETTING_NAMES] },
       settingValue: { $not: new RegExp(ciphertextPatternSource, 'i') },
     };
   }
@@ -158,8 +162,9 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
       const sourceFilter = syncSourceFilter(collectionName);
       if (Object.keys(sourceFilter).length > 0) {
         console.log(
-          `  - Excluding ${SENSITIVE_ADMIN_SETTING_NAMES.size} sensitive settings from the cross-stage sync ` +
-            `(encrypted under the source stage's key; a preview cannot decrypt them).`
+          `  - Excluding ${SENSITIVE_ADMIN_SETTING_NAMES.size} sensitive settings (encrypted under the source ` +
+            `stage's key; a preview cannot decrypt them) and ${PREVIEW_UNSYNCED_ADMIN_SETTING_NAMES.length} ` +
+            `stage-specific settings from the cross-stage sync.`
         );
       }
 
