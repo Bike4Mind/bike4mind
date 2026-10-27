@@ -253,8 +253,12 @@ function parseStateChangeTime(value: string): Date | undefined {
 function periodPhrase(periodSeconds: number): string {
   if (periodSeconds === 3600) return 'hour';
   if (periodSeconds === 86400) return 'day';
-  return `${Math.round(periodSeconds / 60)} minutes`;
+  const minutes = Math.round(periodSeconds / 60);
+  return minutes === 1 ? 'minute' : `${minutes} minutes`;
 }
+
+/** Slack mrkdwn treats &, < and > as control characters; escape them in interpolated text. */
+export const escapeMrkdwn = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const formatNumber = (raw: string) => {
   const n = Number(raw);
@@ -267,7 +271,19 @@ export function describeReason(alarm: CloudWatchAlarmPayload, unit?: string): st
   const reason = alarm.NewStateReason ?? '';
   const trigger = alarm.Trigger;
 
-  if (/missing datapoint|datapoints? (?:was|were) missing|no datapoints were received/i.test(reason)) {
+  // A reason can list real datapoints and missing ones together ("1 out of the last 3 datapoints
+  // [...] ... and 2 missing datapoints were treated as [Breaching]"); the real value wins then.
+  const points = /^Threshold Crossed/i.test(reason)
+    ? [...reason.matchAll(DATAPOINT_RE)].map(([, rawValue, dd, mm, yy, hh, mi, ss]) => ({
+        rawValue,
+        start: Date.UTC(2000 + Number(yy), Number(mm) - 1, Number(dd), Number(hh), Number(mi), Number(ss)),
+      }))
+    : [];
+
+  if (
+    points.length === 0 &&
+    /missing datapoint|datapoints? (?:was|were) missing|no datapoints were received/i.test(reason)
+  ) {
     if (trigger?.EvaluationPeriods && trigger.Period) {
       const minutes = Math.round((trigger.EvaluationPeriods * trigger.Period) / 60);
       return `No data arrived for ${minutes} minutes, which counts as a failure for this alarm.`;
@@ -275,23 +291,19 @@ export function describeReason(alarm: CloudWatchAlarmPayload, unit?: string): st
     return 'No data arrived for a while.';
   }
 
-  if (/^Threshold Crossed/i.test(reason)) {
-    const points = [...reason.matchAll(DATAPOINT_RE)];
-    const last = points[points.length - 1];
-    if (last) {
-      const [, rawValue, dd, mm, yy, hh, mi, ss] = last;
-      const value = formatNumber(rawValue);
-      const what = unit ? `${value} ${unit}` : `The value was ${value}`;
-      const bucketStart = Date.UTC(2000 + Number(yy), Number(mm) - 1, Number(dd), Number(hh), Number(mi), Number(ss));
-      const period = trigger?.Period;
-      const when = period
-        ? ` in the ${periodPhrase(period)} ending ${formatClock(new Date(bucketStart + period * 1000))} UTC`
-        : ` at ${formatClock(new Date(bucketStart))} UTC`;
-      const thresholdMatch = /threshold \(([^)]+)\)/i.exec(reason);
-      const limit = /less than/i.test(reason) ? 'floor' : 'ceiling';
-      const threshold = thresholdMatch ? `; the ${limit} is ${formatNumber(thresholdMatch[1])}` : '';
-      return `${what}${when}${threshold}.`;
-    }
+  if (points.length > 0) {
+    // Pick by timestamp, not position: CloudWatch lists the newest datapoint first.
+    const latest = points.reduce((a, b) => (b.start > a.start ? b : a));
+    const value = formatNumber(latest.rawValue);
+    const what = unit ? `${value} ${unit}` : `The value was ${value}`;
+    const period = trigger?.Period;
+    const when = period
+      ? ` in the ${periodPhrase(period)} ending ${formatClock(new Date(latest.start + period * 1000))} UTC`
+      : ` at ${formatClock(new Date(latest.start))} UTC`;
+    const thresholdMatch = /threshold \(([^)]+)\)/i.exec(reason);
+    const limit = /less than/i.test(reason) ? 'floor' : 'ceiling';
+    const threshold = thresholdMatch ? `; the ${limit} is ${formatNumber(thresholdMatch[1])}` : '';
+    return `${what}${when}${threshold}.`;
   }
 
   return reason;
@@ -320,11 +332,14 @@ export function formatAlarmSlackMessage(alarm: CloudWatchAlarmPayload, stage: st
 
   if (alarm.NewStateValue === 'OK') {
     const back = when ? `back to normal at ${formatClock(when)} UTC` : 'back to normal';
-    const context = [`${stage} · ${alarm.AlarmName}`, link].filter(Boolean).join(' · ');
+    const context = [escapeMrkdwn(`${stage} · ${alarm.AlarmName}`), link].filter(Boolean).join(' · ');
     return {
-      text: `✅ Resolved: ${title}`,
+      text: escapeMrkdwn(`✅ Resolved: ${title}`),
       blocks: [
-        { type: 'section', text: { type: 'mrkdwn', text: `✅ *Resolved: ${title}*\n${stage} · ${back}` } },
+        {
+          type: 'section',
+          text: { type: 'mrkdwn', text: `✅ *Resolved: ${escapeMrkdwn(title)}*\n${escapeMrkdwn(stage)} · ${back}` },
+        },
         { type: 'context', elements: [{ type: 'mrkdwn', text: context }] },
       ],
     };
@@ -332,15 +347,15 @@ export function formatAlarmSlackMessage(alarm: CloudWatchAlarmPayload, stage: st
 
   const happened = describeReason(alarm, entry?.unit);
   const why = entry?.meaning ?? alarm.AlarmDescription;
-  const parts = [`*What happened*\n${happened}`];
-  if (why) parts.push(`*Why it matters*\n${why}`);
-  if (entry?.action) parts.push(`*What to do*\n${entry.action}`);
+  const parts = [`*What happened*\n${escapeMrkdwn(happened)}`];
+  if (why) parts.push(`*Why it matters*\n${escapeMrkdwn(why)}`);
+  if (entry?.action) parts.push(`*What to do*\n${escapeMrkdwn(entry.action)}`);
 
   const stamp = when ? `${formatClock(when)} UTC, ${when.getUTCDate()} ${MONTHS[when.getUTCMonth()]}` : undefined;
-  const context = [`${stage} · ${alarm.AlarmName}`, stamp, link].filter(Boolean).join(' · ');
+  const context = [escapeMrkdwn(`${stage} · ${alarm.AlarmName}`), stamp, link].filter(Boolean).join(' · ');
 
   return {
-    text: `${emoji} ${title}: ${happened}`,
+    text: escapeMrkdwn(`${emoji} ${title}: ${happened}`),
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: `${emoji} ${title}`.slice(0, 150), emoji: true } },
       { type: 'section', text: { type: 'mrkdwn', text: parts.join('\n\n') } },

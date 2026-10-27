@@ -20,6 +20,7 @@ import type { SNSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
 
 import {
+  escapeMrkdwn,
   formatAlarmSlackMessage,
   isCloudWatchAlarm,
   postAlarmToSlack,
@@ -70,14 +71,17 @@ function formatMessage(payload: unknown, stage: string): SlackAlarmMessage | nul
     const heading = `🔴 A background service failed to start: ${detail.group ?? 'unknown service'}`;
     const reason = containerReason ?? detail.stoppedReason ?? 'not reported';
     return {
-      text: heading,
+      text: escapeMrkdwn(heading),
       blocks: [
         { type: 'header', text: { type: 'plain_text', text: heading.slice(0, 150), emoji: true } },
         {
           type: 'section',
-          text: { type: 'mrkdwn', text: `*Reason*\n${reason}\n\n*Task*\n${detail.taskArn ?? 'unknown'}` },
+          text: {
+            type: 'mrkdwn',
+            text: `*Reason*\n${escapeMrkdwn(reason)}\n\n*Task*\n${escapeMrkdwn(detail.taskArn ?? 'unknown')}`,
+          },
         },
-        { type: 'context', elements: [{ type: 'mrkdwn', text: stage }] },
+        { type: 'context', elements: [{ type: 'mrkdwn', text: escapeMrkdwn(stage) }] },
       ],
     };
   }

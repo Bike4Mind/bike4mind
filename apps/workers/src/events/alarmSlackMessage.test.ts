@@ -83,6 +83,42 @@ describe('formatAlarmSlackMessage', () => {
     expect(describeReason(alarm, 'errors')).toBe('4.5 errors in the day ending 23:00 UTC; the ceiling is 3.');
   });
 
+  it('reports the newest datapoint whatever order the reason lists them in', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 3 out of the last 3 datapoints [97.0 (27/10/26 05:46:00), 96.0 (27/10/26 05:45:00), 98.0 (27/10/26 05:44:00)] were greater than the threshold (95.0).',
+      Trigger: { Period: 60 },
+    };
+    expect(describeReason(alarm, 'errors')).toBe('97 errors in the minute ending 05:47 UTC; the ceiling is 95.');
+  });
+
+  it('prefers a real datapoint over the missing-data wording when a reason has both', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 1 out of the last 3 datapoints [5.0 (27/10/26 04:00:00)] was greater than the threshold (3.0) and 2 missing datapoints were treated as [Breaching].',
+      Trigger: { Period: 300, EvaluationPeriods: 3 },
+    };
+    expect(describeReason(alarm, 'errors')).toBe('5 errors in the 5 minutes ending 04:05 UTC; the ceiling is 3.');
+  });
+
+  it('escapes Slack control characters in alarm-supplied text', () => {
+    const message = formatAlarmSlackMessage(
+      {
+        ...sample,
+        AlarmName: 'bike4mind-production-brand-new-thing',
+        AlarmDescription: 'Errors <5% & latency > 2s',
+        NewStateReason: 'Something <odd>',
+      },
+      'production'
+    );
+    const section = blocksOf(message)[1].text?.text;
+    expect(section).toContain('Something &lt;odd&gt;');
+    expect(section).toContain('Errors &lt;5% &amp; latency &gt; 2s');
+    expect(blocksOf(message)[2].elements?.[0].text).toContain('|Open in CloudWatch>');
+  });
+
   it('returns the raw reason for anything else', () => {
     expect(describeReason({ ...sample, NewStateReason: 'Something odd' })).toBe('Something odd');
   });
